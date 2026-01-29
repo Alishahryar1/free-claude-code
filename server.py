@@ -308,40 +308,42 @@ INTERNAL_API_URL = "http://localhost:8082/v1"
 # Initialize Global Instances
 cli_session = CLISession(WORKSPACE_PATH, INTERNAL_API_URL, ALLOWED_DIRS)
 
+# Session storage and message queue (imported from providers)
+from providers.session_store import SessionStore
+from providers.message_queue import MessageQueueManager, QueuedMessage
+
+session_store = SessionStore(os.path.join(WORKSPACE_PATH, "sessions.json"))
+message_queue = MessageQueueManager()
+
 
 def register_bot_handlers(client: "TelegramClient"):
     ALLOWED_USER_ID = os.getenv("ALLOWED_TELEGRAM_USER_ID")
     logger.info(f"DEBUG: Registering bot handlers. Allowed user ID: {ALLOWED_USER_ID}")
 
-    @client.on(events.NewMessage())
-    async def handle_telegram_message(event):
-        sender_id = str(event.sender_id)
-        logger.info(f"BOT_EVENT: From {sender_id} | Text: {event.text[:50]}")
-
-        target_id = str(ALLOWED_USER_ID).strip()
-        if sender_id != target_id:
-            logger.debug(f"BOT_SECURITY: Ignored message from {sender_id}")
-            return
+    async def process_claude_task(session_id_to_resume: str, queued_msg: QueuedMessage):
+        """
+        Core task processor - handles a single Claude CLI interaction.
+        Can be called directly or by the queue manager.
+        """
+        event = queued_msg.event
+        prompt = queued_msg.prompt
+        status_msg_id = queued_msg.reply_msg_id
+        chat_id = queued_msg.chat_id
+        original_msg_id = queued_msg.msg_id
         
-        # 1. Handle Commands
-        if event.text == "/stop":
-            await cli_session.stop()
-            await event.reply("⏹ **Claude process stopped.**")
-            return
-            
-        # 2. Filter out bot's own status messages and empty text
-        if not event.text or any(event.text.startswith(p) for p in ["⏳", "�", "🔧", "✅", "❌", "🚀", "🤖"]):
+        # Get the status message object
+        try:
+            status_msg = await client.get_messages(chat_id, ids=status_msg_id)
+        except Exception as e:
+            logger.error(f"Failed to get status message: {e}")
             return
 
-        logger.info(f"BOT_TASK: {event.text}")
-        status_msg = await event.reply("⏳ **Launching Claude CLI...**")
-
-        # Unified message accumulator - all parts appended in order
-        message_parts = []  # List of (type, content) tuples
+        # Unified message accumulator
+        message_parts = []
         last_ui_update = 0
+        captured_session_id = session_id_to_resume  # May be updated from CLI output
 
         def build_unified_message(status=None):
-            """Build a single message from all accumulated parts."""
             lines = []
             if status:
                 lines.append(status)
@@ -349,7 +351,6 @@ def register_bot_handlers(client: "TelegramClient"):
             
             for part_type, content in message_parts:
                 if part_type == "thinking":
-                    # Truncate thinking for display
                     display_thinking = content[:1200] + ("..." if len(content) > 1200 else "")
                     lines.append(f"💭 **Thinking:**\n```\n{display_thinking}\n```")
                 elif part_type == "tool":
@@ -360,7 +361,6 @@ def register_bot_handlers(client: "TelegramClient"):
                     lines.append(content)
             
             result = "\n".join(lines)
-            # Telegram message limit
             if len(result) > 4000:
                 result = "..." + result[-3997:]
             return result
@@ -379,38 +379,53 @@ def register_bot_handlers(client: "TelegramClient"):
                 logger.debug(f"UI update failed: {e}")
 
         try:
-            async for event_data in cli_session.start_task(event.text):
+            # Start or resume the CLI session
+            is_resume = session_id_to_resume is not None
+            log_prefix = f"Resuming session {session_id_to_resume}" if is_resume else "Starting new session"
+            logger.info(f"BOT: {log_prefix} for prompt: {prompt[:50]}...")
+            
+            async for event_data in cli_session.start_task(prompt, session_id=session_id_to_resume):
                 if not isinstance(event_data, dict):
+                    continue
+
+                # Handle session_info event to capture session ID
+                if event_data.get("type") == "session_info":
+                    captured_session_id = event_data.get("session_id")
+                    if captured_session_id and not is_resume:
+                        # Save the session mapping for new sessions
+                        session_store.save_session(
+                            session_id=captured_session_id,
+                            chat_id=chat_id,
+                            initial_msg_id=original_msg_id,
+                        )
+                        logger.info(f"BOT: Saved new session {captured_session_id} for msg {original_msg_id}")
                     continue
 
                 parsed = CLIParser.parse_event(event_data)
 
                 if event_data.get("type") == "raw":
                     raw_line = event_data.get("content")
-                    if not raw_line: continue
+                    if not raw_line:
+                        continue
                     if "login" in raw_line.lower():
-                        await event.reply("⚠️ **Claude requires login. Run `claude` in terminal.**")
+                        await client.send_message(chat_id, "⚠️ **Claude requires login. Run `claude` in terminal.**")
                     continue
 
                 if not parsed:
                     continue
 
                 if parsed["type"] == "thinking":
-                    # Append thinking to unified message
                     thinking_text = parsed["text"]
                     message_parts.append(("thinking", thinking_text))
                     await update_bot_ui("🧠 **Claude is thinking...**")
 
                 elif parsed["type"] == "content":
-                    # Handle thinking if present in combined event
                     if parsed.get("thinking"):
                         thinking_text = parsed["thinking"]
                         logger.debug(f"BOT: Got thinking: {len(thinking_text)} chars")
                         message_parts.append(("thinking", thinking_text))
-                    # Append text content
                     if parsed.get("text"):
                         logger.debug(f"BOT: Got text content: {len(parsed['text'])} chars")
-                        # Merge with last content part if exists, else append new
                         if message_parts and message_parts[-1][0] == "content":
                             prev_type, prev_content = message_parts[-1]
                             message_parts[-1] = ("content", prev_content + parsed["text"])
@@ -433,17 +448,106 @@ def register_bot_handlers(client: "TelegramClient"):
                     if parsed.get("status") == "failed":
                         await update_bot_ui("❌ **Failed**", force=True)
                     else:
-                        # Ensure we have some content for display
                         if not message_parts:
                             message_parts.append(("content", "Done."))
                         await update_bot_ui("✅ **Complete**", force=True)
+                    
+                    # Update session's last message so replies to THIS response also work
+                    if captured_session_id and status_msg:
+                        session_store.update_last_message(captured_session_id, status_msg.id)
                 
                 elif parsed["type"] == "error":
                     message_parts.append(("content", f"**Error:** {parsed['message']}"))
                     await update_bot_ui("❌ **Error**", force=True)
+
         except Exception as e:
-            logger.error(f"Bot failed: {e}")
-            await event.reply(f"💥 **Failed:** {e}")
+            logger.error(f"Bot task failed: {e}")
+            try:
+                await client.send_message(chat_id, f"💥 **Failed:** {e}")
+            except:
+                pass
+
+    @client.on(events.NewMessage())
+    async def handle_telegram_message(event):
+        sender_id = str(event.sender_id)
+        text_preview = event.text[:50] if event.text else "(empty)"
+        logger.info(f"BOT_EVENT: From {sender_id} | Text: {text_preview}")
+
+        target_id = str(ALLOWED_USER_ID).strip()
+        if sender_id != target_id:
+            logger.debug(f"BOT_SECURITY: Ignored message from {sender_id}")
+            return
+        
+        # 1. Handle Commands
+        if event.text == "/stop":
+            await cli_session.stop()
+            await event.reply("⏹ **Claude process stopped.**")
+            return
+        
+        if event.text == "/queue":
+            # Show queue status (optional command)
+            await event.reply("📋 **Queue status:** Feature active. Reply to old messages to continue conversations.")
+            return
+            
+        # 2. Filter out bot's own status messages and empty text
+        if not event.text or any(event.text.startswith(p) for p in ["⏳", "💭", "🔧", "✅", "❌", "🚀", "🤖", "📋"]):
+            return
+
+        logger.info(f"BOT_TASK: {event.text}")
+        
+        # 3. Check if this is a reply to an existing conversation
+        session_id_to_resume = None
+        reply_to_msg_id = event.reply_to_msg_id
+        
+        if reply_to_msg_id:
+            # User is replying to a previous message - try to find the session
+            session_id_to_resume = session_store.get_session_by_msg(event.chat_id, reply_to_msg_id)
+            if session_id_to_resume:
+                logger.info(f"BOT: Found session {session_id_to_resume} for reply to msg {reply_to_msg_id}")
+            else:
+                logger.info(f"BOT: No session found for reply to msg {reply_to_msg_id}, starting new session")
+
+        # 4. Send initial status message
+        if session_id_to_resume:
+            if cli_session.is_busy:
+                queue_size = message_queue.get_queue_size(session_id_to_resume) + 1
+                status_msg = await event.reply(f"📋 **Queued** (position {queue_size}) - Claude is busy, will process when ready...")
+            else:
+                status_msg = await event.reply("🔄 **Continuing conversation...**")
+        else:
+            status_msg = await event.reply("⏳ **Launching Claude CLI...**")
+
+        # 5. Create queued message
+        queued_msg = QueuedMessage(
+            prompt=event.text,
+            chat_id=event.chat_id,
+            msg_id=event.id,
+            reply_msg_id=status_msg.id,
+            event=event,
+        )
+
+        # 6. Process or queue based on session state
+        if session_id_to_resume and message_queue.is_session_busy(session_id_to_resume):
+            # Session is busy, queue the message
+            await message_queue.enqueue(
+                session_id=session_id_to_resume,
+                message=queued_msg,
+                processor=process_claude_task,
+            )
+            logger.info(f"BOT: Message queued for busy session {session_id_to_resume}")
+        else:
+            # Process immediately (either new session or free session)
+            if session_id_to_resume:
+                # Use the queue manager to track busy state
+                await message_queue.enqueue(
+                    session_id=session_id_to_resume,
+                    message=queued_msg,
+                    processor=process_claude_task,
+                )
+            else:
+                # New session - process directly
+                # We'll save the session ID once we get it from CLI
+                await process_claude_task(None, queued_msg)
 
 
 FAST_PREFIX_DETECTION = os.getenv("FAST_PREFIX_DETECTION", "true").lower() == "true"

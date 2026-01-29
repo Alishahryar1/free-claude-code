@@ -114,8 +114,29 @@ class CLISession:
         self.api_url = api_url
         self.allowed_dirs = [os.path.normpath(d) for d in (allowed_dirs or [])]
         self.process: Optional[asyncio.subprocess.Process] = None
+        self.current_session_id: Optional[str] = None
+        self._is_busy = False
 
-    async def start_task(self, prompt: str) -> AsyncGenerator[dict, None]:
+    @property
+    def is_busy(self) -> bool:
+        """Check if a task is currently running."""
+        return self._is_busy
+
+    async def start_task(
+        self, prompt: str, session_id: Optional[str] = None
+    ) -> AsyncGenerator[dict, None]:
+        """
+        Start a new task or continue an existing session.
+        
+        Args:
+            prompt: The user's message/prompt
+            session_id: Optional session ID to resume. If provided, uses --resume flag.
+        
+        Yields:
+            Event dictionaries from the CLI, including a special 'session_info' event
+            with the session ID when available.
+        """
+        self._is_busy = True
         env = os.environ.copy()
 
         # Ensure we have a dummy key if none exists, as CLI often requires it
@@ -132,15 +153,28 @@ class CLISession:
         env["TERM"] = "dumb"
         env["PYTHONIOENCODING"] = "utf-8"
 
-        cmd = [
-            "claude",
-            "-p",
-            prompt,
-            "--output-format",
-            "stream-json",
-            "--dangerously-skip-permissions",
-            "--verbose",
-        ]
+        # Build command based on whether resuming or starting new
+        if session_id:
+            # Resume existing session
+            cmd = [
+                "claude",
+                "--resume", session_id,
+                "-p", prompt,
+                "--output-format", "stream-json",
+                "--dangerously-skip-permissions",
+                "--verbose",
+            ]
+            logger.info(f"Resuming Claude session {session_id} with prompt: {prompt[:50]}...")
+        else:
+            # Start new session
+            cmd = [
+                "claude",
+                "-p", prompt,
+                "--output-format", "stream-json",
+                "--dangerously-skip-permissions",
+                "--verbose",
+            ]
+            logger.info(f"Starting new Claude session with prompt: {prompt[:50]}...")
 
         if self.allowed_dirs:
             for d in self.allowed_dirs:
@@ -148,44 +182,95 @@ class CLISession:
 
         logger.info(f"Launching Claude CLI in {self.workspace}")
 
-        self.process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self.workspace,
-            env=env,
-        )
+        try:
+            self.process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self.workspace,
+                env=env,
+            )
 
-        if not self.process or not self.process.stdout:
-            logger.error("Claude CLI process failed to start or stdout not captured.")
-            yield {"type": "exit", "code": 1}
-            return
+            if not self.process or not self.process.stdout:
+                logger.error("Claude CLI process failed to start or stdout not captured.")
+                yield {"type": "exit", "code": 1}
+                return
 
-        while True:
-            line = await self.process.stdout.readline()
-            if not line:
-                break
+            session_id_extracted = False
 
-            line_str = line.decode("utf-8", errors="replace").strip()
-            if not line_str:
-                continue
+            while True:
+                line = await self.process.stdout.readline()
+                if not line:
+                    break
 
-            try:
-                event = json.loads(line_str)
-                yield event
-            except json.JSONDecodeError:
-                logger.debug(f"Non-JSON output: {line_str}")
-                yield {"type": "raw", "content": line_str}
+                line_str = line.decode("utf-8", errors="replace").strip()
+                if not line_str:
+                    continue
 
-        if self.process.stderr:
-            stderr_output = await self.process.stderr.read()
-            if stderr_output:
-                logger.error(
-                    f"Claude CLI Stderr: {stderr_output.decode('utf-8', errors='replace')}"
-                )
+                try:
+                    event = json.loads(line_str)
+                    
+                    # Extract session ID from various event types
+                    if not session_id_extracted:
+                        extracted_id = self._extract_session_id(event)
+                        if extracted_id:
+                            self.current_session_id = extracted_id
+                            session_id_extracted = True
+                            logger.info(f"Extracted session ID: {extracted_id}")
+                            # Emit a special event with the session ID
+                            yield {"type": "session_info", "session_id": extracted_id}
+                    
+                    yield event
+                except json.JSONDecodeError:
+                    logger.debug(f"Non-JSON output: {line_str}")
+                    yield {"type": "raw", "content": line_str}
 
-        return_code = await self.process.wait()
-        yield {"type": "exit", "code": return_code}
+            if self.process.stderr:
+                stderr_output = await self.process.stderr.read()
+                if stderr_output:
+                    logger.error(
+                        f"Claude CLI Stderr: {stderr_output.decode('utf-8', errors='replace')}"
+                    )
+
+            return_code = await self.process.wait()
+            yield {"type": "exit", "code": return_code}
+        finally:
+            self._is_busy = False
+
+    def _extract_session_id(self, event: Dict) -> Optional[str]:
+        """
+        Extract session ID from CLI event.
+        
+        The session ID appears in different places depending on event type:
+        - In 'init' or 'system' events as 'session_id' or 'sessionId'
+        - In 'result' events under result.session_id
+        - Sometimes in message metadata
+        """
+        if not isinstance(event, dict):
+            return None
+        
+        # Direct session_id field
+        if "session_id" in event:
+            return event["session_id"]
+        if "sessionId" in event:
+            return event["sessionId"]
+        
+        # Check in nested structures
+        for key in ["init", "system", "result", "metadata"]:
+            if key in event and isinstance(event[key], dict):
+                nested = event[key]
+                if "session_id" in nested:
+                    return nested["session_id"]
+                if "sessionId" in nested:
+                    return nested["sessionId"]
+        
+        # Check in conversation info
+        if "conversation" in event and isinstance(event["conversation"], dict):
+            conv = event["conversation"]
+            if "id" in conv:
+                return conv["id"]
+        
+        return None
 
     async def stop(self):
         if self.process and self.process.returncode is None:
