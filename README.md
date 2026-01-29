@@ -75,7 +75,7 @@ TELEGRAM_USER_ID=your_telegram_user_id
 
 ```dotenv
 CLAUDE_WORKSPACE=./agent_workspace
-ALLOWED_DIRS=C:\Users\yourname\projects
+ALLOWED_DIRS=C:/Users/yourname/projects
 ```
 
 4. **Start the server:**
