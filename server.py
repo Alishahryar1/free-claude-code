@@ -364,6 +364,21 @@ def register_bot_handlers(client: "TelegramClient"):
         temp_session_id = None  # Track temp ID for new sessions
         cli_session = None  # The CLISession instance for this task
 
+        def safe_markdown_truncate(text, limit=3800):
+            """Truncate text carefully to avoid breaking markdown entities or blocks."""
+            if len(text) <= limit:
+                return text
+            
+            # Show the end of the content as it's usually the most relevant
+            truncated = "..." + text[-(limit-5):]
+            
+            # Simple check for unclosed code blocks
+            # This is a heuristic but covers common CLI output issues
+            if truncated.count("```") % 2 != 0:
+                truncated += "\n```"
+                
+            return truncated
+
         def build_unified_message(status=None):
             lines = []
             if status:
@@ -384,9 +399,7 @@ def register_bot_handlers(client: "TelegramClient"):
                     lines.append(f"⚠️ {content}")
             
             result = "\n".join(lines)
-            if len(result) > 4000:
-                result = "..." + result[-3997:]
-            return result
+            return safe_markdown_truncate(result)
 
         async def update_bot_ui(status=None, force=False):
             nonlocal last_ui_update
@@ -399,7 +412,7 @@ def register_bot_handlers(client: "TelegramClient"):
                     await status_msg.edit(display, parse_mode="markdown")
                     last_ui_update = now
             except Exception as e:
-                logger.debug(f"UI update failed: {e}")
+                logger.error(f"BOT: UI update failed: {e}")
 
         try:
             # Get or create CLI session from the manager
@@ -429,7 +442,7 @@ def register_bot_handlers(client: "TelegramClient"):
                 return
 
             # Process CLI events
-            async for event_data in cli_session.start_task(prompt, session_id=session_id_to_resume):
+            async for event_data in cli_session.start_task(prompt, session_id=captured_session_id):
                 if not isinstance(event_data, dict):
                     continue
 
@@ -630,9 +643,25 @@ def register_bot_handlers(client: "TelegramClient"):
                 processor=process_claude_task,
             )
         else:
-            # NEW session - process directly in a new task (parallel!)
-            # Each new message gets its own CLI instance immediately
-            asyncio.create_task(process_claude_task(None, queued_msg))
+            # NEW session - create a temporary ID based on the trigger message
+            temp_session_id = f"pending_{event.id}"
+            logger.info(f"BOT: Starting NEW session {temp_session_id}")
+            
+            # Pre-register in session store so replies to this NEW message or its status
+            # can be identified and enqueued immediately.
+            session_store.save_session(
+                session_id=temp_session_id,
+                chat_id=event.chat_id,
+                initial_msg_id=event.id
+            )
+            session_store.update_last_message(temp_session_id, status_msg.id)
+            
+            # Process via queue to ensure we track busy state even for new sessions
+            await message_queue.enqueue(
+                session_id=temp_session_id,
+                message=queued_msg,
+                processor=process_claude_task,
+            )
 
 
 FAST_PREFIX_DETECTION = os.getenv("FAST_PREFIX_DETECTION", "true").lower() == "true"

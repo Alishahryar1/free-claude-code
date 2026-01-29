@@ -158,7 +158,8 @@ class CLISession:
             env["PYTHONIOENCODING"] = "utf-8"
 
             # Build command based on whether resuming or starting new
-            if session_id:
+            # Important: only use REAL session IDs for --resume, not our internal 'pending_' IDs
+            if session_id and not session_id.startswith("pending_"):
                 # Resume existing session
                 cmd = [
                     "claude",
@@ -237,6 +238,7 @@ class CLISession:
                         )
 
                 return_code = await self.process.wait()
+                logger.info(f"Claude CLI process exited with code {return_code}")
                 yield {"type": "exit", "code": return_code}
             finally:
                 self._is_busy = False

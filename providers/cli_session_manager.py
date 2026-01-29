@@ -73,10 +73,17 @@ class CLISessionManager:
             For new sessions, session_id is a temporary ID until CLI assigns real one.
         """
         async with self._lock:
-            # Case 1: Resume existing session
-            if session_id and session_id in self._sessions:
-                logger.debug(f"Reusing existing session: {session_id}")
-                return self._sessions[session_id], session_id, False
+            # Case 1: Resume existing session (active or pending)
+            if session_id:
+                # Resolve temp_id to real_id if needed
+                lookup_id = self._temp_to_real.get(session_id, session_id)
+                
+                if lookup_id in self._sessions:
+                    logger.debug(f"Reusing existing session: {lookup_id}")
+                    return self._sessions[lookup_id], lookup_id, False
+                if lookup_id in self._pending_sessions:
+                    logger.debug(f"Reusing pending session: {lookup_id}")
+                    return self._pending_sessions[lookup_id], lookup_id, False
             
             # Case 2: Check if we're at capacity
             total_sessions = len(self._sessions) + len(self._pending_sessions)
@@ -94,7 +101,10 @@ class CLISessionManager:
                     )
             
             # Case 3: Create new session
-            temp_id = f"pending_{uuid.uuid4().hex[:8]}"
+            # If session_id was provided (but not found), use it as temp_id
+            # Otherwise generate a new one
+            temp_id = session_id if session_id else f"pending_{uuid.uuid4().hex[:8]}"
+            
             new_session = CLISession(
                 workspace_path=self.workspace,
                 api_url=self.api_url,
