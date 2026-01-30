@@ -14,18 +14,17 @@ class RateLimitedPlatform(MessagingPlatform):
     are sent according to the global rate limit.
     """
 
-    def __init__(
-        self,
-        platform: MessagingPlatform,
-        rate_limit: int = 1,
-        rate_window: float = 1.0,
-    ):
+    def __init__(self, platform: MessagingPlatform, rps: float = 1.0):
         self._platform = platform
-        self._limiter = GlobalRateLimiter(calls=rate_limit, period=rate_window)
+        # RateLimitQueue expects calls and period (per).
+        # For simplicity, we use 1 call per (1/rps) window if rps < 1,
+        # or int(rps) calls per 1.0s window.
+        if rps >= 1.0:
+            self._limiter = GlobalRateLimiter(calls=int(rps), period=1.0)
+        else:
+            self._limiter = GlobalRateLimiter(calls=1, period=1.0 / rps)
 
-        logger.info(
-            f"RateLimitedPlatform initialized with {rate_limit} calls per {rate_window}s"
-        )
+        logger.info(f"RateLimitedPlatform initialized with RPS={rps}")
 
     @property
     def name(self) -> str:
