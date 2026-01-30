@@ -35,20 +35,20 @@ class GlobalRateLimiter:
         """Reset singleton (for testing)."""
         cls._instance = None
 
-    async def wait_if_blocked(self) -> float:
+    async def wait_if_blocked(self) -> bool:
         """
         Wait if currently rate limited.
 
         Returns:
-            The time waited in seconds (0 if not blocked)
+            True if was blocked and waited, False if not blocked
         """
         now = time.time()
         if now < self._blocked_until:
             wait_time = self._blocked_until - now
             logger.warning(f"Global rate limit active, waiting {wait_time:.1f}s...")
             await asyncio.sleep(wait_time)
-            return wait_time
-        return 0
+            return True
+        return False
 
     def set_blocked(self, seconds: float = 60) -> None:
         """

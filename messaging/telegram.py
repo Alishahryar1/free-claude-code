@@ -7,7 +7,7 @@ Implements MessagingPlatform for Telegram using Telethon.
 import asyncio
 import logging
 import os
-from typing import Callable, Awaitable, Optional, Any
+from typing import Callable, Awaitable, Optional, Any, Dict
 
 from .base import MessagingPlatform
 from .models import IncomingMessage
@@ -58,6 +58,8 @@ class TelegramPlatform(MessagingPlatform):
             Callable[[IncomingMessage], Awaitable[None]]
         ] = None
         self._connected = False
+        # Cache entity objects to avoid flood wait errors
+        self._entity_cache: Dict[str, Any] = {}
 
     async def start(self) -> None:
         """Initialize and connect to Telegram."""
@@ -83,7 +85,10 @@ class TelegramPlatform(MessagingPlatform):
 
         # Send startup notification
         try:
-            await self._client.send_message("me", "🚀 **Claude Code Proxy is online!**")
+            me_entity = await self._client.get_input_entity("me")
+            await self._client.send_message(
+                me_entity, "🚀 **Claude Code Proxy is online!**"
+            )
         except Exception as e:
             logger.warning(f"Could not send startup message: {e}")
 
@@ -95,6 +100,16 @@ class TelegramPlatform(MessagingPlatform):
             await self._client.disconnect()
         self._connected = False
         logger.info("Telegram platform stopped")
+
+    async def _get_entity(self, chat_id: str) -> Any:
+        """Get entity object for a chat_id, using cache to avoid flood wait errors."""
+        if chat_id in self._entity_cache:
+            return self._entity_cache[chat_id]
+        
+        # Get entity and cache it
+        entity = await self._client.get_input_entity(peer=int(chat_id))
+        self._entity_cache[chat_id] = entity
+        return entity
 
     async def send_message(
         self,
@@ -108,8 +123,9 @@ class TelegramPlatform(MessagingPlatform):
             raise RuntimeError("Telegram client not connected")
 
         try:
+            entity = await self._get_entity(chat_id)
             msg = await self._client.send_message(
-                int(chat_id),
+                entity,
                 text,
                 reply_to=int(reply_to) if reply_to else None,
                 parse_mode=parse_mode,
@@ -131,8 +147,9 @@ class TelegramPlatform(MessagingPlatform):
             raise RuntimeError("Telegram client not connected")
 
         try:
+            entity = await self._get_entity(chat_id)
             await self._client.edit_message(
-                int(chat_id),
+                entity,
                 int(message_id),
                 text,
                 parse_mode=parse_mode,

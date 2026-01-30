@@ -96,7 +96,7 @@ class ClaudeMessageHandler:
         status_msg_id = await self.platform.send_message(
             incoming.chat_id,
             status_text,
-            reply_to=incoming.message_id,
+            reply_to=incoming.message_id if incoming.message_id != incoming.message_id else None,
         )
 
         # Create or extend tree
@@ -186,19 +186,33 @@ class ClaudeMessageHandler:
             if not force and now - last_ui_update < 1.0:
                 return
 
-            try:
-                display = self._build_message(components, status)
-                if display:
-                    await self.platform.edit_message(
-                        chat_id, status_msg_id, display, parse_mode="markdown"
-                    )
-                    last_ui_update = now
-            except Exception as e:
-                # Log but don't crash the task
-                if "flood" in str(e).lower() or "wait" in str(e).lower():
-                    # Set a temporary skip to avoid spamming the log if we're flooded
-                    last_ui_update = now + 10  # Skip for 10s on flood error
-                logger.error(f"UI update failed: {e}")
+            # Retry logic for flood wait errors
+            max_retries = 3 if not force else 5
+            for attempt in range(max_retries):
+                try:
+                    display = self._build_message(components, status)
+                    if display:
+                        await self.platform.edit_message(
+                            chat_id, status_msg_id, display, parse_mode="markdown"
+                        )
+                        last_ui_update = now
+                        return  # Success, exit retry loop
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    is_flood_error = "flood" in error_msg or "wait" in error_msg
+                    
+                    if is_flood_error and attempt < max_retries - 1:
+                        # Wait before retry on flood error
+                        wait_time = 2 ** attempt  # Exponential backoff: 2s, 4s, 8s
+                        logger.warning(f"Flood wait on edit (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        # Log and give up after retries or if not a flood error
+                        if is_flood_error:
+                            last_ui_update = now + 10  # Skip for 10s on persistent flood error
+                        logger.error(f"UI update failed after {attempt + 1} attempts: {e}")
+                        return
 
         try:
             # Get or create CLI session
@@ -224,11 +238,17 @@ class ClaudeMessageHandler:
                 return
 
             # Process CLI events
+            logger.info(f"HANDLER: Starting CLI task processing for node {node_id}")
+            event_count = 0
             async for event_data in cli_session.start_task(
                 incoming.text, session_id=captured_session_id
             ):
                 if not isinstance(event_data, dict):
+                    logger.warning(f"HANDLER: Non-dict event received: {type(event_data)}")
                     continue
+                event_count += 1
+                if event_count % 10 == 0:
+                    logger.debug(f"HANDLER: Processed {event_count} events so far")
 
                 # Handle session_info event
                 if event_data.get("type") == "session_info":
@@ -242,6 +262,7 @@ class ClaudeMessageHandler:
                     continue
 
                 parsed_list = CLIParser.parse_event(event_data)
+                logger.debug(f"HANDLER: Parsed {len(parsed_list)} events from CLI")
 
                 for parsed in parsed_list:
                     if parsed["type"] == "thinking":
@@ -266,6 +287,8 @@ class ClaudeMessageHandler:
                     elif parsed["type"] == "complete":
                         if not any(components.values()):
                             components["content"].append("Done.")
+                        logger.info(f"HANDLER: Task complete, updating UI")
+                        # Always force final complete status to bypass flood wait
                         await update_ui("✅ **Complete**", force=True)
 
                         # Update node state and session
@@ -279,7 +302,10 @@ class ClaudeMessageHandler:
 
                     elif parsed["type"] == "error":
                         error_msg = parsed.get("message", "Unknown error")
+                        logger.error(f"HANDLER: Error event received: {error_msg[:200]}")
                         components["errors"].append(error_msg)
+                        logger.info(f"HANDLER: Updating UI with error status")
+                        # Always force error status to bypass flood wait
                         await update_ui("❌ **Error**", force=True)
                         if tree:
                             # Mark this node and propagate to pending children
@@ -299,7 +325,9 @@ class ClaudeMessageHandler:
                                     logger.error(f"Failed to update child status: {e}")
 
         except asyncio.CancelledError:
+            logger.warning(f"HANDLER: Task cancelled for node {node_id}")
             components["errors"].append("Task was cancelled")
+            # Always force cancelled status to bypass flood wait
             await update_ui("❌ **Cancelled**", force=True)
             if tree:
                 # Mark this node and propagate to pending children
@@ -318,9 +346,10 @@ class ClaudeMessageHandler:
                     except Exception as e:
                         logger.error(f"Failed to update child status: {e}")
         except Exception as e:
-            logger.error(f"Task failed: {e}")
+            logger.error(f"HANDLER: Task failed with exception: {type(e).__name__}: {e}")
             error_msg = str(e)[:200]
             components["errors"].append(error_msg)
+            # Always force error status to bypass flood wait
             await update_ui("💥 **Task Failed**", force=True)
             if tree:
                 # Mark this node and propagate to pending children
@@ -338,6 +367,8 @@ class ClaudeMessageHandler:
                         )
                     except Exception as e:
                         logger.error(f"Failed to update child status: {e}")
+        finally:
+            logger.info(f"HANDLER: _process_node completed for node {node_id}, errors={len(components['errors'])}")
 
     def _build_message(
         self,

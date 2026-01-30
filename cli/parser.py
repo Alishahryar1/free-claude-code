@@ -102,18 +102,24 @@ class CLIParser:
         if etype == "error":
             err = event.get("error")
             msg = err.get("message") if isinstance(err, dict) else str(err)
+            logger.info(f"CLI_PARSER: Parsed error event: {msg[:100]}")
             return [{"type": "error", "message": msg}]
         elif etype == "exit":
             code = event.get("code", 0)
             stderr = event.get("stderr")
             if code == 0:
+                logger.debug(f"CLI_PARSER: Successful exit (code={code})")
                 return [{"type": "complete", "status": "success"}]
             else:
                 # Non-zero exit is an error
                 error_msg = stderr if stderr else f"Process exited with code {code}"
+                logger.warning(f"CLI_PARSER: Error exit (code={code}): {error_msg[:100]}")
                 return [
                     {"type": "error", "message": error_msg},
                     {"type": "complete", "status": "failed"},
                 ]
 
+        # Log unrecognized events for debugging
+        if etype:
+            logger.debug(f"CLI_PARSER: Unrecognized event type: {etype}")
         return []
