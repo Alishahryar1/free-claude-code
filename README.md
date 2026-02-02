@@ -39,7 +39,7 @@ uv run uvicorn server:app --host 0.0.0.0 --port 8082
 **Terminal 2 - Run Claude Code:**
 
 ```bash
-ANTHROPIC_AUTH_TOKEN=fake ANTHROPIC_BASE_URL=http://localhost:8082 claude
+ANTHROPIC_AUTH_TOKEN=ccnim ANTHROPIC_BASE_URL=http://localhost:8082 claude
 ```
 
 That's it! Claude Code now uses NVIDIA NIM for free.
