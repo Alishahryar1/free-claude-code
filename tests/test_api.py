@@ -108,7 +108,12 @@ def test_generic_exception_returns_500():
     mock_provider.complete.side_effect = RuntimeError("unexpected crash")
     response = client.post(
         "/v1/messages",
-        json={"model": "test", "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 10, "stream": False},
+        json={
+            "model": "test",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 10,
+            "stream": False,
+        },
     )
     assert response.status_code == 500
     mock_provider.complete.side_effect = None
@@ -121,7 +126,12 @@ def test_generic_exception_with_status_code():
     mock_provider.complete.side_effect = exc
     response = client.post(
         "/v1/messages",
-        json={"model": "test", "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 10, "stream": False},
+        json={
+            "model": "test",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 10,
+            "stream": False,
+        },
     )
     assert response.status_code == 502
     mock_provider.complete.side_effect = None

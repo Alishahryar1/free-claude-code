@@ -3,7 +3,11 @@
 import pytest
 
 from api.models.responses import MessagesResponse, Usage, TokenCountResponse
-from api.models.anthropic import ContentBlockText, ContentBlockToolUse, ContentBlockThinking
+from api.models.anthropic import (
+    ContentBlockText,
+    ContentBlockToolUse,
+    ContentBlockThinking,
+)
 
 
 class TestUsage:

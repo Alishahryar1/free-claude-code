@@ -131,17 +131,13 @@ class TestSessionStoreCleanupEdgeCases:
 
     def test_cleanup_trees_malformed_timestamp(self, tmp_store):
         """Malformed created_at in cleanup_old_trees doesn't crash."""
-        tmp_store._trees["root1"] = {
-            "nodes": {"root1": {"created_at": "bad-date"}}
-        }
+        tmp_store._trees["root1"] = {"nodes": {"root1": {"created_at": "bad-date"}}}
         removed = tmp_store.cleanup_old_trees(max_age_days=0)
         assert removed == 0  # Skipped due to parse error
 
     def test_cleanup_trees_missing_created_at(self, tmp_store):
         """Tree node without created_at is not cleaned up."""
-        tmp_store._trees["root1"] = {
-            "nodes": {"root1": {}}
-        }
+        tmp_store._trees["root1"] = {"nodes": {"root1": {}}}
         removed = tmp_store.cleanup_old_trees(max_age_days=0)
         assert removed == 0
 

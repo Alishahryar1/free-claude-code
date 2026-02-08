@@ -107,10 +107,7 @@ class TestMessageTreeConcurrency:
 
         # Update all nodes concurrently
         await asyncio.gather(
-            *[
-                tree.update_state(f"n{i}", MessageState.IN_PROGRESS)
-                for i in range(5)
-            ]
+            *[tree.update_state(f"n{i}", MessageState.IN_PROGRESS) for i in range(5)]
         )
 
         for i in range(5):

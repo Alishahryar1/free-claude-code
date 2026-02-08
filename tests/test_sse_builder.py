@@ -16,7 +16,7 @@ def _parse_sse(sse_str: str) -> dict:
     """Parse an SSE event string into its data payload."""
     for line in sse_str.strip().split("\n"):
         if line.startswith("data: "):
-            return json.loads(line[len("data: "):])
+            return json.loads(line[len("data: ") :])
     raise ValueError(f"No data line found in SSE: {sse_str}")
 
 
@@ -370,9 +370,7 @@ class TestSSEBuilderTokenEstimation:
         builder.start_text_block()
         builder.emit_text_delta("a" * 100)  # 100 chars -> ~25 tokens
 
-        with patch(
-            "providers.nvidia_nim.utils.sse_builder.ENCODER", None
-        ):
+        with patch("providers.nvidia_nim.utils.sse_builder.ENCODER", None):
             tokens = builder.estimate_output_tokens()
             assert tokens == 25  # 100 // 4
 
@@ -382,9 +380,7 @@ class TestSSEBuilderTokenEstimation:
         builder.start_tool_block(0, "t1", "Read")
         builder.emit_tool_delta(0, '{"path":"test.py"}')
 
-        with patch(
-            "providers.nvidia_nim.utils.sse_builder.ENCODER", None
-        ):
+        with patch("providers.nvidia_nim.utils.sse_builder.ENCODER", None):
             tokens = builder.estimate_output_tokens()
             # 1 tool * 50 = 50
             assert tokens == 50

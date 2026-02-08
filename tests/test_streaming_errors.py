@@ -58,7 +58,9 @@ def _make_request(model="test-model", stream=True):
     return req
 
 
-def _make_chunk(content=None, finish_reason=None, tool_calls=None, reasoning_content=None):
+def _make_chunk(
+    content=None, finish_reason=None, tool_calls=None, reasoning_content=None
+):
     """Create a mock streaming chunk."""
     delta = MagicMock()
     delta.content = content
@@ -101,7 +103,12 @@ class TestStreamingExceptionHandling:
             new_callable=AsyncMock,
             side_effect=RuntimeError("API failed"),
         ):
-            with patch.object(provider._global_rate_limiter, "wait_if_blocked", new_callable=AsyncMock, return_value=False):
+            with patch.object(
+                provider._global_rate_limiter,
+                "wait_if_blocked",
+                new_callable=AsyncMock,
+                return_value=False,
+            ):
                 events = await _collect_stream(provider, request)
 
         # Should have message_start, error text block, close blocks, message_delta, message_stop, done
@@ -126,7 +133,12 @@ class TestStreamingExceptionHandling:
             new_callable=AsyncMock,
             return_value=stream_mock,
         ):
-            with patch.object(provider._global_rate_limiter, "wait_if_blocked", new_callable=AsyncMock, return_value=False):
+            with patch.object(
+                provider._global_rate_limiter,
+                "wait_if_blocked",
+                new_callable=AsyncMock,
+                return_value=False,
+            ):
                 events = await _collect_stream(provider, request)
 
         event_text = "".join(events)
@@ -149,7 +161,12 @@ class TestStreamingExceptionHandling:
             new_callable=AsyncMock,
             return_value=stream_mock,
         ):
-            with patch.object(provider._global_rate_limiter, "wait_if_blocked", new_callable=AsyncMock, return_value=False):
+            with patch.object(
+                provider._global_rate_limiter,
+                "wait_if_blocked",
+                new_callable=AsyncMock,
+                return_value=False,
+            ):
                 events = await _collect_stream(provider, request)
 
         event_text = "".join(events)
@@ -172,7 +189,12 @@ class TestStreamingExceptionHandling:
             new_callable=AsyncMock,
             return_value=stream_mock,
         ):
-            with patch.object(provider._global_rate_limiter, "wait_if_blocked", new_callable=AsyncMock, return_value=False):
+            with patch.object(
+                provider._global_rate_limiter,
+                "wait_if_blocked",
+                new_callable=AsyncMock,
+                return_value=False,
+            ):
                 events = await _collect_stream(provider, request)
 
         event_text = "".join(events)
@@ -197,7 +219,12 @@ class TestStreamingExceptionHandling:
             new_callable=AsyncMock,
             return_value=stream_mock,
         ):
-            with patch.object(provider._global_rate_limiter, "wait_if_blocked", new_callable=AsyncMock, return_value=False):
+            with patch.object(
+                provider._global_rate_limiter,
+                "wait_if_blocked",
+                new_callable=AsyncMock,
+                return_value=False,
+            ):
                 events = await _collect_stream(provider, request)
 
         event_text = "".join(events)
@@ -221,7 +248,12 @@ class TestStreamingExceptionHandling:
             new_callable=AsyncMock,
             return_value=stream_mock,
         ):
-            with patch.object(provider._global_rate_limiter, "wait_if_blocked", new_callable=AsyncMock, return_value=True):
+            with patch.object(
+                provider._global_rate_limiter,
+                "wait_if_blocked",
+                new_callable=AsyncMock,
+                return_value=True,
+            ):
                 events = await _collect_stream(provider, request)
 
         event_text = "".join(events)

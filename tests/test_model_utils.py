@@ -120,7 +120,13 @@ def test_is_claude_model_parametrized(model, expected):
         ("openai/gpt-3.5-turbo", "target", "openai/gpt-3.5-turbo"),
         ("", "target", ""),  # empty string is not a claude model
     ],
-    ids=["claude_mapped", "prefixed_claude", "non_claude", "prefixed_non_claude", "empty"],
+    ids=[
+        "claude_mapped",
+        "prefixed_claude",
+        "non_claude",
+        "prefixed_non_claude",
+        "empty",
+    ],
 )
 def test_normalize_model_name_parametrized(model, default, expected):
     """Parametrized model normalization."""

@@ -18,7 +18,9 @@ from providers.exceptions import (
 
 def _make_openai_error(cls, message="test error", status_code=None):
     """Helper to create openai exceptions with required httpx objects."""
-    response = Response(status_code=status_code or 500, request=Request("POST", "http://test"))
+    response = Response(
+        status_code=status_code or 500, request=Request("POST", "http://test")
+    )
     body = {"error": {"message": message}}
     # openai.APIError base class has a different constructor signature
     if cls is openai.APIError:
@@ -79,7 +81,9 @@ class TestMapError:
 
     def test_generic_api_error(self):
         """openai.APIError -> APIError with original status_code."""
-        exc = _make_openai_error(openai.APIError, message="Bad gateway", status_code=502)
+        exc = _make_openai_error(
+            openai.APIError, message="Bad gateway", status_code=502
+        )
         result = map_error(exc)
         assert isinstance(result, APIError)
 

@@ -60,9 +60,7 @@ class TestConvertResponse:
 
     def test_reasoning_content_field(self):
         """reasoning_content field is extracted as thinking block."""
-        resp = _make_response(
-            content="Answer", reasoning_content="I need to think..."
-        )
+        resp = _make_response(content="Answer", reasoning_content="I need to think...")
         result = convert_response(resp, _make_request())
         types = [b["type"] for b in result["content"]]
         assert "thinking" in types
@@ -159,9 +157,7 @@ class TestConvertResponse:
 
     def test_usage_mapping(self):
         """Usage tokens are mapped from OpenAI to Anthropic format."""
-        resp = _make_response(
-            usage={"prompt_tokens": 100, "completion_tokens": 50}
-        )
+        resp = _make_response(usage={"prompt_tokens": 100, "completion_tokens": 50})
         result = convert_response(resp, _make_request())
         assert result["usage"]["input_tokens"] == 100
         assert result["usage"]["output_tokens"] == 50
