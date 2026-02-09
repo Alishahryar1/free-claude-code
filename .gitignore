@@ -6,6 +6,6 @@ __pycache__
 .venv
 agent_workspace
 .env
-AGENTS.MD
-CLAUDE.MD
+AGENTS.md
+CLAUDE.md
 server.log
