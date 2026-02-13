@@ -10,13 +10,16 @@ Use **Claude Code CLI for free** with NVIDIA NIM's free unlimited 40 reqs/min AP
 
 ### Step 1: Install the prerequisites
 
-You need three things before starting:
+You need these before starting:
 
 | What | Where to get it |
 | --- | --- |
 | NVIDIA API key (free) | [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys) |
 | Claude Code CLI | [github.com/anthropics/claude-code](https://github.com/anthropics/claude-code) |
 | uv (Python package runner) | [github.com/astral-sh/uv](https://github.com/astral-sh/uv) |
+| PM2 (keeps the proxy running) | `npm install -g pm2` |
+| fzf (fuzzy model picker) | [github.com/junegunn/fzf](https://github.com/junegunn/fzf) |
+
 
 ### Step 2: Clone the repo and add your API key
 
@@ -37,18 +40,25 @@ Save the file. That's the only thing you need to edit.
 ### Step 3: Start the proxy server
 
 ```bash
-uv run uvicorn server:app --host 0.0.0.0 --port 8082
+pm2 start "uv run uvicorn server:app --host 0.0.0.0 --port 8082" --name "claude-proxy"
 ```
 
-Leave this terminal running. The proxy needs to stay on while you use Claude Code.
+That's it — the proxy is now running in the background. You can close this terminal and it keeps going. Use these commands to manage it:
 
-### Step 4: Open a new terminal and launch Claude Code
+| Command | What it does |
+| --- | --- |
+| `pm2 logs claude-proxy` | See server logs (useful for troubleshooting) |
+| `pm2 stop claude-proxy` | Stop the proxy |
+| `pm2 restart claude-proxy` | Restart it (e.g., after editing `.env`) |
+| `pm2 list` | Check if the proxy is running |
+
+### Step 4: Launch Claude Code
 
 ```bash
 ./claude-free
 ```
 
-You'll see a list of all available AI models. Pick one, press enter, and Claude Code starts with that model. Done!
+You'll see a searchable list of all available AI models. Pick one, press enter, and Claude Code starts with that model. Done!
 
 ---
 
@@ -62,17 +72,7 @@ Every time you run `./claude-free`, you choose which AI model to use. No config 
 ./claude-free
 ```
 
-You'll see a searchable list of every available model. Pick one and go.
-
-**Tip:** Install [fzf](https://github.com/junegunn/fzf) for a much better experience — it turns the list into a fuzzy search where you just type to filter (e.g., type "kimi" to find Kimi K2.5 instantly).
-
-```bash
-# macOS
-brew install fzf
-
-# Ubuntu/Debian
-sudo apt install fzf
-```
+You'll see a searchable list of every available model. Pick one and go. With fzf installed, just type a few letters to filter (e.g., type "kimi" to find Kimi K2.5 instantly).
 
 Any extra arguments you pass go straight to Claude Code:
 
@@ -129,29 +129,6 @@ To use the default model from your `.env` file instead of specifying one:
 ```bash
 ANTHROPIC_AUTH_TOKEN=freecc ANTHROPIC_BASE_URL=http://localhost:8082 claude
 ```
-
----
-
-## Running the Proxy in the Background
-
-By default you need to keep the proxy terminal open. If you want it to run silently in the background (so you can close the terminal), use [PM2](https://pm2.io/):
-
-```bash
-# Install PM2 (one time)
-npm install -g pm2
-
-# Start the proxy in the background
-pm2 start "uv run uvicorn server:app --host 0.0.0.0 --port 8082" --name "claude-proxy"
-```
-
-Now you can close the terminal. The proxy keeps running. Manage it with:
-
-| Command | What it does |
-| --- | --- |
-| `pm2 list` | Check if the proxy is running |
-| `pm2 logs claude-proxy` | See server logs (useful for troubleshooting) |
-| `pm2 stop claude-proxy` | Stop the proxy |
-| `pm2 restart claude-proxy` | Restart it (e.g., after editing `.env`) |
 
 ---
 
