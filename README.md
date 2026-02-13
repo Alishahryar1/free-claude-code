@@ -58,34 +58,13 @@ That's it — the proxy is now running in the background. You can close this ter
 ./claude-free
 ```
 
-You'll see a searchable list of all available AI models. Pick one, press enter, and Claude Code starts with that model. Done!
+You'll see a searchable list of every available model. Pick one and go. Just type a few letters to filter (e.g., type "kimi" to find Kimi K2.5 instantly).
 
 ---
 
-## Choosing a Model
+## Set Up Aliases (Optional, Recommended)
 
-Every time you run `./claude-free`, you choose which AI model to use. No config files to edit, no server restarts.
-
-### Option A: Interactive Picker (Recommended)
-
-```bash
-./claude-free
-```
-
-You'll see a searchable list of every available model. Pick one and go. With fzf installed, just type a few letters to filter (e.g., type "kimi" to find Kimi K2.5 instantly).
-
-Any extra arguments you pass go straight to Claude Code:
-
-```bash
-./claude-free --resume           # resume your last conversation
-./claude-free --model opus       # pass any Claude Code flag
-```
-
-### Option B: Set Up Aliases (Type Less)
-
-If you don't want to type `./claude-free` every time, or if you have a favorite model you always use, add aliases to your shell config.
-
-**For zsh users** (default on macOS), open `~/.zshrc`. **For bash users**, open `~/.bashrc`. Add:
+Add these to your `~/.zshrc` (macOS) or `~/.bashrc` (Linux) so you can run `claude-free` from anywhere:
 
 ```bash
 # Interactive model picker — works from any directory
@@ -97,9 +76,7 @@ alias claude-step='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOK
 alias claude-glm='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOKEN="freecc:z-ai/glm4.7" claude'
 ```
 
-**Important:** Replace `/full/path/to/free-claude-code/` with the actual path where you cloned the repo (e.g., `/Users/yourname/free-claude-code/`).
-
-Then reload your shell:
+Replace `/full/path/to/free-claude-code/` with the actual path where you cloned the repo (e.g., `/Users/yourname/Downloads/free-claude-code/`). Then reload your shell:
 
 ```bash
 source ~/.zshrc    # or: source ~/.bashrc
@@ -112,22 +89,6 @@ claude-free    # pick any model from a list
 claude-kimi    # go straight into Kimi K2.5
 claude-step    # go straight into Step 3.5 Flash
 claude-glm     # go straight into GLM 4.7
-```
-
-### Option C: Manual One-Liner
-
-If you just want to run it once without setting anything up:
-
-```bash
-ANTHROPIC_AUTH_TOKEN="freecc:moonshotai/kimi-k2.5" ANTHROPIC_BASE_URL=http://localhost:8082 claude
-```
-
-Replace `moonshotai/kimi-k2.5` with any model ID from the [Available Models](#available-models) section.
-
-To use the default model from your `.env` file instead of specifying one:
-
-```bash
-ANTHROPIC_AUTH_TOKEN=freecc ANTHROPIC_BASE_URL=http://localhost:8082 claude
 ```
 
 ---
@@ -252,64 +213,3 @@ All `NVIDIA_NIM_*` settings are strictly validated; unknown keys with this prefi
 
 See [`.env.example`](.env.example) for all supported parameters.
 
----
-
-## Development
-
-### Running Tests
-
-```bash
-uv run pytest
-```
-
-### Adding Your Own Provider
-
-Extend `BaseProvider` in `providers/` to add support for other APIs:
-
-```python
-from providers.base import BaseProvider, ProviderConfig
-
-class MyProvider(BaseProvider):
-    async def complete(self, request):
-        # Make API call, return raw JSON
-        pass
-
-    async def stream_response(self, request, input_tokens=0):
-        # Yield Anthropic SSE format events
-        pass
-
-    def convert_response(self, response_json, original_request):
-        # Convert to Anthropic response format
-        pass
-```
-
-### Adding Your Own Messaging App
-
-Extend `MessagingPlatform` in `messaging/` to add support for other platforms (Discord, Slack, etc.):
-
-```python
-from messaging.base import MessagingPlatform
-from messaging.models import IncomingMessage
-
-class MyPlatform(MessagingPlatform):
-    async def start(self):
-        # Initialize connection
-        pass
-
-    async def stop(self):
-        # Cleanup
-        pass
-
-    async def queue_send_message(self, chat_id, text, **kwargs):
-        # Send message to platform
-        pass
-
-    async def queue_edit_message(self, chat_id, message_id, text, **kwargs):
-        # Edit existing message
-        pass
-
-    def on_message(self, handler):
-        # Register callback for incoming messages
-        # Handler expects an IncomingMessage object
-        pass
-```
