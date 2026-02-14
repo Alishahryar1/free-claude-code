@@ -48,13 +48,12 @@ That's it! Claude Code now uses NVIDIA NIM for free.
 
 ---
 
-### Configure via VS Code Settings
+### Use with Claude Code VSCode Extenstion
 
-If the extension does not automatically pick up the global file, you can force it in VS Code Settings:
-
-1. Open Settings (`Ctrl + ,`).
-2. Search for `claude-code.environmentVariables`.
-3. Click **Edit in settings.json** and add the following block:
+1. Start the proxy.
+2. Open Settings (`Ctrl + ,`).
+3. Search for `claude-code.environmentVariables`.
+4. Click **Edit in settings.json** and add the following block:
 
 ```json
 "claude-code.environmentVariables": [
@@ -62,6 +61,8 @@ If the extension does not automatically pick up the global file, you can force i
   { "name": "ANTHROPIC_API_KEY", "value": "ccnim" }
 ]
 ```
+
+That's it! The Claude Code VSCode extension now uses NVIDIA NIM for free.
 
 ---
 
