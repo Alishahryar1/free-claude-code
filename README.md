@@ -89,6 +89,7 @@ uv run uvicorn server:app --host 0.0.0.0 --port 8082
      - ✅ **Final result** when complete
    - Send `/stop` to cancel all running tasks
    - Reply `/stop` to a running task to cancel it
+   - Send `/clear` to clear the chat and delete all sessions from memory
 
 ## Available Models
 
