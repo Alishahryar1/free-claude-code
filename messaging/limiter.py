@@ -2,17 +2,69 @@
 Global Rate Limiter for Messaging Platforms.
 
 Centralizes outgoing message requests and ensures compliance with rate limits
-using a leaky bucket algorithm (aiolimiter) and a task queue.
+using a strict sliding window algorithm and a task queue.
 """
 
 import asyncio
 import logging
 import os
 from collections import deque
+import time
 from typing import Awaitable, Callable, Any, Optional, Dict
-from aiolimiter import AsyncLimiter
 
 logger = logging.getLogger(__name__)
+
+
+class SlidingWindowLimiter:
+    """Strict sliding window limiter.
+
+    Guarantees: at most `rate_limit` acquisitions in any interval of length
+    `rate_window` (seconds).
+
+    Implemented as an async context manager so call sites can do:
+        async with limiter:
+            ...
+    """
+
+    def __init__(self, rate_limit: int, rate_window: float) -> None:
+        if rate_limit <= 0:
+            raise ValueError("rate_limit must be > 0")
+        if rate_window <= 0:
+            raise ValueError("rate_window must be > 0")
+
+        self._rate_limit = int(rate_limit)
+        self._rate_window = float(rate_window)
+        self._times: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        while True:
+            wait_time = 0.0
+            async with self._lock:
+                now = time.monotonic()
+                cutoff = now - self._rate_window
+
+                while self._times and self._times[0] <= cutoff:
+                    self._times.popleft()
+
+                if len(self._times) < self._rate_limit:
+                    self._times.append(now)
+                    return
+
+                oldest = self._times[0]
+                wait_time = max(0.0, (oldest + self._rate_window) - now)
+
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+            else:
+                await asyncio.sleep(0)
+
+    async def __aenter__(self) -> "SlidingWindowLimiter":
+        await self.acquire()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
 
 
 class MessagingRateLimiter:
@@ -49,7 +101,7 @@ class MessagingRateLimiter:
         rate_limit = int(os.getenv("MESSAGING_RATE_LIMIT", "1"))
         rate_window = float(os.getenv("MESSAGING_RATE_WINDOW", "2.0"))
 
-        self.limiter = AsyncLimiter(rate_limit, rate_window)
+        self.limiter = SlidingWindowLimiter(rate_limit, rate_window)
         # Custom queue state - using deque for O(1) popleft
         self._queue_list: deque[str] = deque()  # Deque of dedup_keys in order
         self._queue_map: Dict[

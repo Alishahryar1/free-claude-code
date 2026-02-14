@@ -15,7 +15,6 @@ dependencies = [
     "websockets>=13.0",
     "python-telegram-bot>=21.0",
     "pydantic-settings>=2.12.0",
-    "aiolimiter>=1.2.1",
     "openai>=2.16.0",
 ]
 

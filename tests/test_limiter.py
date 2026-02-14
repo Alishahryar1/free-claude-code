@@ -212,3 +212,32 @@ class TestMessagingRateLimiter:
             pass
 
         assert limiter._paused_until > 0
+
+    @pytest.mark.asyncio
+    async def test_proactive_strict_sliding_window(self):
+        """
+        Proactive limiter should enforce a strict sliding window:
+        for any i, t[i+rate_limit] - t[i] >= rate_window (within tolerance).
+        """
+        os.environ["MESSAGING_RATE_LIMIT"] = "2"
+        os.environ["MESSAGING_RATE_WINDOW"] = "0.5"
+        MessagingRateLimiter._instance = None
+        limiter = await MessagingRateLimiter.get_instance()
+
+        async def acquire(i: int) -> float:
+            async def _do() -> float:
+                return time.monotonic()
+
+            return await limiter.enqueue(_do, dedup_key=f"strict:{i}")
+
+        acquired = await asyncio.gather(*(acquire(i) for i in range(5)))
+        acquired.sort()
+
+        rate_limit = 2
+        rate_window = 0.5
+        tolerance = 0.05
+        for i in range(len(acquired) - rate_limit):
+            assert acquired[i + rate_limit] - acquired[i] >= rate_window - tolerance, (
+                f"Sliding window violated at i={i}: "
+                f"dt={acquired[i + rate_limit] - acquired[i]:.3f}s"
+            )
