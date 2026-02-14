@@ -48,6 +48,23 @@ That's it! Claude Code now uses NVIDIA NIM for free.
 
 ---
 
+### Configure via VS Code Settings
+
+If the extension does not automatically pick up the global file, you can force it in VS Code Settings:
+
+1. Open Settings (`Ctrl + ,`).
+2. Search for `claude-code.environmentVariables`.
+3. Click **Edit in settings.json** and add the following block:
+
+```json
+"claude-code.environmentVariables": [
+  { "name": "ANTHROPIC_BASE_URL", "value": "http://localhost:8082" },
+  { "name": "ANTHROPIC_API_KEY", "value": "ccnim" }
+]
+```
+
+---
+
 ### Telegram Bot Integration
 
 Control Claude Code remotely via Telegram! Set an allowed directory, send tasks from your phone, and watch Claude-Code autonomously work on multiple tasks.
