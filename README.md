@@ -6,6 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-orange.svg?style=for-the-badge)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-00c0ff.svg?style=for-the-badge)](https://www.python.org/downloads/)
+[![uv](https://img.shields.io/badge/uv-FF8C00.svg?style=for-the-badge)](https://github.com/astral-sh/uv)
 [![pytest](https://img.shields.io/badge/pytest-95%25-00ff00.svg?style=for-the-badge)](https://github.com/pytest-dev/pytest)
 [![Type checking: Ty](https://img.shields.io/badge/checked%20with-ty-ffcc00.svg?style=for-the-badge)](https://github.com/pypa/ty)
 [![Code style: Ruff](https://img.shields.io/badge/code%20style-ruff-f5a623.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
