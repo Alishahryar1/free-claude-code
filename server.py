@@ -16,7 +16,7 @@ if __name__ == "__main__":
 
     settings = get_settings()
     try:
-        # Avoid hanging forever on Ctrl+C when there are stuck connections/tasks.
+        # timeout_graceful_shutdown ensures uvicorn doesn't hang on task cleanup.
         uvicorn.run(
             app,
             host=settings.host,
@@ -25,5 +25,5 @@ if __name__ == "__main__":
             timeout_graceful_shutdown=5,
         )
     finally:
-        # Safety net for Ctrl+C cases where lifespan shutdown doesn't fully run.
+        # Safety net: cleanup subprocesses if lifespan shutdown doesn't fully run.
         kill_all_best_effort()

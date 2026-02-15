@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-import signal
 
 # Opt-in to future behavior for python-telegram-bot
 os.environ["PTB_TIMEDELTA"] = "1"
@@ -16,8 +15,6 @@ from .routes import router
 from .dependencies import cleanup_provider
 from providers.exceptions import ProviderError
 from config.settings import get_settings
-
-from utils.signal_handlers import install_chained_signal_handlers
 
 # Configure logging (atomic - only on true fresh start)
 _settings = get_settings()
@@ -50,9 +47,6 @@ async def _best_effort(
     """Run a shutdown step with timeout; never raise to callers."""
     try:
         await asyncio.wait_for(awaitable, timeout=timeout_s)
-    except asyncio.CancelledError:
-        # Shutdown tasks may be cancelled; treat as a successful "best effort".
-        return
     except asyncio.TimeoutError:
         logger.warning(f"Shutdown step timed out: {name} ({timeout_s}s)")
     except Exception as e:
@@ -70,86 +64,6 @@ async def lifespan(app: FastAPI):
     message_handler = None
     cli_manager = None
 
-    # Ctrl+C shutdown assist: chain SIGINT/SIGTERM to trigger early cleanup.
-    shutdown_event = asyncio.Event()
-    # Keep a plain counter because asyncio.Event state may lag behind
-    # call_soon_threadsafe when signals arrive back-to-back.
-    signal_count = {"n": 0}
-    loop = asyncio.get_running_loop()
-
-    def _on_signal(signum: int, _frame) -> None:
-        signal_count["n"] += 1
-        logger.warning(
-            f"Signal received: {signum} (count={signal_count['n']}); requesting shutdown"
-        )
-        # On Windows + uvicorn, shutdown can hang indefinitely when
-        # timeout_graceful_shutdown is None and there are stuck connections/tasks.
-        # A second signal should always force termination.
-        if signal_count["n"] >= 2:
-            logger.error("Second shutdown signal; forcing exit")
-            try:
-                from cli.process_registry import kill_all_best_effort
-
-                kill_all_best_effort()
-            finally:
-                os._exit(130)
-        try:
-            loop.call_soon_threadsafe(shutdown_event.set)
-        except Exception:
-            # Best-effort fallback; should still be safe if we're already on-loop.
-            shutdown_event.set()
-
-    signals = [signal.SIGINT, signal.SIGTERM]
-    if hasattr(signal, "SIGBREAK"):
-        # Windows Ctrl+Break.
-        signals.append(signal.SIGBREAK)
-
-    restore_signal_handlers = install_chained_signal_handlers(
-        signals=signals,
-        handler=_on_signal,
-    )
-    logger.info(f"Installed shutdown signal handlers: {[int(s) for s in signals]}")
-
-    async def _early_shutdown_worker() -> None:
-        await shutdown_event.wait()
-        logger.warning("Early shutdown: running best-effort cleanup steps")
-        try:
-            from cli.process_registry import kill_all_best_effort
-
-            kill_all_best_effort()
-        except Exception:
-            pass
-
-        # Try to stop the Telegram poller quickly; lifespan cleanup will also run.
-        mp = getattr(app.state, "messaging_platform", None)
-        cm = getattr(app.state, "cli_manager", None)
-        mh = getattr(app.state, "message_handler", None)
-        if mp:
-            await _best_effort(
-                "early.messaging_platform.stop", mp.stop(), timeout_s=2.0
-            )
-        if mh:
-            await _best_effort(
-                "early.message_handler.stop_all_tasks",
-                mh.stop_all_tasks(),
-                timeout_s=2.0,
-            )
-        if cm:
-            await _best_effort(
-                "early.cli_manager.stop_all", cm.stop_all(), timeout_s=2.0
-            )
-        try:
-            from messaging.limiter import MessagingRateLimiter
-
-            await _best_effort(
-                "early.MessagingRateLimiter.shutdown_instance",
-                MessagingRateLimiter.shutdown_instance(),
-                timeout_s=2.0,
-            )
-        except Exception:
-            pass
-
-    early_shutdown_task = asyncio.create_task(_early_shutdown_worker())
 
     try:
         # Use the messaging factory to create the right platform
@@ -264,17 +178,6 @@ async def lifespan(app: FastAPI):
         )
     except Exception:
         # Limiter may never have been imported/initialized.
-        pass
-
-    # Stop the early-shutdown worker and restore signal handlers.
-    try:
-        early_shutdown_task.cancel()
-        await _best_effort("early_shutdown_task", early_shutdown_task, timeout_s=1.0)
-    except Exception:
-        pass
-    try:
-        restore_signal_handlers()
-    except Exception:
         pass
 
     logger.info("Server shut down cleanly")
