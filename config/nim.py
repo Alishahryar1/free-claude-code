@@ -1,13 +1,12 @@
-"""NVIDIA NIM settings (strict validation)."""
+"""NVIDIA NIM settings (fixed values, no env config)."""
 
-from typing import Optional, Literal
+from typing import Literal, Optional
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class NimSettings(BaseSettings):
-    """Strictly validated NVIDIA NIM settings."""
+class NimSettings(BaseModel):
+    """Fixed NVIDIA NIM settings (not configurable via env)."""
 
     temperature: float = Field(1.0, ge=0.0)
     top_p: float = Field(1.0, ge=0.0, le=1.0)
@@ -34,12 +33,7 @@ class NimSettings(BaseSettings):
     reasoning_effort: Literal["low", "medium", "high"] = "high"
     include_reasoning: bool = True
 
-    model_config = SettingsConfigDict(
-        env_prefix="NVIDIA_NIM_",
-        # Rely on global load_dotenv in config.settings to avoid
-        # reading unrelated .env keys into this settings model.
-        extra="forbid",
-    )
+    model_config = ConfigDict(extra="forbid")
 
     @field_validator("top_k")
     @classmethod
