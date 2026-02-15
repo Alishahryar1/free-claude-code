@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, cursor/readme-badges-best-practices-2d69]
+    branches: [main, master]
   pull_request:
-    branches: [main, master, cursor/readme-badges-best-practices-2d69]
+    branches: [main, master]
 
 jobs:
   ci:
