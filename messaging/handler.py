@@ -450,10 +450,11 @@ class ClaudeMessageHandler:
                 if event_count % 10 == 0:
                     logger.debug(f"HANDLER: Processed {event_count} events so far")
 
-                captured_session_id, temp_session_id = (
-                    await self._handle_session_info_event(
-                        event_data, tree, node_id, captured_session_id, temp_session_id
-                    )
+                (
+                    captured_session_id,
+                    temp_session_id,
+                ) = await self._handle_session_info_event(
+                    event_data, tree, node_id, captured_session_id, temp_session_id
                 )
                 if event_data.get("type") == "session_info":
                     continue
@@ -462,17 +463,18 @@ class ClaudeMessageHandler:
                 logger.debug(f"HANDLER: Parsed {len(parsed_list)} events from CLI")
 
                 for parsed in parsed_list:
-                    last_status, had_transcript_events = (
-                        await self._process_parsed_event(
-                            parsed,
-                            transcript,
-                            update_ui,
-                            last_status,
-                            had_transcript_events,
-                            tree,
-                            node_id,
-                            captured_session_id,
-                        )
+                    (
+                        last_status,
+                        had_transcript_events,
+                    ) = await self._process_parsed_event(
+                        parsed,
+                        transcript,
+                        update_ui,
+                        last_status,
+                        had_transcript_events,
+                        tree,
+                        node_id,
+                        captured_session_id,
                     )
 
         except asyncio.CancelledError:

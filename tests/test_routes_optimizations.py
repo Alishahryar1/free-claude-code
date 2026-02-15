@@ -55,9 +55,7 @@ def test_create_message_quota_check_mock(client, mock_settings):
         "messages": [{"role": "user", "content": "quota check"}],
     }
 
-    with patch(
-        "api.optimization_handlers.is_quota_check_request", return_value=True
-    ):
+    with patch("api.optimization_handlers.is_quota_check_request", return_value=True):
         response = client.post("/v1/messages", json=payload)
 
     assert response.status_code == 200

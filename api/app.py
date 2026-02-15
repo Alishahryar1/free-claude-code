@@ -64,7 +64,6 @@ async def lifespan(app: FastAPI):
     message_handler = None
     cli_manager = None
 
-
     try:
         # Use the messaging factory to create the right platform
         from messaging.factory import create_messaging_platform

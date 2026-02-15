@@ -7,6 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![Checked with ty](https://img.shields.io/badge/checked%20with-ty-brightgreen.svg)](https://github.com/pypa/ty)
 
 A lightweight proxy that converts Claude Code's Anthropic API requests to NVIDIA NIM format.  
 **40 reqs/min free** · **Telegram bot** · **VSCode & CLI**
@@ -153,50 +154,50 @@ curl "https://integrate.api.nvidia.com/v1/models" > nvidia_nim_models.json
 
 ## Configuration
 
-| Variable                          | Description                     | Default                               |
-| --------------------------------- | ------------------------------- | ------------------------------------- |
-| `NVIDIA_NIM_API_KEY`              | Your NVIDIA API key             | required                              |
-| `MODEL`                           | Model to use for all requests   | `moonshotai/kimi-k2-thinking`         |
-| `CLAUDE_WORKSPACE`                | Directory for agent workspace   | `./agent_workspace`                   |
-| `ALLOWED_DIR`                     | Allowed directories for agent   | `""`                                  |
-| `MAX_CLI_SESSIONS`                | Max concurrent CLI sessions     | `10`                                  |
-| `FAST_PREFIX_DETECTION`           | Enable fast prefix detection    | `true`                                |
-| `ENABLE_NETWORK_PROBE_MOCK`       | Enable network probe mock       | `true`                                |
-| `ENABLE_TITLE_GENERATION_SKIP`    | Skip title generation           | `true`                                |
-| `ENABLE_SUGGESTION_MODE_SKIP`     | Skip suggestion mode            | `true`                                |
-| `ENABLE_FILEPATH_EXTRACTION_MOCK` | Enable filepath extraction mock | `true`                                |
-| `TELEGRAM_BOT_TOKEN`              | Telegram Bot Token              | `""`                                  |
-| `ALLOWED_TELEGRAM_USER_ID`        | Allowed Telegram User ID        | `""`                                  |
-| `MESSAGING_RATE_LIMIT`            | Telegram messages per window    | `1`                                   |
-| `MESSAGING_RATE_WINDOW`           | Messaging window (seconds)      | `1`                                   |
-| `NVIDIA_NIM_RATE_LIMIT`           | API requests per window         | `40`                                  |
-| `NVIDIA_NIM_RATE_WINDOW`          | Rate limit window (seconds)     | `60`                                  |
+| Variable                          | Description                     | Default                       |
+| --------------------------------- | ------------------------------- | ----------------------------- |
+| `NVIDIA_NIM_API_KEY`              | Your NVIDIA API key             | required                      |
+| `MODEL`                           | Model to use for all requests   | `moonshotai/kimi-k2-thinking` |
+| `CLAUDE_WORKSPACE`                | Directory for agent workspace   | `./agent_workspace`           |
+| `ALLOWED_DIR`                     | Allowed directories for agent   | `""`                          |
+| `MAX_CLI_SESSIONS`                | Max concurrent CLI sessions     | `10`                          |
+| `FAST_PREFIX_DETECTION`           | Enable fast prefix detection    | `true`                        |
+| `ENABLE_NETWORK_PROBE_MOCK`       | Enable network probe mock       | `true`                        |
+| `ENABLE_TITLE_GENERATION_SKIP`    | Skip title generation           | `true`                        |
+| `ENABLE_SUGGESTION_MODE_SKIP`     | Skip suggestion mode            | `true`                        |
+| `ENABLE_FILEPATH_EXTRACTION_MOCK` | Enable filepath extraction mock | `true`                        |
+| `TELEGRAM_BOT_TOKEN`              | Telegram Bot Token              | `""`                          |
+| `ALLOWED_TELEGRAM_USER_ID`        | Allowed Telegram User ID        | `""`                          |
+| `MESSAGING_RATE_LIMIT`            | Telegram messages per window    | `1`                           |
+| `MESSAGING_RATE_WINDOW`           | Messaging window (seconds)      | `1`                           |
+| `NVIDIA_NIM_RATE_LIMIT`           | API requests per window         | `40`                          |
+| `NVIDIA_NIM_RATE_WINDOW`          | Rate limit window (seconds)     | `60`                          |
 
 The NVIDIA NIM base URL is fixed to `https://integrate.api.nvidia.com/v1`.
 
 **NIM Settings (prefix `NVIDIA_NIM_`)**
 
-| Variable                              | Description                           | Default   |
-| ------------------------------------- | ------------------------------------- | --------- |
-| `NVIDIA_NIM_TEMPERATURE`              | Sampling temperature                  | `1.0`     |
-| `NVIDIA_NIM_TOP_P`                    | Top-p nucleus sampling                | `1.0`     |
-| `NVIDIA_NIM_TOP_K`                    | Top-k sampling                        | `-1`      |
-| `NVIDIA_NIM_MAX_TOKENS`               | Max tokens for generation             | `81920`   |
-| `NVIDIA_NIM_PRESENCE_PENALTY`         | Presence penalty                      | `0.0`     |
-| `NVIDIA_NIM_FREQUENCY_PENALTY`        | Frequency penalty                     | `0.0`     |
-| `NVIDIA_NIM_MIN_P`                    | Min-p sampling                        | `0.0`     |
-| `NVIDIA_NIM_REPETITION_PENALTY`       | Repetition penalty                    | `1.0`     |
-| `NVIDIA_NIM_SEED`                     | RNG seed (blank = unset)              | unset     |
-| `NVIDIA_NIM_STOP`                     | Stop string (blank = unset)           | unset     |
-| `NVIDIA_NIM_PARALLEL_TOOL_CALLS`      | Parallel tool calls                   | `true`    |
-| `NVIDIA_NIM_RETURN_TOKENS_AS_TOKEN_IDS` | Return token ids                    | `false`   |
-| `NVIDIA_NIM_INCLUDE_STOP_STR_IN_OUTPUT` | Include stop string in output       | `false`   |
-| `NVIDIA_NIM_IGNORE_EOS`               | Ignore EOS token                      | `false`   |
-| `NVIDIA_NIM_MIN_TOKENS`               | Minimum generated tokens              | `0`       |
-| `NVIDIA_NIM_CHAT_TEMPLATE`            | Chat template override                | unset     |
-| `NVIDIA_NIM_REQUEST_ID`               | Request id override                   | unset     |
-| `NVIDIA_NIM_REASONING_EFFORT`         | Reasoning effort                      | `high`    |
-| `NVIDIA_NIM_INCLUDE_REASONING`        | Include reasoning in response         | `true`    |
+| Variable                                | Description                   | Default |
+| --------------------------------------- | ----------------------------- | ------- |
+| `NVIDIA_NIM_TEMPERATURE`                | Sampling temperature          | `1.0`   |
+| `NVIDIA_NIM_TOP_P`                      | Top-p nucleus sampling        | `1.0`   |
+| `NVIDIA_NIM_TOP_K`                      | Top-k sampling                | `-1`    |
+| `NVIDIA_NIM_MAX_TOKENS`                 | Max tokens for generation     | `81920` |
+| `NVIDIA_NIM_PRESENCE_PENALTY`           | Presence penalty              | `0.0`   |
+| `NVIDIA_NIM_FREQUENCY_PENALTY`          | Frequency penalty             | `0.0`   |
+| `NVIDIA_NIM_MIN_P`                      | Min-p sampling                | `0.0`   |
+| `NVIDIA_NIM_REPETITION_PENALTY`         | Repetition penalty            | `1.0`   |
+| `NVIDIA_NIM_SEED`                       | RNG seed (blank = unset)      | unset   |
+| `NVIDIA_NIM_STOP`                       | Stop string (blank = unset)   | unset   |
+| `NVIDIA_NIM_PARALLEL_TOOL_CALLS`        | Parallel tool calls           | `true`  |
+| `NVIDIA_NIM_RETURN_TOKENS_AS_TOKEN_IDS` | Return token ids              | `false` |
+| `NVIDIA_NIM_INCLUDE_STOP_STR_IN_OUTPUT` | Include stop string in output | `false` |
+| `NVIDIA_NIM_IGNORE_EOS`                 | Ignore EOS token              | `false` |
+| `NVIDIA_NIM_MIN_TOKENS`                 | Minimum generated tokens      | `0`     |
+| `NVIDIA_NIM_CHAT_TEMPLATE`              | Chat template override        | unset   |
+| `NVIDIA_NIM_REQUEST_ID`                 | Request id override           | unset   |
+| `NVIDIA_NIM_REASONING_EFFORT`           | Reasoning effort              | `high`  |
+| `NVIDIA_NIM_INCLUDE_REASONING`          | Include reasoning in response | `true`  |
 
 All `NVIDIA_NIM_*` settings are strictly validated; unknown keys with this prefix will cause startup errors.
 
