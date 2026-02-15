@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     # ==================== Provider Selection ====================
     provider_type: str = "nvidia_nim"
 
+    # ==================== OpenRouter Config ====================
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_rate_limit: int = 20
+    openrouter_rate_window: int = 60
+
     # ==================== Messaging Platform Selection ====================
     messaging_platform: str = "telegram"
 

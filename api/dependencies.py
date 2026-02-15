@@ -3,7 +3,11 @@
 import logging
 from typing import Optional
 
-from config.settings import Settings, get_settings as _get_settings, NVIDIA_NIM_BASE_URL
+from config.settings import (
+    Settings,
+    get_settings as _get_settings,
+    NVIDIA_NIM_BASE_URL,
+)
 from providers.base import BaseProvider, ProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -35,14 +39,26 @@ def get_provider() -> BaseProvider:
             )
             _provider = NvidiaNimProvider(config)
             logger.info("Provider initialized: %s", settings.provider_type)
+        elif settings.provider_type == "openrouter":
+            from providers.openrouter import OpenRouterProvider
+
+            config = ProviderConfig(
+                api_key=settings.openrouter_api_key,
+                base_url=settings.openrouter_base_url,
+                rate_limit=settings.openrouter_rate_limit,
+                rate_window=settings.openrouter_rate_window,
+                nim_settings=settings.nim,
+            )
+            _provider = OpenRouterProvider(config)
+            logger.info("Provider initialized: %s", settings.provider_type)
         else:
             logger.error(
-                "Unknown provider_type: '%s'. Supported: 'nvidia_nim'",
+                "Unknown provider_type: '%s'. Supported: 'nvidia_nim', 'openrouter'",
                 settings.provider_type,
             )
             raise ValueError(
                 f"Unknown provider_type: '{settings.provider_type}'. "
-                f"Supported: 'nvidia_nim'"
+                f"Supported: 'nvidia_nim', 'openrouter'"
             )
     return _provider
 

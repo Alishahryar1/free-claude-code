@@ -12,10 +12,10 @@
 [![Code style: Ruff](https://img.shields.io/badge/code%20formatting-ruff-f5a623.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
 [![Logging: Loguru](https://img.shields.io/badge/logging-loguru-4ecdc4.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
 
-A lightweight proxy that converts Claude Code's Anthropic API requests to NVIDIA NIM format.  
-**40 reqs/min free** · **Telegram bot** · **VSCode & CLI**
+A lightweight proxy that converts Claude Code's Anthropic API requests to NVIDIA NIM or OpenRouter format.  
+**40 reqs/min free (NIM)** · **Free tier (OpenRouter)** · **Telegram bot** · **VSCode & CLI**
 
-[Quick Start](#quick-start) · [Telegram Bot](#telegram-bot-integration) · [Models](#available-models) · [Configuration](#configuration)
+[Quick Start](#quick-start) · [OpenRouter (Free Tier)](#openrouter-free-tier) · [Telegram Bot](#telegram-bot-integration) · [Models](#available-models) · [Configuration](#configuration)
 
 ---
 
@@ -94,6 +94,31 @@ That's it! The Claude Code VSCode extension now uses NVIDIA NIM for free. To go 
 
 ---
 
+### OpenRouter (Free Tier)
+
+[OpenRouter](https://openrouter.ai) provides access to multiple AI models through a unified API, including a **free tier** with credits. No credit card required to get started.
+
+1. **Get a free API key** at [openrouter.ai/keys](https://openrouter.ai/keys)
+2. Edit `.env`:
+
+```dotenv
+PROVIDER_TYPE=openrouter
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
+MODEL=google/gemini-2.0-flash-001
+```
+
+3. Start the server and use Claude Code as usual.
+
+**Popular free-tier models on OpenRouter:**
+
+- `google/gemini-2.0-flash-001` – Fast, capable
+- `meta-llama/llama-3.3-70b-instruct` – Strong reasoning
+- `anthropic/claude-3.5-haiku` – Claude on free credits
+
+Browse all models and pricing at [openrouter.ai/models](https://openrouter.ai/models).
+
+---
+
 ### Telegram Bot Integration
 
 Control Claude Code remotely via Telegram! Set an allowed directory, send tasks from your phone, and watch Claude-Code autonomously work on multiple tasks.
@@ -163,7 +188,9 @@ curl "https://integrate.api.nvidia.com/v1/models" > nvidia_nim_models.json
 
 | Variable                          | Description                     | Default                       |
 | --------------------------------- | ------------------------------- | ----------------------------- |
-| `NVIDIA_NIM_API_KEY`              | Your NVIDIA API key             | required                      |
+| `PROVIDER_TYPE`                   | Provider: `nvidia_nim` or `openrouter` | `nvidia_nim`             |
+| `NVIDIA_NIM_API_KEY`              | Your NVIDIA API key (when using nvidia_nim) | required          |
+| `OPENROUTER_API_KEY`             | Your OpenRouter API key (when using openrouter) | required       |
 | `MODEL`                           | Model to use for all requests   | `stepfun-ai/step-3.5-flash` |
 | `CLAUDE_WORKSPACE`                | Directory for agent workspace   | `./agent_workspace`           |
 | `ALLOWED_DIR`                     | Allowed directories for agent   | `""`                          |
@@ -179,6 +206,9 @@ curl "https://integrate.api.nvidia.com/v1/models" > nvidia_nim_models.json
 | `MESSAGING_RATE_WINDOW`           | Messaging window (seconds)      | `1`                           |
 | `NVIDIA_NIM_RATE_LIMIT`           | API requests per window         | `40`                          |
 | `NVIDIA_NIM_RATE_WINDOW`          | Rate limit window (seconds)     | `60`                          |
+| `OPENROUTER_BASE_URL`             | OpenRouter API URL              | `https://openrouter.ai/api/v1` |
+| `OPENROUTER_RATE_LIMIT`           | OpenRouter requests per window  | `20`                          |
+| `OPENROUTER_RATE_WINDOW`          | OpenRouter rate limit window    | `60`                          |
 
 The NVIDIA NIM base URL is fixed to `https://integrate.api.nvidia.com/v1`.
 
