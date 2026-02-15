@@ -86,6 +86,8 @@ uv run uvicorn server:app --host 0.0.0.0 --port 8082
 ]
 ```
 
+5. Reload extensions.
+
 That's it! The Claude Code VSCode extension now uses NVIDIA NIM for free. To go back to Anthropic models just comment out the the added block and reload extensions.
 
 ---
