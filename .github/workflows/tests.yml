@@ -6,18 +6,23 @@ on:
   pull_request:
     branches: [main, master]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  ci:
+  checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           fetch-depth: 1
- 
+
       - name: "Fail on type: ignore (no suppressions allowed)"
         run: |
           if grep -rE '# type: ignore|# ty: ignore' --include='*.py' . --exclude-dir=.venv --exclude-dir=.git; then
@@ -27,17 +32,37 @@ jobs:
           exit 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b
         with:
-          version: "latest"
+          version: "0.10.2"
           enable-cache: true
           cache-python: true
 
       - name: Type check
         run: uv run ty check
-      
+
       - name: Run tests
         run: uv run pytest -v --tb=short
+
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [checks]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b
+        with:
+          version: "0.10.2"
+          enable-cache: true
+          cache-python: true
 
       - name: Commit and push changes
         run: |
