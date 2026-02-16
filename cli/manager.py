@@ -28,6 +28,7 @@ class CLISessionManager:
         api_url: str,
         allowed_dirs: Optional[List[str]] = None,
         max_sessions: int = 10,
+        plans_directory: Optional[str] = None,
     ):
         """
         Initialize the session manager.
@@ -37,10 +38,12 @@ class CLISessionManager:
             api_url: API URL for the proxy
             allowed_dirs: Directories the CLI is allowed to access
             max_sessions: Maximum concurrent sessions
+            plans_directory: Directory for Claude Code CLI plan files (passed via --settings)
         """
         self.workspace = workspace_path
         self.api_url = api_url
         self.allowed_dirs = allowed_dirs or []
+        self.plans_directory = plans_directory
         self.max_sessions = max_sessions
 
         self._sessions: Dict[str, CLISession] = {}
@@ -83,6 +86,7 @@ class CLISessionManager:
                 workspace_path=self.workspace,
                 api_url=self.api_url,
                 allowed_dirs=self.allowed_dirs,
+                plans_directory=self.plans_directory,
             )
             self._pending_sessions[temp_id] = new_session
             logger.info(f"Created new session: {temp_id}")

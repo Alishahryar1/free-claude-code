@@ -17,10 +17,12 @@ class CLISession:
         workspace_path: str,
         api_url: str,
         allowed_dirs: Optional[List[str]] = None,
+        plans_directory: Optional[str] = None,
     ):
         self.workspace = os.path.normpath(os.path.abspath(workspace_path))
         self.api_url = api_url
         self.allowed_dirs = [os.path.normpath(d) for d in (allowed_dirs or [])]
+        self.plans_directory = plans_directory
         self.process: Optional[asyncio.subprocess.Process] = None
         self.current_session_id: Optional[str] = None
         self._is_busy = False
@@ -93,6 +95,10 @@ class CLISession:
             if self.allowed_dirs:
                 for d in self.allowed_dirs:
                     cmd.extend(["--add-dir", d])
+
+            if self.plans_directory is not None:
+                settings_json = json.dumps({"plansDirectory": self.plans_directory})
+                cmd.extend(["--settings", settings_json])
 
             try:
                 self.process = await asyncio.create_subprocess_exec(

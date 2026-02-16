@@ -79,11 +79,16 @@ async def lifespan(app: FastAPI):
 
             api_url = f"http://{settings.host}:{settings.port}/v1"
             allowed_dirs = [workspace] if settings.allowed_dir else []
+            plans_dir_abs = os.path.abspath(
+                os.path.join(settings.claude_workspace, "plans")
+            )
+            plans_directory = os.path.relpath(plans_dir_abs, workspace)
             cli_manager = CLISessionManager(
                 workspace_path=workspace,
                 api_url=api_url,
                 allowed_dirs=allowed_dirs,
                 max_sessions=settings.max_cli_sessions,
+                plans_directory=plans_directory,
             )
 
             # Initialize session store
