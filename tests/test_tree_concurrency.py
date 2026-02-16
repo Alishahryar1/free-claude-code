@@ -1,7 +1,6 @@
 """Concurrency and race condition tests for tree data structures and queue manager."""
 
 import pytest
-import pytest_asyncio
 import asyncio
 
 from messaging.models import IncomingMessage

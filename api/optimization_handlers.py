@@ -4,7 +4,6 @@ Each handler returns a MessagesResponse if the request matches and the
 optimization is enabled, otherwise None.
 """
 
-import logging
 import uuid
 from typing import Optional
 
@@ -19,8 +18,7 @@ from .detection import (
 )
 from .command_utils import extract_command_prefix, extract_filepaths_from_command
 from config.settings import Settings
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def try_prefix_detection(

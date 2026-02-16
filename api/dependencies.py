@@ -1,12 +1,12 @@
 """Dependency injection for FastAPI."""
 
-import logging
 from typing import Optional
+
+from loguru import logger
 
 from config.settings import Settings, get_settings as _get_settings, NVIDIA_NIM_BASE_URL
 from providers.base import BaseProvider, ProviderConfig
 
-logger = logging.getLogger(__name__)
 
 # Global provider instance (singleton)
 _provider: Optional[BaseProvider] = None

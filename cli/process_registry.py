@@ -8,13 +8,12 @@ spawn so we don't accidentally kill unrelated system processes.
 from __future__ import annotations
 
 import atexit
-import logging
 import os
 import subprocess
 import threading
 from typing import Set
+from loguru import logger
 
-logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _pids: Set[int] = set()

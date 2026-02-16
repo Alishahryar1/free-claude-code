@@ -7,13 +7,11 @@ and message trees for conversation continuation.
 
 import json
 import os
-import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, List, Any
 from dataclasses import dataclass, asdict
 import threading
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 @dataclass

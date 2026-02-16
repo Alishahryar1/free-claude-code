@@ -1,15 +1,14 @@
 """FastAPI route handlers."""
 
 import json
-import logging
 import uuid
 
 from fastapi import APIRouter, Request, Depends, HTTPException
-from loguru import logger as loguru_logger
+from loguru import logger
 from fastapi.responses import StreamingResponse
 
 from .models.anthropic import MessagesRequest, TokenCountRequest
-from .models.responses import MessagesResponse, TokenCountResponse
+from .models.responses import TokenCountResponse
 from .dependencies import get_provider, get_settings
 from .request_utils import get_token_count
 from .optimization_handlers import try_optimizations
@@ -18,7 +17,6 @@ from providers.base import BaseProvider
 from providers.exceptions import ProviderError
 from providers.logging_utils import build_request_summary, log_request_compact
 
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -75,7 +73,7 @@ async def create_message(
 async def count_tokens(request_data: TokenCountRequest):
     """Count tokens for a request."""
     request_id = f"req_{uuid.uuid4().hex[:12]}"
-    with loguru_logger.contextualize(request_id=request_id):
+    with logger.contextualize(request_id=request_id):
         try:
             tokens = get_token_count(
                 request_data.messages, request_data.system, request_data.tools

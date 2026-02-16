@@ -8,7 +8,6 @@ from providers.nvidia_nim.utils.sse_builder import (
     SSEBuilder,
     ContentBlockManager,
     map_stop_reason,
-    STOP_REASON_MAP,
 )
 
 

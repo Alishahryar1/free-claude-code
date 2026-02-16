@@ -5,8 +5,6 @@ from .think_parser import (
     ThinkTagParser,
     ContentType,
     ContentChunk,
-    extract_think_content,
-    extract_think_content_interleaved,
 )
 from .heuristic_tool_parser import HeuristicToolParser
 from .message_converter import (
@@ -23,8 +21,6 @@ __all__ = [
     "HeuristicToolParser",
     "ContentType",
     "ContentChunk",
-    "extract_think_content",
-    "extract_think_content_interleaved",
     "AnthropicToOpenAIConverter",
     "get_block_attr",
     "get_block_type",

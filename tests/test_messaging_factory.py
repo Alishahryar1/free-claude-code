@@ -1,6 +1,5 @@
 """Tests for messaging platform factory."""
 
-import pytest
 from unittest.mock import patch, MagicMock
 
 from messaging.factory import create_messaging_platform

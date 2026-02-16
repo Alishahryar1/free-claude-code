@@ -6,12 +6,11 @@ To add a new platform (e.g. Discord, Slack):
 2. Add a case to create_messaging_platform() below
 """
 
-import logging
 from typing import Optional
 
-from .base import MessagingPlatform
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from .base import MessagingPlatform
 
 
 def create_messaging_platform(

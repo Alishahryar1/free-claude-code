@@ -1,3 +1,4 @@
+import logging
 import pytest
 import asyncio
 import os
@@ -144,3 +145,24 @@ def incoming_message_factory():
         return IncomingMessage(**filtered)
 
     return _create
+
+
+@pytest.fixture(autouse=True)
+def _propagate_loguru_to_caplog():
+    """Route loguru logs to stdlib logging so pytest caplog captures them."""
+    from loguru import logger as loguru_logger
+
+    class _PropagateHandler:
+        def write(self, message):
+            record = message.record
+            level = record["level"].no
+            stdlib_level = min(level, logging.CRITICAL)
+            py_logger = logging.getLogger(record["name"])
+            py_logger.log(stdlib_level, record["message"])
+
+    handler_id = loguru_logger.add(_PropagateHandler(), format="{message}")
+    yield
+    try:
+        loguru_logger.remove(handler_id)
+    except ValueError:
+        pass  # Handler already removed (e.g. by test_logging_config tests)

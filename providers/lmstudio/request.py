@@ -1,11 +1,10 @@
 """Request builder for LM Studio provider."""
 
-import logging
 from typing import Any, Dict
 
 from providers.nvidia_nim.utils.message_converter import AnthropicToOpenAIConverter
+from loguru import logger
 
-logger = logging.getLogger(__name__)
 
 LMSTUDIO_DEFAULT_MAX_TOKENS = 81920
 

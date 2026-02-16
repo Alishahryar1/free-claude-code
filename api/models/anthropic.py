@@ -1,6 +1,5 @@
 """Pydantic models for Anthropic-compatible requests."""
 
-import logging
 from enum import Enum
 from typing import List, Dict, Any, Optional, Union, Literal
 
@@ -8,8 +7,7 @@ from pydantic import BaseModel, field_validator, model_validator
 
 from config.settings import get_settings
 from providers.model_utils import normalize_model_name
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 # =============================================================================

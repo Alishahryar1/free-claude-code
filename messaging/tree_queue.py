@@ -5,7 +5,6 @@ Uses TreeRepository for data, TreeQueueProcessor for async logic.
 """
 
 import asyncio
-import logging
 from datetime import datetime, timezone
 from typing import Callable, Awaitable, List, Optional
 
@@ -13,6 +12,7 @@ from .models import IncomingMessage
 from .tree_data import MessageState, MessageNode, MessageTree
 from .tree_repository import TreeRepository
 from .tree_processor import TreeQueueProcessor
+from loguru import logger
 
 # Backward compatibility: re-export moved classes
 __all__ = [
@@ -21,8 +21,6 @@ __all__ = [
     "MessageNode",
     "MessageTree",
 ]
-
-logger = logging.getLogger(__name__)
 
 
 class TreeQueueManager:

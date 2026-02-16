@@ -1,11 +1,10 @@
 """OpenRouter provider implementation."""
 
 import json
-import logging
 import uuid
 from typing import Any, AsyncIterator
 
-from loguru import logger as loguru_logger
+from loguru import logger
 from openai import AsyncOpenAI
 
 from providers.base import BaseProvider, ProviderConfig
@@ -21,7 +20,6 @@ from providers.nvidia_nim.utils import (
 
 from .request import build_request_body
 
-logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -56,7 +54,7 @@ class OpenRouterProvider(BaseProvider):
         request_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream response in Anthropic SSE format."""
-        with loguru_logger.contextualize(request_id=request_id):
+        with logger.contextualize(request_id=request_id):
             async for event in self._stream_response_impl(
                 request, input_tokens, request_id
             ):
@@ -277,20 +275,7 @@ class OpenRouterProvider(BaseProvider):
         fn_delta = tc.get("function", {})
         incoming_name = fn_delta.get("name")
         if incoming_name is not None:
-            prev = sse.blocks.tool_names.get(tc_index, "")
-            if not prev:
-                sse.blocks.tool_names[tc_index] = incoming_name
-            elif prev == incoming_name:
-                pass
-            elif isinstance(prev, str) and isinstance(incoming_name, str):
-                if incoming_name.startswith(prev):
-                    sse.blocks.tool_names[tc_index] = incoming_name
-                elif prev.startswith(incoming_name):
-                    pass
-                else:
-                    sse.blocks.tool_names[tc_index] = prev + incoming_name
-            else:
-                sse.blocks.tool_names[tc_index] = str(prev) + str(incoming_name)
+            sse.blocks.register_tool_name(tc_index, incoming_name)
 
         if tc_index not in sse.blocks.tool_indices:
             name = sse.blocks.tool_names.get(tc_index, "")
@@ -316,55 +301,14 @@ class OpenRouterProvider(BaseProvider):
 
             current_name = sse.blocks.tool_names.get(tc_index, "")
             if current_name == "Task":
-                if not sse.blocks.task_args_emitted.get(tc_index, False):
-                    buf = sse.blocks.task_arg_buffer.get(tc_index, "") + args
-                    sse.blocks.task_arg_buffer[tc_index] = buf
-                    try:
-                        args_json = json.loads(buf)
-                    except Exception:
-                        return
-                    if args_json.get("run_in_background") is not False:
-                        logger.info(
-                            "OPENROUTER_INTERCEPT: Forcing run_in_background=False for Task %s",
-                            tc.get("id")
-                            or sse.blocks.tool_ids.get(tc_index, "unknown"),
-                        )
-                        args_json["run_in_background"] = False
-                    sse.blocks.task_args_emitted[tc_index] = True
-                    sse.blocks.task_arg_buffer.pop(tc_index, None)
-                    yield sse.emit_tool_delta(tc_index, json.dumps(args_json))
+                parsed = sse.blocks.buffer_task_args(tc_index, args)
+                if parsed is not None:
+                    yield sse.emit_tool_delta(tc_index, json.dumps(parsed))
                 return
 
             yield sse.emit_tool_delta(tc_index, args)
 
     def _flush_task_arg_buffers(self, sse: Any):
         """Emit buffered Task args as a single JSON delta (best-effort)."""
-        for tool_index, buf in list(sse.blocks.task_arg_buffer.items()):
-            if sse.blocks.task_args_emitted.get(tool_index, False):
-                sse.blocks.task_arg_buffer.pop(tool_index, None)
-                continue
-
-            tool_id = sse.blocks.tool_ids.get(tool_index, "unknown")
-            out = "{}"
-            try:
-                args_json = json.loads(buf)
-                if args_json.get("run_in_background") is not False:
-                    logger.info(
-                        "OPENROUTER_INTERCEPT: Forcing run_in_background=False for Task %s",
-                        tool_id,
-                    )
-                    args_json["run_in_background"] = False
-                out = json.dumps(args_json)
-            except Exception as e:
-                prefix = buf[:120]
-                logger.warning(
-                    "OPENROUTER_INTERCEPT: Task args invalid JSON (id=%s len=%d prefix=%r): %s",
-                    tool_id,
-                    len(buf),
-                    prefix,
-                    e,
-                )
-
-            sse.blocks.task_args_emitted[tool_index] = True
-            sse.blocks.task_arg_buffer.pop(tool_index, None)
+        for tool_index, out in sse.blocks.flush_task_arg_buffers():
             yield sse.emit_tool_delta(tool_index, out)

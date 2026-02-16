@@ -3,15 +3,12 @@ import pytest_asyncio
 import asyncio
 import time
 import os
-import logging
 
 # Set environment variables relative to test execution
 os.environ["MESSAGING_RATE_LIMIT"] = "1"
 os.environ["MESSAGING_RATE_WINDOW"] = "0.5"
 
 from messaging.limiter import MessagingRateLimiter
-
-logger = logging.getLogger(__name__)
 
 
 class TestMessagingRateLimiter:

@@ -1,7 +1,5 @@
 """Tests for api/models/responses.py Pydantic response models."""
 
-import pytest
-
 from api.models.responses import MessagesResponse, Usage, TokenCountResponse
 from api.models.anthropic import (
     ContentBlockText,

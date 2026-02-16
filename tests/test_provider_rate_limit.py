@@ -2,12 +2,8 @@ import pytest
 import pytest_asyncio
 import asyncio
 import time
-import os
-import logging
 
 from providers.rate_limit import GlobalRateLimiter
-
-logger = logging.getLogger(__name__)
 
 
 class TestProviderRateLimiter:

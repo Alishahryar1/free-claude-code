@@ -38,6 +38,9 @@ jobs:
           enable-cache: true
           cache-python: true
 
+      - name: Lint
+        run: uv run ruff check
+
       - name: Type check
         run: uv run ty check
 

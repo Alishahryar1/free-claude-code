@@ -6,12 +6,10 @@ while maintaining full traceability through request IDs and content hashes.
 
 import hashlib
 import json
-import logging
 from typing import Any, Dict, List
 
 from utils.text import extract_text_from_content
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def generate_request_fingerprint(messages: List[Any]) -> str:
@@ -99,7 +97,7 @@ def build_request_summary(request_data: Any) -> Dict[str, Any]:
 
 
 def log_full_payload(
-    logger_instance: logging.Logger, request_id: str, payload: Dict[str, Any]
+    logger_instance: Any, request_id: str, payload: Dict[str, Any]
 ) -> None:
     """Log full payload to the standard logger."""
     logger_instance.debug(
@@ -108,7 +106,7 @@ def log_full_payload(
 
 
 def log_request_compact(
-    logger_instance: logging.Logger,
+    logger_instance: Any,
     request_id: str,
     request_data: Any,
     prefix: str = "API_REQUEST",

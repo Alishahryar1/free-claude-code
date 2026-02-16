@@ -1,10 +1,9 @@
 import re
-import logging
 import uuid
 from enum import Enum
 from typing import List, Dict, Any, Tuple
+from loguru import logger
 
-logger = logging.getLogger(__name__)
 
 # Some OpenAI-compatible backends/models occasionally leak internal sentinel tokens
 # into `delta.content` (e.g. "<|tool_call_end|>"). These should never be shown to

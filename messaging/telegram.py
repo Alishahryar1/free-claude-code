@@ -5,7 +5,6 @@ Implements MessagingPlatform for Telegram using python-telegram-bot.
 """
 
 import asyncio
-import logging
 import os
 
 # Opt-in to future behavior for python-telegram-bot (retry_after as timedelta)
@@ -14,11 +13,12 @@ os.environ["PTB_TIMEDELTA"] = "1"
 
 from typing import Callable, Awaitable, Optional, Any
 
+from loguru import logger
+
 from .base import MessagingPlatform
 from .models import IncomingMessage
 from .telegram_markdown import escape_md_v2
 
-logger = logging.getLogger(__name__)
 
 # Optional import - python-telegram-bot may not be installed
 try:

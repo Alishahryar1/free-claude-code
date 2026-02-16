@@ -1,12 +1,10 @@
 """Request builder for NVIDIA NIM provider."""
 
-import logging
 from typing import Any, Dict
 
 from config.nim import NimSettings
 from .utils.message_converter import AnthropicToOpenAIConverter
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def _set_if_not_none(body: Dict[str, Any], key: str, value: Any) -> None:

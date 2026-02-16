@@ -6,13 +6,11 @@ using a strict sliding window algorithm and a task queue.
 """
 
 import asyncio
-import logging
 import os
 from collections import deque
 import time
 from typing import Awaitable, Callable, Any, Optional, Dict
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class SlidingWindowLimiter:

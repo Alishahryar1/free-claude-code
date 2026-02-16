@@ -2,7 +2,6 @@ import pytest
 import json
 from unittest.mock import MagicMock, AsyncMock, patch
 from providers.nvidia_nim import NvidiaNimProvider
-from providers.exceptions import APIError
 
 
 # Mock data classes

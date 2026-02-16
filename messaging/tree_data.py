@@ -4,7 +4,6 @@ Contains MessageState, MessageNode, and MessageTree classes.
 """
 
 import asyncio
-import logging
 from collections import deque
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -13,8 +12,7 @@ from typing import Dict, Optional, List, Any, cast
 from dataclasses import dataclass, field
 
 from .models import IncomingMessage
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class MessageState(Enum):

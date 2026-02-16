@@ -6,7 +6,6 @@ import os
 # Opt-in to future behavior for python-telegram-bot
 os.environ["PTB_TIMEDELTA"] = "1"
 
-import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -18,11 +17,12 @@ from config.logging_config import configure_logging
 _settings = get_settings()
 configure_logging(_settings.log_file)
 
+from loguru import logger
+
 from .routes import router
 from .dependencies import cleanup_provider
 from providers.exceptions import ProviderError
 
-logger = logging.getLogger(__name__)
 
 _SHUTDOWN_TIMEOUT_S = 5.0
 

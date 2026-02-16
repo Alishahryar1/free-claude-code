@@ -3,12 +3,10 @@
 import asyncio
 import os
 import json
-import logging
-from typing import AsyncGenerator, Optional, Dict, List, Any
+from typing import AsyncGenerator, Optional, List, Any
 
 from .process_registry import register_pid, unregister_pid
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class CLISession:

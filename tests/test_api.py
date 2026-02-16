@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from api.app import app
 from api.dependencies import get_provider
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 from providers.nvidia_nim import NvidiaNimProvider
 
 # Mock provider

@@ -9,14 +9,11 @@ the transcript grows over time and older content must be truncated.
 from __future__ import annotations
 
 import json
-import logging
 import os
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional
-
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def _safe_json_dumps(obj: Any) -> str:

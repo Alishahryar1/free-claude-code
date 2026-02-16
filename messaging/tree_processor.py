@@ -4,12 +4,10 @@ Handles the async processing lifecycle of tree nodes.
 """
 
 import asyncio
-import logging
 from typing import Callable, Awaitable, Optional
 
 from .tree_data import MessageTree, MessageNode, MessageState
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class TreeQueueProcessor:

@@ -1,9 +1,10 @@
 """SSE event builder for Anthropic-format streaming responses."""
 
 import json
-import logging
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, Iterator
+from typing import Optional, Dict, Any, Iterator, List, Tuple
+
+from loguru import logger
 
 try:
     import tiktoken
@@ -12,7 +13,6 @@ try:
 except Exception:
     ENCODER = None
 
-logger = logging.getLogger(__name__)
 
 # Map OpenAI finish_reason to Anthropic stop_reason
 STOP_REASON_MAP = {
@@ -53,6 +53,76 @@ class ContentBlockManager:
         idx = self.next_index
         self.next_index += 1
         return idx
+
+    def register_tool_name(self, index: int, name: str) -> None:
+        """Register or merge a streaming tool name fragment.
+
+        Handles providers that stream names as fragments and those that
+        resend the full name on every chunk.
+        """
+        prev = self.tool_names.get(index, "")
+        if not prev:
+            self.tool_names[index] = name
+        elif prev == name:
+            pass
+        elif name.startswith(prev):
+            self.tool_names[index] = name
+        elif prev.startswith(name):
+            pass
+        else:
+            self.tool_names[index] = prev + name
+
+    def buffer_task_args(self, index: int, args: str) -> Optional[dict]:
+        """Buffer Task tool args and return parsed JSON when complete.
+
+        Returns the parsed (and patched) args dict once the buffer forms
+        valid JSON, or None if still accumulating.
+        """
+        if self.task_args_emitted.get(index, False):
+            return None
+
+        buf = self.task_arg_buffer.get(index, "") + args
+        self.task_arg_buffer[index] = buf
+        try:
+            args_json = json.loads(buf)
+        except Exception:
+            return None
+
+        if args_json.get("run_in_background") is not False:
+            args_json["run_in_background"] = False
+
+        self.task_args_emitted[index] = True
+        self.task_arg_buffer.pop(index, None)
+        return args_json
+
+    def flush_task_arg_buffers(self) -> List[Tuple[int, str]]:
+        """Flush any remaining Task arg buffers. Returns (tool_index, json_str) pairs."""
+        results: List[Tuple[int, str]] = []
+        for tool_index, buf in list(self.task_arg_buffer.items()):
+            if self.task_args_emitted.get(tool_index, False):
+                self.task_arg_buffer.pop(tool_index, None)
+                continue
+
+            out = "{}"
+            try:
+                args_json = json.loads(buf)
+                if args_json.get("run_in_background") is not False:
+                    args_json["run_in_background"] = False
+                out = json.dumps(args_json)
+            except Exception as e:
+                prefix = buf[:120]
+                logger.warning(
+                    "Task args invalid JSON (id=%s len=%d prefix=%r): %s",
+                    self.tool_ids.get(tool_index, "unknown"),
+                    len(buf),
+                    prefix,
+                    e,
+                )
+
+            self.task_args_emitted[tool_index] = True
+            self.task_arg_buffer.pop(tool_index, None)
+            results.append((tool_index, out))
+        return results
 
 
 class SSEBuilder:

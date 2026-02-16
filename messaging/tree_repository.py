@@ -3,12 +3,11 @@
 Provides data access layer for managing trees and node mappings.
 """
 
-import logging
 from typing import Dict, Optional, List
 
-from .tree_data import MessageTree, MessageNode, MessageState
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from .tree_data import MessageTree, MessageNode, MessageState
 
 
 class TreeRepository:

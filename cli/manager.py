@@ -8,12 +8,10 @@ simultaneously in separate CLI processes.
 
 import asyncio
 import uuid
-import logging
 from typing import Dict, Optional, Tuple, List
 
 from .session import CLISession
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class CLISessionManager:

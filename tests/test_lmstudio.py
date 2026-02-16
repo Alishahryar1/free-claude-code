@@ -539,10 +539,7 @@ class TestLMStudioProcessToolCall:
             flushed = list(lmstudio_provider._flush_task_arg_buffers(sse))
         assert len(flushed) > 0
         assert "{}" in "".join(flushed)
-        assert any(
-            "LMSTUDIO_INTERCEPT: Task args invalid JSON" in r.message
-            for r in caplog.records
-        )
+        assert any("Task args invalid JSON" in r.message for r in caplog.records)
 
     def test_negative_tool_index_fallback(self, lmstudio_provider):
         """tc_index < 0 uses len(tool_indices) as fallback."""

@@ -8,7 +8,7 @@ def test_server_module_exports_app_and_create_app():
 def test_server_main_invokes_uvicorn_run(monkeypatch):
     import runpy
     from types import SimpleNamespace
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
 
     import config.settings as settings_mod
     import uvicorn as uvicorn_mod

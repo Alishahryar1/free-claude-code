@@ -4,21 +4,20 @@ Contains token counting for API requests.
 """
 
 import json
-import logging
-from typing import Any, List, Optional, Union, cast
+from typing import Any, List, Optional, Union
 
 import tiktoken
+from loguru import logger
 
-logger = logging.getLogger(__name__)
 ENCODER = tiktoken.get_encoding("cl100k_base")
 
 __all__ = ["get_token_count"]
 
 
-def _get_block_attr(block: object, key: str, default: Any = "") -> Any:
+def _get_block_attr(block: Any, key: str, default: Any = "") -> Any:
     """Get attribute from block (object or dict)."""
     if isinstance(block, dict):
-        return cast(dict[str, Any], block).get(key, default)
+        return block.get(key, default)
     return getattr(block, key, default)
 
 

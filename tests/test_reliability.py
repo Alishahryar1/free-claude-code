@@ -2,8 +2,6 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from messaging.telegram import TelegramPlatform
 from telegram.error import NetworkError, RetryAfter, TelegramError
-from messaging.handler import ClaudeMessageHandler
-from messaging.telegram_markdown import format_status
 
 
 @pytest.fixture

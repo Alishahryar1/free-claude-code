@@ -4,10 +4,8 @@ This parser emits an ordered stream of low-level events suitable for building a
 Claude Code-like transcript in messaging UIs.
 """
 
-import logging
 from typing import Dict, List, Any
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def parse_cli_event(event: Any) -> List[Dict]:

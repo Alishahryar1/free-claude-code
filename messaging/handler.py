@@ -8,7 +8,6 @@ Uses tree-based queuing for message ordering.
 
 import time
 import asyncio
-import logging
 import os
 from typing import List, Optional, Tuple
 
@@ -26,9 +25,8 @@ from .telegram_markdown import (
     format_status,
     render_markdown_to_mdv2,
 )
-from loguru import logger as loguru_logger
+from loguru import logger
 
-logger = logging.getLogger(__name__)
 
 # Status message prefixes used to filter our own messages (ignore echo)
 STATUS_MESSAGE_PREFIXES = ("⏳", "💭", "🔧", "✅", "❌", "🚀", "🤖", "📋", "📊", "🔄")
@@ -122,7 +120,7 @@ class ClaudeMessageHandler:
             text_preview,
         )
 
-        with loguru_logger.contextualize(
+        with logger.contextualize(
             chat_id=incoming.chat_id, node_id=incoming.message_id
         ):
             await self._handle_message_impl(incoming)
@@ -388,7 +386,7 @@ class ClaudeMessageHandler:
         status_msg_id = node.status_message_id
         chat_id = incoming.chat_id
 
-        with loguru_logger.contextualize(node_id=node_id, chat_id=chat_id):
+        with logger.contextualize(node_id=node_id, chat_id=chat_id):
             await self._process_node_impl(node_id, node, chat_id, status_msg_id)
 
     async def _process_node_impl(

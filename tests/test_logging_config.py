@@ -4,7 +4,6 @@ import json
 import logging
 from pathlib import Path
 
-import pytest
 
 from config.logging_config import configure_logging
 
