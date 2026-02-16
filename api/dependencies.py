@@ -32,6 +32,9 @@ def get_provider() -> BaseProvider:
                 rate_limit=settings.provider_rate_limit,
                 rate_window=settings.provider_rate_window,
                 nim_settings=settings.nim,
+                http_read_timeout=settings.http_read_timeout,
+                http_write_timeout=settings.http_write_timeout,
+                http_connect_timeout=settings.http_connect_timeout,
             )
             _provider = NvidiaNimProvider(config)
             logger.info("Provider initialized: %s", settings.provider_type)
@@ -44,6 +47,9 @@ def get_provider() -> BaseProvider:
                 rate_limit=settings.provider_rate_limit,
                 rate_window=settings.provider_rate_window,
                 nim_settings=settings.nim,
+                http_read_timeout=settings.http_read_timeout,
+                http_write_timeout=settings.http_write_timeout,
+                http_connect_timeout=settings.http_connect_timeout,
             )
             _provider = OpenRouterProvider(config)
             logger.info("Provider initialized: %s", settings.provider_type)
@@ -56,6 +62,9 @@ def get_provider() -> BaseProvider:
                 rate_limit=settings.provider_rate_limit,
                 rate_window=settings.provider_rate_window,
                 nim_settings=settings.nim,
+                http_read_timeout=settings.http_read_timeout,
+                http_write_timeout=settings.http_write_timeout,
+                http_connect_timeout=settings.http_connect_timeout,
             )
             _provider = LMStudioProvider(config)
             logger.info("Provider initialized: %s", settings.provider_type)

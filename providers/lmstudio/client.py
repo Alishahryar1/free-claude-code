@@ -4,6 +4,7 @@ import json
 import uuid
 from typing import Any, AsyncIterator
 
+import httpx
 from loguru import logger
 from openai import AsyncOpenAI
 
@@ -39,7 +40,12 @@ class LMStudioProvider(BaseProvider):
             api_key=self._api_key,
             base_url=self._base_url,
             max_retries=0,
-            timeout=300.0,
+            timeout=httpx.Timeout(
+                config.http_read_timeout,
+                connect=config.http_connect_timeout,
+                read=config.http_read_timeout,
+                write=config.http_write_timeout,
+            ),
         )
 
     def _build_request_body(self, request: Any) -> dict:

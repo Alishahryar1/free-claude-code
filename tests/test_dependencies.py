@@ -17,6 +17,9 @@ def _make_mock_settings(**overrides):
     mock.open_router_api_key = "test_openrouter_key"
     mock.lm_studio_base_url = "http://localhost:1234/v1"
     mock.nim = NimSettings()
+    mock.http_read_timeout = 300.0
+    mock.http_write_timeout = 10.0
+    mock.http_connect_timeout = 2.0
     for key, value in overrides.items():
         setattr(mock, key, value)
     return mock
@@ -117,6 +120,27 @@ async def test_get_provider_lmstudio_uses_lm_studio_base_url():
 
         assert isinstance(provider, LMStudioProvider)
         assert provider._base_url == "http://custom:9999/v1"
+
+
+@pytest.mark.asyncio
+async def test_get_provider_passes_http_timeouts_from_settings():
+    """Provider receives http timeouts from settings when creating client."""
+    with (
+        patch("api.dependencies.get_settings") as mock_settings,
+        patch("providers.nvidia_nim.client.AsyncOpenAI") as mock_openai,
+    ):
+        mock_settings.return_value = _make_mock_settings(
+            http_read_timeout=600.0,
+            http_write_timeout=20.0,
+            http_connect_timeout=5.0,
+        )
+        provider = get_provider()
+        assert isinstance(provider, NvidiaNimProvider)
+        call_kwargs = mock_openai.call_args[1]
+        timeout = call_kwargs["timeout"]
+        assert timeout.read == 600.0
+        assert timeout.write == 20.0
+        assert timeout.connect == 5.0
 
 
 @pytest.mark.asyncio

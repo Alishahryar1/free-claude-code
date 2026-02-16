@@ -50,6 +50,17 @@ class Settings(BaseSettings):
         default=60, validation_alias="PROVIDER_RATE_WINDOW"
     )
 
+    # ==================== HTTP Client Timeouts ====================
+    http_read_timeout: float = Field(
+        default=300.0, validation_alias="HTTP_READ_TIMEOUT"
+    )
+    http_write_timeout: float = Field(
+        default=10.0, validation_alias="HTTP_WRITE_TIMEOUT"
+    )
+    http_connect_timeout: float = Field(
+        default=2.0, validation_alias="HTTP_CONNECT_TIMEOUT"
+    )
+
     # ==================== Fast Prefix Detection ====================
     fast_prefix_detection: bool = True
 

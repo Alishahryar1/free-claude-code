@@ -20,6 +20,9 @@ class ProviderConfig(BaseModel):
     rate_limit: Optional[int] = None
     rate_window: int = 60
     nim_settings: NimSettings = Field(default_factory=NimSettings)
+    http_read_timeout: float = 300.0
+    http_write_timeout: float = 10.0
+    http_connect_timeout: float = 2.0
 
 
 class BaseProvider(ABC):

@@ -61,6 +61,27 @@ async def test_init(provider_config):
 
 
 @pytest.mark.asyncio
+async def test_init_uses_configurable_timeouts():
+    """Test that provider passes configurable read/write/connect timeouts to client."""
+    from providers.base import ProviderConfig
+
+    config = ProviderConfig(
+        api_key="test_key",
+        base_url="https://test.api.nvidia.com/v1",
+        http_read_timeout=600.0,
+        http_write_timeout=15.0,
+        http_connect_timeout=5.0,
+    )
+    with patch("providers.nvidia_nim.client.AsyncOpenAI") as mock_openai:
+        NvidiaNimProvider(config)
+        call_kwargs = mock_openai.call_args[1]
+        timeout = call_kwargs["timeout"]
+        assert timeout.read == 600.0
+        assert timeout.write == 15.0
+        assert timeout.connect == 5.0
+
+
+@pytest.mark.asyncio
 async def test_build_request_body(nim_provider):
     """Test request body construction."""
     req = MockRequest()
