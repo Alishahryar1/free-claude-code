@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 import openai
 from httpx import Response, Request
 
-from providers.nvidia_nim.errors import map_error
+from providers.common import map_error
 from providers.exceptions import (
     AuthenticationError,
     InvalidRequestError,
@@ -41,7 +41,7 @@ class TestMapError:
     def test_rate_limit_error(self):
         """openai.RateLimitError -> RateLimitError and triggers global block."""
         exc = _make_openai_error(openai.RateLimitError, status_code=429)
-        with patch("providers.nvidia_nim.errors.GlobalRateLimiter") as mock_rl:
+        with patch("providers.common.error_mapping.GlobalRateLimiter") as mock_rl:
             mock_instance = MagicMock()
             mock_rl.get_instance.return_value = mock_instance
             result = map_error(exc)
@@ -117,6 +117,6 @@ class TestMapError:
             openai.BadRequestError: 400,
         }
         exc = _make_openai_error(exc_cls, status_code=status_map[exc_cls])
-        with patch("providers.nvidia_nim.errors.GlobalRateLimiter"):
+        with patch("providers.common.error_mapping.GlobalRateLimiter"):
             result = map_error(exc)
         assert isinstance(result, expected_cls)

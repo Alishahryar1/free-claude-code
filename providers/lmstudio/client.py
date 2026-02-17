@@ -10,13 +10,13 @@ from openai import AsyncOpenAI
 
 from providers.base import BaseProvider, ProviderConfig
 from providers.rate_limit import GlobalRateLimiter
-from providers.nvidia_nim.errors import map_error
-from providers.nvidia_nim.utils import (
+from providers.common import (
     SSEBuilder,
     map_stop_reason,
     ThinkTagParser,
     HeuristicToolParser,
     ContentType,
+    map_error,
 )
 
 from .request import build_request_body

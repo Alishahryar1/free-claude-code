@@ -70,7 +70,7 @@ class HeuristicToolParser:
         Returns a tuple of (filtered_text, detected_tool_calls).
 
         filtered_text: Text that should be passed through as normal message content.
-        detected_tool_calls: List of Anthropic-format tool_use blocks.
+        detected_tools: List of Anthropic-format tool_use blocks.
         """
         self.buffer += text
         self.buffer = self._strip_control_tokens(self.buffer)

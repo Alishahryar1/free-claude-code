@@ -1,7 +1,6 @@
 import pytest
 
-from providers.nvidia_nim.utils.think_parser import ThinkTagParser, ContentType
-from providers.nvidia_nim.utils.heuristic_tool_parser import HeuristicToolParser
+from providers.common import ThinkTagParser, ContentType, HeuristicToolParser
 
 
 def test_think_tag_parser_basic():

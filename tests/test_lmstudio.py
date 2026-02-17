@@ -471,7 +471,7 @@ class TestLMStudioProcessToolCall:
 
     def test_tool_call_with_id(self, lmstudio_provider):
         """Tool call with id starts a tool block."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc = {
@@ -487,7 +487,7 @@ class TestLMStudioProcessToolCall:
 
     def test_tool_call_without_id_generates_uuid(self, lmstudio_provider):
         """Tool call without id generates a uuid-based id."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc = {
@@ -501,7 +501,7 @@ class TestLMStudioProcessToolCall:
 
     def test_task_tool_forces_background_false(self, lmstudio_provider):
         """Task tool with run_in_background=true is forced to false."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         args = json.dumps({"run_in_background": True, "prompt": "test"})
@@ -516,7 +516,7 @@ class TestLMStudioProcessToolCall:
 
     def test_task_tool_chunked_args_forces_background_false(self, lmstudio_provider):
         """Chunked Task args are buffered until valid JSON, then forced to false."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc1 = {
@@ -542,7 +542,7 @@ class TestLMStudioProcessToolCall:
         self, lmstudio_provider, caplog
     ):
         """Invalid JSON args for Task tool emits {} on flush and logs a warning."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc = {
@@ -561,7 +561,7 @@ class TestLMStudioProcessToolCall:
 
     def test_negative_tool_index_fallback(self, lmstudio_provider):
         """tc_index < 0 uses len(tool_indices) as fallback."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc = {
@@ -574,7 +574,7 @@ class TestLMStudioProcessToolCall:
 
     def test_tool_args_emitted_as_delta(self, lmstudio_provider):
         """Arguments are emitted as input_json_delta events."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc = {
@@ -588,7 +588,7 @@ class TestLMStudioProcessToolCall:
 
     def test_stream_malformed_tool_args_chunked(self, lmstudio_provider):
         """Chunked tool args that never form valid JSON are flushed with {}."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc1 = {

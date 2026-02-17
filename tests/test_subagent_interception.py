@@ -2,7 +2,7 @@ import json
 import pytest
 from unittest.mock import MagicMock
 from providers.nvidia_nim import NvidiaNimProvider
-from providers.nvidia_nim.utils.sse_builder import ContentBlockManager
+from providers.common import ContentBlockManager
 from providers.base import ProviderConfig
 
 
