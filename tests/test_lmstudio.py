@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from providers.base import ProviderConfig
 from providers.lmstudio import LMStudioProvider
 from providers.lmstudio.request import LMSTUDIO_DEFAULT_MAX_TOKENS
-from config.nim import NimSettings
 
 
 class AsyncStreamMock:
@@ -102,14 +101,13 @@ def lmstudio_config():
         base_url="http://localhost:1234/v1",
         rate_limit=10,
         rate_window=60,
-        nim_settings=NimSettings(),
     )
 
 
 @pytest.fixture(autouse=True)
 def mock_rate_limiter():
     """Mock the global rate limiter to prevent waiting."""
-    with patch("providers.lmstudio.client.GlobalRateLimiter") as mock:
+    with patch("providers.openai_compat.GlobalRateLimiter") as mock:
         instance = mock.get_instance.return_value
         instance.wait_if_blocked = AsyncMock(return_value=False)
 
@@ -127,7 +125,7 @@ def lmstudio_provider(lmstudio_config):
 
 def test_init(lmstudio_config):
     """Test provider initialization."""
-    with patch("providers.lmstudio.client.AsyncOpenAI") as mock_openai:
+    with patch("providers.openai_compat.AsyncOpenAI") as mock_openai:
         provider = LMStudioProvider(lmstudio_config)
         assert provider._api_key == "lm-studio"
         assert provider._base_url == "http://localhost:1234/v1"
@@ -141,9 +139,8 @@ def test_init_with_empty_api_key():
         base_url="http://localhost:1234/v1",
         rate_limit=10,
         rate_window=60,
-        nim_settings=NimSettings(),
     )
-    with patch("providers.lmstudio.client.AsyncOpenAI"):
+    with patch("providers.openai_compat.AsyncOpenAI"):
         provider = LMStudioProvider(config)
         assert provider._api_key == "lm-studio"
 
@@ -157,7 +154,7 @@ def test_init_uses_configurable_timeouts():
         http_write_timeout=15.0,
         http_connect_timeout=5.0,
     )
-    with patch("providers.lmstudio.client.AsyncOpenAI") as mock_openai:
+    with patch("providers.openai_compat.AsyncOpenAI") as mock_openai:
         LMStudioProvider(config)
         call_kwargs = mock_openai.call_args[1]
         timeout = call_kwargs["timeout"]
@@ -471,7 +468,7 @@ class TestLMStudioProcessToolCall:
 
     def test_tool_call_with_id(self, lmstudio_provider):
         """Tool call with id starts a tool block."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc = {
@@ -487,7 +484,7 @@ class TestLMStudioProcessToolCall:
 
     def test_tool_call_without_id_generates_uuid(self, lmstudio_provider):
         """Tool call without id generates a uuid-based id."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc = {
@@ -501,7 +498,7 @@ class TestLMStudioProcessToolCall:
 
     def test_task_tool_forces_background_false(self, lmstudio_provider):
         """Task tool with run_in_background=true is forced to false."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         args = json.dumps({"run_in_background": True, "prompt": "test"})
@@ -516,7 +513,7 @@ class TestLMStudioProcessToolCall:
 
     def test_task_tool_chunked_args_forces_background_false(self, lmstudio_provider):
         """Chunked Task args are buffered until valid JSON, then forced to false."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc1 = {
@@ -542,7 +539,7 @@ class TestLMStudioProcessToolCall:
         self, lmstudio_provider, caplog
     ):
         """Invalid JSON args for Task tool emits {} on flush and logs a warning."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc = {
@@ -561,7 +558,7 @@ class TestLMStudioProcessToolCall:
 
     def test_negative_tool_index_fallback(self, lmstudio_provider):
         """tc_index < 0 uses len(tool_indices) as fallback."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc = {
@@ -574,7 +571,7 @@ class TestLMStudioProcessToolCall:
 
     def test_tool_args_emitted_as_delta(self, lmstudio_provider):
         """Arguments are emitted as input_json_delta events."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc = {
@@ -588,7 +585,7 @@ class TestLMStudioProcessToolCall:
 
     def test_stream_malformed_tool_args_chunked(self, lmstudio_provider):
         """Chunked tool args that never form valid JSON are flushed with {}."""
-        from providers.nvidia_nim.utils import SSEBuilder
+        from providers.common import SSEBuilder
 
         sse = SSEBuilder("msg_test", "test-model")
         tc1 = {
@@ -655,8 +652,7 @@ def test_init_base_url_strips_trailing_slash():
         base_url="http://localhost:1234/v1/",
         rate_limit=10,
         rate_window=60,
-        nim_settings=NimSettings(),
     )
-    with patch("providers.lmstudio.client.AsyncOpenAI"):
+    with patch("providers.openai_compat.AsyncOpenAI"):
         provider = LMStudioProvider(config)
         assert provider._base_url == "http://localhost:1234/v1"

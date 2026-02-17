@@ -2,7 +2,7 @@
 
 from typing import Any, Dict
 
-from providers.nvidia_nim.utils.message_converter import AnthropicToOpenAIConverter
+from providers.common.message_converter import AnthropicToOpenAIConverter
 from loguru import logger
 
 

@@ -479,7 +479,7 @@ class ClaudeMessageHandler:
                 return
             if display and display != last_displayed_text:
                 logger.debug(
-                    "TELEGRAM_EDIT: node_id=%s chat_id=%s msg_id=%s force=%s status=%r chars=%d",
+                    "PLATFORM_EDIT: node_id=%s chat_id=%s msg_id=%s force=%s status=%r chars=%d",
                     node_id,
                     chat_id,
                     status_msg_id,
@@ -488,13 +488,13 @@ class ClaudeMessageHandler:
                     len(display),
                 )
                 if os.getenv("DEBUG_TELEGRAM_EDITS") == "1":
-                    logger.debug("TELEGRAM_EDIT_TEXT:\n%s", display)
+                    logger.debug("PLATFORM_EDIT_TEXT:\n%s", display)
                 else:
                     head = display[:500]
                     tail = display[-500:] if len(display) > 500 else ""
-                    logger.debug("TELEGRAM_EDIT_PREVIEW_HEAD:\n%s", head)
+                    logger.debug("PLATFORM_EDIT_PREVIEW_HEAD:\n%s", head)
                     if tail:
-                        logger.debug("TELEGRAM_EDIT_PREVIEW_TAIL:\n%s", tail)
+                        logger.debug("PLATFORM_EDIT_PREVIEW_TAIL:\n%s", tail)
                 last_displayed_text = display
                 try:
                     await self.platform.queue_edit_message(
@@ -504,7 +504,7 @@ class ClaudeMessageHandler:
                         parse_mode=self._parse_mode(),
                     )
                 except Exception as e:
-                    logger.warning(f"Failed to update Telegram for node {node_id}: {e}")
+                    logger.warning(f"Failed to update platform for node {node_id}: {e}")
 
         try:
             try:

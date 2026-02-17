@@ -24,7 +24,6 @@ class TestSessionStoreLoadEdgeCases:
             f.write("{invalid json")
 
         store = SessionStore(storage_path=path)
-        assert len(store._sessions) == 0
         assert len(store._trees) == 0
 
     def test_load_truncated_json(self, tmp_path):
@@ -34,7 +33,7 @@ class TestSessionStoreLoadEdgeCases:
             f.write('{"sessions": {"s1": {"session_id": "s1"')
 
         store = SessionStore(storage_path=path)
-        assert len(store._sessions) == 0
+        assert len(store._trees) == 0
 
     def test_load_empty_file(self, tmp_path):
         """Empty file is handled gracefully."""
@@ -43,16 +42,16 @@ class TestSessionStoreLoadEdgeCases:
             f.write("")
 
         store = SessionStore(storage_path=path)
-        assert len(store._sessions) == 0
+        assert len(store._trees) == 0
 
     def test_load_nonexistent_file(self, tmp_path):
         """Non-existent file starts with empty state."""
         path = str(tmp_path / "nonexistent.json")
         store = SessionStore(storage_path=path)
-        assert len(store._sessions) == 0
+        assert len(store._trees) == 0
 
-    def test_load_legacy_int_fields(self, tmp_path):
-        """Legacy format with int chat_id/msg_id is converted to string."""
+    def test_load_legacy_sessions_ignored(self, tmp_path):
+        """Legacy sessions in file are ignored; trees and message_log load."""
         path = str(tmp_path / "sessions.json")
         data = {
             "sessions": {
@@ -66,17 +65,15 @@ class TestSessionStoreLoadEdgeCases:
                     "updated_at": "2025-01-01T00:00:00+00:00",
                 }
             },
-            "trees": {},
-            "node_to_tree": {},
+            "trees": {"r1": {"root_id": "r1", "nodes": {"r1": {}}}},
+            "node_to_tree": {"r1": "r1"},
+            "message_log": {},
         }
         with open(path, "w") as f:
             json.dump(data, f)
 
         store = SessionStore(storage_path=path)
-        record = store._sessions["s1"]
-        assert record.chat_id == "12345"
-        assert record.initial_msg_id == "100"
-        assert record.last_msg_id == "200"
+        assert store.get_tree("r1") is not None
 
 
 class TestSessionStoreSaveEdgeCases:
@@ -131,13 +128,11 @@ class TestSessionStoreClearAll:
 
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        assert data["sessions"] == {}
         assert data["trees"] == {}
         assert data["node_to_tree"] == {}
         assert data["message_log"] == {}
 
         store2 = SessionStore(storage_path=path)
-        assert len(store2._sessions) == 0
         assert len(store2._trees) == 0
 
     def test_message_log_persists_and_dedups(self, tmp_path):

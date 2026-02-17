@@ -33,14 +33,17 @@ class Segment:
 
 @dataclass
 class ThinkingSegment(Segment):
-    text: str = ""
-
     def __init__(self) -> None:
         super().__init__(kind="thinking")
+        self._parts: List[str] = []
 
     def append(self, t: str) -> None:
         if t:
-            self.text += t
+            self._parts.append(t)
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
 
     def render(self, ctx: "RenderCtx") -> str:
         raw = self.text or ""
@@ -52,14 +55,17 @@ class ThinkingSegment(Segment):
 
 @dataclass
 class TextSegment(Segment):
-    text: str = ""
-
     def __init__(self) -> None:
         super().__init__(kind="text")
+        self._parts: List[str] = []
 
     def append(self, t: str) -> None:
         if t:
-            self.text += t
+            self._parts.append(t)
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
 
     def render(self, ctx: "RenderCtx") -> str:
         raw = self.text or ""
@@ -72,7 +78,6 @@ class TextSegment(Segment):
 class ToolCallSegment(Segment):
     tool_use_id: str
     name: str
-    input_text: str = ""
     closed: bool = False
     indent_level: int = 0
 
@@ -81,18 +86,23 @@ class ToolCallSegment(Segment):
         self.tool_use_id = str(tool_use_id or "")
         self.name = str(name or "tool")
         self.indent_level = max(0, int(indent_level))
+        self._parts: List[str] = []
 
     def set_initial_input(self, inp: Any) -> None:
         if inp is None:
             return
         if isinstance(inp, str):
-            self.input_text = inp
+            self._parts = [inp]
         else:
-            self.input_text = _safe_json_dumps(inp)
+            self._parts = [_safe_json_dumps(inp)]
 
     def append_input_delta(self, partial: str) -> None:
         if partial:
-            self.input_text += partial
+            self._parts.append(partial)
+
+    @property
+    def input_text(self) -> str:
+        return "".join(self._parts)
 
     def render(self, ctx: "RenderCtx") -> str:
         name = ctx.code_inline(self.name)

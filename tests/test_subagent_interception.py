@@ -2,15 +2,16 @@ import json
 import pytest
 from unittest.mock import MagicMock
 from providers.nvidia_nim import NvidiaNimProvider
-from providers.nvidia_nim.utils.sse_builder import ContentBlockManager
+from providers.common import ContentBlockManager
 from providers.base import ProviderConfig
+from config.nim import NimSettings
 
 
 @pytest.mark.asyncio
 async def test_task_tool_interception():
     # Setup provider
     config = ProviderConfig(api_key="test")
-    provider = NvidiaNimProvider(config)
+    provider = NvidiaNimProvider(config, nim_settings=NimSettings())
 
     # Mock request and sse builder with real ContentBlockManager
     request = MagicMock()

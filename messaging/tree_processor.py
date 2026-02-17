@@ -114,8 +114,8 @@ class TreeQueueProcessor:
             # Process next node (outside lock)
             node = tree.get_node(next_node_id)
             if node:
-                tree._current_task = asyncio.create_task(
-                    self.process_node(tree, node, processor)
+                tree.set_current_task(
+                    asyncio.create_task(self.process_node(tree, node, processor))
                 )
 
         # Notify that this node has started processing and refresh queue positions.
@@ -152,8 +152,8 @@ class TreeQueueProcessor:
                 # Process outside the lock
                 node = tree.get_node(node_id)
                 if node:
-                    tree._current_task = asyncio.create_task(
-                        self.process_node(tree, node, processor)
+                    tree.set_current_task(
+                        asyncio.create_task(self.process_node(tree, node, processor))
                     )
                 return False
 

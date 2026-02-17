@@ -131,6 +131,10 @@ class MessageTree:
 
         logger.debug(f"Created MessageTree with root {self.root_id}")
 
+    def set_current_task(self, task: Optional[asyncio.Task]) -> None:
+        """Set the current processing task. Caller must hold lock."""
+        self._current_task = task
+
     @property
     def is_processing(self) -> bool:
         """Check if tree is currently processing a message."""
@@ -396,10 +400,14 @@ class MessageTree:
         """
         if node_id not in self._nodes:
             return []
-        result = [node_id]
-        node = self._nodes[node_id]
-        for child_id in node.children_ids:
-            result.extend(self.get_descendants(child_id))
+        result: List[str] = []
+        stack = [node_id]
+        while stack:
+            nid = stack.pop()
+            result.append(nid)
+            node = self._nodes.get(nid)
+            if node:
+                stack.extend(node.children_ids)
         return result
 
     def remove_branch(self, branch_root_id: str) -> List[MessageNode]:

@@ -3,7 +3,7 @@
 from typing import Any, Dict
 
 from config.nim import NimSettings
-from .utils.message_converter import AnthropicToOpenAIConverter
+from providers.common.message_converter import AnthropicToOpenAIConverter
 from loguru import logger
 
 

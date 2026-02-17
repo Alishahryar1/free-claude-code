@@ -62,7 +62,7 @@ class TestSessionStore:
         from messaging.session import SessionStore
 
         store = SessionStore(storage_path=str(tmp_path / "sessions.json"))
-        assert store._sessions == {}
+        assert store._trees == {}
 
     # --- Tree Tests ---
 
@@ -127,22 +127,15 @@ class TestSessionStore:
 
     # --- Persistence & Edge Cases ---
 
-    def test_load_existing_legacy_format(self, tmp_path):
-        """Test loading legacy session format (int IDs) - backward compat."""
+    def test_load_existing_file_with_trees(self, tmp_path):
+        """Test loading file with trees (legacy sessions ignored)."""
         from messaging.session import SessionStore
 
         data = {
-            "sessions": {
-                "s1": {
-                    "session_id": "s1",
-                    "chat_id": 123,  # Legacy int
-                    "initial_msg_id": 100,  # Legacy int
-                    "last_msg_id": 101,  # Legacy int
-                    "created_at": "2024-01-01",
-                    "updated_at": "2024-01-01",
-                    # platform missing -> should default to telegram
-                }
-            }
+            "sessions": {},
+            "trees": {"r1": {"root_id": "r1", "nodes": {"r1": {}}}},
+            "node_to_tree": {"r1": "r1"},
+            "message_log": {},
         }
 
         p = tmp_path / "sessions.json"
@@ -150,11 +143,7 @@ class TestSessionStore:
             json.dump(data, f)
 
         store = SessionStore(storage_path=str(p))
-        # Legacy sessions are loaded for backward compat; verify conversion
-        assert "s1" in store._sessions
-        rec = store._sessions["s1"]
-        assert rec.chat_id == "123"  # Converted to str
-        assert rec.platform == "telegram"  # Defaulted
+        assert store.get_tree("r1") is not None
 
     def test_load_corrupt_file(self, tmp_path):
         """Test loading corrupt/invalid json file."""
@@ -166,7 +155,7 @@ class TestSessionStore:
 
         # Should log error and start empty, avoiding crash
         store = SessionStore(storage_path=str(p))
-        assert store._sessions == {}
+        assert store._trees == {}
 
     def test_save_error_handling(self, tmp_path):
         """Test error during save."""

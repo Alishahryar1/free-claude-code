@@ -38,7 +38,7 @@ class MockRequest:
 @pytest.fixture(autouse=True)
 def mock_rate_limiter():
     """Mock the global rate limiter to prevent waiting."""
-    with patch("providers.nvidia_nim.client.GlobalRateLimiter") as mock:
+    with patch("providers.openai_compat.GlobalRateLimiter") as mock:
         instance = mock.get_instance.return_value
         instance.wait_if_blocked = AsyncMock(return_value=False)
 
@@ -53,8 +53,10 @@ def mock_rate_limiter():
 @pytest.mark.asyncio
 async def test_init(provider_config):
     """Test provider initialization."""
-    with patch("providers.nvidia_nim.client.AsyncOpenAI") as mock_openai:
-        provider = NvidiaNimProvider(provider_config)
+    with patch("providers.openai_compat.AsyncOpenAI") as mock_openai:
+        from config.nim import NimSettings
+
+        provider = NvidiaNimProvider(provider_config, nim_settings=NimSettings())
         assert provider._api_key == "test_key"
         assert provider._base_url == "https://test.api.nvidia.com/v1"
         mock_openai.assert_called_once()
@@ -64,6 +66,7 @@ async def test_init(provider_config):
 async def test_init_uses_configurable_timeouts():
     """Test that provider passes configurable read/write/connect timeouts to client."""
     from providers.base import ProviderConfig
+    from config.nim import NimSettings
 
     config = ProviderConfig(
         api_key="test_key",
@@ -72,8 +75,8 @@ async def test_init_uses_configurable_timeouts():
         http_write_timeout=15.0,
         http_connect_timeout=5.0,
     )
-    with patch("providers.nvidia_nim.client.AsyncOpenAI") as mock_openai:
-        NvidiaNimProvider(config)
+    with patch("providers.openai_compat.AsyncOpenAI") as mock_openai:
+        NvidiaNimProvider(config, nim_settings=NimSettings())
         call_kwargs = mock_openai.call_args[1]
         timeout = call_kwargs["timeout"]
         assert timeout.read == 600.0

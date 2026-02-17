@@ -127,7 +127,7 @@ async def test_get_provider_passes_http_timeouts_from_settings():
     """Provider receives http timeouts from settings when creating client."""
     with (
         patch("api.dependencies.get_settings") as mock_settings,
-        patch("providers.nvidia_nim.client.AsyncOpenAI") as mock_openai,
+        patch("providers.openai_compat.AsyncOpenAI") as mock_openai,
     ):
         mock_settings.return_value = _make_mock_settings(
             http_read_timeout=600.0,
