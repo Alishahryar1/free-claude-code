@@ -3,23 +3,20 @@
 from abc import ABC, abstractmethod
 from typing import Any, AsyncIterator, Optional
 
-from pydantic import BaseModel, Field
-
-from config.nim import NimSettings
+from pydantic import BaseModel
 
 
 class ProviderConfig(BaseModel):
     """Configuration for a provider.
 
     Base fields apply to all providers. Provider-specific parameters
-    (e.g. NIM temperature, top_p) are passed via nim_settings.
+    (e.g. NIM temperature, top_p) are passed by the provider constructor.
     """
 
     api_key: str
     base_url: Optional[str] = None
     rate_limit: Optional[int] = None
     rate_window: int = 60
-    nim_settings: NimSettings = Field(default_factory=NimSettings)
     http_read_timeout: float = 300.0
     http_write_timeout: float = 10.0
     http_connect_timeout: float = 2.0

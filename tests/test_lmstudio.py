@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from providers.base import ProviderConfig
 from providers.lmstudio import LMStudioProvider
 from providers.lmstudio.request import LMSTUDIO_DEFAULT_MAX_TOKENS
-from config.nim import NimSettings
 
 
 class AsyncStreamMock:
@@ -102,7 +101,6 @@ def lmstudio_config():
         base_url="http://localhost:1234/v1",
         rate_limit=10,
         rate_window=60,
-        nim_settings=NimSettings(),
     )
 
 
@@ -141,7 +139,6 @@ def test_init_with_empty_api_key():
         base_url="http://localhost:1234/v1",
         rate_limit=10,
         rate_window=60,
-        nim_settings=NimSettings(),
     )
     with patch("providers.openai_compat.AsyncOpenAI"):
         provider = LMStudioProvider(config)
@@ -655,7 +652,6 @@ def test_init_base_url_strips_trailing_slash():
         base_url="http://localhost:1234/v1/",
         rate_limit=10,
         rate_window=60,
-        nim_settings=NimSettings(),
     )
     with patch("providers.openai_compat.AsyncOpenAI"):
         provider = LMStudioProvider(config)

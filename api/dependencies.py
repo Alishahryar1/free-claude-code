@@ -31,12 +31,11 @@ def get_provider() -> BaseProvider:
                 base_url=NVIDIA_NIM_BASE_URL,
                 rate_limit=settings.provider_rate_limit,
                 rate_window=settings.provider_rate_window,
-                nim_settings=settings.nim,
                 http_read_timeout=settings.http_read_timeout,
                 http_write_timeout=settings.http_write_timeout,
                 http_connect_timeout=settings.http_connect_timeout,
             )
-            _provider = NvidiaNimProvider(config)
+            _provider = NvidiaNimProvider(config, nim_settings=settings.nim)
             logger.info("Provider initialized: %s", settings.provider_type)
         elif settings.provider_type == "open_router":
             from providers.open_router import OpenRouterProvider
@@ -46,7 +45,6 @@ def get_provider() -> BaseProvider:
                 base_url="https://openrouter.ai/api/v1",
                 rate_limit=settings.provider_rate_limit,
                 rate_window=settings.provider_rate_window,
-                nim_settings=settings.nim,
                 http_read_timeout=settings.http_read_timeout,
                 http_write_timeout=settings.http_write_timeout,
                 http_connect_timeout=settings.http_connect_timeout,
@@ -61,7 +59,6 @@ def get_provider() -> BaseProvider:
                 base_url=settings.lm_studio_base_url,
                 rate_limit=settings.provider_rate_limit,
                 rate_window=settings.provider_rate_window,
-                nim_settings=settings.nim,
                 http_read_timeout=settings.http_read_timeout,
                 http_write_timeout=settings.http_write_timeout,
                 http_connect_timeout=settings.http_connect_timeout,

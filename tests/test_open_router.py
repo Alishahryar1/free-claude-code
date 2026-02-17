@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from providers.open_router import OpenRouterProvider
 from providers.open_router.request import OPENROUTER_DEFAULT_MAX_TOKENS
 from providers.base import ProviderConfig
-from config.nim import NimSettings
 
 
 class MockMessage:
@@ -39,7 +38,6 @@ def open_router_config():
         base_url="https://openrouter.ai/api/v1",
         rate_limit=10,
         rate_window=60,
-        nim_settings=NimSettings(),
     )
 
 

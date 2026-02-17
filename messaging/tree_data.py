@@ -131,6 +131,10 @@ class MessageTree:
 
         logger.debug(f"Created MessageTree with root {self.root_id}")
 
+    def set_current_task(self, task: Optional[asyncio.Task]) -> None:
+        """Set the current processing task. Caller must hold lock."""
+        self._current_task = task
+
     @property
     def is_processing(self) -> bool:
         """Check if tree is currently processing a message."""

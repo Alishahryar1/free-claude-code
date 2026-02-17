@@ -33,9 +33,8 @@ def _make_provider():
         base_url="https://test.api.nvidia.com/v1",
         rate_limit=10,
         rate_window=60,
-        nim_settings=NimSettings(),
     )
-    return NvidiaNimProvider(config)
+    return NvidiaNimProvider(config, nim_settings=NimSettings())
 
 
 def _make_request(model="test-model", stream=True):
