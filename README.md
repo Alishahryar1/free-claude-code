@@ -242,7 +242,7 @@ Get a token from [@BotFather](https://t.me/BotFather); find your user ID via [@u
 Full list in [`nvidia_nim_models.json`](nvidia_nim_models.json).
 
 Popular models:
-- qwen/qwen3.5-397b-a17b
+- `qwen/qwen3.5-397b-a17b`
 - `z-ai/glm5`
 - `stepfun-ai/step-3.5-flash`
 - `moonshotai/kimi-k2.5`
