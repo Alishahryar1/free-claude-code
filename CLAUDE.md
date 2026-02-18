@@ -1,9 +1,9 @@
 # AGENTIC DIRECTIVE
 
-> This file is identical to AGENTS.md. Keep them in sync.
+> This file is identical to CLAUDE.md. Keep them in sync.
 
 ## CODING ENVIRONMENT
-- Install astral uv if not already installed
+- Install astral uv using "curl -LsSf https://astral.sh/uv/install.sh | sh" if not already installed
 - Always use `uv run` to run files instead of the global `python` command.
 - Read `.env.example` for environment variables.
 - All CI checks must pass; failing checks block merge.
