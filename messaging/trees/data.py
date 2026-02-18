@@ -34,9 +34,7 @@ class _SnapshotQueue(asyncio.Queue[str]):
         """Remove item from queue if present. Returns True if removed."""
         if item not in self._queue:
             return False
-        object.__setattr__(
-            self, "_queue", deque(x for x in self._queue if x != item)
-        )
+        object.__setattr__(self, "_queue", deque(x for x in self._queue if x != item))
         return True
 
 
