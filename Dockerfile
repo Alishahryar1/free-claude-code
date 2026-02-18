@@ -22,18 +22,10 @@ RUN uv sync --frozen --no-dev --no-editable
 # --- Stage 3: Minimal runtime image (no build tools, no uv, no pip) ---
 FROM python:3.14-slim AS runtime
 
-# curl is needed for the healthcheck
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/*
-
-# Non-root user for security
-RUN groupadd -g 1000 app && useradd -u 1000 -g app -s /sbin/nologin user
-
 WORKDIR /app
 
-# Copy only the built app from builder, owned by non-root user
-COPY --from=builder --chown=user:app /app /app
+# Copy only the built app from builder
+COPY --from=builder /app /app
 
 ENV PYTHONUNBUFFERED=1
 ENV PATH="/app/.venv/bin:$PATH"
@@ -41,9 +33,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8082
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["curl", "-f", "http://localhost:8082/health"]
-
-USER user
+    CMD ["wget", "--spider", "-q", "http://localhost:8082/health"]
 
 # Run uvicorn directly for proper signal handling (SIGTERM/SIGINT)
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8082", "--timeout-graceful-shutdown", "5"]

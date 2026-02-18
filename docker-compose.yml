@@ -13,7 +13,7 @@ services:
     volumes:
       - ./agent_workspace:/app/agent_workspace
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health"]
       interval: 30s
       timeout: 5s
       start_period: 10s
