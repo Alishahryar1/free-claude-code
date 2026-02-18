@@ -1,0 +1,23 @@
+services:
+  free-claude-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: free-claude-proxy
+    ports:
+      - "8082:8082"
+    env_file:
+      - .env
+    environment:
+      - host=0.0.0.0
+    volumes:
+      - ./agent_workspace:/app/agent_workspace
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8082/health', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
