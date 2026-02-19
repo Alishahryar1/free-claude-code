@@ -17,6 +17,7 @@ def _make_mock_settings(**overrides):
     mock.nvidia_nim_api_key = "test_key"
     mock.provider_rate_limit = 40
     mock.provider_rate_window = 60
+    mock.provider_max_concurrency = None
     mock.open_router_api_key = "test_openrouter_key"
     mock.lm_studio_base_url = "http://localhost:1234/v1"
     mock.nim = NimSettings()

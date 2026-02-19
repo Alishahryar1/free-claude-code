@@ -251,3 +251,80 @@ class TestProviderRateLimiter:
         )
         assert result == "ok"
         assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_max_concurrency_zero_raises(self):
+        """max_concurrency <= 0 raises ValueError."""
+        GlobalRateLimiter.reset_instance()
+        with pytest.raises(ValueError, match="max_concurrency must be > 0"):
+            GlobalRateLimiter(rate_limit=10, rate_window=60, max_concurrency=0)
+
+    @pytest.mark.asyncio
+    async def test_concurrency_slot_noop_when_not_configured(self):
+        """concurrency_slot() is a no-op when max_concurrency is None."""
+        GlobalRateLimiter.reset_instance()
+        limiter = GlobalRateLimiter.get_instance(rate_limit=100, rate_window=60)
+        assert limiter._concurrency_sem is None
+
+        # Should not block and complete immediately
+        entered = False
+        async with limiter.concurrency_slot():
+            entered = True
+        assert entered
+
+    @pytest.mark.asyncio
+    async def test_concurrency_slot_limits_simultaneous_streams(self):
+        """At most max_concurrency streams can hold a slot simultaneously."""
+        GlobalRateLimiter.reset_instance()
+        max_concurrency = 2
+        limiter = GlobalRateLimiter.get_instance(
+            rate_limit=100, rate_window=60, max_concurrency=max_concurrency
+        )
+
+        peak_concurrent = 0
+        current_concurrent = 0
+        lock = asyncio.Lock()
+
+        async def stream_task(hold_time: float) -> None:
+            nonlocal peak_concurrent, current_concurrent
+            async with limiter.concurrency_slot():
+                async with lock:
+                    current_concurrent += 1
+                    if current_concurrent > peak_concurrent:
+                        peak_concurrent = current_concurrent
+                await asyncio.sleep(hold_time)
+                async with lock:
+                    current_concurrent -= 1
+
+        # Launch 5 tasks that each hold the slot; only 2 can be active at once
+        await asyncio.gather(*(stream_task(0.05) for _ in range(5)))
+
+        assert peak_concurrent <= max_concurrency, (
+            f"Concurrency exceeded: peak={peak_concurrent}, max={max_concurrency}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_concurrency_slot_releases_on_exception(self):
+        """Slot is released even when the body raises an exception."""
+        GlobalRateLimiter.reset_instance()
+        limiter = GlobalRateLimiter.get_instance(
+            rate_limit=100, rate_window=60, max_concurrency=1
+        )
+        assert limiter._concurrency_sem is not None
+
+        with pytest.raises(RuntimeError):
+            async with limiter.concurrency_slot():
+                raise RuntimeError("boom")
+
+        # Semaphore value should be restored (1 available again)
+        assert limiter._concurrency_sem._value == 1
+
+    @pytest.mark.asyncio
+    async def test_get_instance_passes_max_concurrency(self):
+        """get_instance forwards max_concurrency to the singleton."""
+        GlobalRateLimiter.reset_instance()
+        limiter = GlobalRateLimiter.get_instance(
+            rate_limit=10, rate_window=60, max_concurrency=3
+        )
+        assert limiter._concurrency_sem is not None
+        assert limiter._concurrency_sem._value == 3

@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     provider_rate_window: int = Field(
         default=60, validation_alias="PROVIDER_RATE_WINDOW"
     )
+    provider_max_concurrency: int | None = Field(
+        default=None, validation_alias="PROVIDER_MAX_CONCURRENCY"
+    )
 
     # ==================== HTTP Client Timeouts ====================
     http_read_timeout: float = Field(

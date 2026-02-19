@@ -41,6 +41,7 @@ class OpenAICompatibleProvider(BaseProvider):
         self._global_rate_limiter = GlobalRateLimiter.get_instance(
             rate_limit=config.rate_limit,
             rate_window=config.rate_window,
+            max_concurrency=config.max_concurrency,
         )
         self._client = AsyncOpenAI(
             api_key=self._api_key,
@@ -155,108 +156,109 @@ class OpenAICompatibleProvider(BaseProvider):
         error_occurred = False
         error_message = ""
 
-        try:
-            stream = await self._global_rate_limiter.execute_with_retry(
-                self._client.chat.completions.create, **body, stream=True
-            )
-            async for chunk in stream:
-                if getattr(chunk, "usage", None):
-                    usage_info = chunk.usage
+        async with self._global_rate_limiter.concurrency_slot():
+            try:
+                stream = await self._global_rate_limiter.execute_with_retry(
+                    self._client.chat.completions.create, **body, stream=True
+                )
+                async for chunk in stream:
+                    if getattr(chunk, "usage", None):
+                        usage_info = chunk.usage
 
-                if not chunk.choices:
-                    continue
+                    if not chunk.choices:
+                        continue
 
-                choice = chunk.choices[0]
-                delta = choice.delta
-                if delta is None:
-                    continue
+                    choice = chunk.choices[0]
+                    delta = choice.delta
+                    if delta is None:
+                        continue
 
-                if choice.finish_reason:
-                    finish_reason = choice.finish_reason
-                    logger.debug("%s finish_reason: %s", tag, finish_reason)
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+                        logger.debug("%s finish_reason: %s", tag, finish_reason)
 
-                # Handle reasoning_content (OpenAI extended format)
-                reasoning = getattr(delta, "reasoning_content", None)
-                if reasoning:
-                    for event in sse.ensure_thinking_block():
-                        yield event
-                    yield sse.emit_thinking_delta(reasoning)
-
-                # Provider-specific extra reasoning (e.g. OpenRouter reasoning_details)
-                for event in self._handle_extra_reasoning(delta, sse):
-                    yield event
-
-                # Handle text content
-                if delta.content:
-                    for part in think_parser.feed(delta.content):
-                        if part.type == ContentType.THINKING:
-                            for event in sse.ensure_thinking_block():
-                                yield event
-                            yield sse.emit_thinking_delta(part.content)
-                        else:
-                            filtered_text, detected_tools = heuristic_parser.feed(
-                                part.content
-                            )
-
-                            if filtered_text:
-                                for event in sse.ensure_text_block():
-                                    yield event
-                                yield sse.emit_text_delta(filtered_text)
-
-                            for tool_use in detected_tools:
-                                for event in sse.close_content_blocks():
-                                    yield event
-
-                                block_idx = sse.blocks.allocate_index()
-                                if tool_use.get("name") == "Task" and isinstance(
-                                    tool_use.get("input"), dict
-                                ):
-                                    tool_use["input"]["run_in_background"] = False
-                                yield sse.content_block_start(
-                                    block_idx,
-                                    "tool_use",
-                                    id=tool_use["id"],
-                                    name=tool_use["name"],
-                                )
-                                yield sse.content_block_delta(
-                                    block_idx,
-                                    "input_json_delta",
-                                    json.dumps(tool_use["input"]),
-                                )
-                                yield sse.content_block_stop(block_idx)
-
-                # Handle native tool calls
-                if delta.tool_calls:
-                    for event in sse.close_content_blocks():
-                        yield event
-                    for tc in delta.tool_calls:
-                        tc_info = {
-                            "index": tc.index,
-                            "id": tc.id,
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                        for event in self._process_tool_call(tc_info, sse):
+                    # Handle reasoning_content (OpenAI extended format)
+                    reasoning = getattr(delta, "reasoning_content", None)
+                    if reasoning:
+                        for event in sse.ensure_thinking_block():
                             yield event
+                        yield sse.emit_thinking_delta(reasoning)
 
-        except Exception as e:
-            req_tag = f" request_id={request_id}" if request_id else ""
-            logger.error("%s_ERROR:%s %s: %s", tag, req_tag, type(e).__name__, e)
-            mapped_e = map_error(e)
-            error_occurred = True
-            error_message = str(mapped_e)
-            logger.info(
-                "%s_STREAM: Emitting SSE error event for %s%s",
-                tag,
-                type(e).__name__,
-                req_tag,
-            )
-            for event in sse.close_content_blocks():
-                yield event
-            for event in sse.emit_error(error_message):
-                yield event
+                    # Provider-specific extra reasoning (e.g. OpenRouter reasoning_details)
+                    for event in self._handle_extra_reasoning(delta, sse):
+                        yield event
+
+                    # Handle text content
+                    if delta.content:
+                        for part in think_parser.feed(delta.content):
+                            if part.type == ContentType.THINKING:
+                                for event in sse.ensure_thinking_block():
+                                    yield event
+                                yield sse.emit_thinking_delta(part.content)
+                            else:
+                                filtered_text, detected_tools = heuristic_parser.feed(
+                                    part.content
+                                )
+
+                                if filtered_text:
+                                    for event in sse.ensure_text_block():
+                                        yield event
+                                    yield sse.emit_text_delta(filtered_text)
+
+                                for tool_use in detected_tools:
+                                    for event in sse.close_content_blocks():
+                                        yield event
+
+                                    block_idx = sse.blocks.allocate_index()
+                                    if tool_use.get("name") == "Task" and isinstance(
+                                        tool_use.get("input"), dict
+                                    ):
+                                        tool_use["input"]["run_in_background"] = False
+                                    yield sse.content_block_start(
+                                        block_idx,
+                                        "tool_use",
+                                        id=tool_use["id"],
+                                        name=tool_use["name"],
+                                    )
+                                    yield sse.content_block_delta(
+                                        block_idx,
+                                        "input_json_delta",
+                                        json.dumps(tool_use["input"]),
+                                    )
+                                    yield sse.content_block_stop(block_idx)
+
+                    # Handle native tool calls
+                    if delta.tool_calls:
+                        for event in sse.close_content_blocks():
+                            yield event
+                        for tc in delta.tool_calls:
+                            tc_info = {
+                                "index": tc.index,
+                                "id": tc.id,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for event in self._process_tool_call(tc_info, sse):
+                                yield event
+
+            except Exception as e:
+                req_tag = f" request_id={request_id}" if request_id else ""
+                logger.error("%s_ERROR:%s %s: %s", tag, req_tag, type(e).__name__, e)
+                mapped_e = map_error(e)
+                error_occurred = True
+                error_message = str(mapped_e)
+                logger.info(
+                    "%s_STREAM: Emitting SSE error event for %s%s",
+                    tag,
+                    type(e).__name__,
+                    req_tag,
+                )
+                for event in sse.close_content_blocks():
+                    yield event
+                for event in sse.emit_error(error_message):
+                    yield event
 
         # Flush remaining content
         remaining = think_parser.flush()
