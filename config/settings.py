@@ -97,7 +97,6 @@ class Settings(BaseSettings):
     )
     claude_workspace: str = "./agent_workspace"
     allowed_dir: str = ""
-    max_cli_sessions: int = 10
 
     # ==================== Server ====================
     host: str = "0.0.0.0"

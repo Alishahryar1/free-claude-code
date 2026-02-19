@@ -13,25 +13,10 @@ def handler(mock_platform, mock_cli_manager, mock_session_store):
     return ClaudeMessageHandler(mock_platform, mock_cli_manager, mock_session_store)
 
 
-def test_get_initial_status_new_conversation_with_slot(handler):
-    """New conversation when slots available returns launching message."""
-    handler.cli_manager.get_stats.return_value = {
-        "active_sessions": 0,
-        "max_sessions": 5,
-    }
+def test_get_initial_status_new_conversation(handler):
+    """New conversation always returns launching message."""
     result = handler._get_initial_status(None, None)
     assert "Launching" in result
-
-
-def test_get_initial_status_new_conversation_at_capacity(handler):
-    """New conversation at capacity returns waiting message."""
-    handler.cli_manager.get_stats.return_value = {
-        "active_sessions": 5,
-        "max_sessions": 5,
-    }
-    result = handler._get_initial_status(None, None)
-    assert "Waiting" in result
-    assert "5/5" in result
 
 
 def test_get_initial_status_reply_tree_busy_queued(handler):
@@ -140,14 +125,13 @@ async def test_handle_message_stats_command(
     handler, mock_platform, mock_cli_manager, incoming_message_factory
 ):
     incoming = incoming_message_factory(text="/stats")
-    mock_cli_manager.get_stats.return_value = {"active_sessions": 2, "max_sessions": 5}
+    mock_cli_manager.get_stats.return_value = {"active_sessions": 2}
 
     await handler.handle_message(incoming)
 
     mock_platform.queue_send_message.assert_called_once()
     args, kwargs = mock_platform.queue_send_message.call_args
     assert "Active CLI: 2" in args[1]
-    assert "Max CLI: 5" in args[1]
     assert kwargs["fire_and_forget"] is False
     assert kwargs.get("message_thread_id") is None
 

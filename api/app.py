@@ -88,7 +88,6 @@ async def lifespan(app: FastAPI):
                 workspace_path=workspace,
                 api_url=api_url,
                 allowed_dirs=allowed_dirs,
-                max_sessions=settings.max_cli_sessions,
                 plans_directory=plans_directory,
             )
 

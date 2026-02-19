@@ -80,50 +80,6 @@ async def test_remove_session_active_removes_temp_mapping():
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_session_cleans_up_idle_sessions_when_at_limit():
-    from cli.manager import CLISessionManager
-
-    manager = CLISessionManager(
-        workspace_path="/tmp", api_url="http://x/v1", max_sessions=1
-    )
-
-    idle_session = MagicMock()
-    idle_session.is_busy = False
-    idle_session.stop = AsyncMock(return_value=True)
-    manager._sessions["s1"] = idle_session
-
-    with patch("cli.manager.CLISession") as mock_session_cls:
-        new_session = MagicMock()
-        new_session.is_busy = False
-        new_session.stop = AsyncMock(return_value=True)
-        mock_session_cls.return_value = new_session
-
-        s2, sid2, is_new2 = await manager.get_or_create_session()
-        assert s2 is new_session
-        assert sid2.startswith("pending_")
-        assert is_new2 is True
-
-    idle_session.stop.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_get_or_create_session_raises_when_max_sessions_reached_with_busy_sessions():
-    from cli.manager import CLISessionManager
-
-    manager = CLISessionManager(
-        workspace_path="/tmp", api_url="http://x/v1", max_sessions=1
-    )
-
-    busy_session = MagicMock()
-    busy_session.is_busy = True
-    busy_session.stop = AsyncMock(return_value=True)
-    manager._sessions["s1"] = busy_session
-
-    with pytest.raises(RuntimeError):
-        await manager.get_or_create_session()
-
-
-@pytest.mark.asyncio
 async def test_stop_all_handles_stop_exceptions():
     from cli.manager import CLISessionManager
 

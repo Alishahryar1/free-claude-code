@@ -27,7 +27,6 @@ class CLISessionManager:
         workspace_path: str,
         api_url: str,
         allowed_dirs: list[str] | None = None,
-        max_sessions: int = 10,
         plans_directory: str | None = None,
     ):
         """
@@ -37,21 +36,19 @@ class CLISessionManager:
             workspace_path: Working directory for CLI processes
             api_url: API URL for the proxy
             allowed_dirs: Directories the CLI is allowed to access
-            max_sessions: Maximum concurrent sessions
             plans_directory: Directory for Claude Code CLI plan files (passed via --settings)
         """
         self.workspace = workspace_path
         self.api_url = api_url
         self.allowed_dirs = allowed_dirs or []
         self.plans_directory = plans_directory
-        self.max_sessions = max_sessions
 
         self._sessions: dict[str, CLISession] = {}
         self._pending_sessions: dict[str, CLISession] = {}
         self._temp_to_real: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
-        logger.info(f"CLISessionManager initialized (max_sessions={max_sessions})")
+        logger.info("CLISessionManager initialized")
 
     async def get_or_create_session(
         self, session_id: str | None = None
@@ -70,15 +67,6 @@ class CLISessionManager:
                     return self._sessions[lookup_id], lookup_id, False
                 if lookup_id in self._pending_sessions:
                     return self._pending_sessions[lookup_id], lookup_id, False
-
-            total_sessions = len(self._sessions) + len(self._pending_sessions)
-            if total_sessions >= self.max_sessions:
-                await self._cleanup_idle_sessions_unlocked()
-                total_sessions = len(self._sessions) + len(self._pending_sessions)
-                if total_sessions >= self.max_sessions:
-                    raise RuntimeError(
-                        f"Maximum concurrent sessions ({self.max_sessions}) reached."
-                    )
 
             temp_id = session_id if session_id else f"pending_{uuid.uuid4().hex[:8]}"
 
@@ -132,15 +120,6 @@ class CLISessionManager:
 
             return False
 
-    async def _cleanup_idle_sessions_unlocked(self):
-        """Clean up idle sessions (must hold lock)."""
-        idle = [sid for sid, s in self._sessions.items() if not s.is_busy]
-
-        for sid in idle[:3]:
-            session = self._sessions.pop(sid)
-            await session.stop()
-            logger.debug(f"Cleaned up idle session: {sid}")
-
     async def stop_all(self):
         """Stop all sessions."""
         async with self._lock:
@@ -163,6 +142,5 @@ class CLISessionManager:
         return {
             "active_sessions": len(self._sessions),
             "pending_sessions": len(self._pending_sessions),
-            "max_sessions": self.max_sessions,
             "busy_count": sum(1 for s in self._sessions.values() if s.is_busy),
         }

@@ -96,13 +96,8 @@ def test_get_initial_status_branches():
         s2 = handler._get_initial_status(tree=object(), parent_node_id="p")
     assert "Continuing" in s2
 
-    cli_manager.get_stats.return_value = {"active_sessions": 10, "max_sessions": 10}
     s3 = handler._get_initial_status(tree=None, parent_node_id=None)
-    assert "Waiting for slot" in s3
-
-    cli_manager.get_stats.return_value = {"active_sessions": 1, "max_sessions": 10}
-    s4 = handler._get_initial_status(tree=None, parent_node_id=None)
-    assert "Launching" in s4
+    assert "Launching" in s3
 
 
 @pytest.mark.asyncio
@@ -149,7 +144,7 @@ async def test_process_node_session_limit_marks_error_and_updates_ui():
 
     cli_manager = MagicMock()
     cli_manager.get_or_create_session = AsyncMock(side_effect=RuntimeError("limit"))
-    cli_manager.get_stats.return_value = {"active_sessions": 0, "max_sessions": 10}
+    cli_manager.get_stats.return_value = {"active_sessions": 0}
 
     session_store = MagicMock()
     handler = ClaudeMessageHandler(platform, cli_manager, session_store)
@@ -183,7 +178,7 @@ async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
 
     cli_manager = MagicMock()
     cli_manager.stop_all = AsyncMock()
-    cli_manager.get_stats.return_value = {"active_sessions": 0, "max_sessions": 10}
+    cli_manager.get_stats.return_value = {"active_sessions": 0}
 
     session_store = MagicMock()
     handler = ClaudeMessageHandler(platform, cli_manager, session_store)
@@ -219,7 +214,7 @@ async def test_handle_message_reply_with_tree_but_no_parent_treated_as_new():
     platform.queue_edit_message = AsyncMock()
 
     cli_manager = MagicMock()
-    cli_manager.get_stats.return_value = {"active_sessions": 0, "max_sessions": 10}
+    cli_manager.get_stats.return_value = {"active_sessions": 0}
 
     session_store = MagicMock()
     handler = ClaudeMessageHandler(platform, cli_manager, session_store)
@@ -273,7 +268,7 @@ async def test_update_ui_handles_transcript_render_exception():
         return_value=(mock_session, "s1", False)
     )
     cli_manager.remove_session = AsyncMock()
-    cli_manager.get_stats.return_value = {"active_sessions": 0, "max_sessions": 10}
+    cli_manager.get_stats.return_value = {"active_sessions": 0}
 
     handler = ClaudeMessageHandler(platform, cli_manager, session_store)
     handler.tree_queue = MagicMock()
@@ -307,7 +302,7 @@ async def test_handle_message_incoming_text_none_safe():
     platform.queue_edit_message = AsyncMock()
 
     cli_manager = MagicMock()
-    cli_manager.get_stats.return_value = {"active_sessions": 0, "max_sessions": 10}
+    cli_manager.get_stats.return_value = {"active_sessions": 0}
 
     session_store = MagicMock()
     handler = ClaudeMessageHandler(platform, cli_manager, session_store)
@@ -391,7 +386,7 @@ async def test_handler_update_ui_edit_failure_does_not_crash():
         return_value=(mock_session, "s1", False)
     )
     cli_manager.remove_session = AsyncMock()
-    cli_manager.get_stats.return_value = {"active_sessions": 0, "max_sessions": 10}
+    cli_manager.get_stats.return_value = {"active_sessions": 0}
 
     session_store = MagicMock()
     handler = ClaudeMessageHandler(platform, cli_manager, session_store)

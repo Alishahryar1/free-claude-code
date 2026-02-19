@@ -668,13 +668,6 @@ class ClaudeMessageHandler:
             return self._format_status("🔄", "Continuing conversation...")
 
         # New conversation
-        stats = self.cli_manager.get_stats()
-        if stats["active_sessions"] >= stats["max_sessions"]:
-            return self._format_status(
-                "⏳",
-                "Waiting for slot...",
-                f"({stats['active_sessions']}/{stats['max_sessions']})",
-            )
         return self._format_status("⏳", "Launching new Claude CLI instance...")
 
     async def stop_all_tasks(self) -> int:
@@ -812,8 +805,6 @@ class ClaudeMessageHandler:
             + ctx.bold("Stats")
             + "\n"
             + ctx.escape_text(f"• Active CLI: {stats['active_sessions']}")
-            + "\n"
-            + ctx.escape_text(f"• Max CLI: {stats['max_sessions']}")
             + "\n"
             + ctx.escape_text(f"• Message Trees: {tree_count}"),
             fire_and_forget=False,

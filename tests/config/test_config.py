@@ -25,7 +25,6 @@ class TestSettings:
         assert isinstance(settings.provider_rate_window, int)
         assert isinstance(settings.nim.temperature, float)
         assert isinstance(settings.fast_prefix_detection, bool)
-        assert isinstance(settings.max_cli_sessions, int)
 
     def test_get_settings_cached(self):
         """Test get_settings returns cached instance."""
