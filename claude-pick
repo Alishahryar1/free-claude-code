@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# claude-pick — Interactive model picker for free-claude-code
+# Usage: claude-pick [extra claude args...]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODELS_FILE="$SCRIPT_DIR/nvidia_nim_models.json"
+ENV_FILE="${CLAUDE_PICK_ENV_FILE:-$SCRIPT_DIR/.env}"
+PORT="${CLAUDE_PICK_PORT:-8082}"
+BASE_URL="http://localhost:$PORT"
+OPENROUTER_MODELS_URL="https://openrouter.ai/api/v1/models"
+DEFAULT_LM_STUDIO_BASE_URL="http://localhost:1234/v1"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Error: python3 is required." >&2
+    exit 1
+fi
+
+read_env_value() {
+    local key="$1"
+    [[ -f "$ENV_FILE" ]] || return 0
+
+    local raw
+    raw="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$ENV_FILE" | tail -n 1 || true)"
+    raw="${raw#*=}"
+    raw="${raw%%#*}"
+    raw="$(echo "$raw" | xargs || true)"
+    raw="${raw%\"}"
+    raw="${raw#\"}"
+    raw="${raw%\'}"
+    raw="${raw#\'}"
+    echo "$raw"
+}
+
+if ! command -v fzf >/dev/null 2>&1; then
+    echo "Error: fzf is required for the model picker." >&2
+    echo "Install it from: https://github.com/junegunn/fzf" >&2
+    exit 1
+fi
+
+parse_models_from_json() {
+    python3 -c '
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for item in payload.get("data", []):
+    model_id = item.get("id")
+    if model_id:
+        print(model_id)
+'
+}
+
+get_nvidia_models() {
+    if [[ ! -f "$MODELS_FILE" ]]; then
+        echo "Error: $MODELS_FILE not found." >&2
+        echo "Run: curl \"https://integrate.api.nvidia.com/v1/models\" > nvidia_nim_models.json" >&2
+        exit 1
+    fi
+
+    python3 -c '
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    payload = json.load(f)
+for item in payload.get("data", []):
+    model_id = item.get("id")
+    if model_id:
+        print(model_id)
+' "$MODELS_FILE"
+}
+
+get_openrouter_models() {
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is required for OpenRouter model discovery." >&2
+        exit 1
+    fi
+
+    local openrouter_key
+    openrouter_key="${OPENROUTER_API_KEY:-$(read_env_value OPENROUTER_API_KEY)}"
+
+    local response
+    if [[ -n "$openrouter_key" ]]; then
+        if ! response="$(curl -fsSL -H "Authorization: Bearer $openrouter_key" "$OPENROUTER_MODELS_URL")"; then
+            echo "Error: Failed to fetch OpenRouter models." >&2
+            exit 1
+        fi
+    else
+        if ! response="$(curl -fsSL "$OPENROUTER_MODELS_URL")"; then
+            echo "Error: Failed to fetch OpenRouter models." >&2
+            exit 1
+        fi
+    fi
+
+    parse_models_from_json <<< "$response"
+}
+
+get_lmstudio_models() {
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is required for LM Studio model discovery." >&2
+        exit 1
+    fi
+
+    local lm_base
+    lm_base="${LM_STUDIO_BASE_URL:-$(read_env_value LM_STUDIO_BASE_URL)}"
+    lm_base="${lm_base:-$DEFAULT_LM_STUDIO_BASE_URL}"
+
+    local models_url
+    if [[ "$lm_base" == */v1 ]]; then
+        models_url="${lm_base}/models"
+    else
+        models_url="${lm_base}/v1/models"
+    fi
+
+    local response
+    if ! response="$(curl -fsSL "$models_url")"; then
+        echo "Error: Failed to query LM Studio models at $models_url" >&2
+        echo "Start LM Studio server first (Developer tab or: lms server start)." >&2
+        exit 1
+    fi
+
+    parse_models_from_json <<< "$response"
+}
+
+provider="${CLAUDE_PICK_PROVIDER:-$(read_env_value PROVIDER_TYPE)}"
+provider="${provider:-nvidia_nim}"
+
+prompt="Select a model> "
+case "$provider" in
+    nvidia_nim)
+        models="$(get_nvidia_models)"
+        prompt="Select a NVIDIA NIM model> "
+        ;;
+    open_router|openrouter)
+        models="$(get_openrouter_models)"
+        prompt="Select an OpenRouter model> "
+        ;;
+    lmstudio|lm_studio|lm-studio)
+        models="$(get_lmstudio_models)"
+        prompt="Select an LM Studio model> "
+        ;;
+    *)
+        echo "Error: Unsupported PROVIDER_TYPE='$provider'." >&2
+        echo "Expected one of: nvidia_nim, open_router, lmstudio" >&2
+        exit 1
+        ;;
+esac
+
+models="$(printf "%s\n" "$models" | sed '/^[[:space:]]*$/d' | sort -u)"
+if [[ -z "$models" ]]; then
+    echo "Error: No models found for provider '$provider'." >&2
+    exit 1
+fi
+
+model="$(printf "%s\n" "$models" | fzf --prompt="$prompt" --height=40% --reverse)"
+
+if [[ -z "${model:-}" ]]; then
+    echo "No model selected." >&2
+    exit 1
+fi
+
+echo "Launching Claude with provider: $provider, model: $model" >&2
+ANTHROPIC_AUTH_TOKEN="freecc:$model" ANTHROPIC_BASE_URL="$BASE_URL" exec claude "$@"

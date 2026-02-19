@@ -435,6 +435,33 @@ class MyPlatform(MessagingPlatform):
 
 ---
 
+## Model Picker
+
+`claude-pick` is an interactive model selector that lets you choose a model from your active provider before launching Claude.
+
+**1. Install [fzf](https://github.com/junegunn/fzf)** (highly recommended for the interactive picker):
+
+```bash
+brew install fzf        # macOS/Linux
+```
+
+**2. Add the alias to `~/.zshrc` or `~/.bashrc`:**
+
+```bash
+# Use the absolute path to your cloned repo
+alias claude-pick="/absolute/path/to/free-claude-code/claude-pick"
+```
+
+Then reload your shell (`source ~/.zshrc`) and run `claude-pick` to pick a model and launch Claude.
+
+**Skip the picker with a fixed model** (no alias or picker needed):
+
+```bash
+alias claude-kimi='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOKEN="freecc:moonshotai/kimi-k2.5" claude'
+```
+
+---
+
 ## Contributing
 
 Contributions are welcome! Here are some ways to help:
