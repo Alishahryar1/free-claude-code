@@ -73,7 +73,7 @@ def build_request_body(request_data: Any, nim: NimSettings) -> dict:
         body["tools"] = AnthropicToOpenAIConverter.convert_tools(tools)
     tool_choice = getattr(request_data, "tool_choice", None)
     if tool_choice:
-        body["tool_choice"] = tool_choice
+        body["tool_choice"] = AnthropicToOpenAIConverter.convert_tool_choice(tool_choice)
 
     if nim.presence_penalty != 0.0:
         body["presence_penalty"] = nim.presence_penalty

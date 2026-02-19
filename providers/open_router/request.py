@@ -52,7 +52,7 @@ def build_request_body(request_data: Any) -> dict:
         body["tools"] = AnthropicToOpenAIConverter.convert_tools(tools)
     tool_choice = getattr(request_data, "tool_choice", None)
     if tool_choice:
-        body["tool_choice"] = tool_choice
+        body["tool_choice"] = AnthropicToOpenAIConverter.convert_tool_choice(tool_choice)
 
     # OpenRouter reasoning: extra_body={"reasoning": {"enabled": True}}
     extra_body: dict[str, Any] = {}

@@ -165,6 +165,22 @@ class AnthropicToOpenAIConverter:
         ]
 
     @staticmethod
+    def convert_tool_choice(tool_choice: Any) -> Any:
+        """Convert Anthropic tool_choice to OpenAI format."""
+        if isinstance(tool_choice, dict):
+            tc_type = tool_choice.get("type")
+            if tc_type == "tool":
+                return {
+                    "type": "function",
+                    "function": {"name": tool_choice.get("name")},
+                }
+            elif tc_type in ("auto", "any"):
+                return "required" if tc_type == "any" else "auto"
+            else:
+                return tc_type
+        return tool_choice
+
+    @staticmethod
     def convert_system_prompt(system: Any) -> dict[str, str] | None:
         """Convert Anthropic system prompt to OpenAI format."""
         if isinstance(system, str):
