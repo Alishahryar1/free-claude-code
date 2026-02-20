@@ -66,9 +66,8 @@ Choose your provider and edit `.env`:
 <summary><b>NVIDIA NIM</b> (recommended — 40 req/min free)</summary>
 
 ```dotenv
-PROVIDER_TYPE=nvidia_nim
 NVIDIA_NIM_API_KEY=nvapi-your-key-here
-MODEL=stepfun-ai/step-3.5-flash
+MODEL=nvidia_nim/stepfun-ai/step-3.5-flash
 ```
 
 </details>
@@ -77,9 +76,8 @@ MODEL=stepfun-ai/step-3.5-flash
 <summary><b>OpenRouter</b> (hundreds of models)</summary>
 
 ```dotenv
-PROVIDER_TYPE=open_router
 OPENROUTER_API_KEY=sk-or-your-key-here
-MODEL=stepfun/step-3.5-flash:free
+MODEL=open_router/stepfun/step-3.5-flash:free
 ```
 
 </details>
@@ -88,8 +86,7 @@ MODEL=stepfun/step-3.5-flash:free
 <summary><b>LM Studio</b> (fully local, no API key)</summary>
 
 ```dotenv
-PROVIDER_TYPE=lmstudio
-MODEL=lmstudio-community/qwen2.5-7b-instruct
+MODEL=lmstudio/lmstudio-community/qwen2.5-7b-instruct
 ```
 
 </details>
@@ -344,7 +341,7 @@ Browse: [model.lmstudio.ai](https://model.lmstudio.ai)
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PROVIDER_TYPE` | Provider: `nvidia_nim`, `open_router`, or `lmstudio` | `nvidia_nim` |
-| `MODEL` | Model to use for all requests | `stepfun-ai/step-3.5-flash` |
+| `MODEL` | Model to use for all requests | `nvidia_nim/stepfun-ai/step-3.5-flash` |
 | `NVIDIA_NIM_API_KEY` | NVIDIA API key (NIM provider) | required |
 | `OPENROUTER_API_KEY` | OpenRouter API key (OpenRouter provider) | required |
 | `LM_STUDIO_BASE_URL` | LM Studio server URL | `http://localhost:1234/v1` |
