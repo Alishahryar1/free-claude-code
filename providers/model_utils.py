@@ -6,7 +6,7 @@ Centralizes model name mapping logic to avoid duplication across the codebase.
 import os
 
 # Provider prefixes to strip from model names
-_PROVIDER_PREFIXES = ["anthropic/", "openai/", "gemini/"]
+_PROVIDER_PREFIXES = ["anthropic/", "openai/", "gemini/", "nvidia_nim/"]
 
 # Claude model identifiers
 _CLAUDE_IDENTIFIERS = ["haiku", "sonnet", "opus", "claude"]
@@ -67,7 +67,7 @@ def normalize_model_name(model: str, default_model: str | None = None) -> str:
             default_model = os.getenv("MODEL", "moonshotai/kimi-k2-thinking")
         return default_model
 
-    return model
+    return clean
 
 
 def get_original_model(model: str) -> str:
