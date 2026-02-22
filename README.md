@@ -49,7 +49,7 @@ Get **40 free requests/min** on NVIDIA NIM, access **hundreds of models** on Ope
    - **NVIDIA NIM**: [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys)
    - **OpenRouter**: [openrouter.ai/keys](https://openrouter.ai/keys)
    - **LM Studio**: No API key needed — run locally with [LM Studio](https://lmstudio.ai)
-   - **Chutes AI**: [chutes.ai/profile/api-tokens](https://chutes.ai/profile/api-tokens)
+   - **Chutes AI**: [chutes.ai/app/api](https://chutes.ai/app/api)
 2. Install [Claude Code](https://github.com/anthropics/claude-code)
 3. Install [uv](https://github.com/astral-sh/uv)
 
