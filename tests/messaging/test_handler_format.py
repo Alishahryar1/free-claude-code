@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from messaging.telegram_markdown import (
+from messaging.rendering.telegram_markdown import (
     escape_md_v2,
     escape_md_v2_code,
     mdv2_bold,

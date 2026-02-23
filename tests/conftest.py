@@ -18,8 +18,12 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from config.nim import NimSettings
-from messaging.base import CLISession, MessagingPlatform, SessionManagerInterface
 from messaging.models import IncomingMessage
+from messaging.platforms.base import (
+    CLISession,
+    MessagingPlatform,
+    SessionManagerInterface,
+)
 from messaging.session import SessionStore
 from providers.base import ProviderConfig
 from providers.nvidia_nim import NvidiaNimProvider

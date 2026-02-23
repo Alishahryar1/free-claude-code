@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
 
     try:
         # Use the messaging factory to create the right platform
-        from messaging.factory import create_messaging_platform
+        from messaging.platforms.factory import create_messaging_platform
 
         messaging_platform = create_messaging_platform(
             platform_type=settings.messaging_platform,
