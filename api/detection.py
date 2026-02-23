@@ -29,14 +29,13 @@ def is_quota_check_request(request_data: MessagesRequest) -> bool:
 def is_title_generation_request(request_data: MessagesRequest) -> bool:
     """Check if this is a conversation title generation request.
 
-    Title generation requests typically contain the phrase
-    "write a 5-10 word title" in the user's message.
+    Title generation requests are detected by a system prompt containing
+    title extraction instructions, no tools, and a single user message.
     """
-    if len(request_data.messages) > 0 and request_data.messages[-1].role == "user":
-        text = extract_text_from_content(request_data.messages[-1].content)
-        if "write a 5-10 word title" in text.lower():
-            return True
-    return False
+    if not request_data.system or request_data.tools:
+        return False
+    system_text = extract_text_from_content(request_data.system).lower()
+    return "new conversation topic" in system_text and "title" in system_text
 
 
 def is_prefix_detection_request(request_data: MessagesRequest) -> tuple[bool, str]:

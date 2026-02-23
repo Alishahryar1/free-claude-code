@@ -112,68 +112,42 @@ class TestQuotaCheckRequest:
 class TestTitleGenerationRequest:
     """Tests for is_title_generation_request function."""
 
-    def test_title_generation_simple(self):
-        """Test title generation detection with target phrase."""
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = "Please write a 5-10 word title for this conversation"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg]
-
-        assert is_title_generation_request(req) is True
-
-    def test_title_generation_case_insensitive(self):
-        """Test title generation is case insensitive."""
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = "Write a 5-10 Word Title please"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg]
-
-        assert is_title_generation_request(req) is True
-
-    def test_title_generation_list_content(self):
-        """Test title generation with list content blocks."""
+    def _title_gen_system(self) -> list[MagicMock]:
         block = MagicMock()
-        block.text = "Write a 5-10 word title"
+        block.text = "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title."
+        return [block]
 
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = [block]
-
+    def test_title_generation_detected_via_system(self):
+        """Title gen detected by system prompt containing topic/title keywords."""
         req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg]
+        req.system = self._title_gen_system()
+        req.tools = None
 
         assert is_title_generation_request(req) is True
 
-    def test_not_title_generation_no_phrase(self):
-        """Test not title generation without target phrase."""
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = "Hello world, how are you?"
-
+    def test_title_generation_not_detected_with_tools(self):
+        """Not detected when tools are present (main conversation, not title gen)."""
         req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg]
+        req.system = self._title_gen_system()
+        req.tools = [MagicMock()]
 
         assert is_title_generation_request(req) is False
 
-    def test_not_title_generation_wrong_role(self):
-        """Test not title generation when last message is not from user."""
-        msg = MagicMock(spec=Message)
-        msg.role = "assistant"
-        msg.content = "Write a 5-10 word title"
-
+    def test_title_generation_not_detected_no_system(self):
+        """Not detected when system is absent."""
         req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg]
+        req.system = None
+        req.tools = None
 
         assert is_title_generation_request(req) is False
 
-    def test_not_title_generation_empty_messages(self):
-        """Test not title generation when no messages."""
+    def test_title_generation_not_detected_unrelated_system(self):
+        """Not detected when system prompt has no topic/title keywords."""
+        block = MagicMock()
+        block.text = "You are a helpful assistant."
         req = MagicMock(spec=MessagesRequest)
-        req.messages = []
+        req.system = [block]
+        req.tools = None
 
         assert is_title_generation_request(req) is False
 
