@@ -289,11 +289,11 @@ uv sync --extra voice
 Full list in [`nvidia_nim_models.json`](nvidia_nim_models.json).
 
 Popular models:
-- `qwen/qwen3.5-397b-a17b`
-- `z-ai/glm5`
-- `stepfun-ai/step-3.5-flash`
-- `moonshotai/kimi-k2.5`
-- `minimaxai/minimax-m2.1`
+- `nvidia_nim/qwen/qwen3.5-397b-a17b`
+- `nvidia_nim/z-ai/glm5`
+- `nvidia_nim/stepfun-ai/step-3.5-flash`
+- `nvidia_nim/moonshotai/kimi-k2.5`
+- `nvidia_nim/minimaxai/minimax-m2.1`
 
 Browse: [build.nvidia.com](https://build.nvidia.com/explore/discover)
 
@@ -310,9 +310,9 @@ curl "https://integrate.api.nvidia.com/v1/models" > nvidia_nim_models.json
 Hundreds of models from StepFun, OpenAI, Anthropic, Google, and more.
 
 Popular models:
-- `stepfun/step-3.5-flash:free`
-- `deepseek/deepseek-r1-0528:free`
-- `openai/gpt-oss-120b:free`
+- `open_router/stepfun/step-3.5-flash:free`
+- `open_router/deepseek/deepseek-r1-0528:free`
+- `open_router/openai/gpt-oss-120b:free`
 
 Browse: [openrouter.ai/models](https://openrouter.ai/models)
 
