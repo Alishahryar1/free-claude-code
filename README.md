@@ -385,7 +385,6 @@ free-claude-code/
 ├── messaging/             # MessagingPlatform ABC + Discord/Telegram bots, session management
 ├── config/                # Settings, NIM config, logging
 ├── cli/                   # CLI session and process management
-├── utils/                 # Text utilities
 └── tests/                 # Pytest test suite
 ```
 
