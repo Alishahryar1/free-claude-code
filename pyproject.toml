@@ -81,4 +81,5 @@ python-version = "3.14"
 
 [tool.ty.analysis]
 # Optional voice extra: torch, transformers, librosa may not be installed in CI
-allowed-unresolved-imports = ["torch", "transformers", "librosa"]
+# Optional riva: nvidia-riva-client for nvidia_riva transcription provider
+allowed-unresolved-imports = ["torch", "transformers", "librosa", "riva.client"]

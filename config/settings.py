@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     voice_note_enabled: bool = Field(
         default=True, validation_alias="VOICE_NOTE_ENABLED"
     )
+    # Transcription provider: "whisper" | "nvidia_riva"
+    transcription_provider: str = Field(
+        default="whisper", validation_alias="TRANSCRIPTION_PROVIDER"
+    )
+    # NVIDIA RIVA server address (e.g., "localhost:50051" or "riva-ngai.example.com:443")
+    nvidia_riva_server: str = Field(
+        default="localhost:50051", validation_alias="NVIDIA_RIVA_SERVER"
+    )
     # Hugging Face token for faster model downloads (optional)
     hf_token: str = Field(default="", validation_alias="HF_TOKEN")
     # Hugging Face Whisper model ID (e.g. openai/whisper-base) or short name
@@ -119,6 +127,15 @@ class Settings(BaseSettings):
     def validate_whisper_device(cls, v: str) -> str:
         if v not in ("cpu", "cuda"):
             raise ValueError(f"whisper_device must be 'cpu' or 'cuda', got {v!r}")
+        return v
+
+    @field_validator("transcription_provider")
+    @classmethod
+    def validate_transcription_provider(cls, v: str) -> str:
+        if v not in ("whisper", "nvidia_riva"):
+            raise ValueError(
+                f"transcription_provider must be 'whisper' or 'nvidia_riva', got {v!r}"
+            )
         return v
 
     @field_validator("model")

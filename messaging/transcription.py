@@ -1,7 +1,8 @@
 """Voice note transcription for messaging platforms.
 
-Uses Hugging Face transformers Whisper pipeline for free, offline transcription.
-CUDA 13 compatible.
+Supports two providers:
+- "whisper": Hugging Face transformers Whisper pipeline (offline, free)
+- "nvidia_riva": NVIDIA RIVA ASR (requires RIVA server)
 """
 
 import os
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+from config.settings import get_settings
 
 # Max file size in bytes (25 MB)
 MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024
@@ -43,8 +46,6 @@ def _get_pipeline(model_id: str, device: str) -> Any:
         try:
             import torch
             from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
-
-            from config.settings import get_settings
 
             token = get_settings().hf_token
             if token:
@@ -89,21 +90,25 @@ def transcribe_audio(
     whisper_device: str = "cpu",
 ) -> str:
     """
-    Transcribe audio file to text using Hugging Face transformers Whisper.
+    Transcribe audio file to text.
+
+    Supports two providers (configured via TRANSCRIPTION_PROVIDER):
+    - "whisper": Hugging Face transformers Whisper pipeline (offline, free)
+    - "nvidia_riva": NVIDIA RIVA ASR (requires RIVA server)
 
     Args:
         file_path: Path to audio file (OGG, MP3, MP4, WAV, M4A supported)
         mime_type: MIME type of the audio (e.g. "audio/ogg")
-        whisper_model: Model ID (e.g. "openai/whisper-base") or short name
-        whisper_device: "cpu" | "cuda"
+        whisper_model: Model ID (e.g. "openai/whisper-base") or short name (only for whisper)
+        whisper_device: "cpu" | "cuda" (only for whisper)
 
     Returns:
         Transcribed text
 
     Raises:
         FileNotFoundError: If file does not exist
-        ValueError: If file too large
-        ImportError: If voice extra not installed
+        ValueError: If file too large or invalid provider
+        ImportError: If voice extra not installed (for whisper)
     """
     if not file_path.exists():
         raise FileNotFoundError(f"Audio file not found: {file_path}")
@@ -114,7 +119,14 @@ def transcribe_audio(
             f"Audio file too large ({size} bytes). Max {MAX_AUDIO_SIZE_BYTES} bytes."
         )
 
-    return _transcribe_local(file_path, whisper_model, whisper_device)
+    # Get provider from settings (supports backward compatibility with direct args)
+    settings = get_settings()
+    provider = settings.transcription_provider
+
+    if provider == "nvidia_riva":
+        return _transcribe_riva(file_path)
+    else:
+        return _transcribe_local(file_path, whisper_model, whisper_device)
 
 
 # Whisper expects 16 kHz sample rate
@@ -140,4 +152,53 @@ def _transcribe_local(file_path: Path, whisper_model: str, whisper_device: str) 
         text = " ".join(text) if text else ""
     result_text = text.strip()
     logger.debug(f"Local transcription: {len(result_text)} chars")
+    return result_text or "(no speech detected)"
+
+
+def _transcribe_riva(file_path: Path) -> str:
+    """Transcribe using NVIDIA RIVA ASR."""
+    settings = get_settings()
+    server = settings.nvidia_riva_server
+
+    try:
+        import riva.client
+    except ImportError as e:
+        raise ImportError(
+            "NVIDIA RIVA transcription requires the riva client. "
+            "Install with: pip install nvidia-riva-client"
+        ) from e
+
+    # Create auth with SSL for non-local servers
+    use_ssl = not server.startswith("localhost:")
+    auth = riva.client.Auth(uri=server, use_ssl=use_ssl)
+
+    # Read audio file
+    with open(file_path, "rb") as fh:
+        audio_data = fh.read()
+
+    # Create ASR service and configure recognition
+    asr_service = riva.client.ASRService(auth)
+    config = riva.client.RecognitionConfig(
+        encoding=riva.client.AudioEncoding.LINEAR_PCM,
+        sample_rate_hertz=16000,
+        language_code="en-US",
+        enable_automatic_punctuation=True,
+    )
+
+    # Perform offline recognition
+    response = asr_service.offline_recognize(audio_data, config)
+
+    # Extract transcription
+    results = response.results
+    if not results:
+        return "(no speech detected)"
+
+    transcripts = [
+        result.alternatives[0].transcript
+        for result in results
+        if result.alternatives
+    ]
+
+    result_text = " ".join(transcripts).strip()
+    logger.debug(f"RIVA transcription: {len(result_text)} chars")
     return result_text or "(no speech detected)"
