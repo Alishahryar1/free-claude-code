@@ -1,8 +1,8 @@
 """Voice note transcription for messaging platforms.
 
-Supports two providers:
-- "whisper": Hugging Face transformers Whisper pipeline (offline, free)
-- "nvidia_riva": NVIDIA RIVA ASR (requires RIVA server)
+Supports:
+- Local Whisper (cpu/cuda): Hugging Face transformers pipeline
+- NVIDIA NIM: NVIDIA NIM Whisper/Parkeet
 """
 
 import os
@@ -16,7 +16,20 @@ from config.settings import get_settings
 # Max file size in bytes (25 MB)
 MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024
 
-# Short model names -> full Hugging Face model IDs
+# NVIDIA NIM Whisper model config: (function_id, language_code)
+# The function ID is paired with the model (see NVIDIA NIM docs)
+_NIM_MODEL_CONFIG: dict[str, tuple[str, str]] = {
+    "nvidia/parakeet-ctc-0.6b-zh-tw": ("8473f56d-51ef-473c-bb26-efd4f5def2bf", "zh-TW"),
+    "nvidia/parakeet-ctc-0.6b-zh-cn": ("9add5ef7-322e-47e0-ad7a-5653fb8d259b", "zh-CN"),
+    "nvidia/parakeet-ctc-0.6b-es": ("None", "es-US"),
+    "nvidia/parakeet-ctc-0.6b-vi": ("f3dff2bb-99f9-403d-a5f1-f574a757deb0", "vi-VN"),
+    "nvidia/parakeet-ctc-1.1b-asr": ("1598d209-5e27-4d3c-8079-4751568b1081", "en-US"),
+    "nvidia/parakeet-ctc-0.6b-asr": ("d8dd4e9b-fbf5-4fb0-9dba-8cf436c8d965", "en-US"),
+    "nvidia/parakeet-1.1b-rnnt-multilingual-asr": ("71203149-d3b7-4460-8231-1be2543a1fca", ""),
+    "openai/whisper-large-v3": ("b702f636-f60c-4a3d-a6f4-f3568c13bd7d", "multi"),
+}
+
+# Short model names -> full Hugging Face model IDs (for local Whisper)
 _MODEL_MAP: dict[str, str] = {
     "tiny": "openai/whisper-tiny",
     "base": "openai/whisper-base",
@@ -92,23 +105,23 @@ def transcribe_audio(
     """
     Transcribe audio file to text.
 
-    Supports two providers (configured via TRANSCRIPTION_PROVIDER):
-    - "whisper": Hugging Face transformers Whisper pipeline (offline, free)
-    - "nvidia_riva": NVIDIA RIVA ASR (requires RIVA server)
+    Supports:
+    - whisper_device="cpu"/"cuda": local Whisper (requires voice extra)
+    - whisper_device="nvidia_nim": NVIDIA NIM Whisper API
 
     Args:
         file_path: Path to audio file (OGG, MP3, MP4, WAV, M4A supported)
         mime_type: MIME type of the audio (e.g. "audio/ogg")
-        whisper_model: Model ID (e.g. "openai/whisper-base") or short name (only for whisper)
-        whisper_device: "cpu" | "cuda" (only for whisper)
+        whisper_model: Model ID or short name (local) or NVIDIA NIM model
+        whisper_device: "cpu" | "cuda" | "nvidia_nim" (defaults to WHISPER_DEVICE env var)
 
     Returns:
         Transcribed text
 
     Raises:
         FileNotFoundError: If file does not exist
-        ValueError: If file too large or invalid provider
-        ImportError: If voice extra not installed (for whisper)
+        ValueError: If file too large
+        ImportError: If voice extra not installed (for local Whisper)
     """
     if not file_path.exists():
         raise FileNotFoundError(f"Audio file not found: {file_path}")
@@ -119,14 +132,16 @@ def transcribe_audio(
             f"Audio file too large ({size} bytes). Max {MAX_AUDIO_SIZE_BYTES} bytes."
         )
 
-    # Get provider from settings (supports backward compatibility with direct args)
+    # Use settings values (from WHISPER_DEVICE and WHISPER_MODEL env vars)
+    # Function args are kept for backward compatibility but settings take precedence
     settings = get_settings()
-    provider = settings.transcription_provider
+    device = settings.whisper_device
+    model = settings.whisper_model
 
-    if provider == "nvidia_riva":
-        return _transcribe_riva(file_path)
+    if device == "nvidia_nim":
+        return _transcribe_nim(file_path, model)
     else:
-        return _transcribe_local(file_path, whisper_model, whisper_device)
+        return _transcribe_local(file_path, model, device)
 
 
 # Whisper expects 16 kHz sample rate
@@ -155,50 +170,81 @@ def _transcribe_local(file_path: Path, whisper_model: str, whisper_device: str) 
     return result_text or "(no speech detected)"
 
 
-def _transcribe_riva(file_path: Path) -> str:
-    """Transcribe using NVIDIA RIVA ASR."""
-    settings = get_settings()
-    server = settings.nvidia_riva_server
-
+def _transcribe_nim(file_path: Path, model: str) -> str:
+    """Transcribe using NVIDIA NIM Whisper API via Riva gRPC client."""
     try:
         import riva.client
     except ImportError as e:
         raise ImportError(
-            "NVIDIA RIVA transcription requires the riva client. "
-            "Install with: pip install nvidia-riva-client"
+            "Voice notes with nvidia_nim require the voice extra. "
+            "Install with: uv sync --extra voice"
         ) from e
 
-    # Create auth with SSL for non-local servers
-    use_ssl = not server.startswith("localhost:")
-    auth = riva.client.Auth(uri=server, use_ssl=use_ssl)
+    settings = get_settings()
+    api_key = settings.nvidia_nim_api_key
 
-    # Read audio file
-    with open(file_path, "rb") as fh:
-        audio_data = fh.read()
+    if not api_key:
+        raise ValueError(
+            "NVIDIA_NIM_API_KEY is required for nvidia_nim transcription. "
+            "Set it in your .env file."
+        )
 
-    # Create ASR service and configure recognition
-    asr_service = riva.client.ASRService(auth)
-    config = riva.client.RecognitionConfig(
-        encoding=riva.client.AudioEncoding.LINEAR_PCM,
-        sample_rate_hertz=16000,
-        language_code="en-US",
-        enable_automatic_punctuation=True,
-    )
+    # Look up function ID and language code from model mapping
+    model_config = _NIM_MODEL_CONFIG.get(model)
+    if not model_config:
+        raise ValueError(
+            f"No NVIDIA NIM config found for model: {model}. "
+            f"Supported models: {', '.join(_NIM_MODEL_CONFIG.keys())}"
+        )
+    function_id, language_code = model_config
 
-    # Perform offline recognition
-    response = asr_service.offline_recognize(audio_data, config)
-
-    # Extract transcription
-    results = response.results
-    if not results:
-        return "(no speech detected)"
-
-    transcripts = [
-        result.alternatives[0].transcript
-        for result in results
-        if result.alternatives
+    # Riva server configuration
+    server = "grpc.nvcf.nvidia.com:443"
+    options = [
+        ("grpc.max_receive_message_length", 1024 * 1024 * 100),  # 100MB
+        ("grpc.max_send_message_length", 1024 * 1024 * 100),
     ]
 
-    result_text = " ".join(transcripts).strip()
-    logger.debug(f"RIVA transcription: {len(result_text)} chars")
-    return result_text or "(no speech detected)"
+    # Auth with SSL and metadata
+    auth = riva.client.Auth(
+        use_ssl=True,
+        uri=server,
+        metadata_args=[
+            ("function-id", function_id),
+            ("authorization", f"Bearer {api_key}"),
+        ],
+        options=options,
+    )
+
+    asr_service = riva.client.ASRService(auth)
+
+    # Configure recognition - language_code from model config
+    config = riva.client.RecognitionConfig(
+        language_code=language_code,
+        model=model,
+        max_alternatives=1,
+        profanity_filter=False,
+        enable_automatic_punctuation=True,
+        verbatim_transcripts=True,
+        enable_word_time_offsets=False,
+    )
+
+    # Read audio file
+    with open(file_path, "rb") as f:
+        data = f.read()
+
+    # Perform offline recognition
+    response = asr_service.offline_recognize(data, config)
+
+    # Extract text from response
+    if response.results:
+        text = ""
+        for result in response.results:
+            if result.alternatives:
+                text += result.alternatives[0].transcript
+        text = text.strip()
+    else:
+        text = ""
+
+    logger.debug(f"NIM transcription: {len(text)} chars")
+    return text or "(no speech detected)"

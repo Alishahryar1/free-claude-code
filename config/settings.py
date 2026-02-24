@@ -76,20 +76,16 @@ class Settings(BaseSettings):
     voice_note_enabled: bool = Field(
         default=True, validation_alias="VOICE_NOTE_ENABLED"
     )
-    # Transcription provider: "whisper" | "nvidia_riva"
-    transcription_provider: str = Field(
-        default="whisper", validation_alias="TRANSCRIPTION_PROVIDER"
-    )
-    # NVIDIA RIVA server address (e.g., "localhost:50051" or "riva-ngai.example.com:443")
-    nvidia_riva_server: str = Field(
-        default="localhost:50051", validation_alias="NVIDIA_RIVA_SERVER"
-    )
-    # Hugging Face token for faster model downloads (optional)
-    hf_token: str = Field(default="", validation_alias="HF_TOKEN")
-    # Hugging Face Whisper model ID (e.g. openai/whisper-base) or short name
-    whisper_model: str = Field(default="base", validation_alias="WHISPER_MODEL")
-    # Device: "cpu" | "cuda"
+    # Device: "cpu" | "cuda" | "nvidia_nim"
+    # - "cpu"/"cuda": local Whisper (requires voice extra: uv sync --extra voice)
+    # - "nvidia_nim": NVIDIA NIM Whisper API (uses NVIDIA_NIM_API_KEY)
     whisper_device: str = Field(default="cpu", validation_alias="WHISPER_DEVICE")
+    # Hugging Face token for faster model downloads (optional, for local Whisper)
+    hf_token: str = Field(default="", validation_alias="HF_TOKEN")
+    # Whisper model ID or short name (for local Whisper) or NVIDIA NIM model (for nvidia_nim)
+    # Local Whisper: "tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"
+    # NVIDIA NIM: "nvidia/parakeet-ctc-1.1b-asr", "openai/whisper-large-v3", etc.
+    whisper_model: str = Field(default="base", validation_alias="WHISPER_MODEL")
 
     # ==================== Bot Wrapper Config ====================
     telegram_bot_token: str | None = None
@@ -125,16 +121,9 @@ class Settings(BaseSettings):
     @field_validator("whisper_device")
     @classmethod
     def validate_whisper_device(cls, v: str) -> str:
-        if v not in ("cpu", "cuda"):
-            raise ValueError(f"whisper_device must be 'cpu' or 'cuda', got {v!r}")
-        return v
-
-    @field_validator("transcription_provider")
-    @classmethod
-    def validate_transcription_provider(cls, v: str) -> str:
-        if v not in ("whisper", "nvidia_riva"):
+        if v not in ("cpu", "cuda", "nvidia_nim"):
             raise ValueError(
-                f"transcription_provider must be 'whisper' or 'nvidia_riva', got {v!r}"
+                f"whisper_device must be 'cpu', 'cuda', or 'nvidia_nim', got {v!r}"
             )
         return v
 

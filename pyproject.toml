@@ -25,6 +25,7 @@ voice = [
     "transformers>=4.45.0",
     "accelerate>=0.30.0",
     "librosa>=0.10.0",
+    "nvidia-riva-client>=2.15.0",
 ]
 
 [tool.uv.sources]
@@ -81,5 +82,5 @@ python-version = "3.14"
 
 [tool.ty.analysis]
 # Optional voice extra: torch, transformers, librosa may not be installed in CI
-# Optional riva: nvidia-riva-client for nvidia_riva transcription provider
-allowed-unresolved-imports = ["torch", "transformers", "librosa", "riva.client"]
+# Optional voice (nvidia_nim): nvidia-riva-client for nvidia_nim transcription provider
+allowed-unresolved-imports = ["torch", "transformers", "librosa", "nvidia-riva-client", "riva", "riva.client"]

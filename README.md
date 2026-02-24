@@ -262,7 +262,10 @@ Get a token from [@BotFather](https://t.me/BotFather); find your user ID via [@u
 
 ### Voice Notes
 
-Send voice messages on Telegram or Discord; they are transcribed to text and processed as regular prompts. Uses [Hugging Face transformers Whisper](https://huggingface.co/openai/whisper-large-v3-turbo) — free, no API key, works offline, CUDA 13 compatible. No ffmpeg required (audio loaded via librosa).
+Send voice messages on Telegram or Discord; they are transcribed to text and processed as regular prompts. Two transcription backends are available:
+
+- **Local Whisper** (default): Uses [Hugging Face transformers Whisper](https://huggingface.co/openai/whisper-large-v3-turbo) — free, no API key, works offline, CUDA compatible. No ffmpeg required.
+- **NVIDIA NIM**: Uses NVIDIA NIM Whisper/Parkeet models via gRPC — requires `NVIDIA_NIM_API_KEY` and the voice extra.
 
 Install the optional voice extra:
 
@@ -275,9 +278,24 @@ uv sync --extra voice
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VOICE_NOTE_ENABLED` | Enable voice note handling | `true` |
-| `WHISPER_MODEL` | Hugging Face model ID or short name (`tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`, `large-v3-turbo`) | `base` |
-| `WHISPER_DEVICE` | `cpu` \| `cuda` | `cpu` |
-| `HF_TOKEN` | Hugging Face token for faster model downloads (optional; [create one](https://huggingface.co/settings/tokens)) | — |
+| `WHISPER_DEVICE` | `cpu` \| `cuda` \| `nvidia_nim` | `cpu` |
+| `WHISPER_MODEL` | See supported models below | `base` |
+| `HF_TOKEN` | Hugging Face token for faster model downloads (optional) | — |
+| `NVIDIA_NIM_API_KEY` | API key for NVIDIA NIM (required for `nvidia_nim` device) | — |
+
+**Supported `WHISPER_MODEL` values:**
+
+| Model | Device | Description |
+|-------|--------|-------------|
+| `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`, `large-v3-turbo` | `cpu` / `cuda` | Local Whisper (Hugging Face) |
+| `openai/whisper-large-v3` | `nvidia_nim` | Auto language detection (best overall) |
+| `nvidia/parakeet-ctc-1.1b-asr` | `nvidia_nim` | English-only |
+| `nvidia/parakeet-ctc-0.6b-asr` | `nvidia_nim` | English-only |
+| `nvidia/parakeet-ctc-0.6b-zh-cn` | `nvidia_nim` | Mandarin Chinese |
+| `nvidia/parakeet-ctc-0.6b-zh-tw` | `nvidia_nim` | Traditional Chinese |
+| `nvidia/parakeet-ctc-0.6b-es` | `nvidia_nim` | Spanish |
+| `nvidia/parakeet-ctc-0.6b-vi` | `nvidia_nim` | Vietnamese |
+| `nvidia/parakeet-1.1b-rnnt-multilingual-asr` | `nvidia_nim` | Multilingual RNNT |
 
 ---
 
