@@ -1,3 +1,11 @@
+<!-- 🤖 AGENT RULES HEADER -->
+# Core Rules
+⚠️ **IMPORTANT**: The actual rules are in a private configuration file.
+Please read and follow the instructions in:
+- @.rulez/CORE-RULES.md
+- @.rulez/CONTEXT-7.md
+<!-- 🤖 AGENT RULES FOOTER -->
+
 # AGENTIC DIRECTIVE
 
 > This file is identical to CLAUDE.md. Keep them in sync.
@@ -42,3 +50,8 @@
 
 ## TOOLS
 - Prefer built-in tools (grep, read_file, etc.) over manual workflows. Check tool availability before use.
+<!-- vmem:header -->
+## Vector Memory
+
+For vmem commands, read: `.vmem/vmem.md`
+<!-- vmem:footer -->

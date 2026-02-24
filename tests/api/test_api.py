@@ -174,12 +174,13 @@ def test_count_tokens_endpoint():
     assert "input_tokens" in response.json()
 
 
-def test_stop_endpoint_no_handler_no_cli_503():
-    """POST /stop without handler or cli_manager returns 503."""
-    # Ensure no handler or cli_manager on app state
-    if hasattr(app.state, "message_handler"):
-        delattr(app.state, "message_handler")
-    if hasattr(app.state, "cli_manager"):
-        delattr(app.state, "cli_manager")
-    response = client.post("/stop")
-    assert response.status_code == 503
+# NOTE: /stop endpoint is disabled — see api/routes.py for details.
+# def test_stop_endpoint_no_handler_no_cli_503():
+#     """POST /stop without handler or cli_manager returns 503."""
+#     # Ensure no handler or cli_manager on app state
+#     if hasattr(app.state, "message_handler"):
+#         delattr(app.state, "message_handler")
+#     if hasattr(app.state, "cli_manager"):
+#         delattr(app.state, "cli_manager")
+#     response = client.post("/stop")
+#     assert response.status_code == 503

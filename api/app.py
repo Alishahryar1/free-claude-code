@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
             data_path = os.path.abspath(settings.claude_workspace)
             os.makedirs(data_path, exist_ok=True)
 
-            api_url = f"http://{settings.host}:{settings.port}/v1"
+            api_url = f"http://127.0.0.1:{settings.port}/v1"
             allowed_dirs = [workspace] if settings.allowed_dir else []
             plans_dir_abs = os.path.abspath(
                 os.path.join(settings.claude_workspace, "plans")

@@ -130,38 +130,35 @@ def test_count_tokens_error_returns_500(client):
     assert "token error" in response.json()["detail"]
 
 
-def test_stop_cli_with_handler(client):
-    mock_handler = MagicMock()
-    # Mock the async method to return a completed future or just mock it since TestClient
-    # will run the app in a way that respects it?
-    # Actually, we need to mock it as an async function.
-    mock_handler.stop_all_tasks = AsyncMock(return_value=3)
-    app.state.message_handler = mock_handler
-
-    response = client.post("/stop")
-
-    assert response.status_code == 200
-    assert response.json()["cancelled_count"] == 3
-    mock_handler.stop_all_tasks.assert_called_once()
-
-    # Cleanup state
-    if hasattr(app.state, "message_handler"):
-        del app.state.message_handler
-
-
-def test_stop_cli_fallback_to_manager(client):
-    if hasattr(app.state, "message_handler"):
-        del app.state.message_handler
-
-    mock_manager = MagicMock()
-    mock_manager.stop_all = AsyncMock()
-    app.state.cli_manager = mock_manager
-
-    response = client.post("/stop")
-
-    assert response.status_code == 200
-    assert response.json()["source"] == "cli_manager"
-    mock_manager.stop_all.assert_called_once()
-
-    if hasattr(app.state, "cli_manager"):
-        del app.state.cli_manager
+# NOTE: /stop endpoint is disabled — see api/routes.py for details.
+# def test_stop_cli_with_handler(client):
+#     mock_handler = MagicMock()
+#     mock_handler.stop_all_tasks = AsyncMock(return_value=3)
+#     app.state.message_handler = mock_handler
+#
+#     response = client.post("/stop")
+#
+#     assert response.status_code == 200
+#     assert response.json()["cancelled_count"] == 3
+#     mock_handler.stop_all_tasks.assert_called_once()
+#
+#     if hasattr(app.state, "message_handler"):
+#         del app.state.message_handler
+#
+#
+# def test_stop_cli_fallback_to_manager(client):
+#     if hasattr(app.state, "message_handler"):
+#         del app.state.message_handler
+#
+#     mock_manager = MagicMock()
+#     mock_manager.stop_all = AsyncMock()
+#     app.state.cli_manager = mock_manager
+#
+#     response = client.post("/stop")
+#
+#     assert response.status_code == 200
+#     assert response.json()["source"] == "cli_manager"
+#     mock_manager.stop_all.assert_called_once()
+#
+#     if hasattr(app.state, "cli_manager"):
+#         del app.state.cli_manager

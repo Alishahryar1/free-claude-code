@@ -116,19 +116,25 @@ async def health():
     return {"status": "healthy"}
 
 
-@router.post("/stop")
-async def stop_cli(request: Request):
-    """Stop all CLI sessions and pending tasks."""
-    handler = getattr(request.app.state, "message_handler", None)
-    if not handler:
-        # Fallback if messaging not initialized
-        cli_manager = getattr(request.app.state, "cli_manager", None)
-        if cli_manager:
-            await cli_manager.stop_all()
-            logger.info("STOP_CLI: source=cli_manager cancelled_count=N/A")
-            return {"status": "stopped", "source": "cli_manager"}
-        raise HTTPException(status_code=503, detail="Messaging system not initialized")
-
-    count = await handler.stop_all_tasks()
-    logger.info("STOP_CLI: source=handler cancelled_count=%d", count)
-    return {"status": "stopped", "cancelled_count": count}
+# NOTE: /stop endpoint is disabled (Issue 3 — unauthenticated admin action).
+# This endpoint has no auth check, so any local process can kill all active CLI sessions.
+# The messaging platform's /stop command (Telegram/Discord) handles session cancellation
+# internally via messaging/handler.py and does not rely on this HTTP endpoint.
+# Uncomment to re-enable if external programmatic stop control is needed — add auth first.
+#
+# @router.post("/stop")
+# async def stop_cli(request: Request):
+#     """Stop all CLI sessions and pending tasks."""
+#     handler = getattr(request.app.state, "message_handler", None)
+#     if not handler:
+#         # Fallback if messaging not initialized
+#         cli_manager = getattr(request.app.state, "cli_manager", None)
+#         if cli_manager:
+#             await cli_manager.stop_all()
+#             logger.info("STOP_CLI: source=cli_manager cancelled_count=N/A")
+#             return {"status": "stopped", "source": "cli_manager"}
+#         raise HTTPException(status_code=503, detail="Messaging system not initialized")
+#
+#     count = await handler.stop_all_tasks()
+#     logger.info("STOP_CLI: source=handler cancelled_count=%d", count)
+#     return {"status": "stopped", "cancelled_count": count}

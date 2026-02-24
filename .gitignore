@@ -9,3 +9,24 @@ agent_workspace
 .env
 server.log
 .coverage
+# AI Agents
+.rulez/
+.claude/
+.agent/
+.codex/
+.gemini/
+.opencode/
+.qwen/
+.docs/
+.mcp.json
+CLAUDE.md
+GEMINI.md
+QWEN.md
+AGENTS.md
+
+.codegraph/
+
+# vmem
+.vmem/
+
+.env*
