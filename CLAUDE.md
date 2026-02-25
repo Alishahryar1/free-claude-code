@@ -39,7 +39,7 @@
 
 ## SUMMARY STANDARDS
 - Summaries must be technical and granular.
-- Include: [Files Changed], [Logic Altered], [Verification Method], [Residual Risks].
+- Include: [Files Changed], [Logic Altered], [Verification Method], [Residual Risks] (if no residual risks then say none).
 
 ## TOOLS
 - Prefer built-in tools (grep, read_file, etc.) over manual workflows. Check tool availability before use.
