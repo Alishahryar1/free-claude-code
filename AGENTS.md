@@ -5,6 +5,7 @@
 ## CODING ENVIRONMENT
 - Install astral uv using "curl -LsSf https://astral.sh/uv/install.sh | sh" if not already installed
 - Always use `uv run` to run files instead of the global `python` command.
+- Current uv ruff linter is set to py314 which has supports multiple exception types without paranthesis (except TypeError, ValueError:)
 - Read `.env.example` for environment variables.
 - All CI checks must pass; failing checks block merge.
 - Add tests for new changes (including edge cases), then run `uv run pytest`.
