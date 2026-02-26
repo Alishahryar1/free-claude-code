@@ -289,8 +289,6 @@ uv sync --extra voice --extra voice_local
 | `WHISPER_MODEL` | See supported models below | `base` |
 | `HF_TOKEN` | Hugging Face token for faster model downloads (optional, for local Whisper) | — |
 | `NVIDIA_NIM_API_KEY` | API key for NVIDIA NIM (required for `nvidia_nim` device) | — |
-| `HF_TOKEN` | Hugging Face token for faster model downloads (optional) | — |
-| `NVIDIA_NIM_API_KEY` | API key for NVIDIA NIM (required for `nvidia_nim` device) | — |
 
 **Supported `WHISPER_MODEL` values:**
 
