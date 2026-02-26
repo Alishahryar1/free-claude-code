@@ -80,12 +80,12 @@ class Settings(BaseSettings):
     # - "cpu"/"cuda": local Whisper (requires voice_local extra: uv sync --extra voice_local)
     # - "nvidia_nim": NVIDIA NIM Whisper API (requires voice extra: uv sync --extra voice)
     whisper_device: str = Field(default="cpu", validation_alias="WHISPER_DEVICE")
-    # Hugging Face token for faster model downloads (optional, for local Whisper)
-    hf_token: str = Field(default="", validation_alias="HF_TOKEN")
     # Whisper model ID or short name (for local Whisper) or NVIDIA NIM model (for nvidia_nim)
     # Local Whisper: "tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"
     # NVIDIA NIM: "nvidia/parakeet-ctc-1.1b-asr", "openai/whisper-large-v3", etc.
     whisper_model: str = Field(default="base", validation_alias="WHISPER_MODEL")
+    # Hugging Face token for faster model downloads (optional, for local Whisper)
+    hf_token: str = Field(default="", validation_alias="HF_TOKEN")
 
     # ==================== Bot Wrapper Config ====================
     telegram_bot_token: str | None = None
