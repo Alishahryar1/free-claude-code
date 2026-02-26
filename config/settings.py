@@ -77,8 +77,8 @@ class Settings(BaseSettings):
         default=True, validation_alias="VOICE_NOTE_ENABLED"
     )
     # Device: "cpu" | "cuda" | "nvidia_nim"
-    # - "cpu"/"cuda": local Whisper (requires voice extra: uv sync --extra voice)
-    # - "nvidia_nim": NVIDIA NIM Whisper API (uses NVIDIA_NIM_API_KEY)
+    # - "cpu"/"cuda": local Whisper (requires voice_local extra: uv sync --extra voice_local)
+    # - "nvidia_nim": NVIDIA NIM Whisper API (requires voice extra: uv sync --extra voice)
     whisper_device: str = Field(default="cpu", validation_alias="WHISPER_DEVICE")
     # Hugging Face token for faster model downloads (optional, for local Whisper)
     hf_token: str = Field(default="", validation_alias="HF_TOKEN")

@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.14.2"
 
 [[package]]
@@ -521,9 +521,11 @@ dependencies = [
 
 [package.optional-dependencies]
 voice = [
+    { name = "nvidia-riva-client" },
+]
+voice-local = [
     { name = "accelerate" },
     { name = "librosa" },
-    { name = "nvidia-riva-client" },
     { name = "torch" },
     { name = "transformers" },
 ]
@@ -539,11 +541,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "accelerate", marker = "extra == 'voice'", specifier = ">=0.30.0" },
+    { name = "accelerate", marker = "extra == 'voice-local'", specifier = ">=0.30.0" },
     { name = "discord-py", specifier = ">=2.0.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.11" },
     { name = "httpx", specifier = ">=0.25.0" },
-    { name = "librosa", marker = "extra == 'voice'", specifier = ">=0.10.0" },
+    { name = "librosa", marker = "extra == 'voice-local'", specifier = ">=0.10.0" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "markdown-it-py", specifier = ">=3.0.0" },
     { name = "nvidia-riva-client", marker = "extra == 'voice'", specifier = ">=2.15.0" },
@@ -553,11 +555,11 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-telegram-bot", specifier = ">=21.0" },
     { name = "tiktoken", specifier = ">=0.7.0" },
-    { name = "torch", marker = "extra == 'voice'", specifier = ">=2.0.0", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "transformers", marker = "extra == 'voice'", specifier = ">=4.45.0" },
+    { name = "torch", marker = "extra == 'voice-local'", specifier = ">=2.0.0", index = "https://download.pytorch.org/whl/cu130" },
+    { name = "transformers", marker = "extra == 'voice-local'", specifier = ">=4.45.0" },
     { name = "uvicorn", specifier = ">=0.34.0" },
 ]
-provides-extras = ["voice"]
+provides-extras = ["voice", "voice-local"]
 
 [package.metadata.requires-dev]
 dev = [

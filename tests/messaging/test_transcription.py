@@ -87,14 +87,25 @@ def test_transcribe_invalid_device_raises():
         f.write(b"fake ogg")
         path = Path(f.name)
     try:
-        with pytest.raises(ValueError, match="whisper_device must be 'cpu' or 'cuda'"):
-            transcribe_audio(path, "audio/ogg", whisper_device="auto")
+        # Mock settings to return invalid device "auto"
+        mock_settings = MagicMock()
+        mock_settings.whisper_device = "auto"
+        mock_settings.whisper_model = "base"
+
+        # Patch _load_audio to avoid ImportError from missing librosa
+        # Device validation happens in _get_pipeline before torch import
+        with (
+            patch("messaging.transcription.get_settings", return_value=mock_settings),
+            patch("messaging.transcription._load_audio"),
+            pytest.raises(ValueError, match="whisper_device must be 'cpu' or 'cuda'"),
+        ):
+            transcribe_audio(path, "audio/ogg")
     finally:
         path.unlink(missing_ok=True)
 
 
 def test_transcribe_local_import_error_raises():
-    """Local backend when voice extra not installed raises ImportError."""
+    """Local backend when voice_local extra not installed raises ImportError."""
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as f:
         f.write(b"fake ogg")
         path = Path(f.name)
@@ -103,10 +114,11 @@ def test_transcribe_local_import_error_raises():
             patch(
                 "messaging.transcription._get_pipeline",
                 side_effect=ImportError(
-                    "Voice notes require the voice extra. Install with: uv sync --extra voice"
+                    "Local Whisper requires the voice_local extra. "
+                    "Install with: uv sync --extra voice_local"
                 ),
             ),
-            pytest.raises(ImportError, match="voice extra"),
+            pytest.raises(ImportError, match="voice_local extra"),
         ):
             transcribe_audio(path, "audio/ogg")
     finally:

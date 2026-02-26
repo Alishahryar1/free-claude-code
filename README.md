@@ -265,12 +265,19 @@ Get a token from [@BotFather](https://t.me/BotFather); find your user ID via [@u
 Send voice messages on Telegram or Discord; they are transcribed to text and processed as regular prompts. Two transcription backends are available:
 
 - **Local Whisper** (default): Uses [Hugging Face transformers Whisper](https://huggingface.co/openai/whisper-large-v3-turbo) — free, no API key, works offline, CUDA compatible. No ffmpeg required.
-- **NVIDIA NIM**: Uses NVIDIA NIM Whisper/Parkeet models via gRPC — requires `NVIDIA_NIM_API_KEY` and the voice extra.
+- **NVIDIA NIM**: Uses NVIDIA NIM Whisper/Parkeet models via gRPC — requires `NVIDIA_NIM_API_KEY`.
 
-Install the optional voice extra:
+Install the optional voice extras:
 
 ```bash
+# For local Whisper (cpu/cuda)
+uv sync --extra voice_local
+
+# For NVIDIA NIM transcription
 uv sync --extra voice
+
+# Install both
+uv sync --extra voice --extra voice_local
 ```
 
 **Configuration:**
@@ -280,6 +287,8 @@ uv sync --extra voice
 | `VOICE_NOTE_ENABLED` | Enable voice note handling | `true` |
 | `WHISPER_DEVICE` | `cpu` \| `cuda` \| `nvidia_nim` | `cpu` |
 | `WHISPER_MODEL` | See supported models below | `base` |
+| `HF_TOKEN` | Hugging Face token for faster model downloads (optional, for local Whisper) | — |
+| `NVIDIA_NIM_API_KEY` | API key for NVIDIA NIM (required for `nvidia_nim` device) | — |
 | `HF_TOKEN` | Hugging Face token for faster model downloads (optional) | — |
 | `NVIDIA_NIM_API_KEY` | API key for NVIDIA NIM (required for `nvidia_nim` device) | — |
 

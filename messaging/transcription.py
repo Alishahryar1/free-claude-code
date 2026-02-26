@@ -25,7 +25,10 @@ _NIM_MODEL_CONFIG: dict[str, tuple[str, str]] = {
     "nvidia/parakeet-ctc-0.6b-vi": ("f3dff2bb-99f9-403d-a5f1-f574a757deb0", "vi-VN"),
     "nvidia/parakeet-ctc-1.1b-asr": ("1598d209-5e27-4d3c-8079-4751568b1081", "en-US"),
     "nvidia/parakeet-ctc-0.6b-asr": ("d8dd4e9b-fbf5-4fb0-9dba-8cf436c8d965", "en-US"),
-    "nvidia/parakeet-1.1b-rnnt-multilingual-asr": ("71203149-d3b7-4460-8231-1be2543a1fca", ""),
+    "nvidia/parakeet-1.1b-rnnt-multilingual-asr": (
+        "71203149-d3b7-4460-8231-1be2543a1fca",
+        "",
+    ),
     "openai/whisper-large-v3": ("b702f636-f60c-4a3d-a6f4-f3568c13bd7d", "multi"),
 }
 
@@ -90,7 +93,7 @@ def _get_pipeline(model_id: str, device: str) -> Any:
             )
         except ImportError as e:
             raise ImportError(
-                "Voice notes require the voice extra. Install with: uv sync --extra voice"
+                "Local Whisper requires the voice_local extra. Install with: uv sync --extra voice_local"
             ) from e
     return _pipeline_cache[cache_key]
 
@@ -106,8 +109,8 @@ def transcribe_audio(
     Transcribe audio file to text.
 
     Supports:
-    - whisper_device="cpu"/"cuda": local Whisper (requires voice extra)
-    - whisper_device="nvidia_nim": NVIDIA NIM Whisper API
+    - whisper_device="cpu"/"cuda": local Whisper (requires voice_local extra)
+    - whisper_device="nvidia_nim": NVIDIA NIM Whisper API (requires voice extra)
 
     Args:
         file_path: Path to audio file (OGG, MP3, MP4, WAV, M4A supported)
@@ -121,7 +124,7 @@ def transcribe_audio(
     Raises:
         FileNotFoundError: If file does not exist
         ValueError: If file too large
-        ImportError: If voice extra not installed (for local Whisper)
+        ImportError: If voice_local extra not installed (for local Whisper)
     """
     if not file_path.exists():
         raise FileNotFoundError(f"Audio file not found: {file_path}")
@@ -176,7 +179,7 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
         import riva.client
     except ImportError as e:
         raise ImportError(
-            "Voice notes with nvidia_nim require the voice extra. "
+            "NVIDIA NIM transcription requires the voice extra. "
             "Install with: uv sync --extra voice"
         ) from e
 
