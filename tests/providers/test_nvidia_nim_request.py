@@ -3,9 +3,9 @@
 from unittest.mock import MagicMock
 
 from config.nim import NimSettings
+from providers.common.utils import set_if_not_none
 from providers.nvidia_nim.request import (
     _set_extra,
-    _set_if_not_none,
     build_request_body,
 )
 
@@ -13,12 +13,12 @@ from providers.nvidia_nim.request import (
 class TestSetIfNotNone:
     def test_value_not_none_sets(self):
         body = {}
-        _set_if_not_none(body, "key", "value")
+        set_if_not_none(body, "key", "value")
         assert body["key"] == "value"
 
     def test_value_none_skips(self):
         body = {}
-        _set_if_not_none(body, "key", None)
+        set_if_not_none(body, "key", None)
         assert "key" not in body
 
 

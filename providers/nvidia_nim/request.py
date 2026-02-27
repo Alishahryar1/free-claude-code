@@ -6,11 +6,7 @@ from loguru import logger
 
 from config.nim import NimSettings
 from providers.common.message_converter import AnthropicToOpenAIConverter
-
-
-def _set_if_not_none(body: dict[str, Any], key: str, value: Any) -> None:
-    if value is not None:
-        body[key] = value
+from providers.common.utils import set_if_not_none
 
 
 def _set_extra(
@@ -52,15 +48,15 @@ def build_request_body(request_data: Any, nim: NimSettings) -> dict:
         max_tokens = nim.max_tokens
     elif nim.max_tokens:
         max_tokens = min(max_tokens, nim.max_tokens)
-    _set_if_not_none(body, "max_tokens", max_tokens)
+    set_if_not_none(body, "max_tokens", max_tokens)
 
     req_temperature = getattr(request_data, "temperature", None)
     temperature = req_temperature if req_temperature is not None else nim.temperature
-    _set_if_not_none(body, "temperature", temperature)
+    set_if_not_none(body, "temperature", temperature)
 
     req_top_p = getattr(request_data, "top_p", None)
     top_p = req_top_p if req_top_p is not None else nim.top_p
-    _set_if_not_none(body, "top_p", top_p)
+    set_if_not_none(body, "top_p", top_p)
 
     stop_sequences = getattr(request_data, "stop_sequences", None)
     if stop_sequences:
