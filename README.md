@@ -289,11 +289,11 @@ uv sync --extra voice
 Full list in [`nvidia_nim_models.json`](nvidia_nim_models.json).
 
 Popular models:
+- `nvidia_nim/minimaxai/minimax-m2.5`
 - `nvidia_nim/qwen/qwen3.5-397b-a17b`
 - `nvidia_nim/z-ai/glm5`
 - `nvidia_nim/stepfun-ai/step-3.5-flash`
 - `nvidia_nim/moonshotai/kimi-k2.5`
-- `nvidia_nim/minimaxai/minimax-m2.1`
 
 Browse: [build.nvidia.com](https://build.nvidia.com/explore/discover)
 

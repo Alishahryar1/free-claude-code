@@ -476,13 +476,13 @@
             "owned_by": "microsoft"
         },
         {
-            "id": "minimaxai/minimax-m2",
+            "id": "minimaxai/minimax-m2.1",
             "object": "model",
             "created": 735790403,
             "owned_by": "minimaxai"
         },
         {
-            "id": "minimaxai/minimax-m2.1",
+            "id": "minimaxai/minimax-m2.5",
             "object": "model",
             "created": 735790403,
             "owned_by": "minimaxai"
@@ -705,12 +705,6 @@
         },
         {
             "id": "nvidia/llama-3.2-nemoretriever-300m-embed-v1",
-            "object": "model",
-            "created": 735790403,
-            "owned_by": "nvidia"
-        },
-        {
-            "id": "nvidia/llama-3.2-nemoretriever-300m-embed-v2",
             "object": "model",
             "created": 735790403,
             "owned_by": "nvidia"
