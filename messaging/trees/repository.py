@@ -105,17 +105,19 @@ class TreeRepository:
         if not tree:
             return []
 
-        pending = []
-        node = tree.get_node(node_id)
-        if not node:
-            return []
+        pending: list[MessageNode] = []
+        stack = [node_id]
 
-        for child_id in node.children_ids:
-            child = tree.get_node(child_id)
-            if child and child.state == MessageState.PENDING:
-                pending.append(child)
-                # Recursively get children of pending children
-                pending.extend(self.get_pending_children(child_id))
+        while stack:
+            current_id = stack.pop()
+            node = tree.get_node(current_id)
+            if not node:
+                continue
+            for child_id in node.children_ids:
+                child = tree.get_node(child_id)
+                if child and child.state == MessageState.PENDING:
+                    pending.append(child)
+                    stack.append(child_id)
 
         return pending
 
