@@ -134,16 +134,10 @@ def transcribe_audio(
             f"Audio file too large ({size} bytes). Max {MAX_AUDIO_SIZE_BYTES} bytes."
         )
 
-    # Use settings values (from WHISPER_DEVICE and WHISPER_MODEL env vars)
-    # Function args are kept for backward compatibility but settings take precedence
-    settings = get_settings()
-    device = settings.whisper_device
-    model = settings.whisper_model
-
-    if device == "nvidia_nim":
-        return _transcribe_nim(file_path, model)
+    if whisper_device == "nvidia_nim":
+        return _transcribe_nim(file_path, whisper_model)
     else:
-        return _transcribe_local(file_path, model, device)
+        return _transcribe_local(file_path, whisper_model, whisper_device)
 
 
 # Whisper expects 16 kHz sample rate
