@@ -2,7 +2,7 @@
 
 Supports:
 - Local Whisper (cpu/cuda): Hugging Face transformers pipeline
-- NVIDIA NIM: NVIDIA NIM Whisper/Parkeet
+- NVIDIA NIM: NVIDIA NIM Whisper/Parakeet
 """
 
 import os
