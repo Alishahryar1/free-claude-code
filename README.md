@@ -468,6 +468,7 @@ Contributions are welcome! Here are some ways to help:
 - Add new LLM providers (Groq, Together AI, etc.)
 - Add new messaging platforms (Slack, etc.)
 - Improve test coverage
+- Not accepting Docker Integration for now
 
 ```bash
 # Fork the repo, then:
