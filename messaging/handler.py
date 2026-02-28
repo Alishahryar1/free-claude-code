@@ -117,42 +117,33 @@ class ClaudeMessageHandler:
             queue_update_callback=self._update_queue_positions,
             node_started_callback=self._mark_node_processing,
         )
+        is_discord = platform.name == "discord"
+        self._format_status_fn = (
+            format_status_discord if is_discord else format_status_telegram
+        )
+        self._parse_mode_val: str | None = None if is_discord else "MarkdownV2"
+        self._render_ctx_val = RenderCtx(
+            bold=discord_bold if is_discord else mdv2_bold,
+            code_inline=discord_code_inline if is_discord else mdv2_code_inline,
+            escape_code=escape_discord_code if is_discord else escape_md_v2_code,
+            escape_text=escape_discord if is_discord else escape_md_v2,
+            render_markdown=render_markdown_to_discord
+            if is_discord
+            else render_markdown_to_mdv2,
+        )
+        self._limit_chars = 1900 if is_discord else 3900
 
     def _format_status(self, emoji: str, label: str, suffix: str | None = None) -> str:
-        """Platform-specific status formatting."""
-        if self.platform.name == "discord":
-            return format_status_discord(emoji, label, suffix)
-        return format_status_telegram(emoji, label, suffix)
+        return self._format_status_fn(emoji, label, suffix)
 
     def _parse_mode(self) -> str | None:
-        """Platform-specific parse mode (MarkdownV2 for Telegram, None for Discord)."""
-        if self.platform.name == "discord":
-            return None
-        return "MarkdownV2"
+        return self._parse_mode_val
 
     def _get_render_ctx(self) -> RenderCtx:
-        """Platform-specific render context for transcript."""
-        if self.platform.name == "discord":
-            return RenderCtx(
-                bold=discord_bold,
-                code_inline=discord_code_inline,
-                escape_code=escape_discord_code,
-                escape_text=escape_discord,
-                render_markdown=render_markdown_to_discord,
-            )
-        return RenderCtx(
-            bold=mdv2_bold,
-            code_inline=mdv2_code_inline,
-            escape_code=escape_md_v2_code,
-            escape_text=escape_md_v2,
-            render_markdown=render_markdown_to_mdv2,
-        )
+        return self._render_ctx_val
 
     def _get_limit_chars(self) -> int:
-        """Platform-specific message length limit (Discord 2000, Telegram 4096)."""
-        if self.platform.name == "discord":
-            return 1900
-        return 3900
+        return self._limit_chars
 
     async def handle_message(self, incoming: IncomingMessage) -> None:
         """
@@ -704,7 +695,7 @@ class ClaudeMessageHandler:
             node = tree.get_node(node_id)
             if node and node.state not in (MessageState.COMPLETED, MessageState.ERROR):
                 # Used by _process_node cancellation path to render "Stopped."
-                node.context = {"cancel_reason": "stop"}
+                node.set_context({"cancel_reason": "stop"})
 
         cancelled_nodes = await self.tree_queue.cancel_node(node_id)
         self._update_cancelled_nodes_ui(cancelled_nodes)
@@ -973,24 +964,11 @@ class ClaudeMessageHandler:
             logger.debug(f"Failed to read message log for /clear: {e}")
 
         try:
-            data = self.tree_queue.to_dict()
-            trees = data.get("trees", {})
-            for tree_data in trees.values():
-                nodes = tree_data.get("nodes", {})
-                for node_data in nodes.values():
-                    inc = node_data.get("incoming", {}) or {}
-                    if str(inc.get("platform")) != str(incoming.platform):
-                        continue
-                    if str(inc.get("chat_id")) != str(incoming.chat_id):
-                        continue
-
-                    mid = inc.get("message_id")
-                    if mid is not None:
-                        msg_ids.add(str(mid))
-
-                    sid = node_data.get("status_message_id")
-                    if sid is not None:
-                        msg_ids.add(str(sid))
+            msg_ids.update(
+                self.tree_queue.get_message_ids_for_chat(
+                    incoming.platform, incoming.chat_id
+                )
+            )
         except Exception as e:
             logger.warning(f"Failed to gather messages for /clear: {e}")
 

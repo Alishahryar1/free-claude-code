@@ -63,7 +63,7 @@ class TestContentBlockManager:
         assert mgr.text_index == -1
         assert mgr.thinking_started is False
         assert mgr.text_started is False
-        assert mgr.tool_indices == {}
+        assert mgr.tool_states == {}
 
 
 class TestSSEBuilderMessageLifecycle:
@@ -230,7 +230,7 @@ class TestSSEBuilderHighLevelHelpers:
         assert data["content_block"]["type"] == "tool_use"
         assert data["content_block"]["id"] == "tool_abc"
         assert data["content_block"]["name"] == "Grep"
-        assert 0 in builder.blocks.tool_indices
+        assert 0 in builder.blocks.tool_states
 
     def test_emit_tool_delta(self):
         builder = SSEBuilder("msg_1", "model")
@@ -239,7 +239,7 @@ class TestSSEBuilderHighLevelHelpers:
         sse = builder.emit_tool_delta(0, '{"pattern":')
         data = _parse_sse(sse)
         assert data["delta"]["partial_json"] == '{"pattern":'
-        assert builder.blocks.tool_contents[0] == '{"pattern":'
+        assert "".join(builder.blocks.tool_states[0].contents) == '{"pattern":'
 
     def test_stop_tool_block(self):
         builder = SSEBuilder("msg_1", "model")

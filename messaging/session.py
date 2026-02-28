@@ -95,18 +95,18 @@ class SessionStore:
         except Exception as e:
             logger.error(f"Failed to load sessions: {e}")
 
-    def _save(self) -> None:
-        """Persist sessions and trees to disk. Caller must hold self._lock."""
-        try:
-            data = {
-                "trees": self._trees,
-                "node_to_tree": self._node_to_tree,
-                "message_log": self._message_log,
-            }
-            with open(self.storage_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to save sessions: {e}")
+    def _snapshot(self) -> dict:
+        """Snapshot current state for serialization. Caller must hold self._lock."""
+        return {
+            "trees": dict(self._trees),
+            "node_to_tree": dict(self._node_to_tree),
+            "message_log": {k: list(v) for k, v in self._message_log.items()},
+        }
+
+    def _write_data(self, data: dict) -> None:
+        """Write data dict to disk. Must be called WITHOUT holding self._lock."""
+        with open(self.storage_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
 
     def _schedule_save(self) -> None:
         """Schedule a debounced save. Caller must hold self._lock."""
@@ -126,22 +126,35 @@ class SessionStore:
             if not self._dirty:
                 self._save_timer = None
                 return
-            self._save()
+            snapshot = self._snapshot()
             self._dirty = False
             self._save_timer = None
+        try:
+            self._write_data(snapshot)
+        except Exception as e:
+            logger.error(f"Failed to save sessions: {e}")
+            with self._lock:
+                self._dirty = True
 
-    def _flush_save(self) -> None:
-        """Immediate save, cancel any pending debounced save. Caller must hold self._lock."""
+    def _flush_save(self) -> dict:
+        """Cancel pending timer and snapshot current state. Caller must hold self._lock.
+        Returns snapshot dict; caller must call _write_data(snapshot) outside the lock."""
         if self._save_timer is not None:
             self._save_timer.cancel()
             self._save_timer = None
         self._dirty = False
-        self._save()
+        return self._snapshot()
 
     def flush_pending_save(self) -> None:
         """Flush any pending debounced save. Call on shutdown to avoid losing data."""
         with self._lock:
-            self._flush_save()
+            snapshot = self._flush_save()
+        try:
+            self._write_data(snapshot)
+        except Exception as e:
+            logger.error(f"Failed to save sessions: {e}")
+            with self._lock:
+                self._dirty = True
 
     def record_message_id(
         self,
@@ -201,7 +214,13 @@ class SessionStore:
             self._node_to_tree.clear()
             self._message_log.clear()
             self._message_log_ids.clear()
-            self._flush_save()
+            snapshot = self._flush_save()
+        try:
+            self._write_data(snapshot)
+        except Exception as e:
+            logger.error(f"Failed to save sessions: {e}")
+            with self._lock:
+                self._dirty = True
 
     # ==================== Tree Methods ====================
 

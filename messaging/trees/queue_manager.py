@@ -41,8 +41,9 @@ class TreeQueueManager:
         queue_update_callback: Callable[[MessageTree], Awaitable[None]] | None = None,
         node_started_callback: Callable[[MessageTree, str], Awaitable[None]]
         | None = None,
+        _repository: TreeRepository | None = None,
     ):
-        self._repository = TreeRepository()
+        self._repository = _repository or TreeRepository()
         self._processor = TreeQueueProcessor(
             queue_update_callback=queue_update_callback,
             node_started_callback=node_started_callback,
@@ -243,8 +244,7 @@ class TreeQueueManager:
                     MessageState.COMPLETED,
                     MessageState.ERROR,
                 ):
-                    node.state = MessageState.ERROR
-                    node.error_message = "Cancelled by user"
+                    tree._set_node_error_sync(node, "Cancelled by user")
                     cancelled_nodes.append(node)
 
         # 2. Drain queue and mark nodes as cancelled
@@ -259,8 +259,7 @@ class TreeQueueManager:
                 node.state in (MessageState.PENDING, MessageState.IN_PROGRESS)
                 and node.node_id not in cancelled_ids
             ):
-                node.state = MessageState.ERROR
-                node.error_message = "Stale task cleaned up"
+                tree._set_node_error_sync(node, "Stale task cleaned up")
                 cleanup_count += 1
 
         tree.reset_processing_state()
@@ -337,8 +336,7 @@ class TreeQueueManager:
         for tree in self._repository.all_trees():
             for node in tree.all_nodes():
                 if node.state in (MessageState.PENDING, MessageState.IN_PROGRESS):
-                    node.state = MessageState.ERROR
-                    node.error_message = "Lost during server restart"
+                    tree._set_node_error_sync(node, "Lost during server restart")
                     count += 1
         if count:
             logger.info(f"Cleaned up {count} stale nodes during startup")
@@ -435,6 +433,10 @@ class TreeQueueManager:
         self._repository.unregister_nodes([n.node_id for n in removed])
         return (removed, root_id, False)
 
+    def get_message_ids_for_chat(self, platform: str, chat_id: str) -> set[str]:
+        """Get all message IDs for a given platform/chat."""
+        return self._repository.get_message_ids_for_chat(platform, chat_id)
+
     def to_dict(self) -> dict:
         """Serialize all trees."""
         return self._repository.to_dict()
@@ -448,9 +450,8 @@ class TreeQueueManager:
         | None = None,
     ) -> TreeQueueManager:
         """Deserialize from dictionary."""
-        manager = cls(
+        return cls(
             queue_update_callback=queue_update_callback,
             node_started_callback=node_started_callback,
+            _repository=TreeRepository.from_dict(data),
         )
-        manager._repository = TreeRepository.from_dict(data)
-        return manager

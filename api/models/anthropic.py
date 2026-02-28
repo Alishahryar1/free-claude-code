@@ -7,7 +7,6 @@ from loguru import logger
 from pydantic import BaseModel, field_validator, model_validator
 
 from config.settings import get_settings
-from providers.model_utils import normalize_model_name
 
 # =============================================================================
 # Content Block Types
@@ -112,10 +111,7 @@ class MessagesRequest(BaseModel):
         if self.original_model is None:
             self.original_model = self.model
 
-        # Use centralized model normalization
-        normalized = normalize_model_name(self.model, settings.model_name)
-        if normalized != self.model:
-            self.model = normalized
+        self.model = settings.model_name
 
         if self.model != self.original_model:
             logger.debug(f"MODEL MAPPING: '{self.original_model}' -> '{self.model}'")
@@ -136,5 +132,4 @@ class TokenCountRequest(BaseModel):
     def validate_model_field(cls, v, info):
         """Map any Claude model name to the configured model."""
         settings = get_settings()
-        # Use centralized model normalization
-        return normalize_model_name(v, settings.model_name)
+        return settings.model_name

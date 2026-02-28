@@ -4,7 +4,7 @@ import pytest
 
 from messaging.handler import ClaudeMessageHandler
 from messaging.models import IncomingMessage
-from messaging.telegram_markdown import render_markdown_to_mdv2
+from messaging.rendering.telegram_markdown import render_markdown_to_mdv2
 from messaging.trees.data import MessageNode, MessageState
 
 

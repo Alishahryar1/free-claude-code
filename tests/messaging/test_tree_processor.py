@@ -104,7 +104,7 @@ async def test_enqueue_and_start_when_busy(tree_processor, sample_tree):
 
     assert was_queued is True
     assert sample_tree._queue.qsize() == 1
-    assert await sample_tree._queue.get() == node_id
+    assert sample_tree._queue.get_nowait() == node_id
 
 
 def test_cancel_current_task(tree_processor, sample_tree):

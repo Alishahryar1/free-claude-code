@@ -28,7 +28,11 @@ class BaseProvider(ABC):
     """Base class for all providers. Extend this to add your own."""
 
     def __init__(self, config: ProviderConfig):
-        self.config = config
+        self._config = config
+
+    @abstractmethod
+    async def cleanup(self) -> None:
+        """Release any resources held by this provider."""
 
     @abstractmethod
     async def stream_response(

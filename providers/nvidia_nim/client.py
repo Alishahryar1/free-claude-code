@@ -8,6 +8,8 @@ from providers.openai_compat import OpenAICompatibleProvider
 
 from .request import build_request_body
 
+NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
 
 class NvidiaNimProvider(OpenAICompatibleProvider):
     """NVIDIA NIM provider using official OpenAI client."""
@@ -16,7 +18,7 @@ class NvidiaNimProvider(OpenAICompatibleProvider):
         super().__init__(
             config,
             provider_name="NIM",
-            base_url=config.base_url or "https://integrate.api.nvidia.com/v1",
+            base_url=config.base_url or NVIDIA_NIM_BASE_URL,
             api_key=config.api_key,
             nim_settings=nim_settings,
         )

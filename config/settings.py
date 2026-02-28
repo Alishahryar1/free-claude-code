@@ -10,9 +10,6 @@ from .nim import NimSettings
 
 load_dotenv()
 
-# Fixed base URL for NVIDIA NIM
-NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
-
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""

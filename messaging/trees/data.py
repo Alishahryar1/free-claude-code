@@ -16,25 +16,37 @@ from loguru import logger
 from ..models import IncomingMessage
 
 
-class _SnapshotQueue(asyncio.Queue[str]):
-    """
-    Queue with snapshot/remove helpers.
+class _SnapshotQueue:
+    """Queue with snapshot/remove helpers, backed by a deque."""
 
-    Extends asyncio.Queue to expose read-only snapshot and in-place remove
-    without inflating _unfinished_tasks (drain/put would require task_done).
-    """
+    def __init__(self) -> None:
+        self._deque: deque[str] = deque()
 
-    _queue: deque  # Set by asyncio.Queue.__init__
+    async def put(self, item: str) -> None:
+        self._deque.append(item)
+
+    def put_nowait(self, item: str) -> None:
+        self._deque.append(item)
+
+    def get_nowait(self) -> str:
+        if not self._deque:
+            raise asyncio.QueueEmpty()
+        return self._deque.popleft()
+
+    def qsize(self) -> int:
+        return len(self._deque)
 
     def get_snapshot(self) -> list[str]:
         """Return current queue contents in FIFO order (read-only copy)."""
-        return list(self._queue)
+        return list(self._deque)
 
     def remove_if_present(self, item: str) -> bool:
         """Remove item from queue if present. Returns True if removed."""
-        if item not in self._queue:
+        if item not in self._deque:
             return False
-        object.__setattr__(self, "_queue", deque(x for x in self._queue if x != item))
+        items = [x for x in self._deque if x != item]
+        self._deque.clear()
+        self._deque.extend(items)
         return True
 
 
@@ -69,6 +81,9 @@ class MessageNode:
     completed_at: datetime | None = None
     error_message: str | None = None
     context: Any = None  # Additional context if needed
+
+    def set_context(self, context: Any) -> None:
+        self.context = context
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -335,6 +350,12 @@ class MessageTree:
             return True
         return False
 
+    def _set_node_error_sync(self, node: MessageNode, error_message: str) -> None:
+        """Synchronously mark a node as ERROR. Caller must ensure no concurrent access."""
+        node.state = MessageState.ERROR
+        node.error_message = error_message
+        node.completed_at = datetime.now(UTC)
+
     def drain_queue_and_mark_cancelled(
         self, error_message: str = "Cancelled by user"
     ) -> list[MessageNode]:
@@ -350,8 +371,7 @@ class MessageTree:
                 break
             node = self._nodes.get(node_id)
             if node:
-                node.state = MessageState.ERROR
-                node.error_message = error_message
+                self._set_node_error_sync(node, error_message)
                 nodes.append(node)
         return nodes
 
@@ -372,6 +392,11 @@ class MessageTree:
             "nodes": {nid: node.to_dict() for nid, node in self._nodes.items()},
         }
 
+    def _add_node_from_dict(self, node: MessageNode) -> None:
+        """Register a deserialized node into the tree's internal indices."""
+        self._nodes[node.node_id] = node
+        self._status_to_node[node.status_message_id] = node.node_id
+
     @classmethod
     def from_dict(cls, data: dict) -> MessageTree:
         """Deserialize tree from dictionary."""
@@ -386,8 +411,7 @@ class MessageTree:
         for node_id, node_data in nodes_data.items():
             if node_id != root_id:
                 node = MessageNode.from_dict(node_data)
-                tree._nodes[node_id] = node
-                tree._status_to_node[node.status_message_id] = node_id
+                tree._add_node_from_dict(node)
 
         return tree
 

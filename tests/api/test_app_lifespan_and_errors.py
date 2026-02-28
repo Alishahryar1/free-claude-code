@@ -124,7 +124,7 @@ def test_app_lifespan_sets_state_and_cleans_up(tmp_path, messaging_enabled):
         patch.object(api_app_mod, "get_settings", return_value=settings),
         patch.object(api_app_mod, "cleanup_provider", new=cleanup_provider),
         patch(
-            "messaging.factory.create_messaging_platform",
+            "messaging.platforms.factory.create_messaging_platform",
             return_value=fake_platform if messaging_enabled else None,
         ) as create_platform,
         patch("messaging.session.SessionStore", return_value=session_store),
@@ -195,7 +195,7 @@ def test_app_lifespan_cleanup_continues_if_platform_stop_raises(tmp_path):
         patch.object(api_app_mod, "get_settings", return_value=settings),
         patch.object(api_app_mod, "cleanup_provider", new=cleanup_provider),
         patch(
-            "messaging.factory.create_messaging_platform",
+            "messaging.platforms.factory.create_messaging_platform",
             return_value=fake_platform,
         ),
         patch("messaging.session.SessionStore", return_value=session_store),
@@ -234,7 +234,7 @@ def test_app_lifespan_messaging_import_error_no_crash(tmp_path, caplog):
         patch.object(api_app_mod, "get_settings", return_value=settings),
         patch.object(api_app_mod, "cleanup_provider", new=cleanup_provider),
         patch(
-            "messaging.factory.create_messaging_platform",
+            "messaging.platforms.factory.create_messaging_platform",
             side_effect=ImportError("discord not installed"),
         ),
         TestClient(app),
@@ -284,7 +284,7 @@ def test_app_lifespan_platform_start_exception_cleanup_still_runs(tmp_path):
         patch.object(api_app_mod, "get_settings", return_value=settings),
         patch.object(api_app_mod, "cleanup_provider", new=cleanup_provider),
         patch(
-            "messaging.factory.create_messaging_platform",
+            "messaging.platforms.factory.create_messaging_platform",
             return_value=fake_platform,
         ),
         patch("messaging.session.SessionStore", return_value=session_store),
@@ -336,7 +336,7 @@ def test_app_lifespan_flush_pending_save_exception_warning_only(tmp_path):
         patch.object(api_app_mod, "get_settings", return_value=settings),
         patch.object(api_app_mod, "cleanup_provider", new=cleanup_provider),
         patch(
-            "messaging.factory.create_messaging_platform",
+            "messaging.platforms.factory.create_messaging_platform",
             return_value=fake_platform,
         ),
         patch("messaging.session.SessionStore", return_value=session_store),

@@ -9,6 +9,7 @@ from .message_converter import (
 )
 from .sse_builder import ContentBlockManager, SSEBuilder, map_stop_reason
 from .think_parser import ContentChunk, ContentType, ThinkTagParser
+from .utils import set_if_not_none
 
 __all__ = [
     "AnthropicToOpenAIConverter",
@@ -22,4 +23,5 @@ __all__ = [
     "get_block_type",
     "map_error",
     "map_stop_reason",
+    "set_if_not_none",
 ]
