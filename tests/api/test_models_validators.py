@@ -61,7 +61,7 @@ def test_messages_request_model_mapping_logs(mock_settings):
     """Test that model mapping is logged."""
     with (
         patch("api.models.anthropic.get_settings", return_value=mock_settings),
-        patch("api.models.anthropic.logger.info") as mock_log,
+        patch("api.models.anthropic.logger.debug") as mock_log,
     ):
         MessagesRequest(
             model="claude-2.1",
@@ -86,7 +86,7 @@ def test_messages_request_no_mapping_logs():
 
     with (
         patch("api.models.anthropic.get_settings", return_value=settings),
-        patch("api.models.anthropic.logger.info") as mock_log,
+        patch("api.models.anthropic.logger.debug") as mock_log,
     ):
         MessagesRequest(
             model="gpt-4",
@@ -111,7 +111,7 @@ def test_messages_request_claude_no_specific_mapping_logs():
 
     with (
         patch("api.models.anthropic.get_settings", return_value=settings),
-        patch("api.models.anthropic.logger.info") as mock_log,
+        patch("api.models.anthropic.logger.debug") as mock_log,
     ):
         MessagesRequest(
             model="claude-3-haiku",
