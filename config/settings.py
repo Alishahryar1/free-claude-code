@@ -3,7 +3,7 @@
 from functools import lru_cache
 
 from dotenv import load_dotenv
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .nim import NimSettings
@@ -73,12 +73,16 @@ class Settings(BaseSettings):
     voice_note_enabled: bool = Field(
         default=True, validation_alias="VOICE_NOTE_ENABLED"
     )
-    # Hugging Face token for faster model downloads (optional)
-    hf_token: str = Field(default="", validation_alias="HF_TOKEN")
-    # Hugging Face Whisper model ID (e.g. openai/whisper-base) or short name
-    whisper_model: str = Field(default="base", validation_alias="WHISPER_MODEL")
-    # Device: "cpu" | "cuda"
+    # Device: "cpu" | "cuda" | "nvidia_nim"
+    # - "cpu"/"cuda": local Whisper (requires voice_local extra: uv sync --extra voice_local)
+    # - "nvidia_nim": NVIDIA NIM Whisper API (requires voice extra: uv sync --extra voice)
     whisper_device: str = Field(default="cpu", validation_alias="WHISPER_DEVICE")
+    # Whisper model ID or short name (for local Whisper) or NVIDIA NIM model (for nvidia_nim)
+    # Local Whisper: "tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"
+    # NVIDIA NIM: "nvidia/parakeet-ctc-1.1b-asr", "openai/whisper-large-v3", etc.
+    whisper_model: str = Field(default="base", validation_alias="WHISPER_MODEL")
+    # Hugging Face token for faster model downloads (optional, for local Whisper)
+    hf_token: str = Field(default="", validation_alias="HF_TOKEN")
 
     # ==================== Bot Wrapper Config ====================
     telegram_bot_token: str | None = None
@@ -114,8 +118,10 @@ class Settings(BaseSettings):
     @field_validator("whisper_device")
     @classmethod
     def validate_whisper_device(cls, v: str) -> str:
-        if v not in ("cpu", "cuda"):
-            raise ValueError(f"whisper_device must be 'cpu' or 'cuda', got {v!r}")
+        if v not in ("cpu", "cuda", "nvidia_nim"):
+            raise ValueError(
+                f"whisper_device must be 'cpu', 'cuda', or 'nvidia_nim', got {v!r}"
+            )
         return v
 
     @field_validator("model")
@@ -135,6 +141,19 @@ class Settings(BaseSettings):
                 f"Supported: 'nvidia_nim', 'open_router', 'lmstudio'"
             )
         return v
+
+    @model_validator(mode="after")
+    def check_nvidia_nim_api_key(self) -> Settings:
+        if (
+            self.voice_note_enabled
+            and self.whisper_device == "nvidia_nim"
+            and not self.nvidia_nim_api_key.strip()
+        ):
+            raise ValueError(
+                "NVIDIA_NIM_API_KEY is required when WHISPER_DEVICE is 'nvidia_nim'. "
+                "Set it in your .env file."
+            )
+        return self
 
     @property
     def provider_type(self) -> str:

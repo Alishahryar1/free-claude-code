@@ -1,7 +1,8 @@
 """Voice note transcription for messaging platforms.
 
-Uses Hugging Face transformers Whisper pipeline for free, offline transcription.
-CUDA 13 compatible.
+Supports:
+- Local Whisper (cpu/cuda): Hugging Face transformers pipeline
+- NVIDIA NIM: NVIDIA NIM Whisper/Parakeet
 """
 
 import os
@@ -10,10 +11,27 @@ from typing import Any
 
 from loguru import logger
 
+from config.settings import get_settings
+
 # Max file size in bytes (25 MB)
 MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024
 
-# Short model names -> full Hugging Face model IDs
+# NVIDIA NIM Whisper model mapping: (function_id, language_code)
+_NIM_MODEL_MAP: dict[str, tuple[str, str]] = {
+    "nvidia/parakeet-ctc-0.6b-zh-tw": ("8473f56d-51ef-473c-bb26-efd4f5def2bf", "zh-TW"),
+    "nvidia/parakeet-ctc-0.6b-zh-cn": ("9add5ef7-322e-47e0-ad7a-5653fb8d259b", "zh-CN"),
+    "nvidia/parakeet-ctc-0.6b-es": ("None", "es-US"),
+    "nvidia/parakeet-ctc-0.6b-vi": ("f3dff2bb-99f9-403d-a5f1-f574a757deb0", "vi-VN"),
+    "nvidia/parakeet-ctc-1.1b-asr": ("1598d209-5e27-4d3c-8079-4751568b1081", "en-US"),
+    "nvidia/parakeet-ctc-0.6b-asr": ("d8dd4e9b-fbf5-4fb0-9dba-8cf436c8d965", "en-US"),
+    "nvidia/parakeet-1.1b-rnnt-multilingual-asr": (
+        "71203149-d3b7-4460-8231-1be2543a1fca",
+        "",
+    ),
+    "openai/whisper-large-v3": ("b702f636-f60c-4a3d-a6f4-f3568c13bd7d", "multi"),
+}
+
+# Short model names -> full Hugging Face model IDs (for local Whisper)
 _MODEL_MAP: dict[str, str] = {
     "tiny": "openai/whisper-tiny",
     "base": "openai/whisper-base",
@@ -43,8 +61,6 @@ def _get_pipeline(model_id: str, device: str) -> Any:
         try:
             import torch
             from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
-
-            from config.settings import get_settings
 
             token = get_settings().hf_token
             if token:
@@ -76,7 +92,7 @@ def _get_pipeline(model_id: str, device: str) -> Any:
             )
         except ImportError as e:
             raise ImportError(
-                "Voice notes require the voice extra. Install with: uv sync --extra voice"
+                "Local Whisper requires the voice_local extra. Install with: uv sync --extra voice_local"
             ) from e
     return _pipeline_cache[cache_key]
 
@@ -89,13 +105,17 @@ def transcribe_audio(
     whisper_device: str = "cpu",
 ) -> str:
     """
-    Transcribe audio file to text using Hugging Face transformers Whisper.
+    Transcribe audio file to text.
+
+    Supports:
+    - whisper_device="cpu"/"cuda": local Whisper (requires voice_local extra)
+    - whisper_device="nvidia_nim": NVIDIA NIM Whisper API (requires voice extra)
 
     Args:
         file_path: Path to audio file (OGG, MP3, MP4, WAV, M4A supported)
         mime_type: MIME type of the audio (e.g. "audio/ogg")
-        whisper_model: Model ID (e.g. "openai/whisper-base") or short name
-        whisper_device: "cpu" | "cuda"
+        whisper_model: Model ID or short name (local) or NVIDIA NIM model
+        whisper_device: "cpu" | "cuda" | "nvidia_nim" (defaults to WHISPER_DEVICE env var)
 
     Returns:
         Transcribed text
@@ -103,8 +123,9 @@ def transcribe_audio(
     Raises:
         FileNotFoundError: If file does not exist
         ValueError: If file too large
-        ImportError: If voice extra not installed
+        ImportError: If voice_local extra not installed (for local Whisper)
     """
+
     if not file_path.exists():
         raise FileNotFoundError(f"Audio file not found: {file_path}")
 
@@ -114,7 +135,10 @@ def transcribe_audio(
             f"Audio file too large ({size} bytes). Max {MAX_AUDIO_SIZE_BYTES} bytes."
         )
 
-    return _transcribe_local(file_path, whisper_model, whisper_device)
+    if whisper_device == "nvidia_nim":
+        return _transcribe_nim(file_path, whisper_model)
+    else:
+        return _transcribe_local(file_path, whisper_model, whisper_device)
 
 
 # Whisper expects 16 kHz sample rate
@@ -141,3 +165,64 @@ def _transcribe_local(file_path: Path, whisper_model: str, whisper_device: str) 
     result_text = text.strip()
     logger.debug(f"Local transcription: {len(result_text)} chars")
     return result_text or "(no speech detected)"
+
+
+def _transcribe_nim(file_path: Path, model: str) -> str:
+    """Transcribe using NVIDIA NIM Whisper API via Riva gRPC client."""
+    try:
+        import riva.client
+    except ImportError as e:
+        raise ImportError(
+            "NVIDIA NIM transcription requires the voice extra. "
+            "Install with: uv sync --extra voice"
+        ) from e
+
+    settings = get_settings()
+    api_key = settings.nvidia_nim_api_key
+
+    # Look up function ID and language code from model mapping
+    model_config = _NIM_MODEL_MAP.get(model)
+    if not model_config:
+        raise ValueError(
+            f"No NVIDIA NIM config found for model: {model}. "
+            f"Supported models: {', '.join(_NIM_MODEL_MAP.keys())}"
+        )
+    function_id, language_code = model_config
+
+    # Riva server configuration
+    server = "grpc.nvcf.nvidia.com:443"
+
+    # Auth with SSL and metadata
+    auth = riva.client.Auth(
+        use_ssl=True,
+        uri=server,
+        metadata_args=[
+            ["function-id", function_id],
+            ["authorization", f"Bearer {api_key}"],
+        ],
+    )
+
+    asr_service = riva.client.ASRService(auth)
+
+    # Configure recognition - language_code from model config
+    config = riva.client.RecognitionConfig(
+        language_code=language_code,
+        max_alternatives=1,
+        verbatim_transcripts=True,
+    )
+
+    # Read audio file
+    with open(file_path, "rb") as f:
+        data = f.read()
+
+    # Perform offline recognition
+    response = asr_service.offline_recognize(data, config)
+
+    # Extract text from response - use getattr for safe attribute access
+    transcript = ""
+    results = getattr(response, "results", None)
+    if results and results[0].alternatives:
+        transcript = results[0].alternatives[0].transcript
+
+    logger.debug(f"NIM transcription: {len(transcript)} chars")
+    return transcript or "(no speech detected)"

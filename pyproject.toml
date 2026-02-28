@@ -21,6 +21,11 @@ dependencies = [
 
 [project.optional-dependencies]
 voice = [
+    "grpcio>=1.78.0",
+    "grpcio-tools>=1.78.0",
+    "nvidia-riva-client>=2.15.0",
+]
+voice_local = [
     "torch>=2.0.0",
     "transformers>=4.45.0",
     "accelerate>=0.30.0",
@@ -80,5 +85,6 @@ skip-magic-trailing-comma = false
 python-version = "3.14"
 
 [tool.ty.analysis]
-# Optional voice extra: torch, transformers, librosa may not be installed in CI
-allowed-unresolved-imports = ["torch", "transformers", "librosa"]
+# Optional voice_local extra: torch, transformers, librosa for local whisper transcription
+# Optional voice extra: nvidia-riva-client for nvidia_nim transcription provider
+allowed-unresolved-imports = ["torch", "transformers", "librosa", "riva.client"]
