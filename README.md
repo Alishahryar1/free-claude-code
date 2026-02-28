@@ -2,7 +2,7 @@
 
 # Free Claude Code
 
-### Use Claude Code CLI & VSCode — for free. No Anthropic API key required.
+### Use Claude Code CLI & VSCode for free. No Anthropic API key required.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
@@ -12,8 +12,7 @@
 [![Code style: Ruff](https://img.shields.io/badge/code%20formatting-ruff-f5a623.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
 [![Logging: Loguru](https://img.shields.io/badge/logging-loguru-4ecdc4.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
 
-A lightweight proxy server that translates Claude Code's Anthropic API calls into **NVIDIA NIM**, **OpenRouter**, or **LM Studio** format.
-Get **40 free requests/min** on NVIDIA NIM, access **hundreds of models** on OpenRouter, or run **fully local** with LM Studio.
+A lightweight proxy that routes Claude Code's Anthropic API calls to **NVIDIA NIM** (40 req/min free), **OpenRouter** (hundreds of models), or **LM Studio** (fully local).
 
 [Features](#features) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Discord Bot](#discord-bot) · [Configuration](#configuration)
 
@@ -23,7 +22,7 @@ Get **40 free requests/min** on NVIDIA NIM, access **hundreds of models** on Ope
 
 <div align="center">
   <img src="pic.png" alt="Free Claude Code in action" width="700">
-  <p><em>Claude Code running via NVIDIA NIM — completely free</em></p>
+  <p><em>Claude Code running via NVIDIA NIM, completely free</em></p>
 </div>
 
 ## Features
@@ -31,15 +30,15 @@ Get **40 free requests/min** on NVIDIA NIM, access **hundreds of models** on Ope
 | Feature | Description |
 |---------|-------------|
 | **Zero Cost** | 40 req/min free on NVIDIA NIM. Free models on OpenRouter. Fully local with LM Studio |
-| **Drop-in Replacement** | Set 2 env vars — no modifications to Claude Code CLI or VSCode extension needed |
+| **Drop-in Replacement** | Set 2 env vars. No modifications to Claude Code CLI or VSCode extension needed |
 | **3 Providers** | NVIDIA NIM, OpenRouter (hundreds of models), LM Studio (local & offline) |
 | **Thinking Token Support** | Parses `<think>` tags and `reasoning_content` into native Claude thinking blocks |
 | **Heuristic Tool Parser** | Models outputting tool calls as text are auto-parsed into structured tool use |
-| **Request Optimization** | 5 categories of trivial API calls intercepted locally — saves quota and latency |
+| **Request Optimization** | 5 categories of trivial API calls intercepted locally, saving quota and latency |
 | **Discord Bot** | Remote autonomous coding with tree-based threading, session persistence, and live progress (Telegram also supported) |
 | **Smart Rate Limiting** | Proactive rolling-window throttle + reactive 429 exponential backoff + optional concurrency cap across all providers |
-| **Subagent Control** | Task tool interception forces `run_in_background=False` — no runaway subagents |
-| **Extensible** | Clean `BaseProvider` and `MessagingPlatform` ABCs — add new providers or platforms easily |
+| **Subagent Control** | Task tool interception forces `run_in_background=False`. No runaway subagents |
+| **Extensible** | Clean `BaseProvider` and `MessagingPlatform` ABCs. Add new providers or platforms easily |
 
 ## Quick Start
 
@@ -48,7 +47,7 @@ Get **40 free requests/min** on NVIDIA NIM, access **hundreds of models** on Ope
 1. Get an API key (or use LM Studio locally):
    - **NVIDIA NIM**: [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys)
    - **OpenRouter**: [openrouter.ai/keys](https://openrouter.ai/keys)
-   - **LM Studio**: No API key needed — run locally with [LM Studio](https://lmstudio.ai)
+   - **LM Studio**: No API key needed. Run locally with [LM Studio](https://lmstudio.ai)
 2. Install [Claude Code](https://github.com/anthropics/claude-code)
 3. Install [uv](https://github.com/astral-sh/uv)
 
@@ -63,7 +62,7 @@ cp .env.example .env
 Choose your provider and edit `.env`:
 
 <details>
-<summary><b>NVIDIA NIM</b> (recommended — 40 req/min free)</summary>
+<summary><b>NVIDIA NIM</b> (40 req/min free, recommended)</summary>
 
 ```dotenv
 NVIDIA_NIM_API_KEY="nvapi-your-key-here"
@@ -93,13 +92,13 @@ MODEL="lmstudio/lmstudio-community/qwen2.5-7b-instruct"
 
 ### Run It
 
-**Terminal 1** — Start the proxy server:
+**Terminal 1:** Start the proxy server:
 
 ```bash
 uv run uvicorn server:app --host 0.0.0.0 --port 8082
 ```
 
-**Terminal 2** — Run Claude Code:
+**Terminal 2:** Run Claude Code:
 
 ```bash
 ANTHROPIC_AUTH_TOKEN="freecc" ANTHROPIC_BASE_URL="http://localhost:8082" claude
@@ -110,7 +109,7 @@ That's it! Claude Code now uses your configured provider for free.
 <details>
 <summary><b>Multi-Model Support (Model Picker)</b></summary>
 
-`claude-pick` is an interactive model selector that lets you choose any model from your active provider each time you launch Claude — no need to edit `MODEL` in `.env` every time you want to switch.
+`claude-pick` is an interactive model selector that lets you choose any model from your active provider each time you launch Claude, without editing `MODEL` in `.env`.
 
 https://github.com/user-attachments/assets/9a33c316-90f8-4418-9650-97e7d33ad645
 
@@ -152,7 +151,7 @@ alias claude-kimi='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOK
 ```
 
 4. Reload extensions.
-5. **If you see the login screen** ("How do you want to log in?"): Click **Anthropic Console**, then authorize. The extension will start working. You may be redirected to buy credits in the browser — ignore that; the extension already works.
+5. **If you see the login screen** ("How do you want to log in?"): Click **Anthropic Console**, then authorize. The extension will start working. You may be redirected to buy credits in the browser; ignore it, the extension already works.
 
 To switch back to Anthropic models, comment out the added block and reload extensions.
 
@@ -179,10 +178,10 @@ To switch back to Anthropic models, comment out the added block and reload exten
                              └────────────────┘
 ```
 
-- **Transparent proxy** — Claude Code sends standard Anthropic API requests to the proxy server
-- **Request optimization** — 5 categories of trivial requests (quota probes, title generation, prefix detection, suggestions, filepath extraction) are intercepted and responded to instantly without using API quota
-- **Format translation** — Real requests are translated from Anthropic format to the provider's OpenAI-compatible format and streamed back
-- **Thinking tokens** — `<think>` tags and `reasoning_content` fields are converted into native Claude thinking blocks so Claude Code renders them correctly
+- **Transparent proxy**: Claude Code sends standard Anthropic API requests to the proxy server
+- **Request optimization**: 5 categories of trivial requests (quota probes, title generation, prefix detection, suggestions, filepath extraction) are intercepted and responded to instantly without using API quota
+- **Format translation**: real requests are translated from Anthropic format to the provider's OpenAI-compatible format and streamed back
+- **Thinking tokens**: `<think>` tags and `reasoning_content` fields are converted into native Claude thinking blocks so Claude Code renders them correctly
 
 ---
 
@@ -190,11 +189,11 @@ To switch back to Anthropic models, comment out the added block and reload exten
 
 | Provider | Cost | Rate Limit | Models | Best For |
 |----------|------|------------|--------|----------|
-| **NVIDIA NIM** | Free | 40 req/min | Kimi K2, GLM5, Devstral, MiniMax | Daily driver — generous free tier |
+| **NVIDIA NIM** | Free | 40 req/min | Kimi K2, GLM5, Devstral, MiniMax | Daily driver, generous free tier |
 | **OpenRouter** | Free / Paid | Varies | 200+ (GPT-4o, Claude, Step, etc.) | Model variety, fallback options |
 | **LM Studio** | Free (local) | Unlimited | Any GGUF model | Privacy, offline use, no rate limits |
 
-Switch providers by changing `MODEL` in `.env` — use the prefix format `provider/model/name`. Invalid prefix causes an error.
+Switch providers by changing `MODEL` in `.env`. Use the prefix format `provider/model/name`. Invalid prefix causes an error.
 
 | Provider | MODEL prefix | API Key Variable | Base URL |
 |----------|--------------|------------------|----------|
@@ -202,27 +201,25 @@ Switch providers by changing `MODEL` in `.env` — use the prefix format `provid
 | OpenRouter | `open_router/...` | `OPENROUTER_API_KEY` | `openrouter.ai/api/v1` |
 | LM Studio | `lmstudio/...` | (none) | `localhost:1234/v1` |
 
-OpenRouter gives access to hundreds of models (StepFun, OpenAI, Anthropic, etc.) through a single API. Set `MODEL` to any OpenRouter model ID.
-
-LM Studio runs locally — start the server in LM Studio's Developer tab or via `lms server start`, load a model, and set `MODEL` to the model identifier.
+LM Studio runs locally. Start the server in the Developer tab or via `lms server start`, load a model, and set `MODEL` to the model identifier.
 
 ---
 
 ## Discord Bot
 
-Control Claude Code remotely from Discord. Send tasks, watch live progress, and manage multiple concurrent sessions. Discord is the default messaging platform; Telegram is also supported.
+Control Claude Code remotely from Discord. Send tasks, watch live progress, and manage multiple concurrent sessions. Telegram is also supported.
 
 **Capabilities:**
-- Tree-based message threading — reply to messages to fork conversations
+- Tree-based message threading: reply to a message to fork the conversation
 - Session persistence across server restarts
 - Live streaming of thinking tokens, tool calls, and results
 - Unlimited concurrent Claude CLI sessions (provider concurrency controlled by `PROVIDER_MAX_CONCURRENCY`)
-- **Voice notes** — send voice messages; they are transcribed to text and processed like regular prompts (see [Voice Notes](#voice-notes))
+- **Voice notes**: send voice messages; they are transcribed and processed like regular prompts (see [Voice Notes](#voice-notes))
 - Commands: `/stop` (cancel tasks; reply to a message to stop only that task), `/clear` (standalone: reset all sessions; reply to a message to clear that branch downwards), `/stats`
 
 ### Setup
 
-1. **Create a Discord Bot** — Go to [Discord Developer Portal](https://discord.com/developers/applications), create an application, add a bot, and copy the token. Enable **Message Content Intent** under Bot settings.
+1. **Create a Discord Bot**: Go to [Discord Developer Portal](https://discord.com/developers/applications), create an application, add a bot, and copy the token. Enable **Message Content Intent** under Bot settings.
 
 2. **Edit `.env`:**
 
@@ -247,7 +244,7 @@ ALLOWED_DIR="C:/Users/yourname/projects"
 uv run uvicorn server:app --host 0.0.0.0 --port 8082
 ```
 
-5. **Invite the bot** to your server (OAuth2 → URL Generator, scopes: `bot`, permissions: Read Messages, Send Messages, Manage Messages, Read Message History). Send a message in an allowed channel with a task. Claude responds with thinking tokens, tool calls as they execute, and the final result. Reply to messages to cancel tasks or clear branches (see Commands above).
+5. **Invite the bot** (OAuth2 URL Generator, scopes: `bot`, permissions: Read Messages, Send Messages, Manage Messages, Read Message History). Send a task to an allowed channel and Claude responds with live thinking tokens and tool calls. Use commands above to cancel or clear.
 
 ### Telegram (Alternative)
 
@@ -262,7 +259,7 @@ Get a token from [@BotFather](https://t.me/BotFather); find your user ID via [@u
 
 ### Voice Notes
 
-Send voice messages on Telegram or Discord; they are transcribed to text and processed as regular prompts. Uses [Hugging Face transformers Whisper](https://huggingface.co/openai/whisper-large-v3-turbo) — free, no API key, works offline, CUDA 13 compatible. No ffmpeg required (audio loaded via librosa).
+Voice messages are transcribed via [Whisper](https://huggingface.co/openai/whisper-large-v3-turbo) (no API key, offline, CUDA compatible, no ffmpeg required).
 
 Install the optional voice extra:
 
@@ -462,8 +459,6 @@ class MyPlatform(MessagingPlatform):
 
 ## Contributing
 
-Contributions are welcome! Here are some ways to help:
-
 - Report bugs or suggest features via [Issues](https://github.com/Alishahryar1/free-claude-code/issues)
 - Add new LLM providers (Groq, Together AI, etc.)
 - Add new messaging platforms (Slack, etc.)
@@ -482,6 +477,6 @@ uv run ruff format && uv run ruff check && uv run ty check && uv run pytest
 
 ## License
 
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
 
 Built with [FastAPI](https://fastapi.tiangolo.com/), [OpenAI Python SDK](https://github.com/openai/openai-python), [discord.py](https://github.com/Rapptz/discord.py), and [python-telegram-bot](https://python-telegram-bot.org/).
