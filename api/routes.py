@@ -1,6 +1,7 @@
 """FastAPI route handlers."""
 
 import json
+import traceback
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -66,8 +67,6 @@ async def create_message(
     except ProviderError:
         raise
     except Exception as e:
-        import traceback
-
         logger.error(f"Error: {e!s}\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=getattr(e, "status_code", 500), detail=str(e)
@@ -89,8 +88,6 @@ async def count_tokens(request_data: TokenCountRequest):
             logger.info("COUNT_TOKENS: %s", json.dumps(summary))
             return TokenCountResponse(input_tokens=tokens)
         except Exception as e:
-            import traceback
-
             logger.error(
                 "COUNT_TOKENS_ERROR: request_id=%s error=%s\n%s",
                 request_id,

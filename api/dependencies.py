@@ -3,12 +3,12 @@
 from fastapi import HTTPException
 from loguru import logger
 
-from config.settings import NVIDIA_NIM_BASE_URL, Settings
+from config.settings import Settings
 from config.settings import get_settings as _get_settings
 from providers.base import BaseProvider, ProviderConfig
 from providers.exceptions import AuthenticationError
 from providers.lmstudio import LMStudioProvider
-from providers.nvidia_nim import NvidiaNimProvider
+from providers.nvidia_nim import NVIDIA_NIM_BASE_URL, NvidiaNimProvider
 from providers.open_router import OpenRouterProvider
 from providers.open_router.client import OPENROUTER_BASE_URL
 

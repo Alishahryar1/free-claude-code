@@ -32,6 +32,19 @@ def map_stop_reason(openai_reason: str | None) -> str:
 
 
 @dataclass
+class ToolCallState:
+    """State for a single streaming tool call."""
+
+    block_index: int  # -1 if not yet allocated
+    tool_id: str
+    name: str
+    contents: list[str] = field(default_factory=list)
+    started: bool = False
+    task_arg_buffer: str = ""
+    task_args_emitted: bool = False
+
+
+@dataclass
 class ContentBlockManager:
     """Manages content block indices and state."""
 
@@ -40,14 +53,7 @@ class ContentBlockManager:
     text_index: int = -1
     thinking_started: bool = False
     text_started: bool = False
-    tool_indices: dict[int, int] = field(default_factory=dict)
-    tool_contents: dict[int, list[str]] = field(default_factory=dict)
-    tool_names: dict[int, str] = field(default_factory=dict)
-    tool_ids: dict[int, str] = field(default_factory=dict)
-    tool_started: dict[int, bool] = field(default_factory=dict)
-    # Buffer streaming args for tools where we don't want to emit partial deltas.
-    task_arg_buffer: dict[int, str] = field(default_factory=dict)
-    task_args_emitted: dict[int, bool] = field(default_factory=dict)
+    tool_states: dict[int, ToolCallState] = field(default_factory=dict)
 
     def allocate_index(self) -> int:
         """Allocate and return the next block index."""
@@ -61,17 +67,17 @@ class ContentBlockManager:
         Handles providers that stream names as fragments and those that
         resend the full name on every chunk.
         """
-        prev = self.tool_names.get(index, "")
-        if not prev:
-            self.tool_names[index] = name
-        elif prev == name:
-            pass
-        elif name.startswith(prev):
-            self.tool_names[index] = name
-        elif prev.startswith(name):
-            pass
-        else:
-            self.tool_names[index] = prev + name
+        if index not in self.tool_states:
+            self.tool_states[index] = ToolCallState(
+                block_index=-1, tool_id="", name=name
+            )
+            return
+        state = self.tool_states[index]
+        prev = state.name
+        if not prev or name.startswith(prev):
+            state.name = name
+        elif not prev.startswith(name):
+            state.name = prev + name
 
     def buffer_task_args(self, index: int, args: str) -> dict | None:
         """Buffer Task tool args and return parsed JSON when complete.
@@ -79,49 +85,48 @@ class ContentBlockManager:
         Returns the parsed (and patched) args dict once the buffer forms
         valid JSON, or None if still accumulating.
         """
-        if self.task_args_emitted.get(index, False):
+        state = self.tool_states.get(index)
+        if state is None or state.task_args_emitted:
             return None
 
-        buf = self.task_arg_buffer.get(index, "") + args
-        self.task_arg_buffer[index] = buf
+        state.task_arg_buffer += args
         try:
-            args_json = json.loads(buf)
+            args_json = json.loads(state.task_arg_buffer)
         except Exception:
             return None
 
         if args_json.get("run_in_background") is not False:
             args_json["run_in_background"] = False
 
-        self.task_args_emitted[index] = True
-        self.task_arg_buffer.pop(index, None)
+        state.task_args_emitted = True
+        state.task_arg_buffer = ""
         return args_json
 
     def flush_task_arg_buffers(self) -> list[tuple[int, str]]:
         """Flush any remaining Task arg buffers. Returns (tool_index, json_str) pairs."""
         results: list[tuple[int, str]] = []
-        for tool_index, buf in list(self.task_arg_buffer.items()):
-            if self.task_args_emitted.get(tool_index, False):
-                self.task_arg_buffer.pop(tool_index, None)
+        for tool_index, state in list(self.tool_states.items()):
+            if not state.task_arg_buffer or state.task_args_emitted:
                 continue
 
             out = "{}"
             try:
-                args_json = json.loads(buf)
+                args_json = json.loads(state.task_arg_buffer)
                 if args_json.get("run_in_background") is not False:
                     args_json["run_in_background"] = False
                 out = json.dumps(args_json)
             except Exception as e:
-                prefix = buf[:120]
+                prefix = state.task_arg_buffer[:120]
                 logger.warning(
                     "Task args invalid JSON (id=%s len=%d prefix=%r): %s",
-                    self.tool_ids.get(tool_index, "unknown"),
-                    len(buf),
+                    state.tool_id or "unknown",
+                    len(state.task_arg_buffer),
                     prefix,
                     e,
                 )
 
-            self.task_args_emitted[tool_index] = True
-            self.task_arg_buffer.pop(tool_index, None)
+            state.task_args_emitted = True
+            state.task_arg_buffer = ""
             results.append((tool_index, out))
         return results
 
@@ -277,21 +282,31 @@ class SSEBuilder:
     def start_tool_block(self, tool_index: int, tool_id: str, name: str) -> str:
         """Start a tool_use block."""
         block_idx = self.blocks.allocate_index()
-        self.blocks.tool_indices[tool_index] = block_idx
-        self.blocks.tool_contents[tool_index] = []
-        self.blocks.tool_ids[tool_index] = tool_id
-        self.blocks.task_args_emitted.setdefault(tool_index, False)
+        if tool_index in self.blocks.tool_states:
+            state = self.blocks.tool_states[tool_index]
+            state.block_index = block_idx
+            state.tool_id = tool_id
+            state.started = True
+        else:
+            self.blocks.tool_states[tool_index] = ToolCallState(
+                block_index=block_idx,
+                tool_id=tool_id,
+                name=name,
+                started=True,
+            )
         return self.content_block_start(block_idx, "tool_use", id=tool_id, name=name)
 
     def emit_tool_delta(self, tool_index: int, partial_json: str) -> str:
         """Emit tool input delta."""
-        self.blocks.tool_contents[tool_index].append(partial_json)
-        block_idx = self.blocks.tool_indices[tool_index]
-        return self.content_block_delta(block_idx, "input_json_delta", partial_json)
+        state = self.blocks.tool_states[tool_index]
+        state.contents.append(partial_json)
+        return self.content_block_delta(
+            state.block_index, "input_json_delta", partial_json
+        )
 
     def stop_tool_block(self, tool_index: int) -> str:
         """Stop a tool block."""
-        block_idx = self.blocks.tool_indices[tool_index]
+        block_idx = self.blocks.tool_states[tool_index].block_index
         return self.content_block_stop(block_idx)
 
     # State management helpers
@@ -322,8 +337,9 @@ class SSEBuilder:
             yield self.stop_thinking_block()
         if self.blocks.text_started:
             yield self.stop_text_block()
-        for tool_index in list(self.blocks.tool_indices.keys()):
-            yield self.stop_tool_block(tool_index)
+        for tool_index, state in list(self.blocks.tool_states.items()):
+            if state.started:
+                yield self.stop_tool_block(tool_index)
 
     # Error handling
     def emit_error(self, error_message: str) -> Iterator[str]:
@@ -354,17 +370,16 @@ class SSEBuilder:
             # Tool calls are harder to tokenize exactly without reconstruction, but we can approximate
             # by tokenizing the json dumps of tool contents
             tool_tokens = 0
-            for idx, content_parts in self.blocks.tool_contents.items():
-                name = self.blocks.tool_names.get(idx, "")
-                tool_tokens += len(ENCODER.encode(name))
-                tool_tokens += len(ENCODER.encode("".join(content_parts)))
+            for state in self.blocks.tool_states.values():
+                tool_tokens += len(ENCODER.encode(state.name))
+                tool_tokens += len(ENCODER.encode("".join(state.contents)))
                 tool_tokens += 15  # Control tokens overhead per tool
 
             # Per-block overhead (~4 tokens per content block)
             block_count = (
                 (1 if accumulated_reasoning else 0)
                 + (1 if accumulated_text else 0)
-                + len(self.blocks.tool_indices)
+                + sum(1 for s in self.blocks.tool_states.values() if s.started)
             )
             block_overhead = block_count * 4
 
@@ -372,5 +387,5 @@ class SSEBuilder:
 
         text_tokens = len(accumulated_text) // 4
         reasoning_tokens = len(accumulated_reasoning) // 4
-        tool_tokens = len(self.blocks.tool_indices) * 50
+        tool_tokens = sum(1 for s in self.blocks.tool_states.values() if s.started) * 50
         return text_tokens + reasoning_tokens + tool_tokens

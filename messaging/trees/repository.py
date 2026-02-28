@@ -149,6 +149,20 @@ class TreeRepository:
         logger.debug("TREE_REPO: remove_tree root_id=%s", root_id)
         return tree
 
+    def get_message_ids_for_chat(self, platform: str, chat_id: str) -> set[str]:
+        """Get all message IDs (incoming + status) for a given platform/chat."""
+        msg_ids: set[str] = set()
+        for tree in self._trees.values():
+            for node in tree.all_nodes():
+                if str(node.incoming.platform) == str(platform) and str(
+                    node.incoming.chat_id
+                ) == str(chat_id):
+                    if node.incoming.message_id is not None:
+                        msg_ids.add(str(node.incoming.message_id))
+                    if node.status_message_id:
+                        msg_ids.add(str(node.status_message_id))
+        return msg_ids
+
     def to_dict(self) -> dict:
         """Serialize all trees."""
         return {

@@ -52,7 +52,7 @@ class TestSettings:
 
     def test_base_url_constant(self):
         """Test NVIDIA_NIM_BASE_URL is a constant."""
-        from config.settings import NVIDIA_NIM_BASE_URL
+        from providers.nvidia_nim import NVIDIA_NIM_BASE_URL
 
         assert NVIDIA_NIM_BASE_URL == "https://integrate.api.nvidia.com/v1"
 

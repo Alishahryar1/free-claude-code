@@ -162,11 +162,7 @@ class HeuristicToolParser:
                         filtered_output_parts.append(self._buffer[:idx])
                         self._buffer = self._buffer[idx:]
                     finished_tool_call = True
-                elif (
-                    len(self._buffer) > 0
-                    and not self._buffer.strip().startswith("<")
-                    and not self._buffer.lstrip().startswith("<")
-                ):
+                elif len(self._buffer) > 0 and not self._buffer.strip().startswith("<"):
                     # We have text that doesn't look like a tag, and we already parsed some or are in param state
                     # Let's see if we have trailing param starts
                     if "<parameter=" not in self._buffer:

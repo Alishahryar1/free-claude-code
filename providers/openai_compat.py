@@ -60,13 +60,8 @@ class OpenAICompatibleProvider(BaseProvider):
     async def cleanup(self) -> None:
         """Release HTTP client resources."""
         client = getattr(self, "_client", None)
-        if client and hasattr(client, "aclose"):
+        if client is not None:
             await client.aclose()
-        elif client:
-            logger.warning(
-                "Provider client %r has no aclose(); skipping async cleanup",
-                type(client).__name__,
-            )
 
     @abstractmethod
     def _build_request_body(self, request: Any) -> dict:
@@ -80,36 +75,30 @@ class OpenAICompatibleProvider(BaseProvider):
         """Process a single tool call delta and yield SSE events."""
         tc_index = tc.get("index", 0)
         if tc_index < 0:
-            tc_index = len(sse.blocks.tool_indices)
+            tc_index = len(sse.blocks.tool_states)
 
         fn_delta = tc.get("function", {})
         incoming_name = fn_delta.get("name")
         if incoming_name is not None:
             sse.blocks.register_tool_name(tc_index, incoming_name)
 
-        if tc_index not in sse.blocks.tool_indices:
-            name = sse.blocks.tool_names.get(tc_index, "")
+        state = sse.blocks.tool_states.get(tc_index)
+        if state is None or not state.started:
+            name = state.name if state else ""
             if name or tc.get("id"):
                 tool_id = tc.get("id") or f"tool_{uuid.uuid4()}"
                 yield sse.start_tool_block(tc_index, tool_id, name)
-                sse.blocks.tool_started[tc_index] = True
-        elif not sse.blocks.tool_started.get(tc_index) and sse.blocks.tool_names.get(
-            tc_index
-        ):
-            tool_id = tc.get("id") or f"tool_{uuid.uuid4()}"
-            name = sse.blocks.tool_names[tc_index]
-            yield sse.start_tool_block(tc_index, tool_id, name)
-            sse.blocks.tool_started[tc_index] = True
 
         args = fn_delta.get("arguments", "")
         if args:
-            if not sse.blocks.tool_started.get(tc_index):
+            state = sse.blocks.tool_states.get(tc_index)
+            if state is None or not state.started:
                 tool_id = tc.get("id") or f"tool_{uuid.uuid4()}"
-                name = sse.blocks.tool_names.get(tc_index, "tool_call") or "tool_call"
+                name = (state.name if state else None) or "tool_call"
                 yield sse.start_tool_block(tc_index, tool_id, name)
-                sse.blocks.tool_started[tc_index] = True
+                state = sse.blocks.tool_states.get(tc_index)
 
-            current_name = sse.blocks.tool_names.get(tc_index, "")
+            current_name = state.name if state else ""
             if current_name == "Task":
                 parsed = sse.blocks.buffer_task_args(tc_index, args)
                 if parsed is not None:
@@ -257,7 +246,6 @@ class OpenAICompatibleProvider(BaseProvider):
                                 yield event
 
             except Exception as e:
-                req_tag = f" request_id={request_id}" if request_id else ""
                 logger.error("%s_ERROR:%s %s: %s", tag, req_tag, type(e).__name__, e)
                 mapped_e = map_error(e)
                 error_occurred = True
@@ -310,7 +298,7 @@ class OpenAICompatibleProvider(BaseProvider):
         if (
             not error_occurred
             and sse.blocks.text_index == -1
-            and not sse.blocks.tool_indices
+            and not sse.blocks.tool_states
         ):
             for event in sse.ensure_text_block():
                 yield event
