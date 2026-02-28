@@ -66,8 +66,8 @@ Choose your provider and edit `.env`:
 <summary><b>NVIDIA NIM</b> (recommended — 40 req/min free)</summary>
 
 ```dotenv
-NVIDIA_NIM_API_KEY=nvapi-your-key-here
-MODEL=nvidia_nim/stepfun-ai/step-3.5-flash
+NVIDIA_NIM_API_KEY="nvapi-your-key-here"
+MODEL="nvidia_nim/stepfun-ai/step-3.5-flash"
 ```
 
 </details>
@@ -76,8 +76,8 @@ MODEL=nvidia_nim/stepfun-ai/step-3.5-flash
 <summary><b>OpenRouter</b> (hundreds of models)</summary>
 
 ```dotenv
-OPENROUTER_API_KEY=sk-or-your-key-here
-MODEL=open_router/stepfun/step-3.5-flash:free
+OPENROUTER_API_KEY="sk-or-your-key-here"
+MODEL="open_router/stepfun/step-3.5-flash:free"
 ```
 
 </details>
@@ -86,7 +86,7 @@ MODEL=open_router/stepfun/step-3.5-flash:free
 <summary><b>LM Studio</b> (fully local, no API key)</summary>
 
 ```dotenv
-MODEL=lmstudio/lmstudio-community/qwen2.5-7b-instruct
+MODEL="lmstudio/lmstudio-community/qwen2.5-7b-instruct"
 ```
 
 </details>
@@ -102,7 +102,7 @@ uv run uvicorn server:app --host 0.0.0.0 --port 8082
 **Terminal 2** — Run Claude Code:
 
 ```bash
-ANTHROPIC_AUTH_TOKEN=freecc ANTHROPIC_BASE_URL=http://localhost:8082 claude
+ANTHROPIC_AUTH_TOKEN="freecc" ANTHROPIC_BASE_URL="http://localhost:8082" claude
 ```
 
 That's it! Claude Code now uses your configured provider for free.
@@ -227,9 +227,9 @@ Control Claude Code remotely from Discord. Send tasks, watch live progress, and 
 2. **Edit `.env`:**
 
 ```dotenv
-MESSAGING_PLATFORM=discord
-DISCORD_BOT_TOKEN=your_discord_bot_token
-ALLOWED_DISCORD_CHANNELS=123456789,987654321
+MESSAGING_PLATFORM="discord"
+DISCORD_BOT_TOKEN="your_discord_bot_token"
+ALLOWED_DISCORD_CHANNELS="123456789,987654321"
 ```
 
 > Enable Developer Mode in Discord (Settings → Advanced), then right-click a channel and "Copy ID" to get channel IDs. Comma-separate multiple channels. If empty, no channels are allowed.
@@ -237,8 +237,8 @@ ALLOWED_DISCORD_CHANNELS=123456789,987654321
 3. **Configure the workspace** (where Claude will operate):
 
 ```dotenv
-CLAUDE_WORKSPACE=./agent_workspace
-ALLOWED_DIR=C:/Users/yourname/projects
+CLAUDE_WORKSPACE="./agent_workspace"
+ALLOWED_DIR="C:/Users/yourname/projects"
 ```
 
 4. **Start the server:**
@@ -254,8 +254,8 @@ uv run uvicorn server:app --host 0.0.0.0 --port 8082
 To use Telegram instead, set `MESSAGING_PLATFORM=telegram` and configure:
 
 ```dotenv
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ
-ALLOWED_TELEGRAM_USER_ID=your_telegram_user_id
+TELEGRAM_BOT_TOKEN="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
+ALLOWED_TELEGRAM_USER_ID="your_telegram_user_id"
 ```
 
 Get a token from [@BotFather](https://t.me/BotFather); find your user ID via [@userinfobot](https://t.me/userinfobot).
