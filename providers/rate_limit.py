@@ -6,7 +6,7 @@ import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 import openai
 from loguru import logger
@@ -28,7 +28,7 @@ class GlobalRateLimiter:
     Concurrency limit - caps simultaneously open streams.
     """
 
-    _instance: GlobalRateLimiter | None = None
+    _instance: ClassVar[GlobalRateLimiter | None] = None
 
     def __init__(
         self,

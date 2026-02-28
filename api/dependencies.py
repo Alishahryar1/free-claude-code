@@ -6,6 +6,11 @@ from loguru import logger
 from config.settings import NVIDIA_NIM_BASE_URL, Settings
 from config.settings import get_settings as _get_settings
 from providers.base import BaseProvider, ProviderConfig
+from providers.exceptions import AuthenticationError
+from providers.lmstudio import LMStudioProvider
+from providers.nvidia_nim import NvidiaNimProvider
+from providers.open_router import OpenRouterProvider
+from providers.open_router.client import OPENROUTER_BASE_URL
 
 # Global provider instance (singleton)
 _provider: BaseProvider | None = None
@@ -20,15 +25,10 @@ def _create_provider(settings: Settings) -> BaseProvider:
     """Construct and return a new provider instance from settings."""
     if settings.provider_type == "nvidia_nim":
         if not settings.nvidia_nim_api_key or not settings.nvidia_nim_api_key.strip():
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "NVIDIA_NIM_API_KEY is not set. Add it to your .env file. "
-                    "Get a key at https://build.nvidia.com/settings/api-keys"
-                ),
+            raise AuthenticationError(
+                "NVIDIA_NIM_API_KEY is not set. Add it to your .env file. "
+                "Get a key at https://build.nvidia.com/settings/api-keys"
             )
-        from providers.nvidia_nim import NvidiaNimProvider
-
         config = ProviderConfig(
             api_key=settings.nvidia_nim_api_key,
             base_url=NVIDIA_NIM_BASE_URL,
@@ -42,18 +42,13 @@ def _create_provider(settings: Settings) -> BaseProvider:
         provider = NvidiaNimProvider(config, nim_settings=settings.nim)
     elif settings.provider_type == "open_router":
         if not settings.open_router_api_key or not settings.open_router_api_key.strip():
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "OPENROUTER_API_KEY is not set. Add it to your .env file. "
-                    "Get a key at https://openrouter.ai/keys"
-                ),
+            raise AuthenticationError(
+                "OPENROUTER_API_KEY is not set. Add it to your .env file. "
+                "Get a key at https://openrouter.ai/keys"
             )
-        from providers.open_router import OpenRouterProvider
-
         config = ProviderConfig(
             api_key=settings.open_router_api_key,
-            base_url="https://openrouter.ai/api/v1",
+            base_url=OPENROUTER_BASE_URL,
             rate_limit=settings.provider_rate_limit,
             rate_window=settings.provider_rate_window,
             max_concurrency=settings.provider_max_concurrency,
@@ -63,8 +58,6 @@ def _create_provider(settings: Settings) -> BaseProvider:
         )
         provider = OpenRouterProvider(config)
     elif settings.provider_type == "lmstudio":
-        from providers.lmstudio import LMStudioProvider
-
         config = ProviderConfig(
             api_key="lm-studio",
             base_url=settings.lm_studio_base_url,
@@ -93,7 +86,10 @@ def get_provider() -> BaseProvider:
     """Get or create the provider instance based on settings.provider_type."""
     global _provider
     if _provider is None:
-        _provider = _create_provider(get_settings())
+        try:
+            _provider = _create_provider(get_settings())
+        except AuthenticationError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
     return _provider
 
 
@@ -101,13 +97,6 @@ async def cleanup_provider():
     """Cleanup provider resources."""
     global _provider
     if _provider:
-        client = getattr(_provider, "_client", None)
-        if client and hasattr(client, "aclose"):
-            await client.aclose()
-        elif client:
-            logger.warning(
-                "Provider client %r has no aclose(); skipping async cleanup",
-                type(client).__name__,
-            )
+        await _provider.cleanup()
     _provider = None
     logger.debug("Provider cleanup completed")

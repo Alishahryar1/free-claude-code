@@ -239,7 +239,7 @@ class TestSSEBuilderHighLevelHelpers:
         sse = builder.emit_tool_delta(0, '{"pattern":')
         data = _parse_sse(sse)
         assert data["delta"]["partial_json"] == '{"pattern":'
-        assert builder.blocks.tool_contents[0] == '{"pattern":'
+        assert "".join(builder.blocks.tool_contents[0]) == '{"pattern":'
 
     def test_stop_tool_block(self):
         builder = SSEBuilder("msg_1", "model")

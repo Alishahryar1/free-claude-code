@@ -34,7 +34,9 @@ class _SnapshotQueue(asyncio.Queue[str]):
         """Remove item from queue if present. Returns True if removed."""
         if item not in self._queue:
             return False
-        object.__setattr__(self, "_queue", deque(x for x in self._queue if x != item))
+        items = [x for x in self._queue if x != item]
+        self._queue.clear()
+        self._queue.extend(items)
         return True
 
 
@@ -335,6 +337,12 @@ class MessageTree:
             return True
         return False
 
+    def _set_node_error_sync(self, node: MessageNode, error_message: str) -> None:
+        """Synchronously mark a node as ERROR. Caller must ensure no concurrent access."""
+        node.state = MessageState.ERROR
+        node.error_message = error_message
+        node.completed_at = datetime.now(UTC)
+
     def drain_queue_and_mark_cancelled(
         self, error_message: str = "Cancelled by user"
     ) -> list[MessageNode]:
@@ -350,8 +358,7 @@ class MessageTree:
                 break
             node = self._nodes.get(node_id)
             if node:
-                node.state = MessageState.ERROR
-                node.error_message = error_message
+                self._set_node_error_sync(node, error_message)
                 nodes.append(node)
         return nodes
 
@@ -372,6 +379,11 @@ class MessageTree:
             "nodes": {nid: node.to_dict() for nid, node in self._nodes.items()},
         }
 
+    def _add_node_from_dict(self, node: MessageNode) -> None:
+        """Register a deserialized node into the tree's internal indices."""
+        self._nodes[node.node_id] = node
+        self._status_to_node[node.status_message_id] = node.node_id
+
     @classmethod
     def from_dict(cls, data: dict) -> MessageTree:
         """Deserialize tree from dictionary."""
@@ -386,8 +398,7 @@ class MessageTree:
         for node_id, node_data in nodes_data.items():
             if node_id != root_id:
                 node = MessageNode.from_dict(node_data)
-                tree._nodes[node_id] = node
-                tree._status_to_node[node.status_message_id] = node_id
+                tree._add_node_from_dict(node)
 
         return tree
 

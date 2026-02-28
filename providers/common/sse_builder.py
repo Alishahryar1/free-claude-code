@@ -41,7 +41,7 @@ class ContentBlockManager:
     thinking_started: bool = False
     text_started: bool = False
     tool_indices: dict[int, int] = field(default_factory=dict)
-    tool_contents: dict[int, str] = field(default_factory=dict)
+    tool_contents: dict[int, list[str]] = field(default_factory=dict)
     tool_names: dict[int, str] = field(default_factory=dict)
     tool_ids: dict[int, str] = field(default_factory=dict)
     tool_started: dict[int, bool] = field(default_factory=dict)
@@ -134,13 +134,13 @@ class SSEBuilder:
         self.model = model
         self.input_tokens = input_tokens
         self.blocks = ContentBlockManager()
-        self._accumulated_text = ""
-        self._accumulated_reasoning = ""
+        self._accumulated_text_parts: list[str] = []
+        self._accumulated_reasoning_parts: list[str] = []
 
     def _format_event(self, event_type: str, data: dict[str, Any]) -> str:
         """Format as SSE string."""
         event_str = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
-        logger.debug(f"SSE_EVENT: {event_type} - {event_str.strip()}")
+        logger.debug("SSE_EVENT: {} - {}", event_type, event_str.strip())
         return event_str
 
     # Message lifecycle events
@@ -161,7 +161,6 @@ class SSEBuilder:
                     "stop_sequence": None,
                     "usage": usage,
                 },
-                "usage": usage,
             },
         )
 
@@ -247,7 +246,7 @@ class SSEBuilder:
 
     def emit_thinking_delta(self, content: str) -> str:
         """Emit thinking content delta."""
-        self._accumulated_reasoning += content
+        self._accumulated_reasoning_parts.append(content)
         return self.content_block_delta(
             self.blocks.thinking_index, "thinking_delta", content
         )
@@ -266,7 +265,7 @@ class SSEBuilder:
 
     def emit_text_delta(self, content: str) -> str:
         """Emit text content delta."""
-        self._accumulated_text += content
+        self._accumulated_text_parts.append(content)
         return self.content_block_delta(self.blocks.text_index, "text_delta", content)
 
     def stop_text_block(self) -> str:
@@ -279,14 +278,14 @@ class SSEBuilder:
         """Start a tool_use block."""
         block_idx = self.blocks.allocate_index()
         self.blocks.tool_indices[tool_index] = block_idx
-        self.blocks.tool_contents[tool_index] = ""
+        self.blocks.tool_contents[tool_index] = []
         self.blocks.tool_ids[tool_index] = tool_id
         self.blocks.task_args_emitted.setdefault(tool_index, False)
         return self.content_block_start(block_idx, "tool_use", id=tool_id, name=name)
 
     def emit_tool_delta(self, tool_index: int, partial_json: str) -> str:
         """Emit tool input delta."""
-        self.blocks.tool_contents[tool_index] += partial_json
+        self.blocks.tool_contents[tool_index].append(partial_json)
         block_idx = self.blocks.tool_indices[tool_index]
         return self.content_block_delta(block_idx, "input_json_delta", partial_json)
 
@@ -338,38 +337,40 @@ class SSEBuilder:
     @property
     def accumulated_text(self) -> str:
         """Get accumulated text content."""
-        return self._accumulated_text
+        return "".join(self._accumulated_text_parts)
 
     @property
     def accumulated_reasoning(self) -> str:
         """Get accumulated reasoning content."""
-        return self._accumulated_reasoning
+        return "".join(self._accumulated_reasoning_parts)
 
     def estimate_output_tokens(self) -> int:
         """Estimate output tokens from accumulated content."""
+        accumulated_text = self.accumulated_text
+        accumulated_reasoning = self.accumulated_reasoning
         if ENCODER:
-            text_tokens = len(ENCODER.encode(self._accumulated_text))
-            reasoning_tokens = len(ENCODER.encode(self._accumulated_reasoning))
+            text_tokens = len(ENCODER.encode(accumulated_text))
+            reasoning_tokens = len(ENCODER.encode(accumulated_reasoning))
             # Tool calls are harder to tokenize exactly without reconstruction, but we can approximate
             # by tokenizing the json dumps of tool contents
             tool_tokens = 0
-            for idx, content in self.blocks.tool_contents.items():
+            for idx, content_parts in self.blocks.tool_contents.items():
                 name = self.blocks.tool_names.get(idx, "")
                 tool_tokens += len(ENCODER.encode(name))
-                tool_tokens += len(ENCODER.encode(content))
+                tool_tokens += len(ENCODER.encode("".join(content_parts)))
                 tool_tokens += 15  # Control tokens overhead per tool
 
             # Per-block overhead (~4 tokens per content block)
             block_count = (
-                (1 if self._accumulated_reasoning else 0)
-                + (1 if self._accumulated_text else 0)
+                (1 if accumulated_reasoning else 0)
+                + (1 if accumulated_text else 0)
                 + len(self.blocks.tool_indices)
             )
             block_overhead = block_count * 4
 
             return text_tokens + reasoning_tokens + tool_tokens + block_overhead
 
-        text_tokens = len(self._accumulated_text) // 4
-        reasoning_tokens = len(self._accumulated_reasoning) // 4
+        text_tokens = len(accumulated_text) // 4
+        reasoning_tokens = len(accumulated_reasoning) // 4
         tool_tokens = len(self.blocks.tool_indices) * 50
         return text_tokens + reasoning_tokens + tool_tokens

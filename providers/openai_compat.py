@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from abc import abstractmethod
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
@@ -9,6 +10,7 @@ import httpx
 from loguru import logger
 from openai import AsyncOpenAI
 
+from config.nim import NimSettings
 from providers.base import BaseProvider, ProviderConfig
 from providers.common import (
     ContentType,
@@ -31,7 +33,7 @@ class OpenAICompatibleProvider(BaseProvider):
         provider_name: str,
         base_url: str,
         api_key: str,
-        nim_settings: Any | None = None,
+        nim_settings: NimSettings | None = None,
     ):
         super().__init__(config)
         self._provider_name = provider_name
@@ -55,15 +57,26 @@ class OpenAICompatibleProvider(BaseProvider):
             ),
         )
 
+    async def cleanup(self) -> None:
+        """Release HTTP client resources."""
+        client = getattr(self, "_client", None)
+        if client and hasattr(client, "aclose"):
+            await client.aclose()
+        elif client:
+            logger.warning(
+                "Provider client %r has no aclose(); skipping async cleanup",
+                type(client).__name__,
+            )
+
+    @abstractmethod
     def _build_request_body(self, request: Any) -> dict:
-        """Build request body. Override in subclasses."""
-        raise NotImplementedError
+        """Build request body. Must be implemented by subclasses."""
 
     def _handle_extra_reasoning(self, delta: Any, sse: SSEBuilder) -> Iterator[str]:
         """Hook for provider-specific reasoning (e.g. OpenRouter reasoning_details)."""
         return iter(())
 
-    def _process_tool_call(self, tc: dict, sse: Any) -> Iterator[str]:
+    def _process_tool_call(self, tc: dict, sse: SSEBuilder) -> Iterator[str]:
         """Process a single tool call delta and yield SSE events."""
         tc_index = tc.get("index", 0)
         if tc_index < 0:
@@ -105,7 +118,7 @@ class OpenAICompatibleProvider(BaseProvider):
 
             yield sse.emit_tool_delta(tc_index, args)
 
-    def _flush_task_arg_buffers(self, sse: Any) -> Iterator[str]:
+    def _flush_task_arg_buffers(self, sse: SSEBuilder) -> Iterator[str]:
         """Emit buffered Task args as a single JSON delta (best-effort)."""
         for tool_index, out in sse.blocks.flush_task_arg_buffers():
             yield sse.emit_tool_delta(tool_index, out)
