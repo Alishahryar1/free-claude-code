@@ -9,16 +9,11 @@ from typing import Any
 import tiktoken
 from loguru import logger
 
+from providers.common import get_block_attr
+
 ENCODER = tiktoken.get_encoding("cl100k_base")
 
 __all__ = ["get_token_count"]
-
-
-def _get_block_attr(block: Any, key: str, default: Any = "") -> Any:
-    """Get attribute from block (object or dict)."""
-    if isinstance(block, dict):
-        return block.get(key, default)
-    return getattr(block, key, default)
 
 
 def get_token_count(
@@ -38,7 +33,7 @@ def get_token_count(
             total_tokens += len(ENCODER.encode(system))
         elif isinstance(system, list):
             for block in system:
-                text = _get_block_attr(block, "text", "")
+                text = get_block_attr(block, "text", "")
                 if text:
                     total_tokens += len(ENCODER.encode(str(text)))
         total_tokens += 4  # System block formatting overhead
@@ -48,24 +43,24 @@ def get_token_count(
             total_tokens += len(ENCODER.encode(msg.content))
         elif isinstance(msg.content, list):
             for block in msg.content:
-                b_type = _get_block_attr(block, "type") or None
+                b_type = get_block_attr(block, "type") or None
 
                 if b_type == "text":
-                    text = _get_block_attr(block, "text", "")
+                    text = get_block_attr(block, "text", "")
                     total_tokens += len(ENCODER.encode(str(text)))
                 elif b_type == "thinking":
-                    thinking = _get_block_attr(block, "thinking", "")
+                    thinking = get_block_attr(block, "thinking", "")
                     total_tokens += len(ENCODER.encode(str(thinking)))
                 elif b_type == "tool_use":
-                    name = _get_block_attr(block, "name", "")
-                    inp = _get_block_attr(block, "input", {})
-                    block_id = _get_block_attr(block, "id", "")
+                    name = get_block_attr(block, "name", "")
+                    inp = get_block_attr(block, "input", {})
+                    block_id = get_block_attr(block, "id", "")
                     total_tokens += len(ENCODER.encode(str(name)))
                     total_tokens += len(ENCODER.encode(json.dumps(inp)))
                     total_tokens += len(ENCODER.encode(str(block_id)))
                     total_tokens += 15
                 elif b_type == "image":
-                    source = _get_block_attr(block, "source")
+                    source = get_block_attr(block, "source")
                     if isinstance(source, dict):
                         data = source.get("data") or source.get("base64") or ""
                         if data:
@@ -75,8 +70,8 @@ def get_token_count(
                     else:
                         total_tokens += 765
                 elif b_type == "tool_result":
-                    content = _get_block_attr(block, "content", "")
-                    tool_use_id = _get_block_attr(block, "tool_use_id", "")
+                    content = get_block_attr(block, "content", "")
+                    tool_use_id = get_block_attr(block, "tool_use_id", "")
                     if isinstance(content, str):
                         total_tokens += len(ENCODER.encode(content))
                     else:

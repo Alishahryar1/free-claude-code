@@ -4,6 +4,7 @@ from .error_mapping import map_error
 from .heuristic_tool_parser import HeuristicToolParser
 from .message_converter import (
     AnthropicToOpenAIConverter,
+    build_base_request_body,
     get_block_attr,
     get_block_type,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "HeuristicToolParser",
     "SSEBuilder",
     "ThinkTagParser",
+    "build_base_request_body",
     "get_block_attr",
     "get_block_type",
     "map_error",

@@ -39,7 +39,7 @@ class ContentBlockToolUse(BaseModel):
 class ContentBlockToolResult(BaseModel):
     type: Literal["tool_result"]
     tool_use_id: str
-    content: str | list[dict[str, Any]] | dict[str, Any] | list[Any] | Any
+    content: str | list[Any] | dict[str, Any]
 
 
 class ContentBlockThinking(BaseModel):

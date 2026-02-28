@@ -187,10 +187,6 @@ class SSEBuilder:
         """Generate message_stop event."""
         return self._format_event("message_stop", {"type": "message_stop"})
 
-    def done(self) -> str:
-        """Generate [DONE] marker."""
-        return "[DONE]\n\n"
-
     # Content block events
     def content_block_start(self, index: int, block_type: str, **kwargs) -> str:
         """Generate content_block_start event."""

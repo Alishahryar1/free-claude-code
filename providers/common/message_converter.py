@@ -178,3 +178,49 @@ class AnthropicToOpenAIConverter:
             if text_parts:
                 return {"role": "system", "content": "\n\n".join(text_parts).strip()}
         return None
+
+
+def build_base_request_body(
+    request_data: Any,
+    *,
+    default_max_tokens: int | None = None,
+    include_reasoning_for_openrouter: bool = False,
+) -> dict[str, Any]:
+    """Build the common parts of an OpenAI-format request body.
+
+    Handles message conversion, system prompt, max_tokens, temperature,
+    top_p, stop sequences, tools, and tool_choice. Provider-specific
+    parameters (extra_body, penalties, NIM settings) are added by callers.
+    """
+    from providers.common.utils import set_if_not_none
+
+    messages = AnthropicToOpenAIConverter.convert_messages(
+        request_data.messages,
+        include_reasoning_for_openrouter=include_reasoning_for_openrouter,
+    )
+
+    system = getattr(request_data, "system", None)
+    if system:
+        system_msg = AnthropicToOpenAIConverter.convert_system_prompt(system)
+        if system_msg:
+            messages.insert(0, system_msg)
+
+    body: dict[str, Any] = {"model": request_data.model, "messages": messages}
+
+    max_tokens = getattr(request_data, "max_tokens", None)
+    set_if_not_none(body, "max_tokens", max_tokens or default_max_tokens)
+    set_if_not_none(body, "temperature", getattr(request_data, "temperature", None))
+    set_if_not_none(body, "top_p", getattr(request_data, "top_p", None))
+
+    stop_sequences = getattr(request_data, "stop_sequences", None)
+    if stop_sequences:
+        body["stop"] = stop_sequences
+
+    tools = getattr(request_data, "tools", None)
+    if tools:
+        body["tools"] = AnthropicToOpenAIConverter.convert_tools(tools)
+    tool_choice = getattr(request_data, "tool_choice", None)
+    if tool_choice:
+        body["tool_choice"] = tool_choice
+
+    return body

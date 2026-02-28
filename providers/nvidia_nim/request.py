@@ -5,7 +5,7 @@ from typing import Any
 from loguru import logger
 
 from config.nim import NimSettings
-from providers.common.message_converter import AnthropicToOpenAIConverter
+from providers.common.message_converter import build_base_request_body
 from providers.common.utils import set_if_not_none
 
 
@@ -28,48 +28,25 @@ def build_request_body(request_data: Any, nim: NimSettings) -> dict:
         getattr(request_data, "model", "?"),
         len(getattr(request_data, "messages", [])),
     )
-    messages = AnthropicToOpenAIConverter.convert_messages(request_data.messages)
+    body = build_base_request_body(request_data)
 
-    # Add system prompt
-    system = getattr(request_data, "system", None)
-    if system:
-        system_msg = AnthropicToOpenAIConverter.convert_system_prompt(system)
-        if system_msg:
-            messages.insert(0, system_msg)
-
-    body: dict[str, Any] = {
-        "model": request_data.model,
-        "messages": messages,
-    }
-
-    # max_tokens with optional cap
-    max_tokens = getattr(request_data, "max_tokens", None)
+    # NIM-specific max_tokens: cap against nim.max_tokens
+    max_tokens = body.get("max_tokens") or getattr(request_data, "max_tokens", None)
     if max_tokens is None:
         max_tokens = nim.max_tokens
     elif nim.max_tokens:
         max_tokens = min(max_tokens, nim.max_tokens)
     set_if_not_none(body, "max_tokens", max_tokens)
 
-    req_temperature = getattr(request_data, "temperature", None)
-    temperature = req_temperature if req_temperature is not None else nim.temperature
-    set_if_not_none(body, "temperature", temperature)
+    # NIM-specific temperature/top_p: fall back to NIM defaults if request didn't set
+    if body.get("temperature") is None and nim.temperature is not None:
+        body["temperature"] = nim.temperature
+    if body.get("top_p") is None and nim.top_p is not None:
+        body["top_p"] = nim.top_p
 
-    req_top_p = getattr(request_data, "top_p", None)
-    top_p = req_top_p if req_top_p is not None else nim.top_p
-    set_if_not_none(body, "top_p", top_p)
-
-    stop_sequences = getattr(request_data, "stop_sequences", None)
-    if stop_sequences:
-        body["stop"] = stop_sequences
-    elif nim.stop:
+    # NIM-specific stop sequences fallback
+    if "stop" not in body and nim.stop:
         body["stop"] = nim.stop
-
-    tools = getattr(request_data, "tools", None)
-    if tools:
-        body["tools"] = AnthropicToOpenAIConverter.convert_tools(tools)
-    tool_choice = getattr(request_data, "tool_choice", None)
-    if tool_choice:
-        body["tool_choice"] = tool_choice
 
     if nim.presence_penalty != 0.0:
         body["presence_penalty"] = nim.presence_penalty

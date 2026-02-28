@@ -67,7 +67,7 @@ class TestContentBlockManager:
 
 
 class TestSSEBuilderMessageLifecycle:
-    """Tests for message_start, message_delta, message_stop, done."""
+    """Tests for message_start, message_delta, message_stop."""
 
     def test_message_start(self):
         builder = SSEBuilder("msg_123", "test-model", input_tokens=50)
@@ -101,10 +101,6 @@ class TestSSEBuilderMessageLifecycle:
         assert "event: message_stop" in sse
         data = _parse_sse(sse)
         assert data["type"] == "message_stop"
-
-    def test_done(self):
-        builder = SSEBuilder("msg_1", "model")
-        assert builder.done() == "[DONE]\n\n"
 
 
 class TestSSEBuilderContentBlocks:

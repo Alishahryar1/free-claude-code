@@ -8,6 +8,7 @@ included at top level for easy grep/filter.
 
 import json
 import logging
+from pathlib import Path
 
 from loguru import logger
 
@@ -71,7 +72,7 @@ def configure_logging(log_file: str, *, force: bool = False) -> None:
     logger.remove()
 
     # Truncate log file on fresh start for clean debugging
-    open(log_file, "w", encoding="utf-8").close()
+    Path(log_file).write_text("")
 
     # Add file sink: JSON lines, DEBUG level, context vars at top level
     logger.add(
