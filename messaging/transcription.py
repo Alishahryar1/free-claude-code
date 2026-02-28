@@ -7,7 +7,7 @@ Supports:
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
@@ -208,9 +208,9 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
         use_ssl=True,
         uri=server,
         metadata_args=[
-            ("function-id", function_id),
-            ("authorization", f"Bearer {api_key}"),
-        ]
+            ["function-id", function_id],
+            ["authorization", f"Bearer {api_key}"],
+        ],
     )
 
     asr_service = riva.client.ASRService(auth)
@@ -227,10 +227,11 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
     # Perform offline recognition
     response = asr_service.offline_recognize(data, config)
 
-    # Extract text from response
-    if response.result:
+    # Extract text from response - cast to the expected result type
+    response_result = cast(Any, response)
+    if response_result.result:
         text = ""
-        for result in response.results:
+        for result in response_result.results:
             if result.alternatives:
                 text += result.alternatives[0].transcript
         text = text.strip()
