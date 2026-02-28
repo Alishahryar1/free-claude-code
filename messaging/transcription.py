@@ -229,9 +229,11 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
     # Perform offline recognition
     response = asr_service.offline_recognize(data, config)
 
-    # Extract text from response - cast to the expected result type
-    if response.results and response.results[0].alternatives:
-        transcript = response.results[0].alternatives[0].transcript
+    # Extract text from response - use getattr for safe attribute access
+    transcript = ""
+    results = getattr(response, "results", None)
+    if results and results[0].alternatives:
+        transcript = results[0].alternatives[0].transcript
 
     logger.debug(f"NIM transcription: {len(transcript)} chars")
     return transcript or "(no speech detected)"
