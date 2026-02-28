@@ -1,0 +1,73 @@
+# Free Claude Code - Docker Compose
+# Usage: docker-compose up -d
+
+services:
+  free-claude-code:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: free-claude-code:latest
+    container_name: free-claude-code
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    environment:
+      # Provider selection: nvidia_nim, open_router, or lmstudio
+      - MODEL=${MODEL:-nvidia_nim/stepfun-ai/step-3.5-flash}
+
+      # NVIDIA NIM (40 req/min free)
+      - NVIDIA_NIM_API_KEY=${NVIDIA_NIM_API_KEY:-}
+
+      # OpenRouter (hundreds of models)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+
+      # LM Studio (local)
+      - LM_STUDIO_BASE_URL=${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+
+      # Provider rate limiting
+      - PROVIDER_RATE_LIMIT=${PROVIDER_RATE_LIMIT:-40}
+      - PROVIDER_RATE_WINDOW=${PROVIDER_RATE_WINDOW:-60}
+      - PROVIDER_MAX_CONCURRENCY=${PROVIDER_MAX_CONCURRENCY:-5}
+
+      # HTTP timeouts
+      - HTTP_READ_TIMEOUT=${HTTP_READ_TIMEOUT:-300}
+      - HTTP_WRITE_TIMEOUT=${HTTP_WRITE_TIMEOUT:-10}
+      - HTTP_CONNECT_TIMEOUT=${HTTP_CONNECT_TIMEOUT:-2}
+
+      # Optimizations
+      - FAST_PREFIX_DETECTION=${FAST_PREFIX_DETECTION:-true}
+      - ENABLE_NETWORK_PROBE_MOCK=${ENABLE_NETWORK_PROBE_MOCK:-true}
+      - ENABLE_TITLE_GENERATION_SKIP=${ENABLE_TITLE_GENERATION_SKIP:-true}
+      - ENABLE_SUGGESTION_MODE_SKIP=${ENABLE_SUGGESTION_MODE_SKIP:-true}
+      - ENABLE_FILEPATH_EXTRACTION_MOCK=${ENABLE_FILEPATH_EXTRACTION_MOCK:-true}
+
+      # Messaging platform (optional)
+      - MESSAGING_PLATFORM=${MESSAGING_PLATFORM:-discord}
+      - MESSAGING_RATE_LIMIT=${MESSAGING_RATE_LIMIT:-1}
+      - MESSAGING_RATE_WINDOW=${MESSAGING_RATE_WINDOW:-1}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - ALLOWED_DISCORD_CHANNELS=${ALLOWED_DISCORD_CHANNELS:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - ALLOWED_TELEGRAM_USER_ID=${ALLOWED_TELEGRAM_USER_ID:-}
+
+      # Voice transcription (optional)
+      - VOICE_NOTE_ENABLED=${VOICE_NOTE_ENABLED:-false}
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cpu}
+      - HF_TOKEN=${HF_TOKEN:-}
+
+      # Agent config
+      - CLAUDE_WORKSPACE=${CLAUDE_WORKSPACE:-./agent_workspace}
+      - ALLOWED_DIR=${ALLOWED_DIR:-}
+    volumes:
+      # Optional: persist workspace
+      - ./agent_workspace:/app/agent_workspace
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# Optional: Use a .env file for configuration
+# Create .env file with your API keys before running
