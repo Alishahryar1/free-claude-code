@@ -7,7 +7,7 @@ Supports:
 
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from loguru import logger
 
@@ -230,9 +230,8 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
     response = asr_service.offline_recognize(data, config)
 
     # Extract text from response - cast to the expected result type
-    if response.results:
-        if response.results[0].alternatives:
-            transcript = response.results[0].alternatives[0].transcript
+    if response.results and response.results[0].alternatives:
+        transcript = response.results[0].alternatives[0].transcript
 
     logger.debug(f"NIM transcription: {len(transcript)} chars")
     return transcript or "(no speech detected)"
