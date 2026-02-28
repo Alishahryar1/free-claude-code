@@ -1,3 +1,5 @@
+from unittest.mock import Mock
+
 import pytest
 
 from providers.model_utils import (
@@ -6,6 +8,21 @@ from providers.model_utils import (
     normalize_model_name,
     strip_provider_prefixes,
 )
+
+
+def _make_mock_settings(
+    model_name: str = "default-model",
+    haiku_model: str | None = None,
+    sonnet_model: str | None = None,
+    opus_model: str | None = None,
+):
+    """Create a mock Settings object for testing."""
+    settings = Mock()
+    settings.model_name = model_name
+    settings.haiku_model = haiku_model
+    settings.sonnet_model = sonnet_model
+    settings.opus_model = opus_model
+    return settings
 
 
 def test_strip_provider_prefixes():
@@ -25,17 +42,17 @@ def test_is_claude_model():
 
 
 def test_normalize_model_name_claude_maps_to_default():
-    default = "target-model"
+    settings = _make_mock_settings(model_name="target-model")
     # Strips prefix AND maps to default
-    assert normalize_model_name("anthropic/claude-3-sonnet", default) == default
-    assert normalize_model_name("claude-3-opus", default) == default
+    assert normalize_model_name("anthropic/claude-3-sonnet", settings) == "target-model"
+    assert normalize_model_name("claude-3-opus", settings) == "target-model"
 
 
 def test_normalize_model_name_non_claude_unchanged():
-    default = "target-model"
-    assert normalize_model_name("gpt-4", default) == "gpt-4"
+    settings = _make_mock_settings(model_name="target-model")
+    assert normalize_model_name("gpt-4", settings) == "gpt-4"
     assert (
-        normalize_model_name("openai/gpt-3.5-turbo", default) == "openai/gpt-3.5-turbo"
+        normalize_model_name("openai/gpt-3.5-turbo", settings) == "openai/gpt-3.5-turbo"
     )
 
 
@@ -43,9 +60,73 @@ def test_get_original_model():
     assert get_original_model("any-model") == "any-model"
 
 
-def test_normalize_model_name_without_default(monkeypatch):
-    monkeypatch.setenv("MODEL", "env-default-model")
-    assert normalize_model_name("claude-3") == "env-default-model"
+def test_normalize_model_name_haiku_mapping():
+    """Test Haiku models map to haiku_model when set."""
+    settings = _make_mock_settings(
+        model_name="default-model",
+        haiku_model="haiku-target",
+    )
+    assert normalize_model_name("claude-3-haiku", settings) == "haiku-target"
+    assert normalize_model_name("claude-3.5-haiku", settings) == "haiku-target"
+
+
+def test_normalize_model_name_sonnet_mapping():
+    """Test Sonnet models map to sonnet_model when set."""
+    settings = _make_mock_settings(
+        model_name="default-model",
+        sonnet_model="sonnet-target",
+    )
+    assert normalize_model_name("claude-3-sonnet", settings) == "sonnet-target"
+    assert normalize_model_name("claude-3.5-sonnet", settings) == "sonnet-target"
+
+
+def test_normalize_model_name_opus_mapping():
+    """Test Opus models map to opus_model when set."""
+    settings = _make_mock_settings(
+        model_name="default-model",
+        opus_model="opus-target",
+    )
+    assert normalize_model_name("claude-3-opus", settings) == "opus-target"
+
+
+def test_normalize_model_name_fallback_to_default():
+    """Test that Claude models without specific mapping fall back to default."""
+    settings = _make_mock_settings(
+        model_name="default-model",
+        haiku_model="haiku-target",
+    )
+    # Sonnet and Opus should fall back to default when not set
+    assert normalize_model_name("claude-3-sonnet", settings) == "default-model"
+    assert normalize_model_name("claude-3-opus", settings) == "default-model"
+
+
+def test_normalize_model_name_all_three_set():
+    """Test with all three Claude model mappings set."""
+    settings = _make_mock_settings(
+        model_name="default-model",
+        haiku_model="haiku-target",
+        sonnet_model="sonnet-target",
+        opus_model="opus-target",
+    )
+    assert normalize_model_name("claude-3-haiku", settings) == "haiku-target"
+    assert normalize_model_name("claude-3-sonnet", settings) == "sonnet-target"
+    assert normalize_model_name("claude-3-opus", settings) == "opus-target"
+    # Other Claude models fall back to default
+    assert normalize_model_name("claude-2.1", settings) == "default-model"
+
+
+def test_normalize_model_name_none_specific_mappings():
+    """Test with all specific mappings set to None."""
+    settings = _make_mock_settings(
+        model_name="default-model",
+        haiku_model=None,
+        sonnet_model=None,
+        opus_model=None,
+    )
+    # All Claude models should map to default
+    assert normalize_model_name("claude-3-haiku", settings) == "default-model"
+    assert normalize_model_name("claude-3-sonnet", settings) == "default-model"
+    assert normalize_model_name("claude-3-opus", settings) == "default-model"
 
 
 # --- Parametrized Edge Case Tests ---
@@ -112,13 +193,34 @@ def test_is_claude_model_parametrized(model, expected):
 
 
 @pytest.mark.parametrize(
-    "model,default,expected",
+    "model,settings_config,expected",
     [
-        ("claude-3-sonnet", "target", "target"),
-        ("anthropic/claude-3-opus", "target", "target"),
-        ("gpt-4", "target", "gpt-4"),
-        ("openai/gpt-3.5-turbo", "target", "openai/gpt-3.5-turbo"),
-        ("", "target", ""),  # empty string is not a claude model
+        # Claude models with default mapping
+        ("claude-3-sonnet", {"model_name": "target"}, "target"),
+        ("anthropic/claude-3-opus", {"model_name": "target"}, "target"),
+        # Non-Claude models unchanged
+        ("gpt-4", {"model_name": "target"}, "gpt-4"),
+        ("openai/gpt-3.5-turbo", {"model_name": "target"}, "openai/gpt-3.5-turbo"),
+        # Empty string edge case
+        ("", {"model_name": "target"}, ""),
+        # Specific Haiku mapping
+        (
+            "claude-3-haiku",
+            {"model_name": "default", "haiku_model": "haiku-target"},
+            "haiku-target",
+        ),
+        # Specific Sonnet mapping
+        (
+            "claude-3-sonnet",
+            {"model_name": "default", "sonnet_model": "sonnet-target"},
+            "sonnet-target",
+        ),
+        # Specific Opus mapping
+        (
+            "claude-3-opus",
+            {"model_name": "default", "opus_model": "opus-target"},
+            "opus-target",
+        ),
     ],
     ids=[
         "claude_mapped",
@@ -126,8 +228,12 @@ def test_is_claude_model_parametrized(model, expected):
         "non_claude",
         "prefixed_non_claude",
         "empty",
+        "haiku_specific",
+        "sonnet_specific",
+        "opus_specific",
     ],
 )
-def test_normalize_model_name_parametrized(model, default, expected):
-    """Parametrized model normalization."""
-    assert normalize_model_name(model, default) == expected
+def test_normalize_model_name_parametrized(model, settings_config, expected):
+    """Parametrized model normalization with various settings."""
+    settings = _make_mock_settings(**settings_config)
+    assert normalize_model_name(model, settings) == expected

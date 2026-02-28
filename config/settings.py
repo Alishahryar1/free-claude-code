@@ -40,6 +40,18 @@ class Settings(BaseSettings):
     # Format: provider_type/model/name
     model: str = "nvidia_nim/meta/llama3-70b-instruct"
 
+    # ==================== Per-Claude-Model Mapping ====================
+    # Optional: Map specific Claude model families to different target models.
+    # If not set, falls back to the default `model` above.
+    # Format: provider_type/model/name (same as MODEL)
+    # Examples:
+    #   HAIKU_MODEL="open_router/google/gemma-3-4b"
+    #   SONNET_MODEL="open_router/stepfun/step-3.5-flash:free"
+    #   OPUS_MODEL="nvidia_nim/meta/llama3-70b-instruct"
+    haiku_model: str | None = Field(default=None, validation_alias="HAIKU_MODEL")
+    sonnet_model: str | None = Field(default=None, validation_alias="SONNET_MODEL")
+    opus_model: str | None = Field(default=None, validation_alias="OPUS_MODEL")
+
     # ==================== Provider Rate Limiting ====================
     provider_rate_limit: int = Field(default=40, validation_alias="PROVIDER_RATE_LIMIT")
     provider_rate_window: int = Field(
