@@ -219,16 +219,16 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
     config = riva.client.RecognitionConfig(
         language_code=language_code,
         max_alternatives=1,
-        verbatim_transcripts= True,
+        verbatim_transcripts=True,
     )
 
     # Read audio file
     with open(file_path, "rb") as f:
         data = f.read()
-    
+
     # Perform offline recognition
     response = asr_service.offline_recognize(data, config)
-    
+
     # Extract text from response - cast to the expected result type
     if response.results:
         if response.results[0].alternatives:
