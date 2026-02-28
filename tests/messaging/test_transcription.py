@@ -25,7 +25,7 @@ def test_transcribe_file_too_large_raises():
         path = Path(f.name)
     try:
         with pytest.raises(ValueError, match="too large"):
-            transcribe_audio(path, "audio/ogg")
+            transcribe_audio(path, "audio/ogg", whisper_device="auto")
     finally:
         path.unlink(missing_ok=True)
 
@@ -99,7 +99,7 @@ def test_transcribe_invalid_device_raises():
             patch("messaging.transcription._load_audio"),
             pytest.raises(ValueError, match="whisper_device must be 'cpu' or 'cuda'"),
         ):
-            transcribe_audio(path, "audio/ogg")
+            transcribe_audio(path, "audio/ogg", whisper_device="auto")
     finally:
         path.unlink(missing_ok=True)
 
@@ -120,6 +120,6 @@ def test_transcribe_local_import_error_raises():
             ),
             pytest.raises(ImportError, match="voice_local extra"),
         ):
-            transcribe_audio(path, "audio/ogg")
+            transcribe_audio(path, "audio/ogg", whisper_device="auto")
     finally:
         path.unlink(missing_ok=True)

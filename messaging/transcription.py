@@ -125,6 +125,7 @@ def transcribe_audio(
         ValueError: If file too large
         ImportError: If voice_local extra not installed (for local Whisper)
     """
+
     if not file_path.exists():
         raise FileNotFoundError(f"Audio file not found: {file_path}")
 
@@ -178,12 +179,6 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
 
     settings = get_settings()
     api_key = settings.nvidia_nim_api_key
-
-    if not api_key:
-        raise ValueError(
-            "NVIDIA_NIM_API_KEY is required for nvidia_nim transcription. "
-            "Set it in your .env file."
-        )
 
     # Look up function ID and language code from model mapping
     model_config = _NIM_MODEL_MAP.get(model)
