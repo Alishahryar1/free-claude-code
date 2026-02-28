@@ -38,7 +38,7 @@ jobs:
           enable-cache: true
           cache-python: true
 
-      - name: Lint check
+      - name: Format check
         run: uv run ruff format --check
 
       - name: Style check

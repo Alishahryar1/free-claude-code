@@ -5,7 +5,7 @@
 ## CODING ENVIRONMENT
 - Install astral uv using "curl -LsSf https://astral.sh/uv/install.sh | sh" if not already installed
 - Always use `uv run` to run files instead of the global `python` command.
-- Current uv ruff linter is set to py314 which has supports multiple exception types without paranthesis (except TypeError, ValueError:)
+- Current uv ruff formatter is set to py314 which has supports multiple exception types without paranthesis (except TypeError, ValueError:)
 - Read `.env.example` for environment variables.
 - All CI checks must pass; failing checks block merge.
 - Add tests for new changes (including edge cases), then run `uv run pytest`.
@@ -33,7 +33,7 @@
 1. **ANALYZE**: Read relevant files. Do not guess.
 2. **PLAN**: Map out the logic. Identify root cause or required changes. Order changes by dependency.
 3. **EXECUTE**: Fix the cause, not the symptom. Execute incrementally with clear commits.
-4. **VERIFY**: Run tests and linting. Confirm the fix via logs or output.
+4. **VERIFY**: Run ci checks. Confirm the fix via logs or output.
 5. **SPECIFICITY**: Do exactly as much as asked; nothing more, nothing less.
 6. **PROPAGATION**: Changes impact multiple files; propagate updates correctly.
 
