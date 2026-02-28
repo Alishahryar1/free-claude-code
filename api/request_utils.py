@@ -4,7 +4,6 @@ Contains token counting for API requests.
 """
 
 import json
-from typing import Any
 
 import tiktoken
 from loguru import logger
