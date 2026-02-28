@@ -58,9 +58,10 @@ def test_token_count_request_model_validation(mock_settings):
 
 
 def test_messages_request_model_mapping_logs(mock_settings):
+    """Test that model mapping is logged."""
     with (
         patch("api.models.anthropic.get_settings", return_value=mock_settings),
-        patch("api.models.anthropic.logger.debug") as mock_log,
+        patch("api.models.anthropic.logger.info") as mock_log,
     ):
         MessagesRequest(
             model="claude-2.1",
@@ -73,6 +74,57 @@ def test_messages_request_model_mapping_logs(mock_settings):
         assert "MODEL MAPPING" in args
         assert "claude-2.1" in args
         assert "target-model-from-settings" in args
+
+
+def test_messages_request_no_mapping_logs():
+    """Test that non-mapped models are also logged."""
+    settings = Settings()
+    settings.model = "nvidia_nim/default-model"
+    settings.haiku_model = None
+    settings.sonnet_model = None
+    settings.opus_model = None
+
+    with (
+        patch("api.models.anthropic.get_settings", return_value=settings),
+        patch("api.models.anthropic.logger.info") as mock_log,
+    ):
+        MessagesRequest(
+            model="gpt-4",
+            max_tokens=100,
+            messages=[Message(role="user", content="hello")],
+        )
+
+        mock_log.assert_called()
+        args = mock_log.call_args[0][0]
+        assert "MODEL:" in args
+        assert "gpt-4" in args
+        assert "(no mapping)" in args
+
+
+def test_messages_request_claude_no_specific_mapping_logs():
+    """Test that Claude models without specific mapping are logged."""
+    settings = Settings()
+    settings.model = "nvidia_nim/default-model"
+    settings.haiku_model = None
+    settings.sonnet_model = None
+    settings.opus_model = None
+
+    with (
+        patch("api.models.anthropic.get_settings", return_value=settings),
+        patch("api.models.anthropic.logger.info") as mock_log,
+    ):
+        MessagesRequest(
+            model="claude-3-haiku",
+            max_tokens=100,
+            messages=[Message(role="user", content="hello")],
+        )
+
+        mock_log.assert_called()
+        args = mock_log.call_args[0][0]
+        # Should show mapping to default
+        assert "MODEL MAPPING" in args
+        assert "claude-3-haiku" in args
+        assert "default-model" in args
 
 
 def test_messages_request_haiku_mapping_with_haiku_model_set():

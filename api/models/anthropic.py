@@ -117,8 +117,11 @@ class MessagesRequest(BaseModel):
         if normalized != self.model:
             self.model = normalized
 
-        if self.model != self.original_model:
-            logger.debug(f"MODEL MAPPING: '{self.original_model}' -> '{self.model}'")
+        # Always log model mapping info (for debugging/auditing)
+        if self.model == self.original_model:
+            logger.info(f"MODEL: '{self.model}' (no mapping)")
+        else:
+            logger.info(f"MODEL MAPPING: '{self.original_model}' -> '{self.model}'")
 
         return self
 
@@ -136,5 +139,13 @@ class TokenCountRequest(BaseModel):
     def validate_model_field(cls, v, info):
         """Map any Claude model name to the configured model."""
         settings = get_settings()
-        # Use centralized model normalization
-        return normalize_model_name(v, settings)
+        original = v
+        normalized = normalize_model_name(v, settings)
+
+        # Always log model mapping info (for debugging/auditing)
+        if normalized == original:
+            logger.info(f"MODEL (token count): '{normalized}' (no mapping)")
+        else:
+            logger.info(f"MODEL MAPPING (token count): '{original}' -> '{normalized}'")
+
+        return normalized
