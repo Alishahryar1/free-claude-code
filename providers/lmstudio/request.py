@@ -5,13 +5,9 @@ from typing import Any
 from loguru import logger
 
 from providers.common.message_converter import AnthropicToOpenAIConverter
+from providers.common.utils import set_if_not_none
 
 LMSTUDIO_DEFAULT_MAX_TOKENS = 81920
-
-
-def _set_if_not_none(body: dict[str, Any], key: str, value: Any) -> None:
-    if value is not None:
-        body[key] = value
 
 
 def build_request_body(request_data: Any) -> dict:
@@ -38,10 +34,10 @@ def build_request_body(request_data: Any) -> dict:
     }
 
     max_tokens = getattr(request_data, "max_tokens", None)
-    _set_if_not_none(body, "max_tokens", max_tokens or LMSTUDIO_DEFAULT_MAX_TOKENS)
+    set_if_not_none(body, "max_tokens", max_tokens or LMSTUDIO_DEFAULT_MAX_TOKENS)
 
-    _set_if_not_none(body, "temperature", getattr(request_data, "temperature", None))
-    _set_if_not_none(body, "top_p", getattr(request_data, "top_p", None))
+    set_if_not_none(body, "temperature", getattr(request_data, "temperature", None))
+    set_if_not_none(body, "top_p", getattr(request_data, "top_p", None))
 
     stop_sequences = getattr(request_data, "stop_sequences", None)
     if stop_sequences:

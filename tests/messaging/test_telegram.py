@@ -2,12 +2,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from messaging.telegram import TelegramPlatform
+from messaging.platforms.telegram import TelegramPlatform
 
 
 @pytest.fixture
 def telegram_platform():
-    with patch("messaging.telegram.TELEGRAM_AVAILABLE", True):
+    with patch("messaging.platforms.telegram.TELEGRAM_AVAILABLE", True):
         platform = TelegramPlatform(bot_token="test_token", allowed_user_id="12345")
         return platform
 

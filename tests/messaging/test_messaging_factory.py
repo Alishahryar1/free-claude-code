@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from messaging.factory import create_messaging_platform
+from messaging.platforms.factory import create_messaging_platform
 
 
 class TestCreateMessagingPlatform:

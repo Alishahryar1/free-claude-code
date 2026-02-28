@@ -1,6 +1,6 @@
-"""Tests for messaging/discord_markdown.py."""
+"""Tests for messaging/rendering/discord_markdown.py."""
 
-from messaging.discord_markdown import (
+from messaging.rendering.discord_markdown import (
     _is_gfm_table_header_line,
     _normalize_gfm_tables,
     discord_bold,

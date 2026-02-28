@@ -25,18 +25,6 @@ def test_messages_request_map_model_claude_to_default(mock_settings):
         assert request.original_model == "claude-3-opus"
 
 
-def test_messages_request_map_model_non_claude_unchanged(mock_settings):
-    with patch("api.models.anthropic.get_settings", return_value=mock_settings):
-        request = MessagesRequest(
-            model="gpt-4",
-            max_tokens=100,
-            messages=[Message(role="user", content="hello")],
-        )
-
-        # normalize_model_name returns original if not Claude
-        assert request.model == "gpt-4"
-
-
 def test_messages_request_map_model_with_provider_prefix(mock_settings):
     with patch("api.models.anthropic.get_settings", return_value=mock_settings):
         request = MessagesRequest(

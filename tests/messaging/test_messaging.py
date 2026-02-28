@@ -49,7 +49,7 @@ class TestMessagingBase:
 
     def test_platform_is_abstract(self):
         """Verify MessagingPlatform cannot be instantiated."""
-        from messaging.base import MessagingPlatform
+        from messaging.platforms.base import MessagingPlatform
 
         with pytest.raises(TypeError):
             MessagingPlatform()

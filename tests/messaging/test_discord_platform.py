@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from messaging.discord import (
+from messaging.platforms.discord import (
     DISCORD_AVAILABLE,
     DiscordPlatform,
     _get_discord,
