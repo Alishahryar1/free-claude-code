@@ -16,9 +16,8 @@ from config.settings import get_settings
 # Max file size in bytes (25 MB)
 MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024
 
-# NVIDIA NIM Whisper model config: (function_id, language_code)
-# The function ID is paired with the model (see NVIDIA NIM docs)
-_NIM_MODEL_CONFIG: dict[str, tuple[str, str]] = {
+# NVIDIA NIM Whisper model mapping: (function_id, language_code)
+_NIM_MODEL_MAP: dict[str, tuple[str, str]] = {
     "nvidia/parakeet-ctc-0.6b-zh-tw": ("8473f56d-51ef-473c-bb26-efd4f5def2bf", "zh-TW"),
     "nvidia/parakeet-ctc-0.6b-zh-cn": ("9add5ef7-322e-47e0-ad7a-5653fb8d259b", "zh-CN"),
     "nvidia/parakeet-ctc-0.6b-es": ("None", "es-US"),
@@ -193,20 +192,16 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
         )
 
     # Look up function ID and language code from model mapping
-    model_config = _NIM_MODEL_CONFIG.get(model)
+    model_config = _NIM_MODEL_MAP.get(model)
     if not model_config:
         raise ValueError(
             f"No NVIDIA NIM config found for model: {model}. "
-            f"Supported models: {', '.join(_NIM_MODEL_CONFIG.keys())}"
+            f"Supported models: {', '.join(_NIM_MODEL_MAP.keys())}"
         )
     function_id, language_code = model_config
 
     # Riva server configuration
     server = "grpc.nvcf.nvidia.com:443"
-    options = [
-        ("grpc.max_receive_message_length", 1024 * 1024 * 100),  # 100MB
-        ("grpc.max_send_message_length", 1024 * 1024 * 100),
-    ]
 
     # Auth with SSL and metadata
     auth = riva.client.Auth(
@@ -215,8 +210,7 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
         metadata_args=[
             ("function-id", function_id),
             ("authorization", f"Bearer {api_key}"),
-        ],
-        options=options,
+        ]
     )
 
     asr_service = riva.client.ASRService(auth)
@@ -224,12 +218,6 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
     # Configure recognition - language_code from model config
     config = riva.client.RecognitionConfig(
         language_code=language_code,
-        model=model,
-        max_alternatives=1,
-        profanity_filter=False,
-        enable_automatic_punctuation=True,
-        verbatim_transcripts=True,
-        enable_word_time_offsets=False,
     )
 
     # Read audio file
@@ -240,7 +228,7 @@ def _transcribe_nim(file_path: Path, model: str) -> str:
     response = asr_service.offline_recognize(data, config)
 
     # Extract text from response
-    if response.results:
+    if response.result:
         text = ""
         for result in response.results:
             if result.alternatives:
