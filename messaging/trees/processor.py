@@ -67,7 +67,7 @@ class TreeQueueProcessor:
     ) -> None:
         """Process a single node and then check the queue."""
         # Skip if already in terminal state (e.g. from error propagation)
-        if node.state.value == MessageState.ERROR.value:
+        if node.state == MessageState.ERROR:
             logger.info(
                 f"Skipping node {node.node_id} as it is already in state {node.state}"
             )

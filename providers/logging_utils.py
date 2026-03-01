@@ -16,27 +16,29 @@ from providers.common.text import extract_text_from_content
 def generate_request_fingerprint(messages: list[Any]) -> str:
     """Generate unique short hash for message content.
 
-    Creates a SHA256 hash of all message content, returning an 8-char prefix
-    that's sufficient for correlation without full content logging.
+    Uses incremental SHA256 hashing to avoid building a large intermediate
+    string. Returns an 8-char hex prefix sufficient for correlation.
     """
-    content_parts = []
+    h = hashlib.sha256()
+    sep = b"|"
     for msg in messages:
         if hasattr(msg, "content"):
             content = msg.content
             if isinstance(content, str):
-                content_parts.append(content)
+                h.update(content.encode("utf-8"))
+                h.update(sep)
             elif isinstance(content, list):
                 for block in content:
                     if hasattr(block, "text"):
-                        content_parts.append(block.text)
+                        h.update(block.text.encode("utf-8"))
+                        h.update(sep)
                     elif hasattr(block, "type"):
-                        content_parts.append(f"<{block.type}>")
+                        h.update(f"<{block.type}>".encode())
+                        h.update(sep)
         elif hasattr(msg, "role"):
-            content_parts.append(msg.role)
-
-    combined = "|".join(content_parts)
-    hash_digest = hashlib.sha256(combined.encode("utf-8")).hexdigest()
-    return f"fp_{hash_digest[:8]}"
+            h.update(msg.role.encode("utf-8"))
+            h.update(sep)
+    return f"fp_{h.hexdigest()[:8]}"
 
 
 def get_last_user_message_preview(messages: list[Any], max_len: int = 100) -> str:

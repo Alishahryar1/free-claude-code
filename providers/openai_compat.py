@@ -10,7 +10,6 @@ import httpx
 from loguru import logger
 from openai import AsyncOpenAI
 
-from config.nim import NimSettings
 from providers.base import BaseProvider, ProviderConfig
 from providers.common import (
     ContentType,
@@ -33,7 +32,7 @@ class OpenAICompatibleProvider(BaseProvider):
         provider_name: str,
         base_url: str,
         api_key: str,
-        nim_settings: NimSettings | None = None,
+        nim_settings: Any = None,
     ):
         super().__init__(config)
         self._provider_name = provider_name

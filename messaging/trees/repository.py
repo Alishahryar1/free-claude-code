@@ -150,7 +150,11 @@ class TreeRepository:
         return tree
 
     def get_message_ids_for_chat(self, platform: str, chat_id: str) -> set[str]:
-        """Get all message IDs (incoming + status) for a given platform/chat."""
+        """Get all message IDs (incoming + status) for a given platform/chat.
+
+        Note: O(total_nodes) scan. Acceptable because this is only called
+        from /clear (user-initiated, infrequent).
+        """
         msg_ids: set[str] = set()
         for tree in self._trees.values():
             for node in tree.all_nodes():

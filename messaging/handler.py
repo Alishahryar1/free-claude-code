@@ -119,8 +119,8 @@ class ClaudeMessageHandler:
         self.cli_manager = cli_manager
         self.session_store = session_store
         self.tree_queue = TreeQueueManager(
-            queue_update_callback=self._update_queue_positions,
-            node_started_callback=self._mark_node_processing,
+            queue_update_callback=self.update_queue_positions,
+            node_started_callback=self.mark_node_processing,
         )
         is_discord = platform.name == "discord"
         self._format_status_fn = (
@@ -138,13 +138,13 @@ class ClaudeMessageHandler:
         )
         self._limit_chars = 1900 if is_discord else 3900
 
-    def _format_status(self, emoji: str, label: str, suffix: str | None = None) -> str:
+    def format_status(self, emoji: str, label: str, suffix: str | None = None) -> str:
         return self._format_status_fn(emoji, label, suffix)
 
     def _parse_mode(self) -> str | None:
         return self._parse_mode_val
 
-    def _get_render_ctx(self) -> RenderCtx:
+    def get_render_ctx(self) -> RenderCtx:
         return self._render_ctx_val
 
     def _get_limit_chars(self) -> int:
@@ -253,7 +253,7 @@ class ClaudeMessageHandler:
                 fire_and_forget=False,
                 message_thread_id=incoming.message_thread_id,
             )
-        self._record_outgoing_message(
+        self.record_outgoing_message(
             incoming.platform, incoming.chat_id, status_msg_id, "status"
         )
 
@@ -298,13 +298,13 @@ class ClaudeMessageHandler:
             await self.platform.queue_edit_message(
                 incoming.chat_id,
                 status_msg_id,
-                self._format_status(
+                self.format_status(
                     "📋", "Queued", f"(position {queue_size}) - waiting..."
                 ),
                 parse_mode=self._parse_mode(),
             )
 
-    async def _update_queue_positions(self, tree: MessageTree) -> None:
+    async def update_queue_positions(self, tree: MessageTree) -> None:
         """Refresh queued status messages after a dequeue."""
         try:
             queued_ids = await tree.get_queue_snapshot()
@@ -325,14 +325,14 @@ class ClaudeMessageHandler:
                 self.platform.queue_edit_message(
                     node.incoming.chat_id,
                     node.status_message_id,
-                    self._format_status(
+                    self.format_status(
                         "📋", "Queued", f"(position {position}) - waiting..."
                     ),
                     parse_mode=self._parse_mode(),
                 )
             )
 
-    async def _mark_node_processing(self, tree: MessageTree, node_id: str) -> None:
+    async def mark_node_processing(self, tree: MessageTree, node_id: str) -> None:
         """Update the dequeued node's status to processing immediately."""
         node = tree.get_node(node_id)
         if not node or node.state == MessageState.ERROR:
@@ -341,7 +341,7 @@ class ClaudeMessageHandler:
             self.platform.queue_edit_message(
                 node.incoming.chat_id,
                 node.status_message_id,
-                self._format_status("🔄", "Processing..."),
+                self.format_status("🔄", "Processing..."),
                 parse_mode=self._parse_mode(),
             )
         )
@@ -351,7 +351,7 @@ class ClaudeMessageHandler:
     ) -> tuple[TranscriptBuffer, RenderCtx]:
         """Create transcript buffer and render context for node processing."""
         transcript = TranscriptBuffer(show_tool_results=False)
-        return transcript, self._get_render_ctx()
+        return transcript, self.get_render_ctx()
 
     async def _handle_session_info_event(
         self,
@@ -400,7 +400,7 @@ class ClaudeMessageHandler:
             transcript.apply(parsed)
             had_transcript_events = True
 
-        status = _get_status_for_event(ptype, parsed, self._format_status)
+        status = _get_status_for_event(ptype, parsed, self.format_status)
         if status is not None:
             await update_ui(status)
             last_status = status
@@ -410,7 +410,7 @@ class ClaudeMessageHandler:
             if not had_transcript_events:
                 transcript.apply({"type": "text_chunk", "text": "Done."})
             logger.info("HANDLER: Task complete, updating UI")
-            await update_ui(self._format_status("✅", "Complete"), force=True)
+            await update_ui(self.format_status("✅", "Complete"), force=True)
             if tree and captured_session_id:
                 await tree.update_state(
                     node_id,
@@ -422,7 +422,7 @@ class ClaudeMessageHandler:
             error_msg = parsed.get("message", "Unknown error")
             logger.error(f"HANDLER: Error event received: {error_msg}")
             logger.info("HANDLER: Updating UI with error status")
-            await update_ui(self._format_status("❌", "Error"), force=True)
+            await update_ui(self.format_status("❌", "Error"), force=True)
             if tree:
                 await self._propagate_error_to_children(
                     node_id, error_msg, "Parent task failed"
@@ -533,7 +533,7 @@ class ClaudeMessageHandler:
             except RuntimeError as e:
                 transcript.apply({"type": "error", "message": str(e)})
                 await update_ui(
-                    self._format_status("⏳", "Session limit reached"),
+                    self.format_status("⏳", "Session limit reached"),
                     force=True,
                 )
                 if tree:
@@ -592,10 +592,10 @@ class ClaudeMessageHandler:
                 cancel_reason = node.context.get("cancel_reason")
 
             if cancel_reason == "stop":
-                await update_ui(self._format_status("⏹", "Stopped."), force=True)
+                await update_ui(self.format_status("⏹", "Stopped."), force=True)
             else:
                 transcript.apply({"type": "error", "message": "Task was cancelled"})
-                await update_ui(self._format_status("❌", "Cancelled"), force=True)
+                await update_ui(self.format_status("❌", "Cancelled"), force=True)
 
             # Do not propagate cancellation to children; a reply-scoped "/stop"
             # should only stop the targeted task.
@@ -609,7 +609,7 @@ class ClaudeMessageHandler:
             )
             error_msg = str(e)[:200]
             transcript.apply({"type": "error", "message": error_msg})
-            await update_ui(self._format_status("💥", "Task Failed"), force=True)
+            await update_ui(self.format_status("💥", "Task Failed"), force=True)
             if tree:
                 await self._propagate_error_to_children(
                     node_id, error_msg, "Parent task failed"
@@ -643,7 +643,7 @@ class ClaudeMessageHandler:
                 self.platform.queue_edit_message(
                     child.incoming.chat_id,
                     child.status_message_id,
-                    self._format_status("❌", "Cancelled:", child_status_text),
+                    self.format_status("❌", "Cancelled:", child_status_text),
                     parse_mode=self._parse_mode(),
                 )
             )
@@ -658,13 +658,13 @@ class ClaudeMessageHandler:
             # Reply to existing tree
             if self.tree_queue.is_node_tree_busy(parent_node_id):
                 queue_size = self.tree_queue.get_queue_size(parent_node_id) + 1
-                return self._format_status(
+                return self.format_status(
                     "📋", "Queued", f"(position {queue_size}) - waiting..."
                 )
-            return self._format_status("🔄", "Continuing conversation...")
+            return self.format_status("🔄", "Continuing conversation...")
 
         # New conversation
-        return self._format_status("⏳", "Launching new Claude CLI instance...")
+        return self.format_status("⏳", "Launching new Claude CLI instance...")
 
     async def stop_all_tasks(self) -> int:
         """
@@ -685,7 +685,7 @@ class ClaudeMessageHandler:
         await self.cli_manager.stop_all()
 
         # 3. Update UI and persist state for all cancelled nodes
-        self._update_cancelled_nodes_ui(cancelled_nodes)
+        self.update_cancelled_nodes_ui(cancelled_nodes)
 
         return len(cancelled_nodes)
 
@@ -703,10 +703,10 @@ class ClaudeMessageHandler:
                 node.set_context({"cancel_reason": "stop"})
 
         cancelled_nodes = await self.tree_queue.cancel_node(node_id)
-        self._update_cancelled_nodes_ui(cancelled_nodes)
+        self.update_cancelled_nodes_ui(cancelled_nodes)
         return len(cancelled_nodes)
 
-    def _record_outgoing_message(
+    def record_outgoing_message(
         self,
         platform: str,
         chat_id: str,
@@ -723,7 +723,7 @@ class ClaudeMessageHandler:
         except Exception as e:
             logger.debug(f"Failed to record message_id: {e}")
 
-    def _update_cancelled_nodes_ui(self, nodes: list[MessageNode]) -> None:
+    def update_cancelled_nodes_ui(self, nodes: list[MessageNode]) -> None:
         """Update status messages and persist tree state for cancelled nodes."""
         trees_to_save: dict[str, MessageTree] = {}
         for node in nodes:
@@ -731,7 +731,7 @@ class ClaudeMessageHandler:
                 self.platform.queue_edit_message(
                     node.incoming.chat_id,
                     node.status_message_id,
-                    self._format_status("⏹", "Stopped."),
+                    self.format_status("⏹", "Stopped."),
                     parse_mode=self._parse_mode(),
                 )
             )

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -26,11 +27,11 @@ def _safe_json_dumps(obj: Any) -> str:
 
 
 @dataclass
-class Segment:
+class Segment(ABC):
     kind: str
 
-    def render(self, ctx: RenderCtx) -> str:
-        raise NotImplementedError
+    @abstractmethod
+    def render(self, ctx: RenderCtx) -> str: ...
 
 
 @dataclass
@@ -88,23 +89,6 @@ class ToolCallSegment(Segment):
         self.tool_use_id = str(tool_use_id or "")
         self.name = str(name or "tool")
         self.indent_level = max(0, int(indent_level))
-        self._parts: list[str] = []
-
-    def set_initial_input(self, inp: Any) -> None:
-        if inp is None:
-            return
-        if isinstance(inp, str):
-            self._parts = [inp]
-        else:
-            self._parts = [_safe_json_dumps(inp)]
-
-    def append_input_delta(self, partial: str) -> None:
-        if partial:
-            self._parts.append(partial)
-
-    @property
-    def input_text(self) -> str:
-        return "".join(self._parts)
 
     def render(self, ctx: RenderCtx) -> str:
         name = ctx.code_inline(self.name)
@@ -444,17 +428,12 @@ class TranscriptBuffer:
                 seg = ToolCallSegment(tool_id, name)
                 self._segments.append(seg)
 
-            seg.set_initial_input(ev.get("input"))
             if idx >= 0:
                 self._open_tools_by_index[idx] = seg
             return
 
         if et == "tool_use_delta":
-            idx = int(ev.get("index", -1))
-            partial = str(ev.get("partial_json", "") or "")
-            seg = self._open_tools_by_index.get(idx)
-            if seg is not None:
-                seg.append_input_delta(partial)
+            # Track open tool by index for tool_use_stop (closing state).
             return
 
         if et == "tool_use_stop":
@@ -501,7 +480,6 @@ class TranscriptBuffer:
                 seg = ToolCallSegment(tool_id, name)
                 self._segments.append(seg)
 
-            seg.set_initial_input(ev.get("input"))
             seg.closed = True
             return
 

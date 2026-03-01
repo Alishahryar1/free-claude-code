@@ -115,7 +115,7 @@ async def test_update_queue_positions_handles_snapshot_error_and_skips_non_pendi
     # Snapshot error is swallowed.
     tree = MagicMock()
     tree.get_queue_snapshot = AsyncMock(side_effect=RuntimeError("boom"))
-    await handler._update_queue_positions(tree)
+    await handler.update_queue_positions(tree)
     platform.fire_and_forget.assert_not_called()
 
     # Normal path: only PENDING nodes get an update.
@@ -130,7 +130,7 @@ async def test_update_queue_positions_handles_snapshot_error_and_skips_non_pendi
     tree.get_queue_snapshot = AsyncMock(return_value=["n1", "n2"])
     tree.get_node = MagicMock(side_effect=[node_pending, node_done])
 
-    await handler._update_queue_positions(tree)
+    await handler.update_queue_positions(tree)
     assert platform.fire_and_forget.call_count == 1
 
 

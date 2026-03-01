@@ -28,13 +28,13 @@ async def handle_stop_command(
         if not node_id:
             msg_id = await handler.platform.queue_send_message(
                 incoming.chat_id,
-                handler._format_status(
+                handler.format_status(
                     "⏹", "Stopped.", "Nothing to stop for that message."
                 ),
                 fire_and_forget=False,
                 message_thread_id=incoming.message_thread_id,
             )
-            handler._record_outgoing_message(
+            handler.record_outgoing_message(
                 incoming.platform, incoming.chat_id, msg_id, "command"
             )
             return
@@ -43,11 +43,11 @@ async def handle_stop_command(
         noun = "request" if count == 1 else "requests"
         msg_id = await handler.platform.queue_send_message(
             incoming.chat_id,
-            handler._format_status("⏹", "Stopped.", f"Cancelled {count} {noun}."),
+            handler.format_status("⏹", "Stopped.", f"Cancelled {count} {noun}."),
             fire_and_forget=False,
             message_thread_id=incoming.message_thread_id,
         )
-        handler._record_outgoing_message(
+        handler.record_outgoing_message(
             incoming.platform, incoming.chat_id, msg_id, "command"
         )
         return
@@ -56,13 +56,13 @@ async def handle_stop_command(
     count = await handler.stop_all_tasks()
     msg_id = await handler.platform.queue_send_message(
         incoming.chat_id,
-        handler._format_status(
+        handler.format_status(
             "⏹", "Stopped.", f"Cancelled {count} pending or active requests."
         ),
         fire_and_forget=False,
         message_thread_id=incoming.message_thread_id,
     )
-    handler._record_outgoing_message(
+    handler.record_outgoing_message(
         incoming.platform, incoming.chat_id, msg_id, "command"
     )
 
@@ -73,7 +73,7 @@ async def handle_stats_command(
     """Handle /stats command."""
     stats = handler.cli_manager.get_stats()
     tree_count = handler.tree_queue.get_tree_count()
-    ctx = handler._get_render_ctx()
+    ctx = handler.get_render_ctx()
     msg_id = await handler.platform.queue_send_message(
         incoming.chat_id,
         "📊 "
@@ -85,7 +85,7 @@ async def handle_stats_command(
         fire_and_forget=False,
         message_thread_id=incoming.message_thread_id,
     )
-    handler._record_outgoing_message(
+    handler.record_outgoing_message(
         incoming.platform, incoming.chat_id, msg_id, "command"
     )
 
@@ -149,7 +149,7 @@ async def _handle_clear_branch(
 
     # 1) Cancel branch tasks (no stop_all)
     cancelled = await handler.tree_queue.cancel_branch(branch_root_id)
-    handler._update_cancelled_nodes_ui(cancelled)
+    handler.update_cancelled_nodes_ui(cancelled)
 
     # 2) Collect message IDs from branch nodes only
     msg_ids: set[str] = set()
@@ -214,25 +214,23 @@ async def handle_clear_command(
                     await _delete_message_ids(handler, incoming.chat_id, msg_ids_to_del)
                     msg_id = await handler.platform.queue_send_message(
                         incoming.chat_id,
-                        handler._format_status(
-                            "🗑", "Cleared.", "Voice note cancelled."
-                        ),
+                        handler.format_status("🗑", "Cleared.", "Voice note cancelled."),
                         fire_and_forget=False,
                         message_thread_id=incoming.message_thread_id,
                     )
-                    handler._record_outgoing_message(
+                    handler.record_outgoing_message(
                         incoming.platform, incoming.chat_id, msg_id, "command"
                     )
                     return
             msg_id = await handler.platform.queue_send_message(
                 incoming.chat_id,
-                handler._format_status(
+                handler.format_status(
                     "🗑", "Cleared.", "Nothing to clear for that message."
                 ),
                 fire_and_forget=False,
                 message_thread_id=incoming.message_thread_id,
             )
-            handler._record_outgoing_message(
+            handler.record_outgoing_message(
                 incoming.platform, incoming.chat_id, msg_id, "command"
             )
             return
@@ -278,6 +276,6 @@ async def handle_clear_command(
         logger.warning(f"Failed to clear session store: {e}")
 
     handler.tree_queue = TreeQueueManager(
-        queue_update_callback=handler._update_queue_positions,
-        node_started_callback=handler._mark_node_processing,
+        queue_update_callback=handler.update_queue_positions,
+        node_started_callback=handler.mark_node_processing,
     )

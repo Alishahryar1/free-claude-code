@@ -244,7 +244,7 @@ class TreeQueueManager:
                     MessageState.COMPLETED,
                     MessageState.ERROR,
                 ):
-                    tree._set_node_error_sync(node, "Cancelled by user")
+                    tree.set_node_error_sync(node, "Cancelled by user")
                     cancelled_nodes.append(node)
 
         # 2. Drain queue and mark nodes as cancelled
@@ -259,7 +259,7 @@ class TreeQueueManager:
                 node.state in (MessageState.PENDING, MessageState.IN_PROGRESS)
                 and node.node_id not in cancelled_ids
             ):
-                tree._set_node_error_sync(node, "Stale task cleaned up")
+                tree.set_node_error_sync(node, "Stale task cleaned up")
                 cleanup_count += 1
 
         tree.reset_processing_state()
@@ -336,7 +336,7 @@ class TreeQueueManager:
         for tree in self._repository.all_trees():
             for node in tree.all_nodes():
                 if node.state in (MessageState.PENDING, MessageState.IN_PROGRESS):
-                    tree._set_node_error_sync(node, "Lost during server restart")
+                    tree.set_node_error_sync(node, "Lost during server restart")
                     count += 1
         if count:
             logger.info(f"Cleaned up {count} stale nodes during startup")
