@@ -107,6 +107,27 @@ ANTHROPIC_AUTH_TOKEN="freecc" ANTHROPIC_BASE_URL="http://localhost:8082" claude
 That's it! Claude Code now uses your configured provider for free.
 
 <details>
+<summary><b>VSCode Extension Setup</b></summary>
+
+1. Start the proxy server (same as above).
+2. Open Settings (`Ctrl + ,`) and search for `claude-code.environmentVariables`.
+3. Click **Edit in settings.json** and add:
+
+```json
+"claude-code.environmentVariables": [
+  { "name": "ANTHROPIC_BASE_URL", "value": "http://localhost:8082" },
+  { "name": "ANTHROPIC_AUTH_TOKEN", "value": "freecc" }
+]
+```
+
+4. Reload extensions.
+5. **If you see the login screen** ("How do you want to log in?"): Click **Anthropic Console**, then authorize. The extension will start working. You may be redirected to buy credits in the browser; ignore it, the extension already works.
+
+To switch back to Anthropic models, comment out the added block and reload extensions.
+
+</details>
+
+<details>
 <summary><b>Multi-Model Support (Model Picker)</b></summary>
 
 `claude-pick` is an interactive model selector that lets you choose any model from your active provider each time you launch Claude, without editing `MODEL` in `.env`.
@@ -133,27 +154,6 @@ Then reload your shell (`source ~/.zshrc` or `source ~/.bashrc`) and run `claude
 ```bash
 alias claude-kimi='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOKEN="freecc:moonshotai/kimi-k2.5" claude'
 ```
-
-</details>
-
-<details>
-<summary><b>VSCode Extension Setup</b></summary>
-
-1. Start the proxy server (same as above).
-2. Open Settings (`Ctrl + ,`) and search for `claude-code.environmentVariables`.
-3. Click **Edit in settings.json** and add:
-
-```json
-"claude-code.environmentVariables": [
-  { "name": "ANTHROPIC_BASE_URL", "value": "http://localhost:8082" },
-  { "name": "ANTHROPIC_AUTH_TOKEN", "value": "freecc" }
-]
-```
-
-4. Reload extensions.
-5. **If you see the login screen** ("How do you want to log in?"): Click **Anthropic Console**, then authorize. The extension will start working. You may be redirected to buy credits in the browser; ignore it, the extension already works.
-
-To switch back to Anthropic models, comment out the added block and reload extensions.
 
 </details>
 
