@@ -66,7 +66,7 @@ if DISCORD_AVAILABLE and _discord_module is not None:
 
         async def on_ready(self) -> None:
             """Called when the bot is ready."""
-            self._platform._set_connected(True)
+            self._platform._connected = True
             logger.info("Discord platform connected")
 
         async def on_message(self, message: Any) -> None:
@@ -117,10 +117,6 @@ class DiscordPlatform(MessagingPlatform):
         self._start_task: asyncio.Task | None = None
         self._pending_voice: dict[tuple[str, str], tuple[str, str]] = {}
         self._pending_voice_lock = asyncio.Lock()
-
-    def _set_connected(self, connected: bool) -> None:
-        """Update connection state via an explicit accessor."""
-        self._connected = connected
 
     async def _handle_client_message(self, message: Any) -> None:
         """Adapter entry point used by the internal discord client."""
@@ -367,7 +363,7 @@ class DiscordPlatform(MessagingPlatform):
     async def stop(self) -> None:
         """Stop the bot."""
         if self._client.is_closed():
-            self._set_connected(False)
+            self._connected = False
             return
 
         await self._client.close()

@@ -24,7 +24,7 @@ def test_get_initial_status_reply_tree_busy_queued(handler):
     mock_queue = MagicMock()
     mock_queue.is_node_tree_busy.return_value = True
     mock_queue.get_queue_size.return_value = 2
-    handler.tree_queue = mock_queue
+    handler.replace_tree_queue(mock_queue)
     result = handler._get_initial_status(MagicMock(), "parent_1")
     assert "Queued" in result
     assert "position 3" in result
@@ -34,7 +34,7 @@ def test_get_initial_status_reply_tree_not_busy_continuing(handler):
     """Reply to tree when not busy returns continuing message."""
     mock_queue = MagicMock()
     mock_queue.is_node_tree_busy.return_value = False
-    handler.tree_queue = mock_queue
+    handler.replace_tree_queue(mock_queue)
     result = handler._get_initial_status(MagicMock(), "parent_1")
     assert "Continuing" in result
 

@@ -157,11 +157,6 @@ class ClaudeMessageHandler:
         """Accessor for the current tree queue manager."""
         return self._tree_queue
 
-    @tree_queue.setter
-    def tree_queue(self, tree_queue: TreeQueueManager) -> None:
-        """Backward-compatible setter routed through explicit replacement API."""
-        self.replace_tree_queue(tree_queue)
-
     def replace_tree_queue(self, tree_queue: TreeQueueManager) -> None:
         """Replace tree queue manager via explicit API."""
         self._tree_queue = tree_queue

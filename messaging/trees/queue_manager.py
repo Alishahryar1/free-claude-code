@@ -314,11 +314,10 @@ class TreeQueueManager:
         """Cancel all messages in all trees."""
         async with self._lock:
             root_ids = list(self._repository.tree_ids())
-
-        all_cancelled: list[MessageNode] = []
-        for root_id in root_ids:
-            all_cancelled.extend(await self.cancel_tree(root_id))
-        return all_cancelled
+            all_cancelled: list[MessageNode] = []
+            for root_id in root_ids:
+                all_cancelled.extend(await self.cancel_tree(root_id))
+            return all_cancelled
 
     def cleanup_stale_nodes(self) -> int:
         """
