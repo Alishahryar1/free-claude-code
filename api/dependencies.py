@@ -9,8 +9,7 @@ from providers.base import BaseProvider, ProviderConfig
 from providers.exceptions import AuthenticationError
 from providers.lmstudio import LMStudioProvider
 from providers.nvidia_nim import NVIDIA_NIM_BASE_URL, NvidiaNimProvider
-from providers.open_router import OpenRouterProvider
-from providers.open_router.client import OPENROUTER_BASE_URL
+from providers.open_router import OPENROUTER_BASE_URL, OpenRouterProvider
 
 # Global provider instance (singleton)
 _provider: BaseProvider | None = None

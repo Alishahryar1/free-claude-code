@@ -30,13 +30,19 @@ class GlobalRateLimiter:
 
     _instance: ClassVar[GlobalRateLimiter | None] = None
 
+    def __new__(cls, *args: Any, **kwargs: Any) -> GlobalRateLimiter:
+        if cls._instance is not None:
+            return cls._instance
+        instance = super().__new__(cls)
+        return instance
+
     def __init__(
         self,
         rate_limit: int = 40,
         rate_window: float = 60.0,
         max_concurrency: int = 5,
     ):
-        # Prevent double initialization in singleton
+        # Prevent re-initialization on singleton reuse
         if hasattr(self, "_initialized"):
             return
 

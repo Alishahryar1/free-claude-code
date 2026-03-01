@@ -247,7 +247,7 @@ async def test_update_queue_positions(handler, mock_platform):
     await tree.enqueue("child_1")
     await tree.enqueue("child_2")
 
-    await handler._update_queue_positions(tree)
+    await handler.update_queue_positions(tree)
 
     calls = mock_platform.queue_edit_message.call_args_list
     assert len(calls) == 2
@@ -291,7 +291,7 @@ async def test_mark_node_processing(handler, mock_platform):
         parent_id="root",
     )
 
-    await handler._mark_node_processing(tree, "child")
+    await handler.mark_node_processing(tree, "child")
 
     mock_platform.queue_edit_message.assert_called_once()
     args, kwargs = mock_platform.queue_edit_message.call_args

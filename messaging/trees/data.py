@@ -17,21 +17,26 @@ from ..models import IncomingMessage
 
 
 class _SnapshotQueue:
-    """Queue with snapshot/remove helpers, backed by a deque."""
+    """Queue with snapshot/remove helpers, backed by a deque and a set index."""
 
     def __init__(self) -> None:
         self._deque: deque[str] = deque()
+        self._set: set[str] = set()
 
     async def put(self, item: str) -> None:
         self._deque.append(item)
+        self._set.add(item)
 
     def put_nowait(self, item: str) -> None:
         self._deque.append(item)
+        self._set.add(item)
 
     def get_nowait(self) -> str:
         if not self._deque:
             raise asyncio.QueueEmpty()
-        return self._deque.popleft()
+        item = self._deque.popleft()
+        self._set.discard(item)
+        return item
 
     def qsize(self) -> int:
         return len(self._deque)
@@ -41,12 +46,11 @@ class _SnapshotQueue:
         return list(self._deque)
 
     def remove_if_present(self, item: str) -> bool:
-        """Remove item from queue if present. Returns True if removed."""
-        if item not in self._deque:
+        """Remove item from queue if present (O(1) membership check). Returns True if removed."""
+        if item not in self._set:
             return False
-        items = [x for x in self._deque if x != item]
-        self._deque.clear()
-        self._deque.extend(items)
+        self._set.discard(item)
+        self._deque = deque(x for x in self._deque if x != item)
         return True
 
 
@@ -350,7 +354,7 @@ class MessageTree:
             return True
         return False
 
-    def _set_node_error_sync(self, node: MessageNode, error_message: str) -> None:
+    def set_node_error_sync(self, node: MessageNode, error_message: str) -> None:
         """Synchronously mark a node as ERROR. Caller must ensure no concurrent access."""
         node.state = MessageState.ERROR
         node.error_message = error_message
@@ -371,7 +375,7 @@ class MessageTree:
                 break
             node = self._nodes.get(node_id)
             if node:
-                self._set_node_error_sync(node, error_message)
+                self.set_node_error_sync(node, error_message)
                 nodes.append(node)
         return nodes
 

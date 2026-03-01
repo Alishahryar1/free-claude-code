@@ -37,8 +37,8 @@ async def test_reply_to_old_status_message_after_restore_routes_to_parent(
     handler2 = ClaudeMessageHandler(mock_platform, mock_cli_manager, store2)
     handler2.tree_queue = TreeQueueManager.from_dict(
         {"trees": store2.get_all_trees(), "node_to_tree": store2.get_node_mapping()},
-        queue_update_callback=handler2._update_queue_positions,
-        node_started_callback=handler2._mark_node_processing,
+        queue_update_callback=handler2.update_queue_positions,
+        node_started_callback=handler2.mark_node_processing,
     )
 
     # Prevent background task scheduling; we only want to validate routing/tree mutation.
@@ -89,8 +89,8 @@ async def test_reply_to_old_status_message_without_mapping_creates_new_conversat
     handler2 = ClaudeMessageHandler(mock_platform, mock_cli_manager, store2)
     handler2.tree_queue = TreeQueueManager.from_dict(
         {"trees": store2.get_all_trees(), "node_to_tree": store2.get_node_mapping()},
-        queue_update_callback=handler2._update_queue_positions,
-        node_started_callback=handler2._mark_node_processing,
+        queue_update_callback=handler2.update_queue_positions,
+        node_started_callback=handler2.mark_node_processing,
     )
     mock_platform.queue_send_message = AsyncMock(return_value="status_reply")
 

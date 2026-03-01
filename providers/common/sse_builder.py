@@ -366,16 +366,19 @@ class SSEBuilder:
             # Tool calls are harder to tokenize exactly without reconstruction, but we can approximate
             # by tokenizing the json dumps of tool contents
             tool_tokens = 0
+            started_tool_count = 0
             for state in self.blocks.tool_states.values():
                 tool_tokens += len(ENCODER.encode(state.name))
                 tool_tokens += len(ENCODER.encode("".join(state.contents)))
                 tool_tokens += 15  # Control tokens overhead per tool
+                if state.started:
+                    started_tool_count += 1
 
             # Per-block overhead (~4 tokens per content block)
             block_count = (
                 (1 if accumulated_reasoning else 0)
                 + (1 if accumulated_text else 0)
-                + sum(1 for s in self.blocks.tool_states.values() if s.started)
+                + started_tool_count
             )
             block_overhead = block_count * 4
 
