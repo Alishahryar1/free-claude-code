@@ -49,12 +49,16 @@ class TestTryPrefixDetection:
                 "api.optimization_handlers.extract_command_prefix",
                 return_value="/ask",
             ),
+            patch("api.optimization_handlers.logger.info") as mock_log_info,
         ):
             result = try_prefix_detection(req, settings)
         assert result is not None
         block = result.content[0]
         assert isinstance(block, ContentBlockText)
         assert block.text == "/ask"
+        mock_log_info.assert_called_once_with(
+            "Optimization: Fast prefix detection request"
+        )
 
     def test_enabled_but_no_match_returns_none(self):
         settings = Settings()

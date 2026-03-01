@@ -33,6 +33,7 @@ def try_prefix_detection(
     if not is_prefix_req:
         return None
 
+    logger.info("Optimization: Fast prefix detection request")
     return MessagesResponse(
         id=f"msg_{uuid.uuid4()}",
         model=request_data.model,
