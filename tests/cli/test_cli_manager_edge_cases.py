@@ -21,9 +21,6 @@ async def test_register_real_session_id_moves_pending_to_active_and_maps():
         ok = await manager.register_real_session_id(temp_id, "real_1")
         assert ok is True
 
-        real = await manager.get_real_session_id(temp_id)
-        assert real == "real_1"
-
         # Lookup via temp id should resolve to the real session id.
         s2, sid2, is_new2 = await manager.get_or_create_session(session_id=temp_id)
         assert s2 is mock_session
@@ -75,8 +72,10 @@ async def test_remove_session_active_removes_temp_mapping():
         removed = await manager.remove_session("real_1")
         assert removed is True
 
-        real = await manager.get_real_session_id(temp_id)
-        assert real is None
+        # Temp ID should no longer resolve to an active session after removal.
+        _, sid2, is_new2 = await manager.get_or_create_session(session_id=temp_id)
+        assert sid2 == temp_id
+        assert is_new2 is True
 
 
 @pytest.mark.asyncio

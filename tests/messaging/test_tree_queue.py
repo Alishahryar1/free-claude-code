@@ -656,7 +656,7 @@ class TestSessionStoreTrees:
         retrieved = store.get_tree("root")
         assert retrieved is not None
         assert retrieved["root_id"] == "root"
-        assert store.get_tree_root_for_node("child") == "root"
+        assert store.get_node_mapping()["child"] == "root"
 
     def test_register_node(self, tmp_path):
         """Test registering a node to a tree."""
@@ -666,5 +666,4 @@ class TestSessionStoreTrees:
 
         store.register_node("new_node", "root_tree")
 
-        root_id = store.get_tree_root_for_node("new_node")
-        assert root_id == "root_tree"
+        assert store.get_node_mapping()["new_node"] == "root_tree"

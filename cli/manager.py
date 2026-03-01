@@ -97,11 +97,6 @@ class CLISessionManager:
             logger.info(f"Registered session: {temp_id} -> {real_session_id}")
             return True
 
-    async def get_real_session_id(self, temp_id: str) -> str | None:
-        """Get the real session ID for a temporary ID."""
-        async with self._lock:
-            return self._temp_to_real.get(temp_id)
-
     async def remove_session(self, session_id: str) -> bool:
         """Remove a session from the manager."""
         async with self._lock:

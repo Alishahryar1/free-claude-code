@@ -247,11 +247,6 @@ class SessionStore:
         with self._lock:
             return self._trees.get(root_id)
 
-    def get_tree_root_for_node(self, node_id: str) -> str | None:
-        """Get the root ID of the tree containing a node."""
-        with self._lock:
-            return self._node_to_tree.get(node_id)
-
     def register_node(self, node_id: str, root_id: str) -> None:
         """Register a node ID to a tree root."""
         with self._lock:
@@ -292,36 +287,3 @@ class SessionStore:
             self._trees = trees
             self._node_to_tree = node_to_tree
             self._schedule_save()
-
-    def cleanup_old_trees(self, max_age_days: int = 30) -> int:
-        """Remove trees older than max_age_days."""
-        with self._lock:
-            cutoff = datetime.now(UTC)
-            removed = 0
-            to_remove = []
-
-            for root_id, tree_data in self._trees.items():
-                try:
-                    nodes = tree_data.get("nodes", {})
-                    root_node = nodes.get(root_id, {})
-                    created_str = root_node.get("created_at")
-                    if created_str:
-                        created = datetime.fromisoformat(created_str)
-                        age_days = (cutoff - created).days
-                        if age_days > max_age_days:
-                            to_remove.append(root_id)
-                except Exception:
-                    pass
-
-            for root_id in to_remove:
-                tree_data = self._trees.pop(root_id)
-                # Remove node mappings
-                for node_id in tree_data.get("nodes", {}):
-                    self._node_to_tree.pop(node_id, None)
-                removed += 1
-
-            if removed:
-                self._schedule_save()
-                logger.info(f"Cleaned up {removed} old trees")
-
-            return removed

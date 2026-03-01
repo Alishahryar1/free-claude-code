@@ -1,7 +1,6 @@
 """Tests for messaging/ module."""
 
 import json
-from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -83,8 +82,9 @@ class TestSessionStore:
         assert loaded == tree_data
 
         # Verify node mapping
-        assert store.get_tree_root_for_node("r1") == "r1"
-        assert store.get_tree_root_for_node("n1") == "r1"
+        node_map = store.get_node_mapping()
+        assert node_map["r1"] == "r1"
+        assert node_map["n1"] == "r1"
 
     def test_register_node(self, tmp_path):
         """Test manual node registration."""
@@ -92,35 +92,7 @@ class TestSessionStore:
 
         store = SessionStore(storage_path=str(tmp_path / "sessions.json"))
         store.register_node("n_manual", "r_manual")
-        assert store.get_tree_root_for_node("n_manual") == "r_manual"
-
-    def test_cleanup_old_trees(self, tmp_path):
-        """Test cleaning up expired trees."""
-        from messaging.session import SessionStore
-
-        store = SessionStore(storage_path=str(tmp_path / "sessions.json"))
-
-        old_date = (datetime.now(UTC) - timedelta(days=40)).isoformat()
-
-        # Old tree
-        store.save_tree(
-            "old_root", {"nodes": {"old_root": {"created_at": old_date}, "child": {}}}
-        )
-
-        # New tree
-        store.save_tree(
-            "new_root",
-            {"nodes": {"new_root": {"created_at": datetime.now(UTC).isoformat()}}},
-        )
-
-        removed = store.cleanup_old_trees(30)
-        assert removed == 1
-
-        assert store.get_tree("old_root") is None
-        assert (
-            store.get_tree_root_for_node("child") is None
-        )  # Node mapping should be gone
-        assert store.get_tree("new_root") is not None
+        assert store.get_node_mapping()["n_manual"] == "r_manual"
 
     # --- Persistence & Edge Cases ---
 
