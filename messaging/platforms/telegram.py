@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from providers.common import get_user_facing_error_message
+
 if TYPE_CHECKING:
     from telegram import Update
     from telegram.ext import ContextTypes
@@ -508,7 +510,7 @@ class TelegramPlatform(MessagingPlatform):
         if len(update.message.text or "") > 80:
             text_preview += "..."
         logger.info(
-            "TELEGRAM_MSG: chat_id=%s message_id=%s reply_to=%s text_preview=%r",
+            "TELEGRAM_MSG: chat_id={} message_id={} reply_to={} text_preview={!r}",
             chat_id,
             message_id,
             reply_to,
@@ -536,7 +538,7 @@ class TelegramPlatform(MessagingPlatform):
             with contextlib.suppress(Exception):
                 await self.send_message(
                     chat_id,
-                    f"❌ *{escape_md_v2('Error:')}* {escape_md_v2(str(e)[:200])}",
+                    f"❌ *{escape_md_v2('Error:')}* {escape_md_v2(get_user_facing_error_message(e)[:200])}",
                     reply_to=incoming.message_id,
                     message_thread_id=thread_id,
                     parse_mode="MarkdownV2",
@@ -638,7 +640,7 @@ class TelegramPlatform(MessagingPlatform):
             )
 
             logger.info(
-                "TELEGRAM_VOICE: chat_id=%s message_id=%s transcribed=%r",
+                "TELEGRAM_VOICE: chat_id={} message_id={} transcribed={!r}",
                 chat_id,
                 message_id,
                 (transcribed[:80] + "..." if len(transcribed) > 80 else transcribed),
@@ -646,9 +648,9 @@ class TelegramPlatform(MessagingPlatform):
 
             await self._message_handler(incoming)
         except ValueError as e:
-            await update.message.reply_text(str(e)[:200])
+            await update.message.reply_text(get_user_facing_error_message(e)[:200])
         except ImportError as e:
-            await update.message.reply_text(str(e)[:200])
+            await update.message.reply_text(get_user_facing_error_message(e)[:200])
         except Exception as e:
             logger.error(f"Voice transcription failed: {e}")
             await update.message.reply_text(

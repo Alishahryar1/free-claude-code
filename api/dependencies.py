@@ -6,6 +6,7 @@ from loguru import logger
 from config.settings import Settings
 from config.settings import get_settings as _get_settings
 from providers.base import BaseProvider, ProviderConfig
+from providers.common import get_user_facing_error_message
 from providers.exceptions import AuthenticationError
 from providers.lmstudio import LMStudioProvider
 from providers.nvidia_nim import NVIDIA_NIM_BASE_URL, NvidiaNimProvider
@@ -70,14 +71,14 @@ def _create_provider(settings: Settings) -> BaseProvider:
         provider = LMStudioProvider(config)
     else:
         logger.error(
-            "Unknown provider_type: '%s'. Supported: 'nvidia_nim', 'open_router', 'lmstudio'",
+            "Unknown provider_type: '{}'. Supported: 'nvidia_nim', 'open_router', 'lmstudio'",
             settings.provider_type,
         )
         raise ValueError(
             f"Unknown provider_type: '{settings.provider_type}'. "
             f"Supported: 'nvidia_nim', 'open_router', 'lmstudio'"
         )
-    logger.info("Provider initialized: %s", settings.provider_type)
+    logger.info("Provider initialized: {}", settings.provider_type)
     return provider
 
 
@@ -88,7 +89,9 @@ def get_provider() -> BaseProvider:
         try:
             _provider = _create_provider(get_settings())
         except AuthenticationError as e:
-            raise HTTPException(status_code=503, detail=str(e)) from e
+            raise HTTPException(
+                status_code=503, detail=get_user_facing_error_message(e)
+            ) from e
     return _provider
 
 

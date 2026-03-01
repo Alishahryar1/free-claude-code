@@ -3,6 +3,7 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from config.nim import NimSettings
@@ -114,6 +115,39 @@ class TestStreamingExceptionHandling:
         event_text = "".join(events)
         assert "message_start" in event_text
         assert "API failed" in event_text
+        assert "message_stop" in event_text
+
+    @pytest.mark.asyncio
+    async def test_read_timeout_with_empty_message_emits_fallback(self):
+        """ReadTimeout(TimeoutError()) should emit a visible, non-empty timeout message."""
+        provider = _make_provider()
+        request = _make_request()
+
+        with (
+            patch.object(
+                provider._client.chat.completions,
+                "create",
+                new_callable=AsyncMock,
+                side_effect=httpx.ReadTimeout(""),
+            ),
+            patch.object(
+                provider._global_rate_limiter,
+                "wait_if_blocked",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            events = [
+                e
+                async for e in provider.stream_response(
+                    request,
+                    request_id="req_timeout123",
+                )
+            ]
+
+        event_text = "".join(events)
+        assert "timed out after" in event_text
+        assert "request_id=req_timeout123" in event_text
         assert "message_stop" in event_text
 
     @pytest.mark.asyncio

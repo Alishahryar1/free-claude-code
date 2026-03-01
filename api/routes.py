@@ -10,6 +10,7 @@ from loguru import logger
 
 from config.settings import Settings
 from providers.base import BaseProvider
+from providers.common import get_user_facing_error_message
 from providers.exceptions import InvalidRequestError, ProviderError
 from providers.logging_utils import build_request_summary, log_request_compact
 
@@ -69,7 +70,8 @@ async def create_message(
     except Exception as e:
         logger.error(f"Error: {e!s}\n{traceback.format_exc()}")
         raise HTTPException(
-            status_code=getattr(e, "status_code", 500), detail=str(e)
+            status_code=getattr(e, "status_code", 500),
+            detail=get_user_facing_error_message(e),
         ) from e
 
 
@@ -85,16 +87,18 @@ async def count_tokens(request_data: TokenCountRequest):
             summary = build_request_summary(request_data)
             summary["request_id"] = request_id
             summary["input_tokens"] = tokens
-            logger.info("COUNT_TOKENS: %s", json.dumps(summary))
+            logger.info("COUNT_TOKENS: {}", json.dumps(summary))
             return TokenCountResponse(input_tokens=tokens)
         except Exception as e:
             logger.error(
-                "COUNT_TOKENS_ERROR: request_id=%s error=%s\n%s",
+                "COUNT_TOKENS_ERROR: request_id={} error={}\n{}",
                 request_id,
-                str(e),
+                get_user_facing_error_message(e),
                 traceback.format_exc(),
             )
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            raise HTTPException(
+                status_code=500, detail=get_user_facing_error_message(e)
+            ) from e
 
 
 @router.get("/")
@@ -127,5 +131,5 @@ async def stop_cli(request: Request):
         raise HTTPException(status_code=503, detail="Messaging system not initialized")
 
     count = await handler.stop_all_tasks()
-    logger.info("STOP_CLI: source=handler cancelled_count=%d", count)
+    logger.info("STOP_CLI: source=handler cancelled_count={}", count)
     return {"status": "stopped", "cancelled_count": count}

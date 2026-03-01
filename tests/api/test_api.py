@@ -164,6 +164,31 @@ def test_generic_exception_with_status_code():
     mock_provider.stream_response = _mock_stream_response
 
 
+def test_generic_exception_empty_message_returns_non_empty_detail():
+    """Exceptions with empty __str__ still return a readable HTTP detail."""
+
+    class SilentError(RuntimeError):
+        def __str__(self):
+            return ""
+
+    def _raise_silent(*args, **kwargs):
+        raise SilentError()
+
+    mock_provider.stream_response = _raise_silent
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "test",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 10,
+            "stream": True,
+        },
+    )
+    assert response.status_code == 500
+    assert response.json()["detail"] != ""
+    mock_provider.stream_response = _mock_stream_response
+
+
 def test_count_tokens_endpoint():
     """count_tokens endpoint returns token count."""
     response = client.post(

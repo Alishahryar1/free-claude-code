@@ -14,6 +14,8 @@ from typing import Any, cast
 
 from loguru import logger
 
+from providers.common import get_user_facing_error_message
+
 from ..models import IncomingMessage
 from ..rendering.discord_markdown import format_status_discord
 from .base import MessagingPlatform
@@ -235,7 +237,7 @@ class DiscordPlatform(MessagingPlatform):
             )
 
             logger.info(
-                "DISCORD_VOICE: chat_id=%s message_id=%s transcribed=%r",
+                "DISCORD_VOICE: chat_id={} message_id={} transcribed={!r}",
                 channel_id,
                 message_id,
                 (transcribed[:80] + "..." if len(transcribed) > 80 else transcribed),
@@ -244,10 +246,10 @@ class DiscordPlatform(MessagingPlatform):
             await self._message_handler(incoming)
             return True
         except ValueError as e:
-            await message.reply(str(e)[:200])
+            await message.reply(get_user_facing_error_message(e)[:200])
             return True
         except ImportError as e:
-            await message.reply(str(e)[:200])
+            await message.reply(get_user_facing_error_message(e)[:200])
             return True
         except Exception as e:
             logger.error(f"Voice transcription failed: {e}")
@@ -289,7 +291,7 @@ class DiscordPlatform(MessagingPlatform):
         if len(message.content or "") > 80:
             text_preview += "..."
         logger.info(
-            "DISCORD_MSG: chat_id=%s message_id=%s reply_to=%s text_preview=%r",
+            "DISCORD_MSG: chat_id={} message_id={} reply_to={} text_preview={!r}",
             channel_id,
             message_id,
             reply_to,
@@ -317,7 +319,9 @@ class DiscordPlatform(MessagingPlatform):
             with contextlib.suppress(Exception):
                 await self.send_message(
                     channel_id,
-                    format_status_discord("Error:", str(e)[:200]),
+                    format_status_discord(
+                        "Error:", get_user_facing_error_message(e)[:200]
+                    ),
                     reply_to=message_id,
                 )
 

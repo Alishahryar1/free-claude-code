@@ -12,6 +12,8 @@ import time
 
 from loguru import logger
 
+from providers.common import get_user_facing_error_message
+
 from .commands import (
     handle_clear_command,
     handle_stats_command,
@@ -161,7 +163,7 @@ class ClaudeMessageHandler:
         if len(incoming.text or "") > 80:
             text_preview += "..."
         logger.info(
-            "HANDLER_ENTRY: chat_id=%s message_id=%s reply_to=%s text_preview=%r",
+            "HANDLER_ENTRY: chat_id={} message_id={} reply_to={} text_preview={!r}",
             incoming.chat_id,
             incoming.message_id,
             incoming.reply_to_message_id,
@@ -492,7 +494,7 @@ class ClaudeMessageHandler:
                 return
             if display and display != last_displayed_text:
                 logger.debug(
-                    "PLATFORM_EDIT: node_id=%s chat_id=%s msg_id=%s force=%s status=%r chars=%d",
+                    "PLATFORM_EDIT: node_id={} chat_id={} msg_id={} force={} status={!r} chars={}",
                     node_id,
                     chat_id,
                     status_msg_id,
@@ -501,13 +503,13 @@ class ClaudeMessageHandler:
                     len(display),
                 )
                 if os.getenv("DEBUG_TELEGRAM_EDITS") == "1":
-                    logger.debug("PLATFORM_EDIT_TEXT:\n%s", display)
+                    logger.debug("PLATFORM_EDIT_TEXT:\n{}", display)
                 else:
                     head = display[:500]
                     tail = display[-500:] if len(display) > 500 else ""
-                    logger.debug("PLATFORM_EDIT_PREVIEW_HEAD:\n%s", head)
+                    logger.debug("PLATFORM_EDIT_PREVIEW_HEAD:\n{}", head)
                     if tail:
-                        logger.debug("PLATFORM_EDIT_PREVIEW_TAIL:\n%s", tail)
+                        logger.debug("PLATFORM_EDIT_PREVIEW_TAIL:\n{}", tail)
                 last_displayed_text = display
                 try:
                     await self.platform.queue_edit_message(
@@ -531,14 +533,17 @@ class ClaudeMessageHandler:
                 else:
                     captured_session_id = session_or_temp_id
             except RuntimeError as e:
-                transcript.apply({"type": "error", "message": str(e)})
+                error_message = get_user_facing_error_message(e)
+                transcript.apply({"type": "error", "message": error_message})
                 await update_ui(
                     self.format_status("⏳", "Session limit reached"),
                     force=True,
                 )
                 if tree:
                     await tree.update_state(
-                        node_id, MessageState.ERROR, error_message=str(e)
+                        node_id,
+                        MessageState.ERROR,
+                        error_message=error_message,
                     )
                 return
 
@@ -607,7 +612,7 @@ class ClaudeMessageHandler:
             logger.error(
                 f"HANDLER: Task failed with exception: {type(e).__name__}: {e}"
             )
-            error_msg = str(e)[:200]
+            error_msg = get_user_facing_error_message(e)[:200]
             transcript.apply({"type": "error", "message": error_msg})
             await update_ui(self.format_status("💥", "Task Failed"), force=True)
             if tree:

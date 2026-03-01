@@ -24,7 +24,7 @@ def _set_extra(
 def build_request_body(request_data: Any, nim: NimSettings) -> dict:
     """Build OpenAI-format request body from Anthropic request."""
     logger.debug(
-        "NIM_REQUEST: conversion start model=%s msgs=%d",
+        "NIM_REQUEST: conversion start model={} msgs={}",
         getattr(request_data, "model", "?"),
         len(getattr(request_data, "messages", [])),
     )
@@ -96,7 +96,7 @@ def build_request_body(request_data: Any, nim: NimSettings) -> dict:
         body["extra_body"] = extra_body
 
     logger.debug(
-        "NIM_REQUEST: conversion done model=%s msgs=%d tools=%d",
+        "NIM_REQUEST: conversion done model={} msgs={} tools={}",
         body.get("model"),
         len(body.get("messages", [])),
         len(body.get("tools", [])),

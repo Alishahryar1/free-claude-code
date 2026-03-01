@@ -16,6 +16,8 @@ from providers.common import (
     HeuristicToolParser,
     SSEBuilder,
     ThinkTagParser,
+    append_request_id,
+    get_user_facing_error_message,
     map_error,
     map_stop_reason,
 )
@@ -139,7 +141,7 @@ class OpenAICompatibleProvider(BaseProvider):
         body = self._build_request_body(request)
         req_tag = f" request_id={request_id}" if request_id else ""
         logger.info(
-            "%s_STREAM:%s model=%s msgs=%d tools=%d",
+            "{}_STREAM:{} model={} msgs={} tools={}",
             tag,
             req_tag,
             body.get("model"),
@@ -176,7 +178,7 @@ class OpenAICompatibleProvider(BaseProvider):
 
                     if choice.finish_reason:
                         finish_reason = choice.finish_reason
-                        logger.debug("%s finish_reason: %s", tag, finish_reason)
+                        logger.debug("{} finish_reason: {}", tag, finish_reason)
 
                     # Handle reasoning_content (OpenAI extended format)
                     reasoning = getattr(delta, "reasoning_content", None)
@@ -245,12 +247,17 @@ class OpenAICompatibleProvider(BaseProvider):
                                 yield event
 
             except Exception as e:
-                logger.error("%s_ERROR:%s %s: %s", tag, req_tag, type(e).__name__, e)
+                logger.error("{}_ERROR:{} {}: {}", tag, req_tag, type(e).__name__, e)
                 mapped_e = map_error(e)
                 error_occurred = True
-                error_message = str(mapped_e)
+                error_message = append_request_id(
+                    get_user_facing_error_message(
+                        mapped_e, read_timeout_s=self._config.http_read_timeout
+                    ),
+                    request_id,
+                )
                 logger.info(
-                    "%s_STREAM: Emitting SSE error event for %s%s",
+                    "{}_STREAM: Emitting SSE error event for {}{}",
                     tag,
                     type(e).__name__,
                     req_tag,
@@ -318,7 +325,7 @@ class OpenAICompatibleProvider(BaseProvider):
             provider_input = usage_info.prompt_tokens
             if isinstance(provider_input, int):
                 logger.debug(
-                    "TOKEN_ESTIMATE: our=%d provider=%d diff=%+d",
+                    "TOKEN_ESTIMATE: our={} provider={} diff={:+d}",
                     input_tokens,
                     provider_input,
                     provider_input - input_tokens,

@@ -4,9 +4,9 @@ from unittest.mock import MagicMock, patch
 
 import openai
 import pytest
-from httpx import Request, Response
+from httpx import ReadTimeout, Request, Response
 
-from providers.common import map_error
+from providers.common import append_request_id, get_user_facing_error_message, map_error
 from providers.exceptions import (
     APIError,
     AuthenticationError,
@@ -120,3 +120,16 @@ class TestMapError:
         with patch("providers.common.error_mapping.GlobalRateLimiter"):
             result = map_error(exc)
         assert isinstance(result, expected_cls)
+
+
+def test_user_facing_message_read_timeout_empty_string():
+    """ReadTimeout wrapping TimeoutError should still produce readable text."""
+    timeout_exc = ReadTimeout("")
+    message = get_user_facing_error_message(timeout_exc, read_timeout_s=60)
+    assert message == "Provider request timed out after 60s."
+
+
+def test_append_request_id_suffix():
+    """Request id suffix should be appended deterministically."""
+    message = append_request_id("Provider request failed.", "req_abc123")
+    assert message == "Provider request failed. (request_id=req_abc123)"

@@ -8,6 +8,8 @@ from collections.abc import Awaitable, Callable
 
 from loguru import logger
 
+from providers.common import get_user_facing_error_message
+
 from .data import MessageNode, MessageState, MessageTree
 
 
@@ -83,7 +85,9 @@ class TreeQueueProcessor:
         except Exception as e:
             logger.error(f"Error processing node {node.node_id}: {e}")
             await tree.update_state(
-                node.node_id, MessageState.ERROR, error_message=str(e)
+                node.node_id,
+                MessageState.ERROR,
+                error_message=get_user_facing_error_message(e),
             )
         finally:
             tree.clear_current_node()

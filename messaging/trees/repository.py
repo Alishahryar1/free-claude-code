@@ -39,12 +39,12 @@ class TreeRepository:
         """Add a new tree to the repository."""
         self._trees[root_id] = tree
         self._node_to_tree[root_id] = root_id
-        logger.debug("TREE_REPO: add_tree root_id=%s", root_id)
+        logger.debug("TREE_REPO: add_tree root_id={}", root_id)
 
     def register_node(self, node_id: str, root_id: str) -> None:
         """Register a node ID to a tree."""
         self._node_to_tree[node_id] = root_id
-        logger.debug("TREE_REPO: register_node node_id=%s root_id=%s", node_id, root_id)
+        logger.debug("TREE_REPO: register_node node_id={} root_id={}", node_id, root_id)
 
     def has_node(self, node_id: str) -> bool:
         """Check if a node is registered in any tree."""
@@ -146,7 +146,7 @@ class TreeRepository:
             return None
         for node in tree.all_nodes():
             self._node_to_tree.pop(node.node_id, None)
-        logger.debug("TREE_REPO: remove_tree root_id=%s", root_id)
+        logger.debug("TREE_REPO: remove_tree root_id={}", root_id)
         return tree
 
     def get_message_ids_for_chat(self, platform: str, chat_id: str) -> set[str]:

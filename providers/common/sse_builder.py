@@ -118,7 +118,7 @@ class ContentBlockManager:
             except Exception as e:
                 prefix = state.task_arg_buffer[:120]
                 logger.warning(
-                    "Task args invalid JSON (id=%s len=%d prefix=%r): %s",
+                    "Task args invalid JSON (id={} len={} prefix={!r}): {}",
                     state.tool_id or "unknown",
                     len(state.task_arg_buffer),
                     prefix,
