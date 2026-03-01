@@ -408,7 +408,7 @@ class TestTreeQueueManagerConcurrency:
         await mgr.enqueue("c2", slow_processor)
 
         # Cancel the tree
-        cancelled = mgr.cancel_tree("root")
+        cancelled = await mgr.cancel_tree("root")
         assert len(cancelled) >= 1  # At least the current + queued
 
         # Tree should no longer be processing
@@ -418,7 +418,7 @@ class TestTreeQueueManagerConcurrency:
     async def test_cancel_nonexistent_tree(self):
         """cancel_tree for nonexistent tree returns empty list."""
         mgr = TreeQueueManager()
-        result = mgr.cancel_tree("nonexistent")
+        result = await mgr.cancel_tree("nonexistent")
         assert result == []
 
     @pytest.mark.asyncio

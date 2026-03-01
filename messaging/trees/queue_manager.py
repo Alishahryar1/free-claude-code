@@ -6,7 +6,6 @@ Uses TreeRepository for data, TreeQueueProcessor for async logic.
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 
 from loguru import logger
 
@@ -222,7 +221,7 @@ class TreeQueueManager:
 
         return affected
 
-    def cancel_tree(self, root_id: str) -> list[MessageNode]:
+    async def cancel_tree(self, root_id: str) -> list[MessageNode]:
         """
         Cancel all queued and in-progress messages in a tree.
 
@@ -235,34 +234,35 @@ class TreeQueueManager:
 
         cancelled_nodes = []
 
-        # 1. Cancel running task
-        if tree.cancel_current_task():
-            current_id = tree.current_node_id
-            if current_id:
-                node = tree.get_node(current_id)
-                if node and node.state not in (
-                    MessageState.COMPLETED,
-                    MessageState.ERROR,
-                ):
-                    tree.set_node_error_sync(node, "Cancelled by user")
-                    cancelled_nodes.append(node)
-
-        # 2. Drain queue and mark nodes as cancelled
-        queue_nodes = tree.drain_queue_and_mark_cancelled()
-        cancelled_nodes.extend(queue_nodes)
-        cancelled_ids = {n.node_id for n in cancelled_nodes}
-
-        # 3. Cleanup: Mark ANY other PENDING or IN_PROGRESS nodes as ERROR
         cleanup_count = 0
-        for node in tree.all_nodes():
-            if (
-                node.state in (MessageState.PENDING, MessageState.IN_PROGRESS)
-                and node.node_id not in cancelled_ids
-            ):
-                tree.set_node_error_sync(node, "Stale task cleaned up")
-                cleanup_count += 1
+        async with tree.with_lock():
+            # 1. Cancel running task
+            if tree.cancel_current_task():
+                current_id = tree.current_node_id
+                if current_id:
+                    node = tree.get_node(current_id)
+                    if node and node.state not in (
+                        MessageState.COMPLETED,
+                        MessageState.ERROR,
+                    ):
+                        tree.set_node_error_sync(node, "Cancelled by user")
+                        cancelled_nodes.append(node)
 
-        tree.reset_processing_state()
+            # 2. Drain queue and mark nodes as cancelled
+            queue_nodes = tree.drain_queue_and_mark_cancelled()
+            cancelled_nodes.extend(queue_nodes)
+            cancelled_ids = {n.node_id for n in cancelled_nodes}
+
+            # 3. Cleanup: Mark ANY other PENDING or IN_PROGRESS nodes as ERROR
+            for node in tree.all_nodes():
+                if (
+                    node.state in (MessageState.PENDING, MessageState.IN_PROGRESS)
+                    and node.node_id not in cancelled_ids
+                ):
+                    tree.set_node_error_sync(node, "Stale task cleaned up")
+                    cleanup_count += 1
+
+            tree.reset_processing_state()
 
         if cancelled_nodes:
             logger.info(
@@ -306,25 +306,18 @@ class TreeQueueManager:
                     "Failed to remove node from queue; will rely on state=ERROR"
                 )
 
-            node.state = MessageState.ERROR
-            node.error_message = "Cancelled by user"
-            node.completed_at = datetime.now(UTC)
+            tree.set_node_error_sync(node, "Cancelled by user")
 
             return [node]
 
     async def cancel_all(self) -> list[MessageNode]:
-        """Cancel all messages in all trees (async wrapper)."""
+        """Cancel all messages in all trees."""
         async with self._lock:
-            return self.cancel_all_sync()
+            root_ids = list(self._repository.tree_ids())
 
-    def cancel_all_sync(self) -> list[MessageNode]:
-        """
-        Cancel all messages in all trees (synchronous/locked version).
-        NOTE: Must be called with self._lock held.
-        """
-        all_cancelled = []
-        for root_id in list(self._repository.tree_ids()):
-            all_cancelled.extend(self.cancel_tree(root_id))
+        all_cancelled: list[MessageNode] = []
+        for root_id in root_ids:
+            all_cancelled.extend(await self.cancel_tree(root_id))
         return all_cancelled
 
     def cleanup_stale_nodes(self) -> int:
@@ -388,15 +381,11 @@ class TreeQueueManager:
 
                 if tree.is_current_node(nid):
                     self._processor.cancel_current(tree)
-                    node.state = MessageState.ERROR
-                    node.error_message = "Cancelled by user"
-                    node.completed_at = datetime.now(UTC)
+                    tree.set_node_error_sync(node, "Cancelled by user")
                     cancelled.append(node)
                 else:
                     tree.remove_from_queue(nid)
-                    node.state = MessageState.ERROR
-                    node.error_message = "Cancelled by user"
-                    node.completed_at = datetime.now(UTC)
+                    tree.set_node_error_sync(node, "Cancelled by user")
                     cancelled.append(node)
 
         if cancelled:
@@ -421,7 +410,7 @@ class TreeQueueManager:
         root_id = tree.root_id
 
         if branch_root_id == root_id:
-            cancelled = self.cancel_tree(root_id)
+            cancelled = await self.cancel_tree(root_id)
             removed_tree = self._repository.remove_tree(root_id)
             if removed_tree:
                 return (removed_tree.all_nodes(), root_id, True)

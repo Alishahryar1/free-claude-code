@@ -220,14 +220,15 @@ async def test_handle_message_reply_with_tree_but_no_parent_treated_as_new():
     handler = ClaudeMessageHandler(platform, cli_manager, session_store)
 
     # Force "tree exists but parent can't be resolved" branch.
-    handler.tree_queue = MagicMock()
-    handler.tree_queue.get_tree_for_node.return_value = object()
-    handler.tree_queue.resolve_parent_node_id.return_value = None
-    handler.tree_queue.create_tree = AsyncMock(
+    mock_queue = MagicMock()
+    mock_queue.get_tree_for_node.return_value = object()
+    mock_queue.resolve_parent_node_id.return_value = None
+    mock_queue.create_tree = AsyncMock(
         return_value=MagicMock(root_id="root", to_dict=MagicMock(return_value={"t": 1}))
     )
-    handler.tree_queue.register_node = MagicMock()
-    handler.tree_queue.enqueue = AsyncMock(return_value=False)
+    mock_queue.register_node = MagicMock()
+    mock_queue.enqueue = AsyncMock(return_value=False)
+    handler.replace_tree_queue(mock_queue)
 
     incoming = IncomingMessage(
         text="reply",
@@ -239,7 +240,7 @@ async def test_handle_message_reply_with_tree_but_no_parent_treated_as_new():
     )
 
     await handler.handle_message(incoming)
-    handler.tree_queue.create_tree.assert_awaited_once()
+    mock_queue.create_tree.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -271,8 +272,9 @@ async def test_update_ui_handles_transcript_render_exception():
     cli_manager.get_stats.return_value = {"active_sessions": 0}
 
     handler = ClaudeMessageHandler(platform, cli_manager, session_store)
-    handler.tree_queue = MagicMock()
-    handler.tree_queue.get_tree_for_node.return_value = None
+    mock_queue = MagicMock()
+    mock_queue.get_tree_for_node.return_value = None
+    handler.replace_tree_queue(mock_queue)
 
     incoming = IncomingMessage(
         text="hi",
@@ -306,14 +308,15 @@ async def test_handle_message_incoming_text_none_safe():
 
     session_store = MagicMock()
     handler = ClaudeMessageHandler(platform, cli_manager, session_store)
-    handler.tree_queue = MagicMock()
-    handler.tree_queue.get_tree_for_node.return_value = None
-    handler.tree_queue.resolve_parent_node_id.return_value = None
-    handler.tree_queue.create_tree = AsyncMock(
+    mock_queue = MagicMock()
+    mock_queue.get_tree_for_node.return_value = None
+    mock_queue.resolve_parent_node_id.return_value = None
+    mock_queue.create_tree = AsyncMock(
         return_value=MagicMock(root_id="root", to_dict=MagicMock(return_value={"t": 1}))
     )
-    handler.tree_queue.register_node = MagicMock()
-    handler.tree_queue.enqueue = AsyncMock(return_value=True)
+    mock_queue.register_node = MagicMock()
+    mock_queue.enqueue = AsyncMock(return_value=True)
+    handler.replace_tree_queue(mock_queue)
 
     incoming = MagicMock()
     incoming.text = None
@@ -325,7 +328,7 @@ async def test_handle_message_incoming_text_none_safe():
     incoming.is_reply = MagicMock(return_value=False)
 
     await handler.handle_message(incoming)
-    handler.tree_queue.create_tree.assert_awaited_once()
+    mock_queue.create_tree.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -390,8 +393,9 @@ async def test_handler_update_ui_edit_failure_does_not_crash():
 
     session_store = MagicMock()
     handler = ClaudeMessageHandler(platform, cli_manager, session_store)
-    handler.tree_queue = MagicMock()
-    handler.tree_queue.get_tree_for_node.return_value = None
+    mock_queue = MagicMock()
+    mock_queue.get_tree_for_node.return_value = None
+    handler.replace_tree_queue(mock_queue)
 
     incoming = IncomingMessage(
         text="hi",

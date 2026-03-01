@@ -66,12 +66,12 @@ if DISCORD_AVAILABLE and _discord_module is not None:
 
         async def on_ready(self) -> None:
             """Called when the bot is ready."""
-            self._platform._connected = True
+            self._platform._set_connected(True)
             logger.info("Discord platform connected")
 
         async def on_message(self, message: Any) -> None:
             """Handle incoming Discord messages."""
-            await self._platform._on_discord_message(message)
+            await self._platform._handle_client_message(message)
 else:
     _DiscordClient = None
 
@@ -117,6 +117,14 @@ class DiscordPlatform(MessagingPlatform):
         self._start_task: asyncio.Task | None = None
         self._pending_voice: dict[tuple[str, str], tuple[str, str]] = {}
         self._pending_voice_lock = asyncio.Lock()
+
+    def _set_connected(self, connected: bool) -> None:
+        """Update connection state via an explicit accessor."""
+        self._connected = connected
+
+    async def _handle_client_message(self, message: Any) -> None:
+        """Adapter entry point used by the internal discord client."""
+        await self._on_discord_message(message)
 
     async def _register_pending_voice(
         self, chat_id: str, voice_msg_id: str, status_msg_id: str
@@ -359,7 +367,7 @@ class DiscordPlatform(MessagingPlatform):
     async def stop(self) -> None:
         """Stop the bot."""
         if self._client.is_closed():
-            self._connected = False
+            self._set_connected(False)
             return
 
         await self._client.close()
@@ -371,7 +379,7 @@ class DiscordPlatform(MessagingPlatform):
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._start_task
 
-        self._connected = False
+        self._set_connected(False)
         logger.info("Discord platform stopped")
 
     async def send_message(

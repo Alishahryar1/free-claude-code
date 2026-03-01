@@ -308,7 +308,7 @@ async def test_stop_all_tasks(handler, mock_cli_manager, mock_platform):
     mock_node.status_message_id = "status_1"
 
     with patch.object(
-        handler.tree_queue, "cancel_all_sync", MagicMock(return_value=[mock_node])
+        handler.tree_queue, "cancel_all", AsyncMock(return_value=[mock_node])
     ):
         count = await handler.stop_all_tasks()
 

@@ -109,13 +109,15 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Restoring {len(saved_trees)} conversation trees...")
                 from messaging.trees.queue_manager import TreeQueueManager
 
-                message_handler.tree_queue = TreeQueueManager.from_dict(
-                    {
-                        "trees": saved_trees,
-                        "node_to_tree": session_store.get_node_mapping(),
-                    },
-                    queue_update_callback=message_handler.update_queue_positions,
-                    node_started_callback=message_handler.mark_node_processing,
+                message_handler.replace_tree_queue(
+                    TreeQueueManager.from_dict(
+                        {
+                            "trees": saved_trees,
+                            "node_to_tree": session_store.get_node_mapping(),
+                        },
+                        queue_update_callback=message_handler.update_queue_positions,
+                        node_started_callback=message_handler.mark_node_processing,
+                    )
                 )
                 # Reconcile restored state - anything PENDING/IN_PROGRESS is lost across restart
                 if message_handler.tree_queue.cleanup_stale_nodes() > 0:

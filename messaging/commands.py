@@ -275,7 +275,9 @@ async def handle_clear_command(
     except Exception as e:
         logger.warning(f"Failed to clear session store: {e}")
 
-    handler.tree_queue = TreeQueueManager(
-        queue_update_callback=handler.update_queue_positions,
-        node_started_callback=handler.mark_node_processing,
+    handler.replace_tree_queue(
+        TreeQueueManager(
+            queue_update_callback=handler.update_queue_positions,
+            node_started_callback=handler.mark_node_processing,
+        )
     )

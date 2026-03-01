@@ -514,7 +514,7 @@ class TestTreeQueueManager:
         await manager.enqueue("m1", slow_processor)
 
         # Cancel
-        cancelled = manager.cancel_tree("m1")
+        cancelled = await manager.cancel_tree("m1")
         assert len(cancelled) == 1
 
         processing_complete.set()

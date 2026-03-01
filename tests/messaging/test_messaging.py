@@ -187,10 +187,11 @@ class TestTreeQueueManager:
         # First message should process immediately, not queue
         assert was_queued is False
 
-    def test_cancel_tree_empty(self):
+    @pytest.mark.asyncio
+    async def test_cancel_tree_empty(self):
         """Test cancelling non-existent tree."""
         from messaging.trees.queue_manager import TreeQueueManager
 
         mgr = TreeQueueManager()
-        cancelled = mgr.cancel_tree("nonexistent")
+        cancelled = await mgr.cancel_tree("nonexistent")
         assert cancelled == []

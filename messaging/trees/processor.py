@@ -90,7 +90,8 @@ class TreeQueueProcessor:
                 error_message=get_user_facing_error_message(e),
             )
         finally:
-            tree.clear_current_node()
+            async with tree.with_lock():
+                tree.clear_current_node()
             # Check if there are more messages in the queue
             await self._process_next(tree, processor)
 

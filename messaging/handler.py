@@ -120,7 +120,7 @@ class ClaudeMessageHandler:
         self.platform = platform
         self.cli_manager = cli_manager
         self.session_store = session_store
-        self.tree_queue = TreeQueueManager(
+        self._tree_queue = TreeQueueManager(
             queue_update_callback=self.update_queue_positions,
             node_started_callback=self.mark_node_processing,
         )
@@ -151,6 +151,22 @@ class ClaudeMessageHandler:
 
     def _get_limit_chars(self) -> int:
         return self._limit_chars
+
+    @property
+    def tree_queue(self) -> TreeQueueManager:
+        """Accessor for the current tree queue manager."""
+        return self._tree_queue
+
+    @tree_queue.setter
+    def tree_queue(self, tree_queue: TreeQueueManager) -> None:
+        """Backward-compatible setter routed through explicit replacement API."""
+        self.replace_tree_queue(tree_queue)
+
+    def replace_tree_queue(self, tree_queue: TreeQueueManager) -> None:
+        """Replace tree queue manager via explicit API."""
+        self._tree_queue = tree_queue
+        self._tree_queue.set_queue_update_callback(self.update_queue_positions)
+        self._tree_queue.set_node_started_callback(self.mark_node_processing)
 
     async def handle_message(self, incoming: IncomingMessage) -> None:
         """
