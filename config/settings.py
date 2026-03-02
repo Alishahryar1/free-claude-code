@@ -9,8 +9,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .nim import NimSettings
 
 load_dotenv()
-
-
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
@@ -33,9 +31,15 @@ class Settings(BaseSettings):
     )
 
     # ==================== Model ====================
-    # All Claude model requests are mapped to this single model
+    # All Claude model requests are mapped to this single model (fallback)
     # Format: provider_type/model/name
     model: str = "nvidia_nim/meta/llama3-70b-instruct"
+
+    # Per-tier model overrides (optional, falls back to MODEL)
+    # Each can use a different provider
+    model_opus: str | None = Field(default=None, validation_alias="MODEL_OPUS")
+    model_sonnet: str | None = Field(default=None, validation_alias="MODEL_SONNET")
+    model_haiku: str | None = Field(default=None, validation_alias="MODEL_HAIKU")
 
     # ==================== Provider Rate Limiting ====================
     provider_rate_limit: int = Field(default=40, validation_alias="PROVIDER_RATE_LIMIT")
@@ -124,9 +128,11 @@ class Settings(BaseSettings):
             )
         return v
 
-    @field_validator("model")
+    @field_validator("model", "model_opus", "model_sonnet", "model_haiku")
     @classmethod
-    def validate_model_format(cls, v: str) -> str:
+    def validate_model_format(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
         valid_providers = ("nvidia_nim", "open_router", "lmstudio")
         if "/" not in v:
             raise ValueError(
@@ -157,21 +163,44 @@ class Settings(BaseSettings):
 
     @property
     def provider_type(self) -> str:
-        """Extract provider type from the model string."""
+        """Extract provider type from the default model string."""
         return self.model.split("/", 1)[0]
 
     @property
     def model_name(self) -> str:
-        """Extract the actual model name from the model string."""
+        """Extract the actual model name from the default model string."""
         return self.model.split("/", 1)[1]
+
+    def resolve_model(self, claude_model_name: str) -> str:
+        """Resolve a Claude model name to the configured provider/model string.
+
+        Classifies the incoming model into a tier (opus/sonnet/haiku) and
+        returns the tier-specific model if configured, otherwise the fallback MODEL.
+        """
+        name_lower = claude_model_name.lower()
+        if "opus" in name_lower and self.model_opus is not None:
+            return self.model_opus
+        if "haiku" in name_lower and self.model_haiku is not None:
+            return self.model_haiku
+        if "sonnet" in name_lower and self.model_sonnet is not None:
+            return self.model_sonnet
+        return self.model
+
+    @staticmethod
+    def parse_provider_type(model_string: str) -> str:
+        """Extract provider type from any 'provider/model' string."""
+        return model_string.split("/", 1)[0]
+
+    @staticmethod
+    def parse_model_name(model_string: str) -> str:
+        """Extract model name from any 'provider/model' string."""
+        return model_string.split("/", 1)[1]
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
-
 @lru_cache
 def get_settings() -> Settings:
     """Get cached settings instance."""

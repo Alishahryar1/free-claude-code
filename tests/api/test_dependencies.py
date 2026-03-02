@@ -3,7 +3,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from api.dependencies import cleanup_provider, get_provider, get_settings
+from api.dependencies import (
+    cleanup_provider,
+    get_provider,
+    get_provider_for_type,
+    get_settings,
+)
 from config.nim import NimSettings
 from providers.lmstudio import LMStudioProvider
 from providers.nvidia_nim import NvidiaNimProvider
@@ -32,9 +37,13 @@ def _make_mock_settings(**overrides):
 
 @pytest.fixture(autouse=True)
 def reset_provider():
-    """Reset the global _provider singleton between tests."""
-    with patch("api.dependencies._provider", None):
-        yield
+    """Reset the global _providers registry between tests."""
+    import api.dependencies
+
+    saved = api.dependencies._providers
+    api.dependencies._providers = {}
+    yield
+    api.dependencies._providers = saved
 
 
 @pytest.mark.asyncio
@@ -213,6 +222,67 @@ async def test_cleanup_provider_aclose_raises():
         provider._client = AsyncMock()
         provider._client.aclose = AsyncMock(side_effect=RuntimeError("cleanup failed"))
 
-        # Should propagate the error (current behavior - no try/except)
+        # Should propagate the error
         with pytest.raises(RuntimeError, match="cleanup failed"):
             await cleanup_provider()
+
+
+# --- Provider Registry Tests ---
+
+
+@pytest.mark.asyncio
+async def test_get_provider_for_type_caches():
+    """get_provider_for_type returns cached provider on second call."""
+    with patch("api.dependencies.get_settings") as mock_settings:
+        mock_settings.return_value = _make_mock_settings()
+
+        p1 = get_provider_for_type("nvidia_nim")
+        p2 = get_provider_for_type("nvidia_nim")
+
+        assert p1 is p2
+        assert isinstance(p1, NvidiaNimProvider)
+
+
+@pytest.mark.asyncio
+async def test_get_provider_for_type_different_types():
+    """get_provider_for_type creates separate providers per type."""
+    with patch("api.dependencies.get_settings") as mock_settings:
+        mock_settings.return_value = _make_mock_settings()
+
+        nim = get_provider_for_type("nvidia_nim")
+        lmstudio = get_provider_for_type("lmstudio")
+
+        assert isinstance(nim, NvidiaNimProvider)
+        assert isinstance(lmstudio, LMStudioProvider)
+        assert nim is not lmstudio
+
+
+@pytest.mark.asyncio
+async def test_get_provider_for_type_missing_key_raises_503():
+    """get_provider_for_type raises HTTPException 503 for missing API key."""
+    with patch("api.dependencies.get_settings") as mock_settings:
+        mock_settings.return_value = _make_mock_settings(open_router_api_key="")
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_provider_for_type("open_router")
+
+        assert exc_info.value.status_code == 503
+        assert "OPENROUTER_API_KEY" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_cleanup_provider_cleans_all():
+    """cleanup_provider cleans up all providers in the registry."""
+    with patch("api.dependencies.get_settings") as mock_settings:
+        mock_settings.return_value = _make_mock_settings()
+
+        nim = get_provider_for_type("nvidia_nim")
+        lmstudio = get_provider_for_type("lmstudio")
+
+        nim._client = AsyncMock()
+        lmstudio._client = AsyncMock()
+
+        await cleanup_provider()
+
+        nim._client.aclose.assert_called_once()
+        lmstudio._client.aclose.assert_called_once()

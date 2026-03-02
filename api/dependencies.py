@@ -12,18 +12,14 @@ from providers.lmstudio import LMStudioProvider
 from providers.nvidia_nim import NVIDIA_NIM_BASE_URL, NvidiaNimProvider
 from providers.open_router import OPENROUTER_BASE_URL, OpenRouterProvider
 
-# Global provider instance (singleton)
-_provider: BaseProvider | None = None
-
-
+# Provider registry: keyed by provider type string, lazily populated
+_providers: dict[str, BaseProvider] = {}
 def get_settings() -> Settings:
     """Get application settings via dependency injection."""
     return _get_settings()
-
-
-def _create_provider(settings: Settings) -> BaseProvider:
-    """Construct and return a new provider instance from settings."""
-    if settings.provider_type == "nvidia_nim":
+def _create_provider_for_type(provider_type: str, settings: Settings) -> BaseProvider:
+    """Construct and return a new provider instance for the given provider type."""
+    if provider_type == "nvidia_nim":
         if not settings.nvidia_nim_api_key or not settings.nvidia_nim_api_key.strip():
             raise AuthenticationError(
                 "NVIDIA_NIM_API_KEY is not set. Add it to your .env file. "
@@ -39,8 +35,8 @@ def _create_provider(settings: Settings) -> BaseProvider:
             http_write_timeout=settings.http_write_timeout,
             http_connect_timeout=settings.http_connect_timeout,
         )
-        provider = NvidiaNimProvider(config, nim_settings=settings.nim)
-    elif settings.provider_type == "open_router":
+        return NvidiaNimProvider(config, nim_settings=settings.nim)
+    if provider_type == "open_router":
         if not settings.open_router_api_key or not settings.open_router_api_key.strip():
             raise AuthenticationError(
                 "OPENROUTER_API_KEY is not set. Add it to your .env file. "
@@ -56,8 +52,8 @@ def _create_provider(settings: Settings) -> BaseProvider:
             http_write_timeout=settings.http_write_timeout,
             http_connect_timeout=settings.http_connect_timeout,
         )
-        provider = OpenRouterProvider(config)
-    elif settings.provider_type == "lmstudio":
+        return OpenRouterProvider(config)
+    if provider_type == "lmstudio":
         config = ProviderConfig(
             api_key="lm-studio",
             base_url=settings.lm_studio_base_url,
@@ -68,37 +64,41 @@ def _create_provider(settings: Settings) -> BaseProvider:
             http_write_timeout=settings.http_write_timeout,
             http_connect_timeout=settings.http_connect_timeout,
         )
-        provider = LMStudioProvider(config)
-    else:
-        logger.error(
-            "Unknown provider_type: '{}'. Supported: 'nvidia_nim', 'open_router', 'lmstudio'",
-            settings.provider_type,
-        )
-        raise ValueError(
-            f"Unknown provider_type: '{settings.provider_type}'. "
-            f"Supported: 'nvidia_nim', 'open_router', 'lmstudio'"
-        )
-    logger.info("Provider initialized: {}", settings.provider_type)
-    return provider
+        return LMStudioProvider(config)
+    logger.error(
+        "Unknown provider_type: '{}'. Supported: 'nvidia_nim', 'open_router', 'lmstudio'",
+        provider_type,
+    )
+    raise ValueError(
+        f"Unknown provider_type: '{provider_type}'. "
+        f"Supported: 'nvidia_nim', 'open_router', 'lmstudio'"
+    )
+def get_provider_for_type(provider_type: str) -> BaseProvider:
+    """Get or create a provider for the given provider type.
 
-
-def get_provider() -> BaseProvider:
-    """Get or create the provider instance based on settings.provider_type."""
-    global _provider
-    if _provider is None:
+    Providers are cached in the registry and reused across requests.
+    """
+    if provider_type not in _providers:
         try:
-            _provider = _create_provider(get_settings())
+            _providers[provider_type] = _create_provider_for_type(
+                provider_type, get_settings()
+            )
         except AuthenticationError as e:
             raise HTTPException(
                 status_code=503, detail=get_user_facing_error_message(e)
             ) from e
-    return _provider
+        logger.info("Provider initialized: {}", provider_type)
+    return _providers[provider_type]
+def get_provider() -> BaseProvider:
+    """Get or create the default provider (based on MODEL env var).
 
-
+    Backward-compatible convenience for health/root endpoints and tests.
+    """
+    return get_provider_for_type(get_settings().provider_type)
 async def cleanup_provider():
-    """Cleanup provider resources."""
-    global _provider
-    if _provider:
-        await _provider.cleanup()
-    _provider = None
+    """Cleanup all provider resources."""
+    global _providers
+    for provider in _providers.values():
+        await provider.cleanup()
+    _providers = {}
     logger.debug("Provider cleanup completed")

@@ -4,8 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from config.nim import NimSettings
-
-
 class TestSettings:
     """Test Settings configuration."""
 
@@ -103,11 +101,7 @@ class TestSettings:
         monkeypatch.setenv("HTTP_CONNECT_TIMEOUT", "5")
         settings = Settings()
         assert settings.http_connect_timeout == 5.0
-
-
 # --- NimSettings Validation Tests ---
-
-
 class TestNimSettingsValidBounds:
     """Test that valid values within bounds are accepted."""
 
@@ -154,8 +148,6 @@ class TestNimSettingsValidBounds:
     def test_min_p_valid(self, min_p):
         s = NimSettings(min_p=min_p)
         assert s.min_p == min_p
-
-
 class TestNimSettingsInvalidBounds:
     """Test that out-of-range values raise ValidationError."""
 
@@ -202,8 +194,6 @@ class TestNimSettingsInvalidBounds:
 
         with pytest.raises(ValidationError):
             NimSettings(reasoning_effort=cast(Any, "invalid"))
-
-
 class TestNimSettingsValidators:
     """Test custom field validators in NimSettings."""
 
@@ -240,8 +230,6 @@ class TestNimSettingsValidators:
 
         with pytest.raises(ValidationError):
             NimSettings(**cast(Any, {"unknown_field": "value"}))
-
-
 class TestSettingsOptionalStr:
     """Test Settings parse_optional_str validator."""
 
@@ -310,3 +298,149 @@ class TestSettingsOptionalStr:
         monkeypatch.setenv("WHISPER_DEVICE", device)
         s = Settings()
         assert s.whisper_device == device
+class TestPerTierModelMapping:
+    """Test per-tier model fields and resolve_model()."""
+
+    def test_tier_fields_default_none(self):
+        """Per-tier model fields default to None."""
+        from config.settings import Settings
+
+        s = Settings()
+        assert s.model_opus is None
+        assert s.model_sonnet is None
+        assert s.model_haiku is None
+
+    def test_model_opus_from_env(self, monkeypatch):
+        """MODEL_OPUS env var is loaded."""
+        from config.settings import Settings
+
+        monkeypatch.setenv("MODEL_OPUS", "open_router/deepseek/deepseek-r1")
+        s = Settings()
+        assert s.model_opus == "open_router/deepseek/deepseek-r1"
+
+    def test_model_sonnet_from_env(self, monkeypatch):
+        """MODEL_SONNET env var is loaded."""
+        from config.settings import Settings
+
+        monkeypatch.setenv("MODEL_SONNET", "nvidia_nim/meta/llama-3.3-70b-instruct")
+        s = Settings()
+        assert s.model_sonnet == "nvidia_nim/meta/llama-3.3-70b-instruct"
+
+    def test_model_haiku_from_env(self, monkeypatch):
+        """MODEL_HAIKU env var is loaded."""
+        from config.settings import Settings
+
+        monkeypatch.setenv("MODEL_HAIKU", "lmstudio/qwen2.5-7b")
+        s = Settings()
+        assert s.model_haiku == "lmstudio/qwen2.5-7b"
+
+    def test_model_opus_invalid_provider_raises(self, monkeypatch):
+        """MODEL_OPUS with invalid provider prefix raises ValidationError."""
+        from config.settings import Settings
+
+        monkeypatch.setenv("MODEL_OPUS", "bad_provider/some-model")
+        with pytest.raises(ValidationError, match="Invalid provider"):
+            Settings()
+
+    def test_model_opus_no_slash_raises(self, monkeypatch):
+        """MODEL_OPUS without provider prefix raises ValidationError."""
+        from config.settings import Settings
+
+        monkeypatch.setenv("MODEL_OPUS", "noprefix")
+        with pytest.raises(ValidationError, match="provider type"):
+            Settings()
+
+    def test_model_haiku_invalid_provider_raises(self, monkeypatch):
+        """MODEL_HAIKU with invalid provider prefix raises ValidationError."""
+        from config.settings import Settings
+
+        monkeypatch.setenv("MODEL_HAIKU", "invalid/model")
+        with pytest.raises(ValidationError, match="Invalid provider"):
+            Settings()
+
+    def test_resolve_model_opus_override(self):
+        """resolve_model returns model_opus for opus model names."""
+        from config.settings import Settings
+
+        s = Settings()
+        s.model_opus = "open_router/deepseek/deepseek-r1"
+        assert (
+            s.resolve_model("claude-opus-4-20250514")
+            == "open_router/deepseek/deepseek-r1"
+        )
+        assert s.resolve_model("claude-3-opus") == "open_router/deepseek/deepseek-r1"
+        assert (
+            s.resolve_model("claude-3-opus-20240229")
+            == "open_router/deepseek/deepseek-r1"
+        )
+
+    def test_resolve_model_sonnet_override(self):
+        """resolve_model returns model_sonnet for sonnet model names."""
+        from config.settings import Settings
+
+        s = Settings()
+        s.model_sonnet = "nvidia_nim/meta/llama-3.3-70b-instruct"
+        assert (
+            s.resolve_model("claude-sonnet-4-20250514")
+            == "nvidia_nim/meta/llama-3.3-70b-instruct"
+        )
+        assert (
+            s.resolve_model("claude-3-5-sonnet-20241022")
+            == "nvidia_nim/meta/llama-3.3-70b-instruct"
+        )
+
+    def test_resolve_model_haiku_override(self):
+        """resolve_model returns model_haiku for haiku model names."""
+        from config.settings import Settings
+
+        s = Settings()
+        s.model_haiku = "lmstudio/qwen2.5-7b"
+        assert s.resolve_model("claude-3-haiku-20240307") == "lmstudio/qwen2.5-7b"
+        assert s.resolve_model("claude-3-5-haiku-20241022") == "lmstudio/qwen2.5-7b"
+        assert s.resolve_model("claude-haiku-4-20250514") == "lmstudio/qwen2.5-7b"
+
+    def test_resolve_model_fallback_when_tier_not_set(self):
+        """resolve_model falls back to MODEL when tier override is None."""
+        from config.settings import Settings
+
+        s = Settings()
+        s.model = "nvidia_nim/fallback-model"
+        # No tier overrides set
+        assert s.resolve_model("claude-opus-4-20250514") == "nvidia_nim/fallback-model"
+        assert (
+            s.resolve_model("claude-sonnet-4-20250514") == "nvidia_nim/fallback-model"
+        )
+        assert s.resolve_model("claude-3-haiku-20240307") == "nvidia_nim/fallback-model"
+
+    def test_resolve_model_unknown_tier_falls_back(self):
+        """resolve_model falls back to MODEL for unrecognized model names."""
+        from config.settings import Settings
+
+        s = Settings()
+        s.model = "nvidia_nim/fallback-model"
+        s.model_opus = "open_router/opus-model"
+        assert s.resolve_model("claude-2.1") == "nvidia_nim/fallback-model"
+        assert s.resolve_model("some-unknown-model") == "nvidia_nim/fallback-model"
+
+    def test_resolve_model_case_insensitive(self):
+        """Tier classification is case-insensitive."""
+        from config.settings import Settings
+
+        s = Settings()
+        s.model_opus = "open_router/opus-model"
+        assert s.resolve_model("Claude-OPUS-4") == "open_router/opus-model"
+
+    def test_parse_provider_type(self):
+        """parse_provider_type extracts provider from model string."""
+        from config.settings import Settings
+
+        assert Settings.parse_provider_type("nvidia_nim/meta/llama") == "nvidia_nim"
+        assert Settings.parse_provider_type("open_router/deepseek/r1") == "open_router"
+        assert Settings.parse_provider_type("lmstudio/qwen") == "lmstudio"
+
+    def test_parse_model_name(self):
+        """parse_model_name extracts model name from model string."""
+        from config.settings import Settings
+
+        assert Settings.parse_model_name("nvidia_nim/meta/llama") == "meta/llama"
+        assert Settings.parse_model_name("lmstudio/qwen") == "qwen"
