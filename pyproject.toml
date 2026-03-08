@@ -63,6 +63,7 @@ dev = [
 [tool.ruff]
 target-version = "py314"
 line-length = 88
+exclude = ["Dockerfile"]
 
 [tool.ruff.lint]
 select = [
