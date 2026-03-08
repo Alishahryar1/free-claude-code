@@ -160,5 +160,16 @@ if [[ -z "${model:-}" ]]; then
     exit 1
 fi
 
+# Read auth token from .env or environment
+auth_token="${ANTHROPIC_AUTH_TOKEN:-$(read_env_value ANTHROPIC_AUTH_TOKEN)}"
+if [[ -z "$auth_token" ]]; then
+    auth_token="freecc"
+fi
+
+# If auth_token doesn't contain a colon, append ":$model"
+if [[ "$auth_token" != *:* ]]; then
+    auth_token="$auth_token:$model"
+fi
+
 echo "Launching Claude with provider: $provider, model: $model" >&2
-ANTHROPIC_AUTH_TOKEN="freecc:$model" ANTHROPIC_BASE_URL="$BASE_URL" exec claude "$@"
+ANTHROPIC_AUTH_TOKEN="$auth_token" ANTHROPIC_BASE_URL="$BASE_URL" exec claude "$@"

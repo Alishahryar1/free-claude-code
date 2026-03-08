@@ -1,6 +1,6 @@
 """Dependency injection for FastAPI."""
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException, Request
 from loguru import logger
 
 from config.settings import Settings
@@ -112,3 +112,81 @@ async def cleanup_provider():
         await provider.cleanup()
     _providers = {}
     logger.debug("Provider cleanup completed")
+
+
+async def verify_auth_token(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    """Verify ANTHROPIC_AUTH_TOKEN from request headers if configured.
+
+    - If settings.anthropic_auth_token is empty, authentication is disabled (backward compatible)
+    - If configured, clients must provide matching ANTHROPIC_AUTH_TOKEN header
+    """
+    if not settings.anthropic_auth_token:
+        # Auth not configured, allow all requests
+        return
+
+    # Get token from headers - support both anthropic-auth-token and authorization (Bearer) formats
+    auth_header = request.headers.get("anthropic-auth-token")
+    auth_bearer = request.headers.get("authorization")
+
+    # Extract token from Bearer format if present
+    token_from_bearer = None
+    if auth_bearer and auth_bearer.lower().startswith("bearer "):
+        token_from_bearer = auth_bearer[7:]  # Remove "Bearer " prefix
+
+    # Use the token from either header
+    received_token = auth_header or token_from_bearer
+
+    # Debug logging: show configured token and received token (masked for security)
+    configured_token_masked = settings.anthropic_auth_token[:4] + "..." + settings.anthropic_auth_token[-4:] if len(settings.anthropic_auth_token) > 8 else "***"
+    received_masked = "<missing>"
+    if received_token:
+        received_masked = received_token[:4] + "..." + received_token[-4:] if len(received_token) > 8 else "***"
+
+    logger.debug(
+        "Auth check - Configured token: {}, Received token: {}, Source header: {}",
+        configured_token_masked,
+        received_masked,
+        "anthropic-auth-token" if auth_header else ("authorization" if token_from_bearer else "none")
+    )
+
+    if not received_token:
+        # Dump all request headers for debugging
+        logger.warning("Missing ANTHROPIC_AUTH_TOKEN. Expected: {}", configured_token_masked)
+        logger.warning("=== FULL REQUEST HEADERS DUMP ===")
+        for header_name, header_value in request.headers.items():
+            logger.warning("Header: {} = {}", header_name, header_value)
+        logger.warning("=== END HEADERS DUMP ===")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "type": "error",
+                "error": {
+                    "type": "authentication_error",
+                    "message": "Missing ANTHROPIC_AUTH_TOKEN header"
+                }
+            }
+        )
+
+    if received_token != settings.anthropic_auth_token:
+        logger.warning(
+            "ANTHROPIC_AUTH_TOKEN mismatch. Expected: {}, Got: {}",
+            configured_token_masked,
+            received_masked
+        )
+        # Dump all request headers for debugging
+        logger.warning("=== FULL REQUEST HEADERS DUMP ===")
+        for header_name, header_value in request.headers.items():
+            logger.warning("Header: {} = {}", header_name, header_value)
+        logger.warning("=== END HEADERS DUMP ===")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "type": "error",
+                "error": {
+                    "type": "authentication_error",
+                    "message": "Invalid ANTHROPIC_AUTH_TOKEN"
+                }
+            }
+        )
+
+    logger.debug("ANTHROPIC_AUTH_TOKEN authentication successful")

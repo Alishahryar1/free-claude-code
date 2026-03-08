@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # ==================== OpenRouter Config ====================
     open_router_api_key: str = Field(default="", validation_alias="OPENROUTER_API_KEY")
 
+    # ==================== Server Authentication ====================
+    # Authentication token for Claude Code Proxy (Optional)
+    # Leave empty to disable authentication. If set, clients must provide
+    # ANTHROPIC_AUTH_TOKEN header matching this value.
+    anthropic_auth_token: str = Field(default="", validation_alias="ANTHROPIC_AUTH_TOKEN")
+
     # ==================== Messaging Platform Selection ====================
     # Valid: "telegram" | "discord"
     messaging_platform: str = Field(
