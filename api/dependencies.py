@@ -1,6 +1,6 @@
 """Dependency injection for FastAPI."""
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException, Request
 from loguru import logger
 
 from config.settings import Settings
@@ -108,6 +108,40 @@ def get_provider_for_type(provider_type: str) -> BaseProvider:
             ) from e
         logger.info("Provider initialized: {}", provider_type)
     return _providers[provider_type]
+
+
+def require_api_key(
+    request: Request, settings: Settings = Depends(get_settings)
+) -> None:
+    """Require a server API key (Anthropic-style).
+
+    Checks `x-api-key` header or `Authorization: Bearer ...` against
+    `Settings.anthropic_auth_token`. If `ANTHROPIC_AUTH_TOKEN` is empty, this is a no-op.
+    """
+    anthropic_auth_token = settings.anthropic_auth_token
+    if not anthropic_auth_token:
+        # No API key configured -> allow
+        return
+
+    header = (
+        request.headers.get("x-api-key")
+        or request.headers.get("authorization")
+        or request.headers.get("anthropic-auth-token")
+    )
+    if not header:
+        raise HTTPException(status_code=401, detail="Missing API key")
+
+    # Support both raw key in X-API-Key and Bearer token in Authorization
+    token = header
+    if header.lower().startswith("bearer "):
+        token = header.split(" ", 1)[1]
+
+    # Strip anything after the first colon to handle tokens with appended model names
+    if token and ":" in token:
+        token = token.split(":", 1)[0]
+
+    if token != anthropic_auth_token:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 def get_provider() -> BaseProvider:

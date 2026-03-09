@@ -134,6 +134,37 @@ MODEL="nvidia_nim/z-ai/glm4.7"                      # fallback
 
 </details>
 
+<details>
+<summary><b>Optional Authentication</b> (restrict access to your proxy)</summary>
+
+Set `ANTHROPIC_AUTH_TOKEN` in `.env` to require clients to authenticate:
+
+```dotenv
+ANTHROPIC_AUTH_TOKEN="your-secret-token-here"
+```
+
+**How it works:**
+- If `ANTHROPIC_AUTH_TOKEN` is empty (default), no authentication is required (backward compatible)
+- If set, clients must provide the same token via the `ANTHROPIC_AUTH_TOKEN` header
+- The `claude-pick` script automatically reads the token from `.env` if configured
+
+**Example usage:**
+```bash
+# With authentication
+ANTHROPIC_AUTH_TOKEN="your-secret-token-here" \
+ANTHROPIC_BASE_URL="http://localhost:8082" claude
+
+# claude-pick automatically uses the configured token
+claude-pick
+```
+
+Use this feature if:
+- Running the proxy on a public network
+- Sharing the server with others but restricting access
+- Wanting an additional layer of security
+
+</details>
+
 ### Run It
 
 **Terminal 1:** Start the proxy server:

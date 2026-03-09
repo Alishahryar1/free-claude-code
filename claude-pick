@@ -142,7 +142,7 @@ case "$provider" in
         prompt="Select an LM Studio model> "
         ;;
     llamacpp|llama.cpp)
-        # llama.cpp doesn't have a standardized /models endpoint that returns all loaded models reliably 
+        # llama.cpp doesn't have a standardized /models endpoint that returns all loaded models reliably
         # in the same way, but it does support Anthropic routing. We can use a stub model or query if available.
         # For simple picker, we'll just allow passing a default or typing it in, but to match fzf we offer a stub.
         models="local-model\nllama-server"
@@ -168,5 +168,16 @@ if [[ -z "${model:-}" ]]; then
     exit 1
 fi
 
+# Read auth token from .env or environment
+auth_token="${ANTHROPIC_AUTH_TOKEN:-$(read_env_value ANTHROPIC_AUTH_TOKEN)}"
+if [[ -z "$auth_token" ]]; then
+    auth_token="freecc"
+fi
+
+# If auth_token doesn't contain a colon, append ":$model"
+if [[ "$auth_token" != *:* ]]; then
+    auth_token="$auth_token:$model"
+fi
+
 echo "Launching Claude with provider: $provider, model: $model" >&2
-ANTHROPIC_AUTH_TOKEN="freecc:$model" ANTHROPIC_BASE_URL="$BASE_URL" exec claude "$@"
+ANTHROPIC_AUTH_TOKEN="$auth_token" ANTHROPIC_BASE_URL="$BASE_URL" exec claude "$@"
