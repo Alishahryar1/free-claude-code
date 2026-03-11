@@ -9,6 +9,9 @@ import pytest
 os.environ.setdefault("NVIDIA_NIM_API_KEY", "test_key")
 os.environ.setdefault("MODEL", "nvidia_nim/test-model")
 os.environ["PTB_TIMEDELTA"] = "1"
+# Ensure tests don't pick up a server API key from the repo .env
+# (tests expect endpoints to be unauthenticated by default)
+os.environ["ANTHROPIC_AUTH_TOKEN"] = ""
 
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
