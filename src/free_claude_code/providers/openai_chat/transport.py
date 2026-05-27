@@ -336,12 +336,13 @@ class _OpenAIChatStreamAssembler:
             yield from self._output.close_content_blocks()
             for tool_call in native_tool_calls:
                 extra_content = tool_call_extra_content(tool_call)
+                function = tool_call.function
                 tool_call_info = {
                     "index": tool_call.index,
                     "id": tool_call.id,
                     "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments,
+                        "name": function.name if function is not None else None,
+                        "arguments": function.arguments if function is not None else "",
                     },
                 }
                 if extra_content:

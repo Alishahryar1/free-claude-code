@@ -9,6 +9,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.admission import ProviderAdmissionController
@@ -22,6 +23,99 @@ from free_claude_code.providers.openai_chat import (
 from tests.providers.request_factory import make_messages_request
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("function_fields", [{}, {"function": None}])
+async def test_stream_preserves_tool_call_with_functionless_deltas(
+    wire, function_fields
+):
+    tool_deltas = [
+        {"index": 0, "id": "call_lookup", "type": "function", **function_fields},
+        {"index": 0, "function": {"name": "lookup", "arguments": '{"q":'}},
+        {"index": 0, **function_fields},
+        {"index": 0, "function": {"arguments": '"fcc"}'}},
+    ]
+    chunks = [
+        {
+            "id": "chat_test",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [delta]} if delta is not None else {},
+                    "finish_reason": "tool_calls" if delta is None else None,
+                }
+            ],
+        }
+        for delta in [*tool_deltas, None]
+    ]
+
+    def reply(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+            + "data: [DONE]\n\n",
+        )
+
+    async with AsyncOpenAI(
+        api_key="test",
+        base_url="https://provider.invalid/v1",
+        max_retries=0,
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)),
+    ) as client:
+        transport = _transport(client)
+        schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+        if wire == "messages":
+            stream = transport.stream_messages(
+                make_messages_request(
+                    "model", tools=[{"name": "lookup", "input_schema": schema}]
+                )
+            )
+        else:
+            stream = transport.stream_responses(
+                OpenAIResponsesRequest.model_validate(
+                    {
+                        "model": "model",
+                        "input": "hello",
+                        "tools": [
+                            {"type": "function", "name": "lookup", "parameters": schema}
+                        ],
+                    }
+                )
+            )
+        events = parse_sse_text("".join([event async for event in stream]))
+
+    if wire == "messages":
+        blocks = [
+            event.data["content_block"]
+            for event in events
+            if event.event == "content_block_start"
+        ]
+        assert [(block["id"], block["name"]) for block in blocks] == [
+            ("call_lookup", "lookup")
+        ]
+        arguments = "".join(
+            event.data["delta"]["partial_json"]
+            for event in events
+            if event.event == "content_block_delta"
+        )
+        assert arguments == '{"q":"fcc"}'
+        assert events[-2].data["delta"]["stop_reason"] == "tool_use"
+        assert events[-1].event == "message_stop"
+    else:
+        assert events[-1].event == "response.completed"
+        response = events[-1].data["response"]
+        assert response["status"] == "completed"
+        calls = response["output"]
+        assert len(calls) == 1
+        assert calls[0]["type"] == "function_call"
+        assert calls[0]["call_id"] == "call_lookup"
+        assert calls[0]["name"] == "lookup"
+        assert calls[0]["arguments"] == '{"q":"fcc"}'
 
 
 def _transport(client: AsyncOpenAI) -> OpenAIChatTransport:
