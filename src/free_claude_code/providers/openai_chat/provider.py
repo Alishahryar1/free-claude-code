@@ -517,6 +517,11 @@ class _OpenAIChatStreamAssembler:
         self._completed = True
 
 
+async def _drop_authorization_header(request: httpx2.Request) -> None:
+    """Strip the SDK's placeholder bearer token from keyless requests."""
+    request.headers.pop("Authorization", None)
+
+
 class OpenAIChatProvider(BaseProvider):
     """OpenAI-compatible ``/chat/completions`` provider configured by a profile."""
 
@@ -535,7 +540,12 @@ class OpenAIChatProvider(BaseProvider):
         self._profile = profile
         self._endpoint_transport = endpoint_transport
         self._provider_name = profile.provider_name
-        if client is None and config.api_key is None and api_key_provider is None:
+        if (
+            client is None
+            and config.api_key is None
+            and api_key_provider is None
+            and not profile.credential_optional
+        ):
             raise ValueError(
                 f"{profile.provider_name} requires an API key or credential provider"
             )
@@ -551,15 +561,25 @@ class OpenAIChatProvider(BaseProvider):
             read=config.http_read_timeout,
             write=config.http_write_timeout,
         )
+        # Keyless endpoints (credential_optional profiles such as `custom`)
+        # must not send any Authorization header. The OpenAI SDK requires a
+        # non-empty api_key and would otherwise emit a placeholder bearer
+        # token on the wire, so strip the header right before each request.
+        keyless = api_key_provider is None and not config.api_key
         http_client = None
-        if client is None and config.proxy:
+        if client is None and (config.proxy or keyless):
             http_client = DefaultAsyncHttpx2Client(
                 proxy=config.proxy,
                 timeout=timeout,
+                event_hooks={"request": [_drop_authorization_header]}
+                if keyless
+                else None,
             )
         self._owns_client = client is None
         self._client = client or AsyncOpenAI(
-            api_key=api_key_provider or self._api_key,
+            # The SDK rejects a missing api_key outright; keyless profiles
+            # pass a placeholder that _drop_authorization_header removes.
+            api_key=api_key_provider or self._api_key or "no-api-key",
             base_url=self._base_url,
             max_retries=0,
             default_headers=default_headers,

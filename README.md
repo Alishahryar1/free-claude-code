@@ -237,6 +237,7 @@ from more than one provider before succeeding.
 | [LM Studio](https://lmstudio.ai/) | `LM_STUDIO_BASE_URL` | `lmstudio/<model-id>` |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) | `LLAMACPP_BASE_URL` | `llamacpp/<model-id>` |
 | [Ollama](https://ollama.com/) | `OLLAMA_BASE_URL` | `ollama/<model-tag>` |
+| Custom (OpenAI-compatible) | `CUSTOM_BASE_URL` + optional `CUSTOM_API_KEY` | `custom/<model-id>` |
 
 </details>
 
