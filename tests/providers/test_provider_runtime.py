@@ -4,6 +4,7 @@ import subprocess
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx2
 import pytest
 
 from free_claude_code.application.errors import (
@@ -58,6 +59,9 @@ from free_claude_code.providers.open_router import OpenRouterProvider
 from free_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
     OpenAIChatProvider,
+)
+from free_claude_code.providers.openai_chat.client import (
+    _drop_authorization_header,
 )
 from free_claude_code.providers.openai_codex.provider import OpenAICodexProvider
 from free_claude_code.providers.opencode import OpenCodeProvider
@@ -119,6 +123,9 @@ def _make_settings(**overrides):
     mock.lightning_base_url = LIGHTNING_DEFAULT_BASE
     mock.experiential_api_key = "test_experiential_key"
     mock.experiential_base_url = EXPERIENTIAL_DEFAULT_BASE
+    mock.custom_base_url = "http://localhost:9000/v1"
+    mock.custom_api_key = ""
+    mock.custom_proxy = None
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -959,6 +966,7 @@ async def test_create_provider_instantiates_each_builtin():
         "lmstudio": LMStudioProvider,
         "llamacpp": OpenAIChatProvider,
         "ollama": OpenAIChatProvider,
+        "custom": OpenAIChatProvider,
         "ollama_cloud": OpenAIChatProvider,
         "wafer": OpenAIChatProvider,
         "opencode_zen": OpenCodeProvider,
@@ -1284,6 +1292,80 @@ async def test_different_providers_have_independent_admission_controllers() -> N
 async def test_unknown_provider_raises_unknown_provider_type_error():
     with pytest.raises(UnknownProviderError, match="Unknown provider_type"):
         (await create_provider("unknown", _make_settings()))
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_constructs_without_api_key():
+    """A configured CUSTOM_BASE_URL must work with no CUSTOM_API_KEY (keyless)."""
+    settings = _make_settings(custom_api_key=None)
+
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider("custom", settings)
+
+    assert isinstance(provider, OpenAIChatProvider)
+    assert provider._api_key is None
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_uses_configured_api_key_when_present():
+    settings = _make_settings(custom_api_key="sk-custom-secret")
+
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider("custom", settings)
+
+    assert isinstance(provider, OpenAIChatProvider)
+    assert provider._api_key == "sk-custom-secret"
+
+
+@pytest.mark.asyncio
+async def test_keyed_provider_still_requires_api_key():
+    """credential_optional must not weaken the key requirement for other providers."""
+    settings = _make_settings(open_router_api_key=None)
+
+    with (
+        patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"),
+        pytest.raises(ApplicationUnavailableError, match="OPENROUTER_API_KEY"),
+    ):
+        await create_provider("open_router", settings)
+
+
+@pytest.mark.asyncio
+async def test_keyless_custom_requests_omit_authorization_header():
+    """Keyless endpoints must not receive the SDK's placeholder bearer token."""
+    request = httpx2.Request("GET", "http://localhost:9000/v1/models")
+    request.headers["Authorization"] = "Bearer no-api-key"
+
+    await _drop_authorization_header(request)
+
+    assert "Authorization" not in request.headers
+
+
+@pytest.mark.asyncio
+async def test_keyless_custom_provider_installs_authorization_stripper():
+    """Keyless construction must strip Authorization before requests go out."""
+    settings = _make_settings(custom_api_key=None)
+
+    with patch(
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
+    ) as mock_client:
+        await create_provider("custom", settings)
+
+    http_client = mock_client.call_args.kwargs["http_client"]
+    assert http_client is not None
+    assert _drop_authorization_header in http_client.event_hooks["request"]
+
+
+@pytest.mark.asyncio
+async def test_keyed_custom_provider_keeps_default_http_client():
+    """A configured key uses the normal authenticated path (no hook client)."""
+    settings = _make_settings(custom_api_key="sk-custom-secret")
+
+    with patch(
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
+    ) as mock_client:
+        await create_provider("custom", settings)
+
+    assert mock_client.call_args.kwargs["http_client"] is None
 
 
 @pytest.mark.asyncio

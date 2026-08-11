@@ -1,4 +1,4 @@
-"""OpenAI-compatible API base URL policy."""
+"""Provider-neutral OpenAI-compatible base URL policy."""
 
 
 def openai_v1_base_url(base_url: str) -> str:
