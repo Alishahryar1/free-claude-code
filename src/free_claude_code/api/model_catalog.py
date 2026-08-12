@@ -11,6 +11,7 @@ from free_claude_code.application.model_catalog import (
     context_window_for_client,
     read_model_catalog,
 )
+from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.ports import ModelCatalogPort
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import (
@@ -50,6 +51,13 @@ class MuseModelMetadata(BaseModel):
 
 class MuseMetadataEnvelope(BaseModel):
     muse_code: MuseModelMetadata = Field(serialization_alias="muse-code")
+
+
+class ModelPricing(BaseModel):
+    """Per-1K-token pricing (USD) advertised for a model, when known."""
+
+    input: float | None = None
+    output: float | None = None
 
 
 class ModelResponse(BaseModel):
@@ -92,6 +100,10 @@ class ModelResponse(BaseModel):
         default=None, serialization_alias="inferenceIdleTimeoutSecs"
     )
     metadata: MuseMetadataEnvelope | None = None
+    # Optional capability/pricing metadata, surfaced only when the
+    # upstream provider advertised it (omitted from the payload when None).
+    capabilities: list[str] | None = None
+    pricing: ModelPricing | None = None
 
 
 class ModelsListResponse(BaseModel):
@@ -201,6 +213,7 @@ def _build_claude_models_response(
                 _discovered_model_response(
                     desktop_model_id(ref) if desktop else gateway_model_id(ref),
                     display_name=ref,
+                    metadata=model.metadata,
                 )
             )
         models.append(
@@ -209,6 +222,8 @@ def _build_claude_models_response(
                 if desktop
                 else no_thinking_gateway_model_id(ref),
                 display_name=f"{ref} (no thinking)",
+                metadata=model.metadata,
+                strip_thinking=True,
             )
         )
     return ModelsListResponse(
@@ -261,6 +276,10 @@ def _build_direct_models_response(
                     else None
                 ),
                 inference_idle_timeout_seconds=timeout_seconds,
+                capabilities=_capabilities_response(
+                    model.metadata, strip_thinking=not allows_reasoning
+                ),
+                pricing=_pricing_response(model.metadata),
             )
         )
 
@@ -285,9 +304,39 @@ def _responses_inference_idle_timeout_seconds(provider_progress_timeout: float) 
     return math.ceil(provider_progress_timeout) + _INFERENCE_IDLE_TIMEOUT_MARGIN_SECONDS
 
 
-def _discovered_model_response(model_id: str, *, display_name: str) -> ModelResponse:
+def _pricing_response(metadata: ProviderModelInfo | None) -> ModelPricing | None:
+    if metadata is None or metadata.pricing is None:
+        return None
+    return ModelPricing(
+        input=metadata.pricing.input,
+        output=metadata.pricing.output,
+    )
+
+
+def _capabilities_response(
+    metadata: ProviderModelInfo | None, *, strip_thinking: bool = False
+) -> list[str] | None:
+    # Routes that force reasoning off must never advertise thinking support.
+    if metadata is None or not metadata.capabilities:
+        return None
+    capabilities = list(metadata.capabilities)
+    if strip_thinking and "thinking" in capabilities:
+        capabilities = [cap for cap in capabilities if cap != "thinking"]
+    return capabilities or None
+
+
+def _discovered_model_response(
+    model_id: str,
+    *,
+    display_name: str,
+    metadata: ProviderModelInfo | None = None,
+    strip_thinking: bool = False,
+) -> ModelResponse:
+    """Build a discovered-model response, attaching optional upstream metadata."""
     return ModelResponse(
         id=model_id,
         display_name=display_name,
         created_at=DISCOVERED_MODEL_CREATED_AT,
+        capabilities=_capabilities_response(metadata, strip_thinking=strip_thinking),
+        pricing=_pricing_response(metadata),
     )
