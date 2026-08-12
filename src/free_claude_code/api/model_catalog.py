@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.ports import RequestRuntimePort
 from free_claude_code.config.model_refs import configured_chat_model_refs
 from free_claude_code.config.settings import Settings
@@ -47,6 +48,13 @@ class MuseMetadataEnvelope(BaseModel):
     muse_code: MuseModelMetadata = Field(serialization_alias="muse-code")
 
 
+class ModelPricing(BaseModel):
+    """Per-1K-token pricing (USD) advertised for a model, when known."""
+
+    input: float | None = None
+    output: float | None = None
+
+
 class ModelResponse(BaseModel):
     object: Literal["model"] = "model"
     created: int = 0
@@ -84,6 +92,10 @@ class ModelResponse(BaseModel):
         default=None, serialization_alias="inferenceIdleTimeoutSecs"
     )
     metadata: MuseMetadataEnvelope | None = None
+    # Optional capability/pricing metadata, surfaced only when the
+    # upstream provider advertised it (omitted from the payload when None).
+    capabilities: list[str] | None = None
+    pricing: ModelPricing | None = None
 
 
 class ModelsListResponse(BaseModel):
@@ -145,6 +157,7 @@ class _InventoryModel:
     input_modalities: frozenset[ModelInputModality] | None
     context_window_tokens: int | None
     max_output_tokens: int | None
+    metadata: ProviderModelInfo | None = None
 
 
 def build_models_list_response(
@@ -194,14 +207,15 @@ def _build_claude_models_response(
     seen: set[str] = set()
 
     for ref in configured_chat_model_refs(settings):
-        model_info = runtime.cached_model_info(ref.provider_id, ref.model_id)
+        cached_info = runtime.cached_model_info(ref.provider_id, ref.model_id)
         _append_provider_model_variants(
             models,
             seen,
             ref.model_ref,
             supports_thinking=(
-                model_info.supports_thinking if model_info is not None else None
+                cached_info.supports_thinking if cached_info is not None else None
             ),
+            metadata=cached_info,
         )
 
     for model_info in runtime.cached_prefixed_model_infos():
@@ -210,6 +224,7 @@ def _build_claude_models_response(
             seen,
             model_info.model_id,
             supports_thinking=model_info.supports_thinking,
+            metadata=model_info,
         )
 
     for model in SUPPORTED_CLAUDE_MODELS:
@@ -273,6 +288,10 @@ def _build_direct_models_response(
                     else None
                 ),
                 inference_idle_timeout_seconds=timeout_seconds,
+                capabilities=_capabilities_response(
+                    inventory_model.metadata, strip_thinking=not allows_reasoning
+                ),
+                pricing=_pricing_response(inventory_model.metadata),
             )
         )
 
@@ -310,6 +329,7 @@ def _collect_inventory(
                 max_output_tokens=(
                     model_info.max_output_tokens if model_info is not None else None
                 ),
+                metadata=model_info,
             )
         )
 
@@ -324,6 +344,7 @@ def _collect_inventory(
                 input_modalities=model_info.input_modalities,
                 context_window_tokens=model_info.context_window_tokens,
                 max_output_tokens=model_info.max_output_tokens,
+                metadata=model_info,
             )
         )
 
@@ -342,11 +363,41 @@ def _responses_inference_idle_timeout_seconds(provider_progress_timeout: float) 
     return math.ceil(provider_progress_timeout) + _INFERENCE_IDLE_TIMEOUT_MARGIN_SECONDS
 
 
-def _discovered_model_response(model_id: str, *, display_name: str) -> ModelResponse:
+def _pricing_response(metadata: ProviderModelInfo | None) -> ModelPricing | None:
+    if metadata is None or metadata.pricing is None:
+        return None
+    return ModelPricing(
+        input=metadata.pricing.input,
+        output=metadata.pricing.output,
+    )
+
+
+def _capabilities_response(
+    metadata: ProviderModelInfo | None, *, strip_thinking: bool = False
+) -> list[str] | None:
+    # Routes that force reasoning off must never advertise thinking support.
+    if metadata is None or not metadata.capabilities:
+        return None
+    capabilities = list(metadata.capabilities)
+    if strip_thinking and "thinking" in capabilities:
+        capabilities = [cap for cap in capabilities if cap != "thinking"]
+    return capabilities or None
+
+
+def _discovered_model_response(
+    model_id: str,
+    *,
+    display_name: str,
+    metadata: ProviderModelInfo | None = None,
+    strip_thinking: bool = False,
+) -> ModelResponse:
+    """Build a discovered-model response, attaching optional upstream metadata."""
     return ModelResponse(
         id=model_id,
         display_name=display_name,
         created_at=DISCOVERED_MODEL_CREATED_AT,
+        capabilities=_capabilities_response(metadata, strip_thinking=strip_thinking),
+        pricing=_pricing_response(metadata),
     )
 
 
@@ -365,6 +416,7 @@ def _append_provider_model_variants(
     provider_model_ref: str,
     *,
     supports_thinking: bool | None = None,
+    metadata: ProviderModelInfo | None = None,
 ) -> None:
     if supports_thinking is not False:
         _append_unique_model(
@@ -373,6 +425,7 @@ def _append_provider_model_variants(
             _discovered_model_response(
                 gateway_model_id(provider_model_ref),
                 display_name=provider_model_ref,
+                metadata=metadata,
             ),
         )
     _append_unique_model(
@@ -381,5 +434,7 @@ def _append_provider_model_variants(
         _discovered_model_response(
             no_thinking_gateway_model_id(provider_model_ref),
             display_name=f"{provider_model_ref} (no thinking)",
+            metadata=metadata,
+            strip_thinking=True,
         ),
     )
