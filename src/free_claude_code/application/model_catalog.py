@@ -1,7 +1,7 @@
 """Application model inventory and presentation order, independent of clients."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from free_claude_code.config.model_refs import (
@@ -30,6 +30,9 @@ class CatalogModel:
     input_modalities: frozenset[ModelInputModality] | None = None
     context_window_tokens: int | None = None
     max_output_tokens: int | None = None
+    # Presentation enrichment, not identity: excluded from equality so
+    # decoded catalogs remain comparable to freshly-read ones.
+    metadata: ProviderModelInfo | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,16 +73,17 @@ def read_model_catalog(
 
 
 def _catalog_model(ref: str, info: ProviderModelInfo | None) -> CatalogModel:
-    info = info if info is not None else ProviderModelInfo(ref)
-    no_thinking = info.supports_thinking is False
+    resolved = info if info is not None else ProviderModelInfo(ref)
+    no_thinking = resolved.supports_thinking is False
     return CatalogModel(
         wire_slug=no_thinking_gateway_model_id(ref) if no_thinking else ref,
         provider_model_ref=ref,
         display_name=f"{ref} (no thinking)" if no_thinking else ref,
-        supports_reasoning=info.supports_thinking,
-        input_modalities=info.input_modalities,
-        context_window_tokens=info.context_window_tokens,
-        max_output_tokens=info.max_output_tokens,
+        supports_reasoning=resolved.supports_thinking,
+        input_modalities=resolved.input_modalities,
+        context_window_tokens=resolved.context_window_tokens,
+        max_output_tokens=resolved.max_output_tokens,
+        metadata=info,
     )
 
 
