@@ -612,6 +612,10 @@ Windows PowerShell:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/uninstall.ps1")))
 ```
 
+## ☁️ One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/free-claude-code/)
+
 ## Project Links
 
 - [Report bugs or request features](https://github.com/Alishahryar1/free-claude-code/issues)
