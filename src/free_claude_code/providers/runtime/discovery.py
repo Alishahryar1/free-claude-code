@@ -12,7 +12,11 @@ from free_claude_code.application.model_metadata import (
     ProviderModelRefreshResult,
 )
 from free_claude_code.config.model_refs import configured_chat_model_refs
-from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from free_claude_code.config.provider_catalog import (
+    PROVIDER_CATALOG,
+    SUPPORTED_PROVIDER_IDS,
+    ProviderDescriptor,
+)
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.providers.base import BaseProvider
@@ -60,18 +64,38 @@ def model_cache_provider_ids_for_settings(
     )
 
 
+def _self_sufficient_local(descriptor: ProviderDescriptor) -> bool:
+    """Return whether a local server can be probed with zero configuration.
+
+    Keyless locals advertising built-in defaults (Ollama, LM Studio,
+    llama.cpp) expose their OpenAI-compatible model lists without any user
+    settings, so they belong in best-effort discovery (#1296).
+    """
+    return (
+        descriptor.local
+        and descriptor.static_credential is not None
+        and descriptor.default_base_url is not None
+    )
+
+
 def model_list_provider_ids_for_settings(
     settings: Settings,
     connected_provider_ids: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Return providers worth discovering for this process configuration."""
     referenced_ids = referenced_provider_ids(settings)
+    included = set(
+        model_cache_provider_ids_for_settings(settings, connected_provider_ids)
+    )
+    for provider_id, descriptor in PROVIDER_CATALOG.items():
+        if (
+            descriptor.local
+            and provider_id not in included
+            and (provider_id in referenced_ids or _self_sufficient_local(descriptor))
+        ):
+            included.add(provider_id)
     return tuple(
-        provider_id
-        for provider_id in model_cache_provider_ids_for_settings(
-            settings, connected_provider_ids
-        )
-        if not PROVIDER_CATALOG[provider_id].local or provider_id in referenced_ids
+        provider_id for provider_id in SUPPORTED_PROVIDER_IDS if provider_id in included
     )
 
 
@@ -106,6 +130,7 @@ class ProviderModelDiscovery:
                 provider_id
                 for provider_id in provider_ids
                 if not self._model_cache.has_provider(provider_id)
+                and not self._model_cache.discovery_in_cooldown(provider_id)
             )
         return await self._refresh_model_infos(provider_ids)
 
@@ -124,6 +149,7 @@ class ProviderModelDiscovery:
                 provider = self._provider_resolver(provider_id)
             except Exception as exc:
                 self._log_discovery_failure(provider_id, exc)
+                self._record_discovery_failure(provider_id)
                 failed_provider_ids.append(provider_id)
                 continue
             tasks[provider_id] = asyncio.create_task(provider.list_model_infos())
@@ -138,6 +164,7 @@ class ProviderModelDiscovery:
                     if isinstance(result, asyncio.CancelledError):
                         raise result
                     self._log_discovery_failure(provider_id, result)
+                    self._record_discovery_failure(provider_id)
                     failed_provider_ids.append(provider_id)
                     continue
                 self._model_cache.cache_model_infos(provider_id, result)
@@ -152,6 +179,12 @@ class ProviderModelDiscovery:
             refreshed_provider_ids=tuple(refreshed_provider_ids),
             failed_provider_ids=tuple(failed_provider_ids),
         )
+
+    def _record_discovery_failure(self, provider_id: str) -> None:
+        """Pace repeat probes of offline keyless locals (cooldown); remotes stay every-cycle."""
+        descriptor = PROVIDER_CATALOG.get(provider_id)
+        if descriptor is not None and descriptor.local:
+            self._model_cache.mark_discovery_failure(provider_id)
 
     def _log_discovery_failure(self, provider_id: str, exc: BaseException) -> None:
         logger.warning(
