@@ -150,6 +150,8 @@ class NvidiaNimProvider(OpenAIChatProvider):
 
     def _provider_failure_override(self, error: Exception) -> ExecutionFailure | None:
         """Classify NVIDIA-specific 400/500 responses by their actual semantics."""
+        if isinstance(error, openai.APIConnectionError | openai.APITimeoutError):
+            return overloaded_provider_failure()
         if not isinstance(error, openai.BadRequestError | openai.InternalServerError):
             return None
         status = getattr(error, "status_code", None)
