@@ -196,11 +196,11 @@ async def test_unsupported_shared_credentials_never_send_http(monkeypatch):
     supported = {PROVIDER_CATALOG[row[0]].credential_env for row in CASES}
     all_keys = {d.credential_env for d in PROVIDER_CATALOG.values() if d.credential_env}
     keys = tuple(all_keys - supported)
-    assert len(keys) == 20
+    assert len(keys) == 21
     result = await validation.check_credentials(
         Settings.model_construct(), (*keys, "OPENCODE_API_KEY", "MODEL")
     )
-    assert len(result) == 20
+    assert len(result) == 21
     assert all(
         check.status == validation.CredentialStatus.UNVERIFIED for check in result
     )

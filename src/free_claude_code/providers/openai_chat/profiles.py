@@ -665,6 +665,23 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             thinking_boolean_path=("reasoning",),
         ),
     ),
+    "xkiro": OpenAIChatProfile(
+        _policy(
+            "XKIRO",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        # xKiro translates reasoning_effort per vendor: every model declares the
+        # levels it accepts (reasoning_efforts in GET /v1/models) and unsupported
+        # values are adjusted downward, never rejected. Omitting the field is
+        # not disabling — most models default to reasoning on — so explicit
+        # effort keeps client intent and cost control intact.
+        NamedEffortReasoning(
+            _ALL_EFFORTS,
+            disabled_value="none",
+            enabled_value="high",
+        ),
+    ),
     "poolside": OpenAIChatProfile(
         _policy(
             "POOLSIDE",

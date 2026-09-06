@@ -90,6 +90,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "cloudflare": "cloudflare/@cf/moonshotai/kimi-k2.6",
     "tokenrouter": "tokenrouter/moonshotai/kimi-k3-free",
     "nararoute": "nararoute/kimi-k3-free",
+    "xkiro": "xkiro/deepseek/deepseek-v4-flash",
     "poolside": "poolside/poolside/laguna-s-2.1",
     "llm7": "llm7/default",
     "agnes": "agnes/agnes-2.0-flash",
