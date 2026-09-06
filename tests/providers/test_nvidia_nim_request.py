@@ -1,5 +1,6 @@
 """Tests for NVIDIA NIM request policy helpers."""
 
+import base64
 import re
 from copy import deepcopy
 from typing import Any
@@ -10,6 +11,7 @@ from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.anthropic import set_if_not_none
 from free_claude_code.core.anthropic.models import MessagesRequest, Tool
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+import free_claude_code.providers.nvidia_nim.request_options as nim_request_options
 from free_claude_code.providers.nvidia_nim.request_options import (
     _set_extra,
 )
@@ -102,6 +104,54 @@ class TestSetExtra:
 
 
 class TestBuildRequestBody:
+    def test_older_inline_images_are_replaced_when_body_is_too_large(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(nim_request_options, "_MAX_REQUEST_BODY_BYTES", 1_000)
+        image = base64.b64encode(b"x" * 300).decode()
+        req = make_messages_request(
+            model="test",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "first"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": image,
+                            },
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "second"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": image,
+                            },
+                        },
+                    ],
+                },
+            ],
+        )
+
+        body = build_request_body(req, NimSettings(), reasoning=REASONING_OFF)
+
+        first_content = body["messages"][0]["content"]
+        second_content = body["messages"][1]["content"]
+        assert first_content[1]["type"] == "text"
+        assert "omitted" in first_content[1]["text"]
+        assert second_content[1]["type"] == "image_url"
+        assert nim_request_options._request_body_size(body) <= 1_000
+
     @pytest.mark.parametrize(
         ("effort", "expected_budget"),
         (
