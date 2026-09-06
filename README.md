@@ -589,6 +589,74 @@ Restart `fcc-server`. In **Admin UI → Messaging → Voice**, enable voice note
 
 </details>
 
+## Troubleshooting
+
+<details>
+<summary>macOS: Homebrew symlink conflicts during Node.js upgrade (Pi / DeepSeek Harness dependency)</summary>
+
+**Symptom:** When the installer verifies or upgrades Node.js for Pi/DeepSeek Harness (>= 22.19.0), Homebrew fails if prior symlinks exist:
+
+```text
+Error: The `brew link` step did not complete successfully
+Error: node: Could not symlink include/brotli/decode.h
+Target /opt/homebrew/include/brotli/decode.h is a symlink belonging to brotli.
+error: Pi requires Node.js 22.19.0 or newer.
+```
+
+**Fix:** Force overwrite the conflicting dependency links before installing Node:
+
+```bash
+brew link --overwrite brotli ca-certificates openssl@3 xz zstd
+brew install node
+```
+
+</details>
+
+<details>
+<summary>macOS: `~/.zshrc: Permission denied` during Grok Build / PATH configuration</summary>
+
+**Symptom:** If `~/.zshrc` was previously created or edited by root/sudo, the installer script cannot append exports:
+
+```text
+line 493: /Users/<user>/.zshrc: Permission denied
+error: Grok Build installation failed with exit code 1.
+```
+
+**Fix:** Reset the file's ownership to the current user:
+
+```bash
+cp ~/.zshrc ~/.zshrc.tmp && rm -f ~/.zshrc && mv ~/.zshrc.tmp ~/.zshrc
+```
+
+</details>
+
+<details>
+<summary>`503 NVIDIA_NIM_API_KEY is not set` when using OpenRouter or another provider</summary>
+
+**Symptom:** When launching `fcc-claude`, requests fail if `MODEL_*` still defaults to NVIDIA NIM even though `OPENROUTER_API_KEY` is configured in `~/.fcc/.env`:
+
+```text
+* 503 NVIDIA_NIM_API_KEY is not set. Add it in the Admin UI ...
+```
+
+**Fix:** Map the model variables in `~/.fcc/.env` to the provider you configured (e.g. OpenRouter):
+
+```env
+FCC_CONFIG_SCHEMA=1
+MODEL=open_router/openrouter/free
+MODEL_FABLE=open_router/openrouter/free
+MODEL_HAIKU=open_router/openrouter/free
+MODEL_OPUS=open_router/openrouter/free
+MODEL_SONNET=open_router/openrouter/free
+OPENROUTER_API_KEY=your_openrouter_key
+```
+
+Then restart the FCC daemon / desktop app.
+
+</details>
+
+*Thanks to [@Suryanshsaraf](https://github.com/Suryanshsaraf) for reporting and verifying these fixes in [#1613](https://github.com/Alishahryar1/free-claude-code/issues/1613).*
+
 ## Manage Your Installation
 
 Run `fcc-server --version` to check the installed version without starting FCC.
