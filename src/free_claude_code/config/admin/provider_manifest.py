@@ -263,6 +263,19 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Defaults to https://router.bynara.id/v1."
         ),
     },
+    "XKIRO_API_KEY": {
+        "label": "xKiro API Key",
+        "description": (
+            "xKiro OpenAI-compatible multi-vendor gateway API key for api.xkiro.com/v1. "
+            "Keys begin with sk-xt-; create one at xkiro.com/dashboard/api/keys."
+        ),
+    },
+    "XKIRO_BASE_URL": {
+        "description": (
+            "xKiro OpenAI-compatible Chat Completions base URL. "
+            "Defaults to https://api.xkiro.com/v1."
+        ),
+    },
     "AGNES_API_KEY": {
         "label": "Agnes AI API Key",
         "description": (
