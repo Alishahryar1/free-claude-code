@@ -23,6 +23,10 @@ from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from free_claude_code.providers.runtime import ProviderRuntime
+from free_claude_code.providers.runtime.discovery import (
+    ProviderModelDiscovery,
+    model_list_provider_ids_for_settings,
+)
 from free_claude_code.providers.runtime.model_cache import ProviderModelCache
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.providers.support import (
@@ -557,7 +561,7 @@ async def test_failed_startup_warm_remains_eligible_for_background_refresh() -> 
 
 
 @pytest.mark.asyncio
-async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_referenced_local() -> (
+async def test_runtime_refresh_model_list_cache_includes_self_sufficient_locals() -> (
     None
 ):
     settings = _settings(
@@ -569,6 +573,7 @@ async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_
         {
             "open_router": FakeProvider(_infos("anthropic/claude-sonnet")),
             "lmstudio": FakeProvider(_infos("local-qwen")),
+            "llamacpp": FakeProvider(_infos("local-qwen-cpp")),
             "ollama": FakeProvider(_infos("llama3.1")),
         },
     )
@@ -578,8 +583,15 @@ async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_
     assert runtime.cached_model_ids() == {
         "open_router": frozenset({"anthropic/claude-sonnet"}),
         "lmstudio": frozenset({"local-qwen"}),
+        "llamacpp": frozenset({"local-qwen-cpp"}),
+        "ollama": frozenset({"llama3.1"}),
     }
-    assert result.refreshed_provider_ids == ("open_router", "lmstudio")
+    assert result.refreshed_provider_ids == (
+        "open_router",
+        "lmstudio",
+        "llamacpp",
+        "ollama",
+    )
     assert result.failed_provider_ids == ()
 
 
@@ -593,15 +605,28 @@ async def test_runtime_refresh_model_list_cache_treats_vertex_project_as_configu
     )
     runtime = _manager(
         settings,
-        {"vertex": FakeProvider(_infos("google/gemini-3.5-flash"))},
+        {
+            "vertex": FakeProvider(_infos("google/gemini-3.5-flash")),
+            "lmstudio": FakeProvider(_infos("local-qwen")),
+            "llamacpp": FakeProvider(_infos("local-qwen-cpp")),
+            "ollama": FakeProvider(_infos("llama3.1")),
+        },
     )
 
     result = await runtime.refresh_model_list_cache()
 
     assert runtime.cached_model_ids() == {
-        "vertex": frozenset({"google/gemini-3.5-flash"})
+        "vertex": frozenset({"google/gemini-3.5-flash"}),
+        "lmstudio": frozenset({"local-qwen"}),
+        "llamacpp": frozenset({"local-qwen-cpp"}),
+        "ollama": frozenset({"llama3.1"}),
     }
-    assert result.refreshed_provider_ids == ("vertex",)
+    assert result.refreshed_provider_ids == (
+        "vertex",
+        "lmstudio",
+        "llamacpp",
+        "ollama",
+    )
     assert result.failed_provider_ids == ()
 
 
@@ -624,7 +649,12 @@ async def test_runtime_refresh_model_list_cache_keeps_prior_cache_on_failure() -
 
     assert runtime.cached_model_ids() == {"nvidia_nim": frozenset({"cached-model"})}
     assert result.refreshed_provider_ids == ()
-    assert result.failed_provider_ids == ("nvidia_nim",)
+    assert result.failed_provider_ids == (
+        "nvidia_nim",
+        "lmstudio",
+        "llamacpp",
+        "ollama",
+    )
 
 
 def test_runtime_metadata_cache_exposes_ids_and_prefixed_infos() -> None:
@@ -690,3 +720,56 @@ def test_runtime_cached_prefixed_model_infos_are_deterministic() -> None:
         ProviderModelInfo("open_router/z-model"),
         ProviderModelInfo("deepseek/deepseek-chat"),
     )
+
+
+def test_discovery_eligibility_admits_self_sufficient_locals_without_settings() -> None:
+    assert model_list_provider_ids_for_settings(_settings()) == (
+        "lmstudio",
+        "llamacpp",
+        "ollama",
+    )
+
+
+@pytest.mark.asyncio
+async def test_local_discovery_failure_cooldown_skips_then_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: dict[str, int] = {}
+
+    def _offline_resolver(provider_id: str) -> BaseProvider:
+        attempts[provider_id] = attempts.get(provider_id, 0) + 1
+        return FakeProvider(error=RuntimeError("local server offline"))
+
+    settings = _settings()
+    cache = ProviderModelCache()
+    discovery = ProviderModelDiscovery(settings, _offline_resolver, cache)
+
+    first = await discovery.refresh_model_list_cache(only_missing=True)
+    assert first.failed_provider_ids == ("lmstudio", "llamacpp", "ollama")
+    assert attempts == {"lmstudio": 1, "llamacpp": 1, "ollama": 1}
+
+    assert cache.discovery_in_cooldown("ollama") is True
+
+    second = await discovery.refresh_model_list_cache(only_missing=True)
+    assert second.refreshed_provider_ids == ()
+    assert second.failed_provider_ids == ()
+    assert attempts == {"lmstudio": 1, "llamacpp": 1, "ollama": 1}
+
+    monkeypatch.setattr(
+        "free_claude_code.providers.runtime.model_cache.LOCAL_DISCOVERY_RETRY_COOLDOWN_S",
+        0.0,
+    )
+    third = await discovery.refresh_model_list_cache(only_missing=True)
+    assert third.failed_provider_ids == ("lmstudio", "llamacpp", "ollama")
+    assert attempts["ollama"] == 2
+
+
+def test_cache_discovery_failure_cooldown_clears_on_success() -> None:
+    cache = ProviderModelCache()
+    cache.mark_discovery_failure("ollama")
+    assert cache.discovery_in_cooldown("ollama") is True
+
+    cache.cache_model_infos("ollama", _infos("llama3.1"))
+
+    assert cache.discovery_in_cooldown("ollama") is False
+    assert cache.cached_model_ids() == {"ollama": frozenset({"llama3.1"})}

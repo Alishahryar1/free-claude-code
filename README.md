@@ -286,6 +286,8 @@ from more than one provider before succeeding.
 <details>
 <summary><strong>Local provider setup</strong></summary>
 
+All three keyless local servers below are probed automatically while they run — discovered models appear as `ollama/<model>`, `lmstudio/<model>`, and `llamacpp/<model>` ids in the model list without extra configuration. Override any default URL (`OLLAMA_BASE_URL`, `LM_STUDIO_BASE_URL`, `LLAMACPP_BASE_URL`) to point somewhere else.
+
 ### LM Studio
 
 Start LM Studio's local server, load a tool-capable model, and use the model identifier shown by LM Studio with the `lmstudio/` prefix. The default URL is `http://localhost:1234/v1`.

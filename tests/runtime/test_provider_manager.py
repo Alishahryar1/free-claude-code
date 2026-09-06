@@ -159,8 +159,24 @@ async def test_catalog_publication_tracks_warm_refresh_and_direct_cache() -> Non
     assert publisher.events == ["ensure_exists", "publish", "publish"]
     assert publisher.snapshots == [
         ("nvidia_nim/one", ("nvidia_nim/warm-model",)),
-        ("nvidia_nim/one", ("nvidia_nim/warm-model",)),
-        ("nvidia_nim/one", ("nvidia_nim/tested-model",)),
+        (
+            "nvidia_nim/one",
+            (
+                "nvidia_nim/warm-model",
+                "lmstudio/warm-model",
+                "llamacpp/warm-model",
+                "ollama/warm-model",
+            ),
+        ),
+        (
+            "nvidia_nim/one",
+            (
+                "nvidia_nim/tested-model",
+                "lmstudio/warm-model",
+                "llamacpp/warm-model",
+                "ollama/warm-model",
+            ),
+        ),
     ]
 
     await manager.close()
