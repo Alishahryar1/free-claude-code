@@ -36,6 +36,7 @@ from free_claude_code.config.provider_catalog import (
     VERCEL_AI_GATEWAY_DEFAULT_BASE,
     WANDB_INFERENCE_DEFAULT_BASE,
     XAI_DEFAULT_BASE,
+    XKIRO_DEFAULT_BASE,
     ZAI_API_DEFAULT_BASE,
     ZAI_CODING_DEFAULT_BASE,
     ZENMUX_DEFAULT_BASE,
@@ -101,6 +102,8 @@ def _make_settings(**overrides):
     mock.tokenrouter_base_url = TOKENROUTER_DEFAULT_BASE
     mock.nararoute_api_key = "test_nararoute_key"
     mock.nararoute_base_url = NARAROUTE_DEFAULT_BASE
+    mock.xkiro_api_key = "test_xkiro_key"
+    mock.xkiro_base_url = XKIRO_DEFAULT_BASE
     mock.agnes_api_key = "test_agnes_key"
     mock.zenmux_api_key = "test_zenmux_key"
     mock.wandb_api_key = "test_wandb_key"
@@ -132,6 +135,7 @@ def _make_settings(**overrides):
     mock.zai_api_proxy = None
     mock.tokenrouter_proxy = None
     mock.nararoute_proxy = None
+    mock.xkiro_proxy = None
     mock.agnes_proxy = None
     mock.zenmux_proxy = None
     mock.wandb_proxy = None
@@ -887,6 +891,7 @@ def test_create_provider_instantiates_each_builtin():
         "zai_api": OpenAIChatProvider,
         "tokenrouter": OpenAIChatProvider,
         "nararoute": OpenAIChatProvider,
+        "xkiro": OpenAIChatProvider,
         "agnes": OpenAIChatProvider,
         "zenmux": OpenAIChatProvider,
         "wandb": OpenAIChatProvider,

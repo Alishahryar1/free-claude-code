@@ -76,6 +76,8 @@ FEATHERLESS_DEFAULT_BASE = "https://api.featherless.ai/v1"
 TOKENROUTER_DEFAULT_BASE = "https://api.tokenrouter.com/v1"
 # NaraRoute OpenAI-compatible Chat Completions gateway.
 NARAROUTE_DEFAULT_BASE = "https://router.bynara.id/v1"
+# xKiro OpenAI-compatible multi-vendor Chat Completions gateway.
+XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Poolside AI OpenAI-compatible Chat Completions API.
 POOLSIDE_DEFAULT_BASE = "https://inference.poolside.ai/v1"
 # LLM7.io OpenAI-compatible Chat Completions API.
@@ -526,6 +528,16 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=NARAROUTE_DEFAULT_BASE,
         base_url_attr="nararoute_base_url",
         proxy_attr="nararoute_proxy",
+    ),
+    "xkiro": ProviderDescriptor(
+        provider_id="xkiro",
+        display_name="xKiro",
+        credential_env="XKIRO_API_KEY",
+        credential_url="https://xkiro.com/dashboard/api/keys",
+        credential_attr="xkiro_api_key",
+        default_base_url=XKIRO_DEFAULT_BASE,
+        base_url_attr="xkiro_base_url",
+        proxy_attr="xkiro_proxy",
     ),
     "poolside": ProviderDescriptor(
         provider_id="poolside",
