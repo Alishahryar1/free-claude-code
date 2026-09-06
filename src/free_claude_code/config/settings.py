@@ -20,6 +20,7 @@ from .provider_catalog import (
     NARAROUTE_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
     TOKENROUTER_DEFAULT_BASE,
+    XKIRO_DEFAULT_BASE,
 )
 from .reasoning import ReasoningPreference
 
@@ -178,6 +179,15 @@ class Settings(BaseModel):
     nararoute_base_url: NonEmptyString = Field(
         default=NARAROUTE_DEFAULT_BASE,
         validation_alias="NARAROUTE_BASE_URL",
+    )
+
+    # ==================== xKiro Config ====================
+    xkiro_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="XKIRO_API_KEY"
+    )
+    xkiro_base_url: NonEmptyString = Field(
+        default=XKIRO_DEFAULT_BASE,
+        validation_alias="XKIRO_BASE_URL",
     )
 
     # ==================== Poolside AI (OpenAI-compatible) ====================
@@ -472,6 +482,9 @@ class Settings(BaseModel):
     )
     nararoute_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="NARAROUTE_PROXY"
+    )
+    xkiro_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="XKIRO_PROXY"
     )
     poolside_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="POOLSIDE_PROXY"
