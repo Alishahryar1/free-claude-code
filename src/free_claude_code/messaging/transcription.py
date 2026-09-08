@@ -26,7 +26,7 @@ class TranscriptionService:
         *,
         model: str,
         device: str,
-        huggingface_api_key: str | None = None,
+        huggingface_api_key: str | tuple[str, ...] | None = None,
     ) -> None:
         if device not in {"cpu", "cuda"}:
             raise ValueError(
@@ -34,7 +34,10 @@ class TranscriptionService:
             )
         self._model_id = _MODEL_MAP.get(model, model)
         self._device = device
-        self._huggingface_api_key = huggingface_api_key
+        if isinstance(huggingface_api_key, tuple):
+            self._huggingface_api_key = huggingface_api_key[0] if huggingface_api_key else None
+        else:
+            self._huggingface_api_key = huggingface_api_key
         self._pipeline: Any | None = None
         self._lock = asyncio.Lock()
         self._closed = False

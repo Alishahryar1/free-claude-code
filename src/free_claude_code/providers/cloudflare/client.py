@@ -142,9 +142,9 @@ class CloudflareProvider(OpenAIChatProvider):
         yield output.emit_reasoning_delta(reasoning)
 
     def _model_list_headers(self) -> dict[str, str]:
-        if self._api_key is None:
+        if not self._api_keys:
             raise AssertionError("Cloudflare requires a static API token")
-        return {"Authorization": f"Bearer {self._api_key}"}
+        return {"Authorization": f"Bearer {self._api_keys[0]}"}
 
 
 def _cloudflare_reasoning(delta: Any) -> str | None:

@@ -30,6 +30,19 @@ def _empty_to_none(value: object) -> object:
     return value
 
 
+def parse_api_keys(value: object) -> object:
+    """Parse comma-separated API keys into a tuple, maintaining backward compatibility."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if not value.strip():
+            return None
+        return tuple(part.strip() for part in value.split(",") if part.strip())
+    if isinstance(value, list | tuple) and not value:
+        return None
+    return value
+
+
 NonEmptyString = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
@@ -37,6 +50,10 @@ NonEmptyString = Annotated[
 OptionalNonEmptyString = Annotated[
     NonEmptyString | None,
     BeforeValidator(_empty_to_none),
+]
+OptionalApiKeys = Annotated[
+    tuple[NonEmptyString, ...] | None,
+    BeforeValidator(parse_api_keys),
 ]
 OptionalModelFallbacks = Annotated[
     tuple[NonEmptyString, ...] | None,
@@ -70,7 +87,7 @@ class Settings(BaseModel):
     )
 
     # ==================== Azure OpenAI ====================
-    azure_openai_api_key: OptionalNonEmptyString = Field(
+    azure_openai_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="AZURE_OPENAI_API_KEY"
     )
     azure_openai_base_url: OptionalNonEmptyString = Field(
@@ -78,58 +95,58 @@ class Settings(BaseModel):
     )
 
     # ==================== OpenRouter Config ====================
-    open_router_api_key: OptionalNonEmptyString = Field(
+    open_router_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="OPENROUTER_API_KEY"
     )
 
     # ==================== Mistral La Plateforme ====================
-    mistral_api_key: OptionalNonEmptyString = Field(
+    mistral_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="MISTRAL_API_KEY"
     )
 
     # ==================== Mistral Codestral (codestral.mistral.ai) ====================
-    codestral_api_key: OptionalNonEmptyString = Field(
+    codestral_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="CODESTRAL_API_KEY"
     )
 
     # ==================== DeepSeek Config ====================
-    deepseek_api_key: OptionalNonEmptyString = Field(
+    deepseek_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="DEEPSEEK_API_KEY"
     )
 
     # ==================== Kimi Config ====================
-    kimi_api_key: OptionalNonEmptyString = Field(
+    kimi_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="KIMI_API_KEY"
     )
 
     # ==================== Kimi Code Subscription ====================
-    kimi_code_api_key: OptionalNonEmptyString = Field(
+    kimi_code_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="KIMI_CODE_API_KEY"
     )
 
     # ==================== Wafer Config ====================
-    wafer_api_key: OptionalNonEmptyString = Field(
+    wafer_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="WAFER_API_KEY"
     )
 
     # ==================== MiniMax Config ====================
-    minimax_api_key: OptionalNonEmptyString = Field(
+    minimax_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="MINIMAX_API_KEY"
     )
 
     # ==================== OpenCode Zen / OpenCode Go ====================
     # Same key from opencode.ai/auth; Zen uses ``opencode_zen/``, Go uses ``opencode_go/``.
-    opencode_api_key: OptionalNonEmptyString = Field(
+    opencode_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="OPENCODE_API_KEY"
     )
 
     # ==================== Vercel AI Gateway ====================
-    vercel_ai_gateway_api_key: OptionalNonEmptyString = Field(
+    vercel_ai_gateway_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="AI_GATEWAY_API_KEY"
     )
 
     # ==================== Amazon Bedrock Mantle ====================
-    bedrock_api_key: OptionalNonEmptyString = Field(
+    bedrock_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="AWS_BEARER_TOKEN_BEDROCK"
     )
     bedrock_base_url: NonEmptyString = Field(
@@ -138,32 +155,32 @@ class Settings(BaseModel):
     )
 
     # ==================== Hugging Face Inference Providers ====================
-    huggingface_api_key: OptionalNonEmptyString = Field(
+    huggingface_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="HUGGINGFACE_API_KEY"
     )
 
     # ==================== Cohere Compatibility API ====================
-    cohere_api_key: OptionalNonEmptyString = Field(
+    cohere_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="COHERE_API_KEY"
     )
 
     # ==================== SambaNova Cloud ====================
-    sambanova_api_key: OptionalNonEmptyString = Field(
+    sambanova_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="SAMBANOVA_API_KEY"
     )
 
     # ==================== Kilo.ai Config ====================
-    kilo_api_key: OptionalNonEmptyString = Field(
+    kilo_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="KILO_API_KEY"
     )
 
     # ==================== Z.ai Coding Plan / General API ====================
-    zai_api_key: OptionalNonEmptyString = Field(
+    zai_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="ZAI_API_KEY"
     )
 
     # ==================== TokenRouter Config ====================
-    tokenrouter_api_key: OptionalNonEmptyString = Field(
+    tokenrouter_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="TOKENROUTER_API_KEY"
     )
     tokenrouter_base_url: NonEmptyString = Field(
@@ -172,7 +189,7 @@ class Settings(BaseModel):
     )
 
     # ==================== NaraRoute Config ====================
-    nararoute_api_key: OptionalNonEmptyString = Field(
+    nararoute_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="NARAROUTE_API_KEY"
     )
     nararoute_base_url: NonEmptyString = Field(
@@ -181,27 +198,27 @@ class Settings(BaseModel):
     )
 
     # ==================== Poolside AI (OpenAI-compatible) ====================
-    poolside_api_key: OptionalNonEmptyString = Field(
+    poolside_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="POOLSIDE_API_KEY"
     )
 
     # ==================== LLM7.io (OpenAI-compatible) ====================
-    llm7_api_key: OptionalNonEmptyString = Field(
+    llm7_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="LLM7_API_KEY"
     )
 
     # ==================== Fireworks AI Config ====================
-    fireworks_api_key: OptionalNonEmptyString = Field(
+    fireworks_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="FIREWORKS_API_KEY"
     )
 
     # ==================== Novita AI Config ====================
-    novita_api_key: OptionalNonEmptyString = Field(
+    novita_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="NOVITA_API_KEY"
     )
 
     # ==================== Cloudflare Workers AI Config ====================
-    cloudflare_api_token: OptionalNonEmptyString = Field(
+    cloudflare_api_token: OptionalApiKeys = Field(
         default=None, validation_alias="CLOUDFLARE_API_TOKEN"
     )
     cloudflare_account_id: OptionalNonEmptyString = Field(
@@ -209,7 +226,7 @@ class Settings(BaseModel):
     )
 
     # ==================== Google Gemini (Google AI Studio) ====================
-    gemini_api_key: OptionalNonEmptyString = Field(
+    gemini_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="GEMINI_API_KEY"
     )
 
@@ -222,82 +239,82 @@ class Settings(BaseModel):
     )
 
     # ==================== Groq (OpenAI-compatible) ====================
-    groq_api_key: OptionalNonEmptyString = Field(
+    groq_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="GROQ_API_KEY"
     )
 
     # ==================== ClinePass (OpenAI-compatible) ====================
-    cline_api_key: OptionalNonEmptyString = Field(
+    cline_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="CLINE_API_KEY"
     )
 
     # ==================== xAI / Grok (OpenAI-compatible) ====================
-    xai_api_key: OptionalNonEmptyString = Field(
+    xai_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="XAI_API_KEY"
     )
 
     # ==================== QwenCloud Token Plan (OpenAI-compatible) ====================
-    qwencloud_api_key: OptionalNonEmptyString = Field(
+    qwencloud_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="QWENCLOUD_API_KEY"
     )
 
     # ==================== QwenCloud Coding Plan (OpenAI-compatible) ====================
-    qwencloud_coding_api_key: OptionalNonEmptyString = Field(
+    qwencloud_coding_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="QWENCLOUD_CODING_API_KEY"
     )
 
     # ==================== Together AI (OpenAI-compatible) ====================
-    together_api_key: OptionalNonEmptyString = Field(
+    together_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="TOGETHER_API_KEY"
     )
 
     # ==================== DeepInfra (OpenAI-compatible) ====================
-    deepinfra_api_key: OptionalNonEmptyString = Field(
+    deepinfra_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="DEEPINFRA_API_KEY"
     )
 
     # ==================== SiliconFlow (OpenAI-compatible) ====================
-    siliconflow_api_key: OptionalNonEmptyString = Field(
+    siliconflow_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="SILICONFLOW_API_KEY"
     )
 
     # ==================== Nebius Token Factory (OpenAI-compatible) ====================
-    nebius_api_key: OptionalNonEmptyString = Field(
+    nebius_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="NEBIUS_API_KEY"
     )
 
     # ==================== Chutes (OpenAI-compatible) ====================
-    chutes_api_key: OptionalNonEmptyString = Field(
+    chutes_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="CHUTES_API_KEY"
     )
 
     # ==================== Featherless AI (OpenAI-compatible) ====================
-    featherless_api_key: OptionalNonEmptyString = Field(
+    featherless_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="FEATHERLESS_API_KEY"
     )
 
     # ==================== Agnes AI (OpenAI-compatible) ====================
-    agnes_api_key: OptionalNonEmptyString = Field(
+    agnes_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="AGNES_API_KEY"
     )
 
     # ==================== ZenMux (OpenAI-compatible) ====================
-    zenmux_api_key: OptionalNonEmptyString = Field(
+    zenmux_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="ZENMUX_API_KEY"
     )
 
     # ==================== W&B Inference (OpenAI-compatible) ====================
-    wandb_api_key: OptionalNonEmptyString = Field(
+    wandb_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="WANDB_API_KEY"
     )
 
     # ==================== Cerebras Inference (OpenAI-compatible) ====================
-    cerebras_api_key: OptionalNonEmptyString = Field(
+    cerebras_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="CEREBRAS_API_KEY"
     )
 
     # ==================== Ollama Cloud ====================
-    ollama_api_key: OptionalNonEmptyString = Field(
+    ollama_api_key: OptionalApiKeys = Field(
         default=None, validation_alias="OLLAMA_API_KEY"
     )
 

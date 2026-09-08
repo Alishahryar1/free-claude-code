@@ -16,13 +16,20 @@ def string_setting(settings: Settings, attr_name: str | None) -> str | None:
 
 def provider_credential(
     descriptor: ProviderDescriptor, settings: Settings
-) -> str | None:
-    """Return the configured credential for a provider descriptor."""
+) -> tuple[str, ...]:
+    """Return the configured credentials for a provider descriptor."""
     if descriptor.static_credential is not None:
-        return descriptor.static_credential
+        return (descriptor.static_credential,)
     if descriptor.credential_attr:
-        return string_setting(settings, descriptor.credential_attr)
-    return None
+        value = getattr(settings, descriptor.credential_attr, None)
+        if value is None:
+            return ()
+        if isinstance(value, tuple):
+            return value
+        if isinstance(value, str) and value.strip():
+            return (value,)
+        return ()
+    return ()
 
 
 def has_provider_configuration(
@@ -36,7 +43,7 @@ def has_provider_configuration(
 
 
 def require_provider_credential(
-    descriptor: ProviderDescriptor, credential: str | None
+    descriptor: ProviderDescriptor, credential: tuple[str, ...]
 ) -> None:
     """Raise a user-facing configuration error when a required key is missing."""
     if descriptor.credential_env is None:
@@ -77,7 +84,7 @@ def build_provider_config(
         )
     proxy = string_setting(settings, descriptor.proxy_attr)
     return ProviderConfig(
-        api_key=credential,
+        api_keys=credential,
         base_url=resolved_base_url,
         rate_limit=settings.provider_rate_limit,
         rate_window=settings.provider_rate_window,

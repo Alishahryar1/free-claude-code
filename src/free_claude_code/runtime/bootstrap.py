@@ -129,7 +129,11 @@ def _create_transcriber(settings: Settings) -> Transcriber | None:
     )
 
 
-def _required_voice_key(api_key: str | None) -> str:
+def _required_voice_key(api_key: str | tuple[str, ...] | None) -> str:
     if api_key is None:
         raise AssertionError("NIM voice settings were not validated")
+    if isinstance(api_key, tuple):
+        if not api_key:
+            raise AssertionError("NIM voice settings were not validated")
+        return api_key[0]
     return api_key

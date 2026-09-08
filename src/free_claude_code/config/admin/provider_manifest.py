@@ -313,9 +313,13 @@ def _credential_field_specs() -> tuple[ConfigFieldSpec, ...]:
                     key=descriptor.credential_env,
                     label=f"{descriptor.display_name} API Key",
                     section_id="providers",
-                    field_type="secret",
+                    field_type="textarea",
                     settings_attr=descriptor.credential_attr,
                     secret=True,
+                    description=(
+                        "Comma-separated list of API keys for automatic fallback. "
+                        "Example: key1,key2,key3. Single key also works."
+                    ),
                 )
             )
         )

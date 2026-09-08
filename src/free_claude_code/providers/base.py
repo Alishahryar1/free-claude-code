@@ -25,7 +25,7 @@ class ProviderConfig:
     (e.g. NIM temperature, top_p) are passed by the provider constructor.
     """
 
-    api_key: str | None
+    api_keys: tuple[str, ...]
     base_url: str
     rate_limit: int
     rate_window: int

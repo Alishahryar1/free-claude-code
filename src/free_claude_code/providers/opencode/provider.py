@@ -96,8 +96,10 @@ class OpenCodeProvider(OpenAIChatProvider):
             admission=admission,
             client=catalog_client,
         )
+        # Ensure we have a client for the responses transport
+        responses_client = self._client or self._get_client(self._api_keys[0])
         self._responses = OpenAIResponsesTransport(
-            client=self._client,
+            client=responses_client,
             admission=admission,
             provider_name=profile.provider_name,
             read_timeout_s=config.http_read_timeout,

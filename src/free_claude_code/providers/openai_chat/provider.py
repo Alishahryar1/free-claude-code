@@ -68,6 +68,8 @@ from free_claude_code.providers.failure_policy import (
     context_window_exceeded_provider_failure,
     is_context_window_finish_reason,
     is_retryable_stream_error,
+    provider_authentication_status,
+    retryable_transient_status,
     underlying_provider_error,
 )
 from free_claude_code.providers.history_replay import (
@@ -535,11 +537,11 @@ class OpenAIChatProvider(BaseProvider):
         self._profile = profile
         self._endpoint_transport = endpoint_transport
         self._provider_name = profile.provider_name
-        if client is None and config.api_key is None and api_key_provider is None:
+        if client is None and not config.api_keys and api_key_provider is None:
             raise ValueError(
                 f"{profile.provider_name} requires an API key or credential provider"
             )
-        self._api_key = config.api_key
+        self._api_keys = config.api_keys
         self._base_url = profile.base_url(config.base_url).rstrip("/")
         # Learned per-model output-token caps from upstream 400 rejections, so
         # later requests clamp proactively instead of paying the 400 each time.
@@ -558,20 +560,31 @@ class OpenAIChatProvider(BaseProvider):
                 timeout=timeout,
             )
         self._owns_client = client is None
-        self._client = client or AsyncOpenAI(
-            api_key=api_key_provider or self._api_key,
-            base_url=self._base_url,
-            max_retries=0,
-            default_headers=default_headers,
-            timeout=timeout,
-            http_client=http_client,
-        )
+        # Client will be created lazily with the first API key
+        self._client = client
+        self._default_headers = default_headers
+        self._timeout = timeout
+        self._http_client = http_client
 
     async def cleanup(self) -> None:
         """Release HTTP client resources."""
         client = getattr(self, "_client", None)
         if self._owns_client and client is not None:
             await client.close()
+
+    def _get_client(self, api_key: str) -> AsyncOpenAI:
+        """Get or create an AsyncOpenAI client with the given API key."""
+        if self._client is not None:
+            # If a client was injected, use it (for testing)
+            return self._client
+        return AsyncOpenAI(
+            api_key=api_key,
+            base_url=self._base_url,
+            max_retries=0,
+            default_headers=self._default_headers,
+            timeout=self._timeout,
+            http_client=self._http_client,
+        )
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """Return model metadata from the OpenAI-compatible models endpoint."""
@@ -636,15 +649,16 @@ class OpenAIChatProvider(BaseProvider):
         """Fetch the profile-selected model-list endpoint once."""
         listing = self._profile.model_listing
         path = listing.path
+        client = self._get_client(self._api_keys[0])
         if path is None:
-            return await self._client.models.list()
+            return await client.models.list()
         if listing.query_params:
-            return await self._client.get(
+            return await client.get(
                 path,
                 cast_to=object,
                 options={"params": dict(listing.query_params)},
             )
-        return await self._client.get(path, cast_to=object)
+        return await client.get(path, cast_to=object)
 
     async def _fetch_paginated_models_payload(self, path: str) -> Any:
         """Fetch a bounded model catalog with one execution per physical page."""
@@ -656,12 +670,13 @@ class OpenAIChatProvider(BaseProvider):
         payloads: list[Any] = []
         total_pages: int | None = None
         page = pagination.first_page
+        client = self._get_client(self._api_keys[0])
         while total_pages is None or page < pagination.first_page + total_pages:
             params = dict(listing.query_params)
             params[pagination.page_param] = str(page)
             execution = self._admission.start_execution()
             payload = await execution.run_call(
-                lambda params=params: self._client.get(
+                lambda params=params: client.get(
                     path,
                     cast_to=object,
                     options={"params": params},
@@ -862,10 +877,13 @@ class OpenAIChatProvider(BaseProvider):
         extra_headers: Mapping[str, str] | None = None,
         reasoning_correction: ReasoningCorrection | None = None,
     ) -> tuple[Any, dict, ProviderAttempt, dict]:
-        """Create a streaming chat completion with bounded request fallbacks."""
+        """Create a streaming chat completion with bounded request fallbacks and API key rotation."""
         body = self._apply_learned_output_cap(body)
         if used_retry_kinds is None:
             used_retry_kinds = set()
+
+        # Per-request key index tracking (not instance variable since providers are shared)
+        key_index = 0
 
         while execution.can_attempt:
             attempt = await execution.open_attempt(operation_kind)
@@ -873,11 +891,23 @@ class OpenAIChatProvider(BaseProvider):
             retain_attempt = False
             create_body = body
             try:
+                # Get the current API key for this attempt
+                if key_index >= len(self._api_keys):
+                    # All keys exhausted - this will be caught by the outer loop
+                    raise ExecutionFailure(
+                        kind=FailureKind.AUTHENTICATION,
+                        message=f"All {len(self._api_keys)} API keys exhausted for {self._provider_name}",
+                        status_code=401,
+                        retryable=False,
+                    )
+
+                current_key = self._api_keys[key_index]
                 create_body = self._prepare_create_body(body)
+
                 client = (
-                    await endpoint.openai_client(self._client)
+                    await endpoint.openai_client(self._get_client(current_key))
                     if endpoint is not None
-                    else self._client
+                    else self._get_client(current_key)
                 )
                 if extra_headers or endpoint is not None:
                     create_body = create_body.copy()
@@ -913,10 +943,44 @@ class OpenAIChatProvider(BaseProvider):
             except asyncio.CancelledError:
                 raise
             except Exception as error:
+                # Check if we should rotate to the next API key
+                should_rotate_key = False
                 if endpoint is not None and await endpoint.retry_authentication(
                     error, attempt, execution
                 ):
-                    continue
+                    should_rotate_key = True
+                else:
+                    # Check for authentication errors (401/403) or rate limits (429)
+                    auth_status = provider_authentication_status(error)
+                    if auth_status in (401, 403):
+                        should_rotate_key = True
+                    else:
+                        retry_status = retryable_transient_status(error)
+                        if retry_status == 429:
+                            should_rotate_key = True
+
+                if should_rotate_key:
+                    key_index += 1
+                    if key_index < len(self._api_keys):
+                        logger.warning(
+                            "{}_STREAM: rotating to API key {}/{} after error: {}",
+                            self._provider_name,
+                            key_index + 1,
+                            len(self._api_keys),
+                            error,
+                        )
+                        # Don't retain this attempt since we're rotating keys
+                        if stream is not None:
+                            await close_provider_stream(
+                                stream,
+                                active_error=error,
+                                provider_name=self._provider_name,
+                                request_id=execution.request_id,
+                            )
+                        await attempt.aclose()
+                        continue
+                    # All keys exhausted, will fall through to failure handling
+
                 retry_body = self._next_create_retry_body(
                     error,
                     body,
