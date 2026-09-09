@@ -352,6 +352,7 @@ def _run_installer_lifecycle(
     publish_failure: bool = False,
     dry_run: bool = False,
     install_root_is_file: bool = False,
+    empty_path_entries: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     local_app_data = tmp_path / "local-app-data"
     if install_root_is_file:
@@ -370,6 +371,9 @@ def _run_installer_lifecycle(
     user_path = os.pathsep.join(
         (str(tmp_path / "user-one"), str(tmp_path / "user-two"))
     )
+    if empty_path_entries:
+        process_path = os.pathsep + process_path + os.pathsep
+        user_path = os.pathsep + user_path + os.pathsep
     script = f"""$ErrorActionPreference = 'Stop'
 $env:LOCALAPPDATA = {_ps_literal(local_app_data)}
 $env:Path = {_ps_literal(process_path)}
@@ -486,14 +490,16 @@ def test_muse_installer_rejects_file_at_managed_root_before_fetch(
 
 
 @pytest.mark.parametrize("powershell", POWERSHELLS)
+@pytest.mark.parametrize("empty_path_entries", [False, True])
 def test_muse_installer_publishes_verified_binary_record_and_path(
-    tmp_path: Path, powershell: str
+    tmp_path: Path, powershell: str, empty_path_entries: bool
 ) -> None:
     payload = b"fresh Muse payload"
     result, local_app_data, call_log = _run_installer_lifecycle(
         tmp_path,
         powershell,
         payload=payload,
+        empty_path_entries=empty_path_entries,
     )
     root, executable, record_path = _managed_paths(local_app_data)
 
@@ -503,8 +509,11 @@ def test_muse_installer_publishes_verified_binary_record_and_path(
         payload
     )
     state = json.loads(result.stdout.splitlines()[-1])
-    assert state["UserPath"].split(os.pathsep)[0] == str(root / "bin")
-    assert state["ProcessPath"].split(os.pathsep)[0] == str(root / "bin")
+    for field, prefix in (("UserPath", "user"), ("ProcessPath", "process")):
+        expected = [str(tmp_path / f"{prefix}-one"), str(tmp_path / f"{prefix}-two")]
+        if empty_path_entries:
+            expected = ["", *expected, ""]
+        assert state[field] == os.pathsep.join([str(root / "bin"), *expected])
     assert call_log.read_text(encoding="utf-8").splitlines() == [
         "metadata",
         "download",
@@ -799,8 +808,9 @@ def _create_managed_install(
 
 
 @pytest.mark.parametrize("powershell", POWERSHELLS)
+@pytest.mark.parametrize("empty_path_entries", [False, True])
 def test_muse_uninstaller_removes_only_managed_assets_and_exact_path_entries(
-    tmp_path: Path, powershell: str
+    tmp_path: Path, powershell: str, empty_path_entries: bool
 ) -> None:
     local_app_data = tmp_path / "local-app-data"
     root, executable, record_path = _create_managed_install(local_app_data)
@@ -808,7 +818,13 @@ def test_muse_uninstaller_removes_only_managed_assets_and_exact_path_entries(
     muse_state.parent.mkdir(parents=True)
     muse_state.write_text('{"native":true}', encoding="utf-8")
 
-    result, _ = _run_uninstaller_lifecycle(tmp_path, powershell)
+    path_entries = [str(tmp_path / "one"), str(tmp_path / "two")]
+    if empty_path_entries:
+        path_entries = ["", *path_entries, "", ""]
+    user_path = os.pathsep.join(
+        [str(root / "bin"), *path_entries, str(root / "bin") + os.sep]
+    )
+    result, _ = _run_uninstaller_lifecycle(tmp_path, powershell, user_path=user_path)
 
     assert result.returncode == 0, result.stderr
     assert not executable.exists()
@@ -816,7 +832,7 @@ def test_muse_uninstaller_removes_only_managed_assets_and_exact_path_entries(
     assert not root.exists()
     assert muse_state.read_text(encoding="utf-8") == '{"native":true}'
     state = json.loads(result.stdout.splitlines()[-1])
-    expected_path = os.pathsep.join((str(tmp_path / "one"), str(tmp_path / "two")))
+    expected_path = os.pathsep.join(path_entries)
     assert state == {
         "UserPath": expected_path,
         "ProcessPath": expected_path,
