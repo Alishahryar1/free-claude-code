@@ -41,6 +41,51 @@ async def create_session(code_api):
 
 
 @pytest.mark.asyncio
+async def test_mode_is_saved_but_native_defaults_stay_private(code_api):
+    client, code, harness, _, _ = code_api
+    harness.configurations["other/vendor/model"] = "other"
+    session = await create_session(code_api)
+    path = f"/admin/api/code/sessions/{session['id']}"
+    changed = await client.patch(
+        path,
+        json={
+            "expected_revision": session["revision"],
+            "mode": "auto_review",
+            "model": "other/vendor/model",
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["mode"] == "auto_review"
+    assert changed.json()["provider_id"] == "other"
+    assert changed.json()["model_name"] == "vendor/model"
+    for mode in (None, "plan", "never"):
+        rejected = await client.patch(
+            path, json={"expected_revision": changed.json()["revision"], "mode": mode}
+        )
+        assert rejected.status_code == 422
+    await code.send(
+        session["id"],
+        str(uuid.uuid4()),
+        changed.json()["revision"],
+        "hello",
+        expected_epoch=code.epoch,
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    detail = (await client.get(path)).json()
+    assert detail["run"]["mode"] == "auto_review"
+    assert "native_permission_defaults" not in detail["session"]
+    assert (await code.get_detail(session["id"])).session.native_permission_defaults
+    rejected = await client.patch(
+        path,
+        json={
+            "expected_revision": detail["session"]["revision"],
+            "native_permission_defaults": {},
+        },
+    )
+    assert rejected.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_code_library_has_one_harness_and_no_native_work_on_open(code_api):
     client, _, harness, _, _ = code_api
     bootstrap = await client.get("/admin/api/code/bootstrap")

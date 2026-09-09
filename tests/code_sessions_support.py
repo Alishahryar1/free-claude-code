@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from free_claude_code.application.code_sessions.models import (
     CodeCatalog,
     CodeConflictError,
+    CodeMode,
     CodeModel,
     CodeUnavailableError,
     CodeValidationError,
@@ -19,6 +20,7 @@ from free_claude_code.application.code_sessions.models import (
     RunStatus,
 )
 from free_claude_code.application.code_sessions.ports import EventSink, HarnessSelection
+from free_claude_code.config.model_refs import split_provider_model_ref
 from free_claude_code.core.json_types import JsonObject
 
 
@@ -26,6 +28,12 @@ class FakeHarness:
     def __init__(self):
         self.connections: list[FakeConnection] = []
         self.model = "provider/model"
+        self.permission_defaults: JsonObject = {
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "sandbox": {"type": "workspaceWrite"},
+            "activePermissionProfile": {"id": ":workspace"},
+        }
         self.configurations = {self.model: "capabilities-1"}
         self.efforts = ("off", "low", "medium", "high", "xhigh", "max")
         self.default_effort = "medium"
@@ -62,6 +70,8 @@ class FakeHarness:
                 CodeModel(
                     id=model,
                     display_name=model,
+                    provider_id=split_provider_model_ref(model)[0],
+                    model_name=split_provider_model_ref(model)[1],
                     reasoning_efforts=self.efforts,
                     default_reasoning_effort=self.default_effort,
                 )
@@ -69,7 +79,7 @@ class FakeHarness:
             ),
         )
 
-    def prepare(self, model, reasoning_effort):
+    def prepare(self, model, reasoning_effort, mode):
         if model not in self.configurations:
             raise CodeValidationError("This model is unavailable.")
         if reasoning_effort is not None and reasoning_effort not in self.efforts:
@@ -80,10 +90,11 @@ class FakeHarness:
             self.configurations[model],
             dict(self.configurations),
             reasoning_effort or self.default_effort,
+            mode,
         )
 
     async def open_history(self, cwd: str, sink: EventSink):
-        return await self.prepare(self.model, None).open(cwd, sink)
+        return await self.prepare(self.model, None, "config").open(cwd, sink)
 
     async def wait_inputs(self, count: int):
         while sum(len(connection.inputs) for connection in self.connections) < count:
@@ -98,6 +109,7 @@ class FakeSelection:
     configuration_key: str
     catalog: dict[str, str]
     reasoning_effort: str | None
+    mode: CodeMode
 
     async def open(self, cwd: str, sink: EventSink):
         connection = FakeConnection(self.harness, sink, self.catalog)
@@ -114,6 +126,8 @@ class FakeConnection:
         self.thread_id: str | None = None
         self.inputs: list[tuple[str, str, str]] = []
         self.efforts: list[str | None] = []
+        self.modes: list[CodeMode] = []
+        self.defaults: list[JsonObject] = []
         self.interrupts: list[str] = []
         self.deleted: list[str] = []
         self.resumed: list[str] = []
@@ -134,7 +148,9 @@ class FakeConnection:
             raise CodeUnavailableError("Native process closed during creation.")
         self.thread_id = f"native-{len(self.harness.histories) + 1}"
         self.harness.histories[self.thread_id] = []
-        return NativeThread(self.thread_id)
+        return NativeThread(
+            self.thread_id, permission_defaults=self.harness.permission_defaults
+        )
 
     async def resume_thread(self, thread_id: str):
         self.resumed.append(thread_id)
@@ -152,11 +168,20 @@ class FakeConnection:
             tuple(
                 NativeTurn(turn_id, tuple(items)) for turn_id, items in groups.items()
             ),
+            self.harness.permission_defaults,
         )
 
-    async def start_turn(self, text: str, selection: HarnessSelection, client_id: str):
+    async def start_turn(
+        self,
+        text: str,
+        selection: HarnessSelection,
+        client_id: str,
+        permission_defaults: JsonObject,
+    ):
         self.inputs.append((client_id, text, selection.model))
         self.efforts.append(selection.reasoning_effort)
+        self.modes.append(selection.mode)
+        self.defaults.append(permission_defaults)
         self.harness.input_changed.set()
         self.harness.submitted.set()
         self.harness.turn_count += 1

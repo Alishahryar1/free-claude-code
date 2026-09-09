@@ -2,12 +2,95 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 from free_claude_code.application.code_sessions.models import CodeUnavailableError
 from free_claude_code.runtime.codex_app_server import CodexAppServer
 from tests.code_sessions_support import FakeHarness
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [None, {"id": "custom"}])
+async def test_complete_mode_overrides_restore_native_defaults(
+    tmp_path, monkeypatch, profile
+):
+    defaults = {
+        "approvalPolicy": {"granular": {"sandbox_approval": True, "rules": False}},
+        "approvalsReviewer": "user",
+        "activePermissionProfile": profile,
+        "sandbox": {
+            "type": "workspaceWrite",
+            "writableRoots": [str(tmp_path / "extra")],
+            "networkAccess": True,
+            "excludeTmpdirEnvVar": True,
+            "excludeSlashTmp": True,
+        },
+    }
+    native = CodexAppServer(
+        [],
+        {},
+        str(tmp_path),
+        AsyncMock(),
+        model_slugs={"provider/model": "native-slug"},
+    )
+    rpc = AsyncMock(return_value={"thread": {"id": "native", "turns": []}, **defaults})
+    monkeypatch.setattr(native, "rpc", rpc)
+    thread = await native.create_thread()
+    assert thread.permission_defaults == defaults
+    assert rpc.call_args.args[1] == {"cwd": str(tmp_path), "modelProvider": "fcc"}
+    rpc.return_value = {"turn": {"id": "turn"}}
+    harness = FakeHarness()
+    expected = {
+        "ask": {
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "permissions": ":workspace",
+        },
+        "auto_review": {
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "auto_review",
+            "permissions": ":workspace",
+        },
+        "full_access": {
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "permissions": ":danger-full-access",
+        },
+        "config": {
+            "approvalPolicy": defaults["approvalPolicy"],
+            "approvalsReviewer": "user",
+            **(
+                {"permissions": "custom"}
+                if profile
+                else {"sandboxPolicy": defaults["sandbox"]}
+            ),
+        },
+    }
+    for mode in ("ask", "auto_review", "full_access", "config"):
+        selection = harness.prepare(harness.model, "high", mode)
+        await native.start_turn("hello", selection, "input", thread.permission_defaults)
+        params = rpc.call_args.args[1]
+        assert {
+            key: value
+            for key, value in params.items()
+            if key
+            in {"approvalPolicy", "approvalsReviewer", "permissions", "sandboxPolicy"}
+        } == expected[mode]
+        assert params["model"] == "native-slug" and params["effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_missing_native_permission_settings_rejects_thread_preparation(
+    tmp_path, monkeypatch
+):
+    native = CodexAppServer([], {}, str(tmp_path), AsyncMock())
+    monkeypatch.setattr(
+        native, "rpc", AsyncMock(return_value={"thread": {"id": "native", "turns": []}})
+    )
+    with pytest.raises(CodeUnavailableError, match="permission"):
+        await native.create_thread()
 
 
 async def connect(tmp_path, mode):
@@ -41,7 +124,10 @@ async def test_jsonl_large_unicode_events_can_precede_rpc_ack(tmp_path):
         assert (await native.create_thread()).id == "native-1"
         assert (
             await native.start_turn(
-                "hello", FakeHarness().prepare("provider/model", None), "input-1"
+                "hello",
+                FakeHarness().prepare("provider/model", None, "config"),
+                "input-1",
+                FakeHarness().permission_defaults,
             )
             == "turn-1"
         )
@@ -60,7 +146,10 @@ async def test_server_rpc_during_start_preserves_numeric_zero_id(tmp_path):
     try:
         await native.create_thread()
         await native.start_turn(
-            "hello", FakeHarness().prepare("provider/model", None), "input-1"
+            "hello",
+            FakeHarness().prepare("provider/model", None, "config"),
+            "input-1",
+            FakeHarness().permission_defaults,
         )
         await asyncio.wait_for(prompted.wait(), 3)
         response = native.prepare_answer(0, {"choice": "0"})
@@ -142,7 +231,10 @@ async def test_spawned_agent_prompt_is_visible_in_its_registered_root_session(tm
     try:
         await native.create_thread()
         await native.start_turn(
-            "delegate", FakeHarness().prepare("provider/model", None), "input-1"
+            "delegate",
+            FakeHarness().prepare("provider/model", None, "config"),
+            "input-1",
+            FakeHarness().permission_defaults,
         )
         await asyncio.wait_for(prompted.wait(), 3)
         event = next(event for event in events if event.kind == "prompt")
@@ -183,7 +275,10 @@ async def test_turn_start_resets_sticky_effort_and_preserves_client_identity(
     harness = FakeHarness()
     for effort in (None, "high", "off", "max", None):
         await native.start_turn(
-            "hello", harness.prepare("provider/model", effort), "operation"
+            "hello",
+            harness.prepare("provider/model", effort, "config"),
+            "operation",
+            harness.permission_defaults,
         )
     assert [request.get("effort") for request in requests] == (
         ["medium", "high", "none", "max", "medium"] if reasoning else [None] * 5

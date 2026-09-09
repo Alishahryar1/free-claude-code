@@ -136,6 +136,89 @@ async def _session(store):
 
 
 @pytest.mark.asyncio
+async def test_mode_and_original_defaults_survive_restart_and_cannot_be_rewritten(
+    store, tmp_path
+):
+    session = await _session(store)
+    with closing(sqlite3.connect(tmp_path / "code.db")) as connection:
+        assert connection.execute(
+            "SELECT native_permission_defaults FROM code_sessions"
+        ).fetchone() == (None,)
+    defaults = {
+        "approvalPolicy": "on-request",
+        "approvalsReviewer": "user",
+        "sandbox": {"type": "readOnly"},
+    }
+    session = session.model_copy(update={"native_permission_defaults": defaults})
+    await store.save_progress(session, session.revision)
+    for replacement in (None, {"different": True}):
+        with pytest.raises(CodeConflictError):
+            await store.save_progress(
+                session.model_copy(update={"native_permission_defaults": replacement}),
+                session.revision,
+            )
+    session = await store.update_settings(
+        session.model_copy(
+            update={"mode": "full_access", "revision": session.revision + 1}
+        ),
+        session.revision,
+    )
+    await store.close()
+    await store.start()
+    saved = await store.get_session(session.id)
+    assert saved.mode == "full_access"
+    assert saved.native_permission_defaults == defaults
+
+
+@pytest.mark.asyncio
+async def test_mode_is_guarded_by_sqlite_busy_and_run_immutability(store):
+    session, run = await _admit(store, await _session(store))
+    with pytest.raises(CodeConflictError):
+        await store.update_settings(
+            session.model_copy(
+                update={"mode": "full_access", "revision": session.revision + 1}
+            ),
+            session.revision,
+        )
+    with pytest.raises(CodeConflictError):
+        await store.save_progress(
+            session,
+            session.revision,
+            run=run.model_copy(update={"mode": "full_access"}),
+        )
+
+
+@pytest.mark.asyncio
+async def test_version_one_database_gains_mode_without_losing_history(store, tmp_path):
+    session, run = await _admit(store, await _session(store))
+    items = await store.items(session.id, None, None)
+    await store.close()
+    with closing(sqlite3.connect(tmp_path / "code.db")) as connection, connection:
+        connection.execute("ALTER TABLE code_sessions DROP COLUMN mode")
+        connection.execute(
+            "ALTER TABLE code_sessions DROP COLUMN native_permission_defaults"
+        )
+        connection.execute("ALTER TABLE code_runs DROP COLUMN mode")
+        connection.execute("PRAGMA user_version = 1")
+    for _ in range(2):
+        await store.start()
+        saved = await store.get_session(session.id)
+        assert saved.mode == "config"
+        assert saved.native_permission_defaults is None
+        assert (await store.get_run(session.id, run.id)).mode == "config"
+        assert await store.items(session.id, None, None) == items
+        with closing(sqlite3.connect(tmp_path / "code.db")) as connection:
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute("UPDATE code_sessions SET mode = 'unknown'")
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    "UPDATE code_sessions SET native_permission_defaults = '[]'"
+                )
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_admission_is_atomic_and_idempotent(store):
     session = await _session(store)
     results = await asyncio.gather(
@@ -417,6 +500,11 @@ async def _legacy_prompt_database(store, path):
     with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("DROP TABLE code_prompts")
         connection.execute(_LEGACY_PROMPTS)
+        connection.execute("ALTER TABLE code_sessions DROP COLUMN mode")
+        connection.execute(
+            "ALTER TABLE code_sessions DROP COLUMN native_permission_defaults"
+        )
+        connection.execute("ALTER TABLE code_runs DROP COLUMN mode")
         connection.execute("PRAGMA user_version = 0")
         for prompt in prompts:
             connection.execute(
@@ -475,7 +563,7 @@ async def test_legacy_prompts_migrate_once_to_run_ends_without_resequencing(
             )
             assert saved[prompt.id] == expected
         with closing(sqlite3.connect(path)) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
             assert any(
                 row[2] == "code_items"

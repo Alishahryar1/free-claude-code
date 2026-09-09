@@ -13,6 +13,12 @@ def emit(value):
 
 
 mode = sys.argv[1]
+defaults = {
+    "approvalPolicy": "on-request",
+    "approvalsReviewer": "user",
+    "sandbox": {"type": "workspaceWrite"},
+    "activePermissionProfile": {"id": ":workspace"},
+}
 creation_id = None
 turn = "turn-1"
 for line in sys.stdin.buffer:
@@ -30,13 +36,18 @@ for line in sys.stdin.buffer:
             emit(
                 {
                     "id": request_id,
-                    "result": {"thread": {"id": "native-1", "turns": []}},
+                    "result": {"thread": {"id": "native-1", "turns": []}, **defaults},
                 }
             )
     elif method == "test/barrier":
         emit({"id": request_id, "result": {}})
     elif method == "test/release-create":
-        emit({"id": creation_id, "result": {"thread": {"id": "native-1", "turns": []}}})
+        emit(
+            {
+                "id": creation_id,
+                "result": {"thread": {"id": "native-1", "turns": []}, **defaults},
+            }
+        )
         emit({"id": request_id, "result": {}})
     elif method == "turn/start":
         emit(

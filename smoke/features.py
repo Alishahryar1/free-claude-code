@@ -28,6 +28,25 @@ class FeatureCoverage:
 
 FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
+        "code_session_modes",
+        "Code session permission choices reach native Codex and persist their review results",
+        (
+            "tests/application/test_code_sessions.py",
+            "tests/runtime/test_codex_app_server.py",
+            "tests/runtime/test_codex_protocol.py",
+            "tests/runtime/test_code_sessions_sqlite.py",
+            "e2e/test_code_sessions.py",
+        ),
+        (),
+        ("test_codex_modes_local_e2e", "test_codex_modes_free_provider_e2e"),
+        ("clients",),
+        (
+            "Codex executable",
+            "FCC_SMOKE_CODEX_FREE_MODEL and OpenRouter key for optional live inference",
+        ),
+        "local behavior must pass when Codex and native sandbox prerequisites are available; free inference is explicitly selected and pricing checked",
+    ),
+    FeatureCoverage(
         "zero_cost_provider_access",
         "Configured provider accepts real conversation turns",
         ("tests/api/test_dependencies.py", "tests/providers/"),

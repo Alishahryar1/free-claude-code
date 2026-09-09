@@ -24,6 +24,21 @@ class CapabilityContract:
 
 CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
     CapabilityContract(
+        "persistence",
+        "code_session_settings_and_reviews",
+        "code_session_modes",
+        "free_claude_code.application.code_sessions.service.CodeService",
+        "Idle session settings updates and native Codex approval events",
+        "Per-turn mode selection, original permission settings, and ordered review history",
+        "Conflicting updates are rejected; native errors and interrupted reviews remain visible",
+        (
+            "tests/application/test_code_sessions.py",
+            "tests/runtime/test_code_sessions_sqlite.py",
+            "e2e/test_code_sessions.py",
+        ),
+        ("test_codex_modes_local_e2e", "test_codex_modes_free_provider_e2e"),
+    ),
+    CapabilityContract(
         "api_compatibility",
         "routes_and_probes",
         "anthropic_api_routes",

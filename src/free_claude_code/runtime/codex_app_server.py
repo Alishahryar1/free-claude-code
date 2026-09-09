@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from free_claude_code.application.code_sessions.models import (
     CodeCatalog,
     CodeConflictError,
+    CodeMode,
     CodeModel,
     CodeUnavailableError,
     CodeValidationError,
@@ -29,6 +30,7 @@ from free_claude_code.cli.launchers.codex_model_catalog import build_codex_model
 from free_claude_code.cli.launchers.resources import LaunchResources
 from free_claude_code.cli.launchers.runner import LaunchContext
 from free_claude_code.cli.process_registry import register_pid, unregister_pid
+from free_claude_code.config.model_refs import split_provider_model_ref
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.version import package_version
@@ -135,7 +137,7 @@ class CodexAppServer:
         response = await self.rpc(
             "thread/start", {"cwd": self._cwd, "modelProvider": "fcc"}
         )
-        native = self._protocol.history(response)
+        native = self._thread_with_permissions(response)
         self.thread_id = native.id
         return native
 
@@ -144,7 +146,7 @@ class CodexAppServer:
             "thread/resume",
             {"threadId": thread_id, "cwd": self._cwd, "modelProvider": "fcc"},
         )
-        native = self._protocol.history(response)
+        native = self._thread_with_permissions(response)
         self.thread_id = native.id
         return native
 
@@ -153,8 +155,25 @@ class CodexAppServer:
             await self.rpc("thread/read", {"threadId": thread_id, "includeTurns": True})
         )
 
+    def _thread_with_permissions(self, response: JsonObject) -> NativeThread:
+        defaults = {
+            key: response.get(key)
+            for key in (
+                "approvalPolicy",
+                "approvalsReviewer",
+                "activePermissionProfile",
+                "sandbox",
+            )
+        }
+        _permission_settings("config", defaults)
+        return replace(self._protocol.history(response), permission_defaults=defaults)
+
     async def start_turn(
-        self, text: str, selection: HarnessSelection, client_id: str
+        self,
+        text: str,
+        selection: HarnessSelection,
+        client_id: str,
+        permission_defaults: JsonObject,
     ) -> str:
         model = self._model_slugs.get(selection.model)
         if not self.thread_id or model is None:
@@ -166,6 +185,7 @@ class CodexAppServer:
             "input": [{"type": "text", "text": text}],
             "clientUserMessageId": client_id,
             "model": model,
+            **_permission_settings(selection.mode, permission_defaults),
         }
         if self._reasoning.get(selection.model, True):
             off = selection.reasoning_effort == "off"
@@ -500,6 +520,7 @@ class _CodexSelection:
     configuration_key: str
     fingerprints: dict[str, str]
     reasoning_effort: str | None
+    mode: CodeMode
 
     async def open(self, cwd: str, sink: EventSink) -> CodexAppServer:
         resources = ExitStack()
@@ -565,7 +586,9 @@ class CodexHarnessFactory:
             ),
         )
 
-    def prepare(self, model: str, reasoning_effort: str | None) -> _CodexSelection:
+    def prepare(
+        self, model: str, reasoning_effort: str | None, mode: CodeMode
+    ) -> _CodexSelection:
         binary = self._binary or shutil.which("codex")
         if binary is None:
             raise CodeUnavailableError("Codex is not installed. " + SPEC.install_hint)
@@ -611,7 +634,7 @@ class CodexHarnessFactory:
             models,
         )
         return _CodexSelection(
-            context, model, fingerprints[model], fingerprints, effort
+            context, model, fingerprints[model], fingerprints, effort, mode
         )
 
     async def open_history(self, cwd: str, sink: EventSink) -> CodexAppServer:
@@ -632,6 +655,7 @@ class CodexHarnessFactory:
 
 
 def _model_option(model: str, entry: JsonObject) -> CodeModel:
+    provider_id, model_name = split_provider_model_ref(model)
     efforts = tuple(
         string_value(object_value(level).get("effort"))
         for level in array_value(entry.get("supported_reasoning_levels"))
@@ -639,6 +663,8 @@ def _model_option(model: str, entry: JsonObject) -> CodeModel:
     return CodeModel(
         id=model,
         display_name=string_value(entry.get("display_name")) or model,
+        provider_id=provider_id,
+        model_name=model_name,
         reasoning_efforts=tuple(
             "off" if effort == "none" else effort for effort in efforts
         )
@@ -646,6 +672,37 @@ def _model_option(model: str, entry: JsonObject) -> CodeModel:
         default_reasoning_effort=string_value(entry.get("default_reasoning_level"))
         or "off",
     )
+
+
+def _permission_settings(mode: CodeMode, defaults: JsonObject) -> JsonObject:
+    if mode != "config":
+        return {
+            "approvalPolicy": "never" if mode == "full_access" else "on-request",
+            "approvalsReviewer": "auto_review" if mode == "auto_review" else "user",
+            "permissions": ":danger-full-access"
+            if mode == "full_access"
+            else ":workspace",
+        }
+    policy = defaults.get("approvalPolicy")
+    reviewer = string_value(defaults.get("approvalsReviewer"))
+    profile = string_value(
+        object_value(defaults.get("activePermissionProfile")).get("id")
+    )
+    sandbox = object_value(defaults.get("sandbox"))
+    if (
+        not isinstance(policy, str | dict)
+        or not policy
+        or not reviewer
+        or (not profile and not sandbox.get("type"))
+    ):
+        raise CodeUnavailableError(
+            "Codex did not return complete native permission settings. Your input was not sent."
+        )
+    return {
+        "approvalPolicy": policy,
+        "approvalsReviewer": reviewer,
+        **({"permissions": profile} if profile else {"sandboxPolicy": sandbox}),
+    }
 
 
 def _fingerprint(entry: JsonObject) -> str:

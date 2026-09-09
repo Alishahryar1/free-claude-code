@@ -12,6 +12,7 @@ type RunStatus = Literal[
     "preparing", "running", "stopping", "completed", "interrupted", "failed"
 ]
 ACTIVE_RUN_STATUSES = frozenset({"preparing", "running", "stopping"})
+type CodeMode = Literal["config", "ask", "auto_review", "full_access"]
 
 
 def now_ms() -> int:
@@ -27,10 +28,12 @@ class CodeSession(Record):
     cwd: str
     model: str
     reasoning_effort: str | None = None
+    mode: CodeMode = "config"
     harness: Literal["codex"] = "codex"
     title: str = "New code session"
     auto_title: bool = True
     native_thread_id: str | None = None
+    native_permission_defaults: JsonObject | None = None
     native_may_have_input: bool = False
     revision: int = 1
     status: Literal["ready", "deleting", "delete_uncertain"] = "ready"
@@ -45,6 +48,7 @@ class CodeRun(Record):
     text: str
     model: str
     reasoning_effort: str | None = None
+    mode: CodeMode = "config"
     ordinal: int = 0
     status: RunStatus = "preparing"
     submission_started: bool = False
@@ -112,6 +116,8 @@ class CodeItemPage:
 class CodeModel(Record):
     id: str
     display_name: str
+    provider_id: str
+    model_name: str
     reasoning_efforts: tuple[str, ...] = ()
     default_reasoning_effort: str | None = None
 
@@ -162,6 +168,7 @@ class HarnessEvent:
         "prompt",
         "resolved",
         "error",
+        "notice",
         "closed",
     ]
     turn_id: str | None = None
@@ -187,6 +194,7 @@ class NativeTurn:
 class NativeThread:
     id: str
     turns: tuple[NativeTurn, ...] = ()
+    permission_defaults: JsonObject | None = None
 
 
 class CodeError(Exception):

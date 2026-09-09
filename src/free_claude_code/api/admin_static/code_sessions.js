@@ -4,6 +4,11 @@
   const modelComboboxes = new Set();
   let modelControl,
     reasoningControl,
+    providerControl,
+    harnessControl,
+    modeControl,
+    providerDraft = null,
+    harnesses = [],
     catalog = [],
     catalogLoaded = false,
     settingsPending = false;
@@ -269,6 +274,7 @@
       if (token !== syncToken || (epoch && data.epoch !== epoch)) return;
       available = data.available;
       catalog = data.models;
+      harnesses = data.harnesses;
       catalogLoaded = true;
       availabilityNotice = data.message || "";
     } catch (error) {
@@ -286,6 +292,7 @@
     if (epoch !== readyData.epoch) {
       epoch = readyData.epoch;
       records.clear();
+      providerDraft = null;
       deleted.clear();
       rendered = null;
     }
@@ -417,6 +424,7 @@
       ++viewToken;
       rendered = null;
       settingsPending = false;
+      providerDraft = null;
       notice = "";
       render();
       if (connected && epoch) {
@@ -675,6 +683,8 @@
     const id = selected,
       record = records.get(id);
     if (!ready(record) || settingsPending) return;
+    const revision = providerDraft?.revision ?? record.session.revision;
+    providerDraft = null;
     settingsPending = true;
     notice = "";
     renderControls();
@@ -682,7 +692,7 @@
       const session = await api(`${base}/sessions/${id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          expected_revision: record.session.revision,
+          expected_revision: revision,
           ...changes,
         }),
       });
@@ -709,6 +719,7 @@
   }
   function selectionError(record) {
     if (!record?.session) return "";
+    if (providerDraft) return "Choose a model for the selected provider.";
     if (!catalogLoaded) return "Model list unavailable. Reconnecting…";
     const model = catalog.find((model) => model.id === record.session.model);
     if (!model) return "Selected model is unavailable. Choose another model.";
@@ -761,32 +772,105 @@
     dismissDialog();
     root.replaceChildren();
     modelComboboxes.clear();
-    modelControl = reasoningControl = null;
+    modelControl =
+      reasoningControl =
+      providerControl =
+      harnessControl =
+      modeControl =
+        null;
     const message = element("div", "", "session-notice");
     message.id = "codeNotice";
     message.setAttribute("role", "status");
     if (selected) {
       const id = selected,
         record = get(id);
-      const controls = element("div", undefined, "session-controls");
-      modelControl = UI.modelControl(
-        "codeModel",
-        record.session?.model || "",
-        () => catalog.map((model) => model.id),
-        modelComboboxes,
-        (model) => {
-          void updateSettings({ model });
+      const controls = element(
+        "div",
+        undefined,
+        "session-controls code-session-controls",
+      );
+      providerControl = UI.selectControl(
+        "codeProvider",
+        "Provider",
+        [],
+        "",
+        (provider) => {
+          const current = records.get(selected);
+          modelControl.combobox.close();
+          providerDraft =
+            provider === current.session.provider_id
+              ? null
+              : {
+                  id: selected,
+                  revision: current.session.revision,
+                  provider,
+                };
+          renderControls();
         },
       );
-      reasoningControl = UI.reasoningControl(
+      modelControl = UI.modelControl(
+        "codeModel",
+        record.session?.model_name || "",
+        () =>
+          catalog
+            .filter(
+              (model) =>
+                model.provider_id ===
+                (providerDraft?.provider ||
+                  records.get(selected)?.session?.provider_id),
+            )
+            .map((model) => model.model_name),
+        modelComboboxes,
+        (name) => {
+          const provider =
+            providerDraft?.provider ||
+            records.get(selected)?.session?.provider_id;
+          const model = catalog.find(
+            (model) =>
+              model.provider_id === provider && model.model_name === name,
+          );
+          if (model) void updateSettings({ model: model.id });
+        },
+      );
+      reasoningControl = UI.selectControl(
         "codeReasoning",
+        "Effort",
         [],
         "",
         (value) => {
           void updateSettings({ reasoning_effort: value });
         },
       );
-      controls.append(modelControl.group, reasoningControl.group);
+      harnessControl = UI.selectControl(
+        "codeHarness",
+        "Harness",
+        [],
+        "",
+        () => {},
+      );
+      modeControl = UI.selectControl(
+        "codeMode",
+        "Mode",
+        [
+          ["config", "Use config"],
+          ["ask", "Ask"],
+          ["auto_review", "Auto-review"],
+          ["full_access", "Full access"],
+        ],
+        record.session?.mode || "config",
+        (mode) => {
+          void updateSettings({ mode });
+        },
+      );
+      modeControl.select.title =
+        "Use config uses this session's original configured permission selection.";
+      controls.append(
+        providerControl.group,
+        modelControl.group,
+        reasoningControl.group,
+        harnessControl.group,
+        modeControl.group,
+      );
       const deletion = button("Delete", remove, "danger-button");
       deletion.id = "codeDelete";
       const header = UI.header(
@@ -973,7 +1057,7 @@
         );
         items.insertBefore(group, next || null);
       }
-      for (const item of source) renderItem(group.firstChild, item);
+      for (const item of source) renderItem(group.firstChild, item, run);
       const outcome = group.querySelector(".code-outcome");
       outcome.hidden = !["failed", "interrupted"].includes(run.status);
       const status = outcome.querySelector(".session-generation-status");
@@ -992,6 +1076,16 @@
     const record = records.get(selected),
       isBusy = busy(record),
       input = root.querySelector("#codeComposer");
+    if (
+      providerDraft &&
+      (providerDraft.id !== selected ||
+        providerDraft.revision !== record?.session?.revision ||
+        isBusy ||
+        pending(record))
+    ) {
+      providerDraft = null;
+      modelControl.combobox.close();
+    }
     const send = root.querySelector("#codeSend"),
       stop = root.querySelector("#codeStop");
     send.hidden = isBusy;
@@ -1026,10 +1120,36 @@
       pending(record) ||
       settingsPending ||
       !catalogLoaded;
-    modelControl.update(record?.session?.model || "", disabled);
+    const provider =
+      providerDraft?.provider || record?.session?.provider_id || "";
+    if (modelControl.group.dataset.provider !== provider) {
+      modelControl.combobox.close();
+      modelControl.group.dataset.provider = provider;
+    }
+    const providers = [...new Set(catalog.map((model) => model.provider_id))];
+    if (provider && !providers.includes(provider)) providers.push(provider);
+    providerControl.update(
+      providers.map((value) => [value, value]),
+      provider,
+    );
+    providerControl.select.disabled = disabled;
+    modelControl.update(
+      providerDraft ? "" : record?.session?.model_name || "",
+      disabled,
+    );
+    modelControl.input.placeholder = "Choose a model";
+    harnessControl.update(
+      harnesses.map((harness) => [harness.id, harness.name]),
+      record?.session?.harness || "codex",
+    );
+    harnessControl.select.disabled = true;
+    modeControl.select.value = record?.session?.mode || "config";
+    modeControl.select.disabled = disabled;
     const model = catalog.find((model) => model.id === record?.session?.model),
       effort =
-        record?.session?.reasoning_effort || model?.default_reasoning_effort || "off";
+        record?.session?.reasoning_effort ||
+        model?.default_reasoning_effort ||
+        "off";
     const options = ["off", "low", "medium", "high", "xhigh", "max"].map(
       (value) => [value, value],
     );
@@ -1061,7 +1181,7 @@
     UI.resizeComposer(input);
   }
 
-  function renderItem(parent, item) {
+  function renderItem(parent, item, run) {
     if (item.kind === "prompt") {
       const prompt = records.get(selected).prompts.get(item.id)?.value;
       if (prompt) renderPrompt(parent, prompt, item.sequence);
@@ -1095,6 +1215,14 @@
       );
       insertEntry(parent, node, item.sequence);
     }
+    const summary = node.querySelector(".code-tool > summary");
+    if (summary)
+      summary.textContent =
+        item.kind === "auto_review" &&
+        !item.complete &&
+        !activeStatuses.has(run.status)
+          ? "Auto-review: Result unavailable"
+          : item.title || "Tool";
     const content = node.querySelector(".code-prose"),
       value = item.html ?? item.text;
     if (node.codeText !== value) {

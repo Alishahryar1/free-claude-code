@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import get_args
 
 from loguru import logger
 
@@ -20,6 +21,7 @@ from .models import (
     CodeConflictError,
     CodeDetail,
     CodeItem,
+    CodeMode,
     CodeNotFoundError,
     CodePage,
     CodePrompt,
@@ -333,9 +335,14 @@ class CodeService:
     async def _update_settings(
         self, session_id: str, revision: int, changes: JsonObject
     ) -> CodeSession:
-        if not changes or changes.keys() - {"title", "model", "reasoning_effort"}:
+        if not changes or changes.keys() - {
+            "title",
+            "model",
+            "reasoning_effort",
+            "mode",
+        }:
             raise CodeValidationError(
-                "Choose a title, model or reasoning effort to update."
+                "Choose a title, model, effort or mode to update."
             )
         owner = await self._owner(session_id)
         async with owner.lock:
@@ -348,11 +355,17 @@ class CodeService:
                         "Enter a title of at most 200 characters."
                     )
                 updates.update(title=title.strip(), auto_title=False)
+            if changes.keys() & {"model", "reasoning_effort", "mode"} and (
+                owner.busy or owner.pending
+            ):
+                raise CodeConflictError(
+                    "Finish this turn and its prompts before changing settings."
+                )
+            if "mode" in changes and changes["mode"] not in get_args(
+                CodeMode.__value__
+            ):
+                raise CodeValidationError("Choose an available permission mode.")
             if changes.keys() & {"model", "reasoning_effort"}:
-                if owner.busy or owner.pending:
-                    raise CodeConflictError(
-                        "Finish this turn and its prompts before changing settings."
-                    )
                 model = changes.get("model", owner.session.model)
                 entry = next(
                     (entry for entry in self.catalog().models if entry.id == model),
@@ -426,7 +439,7 @@ class CodeService:
                     "This session is busy. Your draft has been kept."
                 )
             selection = self._harness.prepare(
-                owner.session.model, owner.session.reasoning_effort
+                owner.session.model, owner.session.reasoning_effort, owner.session.mode
             )
             run = CodeRun(
                 id=operation_id,
@@ -434,6 +447,7 @@ class CodeService:
                 text=text,
                 model=selection.model,
                 reasoning_effort=selection.reasoning_effort,
+                mode=selection.mode,
             )
             title = (
                 " ".join(text.split())[:80]
@@ -601,7 +615,12 @@ class CodeService:
             async with owner.lock:
                 if native is not None:
                     session = owner.session.model_copy(
-                        update={"native_thread_id": native.id}
+                        update={
+                            "native_thread_id": native.id,
+                            "native_permission_defaults": owner.session.native_permission_defaults
+                            if owner.session.native_permission_defaults is not None
+                            else native.permission_defaults,
+                        }
                     )
                     await self._persist(owner, session)
                     owner.session = session
@@ -613,13 +632,18 @@ class CodeService:
                 if run.stop_requested or not self._accepting:
                     await self._finish_locked(owner, "interrupted")
                     return
+                defaults = owner.session.native_permission_defaults
+                if defaults is None:
+                    raise CodeUnavailableError(
+                        "The harness did not return its permission settings. Your input was not sent."
+                    )
                 run = run.model_copy(update={"submission_started": True})
                 session = owner.session.model_copy(
                     update={"native_may_have_input": True}
                 )
                 await self._persist(owner, session, run=run)
                 owner.session, owner.run = session, run
-            turn_id = await connection.start_turn(run.text, selection, run.id)
+            turn_id = await connection.start_turn(run.text, selection, run.id, defaults)
             async with owner.lock:
                 if owner.run is None or owner.run.id != run_id or not owner.busy:
                     return
@@ -935,6 +959,24 @@ class CodeService:
                         "run.notice",
                         message=event.message or "Codex reported an error.",
                         will_retry=event.will_retry,
+                    )
+                elif event.kind == "notice" and event.message and run is not None:
+                    await self._flush_locked(owner)
+                    item = CodeItem(
+                        id=str(uuid.uuid4()),
+                        session_id=owner.session.id,
+                        sequence=owner.sequence + 1,
+                        run_id=run.id,
+                        kind="notice",
+                        title="Notice",
+                        text=event.message,
+                        complete=True,
+                    )
+                    await self._persist(owner, owner.session, items=(item,))
+                    owner.items[item.id] = item
+                    owner.sequence = item.sequence
+                    self._publish(
+                        owner, "item.updated", item=item.model_dump(mode="json")
                     )
                 elif event.kind == "closed":
                     owner.connection = None

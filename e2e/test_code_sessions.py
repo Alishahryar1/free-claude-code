@@ -9,6 +9,208 @@ from free_claude_code.application.code_sessions.models import (
     HarnessEvent,
     PromptRequest,
 )
+from free_claude_code.runtime.codex_protocol import CodexProtocol
+
+
+@pytest.mark.parametrize("width", [1440, 900, 390])
+def test_five_header_controls_fit_without_hiding_composer(
+    page, admin_base_url, tmp_path, code_control, width
+):
+    page.set_viewport_size({"width": width, "height": 900})
+    create_session(page, admin_base_url, tmp_path)
+    expect(page.locator("#codeMode")).to_be_enabled()
+    for control in (
+        "codeProvider",
+        "codeModel",
+        "codeReasoning",
+        "codeHarness",
+        "codeMode",
+    ):
+        expect(page.locator(f"#{control}")).to_be_visible()
+        box = page.locator(f"#{control}").bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= width
+    controls = page.locator(".session-controls").bounding_box()
+    composer = page.locator("#codeComposer").bounding_box()
+    assert composer["y"] >= controls["y"] + controls["height"]
+    assert composer["y"] + composer["height"] <= 900
+    page.screenshot(path=str(tmp_path / f"code-modes-{width}.png"))
+
+
+def test_header_provider_draft_and_mode_sync(
+    page, context, admin_base_url, tmp_path, code_control
+):
+    code_control.harness.configurations.update(
+        {"other/vendor/model": "other", "other/second": "second"}
+    )
+    url = create_session(page, admin_base_url, tmp_path)
+    expect(
+        page.locator(
+            ".session-controls .session-control > span, .session-controls .session-control > label"
+        )
+    ).to_have_text(["Provider", "Model", "Effort", "Harness", "Mode"])
+    expect(page.locator("#codeHarness")).to_have_value("codex")
+    expect(page.locator("#codeMode")).to_have_value("config")
+    second = context.new_page()
+    try:
+        second.goto(url)
+        page.locator("#codeComposer").fill("Keep this draft")
+        page.locator("#codeProvider").select_option("other")
+        expect(page.locator("#codeModel")).to_have_value("")
+        expect(page.locator("#codeSend")).to_be_disabled()
+        expect(second.locator("#codeProvider")).to_have_value("provider")
+        page.locator("#codeModel").fill("vendor/model")
+        page.get_by_role("option", name="vendor/model", exact=True).click()
+        expect(second.locator("#codeProvider")).to_have_value("other")
+        expect(second.locator("#codeModel")).to_have_value("vendor/model")
+        page.locator("#codeMode").select_option("auto_review")
+        expect(second.locator("#codeMode")).to_have_value("auto_review")
+        page.reload()
+        expect(page.locator("#codeMode")).to_have_value("auto_review")
+        expect(page.locator("#codeComposer")).to_have_value("Keep this draft")
+        send(page, "Use the selected mode")
+        connection = code_control.connection()
+        assert connection.modes == ["auto_review"]
+        assert connection.inputs[0][2] == "other/vendor/model"
+        for control in ("codeProvider", "codeModel", "codeReasoning", "codeMode"):
+            expect(page.locator(f"#{control}")).to_be_disabled()
+            expect(second.locator(f"#{control}")).to_be_disabled()
+    finally:
+        second.close()
+
+
+@pytest.mark.parametrize("reset", ["refresh", "conflict"])
+def test_unfinished_provider_selection_is_discarded_without_losing_message(
+    page, context, admin_base_url, tmp_path, code_control, reset
+):
+    code_control.harness.configurations["other/model"] = "other"
+    url = create_session(page, admin_base_url, tmp_path)
+    second = context.new_page()
+    try:
+        second.goto(url)
+        page.locator("#codeComposer").fill("Keep me")
+        page.locator("#codeProvider").select_option("other")
+        expect(page.locator("#codeSend")).to_be_disabled()
+        if reset == "refresh":
+            page.reload()
+        else:
+            second.locator("#codeMode").select_option("ask")
+        expect(page.locator("#codeProvider")).to_have_value("provider")
+        expect(page.locator("#codeModel")).to_have_value("model")
+        expect(page.locator("#codeSend")).to_be_enabled()
+        expect(page.locator("#codeComposer")).to_have_value("Keep me")
+    finally:
+        second.close()
+
+
+def test_provider_change_in_another_tab_closes_old_model_options(
+    page, context, admin_base_url, tmp_path, code_control
+):
+    code_control.harness.configurations["other/model"] = "other"
+    url = create_session(page, admin_base_url, tmp_path)
+    second = context.new_page()
+    try:
+        second.goto(url)
+        page.locator("#codeModel").fill("mod")
+        expect(page.get_by_role("option", name="model", exact=True)).to_be_visible()
+        second.locator("#codeProvider").select_option("other")
+        second.locator("#codeModel").fill("model")
+        second.get_by_role("option", name="model", exact=True).click()
+        expect(page.locator("#codeProvider")).to_have_value("other")
+        expect(page.get_by_role("listbox")).to_be_hidden()
+        expect(page.locator("#codeModel")).to_have_value("model")
+    finally:
+        second.close()
+
+
+def test_failed_mode_patch_restores_saved_controls_and_keeps_draft(
+    page, admin_base_url, tmp_path, code_control
+):
+    url = create_session(page, admin_base_url, tmp_path)
+    path = f"**/admin/api/code/sessions/{url.rsplit('/', 1)[1]}"
+    page.route(
+        path,
+        lambda route: (
+            route.fulfill(status=409, json={"detail": "Settings changed"})
+            if route.request.method == "PATCH"
+            else route.continue_()
+        ),
+    )
+    page.locator("#codeComposer").fill("Keep this message")
+    page.locator("#codeMode").select_option("full_access")
+    expect(page.locator("#codeNotice")).to_contain_text("Settings changed")
+    expect(page.locator("#codeMode")).to_have_value("config")
+    expect(page.locator("#codeMode")).to_be_enabled()
+    expect(page.locator("#codeComposer")).to_have_value("Keep this message")
+
+
+def test_review_updates_inline_and_unfinished_review_settles_after_restart_view(
+    page, context, admin_base_url, tmp_path, code_control
+):
+    url = create_session(page, admin_base_url, tmp_path)
+    send(page, "Review a command")
+    connection = code_control.connection()
+    protocol = CodexProtocol(connection.generation)
+    payload = {
+        "threadId": connection.thread_id,
+        "turnId": "turn-1",
+        "reviewId": "one",
+        "targetItemId": "tool",
+        "action": {
+            "type": "command",
+            "command": "echo harmless",
+            "cwd": str(tmp_path),
+            "source": "shell",
+        },
+        "review": {"status": "inProgress"},
+    }
+    second = context.new_page()
+    try:
+        second.goto(url)
+        code_control.run(
+            connection.sink(
+                protocol.notification("item/autoApprovalReview/started", payload)
+            )
+        )
+        review = page.locator('[data-kind="auto_review"]')
+        expect(review.locator("summary")).to_have_text("Auto-review: Reviewing")
+        review.locator("summary").click()
+        code_control.run(
+            connection.sink(
+                protocol.notification(
+                    "item/autoApprovalReview/completed",
+                    {
+                        **payload,
+                        "review": {
+                            "status": "approved",
+                            "rationale": "Harmless local action",
+                        },
+                    },
+                )
+            )
+        )
+        expect(review.locator("summary")).to_have_text("Auto-review: Approved")
+        expect(review.locator("details")).to_have_attribute("open", "")
+        expect(review).to_contain_text("Harmless local action")
+        expect(second.locator('[data-kind="auto_review"] summary')).to_have_text(
+            "Auto-review: Approved"
+        )
+        code_control.run(
+            connection.sink(
+                protocol.notification(
+                    "item/autoApprovalReview/started", {**payload, "reviewId": "two"}
+                )
+            )
+        )
+        code_control.run(connection.finish("turn-1", "interrupted"))
+        expect(page.locator('[data-kind="auto_review"] summary')).to_have_text(
+            ["Auto-review: Approved", "Auto-review: Result unavailable"]
+        )
+        page.reload()
+        expect(page.locator('[data-kind="auto_review"] summary')).to_have_text(
+            ["Auto-review: Approved", "Auto-review: Result unavailable"]
+        )
+    finally:
+        second.close()
 
 
 def create_session(page, base_url, directory):
@@ -971,7 +1173,7 @@ def test_off_clears_effort_when_reasoning_becomes_unavailable(
     try:
         second.goto(url)
         expect(second.locator("#codeReasoning")).to_have_value("off")
-        expect(second.locator("#codeModel")).to_have_value("provider/model")
+        expect(second.locator("#codeModel")).to_have_value("model")
         page.locator("#codeSend").click()
         connection = code_control.connection()
         assert connection.efforts == ["off"]
@@ -1218,11 +1420,9 @@ def test_model_effort_picker_syncs_tabs_and_keeps_missing_selection(
     second = context.new_page()
     try:
         second.goto(url)
-        page.get_by_role("combobox", name="Selected model", exact=True).fill(
-            "provider/other"
-        )
-        page.get_by_role("option", name="provider/other", exact=True).click()
-        expect(second.locator("#codeModel")).to_have_value("provider/other")
+        page.get_by_role("combobox", name="Selected model", exact=True).fill("other")
+        page.get_by_role("option", name="other", exact=True).click()
+        expect(second.locator("#codeModel")).to_have_value("other")
         page.locator("#codeReasoning").select_option("high")
         expect(second.locator("#codeReasoning")).to_have_value("high")
         send(page, "Use choice")
@@ -1241,7 +1441,7 @@ def test_model_effort_picker_syncs_tabs_and_keeps_missing_selection(
         else:
             page.locator("#codeSend").click()
             expect(page.locator("#codeNotice")).to_contain_text("unavailable")
-        expect(page.locator("#codeModel")).to_have_value("provider/other")
+        expect(page.locator("#codeModel")).to_have_value("other")
         expect(page.locator("#codeSend")).to_be_disabled()
         expect(page.locator("#codeComposer")).to_have_value("Preserve me")
         expect(page.locator("#codeComposerStatus")).to_contain_text("unavailable")
