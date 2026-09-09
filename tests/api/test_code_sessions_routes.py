@@ -9,7 +9,7 @@ from free_claude_code.application.code_sessions import CodeService
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from tests.api.support import create_test_app
-from tests.code_sessions_support import FakeHarness
+from tests.code_sessions_support import CodexPackets, FakeHarness
 
 
 @pytest_asyncio.fixture
@@ -38,6 +38,35 @@ async def create_session(code_api):
     )
     assert response.status_code == 201
     return response.json()
+
+
+@pytest.mark.asyncio
+async def test_detail_exposes_child_review_liveness_without_native_source(code_api):
+    client, code, harness, _, _ = code_api
+    session = await create_session(code_api)
+    path = f"/admin/api/code/sessions/{session['id']}"
+    await code.send(
+        session["id"],
+        str(uuid.uuid4()),
+        session["revision"],
+        "Delegate",
+        expected_epoch=code.epoch,
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    connection = harness.connections[0]
+    packets = CodexPackets(connection)
+    await packets.spawn()
+    await packets.review()
+    await connection.finish("turn-1")
+    detail = (await client.get(path)).json()
+    review = detail["items"][-1]
+    assert detail.get("active_review_ids") == [review["id"]]
+    assert review["kind"] == "subagent_auto_review"
+    assert not {"raw", "native_turn_id", "native_item_id", "generation"} & review.keys()
+    await connection.close()
+    closed = (await client.get(path)).json()
+    assert closed["active_review_ids"] == []
+    assert closed["items"] == detail["items"]
 
 
 @pytest.mark.asyncio

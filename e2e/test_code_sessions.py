@@ -10,6 +10,7 @@ from free_claude_code.application.code_sessions.models import (
     PromptRequest,
 )
 from free_claude_code.runtime.codex_protocol import CodexProtocol
+from tests.code_sessions_support import CodexPackets
 
 
 @pytest.mark.parametrize("width", [1440, 900, 390])
@@ -211,6 +212,96 @@ def test_review_updates_inline_and_unfinished_review_settles_after_restart_view(
         )
     finally:
         second.close()
+
+
+def test_child_review_outlives_parent_and_updates_in_place_in_both_tabs(
+    page, context, admin_base_url, tmp_path, code_control
+):
+    url = create_session(page, admin_base_url, tmp_path)
+    send(page, "Delegate work")
+    connection = code_control.connection()
+    packets = CodexPackets(connection)
+    code_control.run(packets.spawn())
+    second = context.new_page()
+    try:
+        second.goto(url)
+        code_control.run(packets.review())
+        review = page.locator('[data-kind="subagent_auto_review"]')
+        expect(review.locator("summary")).to_have_text(
+            "Sub-agent Auto-review: Reviewing"
+        )
+        identity = review.get_attribute("data-id")
+        review.locator("summary").click()
+        code_control.run(connection.finish("turn-1"))
+        second.reload()
+        expect(
+            second.locator('[data-kind="subagent_auto_review"] summary')
+        ).to_have_text("Sub-agent Auto-review: Reviewing")
+        page.locator("#codeComposer").fill("Continue while reviewing")
+        expect(page.locator("#codeSend")).to_be_enabled()
+        page.locator("#codeSend").click()
+        code_control.run(code_control.harness.wait_inputs(2))
+        code_control.run(packets.review(status="approved"))
+        expect(review.locator("summary")).to_have_text(
+            "Sub-agent Auto-review: Approved"
+        )
+        expect(review).to_have_attribute("data-id", identity)
+        expect(review.locator("details")).to_have_attribute("open", "")
+        expect(
+            second.locator('[data-kind="subagent_auto_review"] summary')
+        ).to_have_text("Sub-agent Auto-review: Approved")
+        messages = page.locator(".code-item")
+        expect(messages).to_have_count(3)
+        expect(messages.nth(1)).to_have_attribute("data-id", identity)
+        expect(messages.nth(2)).to_contain_text("Continue while reviewing")
+        code_control.run(connection.finish("turn-2"))
+        code_control.run(packets.review(review_id="pending"))
+        code_control.run(packets.warning())
+        expect(page.locator('[data-kind="notice"]')).to_contain_text(
+            "Sub-agent: Native warning"
+        )
+        code_control.run(connection.close())
+        expected = [
+            "Sub-agent Auto-review: Approved",
+            "Sub-agent Auto-review: Result unavailable",
+        ]
+        expect(page.locator('[data-kind="subagent_auto_review"] summary')).to_have_text(
+            expected
+        )
+        expect(
+            second.locator('[data-kind="subagent_auto_review"] summary')
+        ).to_have_text(expected)
+        page.reload()
+        expect(page.locator('[data-kind="subagent_auto_review"] summary')).to_have_text(
+            expected
+        )
+    finally:
+        second.close()
+
+
+@pytest.mark.parametrize("change", ["start", "close"])
+def test_child_review_liveness_ignores_an_older_detail_snapshot(
+    page, admin_base_url, tmp_path, code_control, change
+):
+    url = create_session(page, admin_base_url, tmp_path)
+    send(page, "Delegate")
+    connection = code_control.connection()
+    packets = CodexPackets(connection)
+    code_control.run(packets.spawn())
+    code_control.run(connection.finish("turn-1"))
+    if change == "close":
+        code_control.run(packets.review())
+    path = f"{admin_base_url}/admin/api/code/sessions/{url.rsplit('/', 1)[1]}"
+    previous = page.request.get(path).json()
+    code_control.run(packets.review() if change == "start" else connection.close())
+    title = "Sub-agent Auto-review: " + (
+        "Reviewing" if change == "start" else "Result unavailable"
+    )
+    summary = page.locator('[data-kind="subagent_auto_review"] summary')
+    expect(summary).to_have_text(title)
+    page.route(path, lambda route: route.fulfill(json=previous))
+    page.evaluate("window.CodeSessions.refresh()")
+    expect(summary).to_have_text(title)
 
 
 def create_session(page, base_url, directory):

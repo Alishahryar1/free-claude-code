@@ -150,7 +150,8 @@ uv run pytest smoke/product/test_nvidia_nim_vision_product_live.py -n 0 -s --tb=
 
 Run the installed Codex against a local simulated provider, with disposable
 sessions and folders. This checks Ask, Auto-review, Full access, and returning
-to Use config without spending provider credits:
+to Use config without spending provider credits. It also checks a sub-agent's
+review completing after the parent reply and a subsequent message:
 
 ```powershell
 $env:FCC_LIVE_SMOKE = "1"

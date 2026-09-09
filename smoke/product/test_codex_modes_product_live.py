@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import shutil
+import sqlite3
 import sys
 import threading
 import uuid
@@ -77,8 +78,32 @@ def _environment(tmp_path: Path, model: str) -> tuple[dict[str, str], set[str]]:
     return env, unset
 
 
+def _tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "tool_calls": [
+            {
+                "index": 0,
+                "id": "call_" + uuid.uuid4().hex,
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(arguments)},
+            }
+        ]
+    }
+
+
+def _marker_command(marker: Path) -> str:
+    return (
+        f"Set-Content -LiteralPath '{str(marker).replace(chr(39), chr(39) * 2)}' -Value smoke"
+        if os.name == "nt"
+        else f"printf smoke > {shlex.quote(str(marker))}"
+    )
+
+
 @contextmanager
-def _canned_provider() -> Iterator[tuple[str, dict[str, Any]]]:
+def _canned_provider(
+    review_release: threading.Event | None = None,
+    child_finished: threading.Event | None = None,
+) -> Iterator[tuple[str, dict[str, Any]]]:
     state: dict[str, Any] = {"requests": [], "command": None, "reviews": 0}
 
     class Handler(BaseHTTPRequestHandler):
@@ -106,8 +131,19 @@ def _canned_provider() -> Iterator[tuple[str, dict[str, Any]]]:
                     .get("json_schema", {})
                     .get("schema", {})
                 )
+                # The child starts without the parent's history. Route the canned
+                # actor by that boundary, independently of task-message encoding.
+                child_request = child_finished is not None and not any(
+                    "FCC_PARENT_REVIEW_WORK" in json.dumps(message.get("content", ""))
+                    for message in request["messages"]
+                    if message["role"] == "user"
+                )
                 if "outcome" in schema.get("properties", {}):
                     state["reviews"] += 1
+                    if review_release is not None:
+                        assert review_release.wait(30), (
+                            "Local child reviewer was not released"
+                        )
                     delta = {
                         "content": json.dumps(
                             {
@@ -119,7 +155,35 @@ def _canned_provider() -> Iterator[tuple[str, dict[str, Any]]]:
                         )
                     }
                     reason = "stop"
-                elif state["command"]:
+                elif state.get("spawn"):
+                    functions = {
+                        tool["function"]["name"]: tool["function"]
+                        for tool in request["tools"]
+                        if tool["type"] == "function"
+                    }
+                    spawn_name = next(
+                        (
+                            name
+                            for name in functions
+                            if name.rsplit("__", 1)[-1] == "spawn_agent"
+                        ),
+                        None,
+                    )
+                    assert spawn_name is not None, list(functions)
+                    properties = functions[spawn_name]["parameters"]["properties"]
+                    arguments = {
+                        "message": "FCC_CHILD_REVIEW_WORK: Execute the disposable local smoke command, then finish."
+                    }
+                    if "task_name" in properties:
+                        arguments["task_name"] = "smoke_child"
+                    if "fork_turns" in properties:
+                        arguments["fork_turns"] = "none"
+                    elif "fork_context" in properties:
+                        arguments["fork_context"] = False
+                    state["spawn"] = False
+                    delta = _tool_call(spawn_name, arguments)
+                    reason = "tool_calls"
+                elif state["command"] and (child_finished is None or child_request):
                     names = [
                         tool["function"]["name"]
                         for tool in request["tools"]
@@ -136,21 +200,11 @@ def _canned_provider() -> Iterator[tuple[str, dict[str, Any]]]:
                             justification="Create the disposable smoke marker",
                         )
                     state["command"] = None
-                    delta = {
-                        "tool_calls": [
-                            {
-                                "index": 0,
-                                "id": "call_" + uuid.uuid4().hex,
-                                "type": "function",
-                                "function": {
-                                    "name": "exec_command",
-                                    "arguments": json.dumps(arguments),
-                                },
-                            }
-                        ]
-                    }
+                    delta = _tool_call("exec_command", arguments)
                     reason = "tool_calls"
                 else:
+                    if child_request and child_finished is not None:
+                        child_finished.set()
                     delta = {"content": "FCC_MODE_SMOKE_DONE"}
                     reason = "stop"
                 self.send_response(200)
@@ -172,7 +226,7 @@ def _canned_provider() -> Iterator[tuple[str, dict[str, Any]]]:
                 self.wfile.flush()
             except Exception as exc:
                 state["error"] = repr(exc)
-                self.send_error(500, "Local smoke fixture failed")
+                self.send_error(400, "Local smoke fixture failed")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
@@ -231,11 +285,7 @@ async def _exercise(
                     changed.raise_for_status()
                     session = changed.json()
                     marker = workspace.parent / f"marker-{uuid.uuid4().hex}.txt"
-                    command = (
-                        f"Set-Content -LiteralPath '{str(marker).replace(chr(39), chr(39) * 2)}' -Value smoke"
-                        if os.name == "nt"
-                        else f"printf smoke > {shlex.quote(str(marker))}"
-                    )
+                    command = _marker_command(marker)
                     if state is not None:
                         state["command"] = command
                         state["mode"] = mode
@@ -350,6 +400,178 @@ def test_codex_modes_local_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> Non
             assert state["reviews"] >= 1
         finally:
             (tmp_path / "local-requests.json").write_text(
+                json.dumps(state, indent=2), encoding="utf-8"
+            )
+
+
+async def _exercise_child_review(
+    base_url: str,
+    workspace: Path,
+    release: threading.Event,
+    finished: threading.Event,
+    timeout_s: float,
+) -> str:
+    workspace.mkdir()
+    async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
+        bootstrap = (await client.get("/admin/api/code/bootstrap")).json()
+        assert bootstrap["available"], bootstrap
+        session_id = str(uuid.uuid4())
+        path = f"/admin/api/code/sessions/{session_id}"
+        created = await client.post(
+            "/admin/api/code/sessions",
+            json={"session_id": session_id, "cwd": str(workspace)},
+        )
+        created.raise_for_status()
+        changed = await client.patch(
+            path,
+            json={
+                "expected_revision": created.json()["revision"],
+                "mode": "auto_review",
+            },
+        )
+        changed.raise_for_status()
+        session = changed.json()
+        queue = asyncio.Queue()
+
+        async def send(text: str) -> str:
+            response = await client.post(
+                path + "/turns",
+                json={
+                    "operation_id": str(uuid.uuid4()),
+                    "expected_revision": session["revision"],
+                    "expected_epoch": bootstrap["epoch"],
+                    "text": text,
+                },
+            )
+            response.raise_for_status()
+            return response.json()["id"]
+
+        async def event() -> dict[str, Any]:
+            while True:
+                value = await queue.get()
+                if value.get("session_id") == session_id:
+                    assert value.get("prompt", {}).get("status") != "pending", value
+                    run = value.get("run") or {}
+                    assert run.get("status") not in {"failed", "interrupted"}, value
+                    return value
+
+        async with client.stream(
+            "GET", "/admin/api/code/events", timeout=None
+        ) as response:
+            response.raise_for_status()
+            reading = asyncio.create_task(_events(response, queue))
+            try:
+                async with asyncio.timeout(timeout_s):
+                    await queue.get()
+                    first = await send(
+                        "FCC_PARENT_REVIEW_WORK: Delegate a harmless local command to one child agent."
+                    )
+                    review = None
+                    parent_done = False
+                    while review is None or not parent_done:
+                        value = await event()
+                        item = value.get("item", {})
+                        if item.get("kind") == "subagent_auto_review":
+                            review = item
+                        parent_done |= (
+                            value.get("run", {}).get("id") == first
+                            and value["run"]["status"] == "completed"
+                        )
+                    detail = (await client.get(path)).json()
+                    assert (
+                        not review["complete"]
+                        and review["id"] in detail["active_review_ids"]
+                    ), detail
+                    session = detail["session"]
+                    second = await send("Reply while the child review is pending.")
+                    while True:
+                        value = await event()
+                        if (
+                            value.get("run", {}).get("id") == second
+                            and value["run"]["status"] == "completed"
+                        ):
+                            break
+                    release.set()
+                    while True:
+                        value = await event()
+                        item = value.get("item", {})
+                        if item.get("id") == review["id"] and item["complete"]:
+                            assert item["title"] == "Sub-agent Auto-review: Approved", (
+                                item
+                            )
+                            assert (
+                                item["run_id"] == first
+                                and item["sequence"] == review["sequence"]
+                            ), item
+                            assert (
+                                value["run"]["id"] == second
+                                and value["run"]["status"] == "completed"
+                            ), value
+                            break
+                    assert await asyncio.to_thread(finished.wait, timeout_s), (
+                        "Child did not finish its command"
+                    )
+                    detail = (await client.get(path)).json()
+                    assert detail["active_review_ids"] == [], detail
+                    print(
+                        "child Auto-review: parent finished; next message completed; original review approved"
+                    )
+            finally:
+                release.set()
+                reading.cancel()
+                await asyncio.gather(reading, return_exceptions=True)
+        return session_id
+
+
+def test_codex_child_review_local_e2e(
+    smoke_config: SmokeConfig, tmp_path: Path
+) -> None:
+    env, unset = _environment(tmp_path, "lmstudio/codex-mode-smoke")
+    with (tmp_path / "codex-home" / "config.toml").open(
+        "a", encoding="utf-8"
+    ) as config:
+        config.write("[features]\nmulti_agent = true\nmulti_agent_v2 = true\n")
+    release, finished = threading.Event(), threading.Event()
+    marker = tmp_path / "child-marker.txt"
+    with _canned_provider(release, finished) as (url, state):
+        env["LM_STUDIO_BASE_URL"] = url
+        state.update(spawn=True, mode="auto_review", command=_marker_command(marker))
+        try:
+            with SmokeServerDriver(
+                smoke_config,
+                name="codex-child-review-local",
+                env_overrides=env,
+                env_unset=unset,
+            ).run() as server:
+                session_id = asyncio.run(
+                    _exercise_child_review(
+                        server.base_url,
+                        tmp_path / "workspace",
+                        release,
+                        finished,
+                        smoke_config.timeout_s,
+                    )
+                )
+                assert marker.read_text().strip() == "smoke"
+                with sqlite3.connect(
+                    tmp_path / "home" / ".fcc" / "code" / "code.db"
+                ) as database:
+                    root = database.execute(
+                        "SELECT native_thread_id FROM code_sessions WHERE id = ?",
+                        (session_id,),
+                    ).fetchone()[0]
+                    rows = database.execute(
+                        "SELECT raw FROM code_items WHERE session_id = ? AND kind = 'subagent_auto_review'",
+                        (session_id,),
+                    ).fetchall()
+                    assert rows and all(
+                        json.loads(row[0])["threadId"] != root for row in rows
+                    )
+            assert "error" not in state, state.get("error")
+            assert state["reviews"] == 1
+        finally:
+            release.set()
+            (tmp_path / "child-requests.json").write_text(
                 json.dumps(state, indent=2), encoding="utf-8"
             )
 

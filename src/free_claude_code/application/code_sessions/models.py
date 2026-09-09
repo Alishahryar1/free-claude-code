@@ -104,6 +104,7 @@ class CodeDetail:
     next_before: tuple[int, int] | None = None
     runs: tuple[CodeRun, ...] = ()
     active_prompt_ids: tuple[str, ...] = ()
+    active_review_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +180,7 @@ class HarnessEvent:
     message: str | None = None
     will_retry: bool = False
     error_details: JsonObject = field(default_factory=dict)
+    raw: JsonObject = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

@@ -36,7 +36,11 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
             "tests/runtime/test_code_sessions_sqlite.py",
             "e2e/test_code_sessions.py",
         ),
-        ("test_codex_modes_local_e2e", "test_codex_modes_free_provider_e2e"),
+        (
+            "test_codex_modes_local_e2e",
+            "test_codex_child_review_local_e2e",
+            "test_codex_modes_free_provider_e2e",
+        ),
     ),
     CapabilityContract(
         "api_compatibility",

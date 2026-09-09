@@ -303,6 +303,7 @@ def _detail_payload(detail: CodeDetail) -> JsonObject:
         "run": _run_payload(detail.run) if detail.run else None,
         "runs": [_run_payload(run) for run in detail.runs],
         "active_prompt_ids": list(detail.active_prompt_ids),
+        "active_review_ids": list(detail.active_review_ids),
         "items": [_item_payload(item) for item in detail.items],
         "prompts": [_prompt_payload(prompt) for prompt in detail.prompts],
         "epoch": detail.epoch,

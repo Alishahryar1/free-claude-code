@@ -3,6 +3,7 @@
 import asyncio
 import uuid
 from dataclasses import dataclass
+from unittest.mock import AsyncMock
 
 from free_claude_code.application.code_sessions.models import (
     CodeCatalog,
@@ -22,6 +23,96 @@ from free_claude_code.application.code_sessions.models import (
 from free_claude_code.application.code_sessions.ports import EventSink, HarnessSelection
 from free_claude_code.config.model_refs import split_provider_model_ref
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.runtime.codex_app_server import CodexAppServer
+from free_claude_code.runtime.codex_protocol import CodexProtocol
+
+
+class CodexPackets:
+    """Feed native packets through the real adapter without starting a process."""
+
+    def __init__(self, connection):
+        self.connection = connection
+        self.native = CodexAppServer([], {}, "", connection.sink)
+        self.native.generation = connection.generation
+        self.native._protocol = CodexProtocol(connection.generation)
+        self.parents: dict[str, str] = {}
+        self.native.rpc = AsyncMock(side_effect=self.metadata)
+
+    async def metadata(self, method: str, params: JsonObject) -> JsonObject:
+        assert method == "thread/read" and params["includeTurns"] is False
+        identity = params["threadId"]
+        assert isinstance(identity, str)
+        parent = self.parents.get(identity)
+        return {
+            "thread": {
+                "id": identity,
+                "source": {"subAgent": {"thread_spawn": {"parent_thread_id": parent}}}
+                if parent
+                else "vscode",
+            }
+        }
+
+    async def send(self, method, params):
+        if self.native.thread_id is None:
+            future = asyncio.get_running_loop().create_future()
+            self.native._pending["register"] = ("thread/resume", future)
+            await self.native._packet(
+                {
+                    "id": "register",
+                    "result": {"thread": {"id": self.connection.thread_id}},
+                }
+            )
+        await self.native._packet({"method": method, "params": params})
+        self.native._queue.put_nowait(None)
+        await self.native._dispatch()
+
+    async def spawn(self, child="child", parent=None):
+        self.parents[child] = parent or self.connection.thread_id
+        await self.send(
+            "thread/started",
+            {
+                "thread": {
+                    "id": child,
+                    "source": {
+                        "subAgent": {
+                            "thread_spawn": {
+                                "parent_thread_id": parent or self.connection.thread_id,
+                                "depth": 1 if parent is None else 2,
+                            }
+                        }
+                    },
+                }
+            },
+        )
+
+    async def review(
+        self, child="child", review_id="review", status="inProgress", turn="child-turn"
+    ):
+        payload = {
+            "threadId": child,
+            "turnId": turn,
+            "reviewId": review_id,
+            "targetItemId": "command",
+            "startedAtMs": 1000,
+            "action": {
+                "type": "command",
+                "command": "echo harmless",
+                "cwd": "/tmp",
+                "source": "shell",
+            },
+            "review": {"status": status, "rationale": f"Native {status}"},
+        }
+        if status != "inProgress":
+            payload.update(completedAtMs=2000, decisionSource="agent")
+        await self.send(
+            "item/autoApprovalReview/started"
+            if status == "inProgress"
+            else "item/autoApprovalReview/completed",
+            payload,
+        )
+
+    async def warning(self, child="child", message="Native warning"):
+        await self.send("guardianWarning", {"threadId": child, "message": message})
 
 
 class FakeHarness:

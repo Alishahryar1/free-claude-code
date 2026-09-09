@@ -14,7 +14,7 @@ from free_claude_code.application.code_sessions.models import (
 )
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.codex_protocol import CodexProtocol
-from tests.code_sessions_support import FakeConnection, FakeHarness
+from tests.code_sessions_support import CodexPackets, FakeConnection, FakeHarness
 
 
 def new_id():
@@ -36,6 +36,181 @@ async def code(tmp_path):
 async def session_for(code):
     service, _, directory = code
     return await service.create_session(new_id(), str(directory))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ownership", ["notification", "metadata"])
+async def test_owned_child_reviews_and_warnings_reach_saved_parent_transcript(
+    code, ownership
+):
+    service, harness, _ = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "Delegate", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    connection = harness.connections[0]
+    packets = CodexPackets(connection)
+    if ownership == "notification":
+        await packets.spawn()
+        await packets.spawn("grandchild", "child")
+        await packets.spawn("unrelated", "outside")
+    else:
+        packets.parents.update(
+            {
+                "child": connection.thread_id,
+                "grandchild": "child",
+                "unrelated": "outside",
+            }
+        )
+    for child in (connection.thread_id, "child", "grandchild", "unrelated"):
+        await packets.review(child, status="approved", turn="turn-1")
+        await packets.warning(child)
+    detail = await service.get_detail(session.id)
+    assert [item.kind for item in detail.items] == [
+        "user",
+        "auto_review",
+        "notice",
+        "subagent_auto_review",
+        "notice",
+        "subagent_auto_review",
+        "notice",
+    ]
+    reviews = [item for item in detail.items if item.kind == "subagent_auto_review"]
+    assert len({item.native_item_id for item in reviews}) == 2
+    assert [item.raw["threadId"] for item in reviews] == ["child", "grandchild"]
+    assert all(item.title == "Sub-agent Auto-review: Approved" for item in reviews)
+    assert detail.items[-1].text == "Sub-agent: Native warning"
+    assert detail.items[-1].raw == {
+        "threadId": "grandchild",
+        "message": "Native warning",
+    }
+    assert await service._store.items(session.id, None, None) == detail.items
+    assert detail.run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_child_review_stays_with_first_entry_after_next_turn_begins(code):
+    service, harness, _ = code
+    session = await session_for(code)
+    first = await service.send(
+        session.id, new_id(), session.revision, "Delegate", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    connection = harness.connections[0]
+    packets = CodexPackets(connection)
+    await packets.spawn()
+    await packets.review()
+    before = await service.get_detail(session.id)
+    assert len(before.items) == 2
+    review = before.items[-1]
+    assert before.active_review_ids == (review.id,)
+    await connection.finish("turn-1")
+    await packets.send(
+        "turn/completed",
+        {"threadId": "child", "turn": {"id": "child-turn", "status": "completed"}},
+    )
+    assert (await service.get_detail(session.id)).active_review_ids == (review.id,)
+    subscription, ready = await service.subscribe()
+    events = aiter(subscription)
+    try:
+        assert ready["sessions"][0]["active_review_ids"] == [review.id]
+        session = (await service.get_detail(session.id)).session
+        harness.start_gate.clear()
+        harness.started.clear()
+        second = await service.send(
+            session.id,
+            new_id(),
+            session.revision,
+            "Continue",
+            expected_epoch=service.epoch,
+        )
+        await asyncio.wait_for(harness.wait_inputs(2), 3)
+        await packets.review(status="denied")
+        await packets.review(status="denied")
+        await packets.review()
+        await packets.warning()
+        await packets.review(review_id="next", status="approved", turn="turn-2")
+        await packets.send(
+            "turn/started", {"threadId": "child", "turn": {"id": "turn-2"}}
+        )
+        await packets.send(
+            "turn/completed",
+            {"threadId": "child", "turn": {"id": "turn-2", "status": "completed"}},
+        )
+        detail = await service.get_detail(session.id)
+        saved = next(item for item in detail.items if item.id == review.id)
+        assert (saved.run_id, saved.sequence, saved.native_turn_id) == (
+            first.id,
+            review.sequence,
+            "child-turn",
+        )
+        assert saved.title == "Sub-agent Auto-review: Denied" and saved.complete
+        assert detail.active_review_ids == ()
+        assert detail.run.id == second.id and detail.run.native_turn_id is None
+        assert all(item.run_id == second.id for item in detail.items[-3:])
+        while (event := await asyncio.wait_for(anext(events), 3)).data.get(
+            "item", {}
+        ).get("id") != review.id:
+            pass
+        assert event.data["runs"][0]["id"] == first.id
+        assert event.data["run"]["id"] == second.id
+        harness.start_gate.set()
+        await asyncio.wait_for(harness.started.wait(), 3)
+        assert (await service.get_detail(session.id)).run.native_turn_id == "turn-2"
+        await connection.finish("turn-2")
+    finally:
+        harness.start_gate.set()
+        await subscription.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closure", ["native", "service"])
+async def test_pending_child_review_becomes_unavailable_when_idle_connection_ends(
+    code, closure
+):
+    service, harness, directory = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "Delegate", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    connection = harness.connections[0]
+    packets = CodexPackets(connection)
+    await packets.spawn()
+    await connection.finish("turn-1")
+    await packets.review()
+    before = await service.get_detail(session.id)
+    assert len(before.items) == 2
+    review = before.items[-1]
+    assert before.active_review_ids == (review.id,)
+    subscription, _ = await service.subscribe()
+    events = aiter(subscription)
+    try:
+        if closure == "native":
+            await connection.close()
+        else:
+            await service._close_connection(await service._owner(session.id))
+        event = await asyncio.wait_for(anext(events), 3)
+        assert event.data["active_review_ids"] == []
+        await packets.review(status="approved")
+        detail = await service.get_detail(session.id)
+        assert detail.items == before.items
+        assert detail.active_review_ids == ()
+        assert detail.run.status == "completed"
+        await service.close()
+        restarted = CodeService(
+            SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+        )
+        await restarted.start()
+        try:
+            restored = await restarted.get_detail(session.id)
+            assert restored.items == before.items
+            assert restored.active_review_ids == ()
+        finally:
+            await restarted.close()
+    finally:
+        await subscription.aclose()
 
 
 @pytest.mark.asyncio
@@ -65,6 +240,71 @@ async def test_mode_is_captured_per_turn_and_does_not_recreate_native_process(co
     assert len(harness.connections) == 1
     assert harness.connections[0].modes == modes
     assert session.native_permission_defaults == harness.permission_defaults
+
+
+@pytest.mark.asyncio
+async def test_reobserved_child_review_publishes_liveness_on_new_native_connection(
+    code,
+):
+    service, harness, _ = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "Delegate", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    first = harness.connections[0]
+    packets = CodexPackets(first)
+    await packets.spawn()
+    await packets.review()
+    review = (await service.get_detail(session.id)).items[-1]
+    await first.finish("turn-1")
+    harness.configurations[harness.model] = "replacement"
+    session = (await service.get_detail(session.id)).session
+    await service.send(
+        session.id, new_id(), session.revision, "Continue", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.wait_inputs(2), 3)
+    second = harness.connections[1]
+    await second.finish("turn-2")
+    assert (await service.get_detail(session.id)).active_review_ids == ()
+    packets = CodexPackets(second)
+    await packets.spawn()
+    subscription, _ = await service.subscribe()
+    try:
+        await packets.review()
+        event = await asyncio.wait_for(anext(aiter(subscription)), 3)
+        assert event.data["active_review_ids"] == [review.id]
+        detail = await service.get_detail(session.id)
+        assert next(item for item in detail.items if item.id == review.id) == review
+        assert detail.run.status == "completed"
+    finally:
+        await subscription.aclose()
+
+
+@pytest.mark.asyncio
+async def test_forced_interrupt_clears_pending_child_review_liveness(code, monkeypatch):
+    service, harness, _ = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "Delegate", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    connection = harness.connections[0]
+    packets = CodexPackets(connection)
+    await packets.spawn()
+    await packets.review()
+    assert (await service.get_detail(session.id)).active_review_ids
+
+    async def unavailable(_turn_id):
+        raise CodeUnavailableError("Native interrupt transport failed")
+
+    monkeypatch.setattr(connection, "interrupt", unavailable)
+    await service.stop(session.id, (await service.get_detail(session.id)).run.id)
+    await asyncio.wait_for(service.wait_idle(session.id), 3)
+    detail = await service.get_detail(session.id)
+    assert detail.active_review_ids == ()
+    assert detail.run.status == "interrupted"
+    assert not detail.items[-1].complete
 
 
 @pytest.mark.asyncio
