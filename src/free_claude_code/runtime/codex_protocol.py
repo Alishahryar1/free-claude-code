@@ -87,8 +87,47 @@ class CodexProtocol:
                     self.generation, thread_id, "resolved", request_id=request_id
                 )
             return None
+        if method == "guardianWarning" and thread_id:
+            return HarnessEvent(
+                self.generation,
+                thread_id,
+                "notice",
+                message=string_value(params.get("message")),
+            )
         if not thread_id or not turn_id:
             return None
+        if method in {
+            "item/autoApprovalReview/started",
+            "item/autoApprovalReview/completed",
+        }:
+            review_id = string_value(params.get("reviewId"))
+            if not review_id:
+                return None
+            review = object_value(params.get("review"))
+            status = string_value(review.get("status"))
+            label = {
+                "inProgress": "Reviewing",
+                "approved": "Approved",
+                "denied": "Denied",
+                "timedOut": "Timed out",
+                "aborted": "Aborted",
+            }.get(status, status)
+            return HarnessEvent(
+                self.generation,
+                thread_id,
+                "item",
+                turn_id=turn_id,
+                item=ItemUpdate(
+                    turn_id,
+                    f"auto-review:{review_id}",
+                    "auto_review",
+                    title=f"Auto-review: {label}",
+                    text=string_value(review.get("rationale")),
+                    detail=pretty({"action": params.get("action"), "review": review}),
+                    raw=dict(params),
+                    complete=method == "item/autoApprovalReview/completed",
+                ),
+            )
         raw = object_value(params.get("item"))
         item_id = string_value(params.get("itemId")) or string_value(raw.get("id"))
         if not item_id:

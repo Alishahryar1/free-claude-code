@@ -146,6 +146,27 @@ FCC_SMOKE_MODEL_NVIDIA_NIM_VISION=meta/llama-3.2-11b-vision-instruct \
 uv run pytest smoke/product/test_nvidia_nim_vision_product_live.py -n 0 -s --tb=short
 ```
 
+## Codex Code session modes
+
+Run the installed Codex against a local simulated provider, with disposable
+sessions and folders. This checks Ask, Auto-review, Full access, and returning
+to Use config without spending provider credits:
+
+```powershell
+$env:FCC_LIVE_SMOKE = "1"
+$env:FCC_SMOKE_TARGETS = "clients"
+uv run pytest smoke/product/test_codex_modes_product_live.py -n 0 -s -k local_e2e
+```
+
+For a real model smoke, set `FCC_SMOKE_CODEX_FREE_MODEL` to an explicitly chosen
+`open_router/<model>` reference and run the same file with
+`-k free_provider_e2e`. The test checks OpenRouter's current prompt and completion
+prices are zero and uses only that route; it never falls back to a paid model.
+The local cases do not need that setting or any provider credentials.
+
+Both runs print the installed Codex version. They require native sandbox support
+for restricted modes and never set up the sandbox or change your Codex config.
+
 ## Environment
 
 - Runtime settings use the isolated managed `~/.fcc/.env`; `FCC_ENV_FILE` is

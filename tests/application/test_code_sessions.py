@@ -13,6 +13,7 @@ from free_claude_code.application.code_sessions.models import (
     PromptRequest,
 )
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
+from free_claude_code.runtime.codex_protocol import CodexProtocol
 from tests.code_sessions_support import FakeConnection, FakeHarness
 
 
@@ -35,6 +36,193 @@ async def code(tmp_path):
 async def session_for(code):
     service, _, directory = code
     return await service.create_session(new_id(), str(directory))
+
+
+@pytest.mark.asyncio
+async def test_mode_is_captured_per_turn_and_does_not_recreate_native_process(code):
+    service, harness, _ = code
+    session = await session_for(code)
+    modes = ["full_access", "config", "ask", "auto_review"]
+    for ordinal, mode in enumerate(modes, 1):
+        session = await service.update_settings(
+            session.id, session.revision, {"mode": mode}
+        )
+        run = await service.send(
+            session.id,
+            new_id(),
+            session.revision,
+            "hello",
+            expected_epoch=service.epoch,
+        )
+        assert run.mode == mode
+        await asyncio.wait_for(harness.wait_inputs(ordinal), 3)
+        current = (await service.get_detail(session.id)).session
+        with pytest.raises(CodeConflictError):
+            await service.update_settings(current.id, current.revision, {"mode": "ask"})
+        await harness.connections[0].finish(f"turn-{ordinal}")
+        await service.wait_idle(session.id)
+        session = (await service.get_detail(session.id)).session
+    assert len(harness.connections) == 1
+    assert harness.connections[0].modes == modes
+    assert session.native_permission_defaults == harness.permission_defaults
+
+
+@pytest.mark.asyncio
+async def test_mode_change_and_send_compete_for_one_revision(code):
+    service, harness, _ = code
+    session = await session_for(code)
+    results = await asyncio.gather(
+        service.update_settings(session.id, session.revision, {"mode": "full_access"}),
+        service.send(
+            session.id,
+            new_id(),
+            session.revision,
+            "hello",
+            expected_epoch=service.epoch,
+        ),
+        return_exceptions=True,
+    )
+    assert sum(isinstance(result, CodeConflictError) for result in results) == 1
+    detail = await service.get_detail(session.id)
+    if detail.run:
+        assert detail.run.mode == "config"
+        await asyncio.wait_for(harness.started.wait(), 3)
+        await harness.connections[0].finish("turn-1")
+    else:
+        assert detail.session.mode == "full_access"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [None, "plan", "never", {}, 1])
+async def test_invalid_mode_is_rejected_without_changing_session(code, mode):
+    service, _, _ = code
+    session = await session_for(code)
+    with pytest.raises(CodeValidationError):
+        await service.update_settings(session.id, session.revision, {"mode": mode})
+    assert (await service.get_detail(session.id)).session == session
+
+
+@pytest.mark.asyncio
+async def test_native_defaults_are_saved_before_input_and_preserved_on_resume(code):
+    service, harness, _ = code
+    session = await session_for(code)
+    original = {"policy": "configured-original"}
+    harness.permission_defaults = original
+    session = await service.update_settings(
+        session.id, session.revision, {"mode": "full_access"}
+    )
+    await service.send(
+        session.id, new_id(), session.revision, "first", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    saved = await service._store.get_session(session.id)
+    assert saved.native_permission_defaults == original
+    assert harness.connections[0].defaults == [original]
+    await harness.connections[0].finish("turn-1")
+    await service.wait_idle(session.id)
+    harness.permission_defaults = {"policy": "current-override"}
+    harness.configurations[harness.model] = "recreate-process"
+    session = (await service.get_detail(session.id)).session
+    session = await service.update_settings(
+        session.id, session.revision, {"mode": "config"}
+    )
+    await service.send(
+        session.id, new_id(), session.revision, "second", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.wait_inputs(2), 3)
+    assert len(harness.connections) == 2
+    assert harness.connections[1].defaults == [original]
+    await harness.connections[1].finish("turn-2")
+
+
+@pytest.mark.asyncio
+async def test_failure_saving_native_defaults_never_submits_input(code, monkeypatch):
+    service, harness, _ = code
+    session = await session_for(code)
+    save = service._store.save_progress
+
+    async def reject_defaults(session, *args, **kwargs):
+        if session.native_permission_defaults is not None:
+            raise CodeUnavailableError("Unable to save permission defaults")
+        await save(session, *args, **kwargs)
+
+    monkeypatch.setattr(service._store, "save_progress", reject_defaults)
+    await service.send(
+        session.id, new_id(), session.revision, "first", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(service.wait_idle(session.id), 3)
+    assert not any(connection.inputs for connection in harness.connections)
+    assert not (await service._store.latest_run(session.id)).submission_started
+
+
+@pytest.mark.asyncio
+async def test_native_reviews_and_notices_keep_identity_order_and_survive_restart(code):
+    service, harness, directory = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "hello", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    connection = harness.connections[0]
+    protocol = CodexProtocol(connection.generation)
+    payload = {
+        "threadId": connection.thread_id,
+        "turnId": "turn-1",
+        "targetItemId": "same-command",
+        "action": {"command": "echo test"},
+        "review": {"status": "inProgress"},
+    }
+    for review_id in ("one", "two"):
+        await connection.sink(
+            protocol.notification(
+                "item/autoApprovalReview/started", {**payload, "reviewId": review_id}
+            )
+        )
+    await connection.text("turn-1", "reply", "After reviews", complete=True)
+    before = await service.get_detail(session.id)
+    for review_id in ("two", "one"):
+        await connection.sink(
+            protocol.notification(
+                "item/autoApprovalReview/completed",
+                {
+                    **payload,
+                    "reviewId": review_id,
+                    "review": {"status": "denied", "rationale": "Native refusal"},
+                },
+            )
+        )
+    await connection.sink(
+        protocol.notification(
+            "guardianWarning",
+            {"threadId": connection.thread_id, "message": "Native warning"},
+        )
+    )
+    await connection.sink(
+        HarnessEvent("old-generation", connection.thread_id, "notice", message="stale")
+    )
+    await connection.finish("turn-1")
+    await service.wait_idle(session.id)
+    detail = await service.get_detail(session.id)
+    assert [item.id for item in detail.items[:4]] == [item.id for item in before.items]
+    assert [item.kind for item in detail.items] == [
+        "user",
+        "auto_review",
+        "auto_review",
+        "text",
+        "notice",
+    ]
+    assert all(item.title == "Auto-review: Denied" for item in detail.items[1:3])
+    assert detail.run.status == "completed"
+    assert detail.items[-1].text == "Native warning"
+    await service.close()
+    restarted = CodeService(
+        SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+    )
+    await restarted.start()
+    try:
+        assert (await restarted.get_detail(session.id)).items == detail.items
+    finally:
+        await restarted.close()
 
 
 @pytest.mark.asyncio

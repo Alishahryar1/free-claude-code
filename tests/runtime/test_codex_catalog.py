@@ -112,16 +112,16 @@ def test_code_picker_and_native_selection_use_the_same_advertised_efforts():
     assert advertised.default_model == "nvidia_nim/configured"
     model = advertised.models[1]
     assert model.reasoning_efforts == ("off", "low", "medium", "high", "xhigh", "max")
-    selected = factory.prepare(model.id, None)
+    selected = factory.prepare(model.id, None, "config")
     assert selected.model == model.id
     assert selected.context.settings.model == model.id
     assert selected.reasoning_effort == model.default_reasoning_effort == "medium"
     for effort in model.reasoning_efforts:
-        assert factory.prepare(model.id, effort).reasoning_effort == effort
+        assert factory.prepare(model.id, effort, "config").reasoning_effort == effort
     with pytest.raises(CodeValidationError, match="effort"):
-        factory.prepare(model.id, "unsupported")
+        factory.prepare(model.id, "unsupported", "config")
     with pytest.raises(CodeValidationError, match="model"):
-        factory.prepare("missing/model", None)
+        factory.prepare("missing/model", None, "config")
 
 
 def test_non_reasoning_model_off_selection_is_available():
@@ -139,4 +139,4 @@ def test_non_reasoning_model_off_selection_is_available():
     )
     assert model.reasoning_efforts == ("off",)
     assert model.default_reasoning_effort == "off"
-    assert factory.prepare(model.id, "off").reasoning_effort == "off"
+    assert factory.prepare(model.id, "off", "config").reasoning_effort == "off"

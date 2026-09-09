@@ -1,7 +1,74 @@
 import pytest
 
 from free_claude_code.application.code_sessions import CodeValidationError
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.runtime.codex_protocol import CodexProtocol, NativePrompt
+
+
+@pytest.mark.parametrize(
+    "status,label",
+    [
+        ("approved", "Approved"),
+        ("denied", "Denied"),
+        ("timedOut", "Timed out"),
+        ("aborted", "Aborted"),
+    ],
+)
+def test_auto_review_has_own_identity_and_preserves_native_action_and_rationale(
+    status, label
+):
+    protocol = CodexProtocol("generation")
+    payload: JsonObject = {
+        "threadId": "thread",
+        "turnId": "turn",
+        "reviewId": "review",
+        "targetItemId": None,
+        "action": {
+            "type": "networkAccess",
+            "host": "localhost",
+            "port": 8000,
+            "protocol": "http",
+            "target": "http://localhost:8000",
+        },
+        "review": {"status": "inProgress"},
+        "startedAtMs": 10,
+    }
+    started = protocol.notification("item/autoApprovalReview/started", payload)
+    assert started is not None and started.item is not None
+    assert started.item.item_id == "auto-review:review"
+    assert not started.item.complete
+    completed = protocol.notification(
+        "item/autoApprovalReview/completed",
+        {
+            **payload,
+            "review": {
+                "status": status,
+                "rationale": "Native explanation",
+                "riskLevel": "low",
+            },
+            "completedAtMs": 20,
+        },
+    )
+    assert completed is not None and completed.item is not None
+    assert completed.item.item_id == started.item.item_id
+    assert completed.item.title == f"Auto-review: {label}"
+    assert completed.item.complete
+    assert completed.item.text == "Native explanation"
+    assert "localhost" in completed.item.detail
+    assert completed.item.raw["review"] == {
+        "status": status,
+        "rationale": "Native explanation",
+        "riskLevel": "low",
+    }
+
+
+def test_native_guardian_warning_is_a_notice_without_a_turn_id():
+    event = CodexProtocol("generation").notification(
+        "guardianWarning", {"threadId": "thread", "message": "Review is unavailable"}
+    )
+    assert event is not None
+    assert event.kind == "notice" and event.turn_id is None
+    assert event.message == "Review is unavailable"
 
 
 def notification(protocol, method, **extra):

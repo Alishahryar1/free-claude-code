@@ -19,8 +19,10 @@ from free_claude_code.application.code_sessions import (
     CodeUnavailableError,
     CodeValidationError,
 )
+from free_claude_code.application.code_sessions.models import CodeMode
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.session_events import EventOverflowError
+from free_claude_code.config.model_refs import split_provider_model_ref
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .admin_routes import admin_page_response
@@ -51,6 +53,7 @@ class SettingsPayload(CommandPayload):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     model: str | None = Field(default=None, min_length=1)
     reasoning_effort: str | None = None
+    mode: CodeMode = "config"
 
 
 class SendPayload(CommandPayload):
@@ -256,9 +259,20 @@ async def answer(
 
 
 def _session_payload(session: CodeSession) -> JsonObject:
-    return session.model_dump(
-        mode="json", exclude={"native_thread_id", "native_may_have_input", "auto_title"}
-    )
+    provider_id, model_name = split_provider_model_ref(session.model)
+    return {
+        **session.model_dump(
+            mode="json",
+            exclude={
+                "native_thread_id",
+                "native_may_have_input",
+                "native_permission_defaults",
+                "auto_title",
+            },
+        ),
+        "provider_id": provider_id,
+        "model_name": model_name,
+    }
 
 
 def _run_payload(run: CodeRun) -> JsonObject:

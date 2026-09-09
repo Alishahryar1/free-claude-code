@@ -11,6 +11,7 @@ from .models import (
     CodeDetail,
     CodeItem,
     CodeItemPage,
+    CodeMode,
     CodePage,
     CodePrompt,
     CodeRun,
@@ -35,7 +36,11 @@ class HarnessConnection(Protocol):
     async def read_thread(self, thread_id: str) -> NativeThread: ...
 
     async def start_turn(
-        self, text: str, selection: HarnessSelection, client_id: str
+        self,
+        text: str,
+        selection: HarnessSelection,
+        client_id: str,
+        permission_defaults: JsonObject,
     ) -> str: ...
 
     async def interrupt(self, turn_id: str) -> None: ...
@@ -53,6 +58,9 @@ class HarnessConnection(Protocol):
 
 class HarnessSelection(Protocol):
     @property
+    def mode(self) -> CodeMode: ...
+
+    @property
     def model(self) -> str: ...
 
     @property
@@ -69,7 +77,9 @@ class HarnessFactory(Protocol):
 
     def catalog(self) -> CodeCatalog: ...
 
-    def prepare(self, model: str, reasoning_effort: str | None) -> HarnessSelection: ...
+    def prepare(
+        self, model: str, reasoning_effort: str | None, mode: CodeMode
+    ) -> HarnessSelection: ...
 
     async def open_history(self, cwd: str, sink: EventSink) -> HarnessConnection: ...
 

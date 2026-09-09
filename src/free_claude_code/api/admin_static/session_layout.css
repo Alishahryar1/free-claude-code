@@ -268,6 +268,38 @@
   height: 38px;
 }
 
+.session-controls.code-session-controls {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(180px, 2fr) minmax(
+      80px,
+      0.65fr
+    ) minmax(84px, 0.65fr) minmax(124px, 1fr);
+}
+.code-session-controls .session-control,
+.code-session-controls select {
+  min-width: 0;
+}
+.code-session-controls .session-model-control {
+  max-width: none;
+  grid-column: auto;
+}
+@media (max-width: 1100px) {
+  .session-controls.code-session-controls {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .code-session-controls .session-model-control {
+    grid-column: span 2;
+  }
+}
+@media (max-width: 700px) {
+  .session-controls.code-session-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .code-session-controls .session-model-control {
+    grid-column: auto;
+  }
+}
+
 .session-notice {
   grid-area: notice;
   margin-top: 12px;

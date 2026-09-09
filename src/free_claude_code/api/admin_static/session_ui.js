@@ -117,7 +117,7 @@
       },
     };
   }
-  function reasoningControl(id, options, value, onChange) {
+  function selectControl(id, title, options, value, onChange) {
     const group = node("label", "session-control"),
       select = node("select");
     select.id = id;
@@ -133,7 +133,7 @@
     };
     update(options, value);
     select.addEventListener("change", () => onChange(select.value));
-    group.append(node("span", "", "Effort"), select);
+    group.append(node("span", "", title), select);
     return { group, select, update };
   }
   function composer(id, draft, placeholder, onInput, onSend, onStop) {
@@ -195,7 +195,7 @@
     shell,
     header,
     modelControl,
-    reasoningControl,
+    selectControl,
     composer,
     message,
     thinking,

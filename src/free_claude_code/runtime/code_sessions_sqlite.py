@@ -25,7 +25,9 @@ from free_claude_code.application.code_sessions.models import (
 )
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
-_JSON_FIELDS = frozenset({"raw", "form", "error_details", "request_id"})
+_JSON_FIELDS = frozenset(
+    {"raw", "form", "error_details", "request_id", "native_permission_defaults"}
+)
 _RUN_TRANSITIONS = {
     "preparing": {
         "preparing",
@@ -52,7 +54,8 @@ _PROMPT_TRANSITIONS = {
 def _values(record: Record) -> dict[str, object]:
     values = record.model_dump()
     for key in values.keys() & _JSON_FIELDS:
-        values[key] = json.dumps(values[key], sort_keys=True, separators=(",", ":"))
+        if values[key] is not None:
+            values[key] = json.dumps(values[key], sort_keys=True, separators=(",", ":"))
     if isinstance(record, CodeSession):
         values.update(
             title_search=record.title.casefold(), cwd_search=record.cwd.casefold()
@@ -63,7 +66,8 @@ def _values(record: Record) -> dict[str, object]:
 def _record[T: Record](model: type[T], row: sqlite3.Row) -> T:
     values = {key: row[key] for key in model.model_fields}
     for key in values.keys() & _JSON_FIELDS:
-        values[key] = json.loads(values[key])
+        if values[key] is not None:
+            values[key] = json.loads(values[key])
     return model.model_validate(values)
 
 
@@ -128,6 +132,12 @@ def _write_session(
         raise CodeConflictError(
             "This session changed. Refresh its state and try again."
         )
+    if (
+        not settings
+        and current.native_permission_defaults is not None
+        and session.native_permission_defaults != current.native_permission_defaults
+    ):
+        raise CodeConflictError("The original permission settings cannot be replaced.")
     fields = (
         {
             "title",
@@ -135,12 +145,14 @@ def _write_session(
             "auto_title",
             "model",
             "reasoning_effort",
+            "mode",
             "revision",
             "updated_at",
         }
         if settings
         else {
             "native_thread_id",
+            "native_permission_defaults",
             "native_may_have_input",
             "revision",
             "updated_at",
@@ -178,7 +190,7 @@ def _write_run(connection: sqlite3.Connection, run: CodeRun) -> None:
         or (previous.submission_started and not run.submission_started)
         or any(
             getattr(previous, key) != getattr(run, key)
-            for key in ("ordinal", "text", "model", "reasoning_effort")
+            for key in ("ordinal", "text", "model", "reasoning_effort", "mode")
         )
         or (
             previous.native_turn_id is not None
@@ -194,6 +206,7 @@ def _write_run(connection: sqlite3.Connection, run: CodeRun) -> None:
         "text",
         "model",
         "reasoning_effort",
+        "mode",
         "created_at",
     ):
         values.pop(key)
@@ -403,6 +416,18 @@ class SQLiteCodeStore:
         connection.execute("BEGIN IMMEDIATE")
         if connection.execute("PRAGMA user_version").fetchone()[0] == 0:
             _migrate_prompt_entries(connection)
+        if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
+            for table in ("code_sessions", "code_runs"):
+                connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN mode TEXT NOT NULL DEFAULT 'config' "
+                    "CHECK(mode IN ('config','ask','auto_review','full_access'))"
+                )
+            connection.execute(
+                "ALTER TABLE code_sessions ADD COLUMN native_permission_defaults TEXT "
+                "CHECK(native_permission_defaults IS NULL OR "
+                "(json_valid(native_permission_defaults) AND json_type(native_permission_defaults) = 'object'))"
+            )
+            connection.execute("PRAGMA user_version = 2")
         connection.execute(
             "UPDATE code_runs SET status = 'interrupted', finished_at = ?, error = ? "
             "WHERE status IN ('preparing','running','stopping')",
@@ -581,9 +606,10 @@ class SQLiteCodeStore:
             previous = _session(connection, session.id)
             if previous.status != "ready":
                 raise CodeConflictError("This session is being deleted.")
-            if (previous.model, previous.reasoning_effort) != (
+            if (previous.model, previous.reasoning_effort, previous.mode) != (
                 session.model,
                 session.reasoning_effort,
+                session.mode,
             ):
                 _idle(connection, session.id)
             _write_session(connection, session, expected_revision, settings=True)
@@ -611,6 +637,7 @@ class SQLiteCodeStore:
             if (
                 previous.status != "ready"
                 or previous.model != run.model
+                or previous.mode != run.mode
                 or run.session_id != session.id
             ):
                 raise CodeConflictError(
