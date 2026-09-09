@@ -125,6 +125,13 @@ async def test_pending_child_review_outside_page_keeps_its_run_and_history_curso
     assert resolved.active_review_ids == ()
     assert review.id not in {item.id for item in resolved.items}
     assert resolved.next_before == newest.next_before
+    refreshed = await service.get_detail(
+        session.id, include_item_ids=(review.id, review.id, "missing")
+    )
+    assert len(refreshed.items) == 51
+    assert refreshed.items[0].id == review.id and refreshed.items[0].complete
+    assert first.id in {run.id for run in refreshed.runs}
+    assert refreshed.next_before == newest.next_before
     older = await service.get_detail(session.id, before=newest.next_before)
     saved = next(item for item in older.items if item.id == review.id)
     assert saved.complete and saved.title == "Sub-agent Auto-review: Approved"
@@ -338,8 +345,10 @@ async def test_mode_is_captured_per_turn_and_does_not_recreate_native_process(co
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("pending_output", [False, True])
 async def test_reobserved_child_review_publishes_liveness_on_new_native_connection(
     code,
+    pending_output,
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -360,18 +369,25 @@ async def test_reobserved_child_review_publishes_liveness_on_new_native_connecti
     )
     await asyncio.wait_for(harness.wait_inputs(2), 3)
     second = harness.connections[1]
-    await second.finish("turn-2")
+    if not pending_output:
+        await second.finish("turn-2")
     assert (await service.get_detail(session.id)).active_review_ids == ()
     packets = CodexPackets(second)
     await packets.spawn()
     subscription, _ = await service.subscribe()
     try:
+        if pending_output:
+            await second.text("turn-2", "reply", "In progress")
         await packets.review()
         event = await asyncio.wait_for(anext(aiter(subscription)), 3)
+        while event.data["active_review_ids"] != [review.id]:
+            event = await asyncio.wait_for(anext(aiter(subscription)), 3)
         assert event.data["active_review_ids"] == [review.id]
+        assert event.data.get("item", {}).get("id") == review.id
+        assert event.data["runs"][0]["id"] == review.run_id
         detail = await service.get_detail(session.id)
         assert next(item for item in detail.items if item.id == review.id) == review
-        assert detail.run.status == "completed"
+        assert detail.run.status == ("running" if pending_output else "completed")
     finally:
         await subscription.aclose()
 

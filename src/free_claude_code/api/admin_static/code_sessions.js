@@ -240,10 +240,16 @@
     const requestEpoch = epoch,
       token = viewToken,
       connection = syncToken;
+    const params = new URLSearchParams();
+    if (before) params.set("before", before);
+    else
+      // Reconcile unfinished entries even after they fall outside the newest page.
+      for (const { value } of get(id).items.values())
+        if (!value.complete) params.append("include_item_ids", value.id);
     let data;
     try {
       data = await api(
-        `${base}/sessions/${id}${before ? `/items?before=${encodeURIComponent(before)}` : ""}`,
+        `${base}/sessions/${id}${before ? "/items" : ""}?${params}`,
       );
     } catch (error) {
       if (token !== viewToken || connection !== syncToken || selected !== id)

@@ -160,7 +160,11 @@ class CodeApplicationPort(Protocol):
     ) -> CodePage: ...
 
     async def get_detail(
-        self, session_id: str, *, before: tuple[int, int] | None = None
+        self,
+        session_id: str,
+        *,
+        before: tuple[int, int] | None = None,
+        include_item_ids: Sequence[str] = (),
     ) -> CodeDetail: ...
 
     async def subscribe(self) -> tuple[EventSubscription, JsonObject]: ...

@@ -287,7 +287,11 @@ class CodeService:
         return self._events.cursor
 
     async def get_detail(
-        self, session_id: str, *, before: tuple[int, int] | None = None
+        self,
+        session_id: str,
+        *,
+        before: tuple[int, int] | None = None,
+        include_item_ids: Sequence[str] = (),
     ) -> CodeDetail:
         owner = await self._owner(session_id)
         async with owner.lock:
@@ -298,19 +302,19 @@ class CodeService:
                 active_start = (owner.run.ordinal, 0)
                 page_before = min(before, active_start) if before else active_start
             page = await self._store.item_page(session_id, page_before, 50)
-            active_review_ids = set(owner.active_review_ids)
-            active = [
+            included_ids = {*owner.active_review_ids, *include_item_ids}
+            extra = [
                 item
                 for item in owner.items.values()
                 if (owner.busy and owner.run and item.run_id == owner.run.id)
-                or item.id in active_review_ids
+                or item.id in included_ids
                 or (
                     item.kind == "prompt"
                     and owner.prompts[item.id].status in {"pending", "answering"}
                 )
             ]
             selected = sorted(
-                {item.id: item for item in [*page.items, *active]}.values(),
+                {item.id: item for item in [*page.items, *extra]}.values(),
                 key=lambda item: (owner.runs[item.run_id].ordinal, item.sequence),
             )
             prompt_ids = {item.id for item in selected if item.kind == "prompt"}
@@ -331,7 +335,7 @@ class CodeService:
                         run.id: run
                         for run in (
                             *page.runs,
-                            *(owner.runs[item.run_id] for item in active),
+                            *(owner.runs[item.run_id] for item in extra),
                             *((owner.run,) if owner.run else ()),
                         )
                     }.values()
@@ -928,11 +932,9 @@ class CodeService:
                         owner.review_generations.pop(item.id, None)
                     else:
                         owner.review_generations[item.id] = event.generation
-                    if (
-                        not owner.dirty
-                        and previous_generation != owner.review_generations.get(item.id)
-                    ):
-                        self._publish(owner, "session.updated")
+                    if previous_generation != owner.review_generations.get(item.id):
+                        # Reannounce the saved row when its liveness changes.
+                        owner.dirty.add(item.id)
                     await self._flush_locked(owner)
                 elif (
                     event.kind == "item"
