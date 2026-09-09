@@ -2,6 +2,8 @@
 
 import json
 import sys
+import time
+from pathlib import Path
 
 
 def emit(value):
@@ -29,7 +31,7 @@ for line in sys.stdin.buffer:
         emit({"id": request_id, "result": {"userAgent": "codex/0.153.0"}})
     elif method == "initialized":
         pass
-    elif method == "thread/start":
+    elif method in {"thread/start", "thread/resume"}:
         if mode == "delayed-create":
             creation_id = request_id
         else:
@@ -50,6 +52,8 @@ for line in sys.stdin.buffer:
         )
         emit({"id": request_id, "result": {}})
     elif method == "turn/start":
+        if mode == "child-warning-on-close":
+            turn = request["params"]["clientUserMessageId"]
         emit(
             {
                 "method": "turn/started",
@@ -170,3 +174,14 @@ for line in sys.stdin.buffer:
         sys.stdout.buffer.flush()
     else:
         emit({"id": request_id, "result": {}})
+
+if mode == "child-warning-on-close":
+    emit(
+        {
+            "method": "guardianWarning",
+            "params": {"threadId": "child", "message": "Child is shutting down"},
+        }
+    )
+    # Keep stdout alive until the parent has processed this close-time event.
+    while not Path(sys.argv[2]).exists():
+        time.sleep(0.01)

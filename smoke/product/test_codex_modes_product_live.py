@@ -10,7 +10,7 @@ import sys
 import threading
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -553,8 +553,8 @@ def test_codex_child_review_local_e2e(
                     )
                 )
                 assert marker.read_text().strip() == "smoke"
-                with sqlite3.connect(
-                    tmp_path / "home" / ".fcc" / "code" / "code.db"
+                with closing(
+                    sqlite3.connect(tmp_path / "home" / ".fcc" / "code" / "code.db")
                 ) as database:
                     root = database.execute(
                         "SELECT native_thread_id FROM code_sessions WHERE id = ?",

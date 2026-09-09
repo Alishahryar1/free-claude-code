@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import pytest_asyncio
@@ -36,6 +37,100 @@ async def code(tmp_path):
 async def session_for(code):
     service, _, directory = code
     return await service.create_session(new_id(), str(directory))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "finished", "status"),
+    [(BrokenPipeError, False, "failed"), (ConnectionResetError, True, "completed")],
+)
+async def test_child_lookup_pipe_failure_delivers_queued_close(
+    code, monkeypatch, failure, finished, status
+):
+    service, harness, _ = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "Delegate", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    connection = harness.connections[0]
+    packets = CodexPackets(connection)
+    await packets.spawn()
+    await packets.review()
+    if finished:
+        await connection.finish("turn-1")
+    native = packets.native
+    monkeypatch.delattr(native, "rpc")
+    native._alive = True
+    native._process = Mock(
+        stdin=Mock(drain=AsyncMock(side_effect=failure("Pipe closed")))
+    )
+    await native._packet(
+        {
+            "method": "guardianWarning",
+            "params": {"threadId": "unregistered-child", "message": "Child warning"},
+        }
+    )
+    native._queue.put_nowait(
+        HarnessEvent(
+            connection.generation,
+            connection.thread_id,
+            "closed",
+            message="Native process ended",
+        )
+    )
+    native._queue.put_nowait(None)
+    try:
+        await native._dispatch()
+        detail = await service.get_detail(session.id)
+        assert detail.active_review_ids == ()
+        assert detail.run.status == status
+        assert [item.kind for item in detail.items] == ["user", "subagent_auto_review"]
+        assert not detail.items[-1].complete
+    finally:
+        for _, future in native._pending.values():
+            future.cancel()
+
+
+@pytest.mark.asyncio
+async def test_pending_child_review_outside_page_keeps_its_run_and_history_cursor(code):
+    service, harness, _ = code
+    session = await session_for(code)
+    first = await service.send(
+        session.id, new_id(), session.revision, "Delegate", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    connection = harness.connections[0]
+    packets = CodexPackets(connection)
+    await packets.spawn()
+    await packets.review()
+    review = (await service.get_detail(session.id)).items[-1]
+    await connection.finish("turn-1")
+    session = (await service.get_detail(session.id)).session
+    await service.send(
+        session.id, new_id(), session.revision, "Continue", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.wait_inputs(2), 3)
+    for index in range(55):
+        await connection.text("turn-2", str(index), f"Output {index}", complete=True)
+    await connection.finish("turn-2")
+    newest = await service.get_detail(session.id)
+    assert len(newest.items) == 51
+    assert newest.items[0].id == review.id and newest.items[0].run_id == first.id
+    assert first.id in {run.id for run in newest.runs}
+    assert newest.active_review_ids == (review.id,)
+    assert newest.next_before == (2, 9)
+    await packets.review(status="approved")
+    resolved = await service.get_detail(session.id)
+    assert resolved.active_review_ids == ()
+    assert review.id not in {item.id for item in resolved.items}
+    assert resolved.next_before == newest.next_before
+    older = await service.get_detail(session.id, before=newest.next_before)
+    saved = next(item for item in older.items if item.id == review.id)
+    assert saved.complete and saved.title == "Sub-agent Auto-review: Approved"
+    assert saved.sequence == review.sequence and saved.run_id == first.id
+    merged = {item.id: item for item in (*older.items, *resolved.items)}
+    assert sorted(item.sequence for item in merged.values()) == list(range(1, 59))
 
 
 @pytest.mark.asyncio

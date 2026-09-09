@@ -298,10 +298,12 @@ class CodeService:
                 active_start = (owner.run.ordinal, 0)
                 page_before = min(before, active_start) if before else active_start
             page = await self._store.item_page(session_id, page_before, 50)
+            active_review_ids = set(owner.active_review_ids)
             active = [
                 item
                 for item in owner.items.values()
                 if (owner.busy and owner.run and item.run_id == owner.run.id)
+                or item.id in active_review_ids
                 or (
                     item.kind == "prompt"
                     and owner.prompts[item.id].status in {"pending", "answering"}

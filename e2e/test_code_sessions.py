@@ -279,6 +279,59 @@ def test_child_review_outlives_parent_and_updates_in_place_in_both_tabs(
         second.close()
 
 
+def test_pending_child_review_outside_page_survives_refresh_in_both_tabs(
+    page, context, admin_base_url, tmp_path, code_control
+):
+    url = create_session(page, admin_base_url, tmp_path)
+    send(page, "Delegate")
+    connection = code_control.connection()
+    packets = CodexPackets(connection)
+    code_control.run(packets.spawn())
+    code_control.run(packets.review())
+    review = page.locator('[data-kind="subagent_auto_review"]')
+    expect(review).to_have_count(1)
+    identity = review.get_attribute("data-id")
+    code_control.run(connection.finish("turn-1"))
+    send(page, "Continue")
+    code_control.run(code_control.harness.wait_inputs(2))
+
+    async def more_output():
+        for index in range(55):
+            await connection.text(
+                "turn-2", str(index), f"Output {index}", complete=True
+            )
+        await connection.finish("turn-2")
+
+    code_control.run(more_output())
+    page.reload()
+    second = context.new_page()
+    try:
+        second.goto(url)
+        for tab in (page, second):
+            expect(
+                tab.locator('[data-kind="subagent_auto_review"] summary')
+            ).to_have_text("Sub-agent Auto-review: Reviewing")
+            expect(tab.locator(".code-item").first).to_have_attribute(
+                "data-id", identity
+            )
+        review.locator("summary").click()
+        code_control.run(packets.review(status="approved"))
+        for tab in (page, second):
+            expect(
+                tab.locator('[data-kind="subagent_auto_review"] summary')
+            ).to_have_text("Sub-agent Auto-review: Approved")
+            expect(tab.locator(".code-item").first).to_have_attribute(
+                "data-id", identity
+            )
+            expect(tab.locator('[data-kind="subagent_auto_review"]')).to_have_count(1)
+        expect(review.locator("details")).to_have_attribute("open", "")
+        page.get_by_role("button", name="Load older messages", exact=True).click()
+        expect(page.locator(".code-item")).to_have_count(58)
+        expect(page.locator('[data-kind="subagent_auto_review"]')).to_have_count(1)
+    finally:
+        second.close()
+
+
 @pytest.mark.parametrize("change", ["start", "close"])
 def test_child_review_liveness_ignores_an_older_detail_snapshot(
     page, admin_base_url, tmp_path, code_control, change

@@ -1,14 +1,107 @@
 import asyncio
 import os
 import sys
+import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
+from free_claude_code.application.code_sessions import CodeService
 from free_claude_code.application.code_sessions.models import CodeUnavailableError
+from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.codex_app_server import CodexAppServer
 from tests.code_sessions_support import FakeHarness
+
+
+@pytest.mark.asyncio
+async def test_child_warning_during_shutdown_allows_connection_replacement(
+    tmp_path, monkeypatch
+):
+    harness = FakeHarness()
+    prepare = harness.prepare
+    connections = []
+    releases = []
+    warning = asyncio.Event()
+
+    def selection_for(model, effort, mode):
+        selection = prepare(model, effort, mode)
+
+        async def open_native(cwd, sink):
+            release = tmp_path / f"release-{len(connections)}"
+            releases.append(release)
+
+            async def receive(event):
+                await sink(event)
+                if event.kind == "notice" and event.thread_id == "child":
+                    warning.set()
+
+            native = CodexAppServer(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("codex_fake_process.py")),
+                    "child-warning-on-close",
+                    str(release),
+                ],
+                dict(os.environ),
+                cwd,
+                receive,
+                model_slugs={model: model},
+                fingerprints=selection.catalog,
+            )
+            await native.start()
+            connections.append(native)
+            return native
+
+        monkeypatch.setattr(selection, "open", open_native)
+        return selection
+
+    monkeypatch.setattr(harness, "prepare", selection_for)
+    service = CodeService(
+        SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock"), harness
+    )
+    await service.start()
+    observing = asyncio.create_task(warning.wait())
+    try:
+        session = await service.create_session(str(uuid.uuid4()), str(tmp_path))
+        await service.send(
+            session.id,
+            str(uuid.uuid4()),
+            session.revision,
+            "First",
+            expected_epoch=service.epoch,
+        )
+        await asyncio.wait_for(service.wait_idle(session.id), 3)
+        first = await service.get_detail(session.id)
+        assert first.run is not None
+        assert first.run.status == "completed"
+        harness.configurations[harness.model] = "replacement"
+        await service.send(
+            session.id,
+            str(uuid.uuid4()),
+            first.session.revision,
+            "Next",
+            expected_epoch=service.epoch,
+        )
+        dispatcher = connections[0]._dispatcher
+        assert dispatcher is not None
+        processed, _ = await asyncio.wait(
+            (observing, dispatcher), timeout=3, return_when=asyncio.FIRST_COMPLETED
+        )
+        assert processed, "The close-time warning was never processed"
+        releases[0].touch()
+        await asyncio.wait_for(service.wait_idle(session.id), 3)
+        detail = await service.get_detail(session.id)
+        assert detail.run is not None
+        assert detail.run.status == "completed", detail.run.error
+        assert len(connections) == 2 and connections[0].process.returncode is not None
+        assert all(item.kind != "notice" for item in detail.items)
+    finally:
+        for release in releases:
+            release.touch()
+        observing.cancel()
+        await asyncio.gather(observing, return_exceptions=True)
+        await service.close()
 
 
 @pytest.mark.asyncio

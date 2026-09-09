@@ -474,7 +474,12 @@ class CodexAppServer:
                 result = await self.rpc(
                     "thread/read", {"threadId": thread_id, "includeTurns": False}
                 )
-            except CodeConflictError, CodeUnavailableError, NativeHistoryMissing:
+            except (
+                CodeConflictError,
+                CodeUnavailableError,
+                NativeHistoryMissing,
+                OSError,
+            ):
                 return False
             thread = object_value(result.get("thread"))
             if thread.get("id") != thread_id:
