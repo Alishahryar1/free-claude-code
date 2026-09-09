@@ -432,7 +432,67 @@ class CodexAppServer:
 
     async def _dispatch(self) -> None:
         while (event := await self._queue.get()) is not None:
+            review = event.item is not None and event.item.kind == "auto_review"
+            if (
+                event.thread_id is not None
+                and event.thread_id != self.thread_id
+                and (review or (event.kind == "notice" and event.message))
+                and await self._owns_thread(event.thread_id)
+            ):
+                if review and event.item is not None:
+                    identity = json.dumps(
+                        [event.thread_id, event.item.raw["reviewId"]],
+                        separators=(",", ":"),
+                    )
+                    event = replace(
+                        event,
+                        thread_id=self.thread_id,
+                        item=replace(
+                            event.item,
+                            item_id=f"subagent-auto-review:{identity}",
+                            kind="subagent_auto_review",
+                            title=f"Sub-agent {event.item.title}",
+                        ),
+                    )
+                else:
+                    event = replace(
+                        event,
+                        thread_id=self.thread_id,
+                        message=f"Sub-agent: {event.message}",
+                    )
             await self._sink(event)
+
+    async def _owns_thread(self, thread_id: str) -> bool:
+        # Native child listeners can deliver reviews without thread/started.
+        # Resolve ancestry from metadata, outside the reader that serves the RPC.
+        ancestors: set[str] = set()
+        while thread_id not in self._owned_threads:
+            if thread_id in ancestors:
+                return False
+            ancestors.add(thread_id)
+            try:
+                result = await self.rpc(
+                    "thread/read", {"threadId": thread_id, "includeTurns": False}
+                )
+            except (
+                CodeConflictError,
+                CodeUnavailableError,
+                NativeHistoryMissing,
+                OSError,
+            ):
+                return False
+            thread = object_value(result.get("thread"))
+            if thread.get("id") != thread_id:
+                return False
+            source = object_value(object_value(thread.get("source")).get("subAgent"))
+            parent = string_value(
+                object_value(source.get("thread_spawn")).get("parent_thread_id")
+            )
+            if not parent:
+                return False
+            thread_id = parent
+        self._owned_threads.update(ancestors)
+        return True
 
     async def _read_stderr(self) -> None:
         assert self.process.stderr is not None

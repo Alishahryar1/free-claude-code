@@ -174,9 +174,13 @@ async def create(
 
 @router.get("/admin/api/code/sessions/{session_id}")
 async def detail(
-    session_id: str, services: ApiServices = Depends(get_services)
+    session_id: str,
+    include_item_ids: tuple[str, ...] = Query(default=()),
+    services: ApiServices = Depends(get_services),
 ) -> JsonObject:
-    return _detail_payload(await _code(services).get_detail(session_id))
+    return _detail_payload(
+        await _code(services).get_detail(session_id, include_item_ids=include_item_ids)
+    )
 
 
 @router.get("/admin/api/code/sessions/{session_id}/items")
@@ -303,6 +307,7 @@ def _detail_payload(detail: CodeDetail) -> JsonObject:
         "run": _run_payload(detail.run) if detail.run else None,
         "runs": [_run_payload(run) for run in detail.runs],
         "active_prompt_ids": list(detail.active_prompt_ids),
+        "active_review_ids": list(detail.active_review_ids),
         "items": [_item_payload(item) for item in detail.items],
         "prompts": [_prompt_payload(prompt) for prompt in detail.prompts],
         "epoch": detail.epoch,

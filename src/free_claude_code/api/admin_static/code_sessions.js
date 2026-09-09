@@ -78,6 +78,7 @@
         cursor: -1,
         items: new Map(),
         prompts: new Map(),
+        activeReviewIds: new Set(),
         activePrompts: new Map(),
         runs: new Map(),
         loaded: false,
@@ -118,6 +119,8 @@
       )
         record.runNotice = "";
       record.run = data.run;
+      if (data.active_review_ids)
+        record.activeReviewIds = new Set(data.active_review_ids);
       record.version = version;
       record.cursor = Math.max(record.cursor, data.cursor || 0);
       if (record.run) accepted(id, record.run.id);
@@ -237,10 +240,16 @@
     const requestEpoch = epoch,
       token = viewToken,
       connection = syncToken;
+    const params = new URLSearchParams();
+    if (before) params.set("before", before);
+    else
+      // Reconcile unfinished entries even after they fall outside the newest page.
+      for (const { value } of get(id).items.values())
+        if (!value.complete) params.append("include_item_ids", value.id);
     let data;
     try {
       data = await api(
-        `${base}/sessions/${id}${before ? `/items?before=${encodeURIComponent(before)}` : ""}`,
+        `${base}/sessions/${id}${before ? "/items" : ""}?${params}`,
       );
     } catch (error) {
       if (token !== viewToken || connection !== syncToken || selected !== id)
@@ -1216,13 +1225,18 @@
       insertEntry(parent, node, item.sequence);
     }
     const summary = node.querySelector(".code-tool > summary");
-    if (summary)
+    if (summary) {
+      const childReview = item.kind === "subagent_auto_review";
+      const active = childReview
+        ? records.get(selected).activeReviewIds.has(item.id)
+        : activeStatuses.has(run.status);
       summary.textContent =
-        item.kind === "auto_review" &&
+        (childReview || item.kind === "auto_review") &&
         !item.complete &&
-        !activeStatuses.has(run.status)
-          ? "Auto-review: Result unavailable"
+        !active
+          ? `${childReview ? "Sub-agent " : ""}Auto-review: Result unavailable`
           : item.title || "Tool";
+    }
     const content = node.querySelector(".code-prose"),
       value = item.html ?? item.text;
     if (node.codeText !== value) {

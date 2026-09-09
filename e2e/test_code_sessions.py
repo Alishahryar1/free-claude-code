@@ -10,6 +10,7 @@ from free_claude_code.application.code_sessions.models import (
     PromptRequest,
 )
 from free_claude_code.runtime.codex_protocol import CodexProtocol
+from tests.code_sessions_support import CodexPackets
 
 
 @pytest.mark.parametrize("width", [1440, 900, 390])
@@ -211,6 +212,235 @@ def test_review_updates_inline_and_unfinished_review_settles_after_restart_view(
         )
     finally:
         second.close()
+
+
+def test_child_review_outlives_parent_and_updates_in_place_in_both_tabs(
+    page, context, admin_base_url, tmp_path, code_control
+):
+    url = create_session(page, admin_base_url, tmp_path)
+    send(page, "Delegate work")
+    connection = code_control.connection()
+    packets = CodexPackets(connection)
+    code_control.run(packets.spawn())
+    second = context.new_page()
+    try:
+        second.goto(url)
+        code_control.run(packets.review())
+        review = page.locator('[data-kind="subagent_auto_review"]')
+        expect(review.locator("summary")).to_have_text(
+            "Sub-agent Auto-review: Reviewing"
+        )
+        identity = review.get_attribute("data-id")
+        review.locator("summary").click()
+        code_control.run(connection.finish("turn-1"))
+        second.reload()
+        expect(
+            second.locator('[data-kind="subagent_auto_review"] summary')
+        ).to_have_text("Sub-agent Auto-review: Reviewing")
+        page.locator("#codeComposer").fill("Continue while reviewing")
+        expect(page.locator("#codeSend")).to_be_enabled()
+        page.locator("#codeSend").click()
+        code_control.run(code_control.harness.wait_inputs(2))
+        code_control.run(packets.review(status="approved"))
+        expect(review.locator("summary")).to_have_text(
+            "Sub-agent Auto-review: Approved"
+        )
+        expect(review).to_have_attribute("data-id", identity)
+        expect(review.locator("details")).to_have_attribute("open", "")
+        expect(
+            second.locator('[data-kind="subagent_auto_review"] summary')
+        ).to_have_text("Sub-agent Auto-review: Approved")
+        messages = page.locator(".code-item")
+        expect(messages).to_have_count(3)
+        expect(messages.nth(1)).to_have_attribute("data-id", identity)
+        expect(messages.nth(2)).to_contain_text("Continue while reviewing")
+        code_control.run(connection.finish("turn-2"))
+        code_control.run(packets.review(review_id="pending"))
+        code_control.run(packets.warning())
+        expect(page.locator('[data-kind="notice"]')).to_contain_text(
+            "Sub-agent: Native warning"
+        )
+        code_control.run(connection.close())
+        expected = [
+            "Sub-agent Auto-review: Approved",
+            "Sub-agent Auto-review: Result unavailable",
+        ]
+        expect(page.locator('[data-kind="subagent_auto_review"] summary')).to_have_text(
+            expected
+        )
+        expect(
+            second.locator('[data-kind="subagent_auto_review"] summary')
+        ).to_have_text(expected)
+        page.reload()
+        expect(page.locator('[data-kind="subagent_auto_review"] summary')).to_have_text(
+            expected
+        )
+    finally:
+        second.close()
+
+
+@pytest.mark.parametrize(
+    ("delivery", "status", "title"),
+    [
+        ("live", "approved", "Approved"),
+        ("reconnect", "denied", "Denied"),
+        ("stale_snapshot", "approved", "Approved"),
+    ],
+)
+def test_pending_child_review_outside_page_survives_refresh_in_both_tabs(
+    page, context, admin_base_url, tmp_path, code_control, delivery, status, title
+):
+    control_feed(page)
+    url = create_session(page, admin_base_url, tmp_path)
+    send(page, "Delegate")
+    connection = code_control.connection()
+    packets = CodexPackets(connection)
+    code_control.run(packets.spawn())
+    code_control.run(packets.review())
+    review = page.locator('[data-kind="subagent_auto_review"]')
+    expect(review).to_have_count(1)
+    identity = review.get_attribute("data-id")
+    code_control.run(connection.finish("turn-1"))
+    send(page, "Continue")
+    code_control.run(code_control.harness.wait_inputs(2))
+
+    async def more_output():
+        for index in range(55):
+            await connection.text(
+                "turn-2", str(index), f"Output {index}", complete=True
+            )
+        await connection.finish("turn-2")
+
+    code_control.run(more_output())
+    page.reload()
+    second = context.new_page()
+    try:
+        second.goto(url)
+        for tab in (page, second):
+            expect(
+                tab.locator('[data-kind="subagent_auto_review"] summary')
+            ).to_have_text("Sub-agent Auto-review: Reviewing")
+            expect(tab.locator(".code-item").first).to_have_attribute(
+                "data-id", identity
+            )
+        review.locator("summary").click()
+        page.locator("#codeComposer").fill("Keep draft")
+        if delivery == "reconnect":
+            page.evaluate("window.dropCodeEvents = ['item.updated']")
+        elif delivery == "stale_snapshot":
+            endpoint = url.replace(admin_base_url, "").replace(
+                "/admin/code/", "/admin/api/code/sessions/"
+            )
+            hold_code_reads(page, endpoint)
+            page.evaluate("void window.codeFeed.onerror(new Event('error'))")
+            page.wait_for_function(
+                "path => window.codeReadHolds.some(held => held.path === path)",
+                arg=endpoint,
+            )
+        code_control.run(packets.review(status=status))
+        if delivery == "reconnect":
+            page.evaluate(
+                "window.dropCodeEvents = []; void window.codeFeed.onerror(new Event('error'))"
+            )
+        elif delivery == "stale_snapshot":
+            expect(review.locator("summary")).to_have_text(
+                f"Sub-agent Auto-review: {title}"
+            )
+            page.evaluate("window.releaseCodeReads()")
+        expect(page.locator("#codeSend")).to_be_enabled()
+        for tab in (page, second):
+            expect(
+                tab.locator('[data-kind="subagent_auto_review"] summary')
+            ).to_have_text(f"Sub-agent Auto-review: {title}")
+            expect(tab.locator(".code-item").first).to_have_attribute(
+                "data-id", identity
+            )
+            expect(tab.locator('[data-kind="subagent_auto_review"]')).to_have_count(1)
+        expect(review.locator("details")).to_have_attribute("open", "")
+        expect(page.locator("#codeComposer")).to_have_value("Keep draft")
+        page.get_by_role("button", name="Load older messages", exact=True).click()
+        expect(page.locator(".code-item")).to_have_count(58)
+        expect(page.locator('[data-kind="subagent_auto_review"]')).to_have_count(1)
+    finally:
+        second.close()
+
+
+def test_reobserved_child_review_outside_page_appears_without_refresh(
+    page, context, admin_base_url, tmp_path, code_control
+):
+    url = create_session(page, admin_base_url, tmp_path)
+    send(page, "Delegate")
+    first = code_control.connection()
+    packets = CodexPackets(first)
+    code_control.run(packets.spawn())
+    code_control.run(packets.review())
+    review = page.locator('[data-kind="subagent_auto_review"]')
+    expect(review).to_have_count(1)
+    identity = review.get_attribute("data-id")
+    code_control.run(first.finish("turn-1"))
+    code_control.run(first.close())
+    send(page, "Continue")
+    code_control.run(code_control.harness.wait_inputs(2))
+    replacement = code_control.harness.connections[-1]
+
+    async def more_output():
+        for index in range(55):
+            await replacement.text(
+                "turn-2", str(index), f"Output {index}", complete=True
+            )
+        await replacement.finish("turn-2")
+
+    code_control.run(more_output())
+    page.reload()
+    second = context.new_page()
+    try:
+        second.goto(url)
+        for tab in (page, second):
+            expect(tab.locator("#codeOlder")).to_be_visible()
+            expect(tab.locator('[data-kind="subagent_auto_review"]')).to_have_count(0)
+        packets = CodexPackets(replacement)
+        code_control.run(packets.spawn())
+        code_control.run(packets.review())
+        for tab in (page, second):
+            expect(
+                tab.locator('[data-kind="subagent_auto_review"] summary')
+            ).to_have_text("Sub-agent Auto-review: Reviewing")
+            expect(tab.locator(".code-item").first).to_have_attribute(
+                "data-id", identity
+            )
+        code_control.run(packets.review(status="approved"))
+        for tab in (page, second):
+            expect(
+                tab.locator('[data-kind="subagent_auto_review"] summary')
+            ).to_have_text("Sub-agent Auto-review: Approved")
+            expect(tab.locator('[data-kind="subagent_auto_review"]')).to_have_count(1)
+    finally:
+        second.close()
+
+
+@pytest.mark.parametrize("change", ["start", "close"])
+def test_child_review_liveness_ignores_an_older_detail_snapshot(
+    page, admin_base_url, tmp_path, code_control, change
+):
+    url = create_session(page, admin_base_url, tmp_path)
+    send(page, "Delegate")
+    connection = code_control.connection()
+    packets = CodexPackets(connection)
+    code_control.run(packets.spawn())
+    code_control.run(connection.finish("turn-1"))
+    if change == "close":
+        code_control.run(packets.review())
+    path = f"{admin_base_url}/admin/api/code/sessions/{url.rsplit('/', 1)[1]}"
+    previous = page.request.get(path).json()
+    code_control.run(packets.review() if change == "start" else connection.close())
+    title = "Sub-agent Auto-review: " + (
+        "Reviewing" if change == "start" else "Result unavailable"
+    )
+    summary = page.locator('[data-kind="subagent_auto_review"] summary')
+    expect(summary).to_have_text(title)
+    page.route(path, lambda route: route.fulfill(json=previous))
+    page.evaluate("window.CodeSessions.refresh()")
+    expect(summary).to_have_text(title)
 
 
 def create_session(page, base_url, directory):
@@ -607,7 +837,7 @@ def test_old_detail_cannot_replace_streamed_output(
       const original = window.fetch;
       window.fetch = async (...args) => {
         const result = await original(...args);
-        if (/\\/api\\/code\\/sessions\\/[0-9a-f-]+$/.test(String(args[0]))) {
+        if (/\\/api\\/code\\/sessions\\/[0-9a-f-]+$/.test(new URL(String(args[0]), location.origin).pathname)) {
           window.detailCaptured = true;
           await new Promise(resolve => { window.releaseDetail = resolve; });
         }

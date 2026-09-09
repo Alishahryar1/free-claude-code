@@ -93,6 +93,7 @@ class CodexProtocol:
                 thread_id,
                 "notice",
                 message=string_value(params.get("message")),
+                raw=dict(params),
             )
         if not thread_id or not turn_id:
             return None
