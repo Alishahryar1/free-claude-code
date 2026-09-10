@@ -200,16 +200,26 @@ def normalize_nim_native_tool_stream(
     stream: Any,
     body: Mapping[str, Any],
 ) -> AsyncIterator[Any]:
-    """Convert leaked MiniMax-M3 markup into ordinary OpenAI tool-call chunks."""
+    """Convert leaked MiniMax-M3 markup into ordinary OpenAI tool-call chunks.
+
+    NIM can emit additional deltas after the chunk that carries
+    ``finish_reason``, so the terminal marker is held back and re-emitted
+    once the raw stream ends.
+    """
     schemas = _openai_tool_schemas(body)
 
     async def _iter() -> AsyncIterator[Any]:
         content_framer = _MiniMaxM3ToolFramer()
         reasoning_framer = _MiniMaxM3ToolFramer()
         structured_tool_calls_seen = False
-        finalized = False
+        held_finish_reason: Any = None
+        held_usage: Any = None
 
         async for chunk in stream:
+            usage = getattr(chunk, "usage", None)
+            if usage is not None:
+                held_usage = usage
+
             choices = getattr(chunk, "choices", None)
             if not choices:
                 yield chunk
@@ -236,99 +246,73 @@ def normalize_nim_native_tool_stream(
                 else reasoning
             )
             finish_reason = getattr(choice, "finish_reason", None)
-            generated_calls: tuple[_NativeToolCall, ...] = ()
-            if finish_reason is not None:
-                safe_content, safe_reasoning, generated_calls = (
-                    _finish_native_tool_framers(
-                        content_framer,
-                        reasoning_framer,
-                        content=safe_content,
-                        reasoning_content=safe_reasoning,
-                        schemas=schemas,
-                        structured_tool_calls_seen=structured_tool_calls_seen,
-                    )
-                )
-                finalized = True
+            if finish_reason is not None and held_finish_reason is None:
+                held_finish_reason = finish_reason
 
             normalized = _normalized_chunks(
                 chunk,
-                choice,
                 delta,
                 content=safe_content,
                 reasoning_content=safe_reasoning,
-                generated_calls=generated_calls,
-                terminal=finish_reason is not None,
+                hold_terminal=finish_reason is not None,
             )
             for normalized_chunk in normalized:
                 yield normalized_chunk
 
-        if not finalized:
-            content, reasoning, generated_calls = _finish_native_tool_framers(
-                content_framer,
-                reasoning_framer,
-                content=None,
-                reasoning_content=None,
-                schemas=schemas,
-                structured_tool_calls_seen=structured_tool_calls_seen,
-            )
-            if content or reasoning or generated_calls:
-                for normalized_chunk in _synthetic_chunks(
-                    content=content,
-                    reasoning_content=reasoning,
-                    generated_calls=generated_calls,
-                ):
-                    yield normalized_chunk
+        content, reasoning, generated_calls = _finish_native_tool_framers(
+            content_framer,
+            reasoning_framer,
+            content=None,
+            reasoning_content=None,
+            schemas=schemas,
+            structured_tool_calls_seen=structured_tool_calls_seen,
+        )
+        for normalized_chunk in _synthetic_chunks(
+            content=content,
+            reasoning_content=reasoning,
+            generated_calls=generated_calls,
+        ):
+            yield normalized_chunk
+        if held_finish_reason is not None:
+            terminal = _chunk()
+            terminal.choices[0].finish_reason = held_finish_reason
+            terminal.usage = held_usage
+            yield terminal
 
     return _NormalizedNativeToolStream(_iter(), stream)
 
 
 def _normalized_chunks(
     source_chunk: Any,
-    source_choice: Any,
     source_delta: Any,
     *,
     content: Any,
     reasoning_content: Any,
-    generated_calls: tuple[_NativeToolCall, ...],
-    terminal: bool,
+    hold_terminal: bool,
 ) -> list[Any]:
     source_content = getattr(source_delta, "content", None)
     source_reasoning = getattr(source_delta, "reasoning_content", None)
     structured_calls = getattr(source_delta, "tool_calls", None)
-    source_finish_reason = getattr(source_choice, "finish_reason", None)
-    source_usage = getattr(source_chunk, "usage", None)
 
-    if (
-        not generated_calls
-        and content == source_content
-        and reasoning_content == source_reasoning
+    if not hold_terminal and (
+        content == source_content and reasoning_content == source_reasoning
     ):
         return [source_chunk]
 
-    chunks: list[Any] = []
-    has_source_payload = (
-        bool(content)
-        or bool(reasoning_content)
-        or _has_structured_tool_calls(structured_calls)
-    )
-    if has_source_payload or not generated_calls:
-        chunks.append(
-            _chunk(
-                content=content,
-                reasoning_content=reasoning_content,
-                tool_calls=structured_calls,
-            )
+    if hold_terminal and not (
+        content or reasoning_content or _has_structured_tool_calls(structured_calls)
+    ):
+        # The terminal marker is re-emitted after the raw stream ends, so a
+        # terminal chunk with no payload of its own contributes nothing.
+        return []
+
+    return [
+        _chunk(
+            content=content,
+            reasoning_content=reasoning_content,
+            tool_calls=structured_calls,
         )
-
-    chunks.extend(_tool_call_chunk(call) for call in generated_calls)
-
-    if not chunks:
-        chunks.append(_chunk())
-
-    if terminal:
-        chunks[-1].choices[0].finish_reason = source_finish_reason
-        chunks[-1].usage = source_usage
-    return chunks
+    ]
 
 
 def _synthetic_chunks(

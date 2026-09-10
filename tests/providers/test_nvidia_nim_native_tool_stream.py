@@ -163,8 +163,15 @@ async def test_normalizer_preserves_ordinary_stream_without_tool_schemas() -> No
 
     normalized = await _normalize([source], {})
 
-    assert normalized == [source]
-    assert normalized[0] is source
+    assert _content(normalized) == "Answer"
+    assert _reasoning(normalized) == "Thinking"
+    assert not _tool_calls(normalized)
+    assert [
+        chunk.choices[0].finish_reason
+        for chunk in normalized
+        if chunk.choices[0].finish_reason is not None
+    ] == ["stop"]
+    assert normalized[-1].choices[0].finish_reason == "stop"
 
 
 @pytest.mark.asyncio
@@ -609,3 +616,142 @@ async def test_normalizer_rejects_native_argument_nesting_above_limit(
             [_chunk(content=raw, finish_reason="tool_calls")],
             body,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["content", "reasoning_content"])
+async def test_normalizer_tolerates_empty_deltas_after_finish_reason(
+    field: str,
+) -> None:
+    raw = _tool_block(_invoke("Read", _element("file_path", "README.md")))
+    body = _body(
+        _function(
+            "Read",
+            {"file_path": {"type": "string"}},
+            ["file_path"],
+        )
+    )
+
+    normalized = await _normalize(
+        [
+            _chunk(
+                content=raw if field == "content" else None,
+                reasoning_content=raw if field == "reasoning_content" else None,
+                finish_reason="tool_calls",
+            ),
+            _chunk(
+                content="" if field == "content" else None,
+                reasoning_content="" if field == "reasoning_content" else None,
+            ),
+        ],
+        body,
+    )
+
+    calls = _tool_calls(normalized)
+    assert len(calls) == 1
+    assert calls[0].function.name == "Read"
+    assert [
+        chunk.choices[0].finish_reason
+        for chunk in normalized
+        if chunk.choices[0].finish_reason is not None
+    ] == ["tool_calls"]
+
+
+@pytest.mark.asyncio
+async def test_normalizer_preserves_text_after_finish_reason() -> None:
+    normalized = await _normalize(
+        [
+            _chunk(content="Hello "),
+            _chunk(content="world", finish_reason="stop"),
+            _chunk(content=" and more"),
+        ],
+        {},
+    )
+
+    assert _content(normalized) == "Hello world and more"
+    assert [
+        chunk.choices[0].finish_reason
+        for chunk in normalized
+        if chunk.choices[0].finish_reason is not None
+    ] == ["stop"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["content", "reasoning_content"])
+async def test_normalizer_decodes_tool_block_streamed_after_finish_reason(
+    field: str,
+) -> None:
+    raw = "Preparing. " + _tool_block(
+        _invoke("Read", _element("file_path", "README.md"))
+    )
+    body = _body(
+        _function(
+            "Read",
+            {"file_path": {"type": "string"}},
+            ["file_path"],
+        )
+    )
+
+    normalized = await _normalize(
+        [
+            _chunk(finish_reason="tool_calls"),
+            _chunk(
+                content=raw if field == "content" else None,
+                reasoning_content=raw if field == "reasoning_content" else None,
+            ),
+        ],
+        body,
+    )
+
+    assert (_content(normalized) if field == "content" else _reasoning(normalized)) == (
+        "Preparing. "
+    )
+    calls = _tool_calls(normalized)
+    assert len(calls) == 1
+    assert calls[0].function.name == "Read"
+    assert json.loads(calls[0].function.arguments) == {"file_path": "README.md"}
+    assert normalized[-1].choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_normalizer_emits_single_finish_reason_for_duplicate_terminal_chunks() -> (
+    None
+):
+    raw = _tool_block(_invoke("Read", _element("file_path", "README.md")))
+    body = _body(
+        _function(
+            "Read",
+            {"file_path": {"type": "string"}},
+            ["file_path"],
+        )
+    )
+
+    normalized = await _normalize(
+        [
+            _chunk(content=raw, finish_reason="tool_calls"),
+            _chunk(finish_reason="tool_calls"),
+        ],
+        body,
+    )
+
+    assert len(_tool_calls(normalized)) == 1
+    assert [
+        chunk.choices[0].finish_reason
+        for chunk in normalized
+        if chunk.choices[0].finish_reason is not None
+    ] == ["tool_calls"]
+
+
+@pytest.mark.asyncio
+async def test_normalizer_carries_latest_usage_on_final_terminal_chunk() -> None:
+    usage_first = SimpleNamespace(prompt_tokens=1)
+    usage_last = SimpleNamespace(prompt_tokens=2)
+    text = _chunk(content="Answer", finish_reason="stop")
+    text.usage = usage_first
+    usage_only = SimpleNamespace(choices=[], usage=usage_last)
+
+    normalized = await _normalize([text, usage_only], {})
+
+    assert any(chunk is usage_only for chunk in normalized)
+    assert normalized[-1].choices[0].finish_reason == "stop"
+    assert normalized[-1].usage is usage_last
