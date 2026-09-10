@@ -32,6 +32,7 @@ from .tool_results import (
     ToolResultText,
     decompose_tool_result_content,
 )
+from .tool_schema import sanitize_tool_schema_patterns
 from .utils import set_if_not_none
 
 
@@ -786,7 +787,9 @@ class AnthropicToOpenAIConverter:
                 "function": {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "parameters": _tool_input_schema(tool),
+                    "parameters": sanitize_tool_schema_patterns(
+                        _tool_input_schema(tool)
+                    ),
                 },
             }
             for tool in tools

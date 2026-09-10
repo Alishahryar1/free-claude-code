@@ -585,3 +585,46 @@ def test_build_responses_provider_request_rejects_unknown_request_fields() -> No
             request,
             reasoning=ReasoningPolicy.provider_default(),
         )
+
+
+def test_build_responses_provider_request_sanitizes_tool_patterns() -> None:
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "save a file"}],
+            "tools": [
+                {
+                    "name": "Artifact",
+                    "description": "Save an artifact",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "file_name": {
+                                "type": "string",
+                                "pattern": (
+                                    r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"'
+                                    r"\\./[\]]{1,200}"
+                                ),
+                            },
+                            "slug": {
+                                "type": "string",
+                                "pattern": r"^[a-z-]+$",
+                            },
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+    body = build_responses_provider_request(
+        request,
+        reasoning=ReasoningPolicy.provider_default(),
+    )
+
+    parameters = body["tools"][0]["parameters"]
+    assert parameters["properties"]["file_name"] == {"type": "string"}
+    assert parameters["properties"]["slug"] == {
+        "type": "string",
+        "pattern": r"^[a-z-]+$",
+    }

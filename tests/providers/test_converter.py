@@ -341,6 +341,53 @@ def test_convert_tool_without_input_schema_uses_empty_object_schema():
     ]
 
 
+def test_convert_tools_preserves_supported_pattern():
+    tools = [
+        MockTool(
+            "validate",
+            None,
+            {
+                "type": "object",
+                "properties": {
+                    "slug": {"type": "string", "pattern": r"^[a-z-]+$"},
+                },
+            },
+        )
+    ]
+
+    result = AnthropicToOpenAIConverter.convert_tools(tools)
+
+    assert result[0]["function"]["parameters"]["properties"]["slug"] == {
+        "type": "string",
+        "pattern": r"^[a-z-]+$",
+    }
+
+
+def test_convert_tools_drops_unsupported_unicode_property_pattern():
+    tools = [
+        MockTool(
+            "Artifact",
+            None,
+            {
+                "type": "object",
+                "properties": {
+                    "file_name": {
+                        "type": "string",
+                        "pattern": r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"'
+                        r"\\./[\]]{1,200}",
+                    },
+                },
+            },
+        )
+    ]
+
+    result = AnthropicToOpenAIConverter.convert_tools(tools)
+
+    assert result[0]["function"]["parameters"]["properties"]["file_name"] == {
+        "type": "string",
+    }
+
+
 @pytest.mark.parametrize(
     "tool_choice,expected",
     [

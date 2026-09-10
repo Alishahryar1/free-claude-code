@@ -6,6 +6,38 @@ from typing import Any
 
 import jsonschema
 
+# JSON Schema keywords whose values are name->subschema maps. Keywords holding
+# a single subschema or a list of them are covered by the union below; literal-
+# value keywords such as ``enum`` or ``default`` are deliberately absent: their
+# contents are data, not schema.
+_SCHEMA_MAP_KEYS = frozenset(
+    {
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+        "patternProperties",
+        "properties",
+    }
+)
+_SUBSCHEMA_KEYS = _SCHEMA_MAP_KEYS | frozenset(
+    {
+        "additionalProperties",
+        "allOf",
+        "anyOf",
+        "contains",
+        "else",
+        "if",
+        "items",
+        "not",
+        "oneOf",
+        "prefixItems",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    }
+)
+
 
 def schema_type(schema: Mapping[str, Any]) -> str | None:
     """Resolve one useful non-null JSON type from a simple or union schema."""
@@ -92,3 +124,64 @@ def arguments_match_schema(
     except jsonschema.exceptions.ValidationError:
         return False
     return True
+
+
+def sanitize_tool_schema_patterns(schema: Any) -> Any:
+    """Return a tool schema with regex ``pattern`` values usable by OpenAI-compatible APIs.
+
+    Some providers validate ``pattern`` values against regex dialects that reject
+    Unicode property escapes (``\\p{...}``), failing the whole request with a 400
+    before it reaches the model. Any ``pattern`` containing such an escape is
+    dropped entirely — removing the escape could narrow what the pattern accepts,
+    and a stricter remainder would reject arguments the original schema allowed.
+    Schemas without offending patterns are returned unchanged — no copy and no
+    mutation — and literal-value keywords such as ``enum`` are never traversed.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    items: list[tuple[str, Any]] = []
+    changed = False
+    for key, value in schema.items():
+        if (
+            key == "pattern"
+            and isinstance(value, str)
+            and ("\\p{" in value or "\\P{" in value)
+        ):
+            changed = True
+            continue
+        if key in _SUBSCHEMA_KEYS:
+            sanitized = _sanitize_subschema(key, value)
+            if sanitized is not value:
+                changed = True
+            items.append((key, sanitized))
+            continue
+        items.append((key, value))
+    return dict(items) if changed else schema
+
+
+def _sanitize_subschema(key: str, value: Any) -> Any:
+    if isinstance(value, dict):
+        if key in _SCHEMA_MAP_KEYS:
+            return _sanitize_schema_map(value)
+        return sanitize_tool_schema_patterns(value)
+    if isinstance(value, list):
+        items: list[Any] = []
+        changed = False
+        for item in value:
+            sanitized = sanitize_tool_schema_patterns(item)
+            if sanitized is not item:
+                changed = True
+            items.append(sanitized)
+        return items if changed else value
+    return value
+
+
+def _sanitize_schema_map(mapping: dict[str, Any]) -> Any:
+    items: list[tuple[str, Any]] = []
+    changed = False
+    for key, value in mapping.items():
+        sanitized = sanitize_tool_schema_patterns(value)
+        if sanitized is not value:
+            changed = True
+        items.append((key, sanitized))
+    return dict(items) if changed else mapping
