@@ -263,6 +263,19 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Defaults to https://router.bynara.id/v1."
         ),
     },
+    "LIGHTNING_API_KEY": {
+        "label": "Lightning AI API Key",
+        "description": (
+            "Lightning AI Model APIs key for the OpenAI-compatible endpoint at "
+            "lightning.ai/api/v1. Create one on lightning.ai under Model APIs."
+        ),
+    },
+    "LIGHTNING_BASE_URL": {
+        "description": (
+            "Lightning AI OpenAI-compatible Chat Completions base URL. "
+            "Defaults to https://lightning.ai/api/v1."
+        ),
+    },
     "AGNES_API_KEY": {
         "label": "Agnes AI API Key",
         "description": (

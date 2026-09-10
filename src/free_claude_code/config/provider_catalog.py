@@ -80,6 +80,8 @@ NARAROUTE_DEFAULT_BASE = "https://router.bynara.id/v1"
 POOLSIDE_DEFAULT_BASE = "https://inference.poolside.ai/v1"
 # LLM7.io OpenAI-compatible Chat Completions API.
 LLM7_DEFAULT_BASE = "https://api.llm7.io/v1"
+# Lightning AI Model APIs OpenAI-compatible Chat Completions gateway.
+LIGHTNING_DEFAULT_BASE = "https://lightning.ai/api/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -544,6 +546,16 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="llm7_api_key",
         default_base_url=LLM7_DEFAULT_BASE,
         proxy_attr="llm7_proxy",
+    ),
+    "lightning": ProviderDescriptor(
+        provider_id="lightning",
+        display_name="Lightning AI",
+        credential_env="LIGHTNING_API_KEY",
+        credential_url="https://lightning.ai/lightning-ai/model-apis/models",
+        credential_attr="lightning_api_key",
+        default_base_url=LIGHTNING_DEFAULT_BASE,
+        base_url_attr="lightning_base_url",
+        proxy_attr="lightning_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",

@@ -67,6 +67,7 @@ def _settings(**overrides):
         "ollama_api_key": "",
         "poolside_api_key": "",
         "llm7_api_key": "",
+        "lightning_api_key": "",
         "fireworks_api_key": "",
         "novita_api_key": "",
         "cloudflare_api_token": "",
@@ -229,6 +230,53 @@ def test_llm7_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
     )
 
     assert not config.has_provider_configuration("llm7")
+    assert config.provider_smoke_models() == []
+
+
+def test_lightning_provider_configuration_uses_documented_default_model(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_LIGHTNING", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            lightning_api_key="lightning-key",
+        )
+    )
+
+    assert config.has_provider_configuration("lightning")
+    models = config.provider_smoke_models()
+    assert [model.provider for model in models] == ["lightning"]
+    assert models[0].full_model == "lightning/lightning-ai/gpt-oss-120b"
+    assert models[0].source == "provider_default"
+
+
+def test_lightning_smoke_override_accepts_model_with_or_without_prefix(
+    monkeypatch,
+) -> None:
+    settings = _settings(
+        model="ollama/llama3.1",
+        ollama_base_url="",
+        lightning_api_key="lightning-key",
+    )
+    for override in ("lightning-ai/gpt-oss-20b", "lightning/lightning-ai/gpt-oss-20b"):
+        monkeypatch.setenv("FCC_SMOKE_MODEL_LIGHTNING", override)
+        models = _smoke_config(settings=settings).provider_smoke_models()
+
+        assert [model.provider for model in models] == ["lightning"]
+        assert models[0].full_model == "lightning/lightning-ai/gpt-oss-20b"
+        assert models[0].source == "FCC_SMOKE_MODEL_LIGHTNING"
+
+
+def test_lightning_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_LIGHTNING", raising=False)
+    config = _smoke_config(
+        provider_matrix=frozenset({"lightning"}),
+        settings=_settings(ollama_base_url="", lightning_api_key=""),
+    )
+
+    assert not config.has_provider_configuration("lightning")
     assert config.provider_smoke_models() == []
 
 

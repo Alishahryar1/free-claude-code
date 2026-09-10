@@ -20,6 +20,7 @@ from free_claude_code.config.provider_catalog import (
     FEATHERLESS_DEFAULT_BASE,
     HUGGINGFACE_DEFAULT_BASE,
     KIMI_CODE_DEFAULT_BASE,
+    LIGHTNING_DEFAULT_BASE,
     LLM7_DEFAULT_BASE,
     MINIMAX_DEFAULT_BASE,
     NARAROUTE_DEFAULT_BASE,
@@ -110,6 +111,8 @@ def _make_settings(**overrides):
     mock.ollama_api_key = "test_ollama_cloud_key"
     mock.poolside_api_key = "test_poolside_key"
     mock.llm7_api_key = "test_llm7_key"
+    mock.lightning_api_key = "test_lightning_key"
+    mock.lightning_base_url = LIGHTNING_DEFAULT_BASE
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -156,6 +159,7 @@ def _make_settings(**overrides):
     mock.ollama_cloud_proxy = None
     mock.poolside_proxy = None
     mock.llm7_proxy = None
+    mock.lightning_proxy = None
     mock.kilo_api_key = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
@@ -878,6 +882,7 @@ def test_create_provider_instantiates_each_builtin():
         "opencode_zen": OpenCodeProvider,
         "poolside": OpenAIChatProvider,
         "llm7": OpenAIChatProvider,
+        "lightning": OpenAIChatProvider,
         "opencode_go": OpenCodeProvider,
         "vercel": OpenAIChatProvider,
         "bedrock": OpenAIChatProvider,
