@@ -25,6 +25,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `huggingface-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/huggingface-color.svg |
 | `kilocode.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/kilocode.svg |
 | `kimi-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/kimi-color.svg |
+| `lightning.png` | https://lightning.ai/favicon/favicon-32x32.png |
 | `llamacpp.svg` | https://raw.githubusercontent.com/ggml-org/llama.cpp/master/media/llama1-icon-transparent.svg |
 | `llm7.png` | https://llm7.io/favicons/apple-touch-icon.png |
 | `lmstudio.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/lmstudio.svg |
