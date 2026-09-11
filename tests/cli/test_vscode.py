@@ -72,6 +72,46 @@ def test_missing_file_and_idempotent_operations(tmp_path):
     assert path.stat().st_mtime_ns == before
 
 
+@pytest.mark.parametrize("connected", [True, False])
+def test_escaped_unicode_survives_connect_and_disconnect(tmp_path, connected):
+    path = tmp_path / "settings.json"
+    data = {"keep": "\U0001f600"}
+    if not connected:
+        operate(path, True)
+        data.update(json.loads(path.read_text(encoding="utf-8")))
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert operate(path, connected) == {"connected": connected}
+    assert json.loads(path.read_text(encoding="utf-8"))["keep"] == "\U0001f600"
+
+
+@pytest.mark.parametrize("connected", [True, False])
+@pytest.mark.parametrize("target_exists", [True, False])
+def test_settings_symlink_is_preserved(tmp_path, connected, target_exists):
+    target = tmp_path / "dotfiles" / "settings.json"
+    link = tmp_path / "settings.json"
+    if target_exists:
+        target.parent.mkdir()
+        target.write_text('{"keep": true}')
+        if not connected:
+            operate(target, True)
+    try:
+        link.symlink_to(Path("dotfiles/settings.json"))
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or privilege")
+        raise
+    assert operate(link, connected) == {"connected": connected}
+    assert link.is_symlink()
+    if connected or target_exists:
+        assert target.is_file()
+        saved = json.loads(target.read_text())
+        assert saved.get(LOGIN, False) is connected
+        if target_exists:
+            assert saved["keep"] is True
+    else:
+        assert not target.exists()
+
+
 @pytest.mark.parametrize("url", ["http://localhost:8000/", URL, "http://[::1]:8000"])
 def test_manual_setup_only_requires_connection_fields(tmp_path, url):
     path = tmp_path / "settings.json"

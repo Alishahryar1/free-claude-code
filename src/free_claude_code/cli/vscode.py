@@ -127,10 +127,11 @@ def configure(
     connected: bool | None = None,
 ) -> JsonObject:
     """Inspect, connect, or disconnect; preserve unrelated values, not formatting."""
+    path = path.resolve()
     values = claude_proxy_values(proxy_root_url, auth_token)
     document, entries = _read(path, set(values))
     if connected is not None:
-        before = json.dumps(document, ensure_ascii=False, allow_nan=False)
+        before = json.dumps(document, allow_nan=False)
         if connected:
             document[_LOGIN] = True
             remaining = dict(values)
@@ -150,11 +151,10 @@ def configure(
                     document[_ENV] = retained
                 else:
                     document.pop(_ENV, None)
-        if json.dumps(document, ensure_ascii=False, allow_nan=False) != before:
+        if json.dumps(document, allow_nan=False) != before:
             _write(
                 path,
-                json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False)
-                + "\n",
+                json.dumps(document, indent=2, allow_nan=False) + "\n",
             )
         document, entries = _read(path, set(values))
     return {"connected": _connected(document, entries, values)}
