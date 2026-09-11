@@ -1268,8 +1268,8 @@ function renderClaudeIntegration() {
     : (connected ? "Connected" : "Not connected");
   status.className = `status-pill ${connected ? "ok" : "neutral"}`;
   byId("claudeIntegrationDescription").textContent = connected
-    ? "Remove FCC's settings from VS Code. Other settings will stay."
-    : "Will set FCC's URL and token in VS Code settings, enable model discovery, and skip the login prompt.";
+    ? "Remove FCC's VS Code settings. Claude onboarding stays completed."
+    : "Will set FCC's URL and token, enable model discovery, skip VS Code login, and complete Claude onboarding.";
 }
 
 async function refreshClaudeIntegration() {

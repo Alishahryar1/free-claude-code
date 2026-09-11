@@ -373,6 +373,7 @@ class ApplicationRuntime:
                         to_thread.run_sync(
                             vscode.configure,
                             vscode.settings_path(),
+                            vscode.claude_state_path(),
                             local_proxy_root_url(settings),
                             settings.proxy_auth_token,
                             connected,
@@ -381,11 +382,11 @@ class ApplicationRuntime:
                 )
             except ValueError, UnicodeError:
                 raise InvalidRequestError(
-                    "Could not read VS Code settings. Check the JSON and environment entries."
+                    "Could not read Claude integration settings. Check the JSON in VS Code settings.json and .claude.json."
                 ) from None
             except OSError:
                 raise ApplicationUnavailableError(
-                    "Could not access VS Code settings. Check file permissions and try again."
+                    "Could not access VS Code settings.json or .claude.json. Check file permissions and try again."
                 ) from None
 
     async def admin_status(self) -> JsonObject:

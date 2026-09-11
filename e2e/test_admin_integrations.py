@@ -31,6 +31,8 @@ def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):
     expect(page.locator("#claudeIntegrationStatus")).to_have_text("Connected")
     expect(page.locator("#claudeIntegrationMessage")).to_contain_text("Reload VS Code")
     assert json.loads(path.read_text())["claudeCode.disableLoginPrompt"] is True
+    state_path = tmp_path / ".claude.json"
+    assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
     page.reload()
     expect(card_button).to_have_text("Disconnect")
     card_button.click()
@@ -42,15 +44,27 @@ def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):
     action.click()
     expect(card_button).to_have_text("Connect")
     assert json.loads(path.read_text()) == {}
+    assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
 
 
 def test_manual_setup_and_revisit_read_the_file(page, admin_base_url, tmp_path):
     path = tmp_path / "vscode" / "settings.json"
     status = page.request.get(f"{admin_base_url}/admin/api/status").json()
     vscode.configure(
-        path, f"http://localhost:{status['port']}/", "e2e-proxy-token", True
+        path,
+        tmp_path / ".claude.json",
+        f"http://localhost:{status['port']}/",
+        "e2e-proxy-token",
+        True,
     )
     page.goto(f"{admin_base_url}/admin/integrations")
+    expect(page.locator("#openClaudeIntegration")).to_have_text("Disconnect")
+    (tmp_path / ".claude.json").unlink()
+    page.reload()
+    expect(page.locator("#openClaudeIntegration")).to_have_text("Connect")
+    page.locator("#openClaudeIntegration").click()
+    expect(page.locator("#claudeIntegrationDescription")).to_contain_text("onboarding")
+    page.locator("#confirmClaudeIntegration").click()
     expect(page.locator("#openClaudeIntegration")).to_have_text("Disconnect")
     page.get_by_role("button", name="Providers", exact=True).click()
     path.write_text("{}")

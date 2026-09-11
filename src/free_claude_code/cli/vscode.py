@@ -16,6 +16,7 @@ from free_claude_code.core.json_types import JsonObject
 
 _ENV = "claudeCode.environmentVariables"
 _LOGIN = "claudeCode.disableLoginPrompt"
+_ONBOARDING = "hasCompletedOnboarding"
 
 
 def settings_path() -> Path:
@@ -32,16 +33,25 @@ def settings_path() -> Path:
     return root / "Code/User/settings.json"
 
 
-def _read(path: Path, names: set[str]) -> tuple[JsonObject, list[JsonObject]]:
+def claude_state_path() -> Path:
+    return Path.home() / ".claude.json"
+
+
+def _read_object(path: Path) -> JsonObject:
     try:
         source = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
-        return {}, []
+        return {}
     document = json5.loads(source, allow_duplicate_keys=False)
     if not isinstance(document, dict):
         raise ValueError("Settings must be an object")
     # Also reject non-finite JSON5 numbers before any operation or status result.
     json.dumps(document, allow_nan=False)
+    return cast(JsonObject, document)
+
+
+def _read(path: Path, names: set[str]) -> tuple[JsonObject, list[JsonObject]]:
+    document = _read_object(path)
     entries = document.get(_ENV, [])
     if not isinstance(entries, list):
         raise ValueError("Environment settings must be an array")
@@ -57,7 +67,7 @@ def _read(path: Path, names: set[str]) -> tuple[JsonObject, list[JsonObject]]:
         if name in names and name in seen:
             raise ValueError("Duplicate integration environment entry")
         seen.add(name)
-    return cast(JsonObject, document), cast(list[JsonObject], entries)
+    return document, cast(list[JsonObject], entries)
 
 
 def _same_url(value: object, expected: str) -> bool:
@@ -122,6 +132,7 @@ def _write(path: Path, content: str) -> None:
 
 def configure(
     path: Path,
+    state_path: Path,
     proxy_root_url: str,
     auth_token: str,
     connected: bool | None = None,
@@ -130,6 +141,10 @@ def configure(
     path = path.resolve()
     values = claude_proxy_values(proxy_root_url, auth_token)
     document, entries = _read(path, set(values))
+    onboarding: JsonObject = {}
+    if connected is not False:
+        state_path = state_path.resolve()
+        onboarding = _read_object(state_path)
     if connected is not None:
         before = json.dumps(document, allow_nan=False)
         if connected:
@@ -151,10 +166,17 @@ def configure(
                     document[_ENV] = retained
                 else:
                     document.pop(_ENV, None)
-        if json.dumps(document, allow_nan=False) != before:
-            _write(
-                path,
-                json.dumps(document, indent=2, allow_nan=False) + "\n",
-            )
+        settings_changed = json.dumps(document, allow_nan=False) != before
+        settings_content = json.dumps(document, indent=2, allow_nan=False) + "\n"
+        if connected and onboarding.get(_ONBOARDING) is not True:
+            onboarding[_ONBOARDING] = True
+            _write(state_path, json.dumps(onboarding, indent=2, allow_nan=False) + "\n")
+        if settings_changed:
+            _write(path, settings_content)
         document, entries = _read(path, set(values))
-    return {"connected": _connected(document, entries, values)}
+        if connected:
+            onboarding = _read_object(state_path)
+    return {
+        "connected": _connected(document, entries, values)
+        and onboarding.get(_ONBOARDING) is True,
+    }
