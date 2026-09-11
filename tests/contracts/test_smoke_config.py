@@ -67,6 +67,7 @@ def _settings(**overrides):
         "ollama_api_key": "",
         "poolside_api_key": "",
         "llm7_api_key": "",
+        "orcarouter_api_key": "",
         "fireworks_api_key": "",
         "novita_api_key": "",
         "cloudflare_api_token": "",
@@ -229,6 +230,56 @@ def test_llm7_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
     )
 
     assert not config.has_provider_configuration("llm7")
+    assert config.provider_smoke_models() == []
+
+
+def test_orcarouter_provider_configuration_uses_documented_free_model(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_ORCAROUTER", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            orcarouter_api_key="orcarouter-key",
+        )
+    )
+
+    assert config.has_provider_configuration("orcarouter")
+    models = config.provider_smoke_models()
+    assert [model.provider for model in models] == ["orcarouter"]
+    assert models[0].full_model == "orcarouter/deepseek/deepseek-v4-flash-free"
+    assert models[0].source == "provider_default"
+
+
+def test_orcarouter_smoke_override_accepts_model_with_or_without_prefix(
+    monkeypatch,
+) -> None:
+    settings = _settings(
+        model="ollama/llama3.1",
+        ollama_base_url="",
+        orcarouter_api_key="orcarouter-key",
+    )
+    for override in (
+        "deepseek/deepseek-v4-pro-free",
+        "orcarouter/deepseek/deepseek-v4-pro-free",
+    ):
+        monkeypatch.setenv("FCC_SMOKE_MODEL_ORCAROUTER", override)
+        models = _smoke_config(settings=settings).provider_smoke_models()
+
+        assert [model.provider for model in models] == ["orcarouter"]
+        assert models[0].full_model == "orcarouter/deepseek/deepseek-v4-pro-free"
+        assert models[0].source == "FCC_SMOKE_MODEL_ORCAROUTER"
+
+
+def test_orcarouter_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_ORCAROUTER", raising=False)
+    config = _smoke_config(
+        provider_matrix=frozenset({"orcarouter"}),
+        settings=_settings(ollama_base_url="", orcarouter_api_key=""),
+    )
+
+    assert not config.has_provider_configuration("orcarouter")
     assert config.provider_smoke_models() == []
 
 

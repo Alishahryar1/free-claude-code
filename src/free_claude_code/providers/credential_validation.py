@@ -141,6 +141,7 @@ _PROBES = (
         _AUTH_401,
     ),
     _Probe("nararoute", "/models", _MODELS, _AUTH_401),
+    _Probe("orcarouter", "/models", _MODELS, _AUTH_401),
     # Positive evidence only: these errors can also reflect permissions, budget,
     # token type, or an undocumented response contract. Never reject on failure.
     # https://docs.deepinfra.com/api-reference/account/me
