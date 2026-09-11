@@ -92,6 +92,9 @@ def admin_page_response() -> HTMLResponse:
 
 
 @router.get("/admin", include_in_schema=False)
+@router.get("/admin/model_config", include_in_schema=False)
+@router.get("/admin/messaging", include_in_schema=False)
+@router.get("/admin/integrations", include_in_schema=False)
 def admin_page(request: Request):
     require_loopback_admin(request)
     return admin_page_response()

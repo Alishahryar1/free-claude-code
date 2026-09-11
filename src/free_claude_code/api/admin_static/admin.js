@@ -50,8 +50,7 @@ const VIEW_GROUPS = [
 ];
 
 function viewFromLocation() {
-  if (window.location.pathname.startsWith("/admin/code")) return "code";
-  return new URLSearchParams(window.location.search).get("view") || "providers";
+  return window.location.pathname.split("/")[2] || "providers";
 }
 
 const byId = (id) => document.getElementById(id);
@@ -179,8 +178,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
 }
 
 function navigateToView(viewId) {
-  const target = viewId === "code" ? "/admin/code"
-    : viewId === "providers" ? "/admin" : `/admin?view=${encodeURIComponent(viewId)}`;
+  const target = viewId === "providers" ? "/admin" : `/admin/${viewId}`;
   if (window.location.pathname + window.location.search !== target) {
     window.history.pushState({}, "", target);
   }

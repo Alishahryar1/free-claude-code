@@ -11,8 +11,14 @@ def test_selected_admin_tab_survives_refresh_and_browser_navigation(
     page, admin_base_url
 ):
     page.goto(f"{admin_base_url}/admin")
-    for title in ("Model Config", "Messaging", "Integrations", "Providers"):
+    for title, path in (
+        ("Model Config", "/admin/model_config"),
+        ("Messaging", "/admin/messaging"),
+        ("Integrations", "/admin/integrations"),
+        ("Providers", "/admin"),
+    ):
         page.get_by_role("button", name=title, exact=True).click()
+        expect(page).to_have_url(f"{admin_base_url}{path}")
         page.reload()
         expect(page.locator("#pageTitle")).to_have_text(title)
         expect(page.get_by_role("button", name=title, exact=True)).to_have_attribute(
