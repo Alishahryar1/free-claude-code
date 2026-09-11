@@ -12,7 +12,122 @@ LOGIN = "claudeCode.disableLoginPrompt"
 
 
 def operate(path, connected=None):
-    return vscode.configure(path, URL, TOKEN, connected)
+    return vscode.configure(path, path.parent / ".claude.json", URL, TOKEN, connected)
+
+
+def test_connect_completes_onboarding_and_disconnect_preserves_state(tmp_path):
+    path = tmp_path / "settings.json"
+    state_path = tmp_path / ".claude.json"
+    state_path.write_text('{"theme":"dark","hasCompletedOnboarding":false}')
+    assert operate(path, True) == {"connected": True}
+    assert json.loads(state_path.read_text()) == {
+        "theme": "dark",
+        "hasCompletedOnboarding": True,
+    }
+    saved = state_path.read_bytes()
+    modified = state_path.stat().st_mtime_ns
+    operate(path, True)
+    assert state_path.stat().st_mtime_ns == modified
+    assert operate(path, False) == {"connected": False}
+    assert state_path.read_bytes() == saved
+
+
+@pytest.mark.parametrize("flag", [None, False, 1, "true"])
+def test_connected_requires_completed_onboarding(tmp_path, flag):
+    path = tmp_path / "settings.json"
+    state_path = tmp_path / ".claude.json"
+    operate(path, True)
+    state_path.write_text(json.dumps({"hasCompletedOnboarding": flag}))
+    assert operate(path) == {"connected": False}
+    operate(path, True)
+    assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
+    assert operate(path) == {"connected": True}
+
+
+def test_missing_onboarding_state_is_read_only_until_connect(tmp_path):
+    path = tmp_path / "settings.json"
+    state_path = tmp_path / ".claude.json"
+    operate(path, True)
+    state_path.unlink()
+    assert operate(path) == {"connected": False}
+    assert not state_path.exists()
+    assert operate(path, False) == {"connected": False}
+    assert not state_path.exists()
+    operate(path, True)
+    assert json.loads(state_path.read_text()) == {"hasCompletedOnboarding": True}
+
+
+@pytest.mark.parametrize("source", ["{invalid", "[]", '{"a":1,"a":2}', '{"a":NaN}'])
+def test_invalid_state_blocks_connect_but_not_disconnect(tmp_path, source):
+    path = tmp_path / "settings.json"
+    state_path = tmp_path / ".claude.json"
+    operate(path, True)
+    settings_before = path.read_bytes()
+    state_path.write_text(source)
+    for action in (None, True):
+        with pytest.raises(ValueError):
+            operate(path, action)
+        assert path.read_bytes() == settings_before
+        assert state_path.read_text() == source
+    assert operate(path, False) == {"connected": False}
+    assert json.loads(path.read_text()) == {}
+    assert state_path.read_text() == source
+
+
+def test_invalid_vscode_settings_do_not_update_onboarding(tmp_path):
+    path = tmp_path / "settings.json"
+    state_path = tmp_path / ".claude.json"
+    path.write_text('{"claudeCode.environmentVariables":{}}')
+    state_path.write_text('{"hasCompletedOnboarding":false}')
+    with pytest.raises(ValueError):
+        operate(path, True)
+    assert state_path.read_text() == '{"hasCompletedOnboarding":false}'
+
+
+@pytest.mark.parametrize("failed_file", ["state", "settings"])
+def test_save_failure_preserves_completed_steps_and_retry_completes(
+    tmp_path, monkeypatch, failed_file
+):
+    path = tmp_path / "settings.json"
+    state_path = tmp_path / ".claude.json"
+    path.write_text('{"keep":true}')
+    original_replace = Path.replace
+
+    def fail_replace(self, target):
+        if target == (state_path if failed_file == "state" else path):
+            raise PermissionError("test failure")
+        return original_replace(self, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "replace", fail_replace)
+        with pytest.raises(OSError):
+            operate(path, True)
+    if failed_file == "state":
+        assert not state_path.exists()
+    else:
+        assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
+    assert path.read_text() == '{"keep":true}'
+    assert operate(path) == {"connected": False}
+    assert operate(path, True) == {"connected": True}
+
+
+def test_onboarding_symlink_and_escaped_unicode_are_preserved(tmp_path):
+    path = tmp_path / "settings.json"
+    state_path = tmp_path / ".claude.json"
+    target = tmp_path / "state.json"
+    target.write_text(json.dumps({"keep": "\U0001f600"}))
+    try:
+        state_path.symlink_to(Path("state.json"))
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or privilege")
+        raise
+    assert operate(path, True) == {"connected": True}
+    assert state_path.is_symlink()
+    assert json.loads(target.read_text()) == {
+        "keep": "\U0001f600",
+        "hasCompletedOnboarding": True,
+    }
 
 
 def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path):
@@ -115,6 +230,7 @@ def test_settings_symlink_is_preserved(tmp_path, connected, target_exists):
 @pytest.mark.parametrize("url", ["http://localhost:8000/", URL, "http://[::1]:8000"])
 def test_manual_setup_only_requires_connection_fields(tmp_path, url):
     path = tmp_path / "settings.json"
+    (tmp_path / ".claude.json").write_text('{"hasCompletedOnboarding":true}')
     path.write_text(
         json.dumps(
             {
@@ -184,6 +300,8 @@ def test_failed_replace_preserves_original_and_removes_tempfile(
     tmp_path, monkeypatch, readonly
 ):
     path = tmp_path / "settings.json"
+    state_path = tmp_path / ".claude.json"
+    state_path.write_text('{"hasCompletedOnboarding":true}')
     path.write_text('{"keep": true}')
     if readonly:
         path.chmod(0o444)
@@ -196,7 +314,7 @@ def test_failed_replace_preserves_original_and_removes_tempfile(
         with pytest.raises(OSError):
             operate(path, True)
         assert path.read_text() == '{"keep": true}'
-        assert list(tmp_path.iterdir()) == [path]
+        assert set(tmp_path.iterdir()) == {path, state_path}
     finally:
         for item in tmp_path.iterdir():
             item.chmod(0o600)

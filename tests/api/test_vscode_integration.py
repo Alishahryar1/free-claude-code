@@ -14,6 +14,7 @@ ROOT = "/admin/api/integrations/claude-vscode"
 def integration(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"
     monkeypatch.setattr(vscode, "settings_path", lambda: path)
+    monkeypatch.setattr(vscode, "claude_state_path", lambda: tmp_path / ".claude.json")
     app = create_test_app(
         Settings(host="0.0.0.0", port=4321, proxy_auth_token="integration-secret")
     )
@@ -39,21 +40,32 @@ def test_routes_read_actual_file_connect_and_disconnect(integration):
     assert environment["ANTHROPIC_AUTH_TOKEN"] == "integration-secret"
     assert "integration-secret" not in response.text
     assert client.get(ROOT).json() == {"connected": True}
+    state_path = path.parent / ".claude.json"
+    assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
+    state_path.write_text('{"hasCompletedOnboarding":false}')
+    assert client.get(ROOT).json() == {"connected": False}
+    assert client.post(f"{ROOT}/connect").json() == {"connected": True}
     path.write_text("{}")
     assert client.get(ROOT).json() == {"connected": False}
     assert client.post(f"{ROOT}/disconnect").json() == {"connected": False}
+    assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
 
 
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect"])
-def test_invalid_file_returns_safe_uncached_error(integration, action):
+@pytest.mark.parametrize("target", ["settings", "state"])
+def test_invalid_file_returns_safe_uncached_error(integration, action, target):
     client, path, _ = integration
     source = '{"integration-secret": malformed}'
+    if target == "state":
+        path = path.parent / ".claude.json"
     path.write_text(source)
     response = client.request("GET" if not action else "POST", ROOT + action)
-    assert response.status_code == 400
+    expected_error = target == "settings" or action != "/disconnect"
+    assert response.status_code == (400 if expected_error else 200)
     assert response.headers["cache-control"] == "no-store"
     assert "integration-secret" not in response.text
-    assert response.json()["detail"]
+    if expected_error:
+        assert response.json()["detail"]
     assert path.read_text() == source
 
 

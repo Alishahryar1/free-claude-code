@@ -129,6 +129,7 @@ def admin_base_url(
     """Serve one fully isolated Admin application on an OS-assigned port."""
 
     config_dir = tmp_path / ".fcc"
+    monkeypatch.setattr(vscode, "claude_state_path", lambda: tmp_path / ".claude.json")
     monkeypatch.setattr(
         vscode, "settings_path", lambda: tmp_path / "vscode" / "settings.json"
     )
