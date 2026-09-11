@@ -21,9 +21,13 @@ from free_claude_code.application.connected_accounts import (
     ConnectedAccountPort,
     ConnectedAccountStatus,
 )
-from free_claude_code.application.errors import ApplicationUnavailableError
+from free_claude_code.application.errors import (
+    ApplicationUnavailableError,
+    InvalidRequestError,
+)
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.application.ports import StopResult
+from free_claude_code.cli import vscode
 from free_claude_code.config.admin.persistence import (
     PreparedAdminUpdate,
 )
@@ -346,6 +350,43 @@ class ApplicationRuntime:
 
     async def admin_values(self) -> ValueState:
         return await self._configuration.admin_values()
+
+    async def claude_vscode_status(self) -> JsonObject:
+        return await self._claude_vscode(None)
+
+    async def connect_claude_vscode(self) -> JsonObject:
+        return await self._claude_vscode(True)
+
+    async def disconnect_claude_vscode(self) -> JsonObject:
+        return await self._claude_vscode(False)
+
+    async def _claude_vscode(self, connected: bool | None) -> JsonObject:
+        async with self._config_lock:
+            if self._draining or self._pending_fields:
+                raise ApplicationUnavailableError(
+                    "Wait for FCC to restart before changing the integration."
+                )
+            settings = self.settings
+            try:
+                return await _await_owned_task(
+                    asyncio.create_task(
+                        to_thread.run_sync(
+                            vscode.configure,
+                            vscode.settings_path(),
+                            local_proxy_root_url(settings),
+                            settings.proxy_auth_token,
+                            connected,
+                        )
+                    )
+                )
+            except ValueError, UnicodeError:
+                raise InvalidRequestError(
+                    "Could not read VS Code settings. Check the JSON and environment entries."
+                ) from None
+            except OSError:
+                raise ApplicationUnavailableError(
+                    "Could not access VS Code settings. Check file permissions and try again."
+                ) from None
 
     async def admin_status(self) -> JsonObject:
         values = await self.admin_values()

@@ -598,7 +598,7 @@ wheels = [
 
 [[package]]
 name = "free-claude-code"
-version = "6.2.4"
+version = "6.2.5"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -609,6 +609,7 @@ dependencies = [
     { name = "google-auth", extra = ["requests"] },
     { name = "httpx", extra = ["socks"] },
     { name = "httpx2", extra = ["socks"] },
+    { name = "json5" },
     { name = "jsonschema" },
     { name = "loguru" },
     { name = "markdown-it-py" },
@@ -660,6 +661,7 @@ requires-dist = [
     { name = "grpcio-tools", marker = "extra == 'voice'", specifier = ">=1.81.1" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "httpx2", extras = ["socks"], specifier = ">=2.7.0,<3" },
+    { name = "json5", specifier = ">=0.15.0" },
     { name = "jsonschema", specifier = ">=4.25.0" },
     { name = "librosa", marker = "extra == 'voice-local'", specifier = ">=1.0.0" },
     { name = "loguru", specifier = ">=0.7.0" },
@@ -1086,6 +1088,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/41/f2/d34e8b3a08a9cc79a50b2208a93dce981fe615b64d5a4d4abee421d898df/joblib-1.5.3.tar.gz", hash = "sha256:8561a3269e6801106863fd0d6d84bb737be9e7631e33aaed3fb9ce5953688da3", size = 331603, upload-time = "2025-12-15T08:41:46.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7b/91/984aca2ec129e2757d1e4e3c81c3fcda9d0f85b74670a094cc443d9ee949/joblib-1.5.3-py3-none-any.whl", hash = "sha256:5fc3c5039fc5ca8c0276333a188bbd59d6b7ab37fe6632daa76bc7f9ec18e713", size = 309071, upload-time = "2025-12-15T08:41:44.973Z" },
+]
+
+[[package]]
+name = "json5"
+version = "0.15.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/7d/05c46a96a78147ae3bf99c2f4169ce144a70220b8d6fcd56f6ec368b8ce9/json5-0.15.0.tar.gz", hash = "sha256:7424d1f1eb1d56da6e3d70643f53619862b4ce81440bdb8ecfd6f875e5ba4a71", size = 53278, upload-time = "2026-06-19T20:08:27.716Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/eb/be/59527c99478aade6bb33a68d72e6e18dd4e6ff6eacfc7d01bdb15bc76912/json5-0.15.0-py3-none-any.whl", hash = "sha256:56636a30c0e8a4665fe2179c0212f32eae3796dea89ea6f649b9436ecdb39618", size = 36570, upload-time = "2026-06-19T20:08:26.748Z" },
 ]
 
 [[package]]
