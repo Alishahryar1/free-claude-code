@@ -34,6 +34,13 @@ const VIEW_GROUPS = [
     containerId: "messagingSections",
   },
   {
+    id: "integrations",
+    label: "Integrations",
+    title: "Integrations",
+    sections: [],
+    containerId: "view-integrations",
+  },
+  {
     id: "code",
     label: "Code sessions",
     title: "Code sessions",
@@ -145,7 +152,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   document.querySelector(".app-shell").classList.toggle("session-active", sessionActive);
   document.querySelector(".main").classList.toggle("session-main", sessionActive);
   document.querySelector(".topbar").hidden = sessionActive;
-  document.querySelector(".action-bar").hidden = sessionActive;
+  document.querySelector(".action-bar").hidden = sessionActive || activeView.id === "integrations";
 
   document.querySelectorAll(".nav-link").forEach((link) => {
     const selected = link.dataset.view === activeView.id;
