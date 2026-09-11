@@ -92,6 +92,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "nararoute": "nararoute/kimi-k3-free",
     "poolside": "poolside/poolside/laguna-s-2.1",
     "llm7": "llm7/default",
+    "experiential": "experiential/gemma-4-26b-a4b-it-free",
     "agnes": "agnes/agnes-2.0-flash",
     "zenmux": "zenmux/deepseek/deepseek-v4-flash-free",
     "wandb": "wandb/openai/gpt-oss-20b",
