@@ -1246,6 +1246,17 @@ try {
   console.warn("Chat draft cleanup deferred until the next page load: storage unavailable");
 }
 
+const claudeIntegrationDialog = byId("claudeIntegrationDialog");
+byId("openClaudeIntegration").addEventListener("click", () => claudeIntegrationDialog.showModal());
+byId("closeClaudeIntegration").addEventListener("click", () => claudeIntegrationDialog.close());
+claudeIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== claudeIntegrationDialog) return;
+  const bounds = claudeIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    claudeIntegrationDialog.close();
+  }
+});
+
 load().then(showRestartNotice).catch((error) => {
   showMessage(error.message, "error");
 });
