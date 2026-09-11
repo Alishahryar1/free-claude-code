@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "free-claude-code"
-version = "6.2.4"
+version = "6.2.5"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 requires-python = ">=3.14.0"
@@ -24,6 +24,7 @@ dependencies = [
     "loguru>=0.7.0",
     "aiohttp>=3.14.3",
     "jsonschema>=4.25.0",
+    "json5>=0.15.0",
     "google-auth[requests]>=2.56.3",
     "requests[socks]>=2.34.2",
     "pystray>=0.19.5; sys_platform == 'win32' or sys_platform == 'darwin'",

@@ -175,6 +175,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   }
   if (activeView.id === "code") window.CodeSessions.activate(window.location.pathname);
   else window.CodeSessions.deactivate();
+  if (activeView.id === "integrations") refreshClaudeIntegration();
 }
 
 function navigateToView(viewId) {
@@ -1244,7 +1245,80 @@ try {
 }
 
 const claudeIntegrationDialog = byId("claudeIntegrationDialog");
-byId("openClaudeIntegration").addEventListener("click", () => claudeIntegrationDialog.showModal());
+const claudeIntegration = { connected: null, busy: false };
+const claudeIntegrationPath = "/admin/api/integrations/claude-vscode";
+
+function integrationMessage(id, message, error = false) {
+  const element = byId(id);
+  element.textContent = message;
+  element.hidden = !message;
+  element.classList.toggle("error", error);
+}
+
+function renderClaudeIntegration() {
+  const { connected, busy } = claudeIntegration;
+  const action = connected ? "Disconnect" : "Connect";
+  byId("openClaudeIntegration").textContent = connected === null && !busy ? "Retry" : action;
+  byId("openClaudeIntegration").disabled = busy;
+  byId("confirmClaudeIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmClaudeIntegration").disabled = busy || connected === null;
+  const status = byId("claudeIntegrationStatus");
+  status.textContent = connected === null
+    ? (busy ? "Checking settings…" : "Could not check settings")
+    : (connected ? "Connected" : "Not connected");
+  status.className = `status-pill ${connected ? "ok" : "neutral"}`;
+  byId("claudeIntegrationDescription").textContent = connected
+    ? "Remove FCC's settings from VS Code. Other settings will stay."
+    : "Will set FCC's URL and token in VS Code settings, enable model discovery, and skip the login prompt.";
+}
+
+async function refreshClaudeIntegration() {
+  if (claudeIntegration.busy) return;
+  claudeIntegration.busy = true;
+  renderClaudeIntegration();
+  integrationMessage("claudeIntegrationMessage", "");
+  try {
+    const result = await api(claudeIntegrationPath);
+    claudeIntegration.connected = result.connected;
+  } catch (error) {
+    claudeIntegration.connected = null;
+    integrationMessage("claudeIntegrationMessage", error.message, true);
+  } finally {
+    claudeIntegration.busy = false;
+    renderClaudeIntegration();
+  }
+}
+
+byId("openClaudeIntegration").addEventListener("click", () => {
+  if (claudeIntegration.connected === null) {
+    refreshClaudeIntegration();
+    return;
+  }
+  integrationMessage("claudeIntegrationDialogMessage", "");
+  claudeIntegrationDialog.showModal();
+});
+byId("confirmClaudeIntegration").addEventListener("click", async () => {
+  if (claudeIntegration.busy || claudeIntegration.connected === null) return;
+  const disconnect = claudeIntegration.connected;
+  claudeIntegration.busy = true;
+  renderClaudeIntegration();
+  integrationMessage("claudeIntegrationDialogMessage", "");
+  integrationMessage("claudeIntegrationMessage", "");
+  try {
+    const result = await api(`${claudeIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    claudeIntegration.connected = result.connected;
+    claudeIntegrationDialog.close();
+    integrationMessage("claudeIntegrationMessage", disconnect
+      ? "Settings removed. Reload VS Code to disconnect."
+      : "Settings saved. Reload VS Code to connect.");
+  } catch (error) {
+    integrationMessage("claudeIntegrationDialogMessage", error.message, true);
+    integrationMessage("claudeIntegrationMessage", error.message, true);
+  } finally {
+    claudeIntegration.busy = false;
+    renderClaudeIntegration();
+  }
+});
 byId("closeClaudeIntegration").addEventListener("click", () => claudeIntegrationDialog.close());
 claudeIntegrationDialog.addEventListener("click", (event) => {
   if (event.target !== claudeIntegrationDialog) return;
