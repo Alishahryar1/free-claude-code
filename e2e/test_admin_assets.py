@@ -7,6 +7,23 @@ from playwright.sync_api import Error, Page, Request, expect
 from free_claude_code.core.version import package_version
 
 
+def test_selected_admin_tab_survives_refresh_and_browser_navigation(
+    page, admin_base_url
+):
+    page.goto(f"{admin_base_url}/admin")
+    for title in ("Model Config", "Messaging", "Integrations", "Providers"):
+        page.get_by_role("button", name=title, exact=True).click()
+        page.reload()
+        expect(page.locator("#pageTitle")).to_have_text(title)
+        expect(page.get_by_role("button", name=title, exact=True)).to_have_attribute(
+            "aria-current", "page"
+        )
+    page.go_back()
+    expect(page.locator("#pageTitle")).to_have_text("Integrations")
+    page.go_forward()
+    expect(page.locator("#pageTitle")).to_have_text("Providers")
+
+
 def test_admin_removes_chat_drafts_and_preserves_other_storage(page, admin_base_url):
     page.add_init_script("""(() => {
       for (let index = 0; index < 16; index++) {
