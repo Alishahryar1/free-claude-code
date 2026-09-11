@@ -7,6 +7,52 @@ from free_claude_code.cli import vscode
 
 
 @pytest.mark.parametrize("width", [1280, 390])
+def test_codex_preview_modal_is_noop_and_dismissible(
+    page, admin_base_url, tmp_path, width
+):
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{admin_base_url}/admin/integrations")
+    expect(page.locator("#openClaudeIntegration")).to_be_enabled()
+    expect(page.locator("#messageArea")).to_have_text("")
+    cards = page.locator("#view-integrations > article")
+    expect(cards).to_have_count(2)
+    expect(cards.nth(1)).to_contain_text(
+        "Use FCC's models in the Codex CLI, VS Code extension, and desktop app."
+    )
+    requests = []
+    page.on("request", lambda request: requests.append(request.url))
+    opener = page.locator("#openCodexIntegration")
+    dialog = page.get_by_role("dialog", name="Codex", exact=True)
+    opener.click()
+    expect(dialog).to_be_visible()
+    expect(page.locator("#claudeIntegrationDialog")).not_to_be_visible()
+    expect(dialog.get_by_role("button", name="Close", exact=True)).to_be_focused()
+    expect(dialog).to_contain_text(
+        "Will configure Codex to use FCC's models through its shared config.toml."
+    )
+    assert dialog.evaluate("element => element.scrollWidth <= element.clientWidth")
+    action = dialog.get_by_role("button", name="Connect", exact=True)
+    for _ in range(3):
+        action.click()
+        expect(action).to_be_enabled()
+        expect(dialog).to_be_visible()
+    page.locator("#codexIntegrationDescription").click()
+    expect(dialog).to_be_visible()
+    dialog.get_by_role("button", name="Close", exact=True).click()
+    expect(dialog).not_to_be_visible()
+    expect(opener).to_be_focused()
+    opener.click()
+    page.keyboard.press("Escape")
+    expect(dialog).not_to_be_visible()
+    opener.click()
+    page.mouse.click(1, 1)
+    expect(dialog).not_to_be_visible()
+    assert requests == []
+    assert not (tmp_path / "vscode" / "settings.json").exists()
+    assert not (tmp_path / ".claude.json").exists()
+
+
+@pytest.mark.parametrize("width", [1280, 390])
 def test_modal_shows_files_for_the_selected_action(
     page, admin_base_url, tmp_path, width
 ):
