@@ -107,6 +107,23 @@
               <button id="confirmClaudeIntegration" class="primary-button" type="button">Connect</button>
               <p id="claudeIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
             </dialog>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
+                  <h3>Codex</h3>
+                  <p>Use FCC's models in the Codex CLI, VS Code extension, and desktop app.</p>
+                </div>
+              </div>
+              <button id="openCodexIntegration" class="primary-button" type="button">Connect</button>
+            </article>
+            <dialog id="codexIntegrationDialog" class="integration-dialog" aria-labelledby="codexIntegrationTitle" aria-describedby="codexIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="codexIntegrationTitle">Codex</h3>
+                <button id="closeCodexIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="codexIntegrationDescription">Will configure Codex to use FCC's models through its shared config.toml.</p>
+              <button class="primary-button" type="button">Connect</button>
+            </dialog>
           </section>
 
           <section id="view-code" class="admin-view" data-view="code" hidden>

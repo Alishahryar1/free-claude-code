@@ -1341,6 +1341,17 @@ claudeIntegrationDialog.addEventListener("click", (event) => {
   }
 });
 
+const codexIntegrationDialog = byId("codexIntegrationDialog");
+byId("openCodexIntegration").addEventListener("click", () => codexIntegrationDialog.showModal());
+byId("closeCodexIntegration").addEventListener("click", () => codexIntegrationDialog.close());
+codexIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== codexIntegrationDialog) return;
+  const bounds = codexIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    codexIntegrationDialog.close();
+  }
+});
+
 load().then(showRestartNotice).catch((error) => {
   showMessage(error.message, "error");
 });
