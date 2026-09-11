@@ -10,6 +10,11 @@ from free_claude_code.application.integrations import IntegrationError
 from free_claude_code.application.integrations import IntegrationId as Item
 from free_claude_code.runtime.integrations.discovery import LocalInstallations
 from free_claude_code.runtime.integrations.service import IntegrationService
+from free_claude_code.runtime.integrations.storage import (
+    PendingWrite,
+    content_hash,
+    write_record,
+)
 from tests.api.support import create_test_app, runtime_for_app
 from tests.integration_support import connection, installed_clients
 
@@ -165,3 +170,51 @@ async def test_cancelled_integration_write_settles_under_configuration_lock(
         is True
     )
     assert not runtime._config_lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_require_current_connection_credentials(
+    integration_app, monkeypatch
+):
+    app, locator = integration_app
+    path = locator.home / ".claude.json"
+    path.write_bytes(b'{"hasCompletedOnboarding":true}')
+    write_record(
+        locator.home / ".fcc/integrations/claude-login.json",
+        PendingWrite(
+            item=Item.CLAUDE_LOGIN,
+            action=Action.REPAIR,
+            path=str(path),
+            before=content_hash(None),
+            after=content_hash(path.read_bytes()),
+            previous=None,
+            following=None,
+        ),
+    )
+    runtime = runtime_for_app(app)
+    runtime._pending_fields = ["PORT"]
+
+    async def unreadable_credentials(_self):
+        raise OSError("unavailable current credential file")
+
+    monkeypatch.setattr(
+        type(runtime._configuration), "saved_proxy_auth_token", unreadable_credentials
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+    ) as client:
+        response = await client.post(
+            "/admin/api/integrations/claude-login/preview", json={"action": "recover"}
+        )
+        assert response.status_code == 200
+        preview = response.json()
+        assert preview["writes_file"] is False
+        before = path.read_bytes()
+        response = await client.post(
+            "/admin/api/integrations/claude-login/apply",
+            json={"action": "recover", "revision": preview["revision"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["applied"] is True
+        assert path.read_bytes() == before
+        assert not (locator.home / ".fcc/integrations/claude-login.json").exists()

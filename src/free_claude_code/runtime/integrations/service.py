@@ -14,7 +14,7 @@ from free_claude_code.application.integrations import IntegrationId as Item
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from free_claude_code.core.json_types import JsonObject
 
-from .discovery import InstalledClients, LocalInstallations
+from .discovery import AcpInstallation, InstalledClients, LocalInstallations
 from .documents import MISSING, JsonDocument
 from .storage import (
     FieldHistory,
@@ -29,6 +29,17 @@ from .storage import (
 )
 from .targets import AGENT_PATH, ENV_SETTING, Connection, Target, make_targets, same_url
 
+_RECOVERY_GUIDE = (
+    "https://github.com/Alishahryar1/free-claude-code#integration-recovery"
+)
+
+
+@dataclass(frozen=True)
+class Recovery:
+    action: Action
+    completed: bool
+    ownership: Ownership | None
+
 
 @dataclass
 class Capture:
@@ -38,21 +49,40 @@ class Capture:
     record: Ownership | None
     dependencies: tuple[FileSnapshot, ...]
     installed: InstalledClients
-    pending: PendingWrite | None
-
-    @property
-    def completed_action(self) -> Action | None:
-        if self.pending is not None and self.source.digest == self.pending.after:
-            return self.pending.action
-        return None
+    recovery: Recovery | None
 
 
 @dataclass
 class Prepared:
     capture: Capture
-    output: bytes
+    output: bytes | None
     following: Ownership | None
+    record_changed: bool
     preview: JsonObject
+
+
+def _validate_ownership(target: Target, record: Ownership | None) -> None:
+    if record is None:
+        return
+    if (
+        record.item != target.id
+        or record.path != str(target.path)
+        or not set(record.fields) <= target.recipe.keys()
+        or any(
+            tuple(path) not in target.containers() for path in record.created_containers
+        )
+    ):
+        raise ValueError("target")
+    target.validate_values(
+        {key: field.last.unpack() for key, field in record.fields.items()}
+    )
+    target.validate_values(
+        {
+            key: field.prior.unpack()
+            for key, field in record.fields.items()
+            if field.prior is not None
+        }
+    )
 
 
 def _codex_extension_in_wsl(capture: Capture) -> bool:
@@ -92,40 +122,42 @@ class IntegrationService:
         source = FileSnapshot.read(target.path)
         record_file = FileSnapshot.read(self.state_dir / f"{target.id}.json")
         record = None
-        pending = None
+        recovery = None
         if record_file.data is not None:
             try:
                 payload = json.loads(record_file.data)
                 if isinstance(payload, dict) and payload.get("phase") == "pending":
                     pending = PendingWrite.model_validate(payload)
                     validate_action(target.id, pending.action)
-                    if pending.item != target.id or pending.path != str(target.path):
+                    if (
+                        pending.item != target.id
+                        or pending.path != str(target.path)
+                        or pending.action == Action.RECOVER
+                        or pending.before == pending.after
+                    ):
                         raise ValueError("target")
-                    if source.digest == pending.before:
-                        record = pending.previous
-                    elif source.digest == pending.after:
-                        record = pending.following
-                    else:
+                    _validate_ownership(target, pending.previous)
+                    _validate_ownership(target, pending.following)
+                    if source.digest not in {pending.before, pending.after}:
                         raise IntegrationError(
                             "An interrupted write needs attention because the file has changed. Use manual cleanup; FCC will not overwrite the uncertain file.",
                             status_code=409,
                         )
+                    completed = source.digest == pending.after
+                    recovery = Recovery(
+                        pending.action,
+                        completed,
+                        pending.following if completed else pending.previous,
+                    )
                 else:
                     record = Ownership.model_validate(payload)
-                if record is not None and (
-                    record.item != target.id
-                    or record.path != str(target.path)
-                    or not set(record.fields) <= target.recipe.keys()
-                    or any(
-                        tuple(path) not in target.containers()
-                        for path in record.created_containers
-                    )
-                ):
-                    raise ValueError("target")
+                    _validate_ownership(target, record)
             except ValueError, ValidationError:
                 raise IntegrationError(
                     "The saved undo record cannot be read. Previous settings cannot be restored; use manual cleanup."
                 ) from None
+        if recovery is not None:
+            return Capture(target, source, record_file, None, (), installed, recovery)
         dependencies = []
         if target.id in {Item.CLAUDE_VSCODE, Item.CLAUDE_JETBRAINS}:
             dependencies.append(
@@ -139,10 +171,12 @@ class IntegrationService:
         if target.id == Item.CLAUDE_JETBRAINS:
             dependencies.extend(
                 FileSnapshot.read(self.installations.home / path)
-                for path in installed.acp_command
+                for path in installed.acp.command
             )
+            if installed.acp.manifest is not None:
+                dependencies.append(FileSnapshot.read(installed.acp.manifest))
         return Capture(
-            target, source, record_file, record, tuple(dependencies), installed, pending
+            target, source, record_file, record, tuple(dependencies), installed, None
         )
 
     def _revision(
@@ -150,7 +184,7 @@ class IntegrationService:
     ) -> str:
         context = (
             {}
-            if capture.target.id == Item.CLAUDE_LOGIN
+            if capture.target.id == Item.CLAUDE_LOGIN or action == Action.RECOVER
             else {
                 "url": connection.url,
                 "token": connection.settings.proxy_auth_token,
@@ -165,7 +199,7 @@ class IntegrationService:
             "id": capture.target.id,
             "action": action,
             "context": context,
-            "installed": asdict(capture.installed),
+            "installed": {} if action == Action.RECOVER else asdict(capture.installed),
             "files": [
                 (str(file.path), file.digest, file.identity)
                 for file in (capture.source, capture.record_file, *capture.dependencies)
@@ -240,7 +274,7 @@ class IntegrationService:
         target = capture.target
         if capture.installed.scope_issue:
             raise IntegrationError(capture.installed.scope_issue)
-        if action == Action.DISCONNECT or action == capture.completed_action:
+        if action == Action.DISCONNECT:
             return
         if target.missing:
             raise IntegrationError(" ".join(target.missing))
@@ -276,26 +310,60 @@ class IntegrationService:
                     "This Codex extension runs in WSL and needs manual setup. Its WSL mode will not be changed."
                 )
 
+    def _prepare_recovery(self, capture: Capture, connection: Connection) -> Prepared:
+        recovery = capture.recovery
+        if recovery is None:
+            raise IntegrationError(
+                "There is no interrupted action to recover.", status_code=409
+            )
+        summary = (
+            f"The file already matches the saved {recovery.action} result. Finish recovering FCC's setup history."
+            if recovery.completed
+            else "The file matches its earlier state. Recover FCC's setup history so you can retry the action."
+        )
+        preview: JsonObject = {
+            "id": capture.target.id,
+            "action": Action.RECOVER,
+            "title": capture.target.title,
+            "path": str(capture.target.path),
+            "summary": summary,
+            "writes_file": False,
+            "changes": [],
+            "notes": [],
+            "instructions": capture.target.instructions if recovery.completed else "",
+            "revision": self._revision(capture, Action.RECOVER, connection),
+            "endpoint": None,
+            "helper_path": None,
+        }
+        return Prepared(capture, None, recovery.ownership, True, preview)
+
     def _prepare(
         self, capture: Capture, action: Action, connection: Connection
     ) -> Prepared:
         target = capture.target
         validate_action(target.id, action)
+        if action == Action.RECOVER:
+            return self._prepare_recovery(capture, connection)
+        if capture.recovery is not None:
+            raise IntegrationError(
+                "Recover the interrupted action before starting another change.",
+                status_code=409,
+            )
         document = target.document(capture.source.data)
+        original = document.render()
         values = target.values(document)
         recognized = target.recognized(values, connection)
         self._require_ready(capture, action, connection)
         record = capture.record
-        if action == Action.SETUP and record is not None:
+        if action == Action.SETUP and (record is not None or recognized):
             raise IntegrationError(
-                "This setup is already managed. Use Update or Disconnect; later edits will be preserved.",
+                "An FCC setup already exists. Use Update or Disconnect; later edits will be preserved.",
                 status_code=409,
             )
         if (
             action in {Action.UPDATE, Action.DISCONNECT}
             and record is None
             and not recognized
-            and capture.completed_action != action
         ):
             raise IntegrationError(
                 "An FCC connection could not be identified. Use Set up or follow the manual cleanup instructions."
@@ -363,16 +431,20 @@ class IntegrationService:
                 and target.id == Item.CLAUDE_JETBRAINS
                 and list(AGENT_PATH) in record.created_containers
             ):
-                expected: dict[str, object] = {"env": {}}
-                env = expected["env"]
-                assert isinstance(env, dict)
-                for key, field in fields.items():
-                    if field.last.present:
+                agent = document.get(AGENT_PATH)
+                expected: dict[str, object] = {}
+                env: dict[str, object] = {}
+                if isinstance(agent, dict) and "env" in agent:
+                    expected["env"] = env
+                for key in fields:
+                    value = values[key]
+                    if value is not MISSING:
                         if key.startswith("env."):
-                            env[key[4:]] = field.last.value
+                            env[key[4:]] = value
+                            expected["env"] = env
                         else:
-                            expected[key] = field.last.value
-                if document.get(AGENT_PATH) != expected:
+                            expected[key] = value
+                if agent is not MISSING and agent != expected:
                     raise IntegrationError(
                         "The Claude Code (FCC) agent was edited or has added fields. Preserve those changes and remove it manually.",
                         status_code=409,
@@ -441,8 +513,9 @@ class IntegrationService:
                 remaining = document.get(tuple(path))
                 if remaining == {} or remaining == []:
                     document.delete(tuple(path))
-        output = document.render()
-        if changes:
+        rendered = document.render()
+        output = rendered if rendered != original else None
+        if output is not None:
             capture.source.require_writable()
         following = (
             None
@@ -454,9 +527,7 @@ class IntegrationService:
                 created_containers=containers,
             )
         )
-        if not changes:
-            following = record
-            output = capture.source.data if capture.source.data is not None else output
+        record_changed = following != record
         if target.id == Item.CODEX:
             notes.append(
                 "The App, VS Code extension, and normal Codex CLI share this file and provider selection."
@@ -478,6 +549,17 @@ class IntegrationService:
                 if unknown_history
                 else "You can Disconnect later to restore the settings saved before setup."
             )
+        if output is not None:
+            clients = {
+                Item.CLAUDE_VSCODE: "VS Code",
+                Item.CODEX: "these clients",
+                Item.CLAUDE_JETBRAINS: "your JetBrains IDEs",
+                Item.CLAUDE_LOGIN: "Claude Code and IDE sessions using it",
+            }[target.id]
+            summary = (
+                f"Save and close {clients} before confirming; avoid other edits until FCC finishes. "
+                + summary
+            )
         if target.id == Item.CODEX:
             summary = (
                 "This file is shared by Codex App, VS Code, and the CLI. " + summary
@@ -488,6 +570,7 @@ class IntegrationService:
             "title": target.title,
             "path": str(target.path),
             "summary": summary,
+            "writes_file": output is not None,
             "changes": changes,
             "notes": notes,
             "instructions": target.instructions,
@@ -497,10 +580,23 @@ class IntegrationService:
             if target.id == Item.CODEX and capture.installed.fcc_command
             else None,
         }
-        return Prepared(capture, output, following, preview)
+        return Prepared(capture, output, following, record_changed, preview)
 
     def _one(self, item: Item, action: Action, connection: Connection) -> Prepared:
-        installed = self.installations.scan()
+        installed = (
+            InstalledClients(
+                claude_vscode=False,
+                codex_vscode=False,
+                codex_app=False,
+                jetbrains=False,
+                claude_command=None,
+                fcc_command=None,
+                acp=AcpInstallation(),
+                scope_issue="",
+            )
+            if action == Action.RECOVER
+            else self.installations.scan()
+        )
         target = next(
             target
             for target in make_targets(self.installations, installed, connection)
@@ -532,6 +628,16 @@ class IntegrationService:
             }
             try:
                 capture = self._capture(target, installed, connection)
+                if capture.recovery is not None:
+                    entry["status"] = "needs_attention"
+                    entry["message"] = (
+                        "A previous change was interrupted. Recover its saved setup history before continuing."
+                    )
+                    entry["missing"] = []
+                    entry["documentation_url"] = _RECOVERY_GUIDE
+                    entry["actions"] = [Action.RECOVER.value]
+                    items.append(entry)
+                    continue
                 if (
                     target.id == Item.CODEX
                     and installed.codex_vscode
@@ -559,7 +665,7 @@ class IntegrationService:
                     actions.append(Action.DISCONNECT.value)
                     try:
                         prepared = self._prepare(capture, Action.UPDATE, connection)
-                        if prepared.preview["changes"]:
+                        if prepared.output is not None or prepared.record_changed:
                             entry["status"] = "update_available"
                             actions.insert(0, Action.UPDATE.value)
                     except IntegrationError as error:
@@ -571,22 +677,13 @@ class IntegrationService:
                     self._require_ready(capture, Action.SETUP, connection)
                     actions.append(Action.SETUP.value)
                 entry["actions"] = actions
-                if capture.pending is not None:
-                    entry["status"] = "needs_attention"
-                    entry["message"] = (
-                        "A previous write was interrupted. Confirm the action to finish its saved record."
-                    )
-                    recovery_action = (
-                        capture.completed_action
-                        if capture.record is None
-                        and capture.completed_action is not None
-                        else Action.UPDATE
-                        if capture.record is not None
-                        else capture.pending.action
-                    )
-                    entry["actions"] = [recovery_action.value]
             except IntegrationError as error:
                 entry["status"], entry["message"] = "needs_attention", str(error)
+            if (
+                entry["status"] == "needs_attention"
+                and (self.state_dir / f"{target.id}.json").is_file()
+            ):
+                entry["documentation_url"] = _RECOVERY_GUIDE
             items.append(entry)
         return {
             "items": items,
@@ -614,46 +711,46 @@ class IntegrationService:
                     status_code=409,
                 )
             capture = prepared.capture
-            if not prepared.preview["changes"]:
-                if capture.pending is not None:
-                    capture.source.require_unchanged()
-                    capture.record_file.require_unchanged()
-                    write_record(capture.record_file.path, capture.record)
-                return {"applied": False, "instructions": capture.target.instructions}
             for snapshot in (
                 capture.source,
                 capture.record_file,
                 *capture.dependencies,
             ):
                 snapshot.require_unchanged()
+            output = prepared.output
+            if output is None:
+                if prepared.record_changed:
+                    write_record(capture.record_file.path, prepared.following)
+                return {
+                    "applied": prepared.record_changed,
+                    "instructions": prepared.preview["instructions"],
+                    "message": "Recovery finished."
+                    if action == Action.RECOVER
+                    else "Disconnected. The client settings were already restored."
+                    if action == Action.DISCONNECT and prepared.record_changed
+                    else "FCC setup history saved."
+                    if prepared.record_changed
+                    else "No client settings changed.",
+                }
             pending = PendingWrite(
                 item=item,
                 action=action,
                 path=str(capture.target.path),
                 before=capture.source.digest,
-                after=content_hash(prepared.output),
+                after=content_hash(output),
                 previous=capture.record,
                 following=prepared.following,
             )
             write_record(capture.record_file.path, pending)
-            try:
-                capture.source.require_unchanged()
-                atomic_write(
-                    capture.target.path,
-                    prepared.output,
-                    mode=capture.source.identity[3]
-                    if capture.source.identity
-                    else 0o600,
-                    expected=capture.source,
-                )
-            except OSError, IntegrationError:
-                if capture.record_file.data is None:
-                    write_record(capture.record_file.path, None)
-                else:
-                    atomic_write(capture.record_file.path, capture.record_file.data)
-                raise
+            capture.source.require_unchanged()
+            atomic_write(
+                capture.target.path,
+                output,
+                mode=capture.source.identity[3] if capture.source.identity else 0o600,
+                expected=capture.source,
+            )
             actual = FileSnapshot.read(capture.target.path)
-            if actual.data != prepared.output:
+            if actual.data != output:
                 raise IntegrationError(
                     "The file changed during verification. No further changes were made; inspect it before retrying.",
                     status_code=409,

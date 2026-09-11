@@ -265,8 +265,12 @@ class ApplicationRuntime:
     async def pick_folder(self, initial_path: str | None) -> str | None:
         return await self._folder_picker.pick_folder(initial_path)
 
-    async def _integration_connection(self) -> Connection:
+    async def _integration_connection(
+        self, action: IntegrationAction | None = None
+    ) -> Connection:
         settings = self.settings
+        if action == IntegrationAction.RECOVER:
+            return Connection(settings, (), codex_model_catalog_path(), "")
         return Connection(
             settings,
             current_codex_models(self.provider_manager, settings),
@@ -304,7 +308,7 @@ class ApplicationRuntime:
     ) -> JsonObject:
         async with self._config_lock:
             self._require_integration_ready(action)
-            connection = await self._integration_connection()
+            connection = await self._integration_connection(action)
             return await to_thread.run_sync(
                 self._integrations.preview, item, action, connection
             )
@@ -314,7 +318,7 @@ class ApplicationRuntime:
     ) -> JsonObject:
         async with self._config_lock:
             self._require_integration_ready(action)
-            connection = await self._integration_connection()
+            connection = await self._integration_connection(action)
             self._require_integration_ready(action)
             return await _await_owned_task(
                 asyncio.create_task(

@@ -7,7 +7,9 @@ import pytest
 from playwright.sync_api import expect
 
 from free_claude_code.application.integrations import IntegrationAction as Action
+from free_claude_code.application.integrations import IntegrationError
 from free_claude_code.application.integrations import IntegrationId as Item
+from free_claude_code.runtime.integrations import service as service_module
 from free_claude_code.runtime.integrations.service import IntegrationService
 from tests.integration_support import connection, write_json
 
@@ -64,6 +66,7 @@ def test_setup_cancel_confirm_disconnect(
     expect(dialog).not_to_contain_text("e2e-proxy-token")
     expect(dialog).not_to_contain_text("ANTHROPIC_BASE_URL")
     expect(dialog).to_contain_text("Disconnect")
+    expect(dialog).to_contain_text("Save and close VS Code")
     expect(dialog.get_by_role("heading")).to_be_in_viewport()
     expect(dialog.get_by_role("button", name="Confirm", exact=True)).to_be_in_viewport()
     expect(dialog.get_by_role("button", name="Cancel", exact=True)).to_be_focused()
@@ -273,7 +276,65 @@ def test_preview_shows_only_the_file_and_a_short_summary(
     expect(dialog).not_to_contain_text("model_provider")
     expect(dialog).to_contain_text(str(path))
     expect(dialog).to_contain_text("Disconnect")
+    expect(dialog).to_contain_text("Save and close")
+    expect(dialog).to_contain_text("Codex App, VS Code, and the CLI")
     expect(dialog.locator("img")).to_have_count(0)
     assert page.evaluate("window.previewExecuted === undefined")
     dialog.get_by_role("button", name="Cancel", exact=True).click()
     assert tomllib.loads(path.read_text())["model"] == text
+
+
+@pytest.mark.parametrize(
+    "viewport", [{"width": 1280, "height": 900}, {"width": 390, "height": 844}]
+)
+def test_recover_confirmation_preserves_restored_settings_and_clears_history(
+    page, admin_base_url, integration_installations, monkeypatch, viewport
+):
+    locator = integration_installations
+    original = {"claudeCode.disableLoginPrompt": True, "editor.fontSize": 17}
+    write_json(locator.vscode_settings, original)
+    service = IntegrationService(locator)
+    ctx = connection(locator.home)
+    preview = service.preview(Item.CLAUDE_VSCODE, Action.SETUP, ctx)
+    revision = preview["revision"]
+    assert isinstance(revision, str)
+    service.apply(Item.CLAUDE_VSCODE, Action.SETUP, revision, ctx)
+    actual_record = service_module.write_record
+
+    def fail_cleanup(path, record):
+        if record is None:
+            raise OSError("interrupted cleanup")
+        actual_record(path, record)
+
+    preview = service.preview(Item.CLAUDE_VSCODE, Action.DISCONNECT, ctx)
+    revision = preview["revision"]
+    assert isinstance(revision, str)
+    with monkeypatch.context() as patch:
+        patch.setattr(service_module, "write_record", fail_cleanup)
+        with pytest.raises(IntegrationError):
+            service.apply(Item.CLAUDE_VSCODE, Action.DISCONNECT, revision, ctx)
+    before = locator.vscode_settings.read_bytes()
+    history = service.state_dir / "claude-vscode.json"
+    history_before = history.read_bytes()
+    page.set_viewport_size(viewport)
+    open_integrations(page, admin_base_url)
+    card = item_card(page, "claude-vscode")
+    expect(card.get_by_role("button", name="Disconnect", exact=True)).to_have_count(0)
+    card.get_by_role("button", name="Recover", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_contain_text(str(locator.vscode_settings))
+    expect(dialog).to_contain_text("setup history")
+    expect(dialog).not_to_contain_text("FCC will update this file")
+    expect(dialog).not_to_contain_text("Save and close")
+    expect(dialog.get_by_role("heading")).to_be_in_viewport()
+    expect(dialog.get_by_role("button", name="Confirm", exact=True)).to_be_in_viewport()
+    dialog.get_by_role("button", name="Cancel", exact=True).click()
+    assert locator.vscode_settings.read_bytes() == before
+    assert history.read_bytes() == history_before
+    confirm(page, card, "Recover")
+    expect(page.locator("#integrationMessage")).to_contain_text("Recovery finished")
+    expect(card.get_by_role("button", name="Recover", exact=True)).to_have_count(0)
+    expect(card.get_by_role("button", name="Set up", exact=True)).to_be_visible()
+    assert json.loads(locator.vscode_settings.read_bytes()) == original
+    assert locator.vscode_settings.read_bytes() == before
+    assert not history.exists()

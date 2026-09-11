@@ -157,6 +157,10 @@ class Target:
 
     def values(self, document: Document) -> dict[str, object]:
         values = {key: self.read(document, key) for key in self.recipe}
+        self.validate_values(values)
+        return values
+
+    def validate_values(self, values: dict[str, object]) -> None:
         for key, value in values.items():
             if value is MISSING:
                 continue
@@ -176,7 +180,6 @@ class Target:
                 raise IntegrationError(
                     f"The setting {key} has an unsupported value type."
                 )
-        return values
 
     def recognized(self, values: dict[str, object], connection: Connection) -> bool:
         if self.id == IntegrationId.CODEX:
@@ -251,9 +254,10 @@ def make_targets(
         jetbrains_missing.append(
             "A supported JetBrains IDE was not detected in the standard installation locations."
         )
-    if not installed.acp_command:
+    if not installed.acp.command:
         jetbrains_missing.append(
-            "Install the Claude ACP adapter and its required Node runtime. A usable installed adapter was not detected."
+            installed.acp.issue
+            or "Install the Claude ACP adapter and Node.js 22 or newer. A compatible installed adapter was not detected."
         )
     shared = (installed.scope_issue,) if installed.scope_issue else ()
     return (
@@ -296,8 +300,8 @@ def make_targets(
             locator.home / ".jetbrains/acp.json",
             "Claude Code in JetBrains",
             {
-                "command": installed.acp_command[0] if installed.acp_command else "",
-                "args": list(installed.acp_command[1:]),
+                "command": installed.acp.command[0] if installed.acp.command else "",
+                "args": list(installed.acp.command[1:]),
                 **claude,
             },
             shared + tuple(jetbrains_missing),
@@ -315,7 +319,7 @@ def make_targets(
                 ()
                 if installed.claude_command
                 or installed.claude_vscode
-                or (installed.jetbrains and installed.acp_command)
+                or (installed.jetbrains and installed.acp.command)
                 else ("An installed Claude Code client was not detected.",)
             ),
             (),

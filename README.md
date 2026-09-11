@@ -341,8 +341,10 @@ For terminal use, start `fcc-server`, then run `fcc-claude`, `fcc-codex`,
 For installed editors and Codex App, open **Admin UI → Integrations**:
 
 1. Choose **Set up** on the client card.
-2. Review the file path and short setup summary, then click **Confirm**.
-3. Reload or restart the client as instructed.
+2. Save your work and close the affected clients. Review the file path and short
+   setup summary, then click **Confirm**.
+3. Wait for FCC to finish before making other edits, then reload or restart the
+   client as instructed.
 
 The three cards cover Claude Code in VS Code, Codex App and VS Code together,
 and Claude Code in JetBrains. A separate **Fix Claude Code login prompt** item
@@ -361,6 +363,27 @@ saved before setup when those settings have not since been edited. For a
 recognized manual setup, it removes identifiable FCC values; previous settings
 are unknown, so the client may need its normal setup again. Conflicting later
 edits require manual correction before FCC can continue.
+
+Keep affected clients closed during configuration changes. Codex App, VS Code,
+and normal Codex CLI sessions share the same Codex file. FCC checks for changes,
+but another program can still save between that check and FCC's save. FCC cannot
+guarantee preservation of that simultaneous save.
+
+<a id="integration-recovery"></a>
+
+If a change was interrupted, choose **Recover** to finish FCC's saved setup
+history. Recovery leaves the client file as it is. If the earlier file change
+was not completed, you can retry it after recovery. If you already restored the
+original settings yourself, **Disconnect** releases FCC's saved history without
+rewriting that file.
+
+If recovery is unavailable because the file changed again or the saved history
+cannot be read, inspect the client configuration using the manual guides below.
+Preserve a copy of the matching record in `~/.fcc/integrations/`
+(`%USERPROFILE%\.fcc\integrations\` on Windows) before removing it to abandon
+FCC's history. The records are `claude-vscode.json`, `codex.json`,
+`claude-jetbrains.json`, and `claude-login.json`. Removing a record does not change
+the client file, and it loses FCC's ability to restore the earlier settings.
 
 <details>
 <summary><strong>Claude Code in VS Code</strong></summary>
@@ -470,6 +493,10 @@ For example, install the adapter with `npm install -g @agentclientprotocol/claud
 Then choose **Integrations → Claude Code in JetBrains → Set up**. FCC detects
 standard global npm installations; registry-only or custom cache locations may
 need manual setup.
+
+Automatic setup uses a short version query to verify a direct Node executable
+and checks the adapter's declared minimum version. Wrappers, unresolved runtime
+managers, and version requirements FCC cannot verify use the manual setup below.
 
 For manual setup, merge a custom agent into `~/.jetbrains/acp.json` on every OS
 (`%USERPROFILE%\.jetbrains\acp.json` on Windows). Replace the command and argument

@@ -15,6 +15,7 @@ class IntegrationAction(StrEnum):
     UPDATE = "update"
     DISCONNECT = "disconnect"
     REPAIR = "repair"
+    RECOVER = "recover"
 
 
 class IntegrationError(Exception):
@@ -26,5 +27,7 @@ class IntegrationError(Exception):
 
 
 def validate_action(target: IntegrationId, action: IntegrationAction) -> None:
+    if action == IntegrationAction.RECOVER:
+        return
     if (target == IntegrationId.CLAUDE_LOGIN) != (action == IntegrationAction.REPAIR):
         raise IntegrationError("This action is not available for this item.")

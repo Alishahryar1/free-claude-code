@@ -4,7 +4,7 @@
   const root = document.getElementById("integrationsRoot");
   const message = document.getElementById("integrationMessage");
   const refreshButton = document.getElementById("refreshIntegrations");
-  const labels = { setup: "Set up", update: "Update", disconnect: "Disconnect", repair: "Fix" };
+  const labels = { setup: "Set up", update: "Update", disconnect: "Disconnect", repair: "Fix", recover: "Recover" };
   const statuses = { not_configured: "Not configured", configured: "Configured", update_available: "Update available", needs_attention: "Needs attention" };
 
   function node(tag, text = "", className = "") {
@@ -96,7 +96,7 @@
     dialog.setAttribute("aria-labelledby", heading.id);
     const content = node("div", "", "integration-dialog-content");
     dialog.append(heading, content);
-    content.append(node("p", "FCC will update this file:"), node("p", preview.path, "integration-path"));
+    content.append(node("p", preview.writes_file ? "FCC will update this file:" : "Configuration file:"), node("p", preview.path, "integration-path"));
     content.append(node("p", preview.summary, "integration-guidance"));
     const actions = node("div", "", "integration-actions");
     let committing = false;

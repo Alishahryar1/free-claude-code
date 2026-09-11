@@ -1,12 +1,15 @@
-"""Read installed-client metadata without starting clients or installers."""
+"""Read installed-client metadata and probe Node without starting clients or installers."""
 
 import json
 import os
 import plistlib
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Timer
+from time import monotonic
 from xml.etree import ElementTree
 
 
@@ -54,6 +57,17 @@ def windows_codex_locations() -> tuple[Path, ...]:
         return ()
 
 
+type NodeVersion = tuple[int, int, int]
+
+
+@dataclass(frozen=True)
+class AcpInstallation:
+    command: tuple[str, ...] = ()
+    manifest: Path | None = None
+    node_version: NodeVersion | None = None
+    issue: str = ""
+
+
 @dataclass(frozen=True)
 class InstalledClients:
     claude_vscode: bool
@@ -62,7 +76,7 @@ class InstalledClients:
     jetbrains: bool
     claude_command: Path | None
     fcc_command: Path | None
-    acp_command: tuple[str, ...]
+    acp: AcpInstallation
     scope_issue: str
 
 
@@ -104,7 +118,12 @@ class LocalInstallations:
         elif self.platform == "darwin":
             root = self.home / "Library/Application Support"
         else:
-            root = Path(self.environ.get("XDG_CONFIG_HOME", str(self.home / ".config")))
+            override = self.environ.get("XDG_CONFIG_HOME", "")
+            root = (
+                Path(override)
+                if override and Path(override).is_absolute()
+                else self.home / ".config"
+            )
         return root / "Code/User/settings.json"
 
     def command(self, name: str) -> Path | None:
@@ -231,13 +250,17 @@ class LocalInstallations:
         return self.command("chatgpt") is not None
 
     def _jetbrains(self) -> bool:
-        for root in self.app_roots:
-            for pattern in (
+        patterns = (
+            ("*.app/Contents/Resources/product-info.json",)
+            if self.platform == "darwin"
+            else (
                 "*/product-info.json",
                 "JetBrains/*/product-info.json",
                 "*/*/product-info.json",
-                "*.app/Contents/Resources/product-info.json",
-            ):
+            )
+        )
+        for root in self.app_roots:
+            for pattern in patterns:
                 for path in root.glob(pattern):
                     metadata = _json(path)
                     if not isinstance(metadata, dict) or metadata.get(
@@ -263,23 +286,115 @@ class LocalInstallations:
                             if isinstance(launch, dict) and isinstance(
                                 relative := launch.get("launcherPath"), str
                             ):
-                                base = (
+                                if (
+                                    Path(relative).is_absolute()
+                                    or Path(relative).anchor
+                                ):
+                                    continue
+                                boundary = (
                                     path.parent.parent
                                     if self.platform == "darwin"
                                     else path.parent
                                 )
-                                executable = (base / relative).resolve()
+                                executable = (path.parent / relative).resolve()
                                 if (
-                                    executable.is_relative_to(base.resolve())
+                                    executable.is_relative_to(boundary.resolve())
                                     and executable.is_file()
                                 ):
                                     return True
         return False
 
-    def _acp_command(self) -> tuple[str, ...]:
+    def _node_version(self, node: Path) -> NodeVersion | None:
+        try:
+            node = node.resolve(strict=True)
+            expected_name = "node.exe" if self.platform == "win32" else "node"
+            if node.name.lower() != expected_name or not node.is_file():
+                return None
+            parent = node.parent
+            if (
+                "shims" in {part.lower() for part in node.parts}
+                or parent.name.lower() in {"volta", ".volta"}
+                or (
+                    parent.name.lower() == "bin"
+                    and parent.parent.name.lower() in {"volta", ".volta"}
+                )
+            ):
+                return None
+            if (volta := self.environ.get("VOLTA_HOME")) and parent == (
+                Path(volta) / "bin"
+            ).resolve():
+                return None
+            with node.open("rb") as executable:
+                header = executable.read(4)
+            native = (
+                header.startswith(b"MZ")
+                if self.platform == "win32"
+                else header
+                in {
+                    b"\xfe\xed\xfa\xce",
+                    b"\xce\xfa\xed\xfe",
+                    b"\xfe\xed\xfa\xcf",
+                    b"\xcf\xfa\xed\xfe",
+                    b"\xca\xfe\xba\xbe",
+                    b"\xbe\xba\xfe\xca",
+                    b"\xca\xfe\xba\xbf",
+                    b"\xbf\xba\xfe\xca",
+                }
+                if self.platform == "darwin"
+                else header == b"\x7fELF"
+            )
+            if not native:
+                return None
+            environment = {"LC_ALL": "C", "LANG": "C"}
+            if self.platform == "win32":
+                environment.update(
+                    (key, value)
+                    for key, value in self.environ.items()
+                    if key.upper() in {"SYSTEMROOT", "WINDIR", "SYSTEMDRIVE"}
+                )
+            with subprocess.Popen(
+                [str(node), "--version"],
+                shell=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=0,
+                cwd=self.home,
+                env=environment,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            ) as process:
+                deadline = monotonic() + 2
+                timer = Timer(2, process.kill)
+                timer.start()
+                try:
+                    assert process.stdout is not None
+                    output = bytearray()
+                    while len(output) <= 256:
+                        chunk = process.stdout.read(257 - len(output))
+                        if not chunk:
+                            break
+                        output.extend(chunk)
+                    if len(output) > 256:
+                        return None
+                    if process.wait() != 0 or monotonic() >= deadline:
+                        return None
+                finally:
+                    timer.cancel()
+                    process.kill()
+                    process.wait()
+                    timer.join()
+            match = re.fullmatch(rb"v([0-9]+)\.([0-9]+)\.([0-9]+)\r?\n", output)
+            if match is not None:
+                return int(match[1]), int(match[2]), int(match[3])
+        except OSError:
+            return None
+        return None
+
+    def _acp_installation(self) -> AcpInstallation:
+        missing = "Install the Claude ACP adapter and Node.js 22 or newer. A compatible installed adapter was not detected."
         node = self.command("node")
         if node is None or node.suffix.lower() == ".cmd":
-            return ()
+            return AcpInstallation(issue=missing)
         roots = [node.parent.parent / "lib/node_modules"]
         if self.platform == "win32":
             roots.append(
@@ -293,7 +408,7 @@ class LocalInstallations:
             candidates.append(
                 adapter.parent / "node_modules/@agentclientprotocol/claude-agent-acp"
             )
-        found: set[Path] = set()
+        found: dict[Path, tuple[Path, object]] = {}
         for package in candidates:
             metadata = _json(package / "package.json")
             if (
@@ -310,8 +425,44 @@ class LocalInstallations:
                     executable.is_relative_to(package.resolve())
                     and executable.is_file()
                 ):
-                    found.add(executable)
-        return (str(node), str(next(iter(found)))) if len(found) == 1 else ()
+                    engines = metadata.get("engines")
+                    found[executable] = (
+                        (package / "package.json").resolve(),
+                        engines.get("node") if isinstance(engines, dict) else None,
+                    )
+        if len(found) != 1:
+            return AcpInstallation(issue=missing)
+        executable, (manifest, requirement) = next(iter(found.items()))
+        minimum = (
+            re.fullmatch(
+                r">=\s*(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?(?:\.(0|[1-9][0-9]*))?",
+                requirement.strip(),
+            )
+            if isinstance(requirement, str) and len(requirement.strip()) <= 64
+            else None
+        )
+        if minimum is None:
+            return AcpInstallation(
+                manifest=manifest,
+                issue="The installed ACP adapter has an unsupported Node requirement. Use manual setup.",
+            )
+        required = max(
+            (22, 0, 0),
+            (int(minimum[1]), int(minimum[2] or 0), int(minimum[3] or 0)),
+        )
+        version = self._node_version(node)
+        if version is None:
+            return AcpInstallation(
+                manifest=manifest,
+                issue="Could not verify a direct Node.js 22+ runtime. Use an installed Node executable or manual setup; wrappers and unresolved runtime managers are unsupported.",
+            )
+        if version < required:
+            return AcpInstallation(
+                manifest=manifest,
+                node_version=version,
+                issue=f"Detected Node.js {'.'.join(map(str, version))}; this ACP adapter needs {'.'.join(map(str, required))} or newer.",
+            )
+        return AcpInstallation((str(node), str(executable)), manifest, version)
 
     def scan(self) -> InstalledClients:
         scope = ""
@@ -325,6 +476,6 @@ class LocalInstallations:
             self._jetbrains(),
             self.command("claude"),
             self.command("fcc-codex"),
-            self._acp_command(),
+            AcpInstallation(issue=scope) if scope else self._acp_installation(),
             scope,
         )

@@ -7,6 +7,8 @@ from dataclasses import replace
 from threading import Barrier
 
 import pytest
+import tomlkit
+from tomlkit.exceptions import TOMLKitError
 
 from free_claude_code.application.integrations import IntegrationAction as Action
 from free_claude_code.application.integrations import IntegrationError
@@ -383,11 +385,12 @@ def test_failed_write_keeps_original_settings_recoverable(setup, monkeypatch, st
             perform(service, ctx, Item.CLAUDE_VSCODE, Action.SETUP)
     if stage != "committed":
         assert json.loads(locator.vscode_settings.read_bytes()) == original
-        perform(service, ctx, Item.CLAUDE_VSCODE, Action.SETUP)
-    else:
+    if stage != "pending":
         assert card(service, ctx, Item.CLAUDE_VSCODE)["status"] == "needs_attention"
-        assert card(service, ctx, Item.CLAUDE_VSCODE)["actions"] == ["update"]
-        perform(service, ctx, Item.CLAUDE_VSCODE, Action.UPDATE)
+        assert card(service, ctx, Item.CLAUDE_VSCODE)["actions"] == ["recover"]
+        perform(service, ctx, Item.CLAUDE_VSCODE, Action("recover"))
+    if stage != "committed":
+        perform(service, ctx, Item.CLAUDE_VSCODE, Action.SETUP)
     perform(service, ctx, Item.CLAUDE_VSCODE, Action.DISCONNECT)
     assert json.loads(locator.vscode_settings.read_bytes()) == original
     assert not (service.state_dir / "claude-vscode.json").exists()
@@ -414,9 +417,9 @@ def test_completed_write_with_failed_record_cleanup_can_be_finished(
         patch.setattr(service_module, "write_record", fail_cleanup)
         with pytest.raises(IntegrationError):
             perform(service, ctx, item, action)
-    assert action in card(service, ctx, item)["actions"]
-    result = perform(service, ctx, item, action)
-    assert result["applied"] is False
+    assert card(service, ctx, item)["actions"] == ["recover"]
+    result = perform(service, ctx, item, Action("recover"))
+    assert result["applied"] is True
     assert not (service.state_dir / f"{item}.json").exists()
 
 
@@ -536,3 +539,423 @@ def test_editor_write_during_temporary_file_flush_is_preserved(setup, monkeypatc
     with pytest.raises(IntegrationError, match="changed since this preview"):
         perform(service, ctx, Item.CLAUDE_VSCODE, Action.SETUP)
     assert json.loads(locator.vscode_settings.read_bytes()) == later
+
+
+def test_codex_setup_preserves_unrelated_dotted_provider(setup):
+    service, locator, ctx = setup
+    path = locator.home / ".codex/config.toml"
+    path.parent.mkdir()
+    path.write_text(
+        'model_providers.fcc.name="Old"\nmodel_providers.other.name="Other"\n'
+    )
+    perform(service, ctx, Item.CODEX, Action.SETUP)
+    actual = tomllib.loads(path.read_text())
+    assert actual["model_providers"].get("other") == {"name": "Other"}
+    assert actual.get("model_provider") == "fcc"
+    assert actual["model_providers"]["fcc"]["base_url"] == "http://127.0.0.1:8082/v1"
+
+
+def test_completed_disconnect_recovery_preserves_preexisting_flag(setup, monkeypatch):
+    service, locator, ctx = setup
+    original = {"claudeCode.disableLoginPrompt": True, "editor.fontSize": 17}
+    write_json(locator.vscode_settings, original)
+    perform(service, ctx, Item.CLAUDE_VSCODE, Action.SETUP)
+    actual_record = service_module.write_record
+
+    def fail_cleanup(path, record):
+        if record is None:
+            raise OSError("simulated cleanup failure")
+        actual_record(path, record)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(service_module, "write_record", fail_cleanup)
+        with pytest.raises(IntegrationError):
+            perform(service, ctx, Item.CLAUDE_VSCODE, Action.DISCONNECT)
+    assert json.loads(locator.vscode_settings.read_bytes()) == original
+    assert card(service, ctx, Item.CLAUDE_VSCODE)["actions"] == ["recover"]
+    before = locator.vscode_settings.read_bytes()
+    perform(service, ctx, Item.CLAUDE_VSCODE, Action("recover"))
+    assert locator.vscode_settings.read_bytes() == before
+    assert not (service.state_dir / "claude-vscode.json").exists()
+
+
+@pytest.mark.parametrize(
+    "item,relative,restored",
+    [
+        (Item.CLAUDE_VSCODE, ".config/Code/User/settings.json", b"{}"),
+        (Item.CODEX, ".codex/config.toml", b""),
+        (Item.CLAUDE_JETBRAINS, ".jetbrains/acp.json", b"{}"),
+    ],
+)
+@pytest.mark.parametrize("absent", [False, True])
+def test_managed_disconnect_releases_history_when_file_is_already_restored(
+    setup, item, relative, restored, absent
+):
+    service, locator, ctx = setup
+    perform(service, ctx, item, Action.SETUP)
+    path = locator.home / relative
+    if absent:
+        path.unlink()
+    else:
+        path.write_bytes(restored)
+    before = storage_module.FileSnapshot.read(path)
+    result = perform(service, ctx, item, Action.DISCONNECT)
+    assert not (service.state_dir / f"{item}.json").exists()
+    assert result["applied"] is True
+    assert storage_module.FileSnapshot.read(path) == before
+    assert service.preview(item, Action.SETUP, ctx)["changes"]
+
+
+def test_inline_fcc_provider_without_auth_keeps_all_cards_available(setup):
+    service, locator, ctx = setup
+    path = locator.home / ".codex/config.toml"
+    path.parent.mkdir()
+    path.write_text(
+        'model_provider="fcc"\n[model_providers]\n'
+        'fcc={name="Free Claude Code",base_url="http://localhost:8082/v1"}\n'
+        'other={name="Other"}\n'
+    )
+    result = service.inspect(ctx)
+    assert len(result["items"]) == 4
+    assert card(service, ctx, Item.CODEX)["status"] == "update_available"
+
+
+@pytest.mark.parametrize(
+    "item,action",
+    [
+        (Item.CLAUDE_VSCODE, Action.SETUP),
+        (Item.CLAUDE_VSCODE, Action.UPDATE),
+        (Item.CLAUDE_VSCODE, Action.DISCONNECT),
+        (Item.CODEX, Action.DISCONNECT),
+        (Item.CLAUDE_LOGIN, Action.REPAIR),
+    ],
+)
+@pytest.mark.parametrize("stage", ["before_replace", "after_replace", "finalize"])
+def test_interrupted_operations_recover_without_replaying_client_write(
+    setup, monkeypatch, item, action, stage
+):
+    service, locator, ctx = setup
+    if item == Item.CODEX:
+        path = locator.home / ".codex/config.toml"
+        path.parent.mkdir()
+        path.write_text(
+            'model_provider="other"\n[model_providers.fcc]\nname="Original"\n'
+            'base_url="https://old.example/v1"\nexperimental_bearer_token="original-token"\n'
+        )
+        original = tomllib.loads(path.read_text())
+    else:
+        path = (
+            locator.home / ".claude.json"
+            if item == Item.CLAUDE_LOGIN
+            else locator.vscode_settings
+        )
+        original = (
+            {"hasCompletedOnboarding": False, "keep": "mine"}
+            if item == Item.CLAUDE_LOGIN
+            else {"claudeCode.disableLoginPrompt": True, "editor.fontSize": 17}
+        )
+        write_json(path, original)
+    if action in {Action.UPDATE, Action.DISCONNECT}:
+        perform(service, ctx, item, Action.SETUP)
+    if action == Action.UPDATE:
+        ctx = connection(locator.home, port=8182)
+    before = storage_module.FileSnapshot.read(path)
+    history = service.state_dir / f"{item}.json"
+    previous = json.loads(history.read_bytes()) if history.exists() else None
+    actual_write, actual_record = (
+        service_module.atomic_write,
+        service_module.write_record,
+    )
+
+    def fail_external(destination, data, **kwargs):
+        if destination == path and stage == "before_replace":
+            raise OSError("interrupted before replace")
+        actual_write(destination, data, **kwargs)
+        if destination == path and stage == "after_replace":
+            raise OSError("interrupted after replace")
+
+    def fail_record(destination, record):
+        if stage == "finalize" and not isinstance(record, service_module.PendingWrite):
+            raise OSError("interrupted finalization")
+        actual_record(destination, record)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(service_module, "atomic_write", fail_external)
+        patch.setattr(service_module, "write_record", fail_record)
+        with pytest.raises(IntegrationError):
+            perform(service, ctx, item, action)
+    assert history.exists()
+    assert json.loads(history.read_bytes())["phase"] == "pending"
+    saved = storage_module.FileSnapshot.read(path)
+    if stage == "before_replace":
+        assert saved == before
+    assert card(service, ctx, item)["actions"] == ["recover"]
+    for other_action in (
+        [Action.REPAIR]
+        if item == Item.CLAUDE_LOGIN
+        else [Action.SETUP, Action.UPDATE, Action.DISCONNECT]
+    ):
+        with pytest.raises(IntegrationError):
+            service.preview(item, other_action, ctx)
+    recovery = service.preview(item, Action("recover"), ctx)
+    # Recovery must not depend on a new connection or newly unreadable prerequisites.
+    write_json(locator.home / ".claude/settings.json", {"env": "wrong"})
+    changed = replace(connection(locator.home, port=9192), models=())
+    result = service.apply(item, Action("recover"), recovery["revision"], changed)
+    assert result["applied"] is True
+    assert storage_module.FileSnapshot.read(path) == saved
+    if stage == "before_replace":
+        assert (
+            json.loads(history.read_bytes()) if history.exists() else None
+        ) == previous
+    elif action in {Action.DISCONNECT, Action.REPAIR}:
+        assert not history.exists()
+    else:
+        assert json.loads(history.read_bytes())["fields"]["env.ANTHROPIC_BASE_URL"][
+            "last"
+        ]["value"] == (
+            "http://127.0.0.1:8182"
+            if action == Action.UPDATE
+            else "http://127.0.0.1:8082"
+        )
+    if stage != "before_replace" and action == Action.DISCONNECT:
+        assert (
+            tomllib.loads(path.read_text())
+            if item == Item.CODEX
+            else json.loads(path.read_bytes())
+        ) == original
+    with pytest.raises(IntegrationError):
+        service.apply(item, Action("recover"), recovery["revision"], changed)
+    assert storage_module.FileSnapshot.read(path) == saved
+
+
+def test_disconnect_persists_container_cleanup_without_leaf_changes(setup):
+    service, locator, ctx = setup
+    perform(service, ctx, Item.CLAUDE_VSCODE, Action.SETUP)
+    write_json(locator.vscode_settings, {"claudeCode.environmentVariables": []})
+    preview = service.preview(Item.CLAUDE_VSCODE, Action.DISCONNECT, ctx)
+    assert preview["changes"] == []
+    result = service.apply(
+        Item.CLAUDE_VSCODE, Action.DISCONNECT, preview["revision"], ctx
+    )
+    assert result["applied"] is True
+    assert json.loads(locator.vscode_settings.read_bytes()) == {}
+    assert not (service.state_dir / "claude-vscode.json").exists()
+
+
+def test_current_manual_configuration_can_be_adopted_without_rewriting_it(setup):
+    service, locator, ctx = setup
+    perform(service, ctx, Item.CLAUDE_VSCODE, Action.SETUP)
+    history = service.state_dir / "claude-vscode.json"
+    history.unlink()
+    before = storage_module.FileSnapshot.read(locator.vscode_settings)
+    assert "update" in card(service, ctx, Item.CLAUDE_VSCODE)["actions"]
+    result = perform(service, ctx, Item.CLAUDE_VSCODE, Action.UPDATE)
+    assert result["applied"] is True
+    assert storage_module.FileSnapshot.read(locator.vscode_settings) == before
+    assert history.exists()
+    assert all(
+        field["prior"] is None
+        for field in json.loads(history.read_bytes())["fields"].values()
+    )
+    assert "update" not in card(service, ctx, Item.CLAUDE_VSCODE)["actions"]
+
+
+def test_setup_cannot_bypass_manual_adoption_history(setup):
+    service, locator, ctx = setup
+    perform(service, ctx, Item.CLAUDE_VSCODE, Action.SETUP)
+    history = service.state_dir / "claude-vscode.json"
+    history.unlink()
+    before = storage_module.FileSnapshot.read(locator.vscode_settings)
+    with pytest.raises(IntegrationError):
+        service.preview(Item.CLAUDE_VSCODE, Action.SETUP, ctx)
+    assert not history.exists()
+    assert storage_module.FileSnapshot.read(locator.vscode_settings) == before
+
+
+@pytest.fixture
+def pending_setup(setup):
+    service, locator, ctx = setup
+    write_json(locator.vscode_settings, {"claudeCode.disableLoginPrompt": True})
+    following = storage_module.Ownership(
+        item=Item.CLAUDE_VSCODE,
+        path=str(locator.vscode_settings),
+        fields={
+            "claudeCode.disableLoginPrompt": storage_module.FieldHistory(
+                prior=storage_module.SavedValue(present=False),
+                last=storage_module.SavedValue(present=True, value=True),
+            )
+        },
+    )
+    storage_module.write_record(
+        service.state_dir / "claude-vscode.json",
+        storage_module.PendingWrite(
+            item=Item.CLAUDE_VSCODE,
+            action=Action.SETUP,
+            path=str(locator.vscode_settings),
+            before=storage_module.content_hash(None),
+            after=storage_module.content_hash(locator.vscode_settings.read_bytes()),
+            previous=None,
+            following=following,
+        ),
+    )
+    return service, locator, ctx
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "previous_path",
+        "following_key",
+        "following_value",
+        "prior_value",
+        "equal_hashes",
+        "action",
+        "unrelated_edit",
+    ],
+)
+def test_invalid_pending_evidence_keeps_file_and_history_for_manual_resolution(
+    pending_setup, corruption
+):
+    service, locator, ctx = pending_setup
+    history = service.state_dir / "claude-vscode.json"
+    pending = json.loads(history.read_bytes())
+    if corruption == "previous_path":
+        pending["previous"] = {**pending["following"], "path": "wrong.json"}
+    elif corruption == "following_key":
+        # Validate the following record even when recovery would select previous.
+        locator.vscode_settings.unlink()
+        pending["following"]["fields"]["arbitrary.setting"] = pending["following"][
+            "fields"
+        ]["claudeCode.disableLoginPrompt"]
+    elif corruption in {"following_value", "prior_value"}:
+        field = pending["following"]["fields"]["claudeCode.disableLoginPrompt"]
+        field["last" if corruption == "following_value" else "prior"] = {
+            "present": True,
+            "value": {"wrong": "private contents"},
+        }
+    elif corruption == "equal_hashes":
+        pending["before"] = pending["after"]
+    elif corruption == "action":
+        pending["action"] = "recover"
+    else:
+        write_json(locator.vscode_settings, {"user": "changed"})
+    write_json(history, pending)
+    before = storage_module.FileSnapshot.read(locator.vscode_settings)
+    history_before = history.read_bytes()
+    entry = card(service, ctx, Item.CLAUDE_VSCODE)
+    assert entry["status"] == "needs_attention"
+    assert entry["actions"] == []
+    assert "private contents" not in json.dumps(entry)
+    with pytest.raises(IntegrationError):
+        service.preview(Item.CLAUDE_VSCODE, Action.RECOVER, ctx)
+    assert storage_module.FileSnapshot.read(locator.vscode_settings) == before
+    assert history.read_bytes() == history_before
+
+
+@pytest.mark.parametrize("changed", ["file", "history"])
+def test_stale_recovery_confirmation_keeps_current_evidence(pending_setup, changed):
+    service, locator, ctx = pending_setup
+    history = service.state_dir / "claude-vscode.json"
+    preview = service.preview(Item.CLAUDE_VSCODE, Action.RECOVER, ctx)
+    if changed == "file":
+        write_json(locator.vscode_settings, {"keep": "later"})
+    else:
+        history.write_bytes(history.read_bytes() + b"\n")
+    before = storage_module.FileSnapshot.read(locator.vscode_settings)
+    history_before = history.read_bytes()
+    with pytest.raises(IntegrationError) as caught:
+        service.apply(Item.CLAUDE_VSCODE, Action.RECOVER, preview["revision"], ctx)
+    assert caught.value.status_code == 409
+    assert storage_module.FileSnapshot.read(locator.vscode_settings) == before
+    assert history.read_bytes() == history_before
+
+
+def test_unstarted_recovery_preserves_absent_client_file(pending_setup):
+    service, locator, ctx = pending_setup
+    locator.vscode_settings.unlink()
+    result = perform(service, ctx, Item.CLAUDE_VSCODE, Action.RECOVER)
+    assert result["applied"] is True
+    assert not locator.vscode_settings.exists()
+    assert not (service.state_dir / "claude-vscode.json").exists()
+
+
+def test_recovery_does_not_rediscover_or_probe_installed_clients(
+    pending_setup, monkeypatch
+):
+    service, locator, ctx = pending_setup
+    monkeypatch.setattr(
+        type(locator),
+        "scan",
+        lambda _self: pytest.fail("recovery does not need discovery"),
+    )
+    before = storage_module.FileSnapshot.read(locator.vscode_settings)
+    assert perform(service, ctx, Item.CLAUDE_VSCODE, Action.RECOVER)["applied"] is True
+    assert storage_module.FileSnapshot.read(locator.vscode_settings) == before
+
+
+@pytest.mark.parametrize(
+    "changed", ["requirement", "manifest", "version", "entrypoint", "runtime"]
+)
+def test_acp_dependency_changes_reject_the_old_confirmation(
+    setup, monkeypatch, changed
+):
+    service, locator, ctx = setup
+    preview = service.preview(Item.CLAUDE_JETBRAINS, Action.SETUP, ctx)
+    package = locator.home / "lib/node_modules/@agentclientprotocol/claude-agent-acp"
+    if changed in {"requirement", "manifest"}:
+        manifest = json.loads((package / "package.json").read_bytes())
+        if changed == "requirement":
+            manifest["engines"]["node"] = ">=24"
+        else:
+            manifest["version"] = "next-fixture-version"
+        write_json(package / "package.json", manifest)
+    elif changed == "version":
+        monkeypatch.setattr(
+            type(locator), "_node_version", lambda _self, _node: (24, 0, 0)
+        )
+    else:
+        path = (
+            package / "dist/index.js"
+            if changed == "entrypoint"
+            else locator.home / "bin/node"
+        )
+        path.write_text("replaced dependency")
+    with pytest.raises(IntegrationError):
+        service.apply(Item.CLAUDE_JETBRAINS, Action.SETUP, preview["revision"], ctx)
+    assert not (locator.home / ".jetbrains/acp.json").exists()
+    assert not (service.state_dir / "claude-jetbrains.json").exists()
+
+
+@pytest.mark.parametrize("failure", ["semantic", "value_error", "toml_error"])
+def test_document_failure_is_isolated_before_client_or_history_writes(
+    setup, monkeypatch, failure
+):
+    service, locator, ctx = setup
+    path = locator.home / ".codex/config.toml"
+    path.parent.mkdir()
+    path.write_text(
+        'keep=true\nmodel_provider="fcc"\n[model_providers.fcc]\nname="Free Claude Code"\n'
+    )
+    before = storage_module.FileSnapshot.read(path)
+    actual_dumps = tomlkit.dumps
+
+    def fail_mutated_candidate(candidate):
+        text = actual_dumps(candidate)
+        if "auth" in candidate["model_providers"]["fcc"]:
+            if failure == "value_error":
+                raise ValueError("private source contents")
+            if failure == "toml_error":
+                raise TOMLKitError("private source contents")
+            return text.replace("keep=true", "keep=1")
+        return text
+
+    monkeypatch.setattr(tomlkit, "dumps", fail_mutated_candidate)
+    inspected = service.inspect(ctx)
+    assert len(inspected["items"]) == 4
+    assert card(service, ctx, Item.CODEX)["status"] == "needs_attention"
+    assert "private source contents" not in json.dumps(inspected)
+    with pytest.raises(IntegrationError):
+        service.preview(Item.CODEX, Action.UPDATE, ctx)
+    assert storage_module.FileSnapshot.read(path) == before
+    assert not (service.state_dir / "codex.json").exists()

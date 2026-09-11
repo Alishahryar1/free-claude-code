@@ -21,10 +21,15 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+class FixtureInstallations(LocalInstallations):
+    def _node_version(self, node: Path) -> tuple[int, int, int] | None:
+        return (22, 0, 0) if node.is_file() else None
+
+
 def installed_clients(home: Path) -> LocalInstallations:
     bins, apps = home / "bin", home / "apps"
     env = {"PATH": str(bins), "XDG_CONFIG_HOME": str(home / ".config")}
-    locator = LocalInstallations(home, "linux", env, bins, (apps,))
+    locator = FixtureInstallations(home, "linux", env, bins, (apps,))
     for name in ("fcc-codex", "claude", "node", "chatgpt"):
         executable(bins / name)
     write_json(apps / "code/resources/app/product.json", {"applicationName": "code"})
@@ -56,6 +61,7 @@ def installed_clients(home: Path) -> LocalInstallations:
         {
             "name": "@agentclientprotocol/claude-agent-acp",
             "bin": {"claude-agent-acp": "dist/index.js"},
+            "engines": {"node": ">=22"},
         },
     )
     executable(package / "dist/index.js")

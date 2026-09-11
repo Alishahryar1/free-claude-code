@@ -3,9 +3,14 @@
 import json
 import tomllib
 from collections.abc import Iterator, MutableMapping
+from copy import deepcopy
+from datetime import datetime, time
+from decimal import Decimal
 
 import tomlkit
 import tree_sitter_json
+from tomlkit.exceptions import TOMLKitError
+from tomlkit.items import Table
 from tree_sitter import Language, Node, Parser
 
 from free_claude_code.application.integrations import IntegrationError
@@ -23,6 +28,84 @@ def _invalid() -> IntegrationError:
 
 def _constant(_value: str) -> None:
     raise _invalid()
+
+
+def _same_data(first: object, second: object) -> bool:
+    if type(first) is not type(second):
+        return False
+    if isinstance(first, dict) and isinstance(second, dict):
+        return first.keys() == second.keys() and all(
+            _same_data(value, second[key]) for key, value in first.items()
+        )
+    if isinstance(first, list) and isinstance(second, list):
+        return len(first) == len(second) and all(
+            _same_data(left, right) for left, right in zip(first, second, strict=True)
+        )
+    if isinstance(first, Decimal) and isinstance(second, Decimal):
+        if first.is_nan() or second.is_nan():
+            return (
+                first.is_nan()
+                and second.is_nan()
+                and first.is_signed() == second.is_signed()
+            )
+        return first == second and first.is_signed() == second.is_signed()
+    if isinstance(first, datetime | time) and isinstance(second, datetime | time):
+        return first.isoformat() == second.isoformat()
+    return first == second
+
+
+def _validation_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _validation_value(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_validation_value(child) for child in value]
+    return Decimal(repr(value)) if isinstance(value, float) else value
+
+
+def _expected_data(data: dict, path: SettingPath, value: object) -> dict:
+    expected = deepcopy(data)
+    current: object = expected
+    for key in path[:-1]:
+        if isinstance(current, dict) and isinstance(key, str):
+            if key not in current:
+                current[key] = {}
+            current = current[key]
+        elif (
+            isinstance(current, list)
+            and isinstance(key, int)
+            and 0 <= key < len(current)
+        ):
+            current = current[key]
+        else:
+            raise IntegrationError(
+                "A setting being changed has an incompatible parent."
+            )
+    key = path[-1]
+    if isinstance(current, dict) and isinstance(key, str):
+        if value is MISSING:
+            current.pop(key, None)
+        else:
+            current[key] = _validation_value(value)
+    elif (
+        isinstance(current, list) and isinstance(key, int) and 0 <= key <= len(current)
+    ):
+        if value is MISSING and key < len(current):
+            current.pop(key)
+        elif value is not MISSING:
+            if key == len(current):
+                current.append(_validation_value(value))
+            else:
+                current[key] = _validation_value(value)
+    else:
+        raise IntegrationError("A setting being changed has an incompatible parent.")
+    return expected
+
+
+def _require_expected(actual: dict, expected: dict) -> None:
+    if not _same_data(actual, expected):
+        raise IntegrationError(
+            "This configuration layout cannot be edited without changing other settings. Use manual setup."
+        )
 
 
 def _tokens(node: Node) -> Iterator[Node]:
@@ -69,6 +152,9 @@ class JsonDocument:
                                 projection[index] = 32
             self._projection = bytes(projection)
             self.data = json.loads(self._projection, parse_constant=_constant)
+            self._semantic = json.loads(
+                self._projection, parse_float=Decimal, parse_constant=_constant
+            )
             tree = self._parser.parse(self._projection)
             if not isinstance(self.data, dict) or tree.root_node.has_error:
                 raise _invalid()
@@ -119,7 +205,7 @@ class JsonDocument:
     def render(self) -> bytes:
         return self._bom + self._body
 
-    def _edit(self, edits: list[tuple[int, int, bytes]]) -> None:
+    def _edit(self, edits: list[tuple[int, int, bytes]], expected: dict) -> None:
         body = self._body
         grouped: dict[tuple[int, int], bytes] = {}
         for start, end, replacement in edits:
@@ -128,9 +214,10 @@ class JsonDocument:
             body = body[:start] + replacement + body[end:]
         # Validate before replacing this document, including all untouched bytes.
         candidate = JsonDocument(self._bom + body, jsonc=self._jsonc)
+        _require_expected(candidate._semantic, expected)
         self.__dict__.update(candidate.__dict__)
 
-    def _insert(self, parent: Node, value: bytes) -> None:
+    def _insert(self, parent: Node, value: bytes, expected: dict) -> None:
         children = parent.named_children
         close = parent.end_byte - 1
         edits = []
@@ -152,9 +239,10 @@ class JsonDocument:
             edits.append((line_start, line_start, indent + value + newline))
         else:
             edits.append((close, close, (b" " if children else b"") + value))
-        self._edit(edits)
+        self._edit(edits, expected)
 
     def set(self, path: SettingPath, value: object) -> None:
+        expected = _expected_data(self._semantic, path, value)
         node = self._root
         for index, key in enumerate(path):
             child = self._child(node, key)
@@ -177,10 +265,10 @@ class JsonDocument:
                     raise IntegrationError(
                         "An array entry no longer exists.", status_code=409
                     )
-                self._insert(node, encoded)
+                self._insert(node, encoded, expected)
                 return
             node = child
-        if self.get(path) == value and type(self.get(path)) is type(value):
+        if _same_data(self._semantic, expected):
             return
         self._edit(
             [
@@ -189,7 +277,8 @@ class JsonDocument:
                     node.end_byte,
                     json.dumps(value, ensure_ascii=False, allow_nan=False).encode(),
                 )
-            ]
+            ],
+            expected,
         )
 
     def delete(self, path: SettingPath) -> None:
@@ -218,7 +307,7 @@ class JsonDocument:
         edits = [(node.start_byte, node.end_byte, b"")]
         if commas:
             edits.append((commas[0], commas[0] + 1, b""))
-        self._edit(edits)
+        self._edit(edits, _expected_data(self._semantic, path, MISSING))
 
 
 class TomlDocument:
@@ -226,12 +315,13 @@ class TomlDocument:
         try:
             self._text = source.decode("utf-8")
             self.data = tomllib.loads(self._text)
+            self._semantic = tomllib.loads(self._text, parse_float=Decimal)
             self._document = tomlkit.parse(self._text)
             if tomlkit.dumps(self._document) != self._text:
                 raise IntegrationError(
                     "This TOML layout cannot be edited without reformatting other settings. Use manual setup."
                 )
-        except UnicodeError, ValueError:
+        except UnicodeError, ValueError, TOMLKitError:
             raise _invalid() from None
 
     def render(self) -> bytes:
@@ -250,37 +340,54 @@ class TomlDocument:
         return current
 
     def _change(self, path: SettingPath, value: object) -> None:
-        candidate = tomlkit.parse(self._text)
-        current: MutableMapping = candidate
-        for key in path[:-1]:
+        expected = _expected_data(self._semantic, path, value)
+        if _same_data(self._semantic, expected):
+            return
+        try:
+            candidate = tomlkit.parse(self._text)
+            current: MutableMapping = candidate
+            ancestors: list[tuple[MutableMapping, str]] = []
+            for key in path[:-1]:
+                if not isinstance(key, str):
+                    raise IntegrationError("Unsupported TOML setting path.")
+                if key not in current:
+                    current[key] = tomlkit.inline_table()
+                child = current[key]
+                if not isinstance(child, MutableMapping):
+                    raise IntegrationError(
+                        "A setting being changed has an incompatible table type."
+                    )
+                ancestors.append((current, key))
+                current = child
+            key = path[-1]
             if not isinstance(key, str):
                 raise IntegrationError("Unsupported TOML setting path.")
-            if key not in current:
-                current[key] = tomlkit.table()
-            child = current[key]
-            if not isinstance(child, MutableMapping):
-                raise IntegrationError(
-                    "A setting being changed has an incompatible table type."
-                )
-            current = child
-        key = path[-1]
-        if not isinstance(key, str):
-            raise IntegrationError("Unsupported TOML setting path.")
-        if value is MISSING:
-            current.pop(key, None)
-        else:
-            current[key] = value
-        text = tomlkit.dumps(candidate)
-        try:
+            if value is MISSING:
+                current.pop(key, None)
+                for parent, name in reversed(ancestors):
+                    child = parent[name]
+                    if (
+                        isinstance(child, Table)
+                        and child.is_super_table()
+                        and not child
+                    ):
+                        parent[name] = tomlkit.inline_table()
+            else:
+                current[key] = value
+            text = tomlkit.dumps(candidate)
             data = tomllib.loads(text)
-        except ValueError:
+            semantic = tomllib.loads(text, parse_float=Decimal)
+            _require_expected(semantic, expected)
+        except ValueError, TOMLKitError:
             raise _invalid() from None
-        self._text, self._document, self.data = text, candidate, data
+        self._text, self._document, self.data, self._semantic = (
+            text,
+            candidate,
+            data,
+            semantic,
+        )
 
     def set(self, path: SettingPath, value: object) -> None:
-        existing = self.get(path)
-        if existing == value and type(existing) is type(value):
-            return
         self._change(path, value)
 
     def delete(self, path: SettingPath) -> None:
