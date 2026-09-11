@@ -6,7 +6,7 @@ const state = {
   modelOptions: [],
   modelComboboxes: new Set(),
   authPollers: new Map(),
-  activeView: sessionViewFromPath(),
+  activeView: viewFromLocation(),
 };
 
 const MASKED_SECRET = "********";
@@ -49,8 +49,8 @@ const VIEW_GROUPS = [
   },
 ];
 
-function sessionViewFromPath() {
-  return window.location.pathname.startsWith("/admin/code") ? "code" : "providers";
+function viewFromLocation() {
+  return window.location.pathname.split("/")[2] || "providers";
 }
 
 const byId = (id) => document.getElementById(id);
@@ -178,12 +178,9 @@ function setActiveView(viewId, { scroll = false } = {}) {
 }
 
 function navigateToView(viewId) {
-  if (viewId === "code") {
-    if (window.location.pathname !== `/admin/${viewId}`) {
-      window.history.pushState({}, "", `/admin/${viewId}`);
-    }
-  } else if (sessionViewFromPath() !== "providers") {
-    window.history.pushState({}, "", "/admin");
+  const target = viewId === "providers" ? "/admin" : `/admin/${viewId}`;
+  if (window.location.pathname + window.location.search !== target) {
+    window.history.pushState({}, "", target);
   }
   setActiveView(viewId, { scroll: true });
 }
@@ -1234,7 +1231,7 @@ document.addEventListener("pointerdown", (event) => {
 });
 
 window.addEventListener("popstate", () => {
-  const viewId = sessionViewFromPath();
+  const viewId = viewFromLocation();
   setActiveView(viewId, { scroll: false });
 });
 
