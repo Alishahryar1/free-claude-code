@@ -1,8 +1,33 @@
 import json
 
+import pytest
 from playwright.sync_api import expect
 
 from free_claude_code.cli import vscode
+
+
+@pytest.mark.parametrize("width", [1280, 390])
+def test_modal_shows_files_for_the_selected_action(
+    page, admin_base_url, tmp_path, width
+):
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{admin_base_url}/admin/integrations")
+    page.locator("#openClaudeIntegration").click()
+    dialog = page.locator("#claudeIntegrationDialog")
+    paths = dialog.locator("#claudeIntegrationFiles li")
+    expect(paths).to_have_text(
+        [
+            str((tmp_path / "vscode" / "settings.json").resolve()),
+            str((tmp_path / ".claude.json").resolve()),
+        ]
+    )
+    assert dialog.evaluate("element => element.scrollWidth <= element.clientWidth")
+    page.locator("#confirmClaudeIntegration").click()
+    expect(dialog).not_to_be_visible()
+    page.locator("#openClaudeIntegration").click()
+    expect(paths).to_have_text([str((tmp_path / "vscode" / "settings.json").resolve())])
+    page.keyboard.press("Escape")
+    expect(dialog).not_to_be_visible()
 
 
 def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):

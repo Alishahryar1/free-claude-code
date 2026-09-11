@@ -26,7 +26,7 @@ def integration(tmp_path, monkeypatch):
 
 def test_routes_read_actual_file_connect_and_disconnect(integration):
     client, path, _ = integration
-    assert client.get(ROOT).json() == {"connected": False}
+    assert client.get(ROOT).json()["connected"] is False
     response = client.post(f"{ROOT}/connect")
     assert response.status_code == 200
     assert response.json() == {"connected": True}
@@ -39,16 +39,40 @@ def test_routes_read_actual_file_connect_and_disconnect(integration):
     assert environment["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4321"
     assert environment["ANTHROPIC_AUTH_TOKEN"] == "integration-secret"
     assert "integration-secret" not in response.text
-    assert client.get(ROOT).json() == {"connected": True}
+    assert client.get(ROOT).json()["connected"] is True
     state_path = path.parent / ".claude.json"
     assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
     state_path.write_text('{"hasCompletedOnboarding":false}')
-    assert client.get(ROOT).json() == {"connected": False}
+    assert client.get(ROOT).json()["connected"] is False
     assert client.post(f"{ROOT}/connect").json() == {"connected": True}
     path.write_text("{}")
-    assert client.get(ROOT).json() == {"connected": False}
+    assert client.get(ROOT).json()["connected"] is False
     assert client.post(f"{ROOT}/disconnect").json() == {"connected": False}
     assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
+
+
+@pytest.mark.parametrize("field", ["vscode_settings", "claude_state"])
+def test_status_reports_resolved_file_paths_without_creating_files(integration, field):
+    client, path, _ = integration
+    state_path = path.parent / ".claude.json"
+    result = client.get(ROOT)
+    assert result.json()["paths"] == {
+        "vscode_settings": str(path.resolve()),
+        "claude_state": str(state_path.resolve()),
+    }
+    assert result.headers["cache-control"] == "no-store"
+    assert not path.exists()
+    assert not state_path.exists()
+    link = path if field == "vscode_settings" else state_path
+    target = path.parent / "actual-settings.json"
+    target.write_text("{}")
+    try:
+        link.symlink_to(target.name)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or privilege")
+        raise
+    assert client.get(ROOT).json()["paths"][field] == str(target.resolve())
 
 
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect"])

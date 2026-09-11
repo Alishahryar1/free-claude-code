@@ -1245,7 +1245,7 @@ try {
 }
 
 const claudeIntegrationDialog = byId("claudeIntegrationDialog");
-const claudeIntegration = { connected: null, busy: false };
+const claudeIntegration = { connected: null, busy: false, paths: null };
 const claudeIntegrationPath = "/admin/api/integrations/claude-vscode";
 
 function integrationMessage(id, message, error = false) {
@@ -1256,7 +1256,7 @@ function integrationMessage(id, message, error = false) {
 }
 
 function renderClaudeIntegration() {
-  const { connected, busy } = claudeIntegration;
+  const { connected, busy, paths } = claudeIntegration;
   const action = connected ? "Disconnect" : "Connect";
   byId("openClaudeIntegration").textContent = connected === null && !busy ? "Retry" : action;
   byId("openClaudeIntegration").disabled = busy;
@@ -1270,6 +1270,18 @@ function renderClaudeIntegration() {
   byId("claudeIntegrationDescription").textContent = connected
     ? "Remove FCC's VS Code settings. Claude onboarding stays completed."
     : "Will set FCC's URL and token, enable model discovery, skip VS Code login, and complete Claude onboarding.";
+  const files = byId("claudeIntegrationFiles");
+  files.replaceChildren();
+  if (paths) {
+    const targets = connected ? [paths.vscode_settings] : [paths.vscode_settings, paths.claude_state];
+    targets.forEach((path) => {
+      const item = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = path;
+      item.appendChild(code);
+      files.appendChild(item);
+    });
+  }
 }
 
 async function refreshClaudeIntegration() {
@@ -1280,6 +1292,7 @@ async function refreshClaudeIntegration() {
   try {
     const result = await api(claudeIntegrationPath);
     claudeIntegration.connected = result.connected;
+    claudeIntegration.paths = result.paths;
   } catch (error) {
     claudeIntegration.connected = null;
     integrationMessage("claudeIntegrationMessage", error.message, true);

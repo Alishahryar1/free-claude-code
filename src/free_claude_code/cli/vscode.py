@@ -176,7 +176,13 @@ def configure(
         document, entries = _read(path, set(values))
         if connected:
             onboarding = _read_object(state_path)
-    return {
+    result: JsonObject = {
         "connected": _connected(document, entries, values)
         and onboarding.get(_ONBOARDING) is True,
     }
+    if connected is None:
+        result["paths"] = {
+            "vscode_settings": str(path),
+            "claude_state": str(state_path),
+        }
+    return result

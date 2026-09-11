@@ -12,7 +12,8 @@ LOGIN = "claudeCode.disableLoginPrompt"
 
 
 def operate(path, connected=None):
-    return vscode.configure(path, path.parent / ".claude.json", URL, TOKEN, connected)
+    result = vscode.configure(path, path.parent / ".claude.json", URL, TOKEN, connected)
+    return {"connected": result["connected"]}
 
 
 def test_connect_completes_onboarding_and_disconnect_preserves_state(tmp_path):
