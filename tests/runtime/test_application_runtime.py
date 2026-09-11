@@ -35,6 +35,8 @@ from free_claude_code.providers.credential_validation import (
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
+from free_claude_code.runtime.integrations.discovery import LocalInstallations
+from free_claude_code.runtime.integrations.service import IntegrationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.providers.support import make_provider_config
 
@@ -258,7 +260,10 @@ def _runtime_with_admin_provider(
         ),
     )
     return ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     ), manager
 
 
@@ -343,7 +348,10 @@ async def test_provider_check_never_returns_unrecognized_credentials(
 async def test_stop_all_maps_messaging_outcome_to_application_count() -> None:
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     workflow = MagicMock()
     workflow.stop_all_tasks = AsyncMock(
@@ -371,7 +379,10 @@ async def test_provider_apply_constructs_before_commit_then_publishes(tmp_path) 
         runtime_factory=factory,
     )
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     prepared = _prepared(_settings("nvidia_nim/new"), tmp_path)
     factory.events.clear()
@@ -415,7 +426,10 @@ async def test_candidate_failure_never_commits_and_preserves_current(tmp_path) -
         runtime_factory=factory,
     )
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     prepared = _prepared(_settings("nvidia_nim/new"), tmp_path)
     factory.fail = True
@@ -447,7 +461,10 @@ async def test_persistence_failure_closes_candidate_and_preserves_current(
         runtime_factory=factory,
     )
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     prepared = _prepared(_settings("nvidia_nim/new"), tmp_path)
 
@@ -482,6 +499,7 @@ async def test_restart_required_apply_commits_without_hot_publication(tmp_path) 
     restart = MagicMock(return_value=None)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=None,
         restart_callback=restart,
@@ -533,7 +551,10 @@ async def test_credential_checks_gate_both_apply_paths(tmp_path, pending, status
         _settings("nvidia_nim/old"), runtime_factory=factory
     )
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     prepared = replace(
         _prepared(_settings("nvidia_nim/new"), tmp_path, pending_fields=pending),
@@ -580,7 +601,10 @@ async def test_credential_checks_gate_both_apply_paths(tmp_path, pending, status
 async def test_cancelled_credential_check_never_commits(tmp_path):
     manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     prepared = replace(
         _prepared(_settings("nvidia_nim/new"), tmp_path), changed_keys=("GROQ_API_KEY",)
@@ -611,6 +635,7 @@ async def test_close_drains_messaging_before_transcriber_and_is_idempotent() -> 
     transcriber = TrackingTranscriber(events)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=transcriber,
     )
@@ -644,6 +669,7 @@ async def test_close_retains_transcriber_ownership_when_close_fails() -> None:
     transcriber = FailingTranscriber(events)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=transcriber,
     )
@@ -669,6 +695,7 @@ async def test_close_retries_runtime_before_closing_later_resources() -> None:
     transcriber = TrackingTranscriber(events)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=transcriber,
     )
@@ -708,6 +735,7 @@ async def test_close_retries_connected_account_without_reclosing_providers() -> 
     account.close = AsyncMock(side_effect=[RuntimeError("auth cleanup failed"), None])
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=None,
         connected_accounts={"openai": account},
@@ -748,6 +776,7 @@ async def test_connected_account_status_reports_cached_model_count() -> None:
     )
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=None,
         connected_accounts={"openai": account},
@@ -766,7 +795,10 @@ async def test_close_retries_workflow_close_before_closing_delivery() -> None:
     events: list[str] = []
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     messaging = TrackingMessagingRuntime(events)
     workflow = MagicMock()
@@ -806,7 +838,10 @@ async def test_close_does_not_drain_workflow_until_ingress_is_quiescent() -> Non
     events: list[str] = []
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     messaging = TrackingMessagingRuntime(events, fail_quiesce_once=True)
     workflow = MagicMock()
@@ -836,7 +871,10 @@ async def test_close_retries_failed_persistence_before_closing_delivery() -> Non
     events: list[str] = []
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     messaging = TrackingMessagingRuntime(events)
     workflow = MagicMock()
@@ -877,7 +915,10 @@ async def test_close_retries_real_workflow_persistence_without_losing_latest_sta
     events: list[str] = []
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     messaging = TrackingMessagingRuntime(events)
     cli_manager = MagicMock()
@@ -963,6 +1004,7 @@ async def test_cancelled_transcriber_close_retains_ownership() -> None:
     transcriber = CancelledTranscriber(events)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=transcriber,
     )
@@ -982,6 +1024,7 @@ async def test_cancelled_application_close_remains_retryable() -> None:
     transcriber = CancellingOnceTranscriber(events)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=transcriber,
     )
@@ -1006,6 +1049,7 @@ async def test_startup_failure_closes_owned_transcriber() -> None:
     transcriber = TrackingTranscriber(events)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=transcriber,
     )
@@ -1030,6 +1074,7 @@ async def test_startup_cancellation_cleans_partial_messaging_and_reraises() -> N
     transcriber = TrackingTranscriber(events)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=transcriber,
     )
@@ -1067,7 +1112,10 @@ async def test_public_start_retries_transient_partial_messaging_cleanup() -> Non
     events: list[str] = []
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     messaging = TrackingMessagingRuntime(events, fail_quiesce_once=True)
     workflow = MagicMock()
@@ -1132,6 +1180,7 @@ async def test_public_start_retains_persistently_unclean_partial_messaging_graph
     transcriber = TrackingTranscriber(events)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=transcriber,
     )
@@ -1204,7 +1253,10 @@ async def test_public_start_retains_persistently_unclean_partial_messaging_graph
 async def test_messaging_start_failure_is_nonfatal_after_complete_cleanup() -> None:
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
 
     with (
@@ -1225,7 +1277,10 @@ async def test_messaging_start_failure_fails_closed_when_cleanup_is_incomplete()
 ):
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
 
     with (
@@ -1247,7 +1302,10 @@ async def test_composition_records_runtime_before_workspace_setup() -> None:
     events: list[str] = []
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     messaging = TrackingMessagingRuntime(events)
     components = MessagingPlatformComponents(
@@ -1278,7 +1336,10 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
     events: list[str] = []
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     messaging = TrackingMessagingRuntime(events)
     notice = MessagingStartupNotice(

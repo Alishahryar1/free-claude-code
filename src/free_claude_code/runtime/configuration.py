@@ -36,6 +36,13 @@ class ConfigurationService:
         )
         return load_value_state(snapshot)
 
+    async def saved_proxy_auth_token(self) -> str:
+        """Read credentials available to a separately launched desktop helper."""
+        snapshot = await to_thread.run_sync(
+            lambda: self._store.read(env={}), limiter=self._worker_limiter
+        )
+        return snapshot.settings.proxy_auth_token
+
     async def prepare(
         self, updates: Mapping[str, ConfigInputValue], active_settings: Settings
     ) -> PreparedAdminUpdate:

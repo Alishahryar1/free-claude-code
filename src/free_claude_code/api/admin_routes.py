@@ -48,6 +48,8 @@ _ADMIN_ASSET_FILENAMES = frozenset(
         "session_layout.css",
         "session_ui.js",
         "model_combobox.js",
+        "integrations.js",
+        "integrations.css",
     }
 )
 LOCAL_PROVIDER_PATHS = {

@@ -30,9 +30,12 @@ from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.asgi import RuntimeASGIApp
+from free_claude_code.runtime.codex_catalog import CodexModelCatalogPublisher
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.folder_picker import NativeFolderPicker
+from free_claude_code.runtime.integrations.service import IntegrationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.integration_support import installed_clients
 
 
 class _ModelListingProvider(BaseProvider):
@@ -119,11 +122,17 @@ def code_control(tmp_path):
 
 
 @pytest.fixture
+def integration_installations(tmp_path):
+    return installed_clients(tmp_path)
+
+
+@pytest.fixture
 def admin_base_url(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     code_control: CodeControl,
+    integration_installations,
 ) -> Iterator[str]:
     """Serve one fully isolated Admin application on an OS-assigned port."""
 
@@ -177,9 +186,11 @@ def admin_base_url(
     manager = ProviderRuntimeManager(
         get_settings(),
         runtime_factory=lambda snapshot: ProviderRuntime(snapshot, dict(providers)),
+        model_catalog_publisher=CodexModelCatalogPublisher(),
     )
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(integration_installations),
         configuration=ConfigurationService(ManagedConfigStore()),
         transcriber=None,
         code_service=code_control.service,

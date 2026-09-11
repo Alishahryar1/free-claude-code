@@ -15,6 +15,8 @@ from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
+from free_claude_code.runtime.integrations.discovery import LocalInstallations
+from free_claude_code.runtime.integrations.service import IntegrationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from free_claude_code.runtime.retired_chat import remove_retired_chat_history
 
@@ -47,7 +49,10 @@ def _runtime():
         runtime_factory=lambda snapshot: ProviderRuntime(snapshot, {}),
     )
     return ApplicationRuntime(
-        manager, configuration=ConfigurationService(store), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=ConfigurationService(store),
+        transcriber=None,
     )
 
 

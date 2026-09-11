@@ -34,6 +34,13 @@ const VIEW_GROUPS = [
     containerId: "messagingSections",
   },
   {
+    id: "integrations",
+    label: "Integrations",
+    title: "Integrations",
+    sections: [],
+    containerId: "integrationsRoot",
+  },
+  {
     id: "code",
     label: "Code sessions",
     title: "Code sessions",
@@ -98,6 +105,7 @@ async function api(path, options = {}) {
 }
 
 async function load() {
+  window.Integrations.initialize(api);
   showMessage("Loading admin config");
   const config = await api("/admin/api/config");
   state.config = config;
@@ -145,7 +153,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   document.querySelector(".app-shell").classList.toggle("session-active", sessionActive);
   document.querySelector(".main").classList.toggle("session-main", sessionActive);
   document.querySelector(".topbar").hidden = sessionActive;
-  document.querySelector(".action-bar").hidden = sessionActive;
+  document.querySelector(".action-bar").hidden = sessionActive || activeView.id === "integrations";
 
   document.querySelectorAll(".nav-link").forEach((link) => {
     const selected = link.dataset.view === activeView.id;
@@ -168,6 +176,8 @@ function setActiveView(viewId, { scroll = false } = {}) {
   }
   if (activeView.id === "code") window.CodeSessions.activate(window.location.pathname);
   else window.CodeSessions.deactivate();
+  if (activeView.id === "integrations") window.Integrations.activate();
+  else window.Integrations.deactivate();
 }
 
 function navigateToView(viewId) {

@@ -14,6 +14,8 @@ from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime, RestartCallback
 from free_claude_code.runtime.configuration import ConfigurationService
+from free_claude_code.runtime.integrations.discovery import LocalInstallations
+from free_claude_code.runtime.integrations.service import IntegrationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 
 
@@ -54,6 +56,7 @@ def create_test_app(
         )
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=ConfigurationService(store),
         transcriber=None,
         restart_callback=restart_callback,

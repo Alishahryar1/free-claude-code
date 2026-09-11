@@ -338,12 +338,34 @@ For terminal use, start `fcc-server`, then run `fcc-claude`, `fcc-codex`,
 `fcc-pi`, `fcc-opencode`, `fcc-cline`, `fcc-hermes`, `fcc-dsh`, `fcc-grok`,
 `fcc-muse`, or `fcc-aider`.
 
-Use the guides below for editor integrations.
+For installed editors and Codex App, open **Admin UI → Integrations**:
+
+1. Choose **Set up** on the client card.
+2. Review the file path and short setup summary, then click **Confirm**.
+3. Reload or restart the client as instructed.
+
+The three cards cover Claude Code in VS Code, Codex App and VS Code together,
+and Claude Code in JetBrains. A separate **Fix Claude Code login prompt** item
+applies the first-run workaround described below. Configured means the settings
+were saved; restart the client to use them.
+
+Setup supports standard local installations on Windows, macOS, and Linux, using
+the same user account as FCC and VS Code's default profile. Install missing
+clients or adapters yourself, then click **Refresh integrations**. Use the
+manual guides below for WSL, remote environments, named profiles, and custom
+installation or configuration paths.
+
+After changing FCC's address or token, finish any required FCC restart, then
+return here and choose **Update** where offered. **Disconnect** restores settings
+saved before setup when those settings have not since been edited. For a
+recognized manual setup, it removes identifiable FCC values; previous settings
+are unknown, so the client may need its normal setup again. Conflicting later
+edits require manual correction before FCC can continue.
 
 <details>
 <summary><strong>Claude Code in VS Code</strong></summary>
 
-Install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code). Open VS Code's user settings as JSON and add:
+Install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code), then use its card in **Integrations**. For manual setup, open VS Code's user settings as JSON and merge:
 
 ```json
 "claudeCode.disableLoginPrompt": true,
@@ -351,6 +373,7 @@ Install the [Claude Code extension](https://marketplace.visualstudio.com/items?i
   { "name": "ANTHROPIC_BASE_URL", "value": "http://localhost:8082" },
   { "name": "ANTHROPIC_AUTH_TOKEN", "value": "freecc" },
   { "name": "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "value": "1" },
+  { "name": "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "value": "" },
   { "name": "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "value": "190000" },
   { "name": "DISABLE_AUTOUPDATER", "value": "1" },
   { "name": "DISABLE_FEEDBACK_COMMAND", "value": "1" },
@@ -358,17 +381,24 @@ Install the [Claude Code extension](https://marketplace.visualstudio.com/items?i
 ]
 ```
 
-Match the port and authentication token to the Admin UI, then reload the extension.
+Match the port and authentication token to the Admin UI. Run **Developer: Reload
+Window**, then start a new Claude session. Conflicting environment settings in
+Claude's user or project configuration may also need manual correction.
 
 </details>
 
 <details>
 <summary><strong>Codex App</strong></summary>
 
-Start FCC, then edit your Codex configuration:
+Start FCC and use **Integrations → Codex App and VS Code**. This shared setup
+also affects normal Codex CLI use. Setup starts with FCC's current default model;
+later model choices remain yours. After changing FCC's token, the existing
+credential helper reads the new token without a settings Update.
+
+For manual setup, edit your Codex configuration:
 
 - Windows: `%USERPROFILE%\.codex\config.toml`
-- macOS: `~/.codex/config.toml`
+- macOS/Linux: `~/.codex/config.toml`
 
 Add the matching model-catalog path and replace `YOUR_USERNAME`.
 
@@ -409,7 +439,7 @@ then select an FCC model from its model picker.
 <details>
 <summary><strong>Codex in VS Code</strong></summary>
 
-Install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt). Create or edit `~/.codex/config.toml` (`%USERPROFILE%\.codex\config.toml` on Windows):
+Install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt), then use the shared Codex card in **Integrations**. For manual setup, create or edit `~/.codex/config.toml` (`%USERPROFILE%\.codex\config.toml` on Windows):
 
 ```toml
 model_provider = "fcc"
@@ -434,33 +464,58 @@ WSL-backed Codex, edit the file inside WSL.
 <details>
 <summary><strong>Claude Code in JetBrains ACP</strong></summary>
 
-Edit the installed Claude ACP configuration:
+Install a JetBrains IDE with ACP support, Node.js 22 or newer, and
+[`@agentclientprotocol/claude-agent-acp`](https://github.com/zed-industries/claude-agent-acp).
+For example, install the adapter with `npm install -g @agentclientprotocol/claude-agent-acp`.
+Then choose **Integrations → Claude Code in JetBrains → Set up**. FCC detects
+standard global npm installations; registry-only or custom cache locations may
+need manual setup.
 
-- Windows: `C:\Users\%USERNAME%\AppData\Roaming\JetBrains\acp-agents\installed.json`
-- Linux/macOS: `~/.jetbrains/acp.json`
-
-Set the environment for `acp.registry.claude-acp`:
+For manual setup, merge a custom agent into `~/.jetbrains/acp.json` on every OS
+(`%USERPROFILE%\.jetbrains\acp.json` on Windows). Replace the command and argument
+below with the absolute paths to your installed Node executable and the adapter's
+entrypoint, as declared in its `package.json`. Use forward slashes or escaped
+backslashes for Windows JSON paths. Preserve existing agents:
 
 ```json
-"env": {
-  "ANTHROPIC_BASE_URL": "http://localhost:8082",
-  "ANTHROPIC_AUTH_TOKEN": "freecc",
-  "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-  "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
-  "DISABLE_AUTOUPDATER": "1",
-  "DISABLE_FEEDBACK_COMMAND": "1",
-  "DISABLE_ERROR_REPORTING": "1"
+{
+  "agent_servers": {
+    "Claude Code (FCC)": {
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/claude-agent-acp/dist/index.js"],
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://localhost:8082",
+        "ANTHROPIC_AUTH_TOKEN": "freecc",
+        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
+        "DISABLE_AUTOUPDATER": "1",
+        "DISABLE_FEEDBACK_COMMAND": "1",
+        "DISABLE_ERROR_REPORTING": "1"
+      }
+    }
+  }
 }
 ```
 
-Match the port and token to the Admin UI, then restart the IDE.
+Match the port and token to the Admin UI, restart the IDE, and select
+**Claude Code (FCC)** in a new chat. Use JetBrains's
+[custom-agent configuration](https://www.jetbrains.com/help/ai-assistant/acp.html);
+do not edit the installation inventory.
 
 </details>
 
 <details>
 <summary><strong>Claude Code still asks you to log in</strong></summary>
 
-If Claude Code asks you to log in after you configure the FCC URL and token, open its state file:
+If Claude Code asks you to log in after you configure the FCC URL and token, open
+**Admin UI → Integrations → Fix Claude Code login prompt → Fix**, review the
+change, and confirm. Restart Claude Code or the IDE afterward. This changes the
+shared first-run state for the current user; it does not sign in to an account,
+and Disconnect does not undo it. If onboarding is already complete, check the
+client's connection settings for another cause.
+
+For the manual fallback, open its state file:
 
 - Windows: `%USERPROFILE%\.claude.json`
 - macOS/Linux/WSL: `~/.claude.json`

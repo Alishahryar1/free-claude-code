@@ -23,6 +23,8 @@ from free_claude_code.runtime.application import (
 from free_claude_code.runtime.asgi import RuntimeASGIApp
 from free_claude_code.runtime.bootstrap import _create_transcriber, build_asgi_app
 from free_claude_code.runtime.configuration import ConfigurationService
+from free_claude_code.runtime.integrations.discovery import LocalInstallations
+from free_claude_code.runtime.integrations.service import IntegrationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.api.support import create_test_app
 
@@ -47,7 +49,10 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner():
     )
     manager = ProviderRuntimeManager(settings)
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     uvicorn_logger = MagicMock()
 
@@ -155,7 +160,10 @@ async def test_runtime_startup_warms_catalog_before_background_refresh():
     settings = _settings(messaging_platform="none")
     manager = ProviderRuntimeManager(settings)
     runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
     )
     events: list[str] = []
 

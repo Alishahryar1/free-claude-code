@@ -17,6 +17,8 @@ from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.asgi import RuntimeASGIApp
 from free_claude_code.runtime.configuration import ConfigurationService
+from free_claude_code.runtime.integrations.discovery import LocalInstallations
+from free_claude_code.runtime.integrations.service import IntegrationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 
 
@@ -42,6 +44,7 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
         monkeypatch.setattr(manager, "_refresh_generation_in_background", AsyncMock())
         runtime = ApplicationRuntime(
             manager,
+            integrations=IntegrationService(LocalInstallations.current()),
             configuration=ConfigurationService(ManagedConfigStore()),
             transcriber=None,
             restart_callback=restart_callback,

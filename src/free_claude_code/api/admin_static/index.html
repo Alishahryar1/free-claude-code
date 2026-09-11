@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/admin.css" />
     <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/code_sessions.css" />
     <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/session_layout.css" />
+    <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/integrations.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -82,6 +83,20 @@
             ></div>
           </section>
 
+          <section id="view-integrations" class="admin-view" data-view="integrations" hidden>
+            <div class="integrations-intro">
+              <div>
+                <p>Connect installed clients to FCC. Review each change before saving, then restart the client.</p>
+                <p id="integrationScope">Standard local installations for this OS and user account; VS Code default profile.</p>
+                <p>Configured means settings are saved. It does not verify a live connection.</p>
+                <p id="integrationServerNotice" role="status"></p>
+              </div>
+              <button id="refreshIntegrations" class="secondary-button" type="button">Refresh integrations</button>
+            </div>
+            <p id="integrationMessage" class="integration-message" role="status" aria-live="polite"></p>
+            <div id="integrationsRoot" class="integration-grid"></div>
+          </section>
+
           <section id="view-code" class="admin-view" data-view="code" hidden>
             <div id="codeRoot" class="code-root session-root" aria-live="off"></div>
           </section>
@@ -102,6 +117,7 @@
     <script src="/admin/assets/__FCC_VERSION__/model_combobox.js"></script>
     <script src="/admin/assets/__FCC_VERSION__/session_ui.js"></script>
     <script src="/admin/assets/__FCC_VERSION__/code_sessions.js"></script>
+    <script src="/admin/assets/__FCC_VERSION__/integrations.js"></script>
     <script src="/admin/assets/__FCC_VERSION__/admin.js"></script>
   </body>
 </html>

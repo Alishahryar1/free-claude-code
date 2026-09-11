@@ -1,0 +1,29 @@
+.integrations-intro { display: flex; align-items: start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.integrations-intro p { margin: 0 0 10px; color: var(--muted); line-height: 1.6; }
+.integrations-intro button { flex-shrink: 0; }
+.integration-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.integration-card { padding: 24px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); min-width: 0; }
+.integration-card[data-integration="claude-login"] { grid-column: 1 / -1; }
+.integration-heading { display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 12px; }
+.integration-heading h3 { margin: 0; font-size: 17px; }
+.integration-status { font-size: 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-full); padding: 4px 9px; white-space: nowrap; color: var(--muted); }
+.integration-status.configured { color: var(--ok); border-color: var(--ok-border); }
+.integration-status.update_available, .integration-status.needs_attention { color: var(--warn); border-color: var(--warn-border); }
+.integration-badges { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; font-size: 12px; color: var(--accent); }
+.integration-card p, .integration-dialog p { font-size: 13px; color: var(--muted); line-height: 1.6; }
+.integration-path { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+.integration-guidance { color: var(--text) !important; }
+.integration-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.integration-actions a { color: var(--muted); font-size: 13px; text-underline-offset: 3px; }
+.integration-message { white-space: pre-wrap; line-height: 1.6; color: var(--ok); margin: 16px 0; }
+.integration-message:empty { display: none; }
+.integration-message.error { color: var(--error); }
+.integration-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 24px; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); overflow: hidden; }
+.integration-dialog[open] { display: flex; flex-direction: column; }
+.integration-dialog-content { overflow-y: auto; min-height: 0; padding-right: 12px; }
+.integration-dialog h3, .integration-dialog .integration-actions { flex: none; }
+.integration-dialog::backdrop { background: rgba(0, 0, 0, 0.72); }
+.integration-dialog h3 { margin-top: 0; }
+.integration-dialog .integration-path { padding: 12px; background: var(--panel-strong); border-radius: var(--radius-sm); }
+@media (max-width: 1200px) { .integration-grid { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .integrations-intro { flex-direction: column; gap: 10px; } .integration-card { padding: 18px; } }

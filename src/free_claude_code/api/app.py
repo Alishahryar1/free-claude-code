@@ -14,6 +14,7 @@ from free_claude_code.application.code_sessions import (
     CodeValidationError,
 )
 from free_claude_code.application.errors import ApplicationError
+from free_claude_code.application.integrations import IntegrationError
 from free_claude_code.core.anthropic import anthropic_error_payload
 from free_claude_code.core.diagnostics import (
     redacted_exception_traceback,
@@ -29,6 +30,7 @@ from free_claude_code.core.version import package_version
 from .admin_cache import AdminNoStoreMiddleware, attach_admin_no_store
 from .admin_routes import router as admin_router
 from .code_sessions_routes import router as code_router
+from .integrations_routes import router as integrations_router
 from .ports import ApiServices
 from .request_errors import ordinary_application_error_response
 from .request_ids import (
@@ -51,7 +53,16 @@ def create_app(services: ApiServices) -> FastAPI:
 
     app.include_router(admin_router)
     app.include_router(code_router)
+    app.include_router(integrations_router)
     app.include_router(router)
+
+    @app.exception_handler(IntegrationError)
+    async def integration_error_handler(request: Request, exc: IntegrationError):
+        response = JSONResponse(
+            status_code=exc.status_code, content={"detail": str(exc)}
+        )
+        attach_admin_no_store(response, path=request.url.path)
+        return response
 
     @app.exception_handler(CodeError)
     async def code_error_handler(request: Request, exc: CodeError):

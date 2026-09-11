@@ -28,6 +28,8 @@ from free_claude_code.providers.openai_codex import (
 )
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.providers.runtime.factory import create_provider
+from free_claude_code.runtime.integrations.discovery import LocalInstallations
+from free_claude_code.runtime.integrations.service import IntegrationService
 
 from .application import ApplicationRuntime, RestartCallback
 from .asgi import RuntimeASGIApp
@@ -79,6 +81,7 @@ def build_asgi_app(
     )
     runtime = ApplicationRuntime(
         provider_manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=ConfigurationService(ManagedConfigStore()),
         code_service=code_service,
         transcriber=_create_transcriber(settings),

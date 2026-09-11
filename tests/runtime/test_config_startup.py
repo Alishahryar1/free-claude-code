@@ -11,6 +11,8 @@ from free_claude_code.config.paths import config_lock_path
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
+from free_claude_code.runtime.integrations.discovery import LocalInstallations
+from free_claude_code.runtime.integrations.service import IntegrationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.runtime.test_application_runtime import _settings
 
@@ -27,7 +29,10 @@ async def test_shutdown_drains_initialization_worker(cancel, fail):
     store = ManagedConfigStore()
     manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
     runtime = ApplicationRuntime(
-        manager, configuration=ConfigurationService(store), transcriber=None
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=ConfigurationService(store),
+        transcriber=None,
     )
     consolidate = loader.consolidate_managed_config
 
@@ -99,6 +104,7 @@ async def test_closed_runtime_cannot_start_another_configuration_writer():
     store = ManagedConfigStore()
     runtime = ApplicationRuntime(
         ProviderRuntimeManager(_settings("nvidia_nim/old")),
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=ConfigurationService(store),
         transcriber=None,
     )

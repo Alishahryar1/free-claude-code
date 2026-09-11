@@ -1,0 +1,288 @@
+"""Source-preserving edits for the small set of supported client files."""
+
+import json
+import tomllib
+from collections.abc import Iterator, MutableMapping
+
+import tomlkit
+import tree_sitter_json
+from tree_sitter import Language, Node, Parser
+
+from free_claude_code.application.integrations import IntegrationError
+
+MISSING = object()
+type PathKey = str | int
+type SettingPath = tuple[PathKey, ...]
+
+
+def _invalid() -> IntegrationError:
+    return IntegrationError(
+        "The configuration file is malformed or has unsupported syntax. Fix it before continuing."
+    )
+
+
+def _constant(_value: str) -> None:
+    raise _invalid()
+
+
+def _tokens(node: Node) -> Iterator[Node]:
+    if node.is_missing:
+        return
+    if node.type in {"comment", "string"} or not node.children:
+        yield node
+    else:
+        for child in node.children:
+            yield from _tokens(child)
+
+
+class JsonDocument:
+    def __init__(self, source: bytes, *, jsonc: bool) -> None:
+        self._bom = b"\xef\xbb\xbf" if source.startswith(b"\xef\xbb\xbf") else b""
+        self._body = source[len(self._bom) :]
+        self._jsonc = jsonc
+        self._parser = Parser(Language(tree_sitter_json.language()))
+        self._parse()
+
+    def _parse(self) -> None:
+        try:
+            self._body.decode("utf-8")
+            original = self._parser.parse(self._body)
+            tokens = list(_tokens(original.root_node))
+            significant = [node for node in tokens if node.type != "comment"]
+            self._commas = [node.start_byte for node in significant if node.type == ","]
+            projection = bytearray(self._body)
+            if self._jsonc:
+                for index, node in enumerate(significant):
+                    if (
+                        node.type == ","
+                        and 0 < index < len(significant) - 1
+                        and significant[index + 1].type in {"}", "]"}
+                        and significant[index - 1].type not in {"{", "[", ":", ","}
+                    ):
+                        projection[node.start_byte : node.end_byte] = b" " * (
+                            node.end_byte - node.start_byte
+                        )
+                for node in tokens:
+                    if node.type == "comment":
+                        for index in range(node.start_byte, node.end_byte):
+                            if projection[index] not in (10, 13):
+                                projection[index] = 32
+            self._projection = bytes(projection)
+            self.data = json.loads(self._projection, parse_constant=_constant)
+            tree = self._parser.parse(self._projection)
+            if not isinstance(self.data, dict) or tree.root_node.has_error:
+                raise _invalid()
+            self._root = tree.root_node.named_children[0]
+        except UnicodeError, ValueError, IndexError:
+            raise _invalid() from None
+
+    def _child(self, parent: Node, key: PathKey) -> Node | None:
+        if isinstance(key, str) and parent.type == "object":
+            matches = []
+            for pair in parent.named_children:
+                key_node = pair.child_by_field_name("key")
+                if (
+                    key_node is not None
+                    and json.loads(
+                        self._projection[key_node.start_byte : key_node.end_byte]
+                    )
+                    == key
+                ):
+                    matches.append(pair.child_by_field_name("value"))
+            if len(matches) > 1:
+                raise IntegrationError(
+                    "A setting being changed has duplicate keys. Remove the duplicate before continuing."
+                )
+            return matches[0] if matches else None
+        if isinstance(key, int) and parent.type == "array" and key >= 0:
+            children = parent.named_children
+            return children[key] if key < len(children) else None
+        raise IntegrationError(
+            "A setting being changed has an incompatible object or array type."
+        )
+
+    def _find(self, path: SettingPath) -> Node | None:
+        node = self._root
+        for key in path:
+            child = self._child(node, key)
+            if child is None:
+                return None
+            node = child
+        return node
+
+    def get(self, path: SettingPath) -> object:
+        node = self._find(path)
+        if node is None:
+            return MISSING
+        return json.loads(self._projection[node.start_byte : node.end_byte])
+
+    def render(self) -> bytes:
+        return self._bom + self._body
+
+    def _edit(self, edits: list[tuple[int, int, bytes]]) -> None:
+        body = self._body
+        grouped: dict[tuple[int, int], bytes] = {}
+        for start, end, replacement in edits:
+            grouped[start, end] = grouped.get((start, end), b"") + replacement
+        for (start, end), replacement in sorted(grouped.items(), reverse=True):
+            body = body[:start] + replacement + body[end:]
+        # Validate before replacing this document, including all untouched bytes.
+        candidate = JsonDocument(self._bom + body, jsonc=self._jsonc)
+        self.__dict__.update(candidate.__dict__)
+
+    def _insert(self, parent: Node, value: bytes) -> None:
+        children = parent.named_children
+        close = parent.end_byte - 1
+        edits = []
+        if children:
+            last = children[-1]
+            if not any(last.end_byte <= comma < close for comma in self._commas):
+                edits.append((last.end_byte, last.end_byte, b","))
+        newline = b"\r\n" if b"\r\n" in self._body else b"\n"
+        line_start = self._body.rfind(b"\n", 0, close) + 1
+        closing_indent = self._body[line_start:close]
+        if line_start > parent.start_byte and not closing_indent.strip():
+            indent = closing_indent + b"  "
+            if children:
+                first = children[0].start_byte
+                first_line = self._body.rfind(b"\n", 0, first) + 1
+                existing = self._body[first_line:first]
+                if not existing.strip():
+                    indent = existing
+            edits.append((line_start, line_start, indent + value + newline))
+        else:
+            edits.append((close, close, (b" " if children else b"") + value))
+        self._edit(edits)
+
+    def set(self, path: SettingPath, value: object) -> None:
+        node = self._root
+        for index, key in enumerate(path):
+            child = self._child(node, key)
+            if child is None:
+                nested = value
+                for tail in reversed(path[index + 1 :]):
+                    if not isinstance(tail, str):
+                        raise IntegrationError(
+                            "A missing array must be created before adding entries."
+                        )
+                    nested = {tail: nested}
+                encoded = json.dumps(
+                    nested, ensure_ascii=False, allow_nan=False
+                ).encode()
+                if isinstance(key, str):
+                    encoded = (
+                        json.dumps(key, ensure_ascii=False).encode() + b": " + encoded
+                    )
+                elif key != len(node.named_children):
+                    raise IntegrationError(
+                        "An array entry no longer exists.", status_code=409
+                    )
+                self._insert(node, encoded)
+                return
+            node = child
+        if self.get(path) == value and type(self.get(path)) is type(value):
+            return
+        self._edit(
+            [
+                (
+                    node.start_byte,
+                    node.end_byte,
+                    json.dumps(value, ensure_ascii=False, allow_nan=False).encode(),
+                )
+            ]
+        )
+
+    def delete(self, path: SettingPath) -> None:
+        node = self._find(path)
+        if node is None:
+            return
+        parent = self._find(path[:-1])
+        assert parent is not None
+        if parent.type == "object":
+            node = node.parent
+            assert node is not None
+        siblings = parent.named_children
+        index = siblings.index(node)
+        after = (
+            siblings[index + 1].start_byte
+            if index + 1 < len(siblings)
+            else parent.end_byte - 1
+        )
+        commas = [comma for comma in self._commas if node.end_byte <= comma < after]
+        if not commas and index > 0:
+            commas = [
+                comma
+                for comma in self._commas
+                if siblings[index - 1].end_byte <= comma < node.start_byte
+            ]
+        edits = [(node.start_byte, node.end_byte, b"")]
+        if commas:
+            edits.append((commas[0], commas[0] + 1, b""))
+        self._edit(edits)
+
+
+class TomlDocument:
+    def __init__(self, source: bytes) -> None:
+        try:
+            self._text = source.decode("utf-8")
+            self.data = tomllib.loads(self._text)
+            self._document = tomlkit.parse(self._text)
+            if tomlkit.dumps(self._document) != self._text:
+                raise IntegrationError(
+                    "This TOML layout cannot be edited without reformatting other settings. Use manual setup."
+                )
+        except UnicodeError, ValueError:
+            raise _invalid() from None
+
+    def render(self) -> bytes:
+        return self._text.encode()
+
+    def get(self, path: SettingPath) -> object:
+        current: object = self.data
+        for key in path:
+            if not isinstance(key, str) or not isinstance(current, dict):
+                raise IntegrationError(
+                    "A setting being changed has an incompatible table type."
+                )
+            if key not in current:
+                return MISSING
+            current = current[key]
+        return current
+
+    def _change(self, path: SettingPath, value: object) -> None:
+        candidate = tomlkit.parse(self._text)
+        current: MutableMapping = candidate
+        for key in path[:-1]:
+            if not isinstance(key, str):
+                raise IntegrationError("Unsupported TOML setting path.")
+            if key not in current:
+                current[key] = tomlkit.table()
+            child = current[key]
+            if not isinstance(child, MutableMapping):
+                raise IntegrationError(
+                    "A setting being changed has an incompatible table type."
+                )
+            current = child
+        key = path[-1]
+        if not isinstance(key, str):
+            raise IntegrationError("Unsupported TOML setting path.")
+        if value is MISSING:
+            current.pop(key, None)
+        else:
+            current[key] = value
+        text = tomlkit.dumps(candidate)
+        try:
+            data = tomllib.loads(text)
+        except ValueError:
+            raise _invalid() from None
+        self._text, self._document, self.data = text, candidate, data
+
+    def set(self, path: SettingPath, value: object) -> None:
+        existing = self.get(path)
+        if existing == value and type(existing) is type(value):
+            return
+        self._change(path, value)
+
+    def delete(self, path: SettingPath) -> None:
+        if self.get(path) is not MISSING:
+            self._change(path, MISSING)

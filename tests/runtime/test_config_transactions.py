@@ -8,6 +8,8 @@ from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
+from free_claude_code.runtime.integrations.discovery import LocalInstallations
+from free_claude_code.runtime.integrations.service import IntegrationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.runtime.test_application_runtime import TrackingFactory, _prepared, _settings
 
@@ -31,6 +33,7 @@ async def test_awaitable_restart_callback_is_not_executed_under_apply_lock(tmp_p
     callback = MagicMock(side_effect=close_on_restart)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=configuration,
         transcriber=None,
         restart_callback=callback,
@@ -82,7 +85,11 @@ async def test_cancelled_commit_settles_before_shutdown(tmp_path, pending, fail)
     configuration.commit.side_effect = commit
     restart = MagicMock(return_value=None)
     runtime = ApplicationRuntime(
-        manager, configuration=configuration, transcriber=None, restart_callback=restart
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=configuration,
+        transcriber=None,
+        restart_callback=restart,
     )
     with patch(
         "free_claude_code.runtime.application.check_credentials",
@@ -129,6 +136,7 @@ async def test_cancellation_at_finalization_handoff_prevents_persistence(
     restart = MagicMock(return_value=None)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=ConfigurationService(store),
         transcriber=None,
         restart_callback=restart,
@@ -186,7 +194,12 @@ async def test_cancellation_waiting_for_replacement_does_not_persist(tmp_path):
     configuration.prepare.return_value = _prepared(
         _settings("nvidia_nim/new"), tmp_path
     )
-    runtime = ApplicationRuntime(manager, configuration=configuration, transcriber=None)
+    runtime = ApplicationRuntime(
+        manager,
+        integrations=IntegrationService(LocalInstallations.current()),
+        configuration=configuration,
+        transcriber=None,
+    )
     with patch(
         "free_claude_code.runtime.application.check_credentials",
         AsyncMock(return_value=()),
@@ -215,6 +228,7 @@ async def test_worker_commit_retains_ownership_against_queued_apply(
     restart = MagicMock(return_value=None)
     runtime = ApplicationRuntime(
         manager,
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=ConfigurationService(store),
         transcriber=None,
         restart_callback=restart,

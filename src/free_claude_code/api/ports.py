@@ -9,6 +9,7 @@ from free_claude_code.application.connected_accounts import (
     ConnectedAccountLoginMode,
     ConnectedAccountStatus,
 )
+from free_claude_code.application.integrations import IntegrationAction, IntegrationId
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.application.ports import RequestRuntimePort, TaskController
 from free_claude_code.config.admin.state import ConfigInputValue, ValueState
@@ -27,6 +28,16 @@ class AdminRuntimePort(Protocol):
     async def admin_values(self) -> ValueState: ...
 
     async def admin_status(self) -> JsonObject: ...
+
+    async def inspect_integrations(self) -> JsonObject: ...
+
+    async def preview_integration(
+        self, item: IntegrationId, action: IntegrationAction
+    ) -> JsonObject: ...
+
+    async def apply_integration(
+        self, item: IntegrationId, action: IntegrationAction, revision: str
+    ) -> JsonObject: ...
 
     async def pick_folder(self, initial_path: str | None) -> str | None: ...
 

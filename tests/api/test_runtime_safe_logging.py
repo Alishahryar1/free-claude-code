@@ -8,6 +8,8 @@ import pytest
 from free_claude_code.config.settings import Settings
 from free_claude_code.runtime.application import ApplicationRuntime, best_effort
 from free_claude_code.runtime.configuration import ConfigurationService
+from free_claude_code.runtime.integrations.discovery import LocalInstallations
+from free_claude_code.runtime.integrations.service import IntegrationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 
 
@@ -23,6 +25,7 @@ async def test_messaging_start_failure_default_logs_exclude_traceback(caplog):
     )
     runtime = ApplicationRuntime(
         ProviderRuntimeManager(settings),
+        integrations=IntegrationService(LocalInstallations.current()),
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=None,
     )

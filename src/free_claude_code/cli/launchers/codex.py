@@ -30,22 +30,29 @@ _STRIPPED_CODEX_ENV_KEYS = frozenset(
 )
 
 
-def codex_config_args(*, api_url: str, model: str | None = None) -> list[str]:
-    """Build native TOML overrides for the FCC Responses provider."""
+def codex_config_values(
+    *, api_url: str, model: str | None = None, auth_command: str = "fcc-codex"
+) -> dict[str, str | list[str]]:
+    """Structured FCC settings shared by launch overrides and editor setup."""
 
     values: dict[str, str | list[str]] = {
         "model_provider": "fcc",
         "model_providers.fcc.name": "Free Claude Code",
         "model_providers.fcc.base_url": proxy_v1_url(api_url),
-        "model_providers.fcc.auth.command": "fcc-codex",
+        "model_providers.fcc.auth.command": auth_command,
         "model_providers.fcc.auth.args": [_PRINT_PROXY_AUTH_TOKEN_FLAG],
         "model_providers.fcc.wire_api": "responses",
     }
     if model:
         values["model"] = model
+    return values
+
+
+def codex_config_args(*, api_url: str, model: str | None = None) -> list[str]:
+    """Build native TOML overrides for the FCC Responses provider."""
     return [
         arg
-        for key, value in values.items()
+        for key, value in codex_config_values(api_url=api_url, model=model).items()
         for arg in ("-c", f"{key}={json.dumps(value)}")
     ]
 

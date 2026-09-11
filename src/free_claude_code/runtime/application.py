@@ -22,6 +22,11 @@ from free_claude_code.application.connected_accounts import (
     ConnectedAccountStatus,
 )
 from free_claude_code.application.errors import ApplicationUnavailableError
+from free_claude_code.application.integrations import (
+    IntegrationAction,
+    IntegrationError,
+    IntegrationId,
+)
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.application.ports import StopResult
 from free_claude_code.config.admin.persistence import (
@@ -31,7 +36,10 @@ from free_claude_code.config.admin.state import ConfigInputValue, ValueState
 from free_claude_code.config.admin.status import provider_config_status
 from free_claude_code.config.loader import clear_settings_cache
 from free_claude_code.config.model_refs import parse_provider_type
-from free_claude_code.config.paths import messaging_state_dir_path
+from free_claude_code.config.paths import (
+    codex_model_catalog_path,
+    messaging_state_dir_path,
+)
 from free_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject
@@ -47,8 +55,11 @@ from free_claude_code.providers.credential_validation import (
     check_credentials,
 )
 
+from .codex_catalog import current_codex_models
 from .configuration import ConfigurationService
 from .folder_picker import NativeFolderPicker
+from .integrations.service import IntegrationService
+from .integrations.targets import Connection
 from .provider_manager import ProviderRuntimeManager
 from .retired_chat import remove_retired_chat_history
 
@@ -141,6 +152,7 @@ class ApplicationRuntime:
         provider_manager: ProviderRuntimeManager,
         *,
         configuration: ConfigurationService,
+        integrations: IntegrationService,
         transcriber: Transcriber | None,
         code_service: CodeService | None = None,
         restart_callback: RestartCallback | None = None,
@@ -148,6 +160,7 @@ class ApplicationRuntime:
     ) -> None:
         self.provider_manager = provider_manager
         self._configuration = configuration
+        self._integrations = integrations
         self._code_service = code_service
         self._folder_picker = NativeFolderPicker()
         self._transcriber = transcriber
@@ -251,6 +264,69 @@ class ApplicationRuntime:
 
     async def pick_folder(self, initial_path: str | None) -> str | None:
         return await self._folder_picker.pick_folder(initial_path)
+
+    async def _integration_connection(self) -> Connection:
+        settings = self.settings
+        return Connection(
+            settings,
+            current_codex_models(self.provider_manager, settings),
+            codex_model_catalog_path(),
+            await self._configuration.saved_proxy_auth_token(),
+        )
+
+    def _require_integration_ready(self, action: IntegrationAction) -> None:
+        if self._draining:
+            raise IntegrationError(
+                "The server is shutting down. Reconnect after restart.", status_code=409
+            )
+        if self._pending_fields and action in {
+            IntegrationAction.SETUP,
+            IntegrationAction.UPDATE,
+        }:
+            raise IntegrationError(
+                "Restart FCC to activate its saved settings before configuring a client.",
+                status_code=409,
+            )
+
+    async def inspect_integrations(self) -> JsonObject:
+        async with self._config_lock:
+            connection = await self._integration_connection()
+            result = await to_thread.run_sync(self._integrations.inspect, connection)
+            result["notice"] = (
+                "Restart FCC to activate saved settings before configuring a client."
+                if self._pending_fields
+                else ""
+            )
+            return result
+
+    async def preview_integration(
+        self, item: IntegrationId, action: IntegrationAction
+    ) -> JsonObject:
+        async with self._config_lock:
+            self._require_integration_ready(action)
+            connection = await self._integration_connection()
+            return await to_thread.run_sync(
+                self._integrations.preview, item, action, connection
+            )
+
+    async def apply_integration(
+        self, item: IntegrationId, action: IntegrationAction, revision: str
+    ) -> JsonObject:
+        async with self._config_lock:
+            self._require_integration_ready(action)
+            connection = await self._integration_connection()
+            self._require_integration_ready(action)
+            return await _await_owned_task(
+                asyncio.create_task(
+                    to_thread.run_sync(
+                        self._integrations.apply,
+                        item,
+                        action,
+                        revision,
+                        connection,
+                    )
+                )
+            )
 
     async def apply_admin_config(
         self,
