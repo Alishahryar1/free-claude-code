@@ -41,37 +41,6 @@ def test_add_nested_property_to_empty_or_comment_only_object(source):
     assert source.strip(b"{} \n") in document.render()
 
 
-@pytest.mark.parametrize("index", [0, 1, 2])
-@pytest.mark.parametrize("trailing", ["", ","])
-def test_array_removal_keeps_other_entries_and_comments(index, trailing):
-    source = (
-        '{"env": [ {"name":"A","value":"a"}, /* keep */ '
-        '{"name":"B","value":"b"}, {"name":"C","value":"c"}' + trailing + " ]}"
-    ).encode()
-    document = JsonDocument(source, jsonc=True)
-    document.delete(("env", index))
-    expected = [{"name": name, "value": name.lower()} for name in "ABC"]
-    expected.pop(index)
-    assert document.get(("env",)) == expected
-    assert b"/* keep */" in document.render()
-    for entry in expected:
-        assert (
-            f'{{"name":"{entry["name"]}","value":"{entry["value"]}"}}'.encode()
-            in document.render()
-        )
-
-
-@pytest.mark.parametrize(
-    "source", [b'{"owned":true}', b'{"owned":true,}', b'{"owned":true, // keep\n}']
-)
-def test_delete_only_property_leaves_valid_object(source):
-    document = JsonDocument(source, jsonc=True)
-    document.delete(("owned",))
-    assert document.data == {}
-    if b"// keep" in source:
-        assert b"// keep" in document.render()
-
-
 def test_array_append_and_nested_value_edit_preserve_other_values():
     document = JsonDocument(
         '{"env":[{"name":"KEEP", "value":"é"},]}'.encode(), jsonc=True
@@ -125,11 +94,10 @@ def test_unrelated_duplicate_keys_are_preserved_but_owned_parent_is_ambiguous():
         document.set(("env", "key"), "value")
 
 
-def test_noop_json_edit_is_byte_identical_and_missing_delete_is_safe():
+def test_noop_json_edit_is_byte_identical():
     source = b'{ "owned": true, "keep": "slash\\/value" }'
     document = JsonDocument(source, jsonc=True)
     document.set(("owned",), True)
-    document.delete(("absent",))
     assert document.get(("absent",)) is MISSING
     assert document.render() == source
 

@@ -5,16 +5,10 @@ import threading
 import httpx
 import pytest
 
-from free_claude_code.application.integrations import IntegrationAction as Action
 from free_claude_code.application.integrations import IntegrationError
 from free_claude_code.application.integrations import IntegrationId as Item
 from free_claude_code.runtime.integrations.discovery import LocalInstallations
 from free_claude_code.runtime.integrations.service import IntegrationService
-from free_claude_code.runtime.integrations.storage import (
-    PendingWrite,
-    content_hash,
-    write_record,
-)
 from tests.api.support import create_test_app, runtime_for_app
 from tests.integration_support import connection, installed_clients
 
@@ -38,12 +32,12 @@ async def test_inspect_preview_apply_and_conflict_are_local_no_store(integration
         assert "no-store" in response.headers["cache-control"]
         assert len(response.json()["items"]) == 4
         preview = await client.post(
-            "/admin/api/integrations/claude-vscode/preview", json={"action": "setup"}
+            "/admin/api/integrations/claude-vscode/preview", json={}
         )
         assert preview.status_code == 200
         assert "fixture-proxy-token" not in preview.text
         assert not locator.vscode_settings.exists()
-        payload = {"action": "setup", "revision": preview.json()["revision"]}
+        payload = {"revision": preview.json()["revision"]}
         applied = await client.post(
             "/admin/api/integrations/claude-vscode/apply", json=payload
         )
@@ -81,8 +75,8 @@ async def test_integration_endpoints_enforce_loopback(
     ) as client:
         for method, path, payload in [
             ("GET", "", None),
-            ("POST", "/claude-login/preview", {"action": "repair"}),
-            ("POST", "/claude-login/apply", {"action": "repair", "revision": "a" * 64}),
+            ("POST", "/claude-login/preview", {}),
+            ("POST", "/claude-login/apply", {"revision": "a" * 64}),
         ]:
             response = await client.request(
                 method, "/admin/api/integrations" + path, json=payload
@@ -96,10 +90,12 @@ async def test_integration_endpoints_enforce_loopback(
 @pytest.mark.parametrize(
     "item,payload,status",
     [
-        ("anything", {"action": "setup"}, 422),
+        ("anything", {}, 422),
+        ("codex", {"action": "disconnect"}, 422),
+        ("codex", {"action": "recover"}, 422),
         ("codex", {"action": "execute"}, 422),
-        ("claude-login", {"action": "setup"}, 400),
-        ("codex", {"action": "repair"}, 400),
+        ("claude-login", {"action": "setup"}, 422),
+        ("codex", {"action": "repair"}, 422),
         ("claude-login", {"action": "repair", "path": "arbitrary.json"}, 422),
     ],
 )
@@ -117,6 +113,31 @@ async def test_fixed_items_actions_and_payloads(integration_app, item, payload, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra",
+    [{"action": "disconnect"}, {"action": "recover"}, {"path": "arbitrary.json"}],
+)
+async def test_apply_rejects_retired_actions_even_with_a_valid_revision(
+    integration_app, extra
+):
+    app, locator = integration_app
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+    ) as client:
+        preview = await client.post(
+            "/admin/api/integrations/claude-login/preview", json={}
+        )
+        assert preview.status_code == 200
+        response = await client.post(
+            "/admin/api/integrations/claude-login/apply",
+            json={"revision": preview.json()["revision"], **extra},
+        )
+        assert response.status_code == 422
+        assert "no-store" in response.headers["cache-control"]
+    assert not (locator.home / ".claude.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_pending_settings_block_connection_setup_but_allow_onboarding_repair(
     integration_app,
 ):
@@ -124,12 +145,12 @@ async def test_pending_settings_block_connection_setup_but_allow_onboarding_repa
     runtime = runtime_for_app(app)
     runtime._pending_fields = ["PORT"]
     with pytest.raises(IntegrationError, match="Restart"):
-        await runtime.preview_integration(Item.CLAUDE_VSCODE, Action.SETUP)
-    preview = await runtime.preview_integration(Item.CLAUDE_LOGIN, Action.REPAIR)
-    assert preview["changes"]
+        await runtime.preview_integration(Item.CLAUDE_VSCODE)
+    preview = await runtime.preview_integration(Item.CLAUDE_LOGIN)
+    assert preview["writes_file"]
     runtime.begin_shutdown()
     with pytest.raises(IntegrationError, match="shutting down"):
-        await runtime.preview_integration(Item.CLAUDE_LOGIN, Action.REPAIR)
+        await runtime.preview_integration(Item.CLAUDE_LOGIN)
 
 
 @pytest.mark.asyncio
@@ -138,7 +159,7 @@ async def test_cancelled_integration_write_settles_under_configuration_lock(
 ):
     app, locator = integration_app
     runtime = runtime_for_app(app)
-    preview = await runtime.preview_integration(Item.CLAUDE_LOGIN, Action.REPAIR)
+    preview = await runtime.preview_integration(Item.CLAUDE_LOGIN)
     entered, release = threading.Event(), threading.Event()
     actual = IntegrationService.apply
 
@@ -150,9 +171,7 @@ async def test_cancelled_integration_write_settles_under_configuration_lock(
     monkeypatch.setattr(IntegrationService, "apply", wait_then_apply)
     revision = preview["revision"]
     assert isinstance(revision, str)
-    task = asyncio.create_task(
-        runtime.apply_integration(Item.CLAUDE_LOGIN, Action.REPAIR, revision)
-    )
+    task = asyncio.create_task(runtime.apply_integration(Item.CLAUDE_LOGIN, revision))
     try:
         assert await asyncio.to_thread(entered.wait, 3)
         task.cancel()
@@ -170,51 +189,3 @@ async def test_cancelled_integration_write_settles_under_configuration_lock(
         is True
     )
     assert not runtime._config_lock.locked()
-
-
-@pytest.mark.asyncio
-async def test_recovery_does_not_require_current_connection_credentials(
-    integration_app, monkeypatch
-):
-    app, locator = integration_app
-    path = locator.home / ".claude.json"
-    path.write_bytes(b'{"hasCompletedOnboarding":true}')
-    write_record(
-        locator.home / ".fcc/integrations/claude-login.json",
-        PendingWrite(
-            item=Item.CLAUDE_LOGIN,
-            action=Action.REPAIR,
-            path=str(path),
-            before=content_hash(None),
-            after=content_hash(path.read_bytes()),
-            previous=None,
-            following=None,
-        ),
-    )
-    runtime = runtime_for_app(app)
-    runtime._pending_fields = ["PORT"]
-
-    async def unreadable_credentials(_self):
-        raise OSError("unavailable current credential file")
-
-    monkeypatch.setattr(
-        type(runtime._configuration), "saved_proxy_auth_token", unreadable_credentials
-    )
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://localhost"
-    ) as client:
-        response = await client.post(
-            "/admin/api/integrations/claude-login/preview", json={"action": "recover"}
-        )
-        assert response.status_code == 200
-        preview = response.json()
-        assert preview["writes_file"] is False
-        before = path.read_bytes()
-        response = await client.post(
-            "/admin/api/integrations/claude-login/apply",
-            json={"action": "recover", "revision": preview["revision"]},
-        )
-        assert response.status_code == 200
-        assert response.json()["applied"] is True
-        assert path.read_bytes() == before
-        assert not (locator.home / ".fcc/integrations/claude-login.json").exists()

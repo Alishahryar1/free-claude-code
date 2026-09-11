@@ -8,13 +8,15 @@
 .integration-heading h3 { margin: 0; font-size: 17px; }
 .integration-status { font-size: 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-full); padding: 4px 9px; white-space: nowrap; color: var(--muted); }
 .integration-status.configured { color: var(--ok); border-color: var(--ok-border); }
-.integration-status.update_available, .integration-status.needs_attention { color: var(--warn); border-color: var(--warn-border); }
+.integration-status.needs_attention { color: var(--warn); border-color: var(--warn-border); }
 .integration-badges { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; font-size: 12px; color: var(--accent); }
 .integration-card p, .integration-dialog p { font-size: 13px; color: var(--muted); line-height: 1.6; }
 .integration-path { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 .integration-guidance { color: var(--text) !important; }
 .integration-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
 .integration-actions a { color: var(--muted); font-size: 13px; text-underline-offset: 3px; }
+.integration-disconnect { margin-top: 20px; border-top: 1px solid var(--line-strong); padding-top: 16px; overflow-wrap: anywhere; }
+.integration-disconnect summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .integration-message { white-space: pre-wrap; line-height: 1.6; color: var(--ok); margin: 16px 0; }
 .integration-message:empty { display: none; }
 .integration-message.error { color: var(--error); }

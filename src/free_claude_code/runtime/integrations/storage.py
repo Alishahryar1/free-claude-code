@@ -1,4 +1,4 @@
-"""Atomic client writes and minimal, private undo records."""
+"""Snapshots and atomic client configuration writes."""
 
 import hashlib
 import os
@@ -6,17 +6,8 @@ import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, JsonValue
-
-from free_claude_code.application.integrations import (
-    IntegrationAction,
-    IntegrationError,
-    IntegrationId,
-)
-
-from .documents import MISSING
+from free_claude_code.application.integrations import IntegrationError
 
 
 def content_hash(data: bytes | None) -> str:
@@ -26,6 +17,10 @@ def content_hash(data: bytes | None) -> str:
 
 
 def check_path(path: Path) -> None:
+    if not path.is_absolute():
+        raise IntegrationError(
+            "Configuration paths must be absolute. Use manual setup."
+        )
     for part in (path, *path.parents):
         if part.is_symlink() or part.is_junction():
             raise IntegrationError(
@@ -85,52 +80,6 @@ class FileSnapshot:
             )
 
 
-class SavedValue(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    present: bool
-    value: JsonValue = None
-
-    @classmethod
-    def capture(cls, value: object) -> SavedValue:
-        return cls.model_validate(
-            {
-                "present": value is not MISSING,
-                "value": None if value is MISSING else value,
-            }
-        )
-
-    def unpack(self) -> object:
-        return self.value if self.present else MISSING
-
-
-class FieldHistory(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    prior: SavedValue | None
-    last: SavedValue
-
-
-class Ownership(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    version: Literal[1] = 1
-    item: IntegrationId
-    path: str
-    fields: dict[str, FieldHistory]
-    created_containers: list[list[str]] = []
-
-
-class PendingWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    version: Literal[1] = 1
-    phase: Literal["pending"] = "pending"
-    item: IntegrationId
-    action: IntegrationAction
-    path: str
-    before: str
-    after: str
-    previous: Ownership | None
-    following: Ownership | None
-
-
 def atomic_write(
     path: Path, data: bytes, *, mode: int = 0o600, expected: FileSnapshot | None = None
 ) -> None:
@@ -152,10 +101,3 @@ def atomic_write(
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
-
-
-def write_record(path: Path, record: Ownership | PendingWrite | None) -> None:
-    if record is None:
-        path.unlink(missing_ok=True)
-    else:
-        atomic_write(path, record.model_dump_json().encode())

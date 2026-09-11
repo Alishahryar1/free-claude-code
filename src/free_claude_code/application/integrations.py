@@ -10,24 +10,9 @@ class IntegrationId(StrEnum):
     CLAUDE_LOGIN = "claude-login"
 
 
-class IntegrationAction(StrEnum):
-    SETUP = "setup"
-    UPDATE = "update"
-    DISCONNECT = "disconnect"
-    REPAIR = "repair"
-    RECOVER = "recover"
-
-
 class IntegrationError(Exception):
     """A safe, user-facing configuration error, without source-file contents."""
 
     def __init__(self, message: str, *, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
-
-
-def validate_action(target: IntegrationId, action: IntegrationAction) -> None:
-    if action == IntegrationAction.RECOVER:
-        return
-    if (target == IntegrationId.CLAUDE_LOGIN) != (action == IntegrationAction.REPAIR):
-        raise IntegrationError("This action is not available for this item.")

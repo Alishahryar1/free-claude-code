@@ -89,9 +89,7 @@ def _expected_data(data: dict, path: SettingPath, value: object) -> dict:
     elif (
         isinstance(current, list) and isinstance(key, int) and 0 <= key <= len(current)
     ):
-        if value is MISSING and key < len(current):
-            current.pop(key)
-        elif value is not MISSING:
+        if value is not MISSING:
             if key == len(current):
                 current.append(_validation_value(value))
             else:
@@ -280,34 +278,6 @@ class JsonDocument:
             ],
             expected,
         )
-
-    def delete(self, path: SettingPath) -> None:
-        node = self._find(path)
-        if node is None:
-            return
-        parent = self._find(path[:-1])
-        assert parent is not None
-        if parent.type == "object":
-            node = node.parent
-            assert node is not None
-        siblings = parent.named_children
-        index = siblings.index(node)
-        after = (
-            siblings[index + 1].start_byte
-            if index + 1 < len(siblings)
-            else parent.end_byte - 1
-        )
-        commas = [comma for comma in self._commas if node.end_byte <= comma < after]
-        if not commas and index > 0:
-            commas = [
-                comma
-                for comma in self._commas
-                if siblings[index - 1].end_byte <= comma < node.start_byte
-            ]
-        edits = [(node.start_byte, node.end_byte, b"")]
-        if commas:
-            edits.append((commas[0], commas[0] + 1, b""))
-        self._edit(edits, _expected_data(self._semantic, path, MISSING))
 
 
 class TomlDocument:

@@ -77,19 +77,6 @@ class Target:
             jsonc=self.id == IntegrationId.CLAUDE_VSCODE,
         )
 
-    def containers(self) -> tuple[tuple[str, ...], ...]:
-        if self.id == IntegrationId.CODEX:
-            return (
-                ("model_providers",),
-                ("model_providers", "fcc"),
-                ("model_providers", "fcc", "auth"),
-            )
-        if self.id == IntegrationId.CLAUDE_VSCODE:
-            return ((ENV_SETTING,),)
-        if self.id == IntegrationId.CLAUDE_JETBRAINS:
-            return (("agent_servers",), AGENT_PATH, (*AGENT_PATH, "env"))
-        return ()
-
     def _env_index(self, document: Document, name: str) -> int | None:
         entries = document.get((ENV_SETTING,))
         if entries is MISSING:
@@ -136,8 +123,6 @@ class Target:
             name = key[4:]
             index = self._env_index(document, name)
             if index is None:
-                if value is MISSING:
-                    return
                 if document.get((ENV_SETTING,)) is MISSING:
                     document.set((ENV_SETTING,), [])
                 entries = document.get((ENV_SETTING,))
@@ -145,19 +130,17 @@ class Target:
                 document.set(
                     (ENV_SETTING, len(entries)), {"name": name, "value": value}
                 )
-            elif value is MISSING:
-                document.delete((ENV_SETTING, index))
             else:
                 document.set((ENV_SETTING, index, "value"), value)
             return
         if value is MISSING:
+            assert isinstance(document, TomlDocument)
             document.delete(self.path_for(key))
         else:
             document.set(self.path_for(key), value)
 
     def values(self, document: Document) -> dict[str, object]:
         values = {key: self.read(document, key) for key in self.recipe}
-        self.validate_values(values)
         return values
 
     def validate_values(self, values: dict[str, object]) -> None:
@@ -180,42 +163,6 @@ class Target:
                 raise IntegrationError(
                     f"The setting {key} has an unsupported value type."
                 )
-
-    def recognized(self, values: dict[str, object], connection: Connection) -> bool:
-        if self.id == IntegrationId.CODEX:
-            command = values.get("model_providers.fcc.auth.command")
-            helper = (
-                isinstance(command, str)
-                and Path(command).name in {"fcc-codex", "fcc-codex.exe"}
-                and values.get("model_providers.fcc.auth.args")
-                == ["--print-proxy-auth-token"]
-            )
-            return values.get("model_provider") == "fcc" and (
-                values.get("model_providers.fcc.name") == "Free Claude Code" or helper
-            )
-        if self.id == IntegrationId.CLAUDE_LOGIN:
-            return values.get("hasCompletedOnboarding") is True
-        return (
-            same_url(values.get("env.ANTHROPIC_BASE_URL"), connection.url)
-            and values.get("env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") == "1"
-        )
-
-    def manual_owned(self, key: str, value: object, connection: Connection) -> bool:
-        if value is MISSING:
-            return False
-        if self.id == IntegrationId.CODEX:
-            if key == "model":
-                return value in {model.wire_slug for model in connection.models}
-            if key == "model_catalog_json":
-                return isinstance(value, str) and Path(value) == connection.catalog_path
-            return key.startswith("model_providers.fcc.") or (
-                key == "model_provider" and value == "fcc"
-            )
-        if key == "env.ANTHROPIC_AUTH_TOKEN":
-            return True
-        if key == "env.ANTHROPIC_BASE_URL":
-            return same_url(value, connection.url)
-        return value == self.recipe[key]
 
 
 def make_targets(

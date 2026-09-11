@@ -1,9 +1,19 @@
+import json
+import os
 import plistlib
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from free_claude_code.runtime.integrations.discovery import LocalInstallations
-from tests.integration_support import executable, installed_clients, write_json
+from free_claude_code.runtime.integrations.service import IntegrationService
+from tests.integration_support import (
+    connection,
+    executable,
+    installed_clients,
+    write_json,
+)
 
 
 def test_discovery_reads_installed_metadata_without_running_clients(
@@ -58,6 +68,72 @@ def test_standard_settings_paths(tmp_path, platform, suffix):
         (tmp_path / "apps",),
     )
     assert locator.vscode_settings == tmp_path / suffix
+
+
+@pytest.mark.parametrize(
+    "override", [None, "", "relative-data", r"C:relative-data", r"\relative-data"]
+)
+def test_invalid_appdata_uses_absolute_user_roaming_target(tmp_path, override):
+    locator = replace(installed_clients(tmp_path), platform="win32")
+    if override is not None:
+        locator.environ["APPDATA"] = override
+    assert (
+        locator.vscode_settings == tmp_path / "AppData/Roaming/Code/User/settings.json"
+    )
+
+
+def test_absolute_appdata_preserves_relocated_profile(tmp_path):
+    locator = replace(installed_clients(tmp_path), platform="win32")
+    locator.environ["APPDATA"] = str(tmp_path / "relocated")
+    assert locator.vscode_settings == tmp_path / "relocated/Code/User/settings.json"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows path classification")
+def test_absolute_unc_appdata_is_not_rebased_to_local_home(tmp_path):
+    locator = replace(installed_clients(tmp_path), platform="win32")
+    locator.environ["APPDATA"] = r"\\server\profile\Roaming"
+    assert locator.vscode_settings == Path(
+        r"\\server\profile\Roaming\Code\User\settings.json"
+    )
+
+
+def test_windows_acp_uses_same_roaming_fallback(tmp_path, monkeypatch):
+    locator = replace(installed_clients(tmp_path), platform="win32")
+    locator.environ["APPDATA"] = ""
+    old = (
+        tmp_path / "lib/node_modules/@agentclientprotocol/claude-agent-acp/package.json"
+    )
+    metadata = json.loads(old.read_bytes())
+    old.unlink()
+    package = (
+        tmp_path
+        / "AppData/Roaming/npm/node_modules/@agentclientprotocol/claude-agent-acp"
+    )
+    write_json(package / "package.json", metadata)
+    entry = executable(package / "dist/index.js")
+    monkeypatch.setattr(
+        "free_claude_code.runtime.integrations.discovery.windows_codex_locations",
+        lambda: (),
+    )
+    assert locator.scan().acp.command == (str(tmp_path / "bin/node"), str(entry))
+
+
+@pytest.mark.parametrize("metadata", [[], ["unrelated app"], "unsupported root"])
+def test_unsupported_macos_metadata_does_not_hide_other_client_actions(
+    tmp_path, metadata
+):
+    locator = replace(installed_clients(tmp_path), platform="darwin")
+    contents = tmp_path / "apps/Unrelated.app/Contents"
+    contents.mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps(metadata))
+    items = IntegrationService(locator).inspect(connection(tmp_path))["items"]
+    assert isinstance(items, list)
+    repair = next(
+        item
+        for item in items
+        if isinstance(item, dict) and item["id"] == "claude-login"
+    )
+    assert repair["can_apply"] is True
 
 
 def test_macos_app_uses_bundle_identity_and_declared_executable(tmp_path):

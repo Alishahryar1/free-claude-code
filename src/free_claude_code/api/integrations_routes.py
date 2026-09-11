@@ -4,9 +4,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
 from free_claude_code.application.integrations import (
-    IntegrationAction,
     IntegrationId,
-    validate_action,
 )
 
 from .admin_security import require_loopback_admin
@@ -20,7 +18,6 @@ router = APIRouter(
 
 class PreviewPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: IntegrationAction
 
 
 class ApplyPayload(PreviewPayload):
@@ -38,8 +35,7 @@ async def preview_integration(
     payload: PreviewPayload,
     services: ApiServices = Depends(get_services),
 ):
-    validate_action(item, payload.action)
-    return await services.admin.preview_integration(item, payload.action)
+    return await services.admin.preview_integration(item)
 
 
 @router.post("/{item}/apply")
@@ -48,7 +44,4 @@ async def apply_integration(
     payload: ApplyPayload,
     services: ApiServices = Depends(get_services),
 ):
-    validate_action(item, payload.action)
-    return await services.admin.apply_integration(
-        item, payload.action, payload.revision
-    )
+    return await services.admin.apply_integration(item, payload.revision)

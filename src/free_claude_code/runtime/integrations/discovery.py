@@ -112,9 +112,18 @@ class LocalInstallations:
         return cls(home, sys.platform, env, Path(sys.executable).parent, tuple(roots))
 
     @property
+    def appdata(self) -> Path:
+        override = self.environ.get("APPDATA", "")
+        return (
+            Path(override)
+            if override and Path(override).is_absolute()
+            else self.home / "AppData/Roaming"
+        )
+
+    @property
     def vscode_settings(self) -> Path:
         if self.platform == "win32":
-            root = Path(self.environ.get("APPDATA", str(self.home / "AppData/Roaming")))
+            root = self.appdata
         elif self.platform == "darwin":
             root = self.home / "Library/Application Support"
         else:
@@ -234,6 +243,8 @@ class LocalInstallations:
                         metadata = plistlib.loads(
                             (bundle / "Contents/Info.plist").read_bytes()
                         )
+                        if not isinstance(metadata, dict):
+                            continue
                         executable = metadata.get("CFBundleExecutable")
                         if metadata.get(
                             "CFBundleIdentifier"
@@ -397,10 +408,7 @@ class LocalInstallations:
             return AcpInstallation(issue=missing)
         roots = [node.parent.parent / "lib/node_modules"]
         if self.platform == "win32":
-            roots.append(
-                Path(self.environ.get("APPDATA", str(self.home / "AppData/Roaming")))
-                / "npm/node_modules"
-            )
+            roots.append(self.appdata / "npm/node_modules")
         adapter = self.command("claude-agent-acp")
         candidates = [root / "@agentclientprotocol/claude-agent-acp" for root in roots]
         if adapter is not None:

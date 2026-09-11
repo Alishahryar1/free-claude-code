@@ -6,10 +6,7 @@ import tomllib
 import pytest
 from playwright.sync_api import expect
 
-from free_claude_code.application.integrations import IntegrationAction as Action
-from free_claude_code.application.integrations import IntegrationError
 from free_claude_code.application.integrations import IntegrationId as Item
-from free_claude_code.runtime.integrations import service as service_module
 from free_claude_code.runtime.integrations.service import IntegrationService
 from tests.integration_support import connection, write_json
 
@@ -51,21 +48,19 @@ def test_four_items_preserve_unsaved_admin_fields(page, admin_base_url):
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
 
 
-def test_setup_cancel_confirm_disconnect(
-    page, admin_base_url, integration_installations
-):
+def test_apply_cancel_confirm_reapply(page, admin_base_url, integration_installations):
     locator = integration_installations
     original = {"editor.fontSize": 16, "claudeCode.disableLoginPrompt": False}
     write_json(locator.vscode_settings, original)
     open_integrations(page, admin_base_url)
     card = item_card(page, "claude-vscode")
-    setup = card.get_by_role("button", name="Set up", exact=True)
+    setup = card.get_by_role("button", name="Apply FCC settings", exact=True)
     setup.click()
     dialog = page.get_by_role("dialog")
     expect(dialog).to_contain_text(str(locator.vscode_settings))
     expect(dialog).not_to_contain_text("e2e-proxy-token")
     expect(dialog).not_to_contain_text("ANTHROPIC_BASE_URL")
-    expect(dialog).to_contain_text("Disconnect")
+    expect(dialog).to_contain_text("Manual disconnect instructions are on the card")
     expect(dialog).to_contain_text("Save and close VS Code")
     expect(dialog.get_by_role("heading")).to_be_in_viewport()
     expect(dialog.get_by_role("button", name="Confirm", exact=True)).to_be_in_viewport()
@@ -74,34 +69,39 @@ def test_setup_cancel_confirm_disconnect(
     expect(dialog).to_have_count(0)
     expect(setup).to_be_focused()
     assert json.loads(locator.vscode_settings.read_bytes()) == original
-    confirm(page, card, "Set up")
+    confirm(page, card, "Apply FCC settings")
     expect(card).to_contain_text("Configured")
     expect(page.locator("#integrationMessage")).to_contain_text("Reload Window")
-    confirm(page, card, "Disconnect")
-    assert json.loads(locator.vscode_settings.read_bytes()) == original
+    before = locator.vscode_settings.read_bytes()
+    confirm(page, card, "Apply FCC settings")
+    expect(page.locator("#integrationMessage")).to_contain_text(
+        "No client settings changed"
+    )
+    assert locator.vscode_settings.read_bytes() == before
 
 
-def test_explicit_update_of_saved_connection_from_previous_server_settings(
+def test_explicit_reapply_of_connection_from_previous_server_settings(
     page, admin_base_url, integration_installations
 ):
     locator = integration_installations
     service = IntegrationService(locator)
-    # Model the client file and undo record left by an earlier FCC server.
+    # Model a client file left by an earlier FCC server.
     old = connection(locator.home, port=8182, token="previous-fcc-token")
-    preview = service.preview(Item.CLAUDE_VSCODE, Action.SETUP, old)
+    preview = service.preview(Item.CLAUDE_VSCODE, old)
     revision = preview["revision"]
     assert isinstance(revision, str)
-    service.apply(Item.CLAUDE_VSCODE, Action.SETUP, revision, old)
+    service.apply(Item.CLAUDE_VSCODE, revision, old)
     before = locator.vscode_settings.read_bytes()
     open_integrations(page, admin_base_url)
     card = item_card(page, "claude-vscode")
-    expect(card.get_by_role("button", name="Update", exact=True)).to_be_visible()
+    expect(
+        card.get_by_role("button", name="Apply FCC settings", exact=True)
+    ).to_be_visible()
     assert locator.vscode_settings.read_bytes() == before
-    confirm(page, card, "Update")
+    confirm(page, card, "Apply FCC settings")
     assert "8182" not in locator.vscode_settings.read_text()
     assert "e2e-proxy-token" in locator.vscode_settings.read_text()
-    confirm(page, card, "Disconnect")
-    assert json.loads(locator.vscode_settings.read_bytes()) == {}
+    expect(card.get_by_role("button", name="Disconnect", exact=True)).to_have_count(0)
 
 
 @pytest.mark.parametrize(
@@ -112,20 +112,19 @@ def test_shared_codex_config_and_restart_instructions(
 ):
     open_integrations(page, admin_base_url)
     card = item_card(page, "codex")
-    confirm(page, card, "Set up")
+    confirm(page, card, "Apply FCC settings")
     expect(page.locator("#integrationMessage")).to_contain_text("normal Codex CLI")
     path = integration_installations.home / ".codex/config.toml"
     assert tomllib.loads(path.read_text())["model_provider"] == "fcc"
-    confirm(page, card, "Disconnect")
-    assert "model_provider" not in tomllib.loads(path.read_text())
+    expect(card.locator("summary")).to_have_text("How to disconnect")
 
 
-def test_stale_preview_and_later_edits_are_refused(
+def test_stale_preview_is_refused_and_fresh_apply_replaces_fcc_edits(
     page, admin_base_url, integration_installations
 ):
     open_integrations(page, admin_base_url)
     card = item_card(page, "claude-vscode")
-    card.get_by_role("button", name="Set up", exact=True).click()
+    card.get_by_role("button", name="Apply FCC settings", exact=True).click()
     expect(page.get_by_role("dialog")).to_be_visible()
     write_json(integration_installations.vscode_settings, {"editor.fontSize": 18})
     page.get_by_role("dialog").get_by_role("button", name="Confirm", exact=True).click()
@@ -135,14 +134,17 @@ def test_stale_preview_and_later_edits_are_refused(
     assert json.loads(integration_installations.vscode_settings.read_bytes()) == {
         "editor.fontSize": 18
     }
-    confirm(page, card, "Set up")
+    confirm(page, card, "Apply FCC settings")
     data = json.loads(integration_installations.vscode_settings.read_bytes())
     data["claudeCode.environmentVariables"][0]["value"] = "https://user.example"
     write_json(integration_installations.vscode_settings, data)
-    card.get_by_role("button", name="Disconnect", exact=True).click()
-    expect(page.locator("#integrationMessage")).to_contain_text("edited after FCC")
-    expect(page.get_by_role("dialog")).to_have_count(0)
-    assert json.loads(integration_installations.vscode_settings.read_bytes()) == data
+    confirm(page, card, "Apply FCC settings")
+    saved = json.loads(integration_installations.vscode_settings.read_bytes())
+    assert saved["editor.fontSize"] == 18
+    assert (
+        "https://user.example"
+        not in integration_installations.vscode_settings.read_text()
+    )
 
 
 @pytest.mark.parametrize(
@@ -158,7 +160,8 @@ def test_separate_login_repair(
     card = item_card(page, "claude-login")
     confirm(page, card, "Fix")
     expect(card).to_contain_text("Onboarding already completed")
-    expect(card.get_by_role("button", name="Fix", exact=True)).to_have_count(0)
+    expect(card.get_by_role("button", name="Fix", exact=True)).to_be_visible()
+    expect(card.locator("details")).to_have_count(0)
     expect(page.locator("#integrationMessage")).to_contain_text(
         "Onboarding setting saved"
     )
@@ -167,8 +170,7 @@ def test_separate_login_repair(
         "hasCompletedOnboarding": True,
     }
     assert "do-not-show" not in page.locator("#view-integrations").inner_text()
-    confirm(page, item_card(page, "claude-vscode"), "Set up")
-    confirm(page, item_card(page, "claude-vscode"), "Disconnect")
+    confirm(page, item_card(page, "claude-vscode"), "Apply FCC settings")
     assert json.loads(path.read_bytes())["hasCompletedOnboarding"] is True
 
 
@@ -198,7 +200,9 @@ def test_missing_adapter_shows_manual_prerequisites(
     open_integrations(page, admin_base_url)
     card = item_card(page, "claude-jetbrains")
     expect(card).to_contain_text("Install the Claude ACP adapter")
-    expect(card.get_by_role("button", name="Set up", exact=True)).to_have_count(0)
+    expect(
+        card.get_by_role("button", name="Apply FCC settings", exact=True)
+    ).to_have_count(0)
     expect(card.get_by_role("link", name="Manual setup", exact=True)).to_be_visible()
 
 
@@ -229,36 +233,6 @@ def test_repair_cancel_and_stale_confirmation_preserve_shared_state(
     }
 
 
-def test_manual_disconnect_describes_unknown_history_and_keeps_other_settings(
-    page, admin_base_url, integration_installations
-):
-    path = integration_installations.vscode_settings
-    write_json(
-        path,
-        {
-            "editor.fontSize": 16,
-            "claudeCode.environmentVariables": [
-                {"name": "ANTHROPIC_BASE_URL", "value": "http://localhost:8082"},
-                {"name": "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "value": "1"},
-                {"name": "ANTHROPIC_AUTH_TOKEN", "value": "old-manual-secret"},
-            ],
-        },
-    )
-    open_integrations(page, admin_base_url)
-    card = item_card(page, "claude-vscode")
-    expect(card).to_contain_text("Manual FCC setup detected")
-    card.get_by_role("button", name="Disconnect", exact=True).click()
-    dialog = page.get_by_role("dialog")
-    expect(dialog).to_contain_text("Previous settings are unknown")
-    expect(dialog).not_to_contain_text("old-manual-secret")
-    dialog.get_by_role("button", name="Confirm", exact=True).click()
-    expect(dialog).to_have_count(0)
-    assert json.loads(path.read_bytes()) == {
-        "editor.fontSize": 16,
-        "claudeCode.environmentVariables": [],
-    }
-
-
 @pytest.mark.parametrize(
     "admin_base_url", [{"MODEL": "open_router/vendor/model-a"}], indirect=True
 )
@@ -270,12 +244,14 @@ def test_preview_shows_only_the_file_and_a_short_summary(
     text = '<img src=x onerror="window.previewExecuted=true">'
     path.write_text(f"model='{text}'\n")
     open_integrations(page, admin_base_url)
-    item_card(page, "codex").get_by_role("button", name="Set up", exact=True).click()
+    item_card(page, "codex").get_by_role(
+        "button", name="Apply FCC settings", exact=True
+    ).click()
     dialog = page.get_by_role("dialog")
     expect(dialog).not_to_contain_text("onerror")
     expect(dialog).not_to_contain_text("model_provider")
     expect(dialog).to_contain_text(str(path))
-    expect(dialog).to_contain_text("Disconnect")
+    expect(dialog).to_contain_text("Manual disconnect instructions are on the card")
     expect(dialog).to_contain_text("Save and close")
     expect(dialog).to_contain_text("Codex App, VS Code, and the CLI")
     expect(dialog.locator("img")).to_have_count(0)
@@ -287,54 +263,67 @@ def test_preview_shows_only_the_file_and_a_short_summary(
 @pytest.mark.parametrize(
     "viewport", [{"width": 1280, "height": 900}, {"width": 390, "height": 844}]
 )
-def test_recover_confirmation_preserves_restored_settings_and_clears_history(
-    page, admin_base_url, integration_installations, monkeypatch, viewport
+def test_manual_disconnect_instructions_expand_without_requests_or_writes(
+    page, admin_base_url, integration_installations, viewport
 ):
     locator = integration_installations
-    original = {"claudeCode.disableLoginPrompt": True, "editor.fontSize": 17}
-    write_json(locator.vscode_settings, original)
-    service = IntegrationService(locator)
-    ctx = connection(locator.home)
-    preview = service.preview(Item.CLAUDE_VSCODE, Action.SETUP, ctx)
-    revision = preview["revision"]
-    assert isinstance(revision, str)
-    service.apply(Item.CLAUDE_VSCODE, Action.SETUP, revision, ctx)
-    actual_record = service_module.write_record
-
-    def fail_cleanup(path, record):
-        if record is None:
-            raise OSError("interrupted cleanup")
-        actual_record(path, record)
-
-    preview = service.preview(Item.CLAUDE_VSCODE, Action.DISCONNECT, ctx)
-    revision = preview["revision"]
-    assert isinstance(revision, str)
-    with monkeypatch.context() as patch:
-        patch.setattr(service_module, "write_record", fail_cleanup)
-        with pytest.raises(IntegrationError):
-            service.apply(Item.CLAUDE_VSCODE, Action.DISCONNECT, revision, ctx)
-    before = locator.vscode_settings.read_bytes()
-    history = service.state_dir / "claude-vscode.json"
-    history_before = history.read_bytes()
+    write_json(locator.vscode_settings, {"editor.fontSize": 16})
     page.set_viewport_size(viewport)
     open_integrations(page, admin_base_url)
+    paths = [
+        locator.vscode_settings,
+        locator.home / ".codex/config.toml",
+        locator.home / ".jetbrains/acp.json",
+        locator.home / ".claude.json",
+    ]
+    before = {path: path.read_bytes() if path.exists() else None for path in paths}
+    requests = []
+    page.on("request", lambda request: requests.append(request))
+    for item, expected in [
+        (
+            "claude-vscode",
+            [
+                "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+                "disableLoginPrompt",
+                "global/project",
+            ],
+        ),
+        (
+            "codex",
+            [
+                "model_provider",
+                "model_providers",
+                "model_catalog_json",
+                "inline TOML",
+                "normal authentication",
+            ],
+        ),
+        (
+            "claude-jetbrains",
+            ['agent_servers["Claude Code (FCC)"]', "custom fields", "other agents"],
+        ),
+    ]:
+        card = item_card(page, item)
+        help = card.locator("details")
+        expect(help).not_to_have_attribute("open", "")
+        help.locator("summary").click()
+        expect(help).to_have_attribute("open", "")
+        for text in expected:
+            expect(help).to_contain_text(text)
+        expect(card.get_by_role("button", name="Disconnect", exact=True)).to_have_count(
+            0
+        )
+        assert card.evaluate("el => el.scrollWidth <= el.clientWidth")
+    assert requests == []
+    assert {
+        path: path.read_bytes() if path.exists() else None for path in paths
+    } == before
     card = item_card(page, "claude-vscode")
-    expect(card.get_by_role("button", name="Disconnect", exact=True)).to_have_count(0)
-    card.get_by_role("button", name="Recover", exact=True).click()
+    card.get_by_role("button", name="Apply FCC settings", exact=True).click()
     dialog = page.get_by_role("dialog")
-    expect(dialog).to_contain_text(str(locator.vscode_settings))
-    expect(dialog).to_contain_text("setup history")
-    expect(dialog).not_to_contain_text("FCC will update this file")
-    expect(dialog).not_to_contain_text("Save and close")
     expect(dialog.get_by_role("heading")).to_be_in_viewport()
     expect(dialog.get_by_role("button", name="Confirm", exact=True)).to_be_in_viewport()
+    expect(dialog.locator("details")).to_have_count(0)
     dialog.get_by_role("button", name="Cancel", exact=True).click()
-    assert locator.vscode_settings.read_bytes() == before
-    assert history.read_bytes() == history_before
-    confirm(page, card, "Recover")
-    expect(page.locator("#integrationMessage")).to_contain_text("Recovery finished")
-    expect(card.get_by_role("button", name="Recover", exact=True)).to_have_count(0)
-    expect(card.get_by_role("button", name="Set up", exact=True)).to_be_visible()
-    assert json.loads(locator.vscode_settings.read_bytes()) == original
-    assert locator.vscode_settings.read_bytes() == before
-    assert not history.exists()

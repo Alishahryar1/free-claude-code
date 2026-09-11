@@ -340,7 +340,7 @@ For terminal use, start `fcc-server`, then run `fcc-claude`, `fcc-codex`,
 
 For installed editors and Codex App, open **Admin UI → Integrations**:
 
-1. Choose **Set up** on the client card.
+1. Choose **Apply FCC settings** on the client card.
 2. Save your work and close the affected clients. Review the file path and short
    setup summary, then click **Confirm**.
 3. Wait for FCC to finish before making other edits, then reload or restart the
@@ -358,32 +358,37 @@ manual guides below for WSL, remote environments, named profiles, and custom
 installation or configuration paths.
 
 After changing FCC's address or token, finish any required FCC restart, then
-return here and choose **Update** where offered. **Disconnect** restores settings
-saved before setup when those settings have not since been edited. For a
-recognized manual setup, it removes identifiable FCC values; previous settings
-are unknown, so the client may need its normal setup again. Conflicting later
-edits require manual correction before FCC can continue.
+choose **Apply FCC settings** again. Applying replaces the known FCC connection
+fields, including manual changes to those fields, and preserves unrelated
+settings. For Codex, an existing model choice is preserved when its current
+provider is FCC; switching to FCC or filling a missing model uses FCC's default.
 
 Keep affected clients closed during configuration changes. Codex App, VS Code,
 and normal Codex CLI sessions share the same Codex file. FCC checks for changes,
 but another program can still save between that check and FCC's save. FCC cannot
 guarantee preservation of that simultaneous save.
 
-<a id="integration-recovery"></a>
+If a change is interrupted, click **Refresh integrations** to inspect the current
+file before applying again. A failed request may have completed the file change.
 
-If a change was interrupted, choose **Recover** to finish FCC's saved setup
-history. Recovery leaves the client file as it is. If the earlier file change
-was not completed, you can retry it after recovery. If you already restored the
-original settings yourself, **Disconnect** releases FCC's saved history without
-rewriting that file.
+To disconnect, expand **How to disconnect** on the card and edit its displayed
+configuration file:
 
-If recovery is unavailable because the file changed again or the saved history
-cannot be read, inspect the client configuration using the manual guides below.
-Preserve a copy of the matching record in `~/.fcc/integrations/`
-(`%USERPROFILE%\.fcc\integrations\` on Windows) before removing it to abandon
-FCC's history. The records are `claude-vscode.json`, `codex.json`,
-`claude-jetbrains.json`, and `claude-login.json`. Removing a record does not change
-the client file, and it loses FCC's ability to restore the earlier settings.
+- **Claude Code in VS Code:** remove FCC's `ANTHROPIC_BASE_URL`,
+  `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` entries
+  from `claudeCode.environmentVariables`, preserving unrelated entries. Remove
+  `claudeCode.disableLoginPrompt` or set it to false, then reload VS Code. Other
+  optional setup flags can be removed if no longer wanted. Separate global or
+  project overrides still need manual correction if present.
+- **Codex:** remove `model_provider` only when it selects `fcc`, remove the FCC
+  entry under `model_providers` including its auth settings, and remove
+  `model_catalog_json` only when it points to FCC's catalog. Remove or replace
+  the FCC model selection with a model for your normal provider. This applies
+  to table-header and inline TOML layouts; preserve other providers and settings.
+  Restart affected App, VS Code, and CLI sessions and use normal authentication.
+- **JetBrains:** remove only `agent_servers["Claude Code (FCC)"]`, including any
+  custom fields inside that named agent. Preserve other agents, restart the IDE,
+  and select your normal agent.
 
 <details>
 <summary><strong>Claude Code in VS Code</strong></summary>
@@ -538,8 +543,8 @@ do not edit the installation inventory.
 If Claude Code asks you to log in after you configure the FCC URL and token, open
 **Admin UI → Integrations → Fix Claude Code login prompt → Fix**, review the
 change, and confirm. Restart Claude Code or the IDE afterward. This changes the
-shared first-run state for the current user; it does not sign in to an account,
-and Disconnect does not undo it. If onboarding is already complete, check the
+shared first-run state for the current user; it does not sign in to an account.
+If onboarding is already complete, check the
 client's connection settings for another cause.
 
 For the manual fallback, open its state file:
