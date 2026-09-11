@@ -103,6 +103,7 @@ class OpenAIChatProvider(BaseProvider):
             required_null_field=listing.required_null_field,
             required_sequence_items=listing.required_sequence_items,
             exclude_missing_sequence_fields=listing.exclude_missing_sequence_fields,
+            optional_sequence_items=listing.optional_sequence_items,
             tags_field=listing.tags_field,
             thinking_tag=listing.thinking_tag,
             non_thinking_tag=listing.non_thinking_tag,
