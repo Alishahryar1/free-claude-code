@@ -57,6 +57,7 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "lightning",
     "experiential",
     "cheaperinference",
+    "orcarouter",
     "ollama_cloud",
     "lmstudio",
     "llamacpp",

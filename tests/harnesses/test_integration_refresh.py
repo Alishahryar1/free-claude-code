@@ -57,16 +57,12 @@ def test_refresh_upgrades_original_claude_directly_and_only_once(tmp_path):
     assert [path.stat().st_mtime_ns for path in (settings, state)] == before
 
 
-@pytest.mark.parametrize("change", ["missing", "disconnected", "url", "token"])
+@pytest.mark.parametrize("change", ["missing", "disconnected"])
 def test_refresh_does_not_claim_unrecognized_claude(tmp_path, change):
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
     document = json.loads(json.dumps(OLD_CLAUDE))
     if change == "disconnected":
         document.pop("claudeCode.disableLoginPrompt")
-    elif change in {"url", "token"}:
-        document["claudeCode.environmentVariables"][0 if change == "url" else 1][
-            "value"
-        ] = "other"
     if change != "missing":
         settings.write_text(json.dumps(document))
     before = settings.read_bytes() if settings.exists() else None
@@ -155,3 +151,70 @@ def test_refresh_rejects_malformed_input_without_writing(tmp_path, integration):
             codex_integration.refresh_connected(path, tmp_path / "catalog.json", URL)
     assert path.read_text() == "{invalid"
     assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize(
+    ("saved_url", "current_url", "saved_token"),
+    [
+        # FCC restarted on an equivalent loopback address: migrate.
+        ("http://localhost:8000", "http://127.0.0.1:8000", TOKEN),
+        ("http://127.0.0.1:8000", "http://localhost:8000/", TOKEN),
+        ("http://[::1]:8000", "http://localhost:8000", "rotated-token"),
+        # A canonical /v1 suffixed save is the proxy moving, not a foreign host.
+        ("http://localhost:8000/v1", "http://localhost:8000", "rotated-token"),
+    ],
+)
+def test_refresh_migrates_managed_connection_on_own_proxy_change(
+    tmp_path, saved_url, current_url, saved_token
+):
+    settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
+    document = json.loads(json.dumps(OLD_CLAUDE))
+    entries = document["claudeCode.environmentVariables"]
+    entries[0]["value"] = saved_url
+    entries[1]["value"] = saved_token
+    settings.write_text(json.dumps(document))
+    state.write_text('{"theme":"dark"}')
+
+    assert (
+        claude_integration.refresh_connected(settings, state, current_url, TOKEN)
+        is True
+    )
+
+    saved = json.loads(settings.read_text())
+    env = {
+        entry["name"]: entry["value"]
+        for entry in saved["claudeCode.environmentVariables"]
+    }
+    assert env["ANTHROPIC_BASE_URL"] == current_url
+    assert env["ANTHROPIC_AUTH_TOKEN"] == TOKEN
+    assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+    assert env["KEEP_ME"] == "user-value"
+    assert saved["claudeCode.disableLoginPrompt"] is True
+    assert json.loads(state.read_text())["hasCompletedOnboarding"] is True
+
+    before = [path.stat().st_mtime_ns for path in (settings, state)]
+    assert (
+        claude_integration.refresh_connected(settings, state, current_url, TOKEN)
+        is False
+    )
+    assert [path.stat().st_mtime_ns for path in (settings, state)] == before
+
+
+@pytest.mark.parametrize(
+    "saved_url",
+    [
+        # A different machine or an https non-loopback gateway is not ours.
+        "http://192.168.1.10:8000",
+        "https://gateway.example.com/v1",
+    ],
+)
+def test_refresh_leaves_foreign_gateway_alone(tmp_path, saved_url):
+    settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
+    document = json.loads(json.dumps(OLD_CLAUDE))
+    document["claudeCode.environmentVariables"][0]["value"] = saved_url
+    settings.write_text(json.dumps(document))
+    state.write_text("{invalid")
+
+    assert claude_integration.refresh_connected(settings, state, URL, TOKEN) is False
+    assert json.loads(settings.read_text()) == document
+    assert state.read_text() == "{invalid"

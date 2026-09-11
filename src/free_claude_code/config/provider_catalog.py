@@ -88,6 +88,8 @@ LIGHTNING_DEFAULT_BASE = "https://lightning.ai/api/v1"
 EXPERIENTIAL_DEFAULT_BASE = "https://api.experientiallabs.ai/v1"
 # Cheaper Inference OpenAI-compatible Chat Completions gateway.
 CHEAPERINFERENCE_DEFAULT_BASE = "https://api.cheaperinference.com/v1"
+# OrcaRouter OpenAI-compatible multi-provider gateway.
+ORCAROUTER_DEFAULT_BASE = "https://api.orcarouter.ai/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -699,6 +701,18 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="cheaperinference_api_key",
         default_base_url=CHEAPERINFERENCE_DEFAULT_BASE,
         proxy_attr="cheaperinference_proxy",
+    ),
+    "orcarouter": ProviderDescriptor(
+        provider_id="orcarouter",
+        display_name="OrcaRouter",
+        website_url="https://www.orcarouter.ai/",
+        logo_filename="orcarouter.png",
+        credential_env="ORCAROUTER_API_KEY",
+        credential_url="https://www.orcarouter.ai/console",
+        credential_attr="orcarouter_api_key",
+        default_base_url=ORCAROUTER_DEFAULT_BASE,
+        base_url_attr="orcarouter_base_url",
+        proxy_attr="orcarouter_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",

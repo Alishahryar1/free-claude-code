@@ -18,6 +18,7 @@ from .model_refs import parse_model_fallbacks
 from .nim import NimSettings
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
+    ORCAROUTER_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
 )
 from .reasoning import ReasoningPreference
@@ -237,6 +238,15 @@ class Settings(BaseModel):
     # ==================== Cheaper Inference (OpenAI-compatible) ====================
     cheaperinference_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="CHEAPER_INFERENCE_API_KEY"
+    )
+
+    # ==================== OrcaRouter (OpenAI-compatible gateway) ====================
+    orcarouter_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ORCAROUTER_API_KEY"
+    )
+    orcarouter_base_url: NonEmptyString = Field(
+        default=ORCAROUTER_DEFAULT_BASE,
+        validation_alias="ORCAROUTER_BASE_URL",
     )
 
     # ==================== Fireworks AI Config ====================
@@ -544,6 +554,9 @@ class Settings(BaseModel):
     )
     cheaperinference_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="CHEAPER_INFERENCE_PROXY"
+    )
+    orcarouter_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ORCAROUTER_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"

@@ -48,6 +48,7 @@ def extract_openai_model_infos(
     required_null_field: str | None = None,
     required_sequence_items: tuple[tuple[str, str], ...] = (),
     exclude_missing_sequence_fields: bool = False,
+    optional_sequence_items: tuple[tuple[str, str], ...] = (),
     tags_field: str | None = None,
     thinking_tag: str = "reasoning",
     non_thinking_tag: str | None = None,
@@ -123,6 +124,22 @@ def extract_openai_model_infos(
 
         if missing_sequence_field:
             continue
+
+        for field_name, required_item in optional_sequence_items:
+            values = _field(item, field_name)
+            if values is None:
+                # Absent or null metadata proves nothing: keep the item listed.
+                continue
+            if not _is_sequence(values) or any(
+                not isinstance(value, str) or not value.strip() for value in values
+            ):
+                raise _malformed(
+                    provider_name,
+                    f"expected every {item_location} item to include "
+                    f"{field_name} string array",
+                )
+            if required_item not in values:
+                included = False
 
         supports_thinking: bool | None = None
         intrinsic_facts: set[bool] = set()
