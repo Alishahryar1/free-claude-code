@@ -271,6 +271,8 @@ textarea:focus-visible,
   box-shadow: var(--shadow);
 }
 .integration-dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
+.integration-card .section-heading,
+.integration-dialog .section-heading { border-bottom: 0; padding-bottom: 0; }
 .integration-dialog .section-heading { align-items: center; }
 .integration-dialog p { color: var(--muted); line-height: 1.6; margin: 0 0 24px; }
 
