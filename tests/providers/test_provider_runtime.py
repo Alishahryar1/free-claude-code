@@ -29,6 +29,7 @@ from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     QWENCLOUD_CODING_DEFAULT_BASE,
     QWENCLOUD_DEFAULT_BASE,
+    SCALEWAY_DEFAULT_BASE,
     SILICONFLOW_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
     TOGETHER_DEFAULT_BASE,
@@ -83,6 +84,7 @@ def _make_settings(**overrides):
     mock.deepinfra_api_key = "test_deepinfra_key"
     mock.siliconflow_api_key = "test_siliconflow_key"
     mock.nebius_api_key = "test_nebius_key"
+    mock.scw_secret_key = "test_scw_key"
     mock.chutes_api_key = "test_chutes_key"
     mock.featherless_api_key = "test_featherless_key"
     mock.mistral_api_key = "test_mistral_key"
@@ -166,6 +168,7 @@ def _make_settings(**overrides):
     mock.deepinfra_proxy = None
     mock.siliconflow_proxy = None
     mock.nebius_proxy = None
+    mock.scw_proxy = None
     mock.chutes_proxy = None
     mock.featherless_proxy = None
     mock.azure_openai_proxy = None
@@ -442,6 +445,27 @@ def test_nebius_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.base_url_attr is None
     assert config.api_key == "nebius-token"
     assert config.base_url == NEBIUS_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+def test_scaleway_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["scaleway"]
+    settings = _make_settings(
+        scw_secret_key="scw-token",
+        scw_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+        provider = create_provider("scaleway", settings)
+
+    assert descriptor.display_name == "Scaleway"
+    assert descriptor.credential_env == "SCW_SECRET_KEY"
+    assert descriptor.credential_url == ("https://console.scaleway.com/iam/api-keys")
+    assert descriptor.base_url_attr is None
+    assert config.api_key == "scw-token"
+    assert config.base_url == SCALEWAY_DEFAULT_BASE
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
@@ -857,6 +881,7 @@ def test_create_provider_instantiates_each_builtin():
         "deepinfra": OpenAIChatProvider,
         "siliconflow": OpenAIChatProvider,
         "nebius": OpenAIChatProvider,
+        "scaleway": OpenAIChatProvider,
         "chutes": OpenAIChatProvider,
         "featherless": OpenAIChatProvider,
         "azure_openai": OpenAIChatProvider,

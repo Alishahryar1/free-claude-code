@@ -737,4 +737,13 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         normalize_base_url=True,
         reasoning_delta_field="reasoning",
     ),
+    "scaleway": OpenAIChatProfile(
+        _policy(
+            "SCALEWAY",
+            ReasoningReplayMode.DISABLED,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NO_REASONING,
+        model_listing=OpenAIModelListing(path="/models"),
+    ),
 }
