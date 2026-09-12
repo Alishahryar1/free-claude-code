@@ -68,6 +68,8 @@ DEEPINFRA_DEFAULT_BASE = "https://api.deepinfra.com/v1/openai"
 SILICONFLOW_DEFAULT_BASE = "https://api.siliconflow.com/v1"
 # Nebius Token Factory OpenAI-compatible Chat Completions API.
 NEBIUS_DEFAULT_BASE = "https://api.tokenfactory.nebius.com/v1"
+# Scaleway Generative APIs OpenAI-compatible Chat Completions API.
+SCALEWAY_DEFAULT_BASE = "https://api.scaleway.ai/v1"
 # Chutes OpenAI-compatible Chat Completions API.
 CHUTES_DEFAULT_BASE = "https://llm.chutes.ai/v1"
 # Featherless AI OpenAI-compatible Chat Completions API.
@@ -544,6 +546,15 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="llm7_api_key",
         default_base_url=LLM7_DEFAULT_BASE,
         proxy_attr="llm7_proxy",
+    ),
+    "scaleway": ProviderDescriptor(
+        provider_id="scaleway",
+        display_name="Scaleway",
+        credential_env="SCW_SECRET_KEY",
+        credential_url="https://console.scaleway.com/iam/api-keys",
+        credential_attr="scw_secret_key",
+        default_base_url=SCALEWAY_DEFAULT_BASE,
+        proxy_attr="scw_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",
