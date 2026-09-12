@@ -11,6 +11,7 @@ from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.history_replay import HistoryScope
 from free_claude_code.core.model_capabilities import ModelInputModality
+from free_claude_code.core.openai_base_url import openai_v1_base_url
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.model_listing import (
     InputModalityBooleanPaths,
@@ -19,7 +20,6 @@ from free_claude_code.providers.model_listing import (
     live_provider_context_window_consensus,
 )
 
-from .base_url import openai_v1_base_url
 from .extra_body import (
     validate_extra_body_does_not_override_canonical_fields,
     validate_extra_body_does_not_override_reasoning_fields,
@@ -121,6 +121,7 @@ class OpenAIChatProfile:
     model_ids_are_routable: bool = True
     model_listing: OpenAIModelListing = OpenAIModelListing()
     normalize_base_url: bool = False
+    credential_optional: bool = False
     reasoning_delta_field: Literal["reasoning_content", "reasoning"] = (
         "reasoning_content"
     )
@@ -736,5 +737,15 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         normalize_base_url=True,
         reasoning_delta_field="reasoning",
+    ),
+    "custom": OpenAIChatProfile(
+        _policy(
+            "CUSTOM",
+            ReasoningReplayMode.DISABLED,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NO_REASONING,
+        normalize_base_url=True,
+        credential_optional=True,
     ),
 }

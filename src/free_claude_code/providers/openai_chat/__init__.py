@@ -1,9 +1,9 @@
 """OpenAI-compatible provider family."""
 
+from free_claude_code.core.openai_base_url import openai_v1_base_url
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 
-from .base_url import openai_v1_base_url
 from .extra_body import (
     validate_extra_body_does_not_override_canonical_fields,
     validate_extra_body_does_not_override_reasoning_fields,

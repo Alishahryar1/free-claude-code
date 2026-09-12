@@ -580,6 +580,15 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         base_url_attr="ollama_base_url",
         local=True,
     ),
+    "custom": ProviderDescriptor(
+        provider_id="custom",
+        display_name="Custom (OpenAI-compatible)",
+        credential_attr="custom_api_key",
+        default_base_url="",
+        base_url_attr="custom_base_url",
+        proxy_attr="custom_proxy",
+        required_settings_attrs=("custom_base_url",),
+    ),
 }
 
 # Key order:
