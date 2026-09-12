@@ -62,6 +62,17 @@ async def test_provider_discovery_call_and_result_round_trip(
             assert name.split("__")[-1] in messages[-1][result_field]
             args = '{"input":"patch"}' if custom else '{"message":"hello"}'
         else:
+            if native:
+                replayed_call = messages[-2]
+                assert replayed_call["type"] == "function_call"
+                assert replayed_call["name"] == (
+                    "editor__edit" if custom else "agents__spawn_agent"
+                )
+                assert "namespace" not in replayed_call
+                assert "namespace" not in functions[replayed_call["name"]]
+                assert json.loads(replayed_call["arguments"]) == (
+                    {"input": "patch"} if custom else {"message": "hello"}
+                )
             assert (
                 messages[-1].get("type") == "function_call_output"
                 if native

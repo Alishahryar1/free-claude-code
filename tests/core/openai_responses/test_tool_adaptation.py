@@ -70,6 +70,7 @@ def test_custom_tool_identity_and_history_preserve_namespaces() -> None:
     nested = wire["tools"][1]["tools"][0]
     assert nested["type"] == "function"
     assert wire["input"][0]["name"] == nested["name"]
+    assert wire["input"][0]["namespace"] == "editor"
     assert wire["tool_choice"] == {
         "type": "function",
         "namespace": "editor",

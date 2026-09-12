@@ -257,7 +257,7 @@ class ResponsesToolAdapter:
             )
             self._register(identity, wire_name)
             if kind == "custom_tool_call":
-                return {
+                call: JsonObject = {
                     **{key: value for key, value in item.items() if key != "input"},
                     "type": "function_call",
                     "name": wire_name,
@@ -266,6 +266,9 @@ class ResponsesToolAdapter:
                         ensure_ascii=False,
                     ),
                 }
+                if self._policy.flatten_namespaces:
+                    call.pop("namespace", None)
+                return call
             if self._policy.flatten_namespaces:
                 return {
                     **{key: value for key, value in item.items() if key != "namespace"},
