@@ -133,7 +133,7 @@ def _translate_pattern(pattern: str) -> str:
     translated = "".join(parts)
     try:
         re.compile(translated)
-    except re.error:
+    except re.error, OverflowError, RecursionError:
         return pattern
     return translated
 

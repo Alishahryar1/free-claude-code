@@ -63,6 +63,37 @@ def translated_pattern(pattern):
     return translate_tool_schema_patterns({"pattern": pattern})["pattern"]
 
 
+@pytest.mark.parametrize("wire_format", ["chat", "responses"])
+@pytest.mark.parametrize(
+    "pattern",
+    [r"^[^\p{Cc}]{4294967296}$", "(" * 500 + r"[^\p{Cc}]" + ")" * 500],
+    ids=["repeat-overflow", "group-recursion"],
+)
+def test_compiler_limits_preserve_original_schema_in_both_converters(
+    wire_format, pattern
+):
+    schema = {"type": "string", "pattern": pattern}
+    request = MessagesRequest.model_validate(
+        {
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "Test schema passthrough"}],
+            "tools": [{"name": "Artifact", "input_schema": schema}],
+        }
+    )
+    original = deepcopy(request.model_dump())
+    if wire_format == "chat":
+        parameters = build_base_request_body(request)["tools"][0]["function"][
+            "parameters"
+        ]
+    else:
+        body = build_responses_provider_request(
+            request, reasoning=ReasoningPolicy.provider_default()
+        )
+        parameters = body["tools"][0]["parameters"]
+    assert parameters == schema
+    assert request.model_dump() == original
+
+
 @pytest.mark.parametrize("category", ["Cc", "Cf", "Zl", "Zp"])
 def test_category_expansion_preserves_every_unicode_scalar(category):
     regex = re.compile(translated_pattern(r"[^\p{" + category + "}]+"))
