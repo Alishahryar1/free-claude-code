@@ -1011,6 +1011,98 @@ def test_nested_function_definition_and_choice_use_one_provider_name(
         }
 
 
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("custom", [False, True])
+@pytest.mark.parametrize("discovered", [False, True])
+def test_discovery_preserves_outer_namespace_in_nested_tools(
+    native: bool, custom: bool, discovered: bool
+) -> None:
+    kind = "custom" if custom else "function"
+    definition: JsonObject = {"name": "run"}
+    if custom:
+        definition["format"] = {"type": "text"}
+    else:
+        definition["parameters"] = {"type": "object"}
+    tool: JsonObject = {"type": kind, "namespace": "agents", kind: definition}
+    tools = [SEARCH]
+    items: list[JsonObject] = [{"role": "user", "content": "Run the agent tool"}]
+    if discovered:
+        items.extend(
+            [
+                {
+                    "type": "tool_search_call",
+                    "call_id": "search",
+                    "execution": "client",
+                    "status": "completed",
+                    "arguments": {"query": "agent"},
+                },
+                {
+                    "type": "tool_search_output",
+                    "call_id": "search",
+                    "execution": "client",
+                    "status": "completed",
+                    "tools": [tool],
+                },
+            ]
+        )
+    else:
+        tools.append(tool)
+    request = OpenAIResponsesRequest(
+        model="example",
+        input=items,
+        tools=tools,
+        tool_choice={"type": kind, "name": "run", "namespace": "agents"},
+    )
+    original = request.model_dump()
+    if native:
+        prepared = ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(
+                custom_tools_as_functions=True,
+                client_tool_search=True,
+                flatten_namespaces=True,
+            ),
+        ).request
+        assert {tool["name"] for tool in prepared.tools or []} == {
+            "fcc_tool_search",
+            "agents__run",
+        }
+        assert prepared.tool_choice == {"type": "function", "name": "agents__run"}
+    else:
+        body = build_responses_chat_request(
+            request, reasoning_replay=ReasoningReplayMode.DISABLED
+        ).body
+        assert {
+            tool["function"]["name"]
+            for tool in cast(list[dict[str, Any]], body["tools"])
+        } == {"fcc_tool_search", "agents__run"}
+        assert body["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "agents__run"},
+        }
+    events = _completed_tool_events(
+        request,
+        native=native,
+        name="agents__run",
+        arguments='{"input":"hello"}' if custom else '{"message":"hello"}',
+    )
+    expected_type = "custom_tool_call" if custom else "function_call"
+    for event in events:
+        if "item" in event:
+            assert event["item"]["type"] == expected_type
+            assert event["item"]["name"] == "run"
+            assert event["item"]["namespace"] == "agents"
+    final = events[-1]["response"]["output"][0]
+    assert final["type"] == expected_type
+    assert final["name"] == "run"
+    assert final["namespace"] == "agents"
+    if custom:
+        assert final["input"] == "hello"
+    else:
+        assert json.loads(final["arguments"]) == {"message": "hello"}
+    assert request.model_dump() == original
+
+
 def test_chat_does_not_turn_missing_search_arguments_into_a_successful_call() -> None:
     events = _completed_tool_events(
         OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),

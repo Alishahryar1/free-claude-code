@@ -8,7 +8,7 @@ from typing import cast
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .errors import ResponsesConversionError
-from .tools import required_str
+from .tools import optional_str, required_str
 
 
 def is_client_search(value: Mapping[str, JsonValue]) -> bool:
@@ -107,8 +107,11 @@ def _merge_tool_groups(groups: list[list[JsonObject]]) -> list[JsonObject]:
                 definition["type"] = kind
                 definition.pop("defer_loading", None)
                 name = required_str(definition.get("name"), "tool.name")
-                ns = namespace or definition.get("namespace")
-                ns = ns if isinstance(ns, str) else None
+                ns = (
+                    namespace
+                    or optional_str(definition.get("namespace"))
+                    or optional_str(child.get("namespace"))
+                )
                 if ns is not None:
                     definition["namespace"] = ns
                 identity = (str(kind), ns, name)
