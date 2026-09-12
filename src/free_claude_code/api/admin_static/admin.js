@@ -175,7 +175,10 @@ function setActiveView(viewId, { scroll = false } = {}) {
   }
   if (activeView.id === "code") window.CodeSessions.activate(window.location.pathname);
   else window.CodeSessions.deactivate();
-  if (activeView.id === "integrations") refreshClaudeIntegration();
+  if (activeView.id === "integrations") {
+    refreshClaudeIntegration();
+    refreshCodexIntegration();
+  }
 }
 
 function navigateToView(viewId) {
@@ -1342,7 +1345,87 @@ claudeIntegrationDialog.addEventListener("click", (event) => {
 });
 
 const codexIntegrationDialog = byId("codexIntegrationDialog");
-byId("openCodexIntegration").addEventListener("click", () => codexIntegrationDialog.showModal());
+const codexIntegration = { connected: null, busy: false, paths: null };
+const codexIntegrationPath = "/admin/api/integrations/codex";
+
+function renderCodexIntegration() {
+  const { connected, busy, paths } = codexIntegration;
+  const action = connected ? "Disconnect" : "Connect";
+  byId("openCodexIntegration").textContent = connected === null && !busy ? "Retry" : action;
+  byId("openCodexIntegration").disabled = busy;
+  byId("confirmCodexIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmCodexIntegration").disabled = busy || connected === null;
+  const status = byId("codexIntegrationStatus");
+  status.textContent = connected === null
+    ? (busy ? "Checking settings…" : "Could not check settings")
+    : (connected ? "Connected" : "Not connected");
+  status.className = `status-pill ${connected ? "ok" : "neutral"}`;
+  byId("codexIntegrationDescription").textContent = connected
+    ? "Remove FCC's Codex configuration. Other settings stay unchanged."
+    : "Configure Codex to use FCC. Your selected model stays unchanged.";
+  const files = byId("codexIntegrationFiles");
+  files.replaceChildren();
+  if (paths) {
+    const targets = [paths.codex_config];
+    targets.forEach((path) => {
+      const item = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = path;
+      item.appendChild(code);
+      files.appendChild(item);
+    });
+  }
+}
+
+async function refreshCodexIntegration() {
+  if (codexIntegration.busy) return;
+  codexIntegration.busy = true;
+  renderCodexIntegration();
+  integrationMessage("codexIntegrationMessage", "");
+  try {
+    const result = await api(codexIntegrationPath);
+    codexIntegration.connected = result.connected;
+    codexIntegration.paths = result.paths;
+  } catch (error) {
+    codexIntegration.connected = null;
+    integrationMessage("codexIntegrationMessage", error.message, true);
+  } finally {
+    codexIntegration.busy = false;
+    renderCodexIntegration();
+  }
+}
+
+byId("openCodexIntegration").addEventListener("click", () => {
+  if (codexIntegration.connected === null) {
+    refreshCodexIntegration();
+    return;
+  }
+  integrationMessage("codexIntegrationDialogMessage", "");
+  codexIntegrationDialog.showModal();
+});
+byId("confirmCodexIntegration").addEventListener("click", async () => {
+  if (codexIntegration.busy || codexIntegration.connected === null) return;
+  const disconnect = codexIntegration.connected;
+  codexIntegration.busy = true;
+  renderCodexIntegration();
+  integrationMessage("codexIntegrationDialogMessage", "");
+  integrationMessage("codexIntegrationMessage", "");
+  try {
+    const result = await api(`${codexIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    codexIntegration.connected = result.connected;
+    codexIntegration.paths = result.paths;
+    codexIntegrationDialog.close();
+    integrationMessage("codexIntegrationMessage", disconnect
+      ? "Settings removed. Restart Codex to disconnect."
+      : "Settings saved. Restart Codex and select an FCC model.");
+  } catch (error) {
+    integrationMessage("codexIntegrationDialogMessage", error.message, true);
+    integrationMessage("codexIntegrationMessage", error.message, true);
+  } finally {
+    codexIntegration.busy = false;
+    renderCodexIntegration();
+  }
+});
 byId("closeCodexIntegration").addEventListener("click", () => codexIntegrationDialog.close());
 codexIntegrationDialog.addEventListener("click", (event) => {
   if (event.target !== codexIntegrationDialog) return;

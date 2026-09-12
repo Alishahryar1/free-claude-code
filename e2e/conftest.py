@@ -16,7 +16,7 @@ from e2e.code_support import CodeControl
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.cli import vscode
+from free_claude_code.cli import codex_integration, vscode
 from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.env_migrations import recognized_env_keys
 from free_claude_code.config.loader import (
@@ -129,6 +129,9 @@ def admin_base_url(
     """Serve one fully isolated Admin application on an OS-assigned port."""
 
     config_dir = tmp_path / ".fcc"
+    monkeypatch.setattr(
+        codex_integration, "config_path", lambda: tmp_path / ".codex" / "config.toml"
+    )
     monkeypatch.setattr(vscode, "claude_state_path", lambda: tmp_path / ".claude.json")
     monkeypatch.setattr(
         vscode, "settings_path", lambda: tmp_path / "vscode" / "settings.json"

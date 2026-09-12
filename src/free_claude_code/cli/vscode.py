@@ -2,16 +2,15 @@
 
 import json
 import os
-import stat
 import sys
-import tempfile
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlsplit
 
 import json5
 
 from free_claude_code.cli.claude_env import claude_proxy_values
+from free_claude_code.cli.config_file import atomic_write_text
+from free_claude_code.config.server_urls import same_proxy_url
 from free_claude_code.core.json_types import JsonObject
 
 _ENV = "claudeCode.environmentVariables"
@@ -70,64 +69,18 @@ def _read(path: Path, names: set[str]) -> tuple[JsonObject, list[JsonObject]]:
     return document, cast(list[JsonObject], entries)
 
 
-def _same_url(value: object, expected: str) -> bool:
-    if not isinstance(value, str):
-        return False
-
-    def normalized(url: str) -> tuple[str, str | None, int | None, str]:
-        parsed = urlsplit(url)
-        if parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValueError("Unexpected URL components")
-        host = parsed.hostname
-        if host in {"localhost", "127.0.0.1", "::1"}:
-            host = "localhost"
-        return parsed.scheme, host, parsed.port, parsed.path.rstrip("/")
-
-    try:
-        return normalized(value) == normalized(expected)
-    except ValueError:
-        return False
-
-
 def _connected(
     document: JsonObject, entries: list[JsonObject], values: dict[str, str]
 ) -> bool:
     environment = {entry["name"]: entry["value"] for entry in entries}
     return (
         document.get(_LOGIN) is True
-        and _same_url(
+        and same_proxy_url(
             environment.get("ANTHROPIC_BASE_URL"), values["ANTHROPIC_BASE_URL"]
         )
         and environment.get("ANTHROPIC_AUTH_TOKEN") == values["ANTHROPIC_AUTH_TOKEN"]
         and environment.get("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") == "1"
     )
-
-
-def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="\n",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as output:
-            temporary = Path(output.name)
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-        if path.exists():
-            temporary.chmod(stat.S_IMODE(path.stat().st_mode))
-        temporary.replace(path)
-    finally:
-        if temporary is not None and temporary.exists():
-            # Windows cannot delete a temporary file after copying a read-only mode.
-            temporary.chmod(stat.S_IRUSR | stat.S_IWUSR)
-            temporary.unlink()
 
 
 def configure(
@@ -170,9 +123,11 @@ def configure(
         settings_content = json.dumps(document, indent=2, allow_nan=False) + "\n"
         if connected and onboarding.get(_ONBOARDING) is not True:
             onboarding[_ONBOARDING] = True
-            _write(state_path, json.dumps(onboarding, indent=2, allow_nan=False) + "\n")
+            atomic_write_text(
+                state_path, json.dumps(onboarding, indent=2, allow_nan=False) + "\n"
+            )
         if settings_changed:
-            _write(path, settings_content)
+            atomic_write_text(path, settings_content)
         document, entries = _read(path, set(values))
         if connected:
             onboarding = _read_object(state_path)

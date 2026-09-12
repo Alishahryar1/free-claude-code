@@ -273,6 +273,33 @@ async def disconnect_claude_vscode(
     return await _integration_response(services.admin.disconnect_claude_vscode)
 
 
+@router.get("/admin/api/integrations/codex")
+async def codex_integration_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.codex_integration_status)
+
+
+@router.post("/admin/api/integrations/codex/connect")
+async def connect_codex(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_codex)
+
+
+@router.post("/admin/api/integrations/codex/disconnect")
+async def disconnect_codex(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_codex)
+
+
 async def _integration_response(
     operation: Callable[[], Awaitable[JsonObject]],
 ) -> JSONResponse:
