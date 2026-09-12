@@ -1,5 +1,6 @@
 import json
 import tomllib
+from itertools import pairwise
 
 import pytest
 from playwright.sync_api import expect
@@ -16,7 +17,14 @@ def test_codex_connect_disconnect_and_modal_paths(
     expect(page.locator("#openClaudeIntegration")).to_be_enabled()
     expect(page.locator("#messageArea")).to_have_text("")
     cards = page.locator("#view-integrations > article")
-    expect(cards).to_have_count(2)
+    expect(cards).to_have_count(3)
+    expect(cards.locator("h3")).to_have_text(
+        [
+            "Claude Code in VS Code",
+            "Codex in VS Code and App",
+            "Claude Code in JetBrains ACP",
+        ]
+    )
     expect(page.locator("#claudeIntegrationStatus")).not_to_be_visible()
     expect(page.locator("#openCodexIntegration")).to_be_enabled()
     expect(page.locator("#codexIntegrationStatus")).not_to_be_visible()
@@ -25,14 +33,17 @@ def test_codex_connect_disconnect_and_modal_paths(
     )
     bounds = [card.bounding_box() for card in cards.all()]
     if width >= 1200:
-        assert bounds[0]["y"] == bounds[1]["y"]
-        assert bounds[1]["x"] > bounds[0]["x"]
+        assert len({bound["y"] for bound in bounds}) == 1
+        assert all(right["x"] > left["x"] for left, right in pairwise(bounds))
         descriptions = [
             card.locator(".section-heading p").bounding_box() for card in cards.all()
         ]
-        assert descriptions[0]["y"] == descriptions[1]["y"]
+        assert len({description["y"] for description in descriptions}) == 1
     else:
-        assert bounds[1]["y"] > bounds[0]["y"]
+        assert all(right["y"] > left["y"] for left, right in pairwise(bounds))
+    assert page.locator("body").evaluate(
+        "element => element.scrollWidth <= window.innerWidth"
+    )
     opener = page.locator("#openCodexIntegration")
     dialog = page.get_by_role("dialog", name="Codex in VS Code and App", exact=True)
     opener.click()
@@ -72,8 +83,8 @@ def test_codex_connect_disconnect_and_modal_paths(
             button.bounding_box()
             for button in page.locator(".integration-card > button").all()
         ]
-        assert buttons[0]["y"] == buttons[1]["y"]
-        assert buttons[0]["height"] == buttons[1]["height"]
+        assert len({button["y"] for button in buttons}) == 1
+        assert len({button["height"] for button in buttons}) == 1
     expect(page.locator("#codexIntegrationMessage")).to_have_text(
         "Settings saved. Restart Codex and select an FCC model."
     )
@@ -96,6 +107,79 @@ def test_codex_connect_disconnect_and_modal_paths(
     assert tomllib.loads(path.read_text()) == {"model": "my-choice"}
     assert not (tmp_path / "vscode" / "settings.json").exists()
     assert not (tmp_path / ".claude.json").exists()
+
+
+@pytest.mark.parametrize("width", [1280, 390])
+def test_jetbrains_preview_connect_is_noop_and_modal_dismisses(
+    page, admin_base_url, tmp_path, width
+):
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{admin_base_url}/admin/integrations")
+    expect(page.locator("#messageArea")).to_have_text("")
+    expect(page.locator("#openClaudeIntegration")).to_be_enabled()
+    expect(page.locator("#openCodexIntegration")).to_be_enabled()
+    opener = page.locator("#openJetBrainsIntegration")
+    expect(opener).to_be_enabled()
+    expect(opener).to_have_text("Connect")
+    card = page.locator("#view-integrations > article").nth(2)
+    expect(card).to_contain_text(
+        "Use FCC's models in Claude Code through JetBrains ACP."
+    )
+    expect(card.get_by_role("status")).to_have_count(0)
+    page.screenshot(path=str(tmp_path / f"jetbrains-card-{width}.png"), full_page=True)
+    paths = [
+        tmp_path / ".fcc" / ".env",
+        tmp_path / "vscode" / "settings.json",
+        tmp_path / ".claude.json",
+        tmp_path / ".codex" / "config.toml",
+    ]
+    before = {path: path.read_bytes() if path.exists() else None for path in paths}
+    requests = []
+
+    def record_request(request):
+        requests.append((request.method, request.url))
+
+    page.on("request", record_request)
+    dialog = page.get_by_role("dialog", name="Claude Code in JetBrains ACP", exact=True)
+    for dismiss in ("close", "escape", "outside"):
+        opener.click()
+        expect(dialog).to_be_visible()
+        close = dialog.get_by_role("button", name="Close", exact=True)
+        expect(close).to_be_focused()
+        expect(dialog).to_have_accessible_description(
+            "Route Claude Code in JetBrains through your FCC server."
+        )
+        assert dialog.evaluate("element => element.scrollWidth <= element.clientWidth")
+        page.locator("#jetBrainsIntegrationDescription").click()
+        dialog.click(position={"x": 10, "y": 80})
+        expect(dialog).to_be_visible()
+        action = dialog.get_by_role("button", name="Connect", exact=True)
+        for _ in range(2):
+            expect(action).to_be_enabled()
+            action.click()
+            expect(dialog).to_be_visible()
+            expect(action).to_have_text("Connect")
+        if dismiss == "close":
+            page.screenshot(path=str(tmp_path / f"jetbrains-modal-{width}.png"))
+            close.click()
+        elif dismiss == "escape":
+            page.keyboard.press("Escape")
+        else:
+            page.mouse.click(1, 1)
+        expect(dialog).not_to_be_visible()
+        expect(opener).to_be_focused()
+        expect(opener).to_have_text("Connect")
+    assert requests == []
+    assert {
+        path: path.read_bytes() if path.exists() else None for path in paths
+    } == before
+    page.remove_listener("request", record_request)
+    page.reload()
+    expect(opener).to_be_enabled()
+    expect(opener).to_have_text("Connect")
+    expect(dialog).not_to_be_visible()
+    opener.click()
+    expect(dialog).to_be_visible()
 
 
 @pytest.mark.parametrize("width", [1280, 390])

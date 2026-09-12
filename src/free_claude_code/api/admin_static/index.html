@@ -131,6 +131,23 @@
               <button id="confirmCodexIntegration" class="primary-button" type="button">Connect</button>
               <p id="codexIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
             </dialog>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
+                  <h3>Claude Code in JetBrains ACP</h3>
+                  <p>Use FCC's models in Claude Code through JetBrains ACP.</p>
+                </div>
+              </div>
+              <button id="openJetBrainsIntegration" class="primary-button" type="button">Connect</button>
+            </article>
+            <dialog id="jetBrainsIntegrationDialog" class="integration-dialog" aria-labelledby="jetBrainsIntegrationTitle" aria-describedby="jetBrainsIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="jetBrainsIntegrationTitle">Claude Code in JetBrains ACP</h3>
+                <button id="closeJetBrainsIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="jetBrainsIntegrationDescription">Route Claude Code in JetBrains through your FCC server.</p>
+              <button id="confirmJetBrainsIntegration" class="primary-button" type="button">Connect</button>
+            </dialog>
           </section>
 
           <section id="view-code" class="admin-view" data-view="code" hidden>

@@ -1435,6 +1435,17 @@ codexIntegrationDialog.addEventListener("click", (event) => {
   }
 });
 
+const jetBrainsIntegrationDialog = byId("jetBrainsIntegrationDialog");
+byId("openJetBrainsIntegration").addEventListener("click", () => jetBrainsIntegrationDialog.showModal());
+byId("closeJetBrainsIntegration").addEventListener("click", () => jetBrainsIntegrationDialog.close());
+jetBrainsIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== jetBrainsIntegrationDialog) return;
+  const bounds = jetBrainsIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    jetBrainsIntegrationDialog.close();
+  }
+});
+
 load().then(showRestartNotice).catch((error) => {
   showMessage(error.message, "error");
 });
