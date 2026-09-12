@@ -492,3 +492,88 @@ def test_unspecified_tool_metadata_keeps_native_defaults() -> None:
     response = cast(dict[str, Any], result[-1][1]["response"])
     assert response["tool_choice"] == "auto"
     assert response["tools"] == []
+
+
+@pytest.mark.parametrize("discovery", [False, True])
+def test_chat_forced_namespaced_custom_choice_is_lowered_once(discovery: bool) -> None:
+    custom: JsonObject = {
+        "type": "namespace",
+        "name": "editor",
+        "tools": [{"type": "custom", "name": "edit", "format": {"type": "text"}}],
+    }
+    request = OpenAIResponsesRequest(
+        model="example",
+        input="Edit the file",
+        tools=[custom, SEARCH] if discovery else [custom],
+        tool_choice={"type": "custom", "namespace": "editor", "name": "edit"},
+    )
+    body = build_responses_chat_request(
+        request, reasoning_replay=ReasoningReplayMode.DISABLED
+    ).body
+    assert body.get("tool_choice") == {
+        "type": "function",
+        "function": {"name": "editor__edit"},
+    }
+    functions = cast(list[dict[str, Any]], body["tools"])
+    assert any(tool["function"]["name"] == "editor__edit" for tool in functions)
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize(
+    "status", ["omitted", None, "completed", "in_progress", "incomplete", "failed"]
+)
+def test_discovery_optional_status_preserves_valid_tools(
+    native: bool, status: str | None
+) -> None:
+    result: JsonObject = {
+        "type": "tool_search_output",
+        "execution": "client",
+        "call_id": "search",
+        "tools": [
+            {"type": "function", "name": "lookup", "parameters": {"type": "object"}}
+        ],
+    }
+    if status != "omitted":
+        result["status"] = status
+    request = OpenAIResponsesRequest(
+        model="example",
+        tools=[SEARCH],
+        input=[
+            {"role": "user", "content": "Find lookup"},
+            {
+                "type": "tool_search_call",
+                "execution": "client",
+                "call_id": "search",
+                "arguments": {"query": "lookup"},
+            },
+            result,
+        ],
+    )
+    original = request.model_dump()
+    if native:
+        adapter = ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(client_tool_search=True, flatten_namespaces=True),
+        )
+        definitions = adapter.request.tools or []
+        names = [tool.get("name") for tool in definitions]
+        items = cast(list[dict[str, Any]], adapter.request.input)
+        payload = json.loads(items[-1]["output"])
+        assert items[-1]["call_id"] == "search"
+    else:
+        body = build_responses_chat_request(
+            request, reasoning_replay=ReasoningReplayMode.DISABLED
+        ).body
+        definitions = cast(list[dict[str, Any]], body["tools"])
+        names = [tool["function"]["name"] for tool in definitions]
+        messages = cast(list[dict[str, Any]], body["messages"])
+        payload = json.loads(messages[-1]["content"])
+        assert messages[-1]["tool_call_id"] == "search"
+    accepted = status in {"omitted", None, "completed"}
+    assert ("lookup" in names) is accepted
+    assert payload == (
+        [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}]
+        if accepted
+        else []
+    )
+    assert request.model_dump() == original

@@ -30,7 +30,7 @@ def active_client_tools(request: OpenAIResponsesRequest) -> list[JsonObject]:
                 isinstance(item, dict)
                 and item.get("type") == "tool_search_output"
                 and is_client_search(item)
-                and item.get("status") == "completed"
+                and item.get("status") in (None, "completed")
                 and isinstance(tools := item.get("tools"), list)
             )
         )

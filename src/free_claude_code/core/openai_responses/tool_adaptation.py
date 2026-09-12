@@ -295,7 +295,7 @@ class ResponsesToolAdapter:
                     _name(choice), namespace=_namespace(choice)
                 ),
             }
-        if choice.get("type") == "custom":
+        if self._policy.custom_tools_as_functions and choice.get("type") == "custom":
             return {
                 **choice,
                 "type": "function",
