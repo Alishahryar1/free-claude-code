@@ -5,7 +5,7 @@ from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import cast
+from typing import Never, cast
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
@@ -60,6 +60,7 @@ class ResponsesToolAdapter:
         self._identities: dict[tuple[str | None, str], ResponsesToolIdentity] = {}
         self._wire_names: dict[ResponsesToolIdentity, str] = {}
         self._declared: set[ResponsesToolIdentity] = set()
+        self._namespace_headers: dict[tuple[str | None, str], JsonObject] = {}
         self._edits: list[_DefinitionEdit] = []
         self._search_name: str | None = None
         self._search_history = (
@@ -146,8 +147,6 @@ class ResponsesToolAdapter:
         tools: JsonValue,
         namespace: str | None = None,
         scope: str | None = None,
-        *,
-        preserve_namespaces: bool = False,
     ) -> JsonValue:
         if not isinstance(tools, list):
             return tools
@@ -155,11 +154,16 @@ class ResponsesToolAdapter:
         for tool in tools:
             if (
                 self._policy.flatten_namespaces
-                and not preserve_namespaces
                 and isinstance(tool, dict)
                 and tool.get("type") == "namespace"
             ):
-                children = self._tools(tool.get("tools"), _name(tool), scope)
+                name = _name(tool)
+                self._namespace_headers[(scope, name)] = {
+                    key: deepcopy(value)
+                    for key, value in tool.items()
+                    if key != "tools"
+                }
+                children = self._tools(tool.get("tools"), name, scope)
                 if isinstance(children, list):
                     result.extend(children)
             else:
@@ -278,9 +282,7 @@ class ResponsesToolAdapter:
         if kind == "tool_search_output":
             return {
                 **item,
-                "tools": self._tools(
-                    item.get("tools"), scope=_scope(item), preserve_namespaces=True
-                ),
+                "tools": self._tools(item.get("tools"), scope=_scope(item)),
             }
         if (
             not self._policy.custom_tools_as_functions
@@ -387,12 +389,18 @@ class ResponsesToolAdapter:
                 separators=(",", ":"),
             )
         try:
-            parsed = json.loads(arguments, parse_float=_canonical_number)
+            parsed = json.loads(
+                arguments,
+                parse_float=_canonical_number,
+                parse_constant=_reject_json_constant,
+            )
         except ValueError as exc:
             raise ResponsesConversionError("Invalid tool call arguments.") from exc
         if not isinstance(parsed, dict):
             raise ResponsesConversionError("Tool call arguments must be a JSON object.")
-        return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(
+            parsed, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
 
     def restore_item(self, value: JsonValue) -> JsonValue:
         if not isinstance(value, dict):
@@ -423,7 +431,7 @@ class ResponsesToolAdapter:
                 arguments = (
                     {}
                     if value.get("status") == "in_progress"
-                    else json.loads(raw)
+                    else json.loads(raw, parse_constant=_reject_json_constant)
                     if isinstance(raw, str) and raw
                     else None
                 )
@@ -476,6 +484,7 @@ class ResponsesToolAdapter:
         if not isinstance(tools, list):
             return tools
         result: list[JsonValue] = []
+        namespaces: dict[str, JsonObject] = {}
         for tool in tools:
             if isinstance(tool, dict):
                 if tool.get("type") == "namespace":
@@ -485,14 +494,42 @@ class ResponsesToolAdapter:
                             tool.get("tools"), _name(tool), scope
                         ),
                     }
+                    if self._policy.flatten_namespaces and namespace is None:
+                        name = _name(tool)
+                        if name in namespaces:
+                            cast(list[JsonValue], namespaces[name]["tools"]).extend(
+                                cast(list[JsonValue], tool["tools"])
+                            )
+                            continue
+                        namespaces[name] = tool
                 else:
+                    identity = (
+                        self._identity(
+                            {**tool, "namespace": namespace or _namespace(tool)}
+                        )
+                        if self._policy.flatten_namespaces
+                        and tool.get("type") in ("function", "custom")
+                        else None
+                    )
+                    wire_name = (
+                        self._wire_names[identity]
+                        if identity is not None
+                        else tool.get("name")
+                    )
                     edits = [
                         edit
                         for edit in self._edits
-                        if edit.namespace == namespace
-                        and edit.adapted.get("type") == tool.get("type")
-                        and edit.adapted.get("name") == tool.get("name")
+                        if edit.adapted.get("type") == tool.get("type")
+                        and edit.adapted.get("name") == wire_name
                     ]
+                    if self._policy.flatten_namespaces and tool.get("type") in (
+                        "function",
+                        "custom",
+                    ):
+                        if identity is None:
+                            edits = []
+                    else:
+                        edits = [edit for edit in edits if edit.namespace == namespace]
                     scoped = [edit for edit in edits if edit.scope == scope]
                     if scoped:
                         edits = scoped
@@ -514,6 +551,31 @@ class ResponsesToolAdapter:
                                     tool[key] = deepcopy(edit.original[key])
                                 else:
                                     tool.pop(key, None)
+                    elif identity is not None:
+                        tool = {**tool, "name": identity.name}
+                    if (
+                        identity is not None
+                        and identity.namespace is not None
+                        and namespace is None
+                    ):
+                        name = identity.namespace
+                        if name not in namespaces:
+                            header = self._namespace_headers.get(
+                                (scope, name),
+                                self._namespace_headers.get(
+                                    (None, name), {"type": "namespace", "name": name}
+                                ),
+                            )
+                            namespaces[name] = {**deepcopy(header), "tools": []}
+                            result.append(namespaces[name])
+                        cast(list[JsonValue], namespaces[name]["tools"]).append(
+                            {
+                                key: value
+                                for key, value in tool.items()
+                                if key != "namespace"
+                            }
+                        )
+                        continue
             result.append(tool)
         return result
 
@@ -703,3 +765,7 @@ def _canonical_number(value: str) -> int | float:
     """Codex integer parameters reject equivalent JSON floats such as 8.0."""
     number = Decimal(value)
     return int(number) if number == number.to_integral_value() else float(number)
+
+
+def _reject_json_constant(value: str) -> Never:
+    raise ValueError(f"Non-finite JSON constant: {value}")

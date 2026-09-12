@@ -1102,3 +1102,64 @@ def test_chat_preserves_custom_result_text_serialization() -> None:
         "tool_call_id": "edit",
         "content": json.dumps(result, separators=(",", ":")),
     }
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("search", [False, True])
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_non_finite_arguments_cannot_complete_or_corrupt_sse(
+    native: bool, search: bool, constant: str
+) -> None:
+    request = OpenAIResponsesRequest(
+        model="example", input="Call a tool", tools=[SEARCH, AGENTS]
+    )
+    name = "fcc_tool_search" if search else "agents__spawn_agent"
+    arguments = '{"nested":[{"limit":' + constant + "}]}"
+    if native:
+        with pytest.raises(ResponsesConversionError, match="arguments"):
+            _completed_tool_events(request, native=True, name=name, arguments=arguments)
+    else:
+        events = _completed_tool_events(
+            request, native=False, name=name, arguments=arguments
+        )
+        assert events[-1]["type"] == "response.failed"
+        assert events[-1]["response"]["output"] == []
+        assert not any(event["type"] == "response.output_item.done" for event in events)
+        json.dumps(events, allow_nan=False)
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_non_finite_spellings_remain_valid_custom_text(native: bool) -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        input="Edit",
+        tools=[
+            {"type": "custom", "name": "edit"},
+        ],
+    )
+    events = _completed_tool_events(
+        request, native=native, name="edit", arguments="NaN Infinity -Infinity"
+    )
+    assert events[-1]["response"]["output"][0]["input"] == "NaN Infinity -Infinity"
+    json.dumps(events, allow_nan=False)
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("search", [False, True])
+def test_non_finite_spellings_in_json_strings_remain_valid(
+    native: bool, search: bool
+) -> None:
+    request = OpenAIResponsesRequest(
+        model="example", input="Call a tool", tools=[SEARCH, AGENTS]
+    )
+    events = _completed_tool_events(
+        request,
+        native=native,
+        name="fcc_tool_search" if search else "agents__spawn_agent",
+        arguments='{"text":"NaN Infinity -Infinity","limit":8.0}',
+    )
+    item = events[-1]["response"]["output"][0]
+    arguments = item["arguments"] if search else json.loads(item["arguments"])
+    assert arguments == {"text": "NaN Infinity -Infinity", "limit": 8}
+    assert type(arguments["limit"]) is int
+    json.dumps(events, allow_nan=False)
