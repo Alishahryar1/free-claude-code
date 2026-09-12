@@ -6,6 +6,7 @@ const state = {
   modelOptions: [],
   modelComboboxes: new Set(),
   authPollers: new Map(),
+  localStatusRequest: null,
   activeView: viewFromLocation(),
 };
 
@@ -105,6 +106,7 @@ async function api(path, options = {}) {
 }
 
 async function load() {
+  state.localStatusRequest = null;
   showMessage("Loading admin config");
   const config = await api("/admin/api/config");
   state.config = config;
@@ -113,10 +115,10 @@ async function load() {
   renderProviders(config.provider_status);
   renderSections(config.sections, config.fields);
   byId("configPath").textContent = config.paths.managed;
+  void refreshLocalStatus(config);
   await Promise.all([
     refreshConnectedAccounts(),
     hydrateModelOptions(),
-    refreshLocalStatus(),
     window.CodeSessions.initialize(api),
   ]);
   updateDirtyState();
@@ -1100,32 +1102,53 @@ async function apply() {
   }
 }
 
-async function refreshLocalStatus() {
-  const result = await api("/admin/api/providers/local-status");
-  result.providers.forEach((provider) => {
-    if (provider.status === "missing_url") return;
-    if (provider.status === "reachable") {
+async function refreshLocalStatus(config) {
+  const request = {
+    providerIds: new Set(config.provider_status.filter((provider) =>
+      provider.kind === "local" && provider.status === "configured",
+    ).map((provider) => provider.provider_id)),
+  };
+  state.localStatusRequest = request;
+  try {
+    const result = await api("/admin/api/providers/local-status");
+    if (state.localStatusRequest !== request) return;
+    result.providers.forEach((provider) => {
+      if (!request.providerIds.has(provider.provider_id) || provider.status === "missing_url") return;
+      if (provider.status === "reachable") {
+        updateProviderCheckResult(
+          provider.provider_id,
+          "ok",
+          `Reachable: ${provider.base_url}`,
+        );
+        return;
+      }
+      const detail = provider.message
+        ? provider.message
+        : provider.status_code
+          ? `${provider.base_url} returned HTTP ${provider.status_code}`
+          : "The local provider did not respond.";
       updateProviderCheckResult(
         provider.provider_id,
-        "ok",
-        `Reachable: ${provider.base_url}`,
+        "error",
+        `Unavailable: ${detail}`,
       );
-      return;
-    }
-    const detail = provider.message
-      ? provider.message
-      : provider.status_code
-        ? `${provider.base_url} returned HTTP ${provider.status_code}`
-        : "The local provider did not respond.";
-    updateProviderCheckResult(
-      provider.provider_id,
-      "error",
-      `Unavailable: ${detail}`,
-    );
-  });
+    });
+  } catch {
+    if (state.localStatusRequest !== request) return;
+    request.providerIds.forEach((providerId) => {
+      updateProviderCheckResult(
+        providerId,
+        "error",
+        "Availability check failed. Use Test to retry.",
+      );
+    });
+  } finally {
+    if (state.localStatusRequest === request) state.localStatusRequest = null;
+  }
 }
 
 async function testProvider(providerId, button) {
+  state.localStatusRequest?.providerIds.delete(providerId);
   const original = button.textContent;
   button.disabled = true;
   button.textContent = "Checking...";
