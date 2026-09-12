@@ -204,6 +204,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "and tool-capable models."
         ),
     },
+    "SCW_SECRET_KEY": {
+        "label": "Scaleway API Key",
+        "description": (
+            "Scaleway Generative APIs secret key for OpenAI-compatible chat and "
+            "tool-capable models."
+        ),
+    },
     "CHUTES_API_KEY": {
         "label": "Chutes API Key",
         "description": (
