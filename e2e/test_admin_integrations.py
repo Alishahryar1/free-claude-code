@@ -18,10 +18,16 @@ def test_codex_connect_disconnect_and_modal_paths(
     cards = page.locator("#view-integrations > article")
     expect(cards).to_have_count(2)
     expect(cards.nth(1)).to_contain_text(
-        "Use FCC's models in the Codex CLI, VS Code extension, and desktop app."
+        "Use FCC's models in the Codex VS Code extension and desktop app."
     )
+    bounds = [card.bounding_box() for card in cards.all()]
+    if width == 1280:
+        assert bounds[0]["y"] == bounds[1]["y"]
+        assert bounds[1]["x"] > bounds[0]["x"]
+    else:
+        assert bounds[1]["y"] > bounds[0]["y"]
     opener = page.locator("#openCodexIntegration")
-    dialog = page.get_by_role("dialog", name="Codex", exact=True)
+    dialog = page.get_by_role("dialog", name="Codex in VS Code and App", exact=True)
     opener.click()
     expect(dialog).to_be_visible()
     expect(page.locator("#claudeIntegrationDialog")).not_to_be_visible()
@@ -52,7 +58,15 @@ def test_codex_connect_disconnect_and_modal_paths(
     page.locator("#confirmCodexIntegration").click()
     expect(dialog).not_to_be_visible()
     expect(opener).to_have_text("Disconnect")
-    expect(page.locator("#codexIntegrationStatus")).to_have_text("Connected")
+    expect(page.locator("#codexIntegrationStatus")).not_to_be_visible()
+    expect(opener).to_have_css("color", "rgb(239, 68, 68)")
+    if width == 1280:
+        buttons = [
+            button.bounding_box()
+            for button in page.locator(".integration-card > button").all()
+        ]
+        assert buttons[0]["y"] == buttons[1]["y"]
+        assert buttons[0]["height"] == buttons[1]["height"]
     expect(page.locator("#codexIntegrationMessage")).to_have_text(
         "Settings saved. Restart Codex and select an FCC model."
     )
@@ -62,11 +76,15 @@ def test_codex_connect_disconnect_and_modal_paths(
     expect(opener).to_have_text("Disconnect")
     opener.click()
     expect(page.locator("#confirmCodexIntegration")).to_have_text("Disconnect")
+    expect(page.locator("#confirmCodexIntegration")).to_have_css(
+        "color", "rgb(239, 68, 68)"
+    )
     expect(dialog.locator("#codexIntegrationFiles li")).to_have_text(
         [str(path.resolve())]
     )
     page.locator("#confirmCodexIntegration").click()
     expect(opener).to_have_text("Connect")
+    expect(opener).to_have_css("color", "rgb(6, 16, 11)")
     assert tomllib.loads(path.read_text()) == {"model": "my-choice"}
     assert not (tmp_path / "vscode" / "settings.json").exists()
     assert not (tmp_path / ".claude.json").exists()
@@ -119,7 +137,8 @@ def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):
     action.click()
     expect(dialog).not_to_be_visible()
     expect(card_button).to_have_text("Disconnect")
-    expect(page.locator("#claudeIntegrationStatus")).to_have_text("Connected")
+    expect(page.locator("#claudeIntegrationStatus")).not_to_be_visible()
+    expect(card_button).to_have_css("color", "rgb(239, 68, 68)")
     expect(page.locator("#claudeIntegrationMessage")).to_contain_text("Reload VS Code")
     assert json.loads(path.read_text())["claudeCode.disableLoginPrompt"] is True
     state_path = tmp_path / ".claude.json"
@@ -128,12 +147,14 @@ def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):
     expect(card_button).to_have_text("Disconnect")
     card_button.click()
     expect(action).to_have_text("Disconnect")
+    expect(action).to_have_css("color", "rgb(239, 68, 68)")
     expect(page.locator("#claudeIntegrationDescription")).to_contain_text("Remove")
     page.keyboard.press("Escape")
     assert json.loads(path.read_text())["claudeCode.disableLoginPrompt"] is True
     card_button.click()
     action.click()
     expect(card_button).to_have_text("Connect")
+    expect(card_button).to_have_css("color", "rgb(6, 16, 11)")
     assert json.loads(path.read_text()) == {}
     assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
 

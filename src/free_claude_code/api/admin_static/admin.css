@@ -259,7 +259,18 @@ textarea:focus-visible,
   margin: 4px 0 0 0;
 }
 
-.integration-card { max-width: 400px; }
+.integration-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-bottom: 0;
+}
+.integration-card > button {
+  margin-top: auto;
+  min-height: 38px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
 .integration-dialog {
   width: min(480px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);

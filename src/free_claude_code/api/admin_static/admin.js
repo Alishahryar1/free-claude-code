@@ -1265,7 +1265,10 @@ function renderClaudeIntegration() {
   byId("openClaudeIntegration").disabled = busy;
   byId("confirmClaudeIntegration").textContent = busy ? "Saving…" : action;
   byId("confirmClaudeIntegration").disabled = busy || connected === null;
+  byId("openClaudeIntegration").className = connected ? "danger-button" : "primary-button";
+  byId("confirmClaudeIntegration").className = connected ? "danger-button" : "primary-button";
   const status = byId("claudeIntegrationStatus");
+  status.hidden = connected === true;
   status.textContent = connected === null
     ? (busy ? "Checking settings…" : "Could not check settings")
     : (connected ? "Connected" : "Not connected");
@@ -1355,7 +1358,10 @@ function renderCodexIntegration() {
   byId("openCodexIntegration").disabled = busy;
   byId("confirmCodexIntegration").textContent = busy ? "Saving…" : action;
   byId("confirmCodexIntegration").disabled = busy || connected === null;
+  byId("openCodexIntegration").className = connected ? "danger-button" : "primary-button";
+  byId("confirmCodexIntegration").className = connected ? "danger-button" : "primary-button";
   const status = byId("codexIntegrationStatus");
+  status.hidden = connected === true;
   status.textContent = connected === null
     ? (busy ? "Checking settings…" : "Could not check settings")
     : (connected ? "Connected" : "Not connected");
