@@ -1,14 +1,14 @@
-"""Explicit argument schemas for providers requiring every search property."""
+"""Request-scoped client discovery and provider search argument schemas."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import cast
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .errors import ResponsesConversionError
-from .models import OpenAIResponsesRequest
-from .tools import flatten_responses_tool_name, required_str
+from .tools import required_str
 
 
 def is_client_search(value: Mapping[str, JsonValue]) -> bool:
@@ -19,22 +19,70 @@ def is_client_search(value: Mapping[str, JsonValue]) -> bool:
     }
 
 
-def active_client_tools(request: OpenAIResponsesRequest) -> list[JsonObject]:
-    """Resolve discoveries in history order, with explicit current tools last."""
-    groups: list[list[JsonObject]] = []
-    if isinstance(request.input, list):
-        groups.extend(
-            [tool for tool in tools if isinstance(tool, dict)]
-            for item in request.input
-            if (
-                isinstance(item, dict)
-                and item.get("type") == "tool_search_output"
-                and is_client_search(item)
-                and item.get("status") in (None, "completed")
-                and isinstance(tools := item.get("tools"), list)
+@dataclass(frozen=True, slots=True)
+class ClientSearchHistory:
+    client_items: frozenset[int]
+    output_tools: dict[int, list[JsonObject]]
+
+
+def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
+    """Infer omitted execution only from search records with the same call ID."""
+    if not isinstance(items, list):
+        return ClientSearchHistory(frozenset(), {})
+    searches = {
+        index: item
+        for index, item in enumerate(items)
+        if isinstance(item, dict)
+        and item.get("type") in ("tool_search_call", "tool_search_output")
+    }
+    executions: dict[str, str] = {}
+    for item in searches.values():
+        call_id, execution = item.get("call_id"), item.get("execution")
+        if (
+            not isinstance(call_id, str)
+            or not call_id
+            or execution not in ("client", "server")
+        ):
+            continue
+        if call_id in executions and executions[call_id] != execution:
+            raise ResponsesConversionError(
+                "Conflicting tool search execution for one call ID."
             )
-        )
-    groups.append(request.tools or [])
+        executions[call_id] = cast(str, execution)
+    client_items: set[int] = set()
+    outputs: dict[int, list[JsonObject]] = {}
+    for index, item in searches.items():
+        execution = item.get("execution")
+        call_id = item.get("call_id")
+        if execution is None and isinstance(call_id, str) and call_id:
+            execution = executions.get(call_id)
+        if execution != "client":
+            continue
+        client_items.add(index)
+        if item.get("type") == "tool_search_output":
+            tools = item.get("tools")
+            accepted = item.get("status") in (None, "completed") and isinstance(
+                tools, list
+            )
+            outputs[index] = _merge_tool_groups(
+                [
+                    [tool for tool in tools if isinstance(tool, dict)]
+                    if accepted and isinstance(tools, list)
+                    else [],
+                    [],
+                ]
+            )
+    return ClientSearchHistory(frozenset(client_items), outputs)
+
+
+def active_client_tools(
+    tools: list[JsonObject] | None, history: ClientSearchHistory
+) -> list[JsonObject]:
+    """Resolve discoveries in history order, with explicit current tools last."""
+    return _merge_tool_groups([*history.output_tools.values(), tools or []])
+
+
+def _merge_tool_groups(groups: list[list[JsonObject]]) -> list[JsonObject]:
     active: dict[tuple[str, str | None, str], JsonObject] = {}
     hosted: list[JsonObject] = []
     for group in groups:
@@ -82,21 +130,8 @@ def active_client_tools(request: OpenAIResponsesRequest) -> list[JsonObject]:
     return result
 
 
-def search_function_name(tools: list[JsonObject]) -> str:
-    names: set[str] = set()
-    for tool in tools:
-        ns = tool.get("name") if tool.get("type") == "namespace" else None
-        children = tool.get("tools") if ns else [tool]
-        if isinstance(children, list):
-            for child in children:
-                if isinstance(child, dict) and isinstance(
-                    name := child.get("name"), str
-                ):
-                    names.add(
-                        flatten_responses_tool_name(
-                            name, namespace=ns if isinstance(ns, str) else None
-                        )
-                    )
+def search_function_name(reserved: Iterable[str]) -> str:
+    names = set(reserved)
     name = "fcc_tool_search"
     suffix = 0
     while name in names:

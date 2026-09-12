@@ -1114,10 +1114,9 @@ class OpenAIChatProvider(BaseProvider):
             tool_schemas=tool_schemas,
             reserved_tool_ids=translated.reserved_tool_ids,
             output_factory=lambda: ResponsesChatStreamOutput(
-                request,
+                translated.tool_adapter,
                 input_tokens=input_tokens,
                 response_model=public_model,
-                tool_adapter=translated.tool_adapter,
             ),
             input_tokens=input_tokens,
             request_id=request_id,

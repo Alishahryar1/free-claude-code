@@ -5,6 +5,7 @@ from typing import Any, cast
 import pytest
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -12,7 +13,10 @@ from free_claude_code.core.openai_responses import (
     ResponsesToolAdapter,
     ResponsesToolPolicy,
     build_responses_chat_request,
-    responses_tool_identity_from_wire_name,
+)
+from free_claude_code.providers.openai_chat.stream_output import (
+    ChatStreamUsage,
+    ResponsesChatStreamOutput,
 )
 
 SEARCH: JsonObject = {
@@ -99,9 +103,18 @@ def test_chat_discovery_preserves_pairing_and_activates_returned_tool() -> None:
 
 
 def test_unique_bare_tool_name_restores_declared_namespace() -> None:
-    identity = responses_tool_identity_from_wire_name([AGENTS], "spawn_agent")
-    assert identity.name == "spawn_agent"
-    assert identity.namespace == "agents"
+    item = cast(
+        dict[str, Any],
+        _native_adapter([AGENTS]).restore_item(
+            {
+                "type": "function_call",
+                "name": "spawn_agent",
+                "arguments": '{"message":"hello"}',
+            }
+        ),
+    )
+    assert item["name"] == "spawn_agent"
+    assert item["namespace"] == "agents"
 
 
 def _native_adapter(tools: list[JsonObject]) -> ResponsesToolAdapter:
@@ -417,12 +430,17 @@ def test_native_custom_namespace_is_removed_from_provider_definition() -> None:
 
 
 def test_real_unnamespaced_tool_wins_over_bare_namespace_alias() -> None:
-    tools = [
+    tools: list[JsonObject] = [
         AGENTS,
         {"type": "function", "name": "spawn_agent", "parameters": {"type": "object"}},
     ]
-    identity = responses_tool_identity_from_wire_name(tools, "spawn_agent")
-    assert identity.namespace is None
+    item = cast(
+        dict[str, Any],
+        _native_adapter(tools).restore_item(
+            {"type": "function_call", "name": "spawn_agent", "arguments": "{}"}
+        ),
+    )
+    assert "namespace" not in item
 
 
 def test_native_canonical_arguments_agree_across_the_stream() -> None:
@@ -577,3 +595,510 @@ def test_discovery_optional_status_preserves_valid_tools(
         else []
     )
     assert request.model_dump() == original
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("missing_side", ["call", "output"])
+@pytest.mark.parametrize("missing", ["omitted", None])
+def test_discovery_execution_is_inferred_from_the_matching_record(
+    native: bool, missing_side: str, missing: str | None
+) -> None:
+    call: JsonObject = {
+        "type": "tool_search_call",
+        "execution": "client",
+        "call_id": "search",
+        "arguments": {"query": "agent"},
+    }
+    result: JsonObject = {
+        "type": "tool_search_output",
+        "execution": "client",
+        "call_id": "search",
+        "tools": [AGENTS],
+    }
+    item = call if missing_side == "call" else result
+    if missing == "omitted":
+        item.pop("execution")
+    else:
+        item["execution"] = missing
+    request = OpenAIResponsesRequest(
+        model="example",
+        tools=[SEARCH],
+        input=[{"role": "user", "content": "Find agent"}, call, result],
+    )
+    original = request.model_dump()
+    if native:
+        prepared = ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(client_tool_search=True, flatten_namespaces=True),
+        ).request
+        items = cast(list[dict[str, Any]], prepared.input)
+        assert items[-2]["type"] == "function_call"
+        assert items[-1]["type"] == "function_call_output"
+        assert items[-2]["call_id"] == items[-1]["call_id"] == "search"
+        assert "agents__spawn_agent" in [
+            tool.get("name") for tool in prepared.tools or []
+        ]
+        assert "spawn_agent" in items[-1]["output"]
+    else:
+        body = build_responses_chat_request(
+            request, reasoning_replay=ReasoningReplayMode.DISABLED
+        ).body
+        items = cast(list[dict[str, Any]], body["messages"])
+        assert items[-2]["tool_calls"][0]["id"] == "search"
+        assert items[-1]["role"] == "tool"
+        assert items[-1]["tool_call_id"] == "search"
+        assert "spawn_agent" in items[-1]["content"]
+        assert "agents__spawn_agent" in [
+            tool["function"]["name"]
+            for tool in cast(list[dict[str, Any]], body["tools"])
+        ]
+    assert request.model_dump() == original
+
+
+@pytest.mark.parametrize("execution", ["server", "omitted"])
+def test_discovery_call_id_does_not_imply_client_execution(execution: str) -> None:
+    call: JsonObject = {
+        "type": "tool_search_call",
+        "call_id": "search",
+        "arguments": {"query": "agent"},
+    }
+    if execution != "omitted":
+        call["execution"] = execution
+    result: JsonObject = {
+        "type": "tool_search_output",
+        "call_id": "search",
+        "tools": [AGENTS],
+    }
+    request = OpenAIResponsesRequest(
+        model="example", input=[call, result], tools=[SEARCH]
+    )
+    prepared = ResponsesToolAdapter(
+        request, ResponsesToolPolicy(client_tool_search=True, flatten_namespaces=True)
+    ).request
+    items = cast(list[dict[str, Any]], prepared.input)
+    assert [item["type"] for item in items] == [
+        "tool_search_call",
+        "tool_search_output",
+    ]
+    assert "agents__spawn_agent" not in [
+        tool.get("name") for tool in prepared.tools or []
+    ]
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_discovery_rejects_conflicting_execution_for_one_call(native: bool) -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        tools=[SEARCH],
+        input=[
+            {"role": "user", "content": "Find agent"},
+            {
+                "type": "tool_search_call",
+                "execution": "client",
+                "call_id": "search",
+                "arguments": {"query": "agent"},
+            },
+            {
+                "type": "tool_search_output",
+                "execution": "server",
+                "call_id": "search",
+                "tools": [AGENTS],
+            },
+        ],
+    )
+    with pytest.raises(ResponsesConversionError, match="execution"):
+        if native:
+            ResponsesToolAdapter(request, ResponsesToolPolicy(client_tool_search=True))
+        else:
+            build_responses_chat_request(
+                request, reasoning_replay=ReasoningReplayMode.DISABLED
+            )
+
+
+def _completed_tool_events(
+    request: OpenAIResponsesRequest, *, native: bool, name: str, arguments: str
+) -> list[dict[str, Any]]:
+    if native:
+        adapter = ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(
+                custom_tools_as_functions=True,
+                client_tool_search=True,
+                flatten_namespaces=True,
+            ),
+        )
+        events = adapter.event_adapter()
+        assert events is not None
+        item: JsonObject = {
+            "type": "function_call",
+            "id": "fc_test",
+            "call_id": "call_test",
+            "name": name,
+            "arguments": "",
+            "status": "in_progress",
+        }
+        completed: JsonObject = {**item, "arguments": arguments, "status": "completed"}
+        payloads: list[tuple[str, JsonObject]] = [
+            ("response.output_item.added", {"item": item, "output_index": 0}),
+            ("response.output_item.done", {"item": completed, "output_index": 0}),
+            (
+                "response.completed",
+                {"response": {"output": [completed], "status": "completed"}},
+            ),
+        ]
+        return [
+            data for kind, payload in payloads for _, data in events.feed(kind, payload)
+        ]
+    adapter = build_responses_chat_request(
+        request, reasoning_replay=ReasoningReplayMode.DISABLED
+    ).tool_adapter
+    writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
+    frames = [*writer.start_events(), writer.start_tool_block(0, "call_test", name)]
+    frames.append(writer.emit_tool_delta(0, arguments))
+    frames.extend(
+        writer.finish_success(
+            stop_reason="tool_calls",
+            usage=ChatStreamUsage(input_tokens=1, output_tokens=1),
+        )
+    )
+    return [frame.data for frame in parse_sse_text("".join(frames))]
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("custom", [False, True])
+def test_namespaced_search_named_tool_keeps_its_identity_in_all_events(
+    native: bool, custom: bool
+) -> None:
+    tool: JsonObject = {
+        "type": "custom" if custom else "function",
+        "name": "fcc_tool_search",
+    }
+    if not custom:
+        tool["parameters"] = {"type": "object"}
+    request = OpenAIResponsesRequest(
+        model="example",
+        input="Use ordinary tool",
+        tools=[
+            SEARCH,
+            {"type": "namespace", "name": "ordinary", "tools": [tool]},
+        ],
+    )
+    events = _completed_tool_events(
+        request,
+        native=native,
+        name="ordinary__fcc_tool_search",
+        arguments='{"input":"patch"}' if custom else '{"query":"ordinary"}',
+    )
+    expected_type = "custom_tool_call" if custom else "function_call"
+    for event in events:
+        if "item" in event:
+            assert event["item"]["type"] == expected_type
+            assert event["item"]["name"] == "fcc_tool_search"
+            assert event["item"]["namespace"] == "ordinary"
+    final = events[-1]["response"]["output"][0]
+    assert final["type"] == expected_type
+    assert final["namespace"] == "ordinary"
+    assert final["call_id"] == "call_test"
+    assert (
+        final.get("input") == "patch"
+        if custom
+        else json.loads(final["arguments"]) == {"query": "ordinary"}
+    )
+
+
+def test_search_name_reserves_ordinary_calls_from_history() -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        tools=[SEARCH],
+        input=[
+            {
+                "type": "function_call",
+                "call_id": "old",
+                "name": "fcc_tool_search",
+                "arguments": "{}",
+            },
+            {"type": "function_call_output", "call_id": "old", "output": "done"},
+        ],
+    )
+    adapter = ResponsesToolAdapter(
+        request,
+        ResponsesToolPolicy(
+            custom_tools_as_functions=True,
+            client_tool_search=True,
+            flatten_namespaces=True,
+        ),
+    )
+    helper = (adapter.request.tools or [])[0]
+    replay = cast(list[dict[str, Any]], adapter.request.input)[0]
+    assert helper["name"] != replay["name"]
+    restored = cast(
+        dict[str, Any], adapter.restore_item({**replay, "status": "completed"})
+    )
+    assert restored["type"] == "function_call"
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_nested_function_definition_and_choice_use_one_provider_name(
+    native: bool,
+) -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        input="Call lookup",
+        tools=[
+            {
+                "type": "namespace",
+                "name": "group",
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {"type": "object"},
+                        },
+                    },
+                ],
+            },
+        ],
+        tool_choice={"type": "function", "name": "lookup", "namespace": "group"},
+    )
+    if native:
+        prepared = ResponsesToolAdapter(
+            request, ResponsesToolPolicy(flatten_namespaces=True)
+        ).request
+        definition = (prepared.tools or [])[0]
+        assert "function" not in definition
+        assert definition["name"] == "group__lookup"
+        assert prepared.tool_choice == {"type": "function", "name": "group__lookup"}
+    else:
+        body = build_responses_chat_request(
+            request, reasoning_replay=ReasoningReplayMode.DISABLED
+        ).body
+        definition = cast(list[dict[str, Any]], body["tools"])[0]["function"]
+        assert definition["name"] == "group__lookup"
+        assert body["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "group__lookup"},
+        }
+
+
+def test_chat_does_not_turn_missing_search_arguments_into_a_successful_call() -> None:
+    events = _completed_tool_events(
+        OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),
+        native=False,
+        name="fcc_tool_search",
+        arguments="",
+    )
+    assert events[-1]["type"] == "response.failed"
+    assert events[-1]["response"]["output"] == []
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_synthetic_search_wins_over_bare_aliases_of_real_tools(native: bool) -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        input="Search",
+        tools=[
+            SEARCH,
+            {
+                "type": "namespace",
+                "name": "editor",
+                "tools": [
+                    {"type": "custom", "name": "fcc_tool_search"},
+                ],
+            },
+            {
+                "type": "namespace",
+                "name": "ordinary",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "fcc_tool_search",
+                        "parameters": {"type": "object"},
+                    },
+                ],
+            },
+        ],
+    )
+    events = _completed_tool_events(
+        request, native=native, name="fcc_tool_search", arguments='{"query":"agent"}'
+    )
+    item = events[-1]["response"]["output"][0]
+    assert item["type"] == "tool_search_call"
+    assert item["arguments"] == {"query": "agent"}
+    assert "namespace" not in item
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_malformed_namespace_is_not_silently_dropped(native: bool) -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        input="Hello",
+        tools=[
+            {"type": "namespace", "name": "ordinary", "tools": {}},
+        ],
+    )
+    with pytest.raises(ResponsesConversionError, match="list"):
+        if native:
+            ResponsesToolAdapter(request, ResponsesToolPolicy(flatten_namespaces=True))
+        else:
+            build_responses_chat_request(
+                request, reasoning_replay=ReasoningReplayMode.DISABLED
+            )
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
+    native: bool,
+) -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        input="Use tools",
+        tools=[
+            SEARCH,
+            {
+                "type": "namespace",
+                "name": "group",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object"},
+                    },
+                    {"type": "custom", "name": "edit"},
+                ],
+            },
+        ],
+    )
+    names = ["fcc_tool_search", "group__lookup", "group__edit"]
+    fragments = [['{"query":', '"agent"}'], ['{"n":', "8.0}"], ["plain ", "patch"]]
+    events: list[dict[str, Any]]
+    if native:
+        adapter = _native_adapter(cast(list[JsonObject], request.tools))
+        stream = adapter.event_adapter()
+        assert stream is not None
+        items: list[JsonObject] = [
+            {
+                "id": f"fc_{i}",
+                "call_id": f"call_{i}",
+                "type": "function_call",
+                "status": "in_progress",
+                "name": name,
+                "arguments": "",
+            }
+            for i, name in enumerate(names)
+        ]
+        events = []
+        for i, item in enumerate(items):
+            events.extend(
+                data
+                for _, data in stream.feed(
+                    "response.output_item.added", {"item": item, "output_index": i}
+                )
+            )
+        for part in range(2):
+            for i, item in enumerate(items):
+                events.extend(
+                    data
+                    for _, data in stream.feed(
+                        "response.function_call_arguments.delta",
+                        {
+                            "item_id": item["id"],
+                            "output_index": i,
+                            "delta": fragments[i][part],
+                        },
+                    )
+                )
+        completed: list[JsonObject] = []
+        for i, item in enumerate(items):
+            finished: JsonObject = {
+                **item,
+                "status": "completed",
+                "arguments": "".join(fragments[i]),
+            }
+            completed.append(finished)
+            events.extend(
+                data
+                for _, data in stream.feed(
+                    "response.output_item.done", {"item": finished, "output_index": i}
+                )
+            )
+        events.extend(
+            data
+            for _, data in stream.feed(
+                "response.completed",
+                {"response": {"output": completed, "status": "completed"}},
+            )
+        )
+    else:
+        prepared = build_responses_chat_request(
+            request, reasoning_replay=ReasoningReplayMode.DISABLED
+        )
+        writer = ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
+        frames = [*writer.start_events()]
+        for i, name in enumerate(names):
+            frames.append(writer.start_tool_block(i, f"call_{i}", name))
+        for part in range(2):
+            frames.extend(
+                writer.emit_tool_delta(i, fragments[i][part]) for i in range(3)
+            )
+        frames.extend(
+            writer.finish_success(
+                stop_reason="tool_calls",
+                usage=ChatStreamUsage(input_tokens=1, output_tokens=1),
+            )
+        )
+        events = [frame.data for frame in parse_sse_text("".join(frames))]
+    final = events[-1]["response"]["output"]
+    assert final == [
+        event["item"]
+        for event in events
+        if event["type"] == "response.output_item.done"
+    ]
+    assert [item["call_id"] for item in final] == ["call_0", "call_1", "call_2"]
+    assert final[0]["type"] == "tool_search_call"
+    assert final[0]["arguments"] == {"query": "agent"}
+    assert final[1]["type"] == "function_call"
+    assert (final[1]["name"], final[1]["namespace"]) == ("lookup", "group")
+    assert final[1]["arguments"] == '{"n":8}'
+    assert final[2]["type"] == "custom_tool_call"
+    assert (final[2]["name"], final[2]["namespace"], final[2]["input"]) == (
+        "edit",
+        "group",
+        "plain patch",
+    )
+    argument_events = [
+        event
+        for event in events
+        if event["type"].startswith("response.function_call_arguments.")
+    ]
+    assert {event["item_id"] for event in argument_events} == {final[1]["id"]}
+    assert argument_events[-1]["arguments"] == final[1]["arguments"]
+    sequences = [event["sequence_number"] for event in events]
+    assert sequences == sorted(set(sequences))
+
+
+def test_chat_preserves_custom_result_text_serialization() -> None:
+    result = [{"type": "input_image", "image_url": "https://example.com/result.png"}]
+    request = OpenAIResponsesRequest(
+        model="example",
+        tools=[{"type": "custom", "name": "edit"}],
+        input=[
+            {
+                "type": "custom_tool_call",
+                "call_id": "edit",
+                "name": "edit",
+                "input": "patch",
+            },
+            {"type": "custom_tool_call_output", "call_id": "edit", "output": result},
+        ],
+    )
+    body = build_responses_chat_request(
+        request, reasoning_replay=ReasoningReplayMode.DISABLED
+    ).body
+    messages = cast(list[dict[str, Any]], body["messages"])
+    assert len(messages) == 2
+    assert messages[-1] == {
+        "role": "tool",
+        "tool_call_id": "edit",
+        "content": json.dumps(result, separators=(",", ":")),
+    }

@@ -24,8 +24,9 @@ from tests.providers.test_opencode import (
     "provider_id", ["open_router", "nvidia_nim", "groq", "mistral", "opencode_zen"]
 )
 @pytest.mark.parametrize("custom", [False, True])
+@pytest.mark.parametrize("omit_discovery_metadata", [False, True])
 async def test_provider_discovery_call_and_result_round_trip(
-    provider_id: str, custom: bool
+    provider_id: str, custom: bool, omit_discovery_metadata: bool
 ) -> None:
     native = provider_id == "opencode_zen"
     requests: list[dict[str, Any]] = []
@@ -73,6 +74,17 @@ async def test_provider_discovery_call_and_result_round_trip(
                 assert json.loads(replayed_call["arguments"]) == (
                     {"input": "patch"} if custom else {"message": "hello"}
                 )
+            else:
+                replayed_call = messages[-2]["tool_calls"][0]
+                function = replayed_call["function"]
+                assert function["name"] == (
+                    "editor__edit" if custom else "agents__spawn_agent"
+                )
+                assert json.loads(function["arguments"]) == (
+                    {"input": "patch"} if custom else {"message": "hello"}
+                )
+                assert function["name"] in functions
+                assert "namespace" not in function
             assert (
                 messages[-1].get("type") == "function_call_output"
                 if native
@@ -274,6 +286,9 @@ async def test_provider_discovery_call_and_result_round_trip(
                 },
             ]
         )
+        if omit_discovery_metadata:
+            history[-1].pop("execution")
+            history[-1].pop("status")
         call = (await turn())["output"][0]
         assert call["type"] == ("custom_tool_call" if custom else "function_call")
         assert call["namespace"] == ("editor" if custom else "agents")

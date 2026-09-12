@@ -23,7 +23,6 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
-    OpenAIResponsesRequest,
     ReasoningBlockState,
     ResponseBlockCompleter,
     ResponseEventBuilder,
@@ -39,7 +38,6 @@ from free_claude_code.core.openai_responses import (
     openai_error_from_failure,
     reasoning_output_item,
     replay_unsafe_function_call_error,
-    responses_tool_identity_from_wire_name,
     tool_item,
 )
 from free_claude_code.core.token_estimation import estimate_text_tokens
@@ -488,25 +486,24 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
 
     def __init__(
         self,
-        request: OpenAIResponsesRequest,
+        tool_adapter: ResponsesToolAdapter,
         *,
         input_tokens: int,
         response_model: str | None = None,
-        tool_adapter: ResponsesToolAdapter | None = None,
     ) -> None:
         super().__init__(input_tokens=input_tokens)
-        self._request = request
-        self._tool_request = tool_adapter.request if tool_adapter else request
-        self._response_model = response_model or request.model
+        self._request = tool_adapter.original
+        self._response_model = response_model or self._request.model
         self._response_id = new_response_id()
         self._created_at = int(time.time())
         self._ledger = ResponsesOutputLedger()
-        tool_events = tool_adapter.event_adapter() if tool_adapter else None
+        tool_events = tool_adapter.event_adapter()
         self._events = ResponseEventBuilder(tool_events.feed if tool_events else None)
         self._completer = ResponseBlockCompleter(
             self._ledger,
             events=self._events,
             on_invalid_function_call=self._fail_invalid_function_call,
+            prepare_tool_arguments=tool_adapter.prepare_arguments,
         )
         self._text_state: TextBlockState | None = None
         self._reasoning_state: ReasoningBlockState | None = None
@@ -653,19 +650,14 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         return self._completer.complete_block(state)
 
     def _start_tool_block(self, tool_index: int, state: ChatToolState) -> str:
-        identity = responses_tool_identity_from_wire_name(
-            self._tool_request.tools, state.name
-        )
         output_index = self._ledger.reserve_output_slot()
         output_state = ToolBlockState(
             index=output_index,
             output_index=output_index,
-            item_id=f"{'ctc' if identity.kind == 'custom' else 'fc'}_"
-            f"{uuid.uuid4().hex[:24]}",
+            item_id=f"fc_{uuid.uuid4().hex[:24]}",
             call_id=state.tool_id or new_call_id(),
-            kind=identity.kind,
-            name=identity.name,
-            namespace=identity.namespace,
+            kind="function",
+            name=state.name,
         )
         self._tool_output_states[tool_index] = output_state
         self._ledger.set_active_block(output_state)
