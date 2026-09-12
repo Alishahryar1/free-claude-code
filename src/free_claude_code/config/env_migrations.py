@@ -414,10 +414,7 @@ def _materialize_auth_state(
             "true" if values[ANTHROPIC_AUTH_TOKEN_ENV].strip() else "false"
         )
         return
-    process_token = process.get(ANTHROPIC_AUTH_TOKEN_ENV, "").strip()
-    if process_token:
-        values[PROXY_AUTH_ENABLED_ENV] = "true"
-    elif had_legacy_state:
+    if had_legacy_state:
         values[PROXY_AUTH_ENABLED_ENV] = "false"
 
 

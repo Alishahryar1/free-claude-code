@@ -271,7 +271,7 @@ def test_explicit_managed_path_is_deduplicated(
     [
         ("ANTHROPIC_AUTH_TOKEN=secret\n", {}, "true", "secret"),
         ("ANTHROPIC_AUTH_TOKEN=\n", {}, "false", None),
-        ("", {"ANTHROPIC_AUTH_TOKEN": "process-secret"}, "true", None),
+        ("", {"ANTHROPIC_AUTH_TOKEN": "process-secret"}, "false", None),
         ("", {}, "false", None),
         (
             "PROXY_AUTH_ENABLED=false\nANTHROPIC_AUTH_TOKEN=secret\n",
@@ -308,6 +308,18 @@ def test_process_auth_flag_is_not_persisted(
     consolidate_managed_config({"PROXY_AUTH_ENABLED": "true"})
 
     assert "PROXY_AUTH_ENABLED" not in dotenv_values_from_file(managed)
+
+
+def test_fresh_install_ignores_process_token(monkeypatch, tmp_path):
+    managed, _ = _paths(monkeypatch, tmp_path)
+    process = {"ANTHROPIC_AUTH_TOKEN": "process-secret"}
+    consolidate_managed_config(process)
+    values = dotenv_values_from_file(managed)
+    assert "ANTHROPIC_AUTH_TOKEN" not in values
+    assert "PROXY_AUTH_ENABLED" not in values
+    settings = ManagedConfigStore().read(process).settings
+    assert settings.proxy_auth_token == "freecc"
+    assert settings.proxy_auth_enabled is False
 
 
 def test_only_managed_schema_marker_is_trusted(

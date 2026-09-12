@@ -149,13 +149,18 @@ def admin_base_url(
     monkeypatch.setenv("VOICE_NOTE_ENABLED", "false")
     monkeypatch.setenv("FCC_OPEN_BROWSER", "false")
     monkeypatch.setenv("PROXY_AUTH_ENABLED", "false")
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "e2e-proxy-token")
     for key, value in getattr(request, "param", {}).items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(paths, "config_dir_path", lambda: config_dir)
     monkeypatch.setattr(env_migrations, "legacy_env_paths", lambda: ())
     monkeypatch.setattr(env_migrations, "verified_checkout_env_path", lambda: None)
     clear_settings_cache()
+
+    store = ManagedConfigStore()
+    store.initialize({})
+    store.commit(
+        dict(store.read({}).managed) | {"ANTHROPIC_AUTH_TOKEN": "e2e-proxy-token"}
+    )
 
     provider_secret = "CREDENTIAL[unrecognized-format-987654321]"
     providers: dict[str, BaseProvider] = {
