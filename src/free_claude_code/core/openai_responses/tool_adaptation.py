@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Never, cast
 
+import simplejson
+
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .errors import ResponsesConversionError
@@ -85,12 +87,21 @@ class ResponsesToolAdapter:
         ):
             self._register_tools(self.request.tools)
             if isinstance(self.request.input, list):
-                for item in self.request.input:
+                for index, item in enumerate(self.request.input):
                     if isinstance(item, dict) and item.get("type") in (
                         "function_call",
                         "custom_tool_call",
                     ):
                         self._wire_name(_call_identity(item))
+                    elif (
+                        isinstance(item, dict)
+                        and item.get("type") == "tool_search_output"
+                    ):
+                        self._register_tools(
+                            self._search_history.output_tools.get(
+                                index, item.get("tools")
+                            )
+                        )
         if client_search:
             self._search_name = search_function_name(self._wire_names.values())
         if self.request.tools:
@@ -270,7 +281,7 @@ class ResponsesToolAdapter:
                     **common,
                     "type": "function_call",
                     "name": self._search_name,
-                    "arguments": json.dumps(arguments),
+                    "arguments": simplejson.dumps(arguments, use_decimal=True),
                 }
             if kind == "tool_search_output":
                 active = self._search_history.output_tools[index]
@@ -408,8 +419,12 @@ class ResponsesToolAdapter:
             raise ResponsesConversionError("Invalid tool call arguments.") from exc
         if not isinstance(parsed, dict):
             raise ResponsesConversionError("Tool call arguments must be a JSON object.")
-        return json.dumps(
-            parsed, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        return simplejson.dumps(
+            parsed,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+            use_decimal=True,
         )
 
     def restore_item(self, value: JsonValue) -> JsonValue:
@@ -441,7 +456,11 @@ class ResponsesToolAdapter:
                 arguments = (
                     {}
                     if value.get("status") == "in_progress"
-                    else json.loads(raw, parse_constant=_reject_json_constant)
+                    else json.loads(
+                        raw,
+                        parse_float=_canonical_number,
+                        parse_constant=_reject_json_constant,
+                    )
                     if isinstance(raw, str) and raw
                     else None
                 )
@@ -646,6 +665,8 @@ class ResponsesToolEventAdapter:
             ):
                 if isinstance(item_id := item.get("id"), str):
                     self._function_items.add(item_id)
+                if event_type == "response.output_item.added":
+                    item["arguments"] = ""
                 if (
                     event_type == "response.output_item.done"
                     and item.get("status") == "completed"
@@ -677,6 +698,8 @@ class ResponsesToolEventAdapter:
             ):
                 if isinstance(item_id := item.get("id"), str):
                     self._custom_items.add(item_id)
+                if event_type == "response.output_item.added":
+                    item["input"] = ""
                 if event_type == "response.output_item.done":
                     coordinates = {
                         "item_id": item.get("id"),
@@ -773,10 +796,10 @@ def _scope(value: Mapping[str, JsonValue]) -> str | None:
     return optional_str(value.get("call_id")) or optional_str(value.get("id"))
 
 
-def _canonical_number(value: str) -> int | float:
+def _canonical_number(value: str) -> int | Decimal:
     """Codex integer parameters reject equivalent JSON floats such as 8.0."""
     number = Decimal(value)
-    return int(number) if number == number.to_integral_value() else float(number)
+    return int(number) if number == number.to_integral_value() else number
 
 
 def _reject_json_constant(value: str) -> Never:

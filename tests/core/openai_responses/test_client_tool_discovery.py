@@ -1,8 +1,13 @@
 import json
 from copy import deepcopy
+from decimal import Decimal
 from typing import Any, cast
 
 import pytest
+from openai import omit
+from openai.lib.streaming.responses._responses import ResponseStreamState
+from openai.types.responses import ResponseStreamEvent
+from pydantic import TypeAdapter
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -18,6 +23,10 @@ from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
     ResponsesChatStreamOutput,
 )
+from free_claude_code.providers.openai_responses.presentation import (
+    NativeResponsesPresenter,
+)
+from tests.providers.test_opencode import _responses_event_stream
 
 SEARCH: JsonObject = {
     "type": "tool_search",
@@ -443,8 +452,9 @@ def test_real_unnamespaced_tool_wins_over_bare_namespace_alias() -> None:
     assert "namespace" not in item
 
 
-def test_native_canonical_arguments_agree_across_the_stream() -> None:
-    adapter = _native_adapter([AGENTS])
+@pytest.mark.parametrize("prefix", ["", '{"limit":', '{"limit":8.0}'])
+def test_native_canonical_arguments_agree_across_the_stream(prefix: str) -> None:
+    adapter = _native_adapter([{**AGENTS, "description": "Agent tools"}])
     stream = adapter.event_adapter()
     assert stream is not None
     item: JsonObject = {
@@ -453,12 +463,14 @@ def test_native_canonical_arguments_agree_across_the_stream() -> None:
         "call_id": "one",
         "name": "agents__spawn_agent",
         "status": "in_progress",
-        "arguments": "",
+        "arguments": prefix,
     }
-    events = list(
+    created = parse_sse_text(_responses_event_stream(""))[0].data
+    events = list(stream.feed("response.created", created))
+    events.extend(
         stream.feed("response.output_item.added", {"item": item, "output_index": 0})
     )
-    for fragment in ['{"limit":', "8.0}"]:
+    for fragment in ['{"limit":8.0}'[len(prefix) :]]:
         events.extend(
             stream.feed(
                 "response.function_call_arguments.delta",
@@ -495,6 +507,68 @@ def test_native_canonical_arguments_agree_across_the_stream() -> None:
         data for kind, data in events if kind == "response.function_call_arguments.done"
     )
     assert delta == done["arguments"] == completed["arguments"]
+    sdk: ResponseStreamState[Any] = ResponseStreamState(
+        input_tools=omit, text_format=omit
+    )
+    parser: TypeAdapter[ResponseStreamEvent] = TypeAdapter(ResponseStreamEvent)
+    snapshots = [
+        event.snapshot
+        for _, data in events
+        for event in sdk.handle_event(parser.validate_python(data))
+        if event.type == "response.function_call_arguments.delta"
+    ]
+    assert snapshots == [completed["arguments"]]
+
+
+@pytest.mark.parametrize(
+    ("prefix", "arguments"),
+    [
+        ("", '{"input":"whole"}'),
+        ('{"input":', '{"input":"whole"}'),
+        ('{"input":"whole"}', '{"input":"whole"}'),
+        ("wh", "whole"),
+    ],
+)
+def test_native_custom_input_is_emitted_once_when_buffered(
+    prefix: str, arguments: str
+) -> None:
+    adapter = _native_adapter([{"type": "custom", "name": "edit"}])
+    stream = adapter.event_adapter()
+    assert stream is not None
+    item: JsonObject = {
+        "type": "function_call",
+        "id": "fc",
+        "call_id": "call",
+        "name": "edit",
+        "status": "in_progress",
+        "arguments": prefix,
+    }
+    events = list(
+        stream.feed("response.output_item.added", {"output_index": 0, "item": item})
+    )
+    events.extend(
+        stream.feed(
+            "response.function_call_arguments.delta",
+            {"output_index": 0, "item_id": "fc", "delta": arguments[len(prefix) :]},
+        )
+    )
+    events.extend(
+        stream.feed(
+            "response.output_item.done",
+            {
+                "output_index": 0,
+                "item": {**item, "status": "completed", "arguments": arguments},
+            },
+        )
+    )
+    added = cast(dict[str, Any], events[0][1]["item"])
+    completed = cast(dict[str, Any], events[-1][1]["item"])
+    assembled = added["input"] + "".join(
+        str(data["delta"])
+        for kind, data in events
+        if kind == "response.custom_tool_call_input.delta"
+    )
+    assert assembled == completed["input"] == "whole"
 
 
 def test_unspecified_tool_metadata_keeps_native_defaults() -> None:
@@ -1219,3 +1293,206 @@ def test_non_finite_spellings_in_json_strings_remain_valid(
     assert arguments == {"text": "NaN Infinity -Infinity", "limit": 8}
     assert type(arguments["limit"]) is int
     json.dumps(events, allow_nan=False)
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("search", [False, True])
+@pytest.mark.parametrize(
+    "number", ["1e-400", "-1e-400", "0.12345678901234567890123456789", "1.25", "8.0"]
+)
+def test_argument_numbers_survive_sse_serialization(
+    native: bool, search: bool, number: str
+) -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        input="Call a tool",
+        tools=[
+            SEARCH,
+            {"type": "function", "name": "lookup", "parameters": {"type": "object"}},
+        ],
+    )
+    arguments = (
+        '{"nested":{"values":[' + number + ',8.0],"text":' + json.dumps(number) + "}}"
+    )
+    name = "fcc_tool_search" if search else "lookup"
+    if native:
+        adapter = ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(
+                custom_tools_as_functions=True,
+                flatten_namespaces=True,
+                client_tool_search=True,
+            ),
+        )
+        presenter = NativeResponsesPresenter(
+            public_model="example", tool_events=adapter.event_adapter()
+        )
+        item: JsonObject = {
+            "type": "function_call",
+            "id": "fc",
+            "call_id": "call",
+            "name": name,
+            "arguments": "",
+            "status": "in_progress",
+        }
+        completed: JsonObject = {**item, "arguments": arguments, "status": "completed"}
+        frames = list(
+            presenter.feed(
+                "response.output_item.added", {"output_index": 0, "item": item}
+            )
+        )
+        frames.extend(
+            presenter.feed(
+                "response.output_item.done", {"output_index": 0, "item": completed}
+            )
+        )
+        frames.extend(
+            presenter.feed(
+                "response.completed",
+                {
+                    "response": {
+                        "id": "resp",
+                        "model": "example",
+                        "status": "completed",
+                        "output": [completed],
+                    }
+                },
+            )
+        )
+    else:
+        adapter = build_responses_chat_request(
+            request, reasoning_replay=ReasoningReplayMode.DISABLED
+        ).tool_adapter
+        writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
+        frames = [
+            *writer.start_events(),
+            writer.start_tool_block(0, "call", name),
+            writer.emit_tool_delta(0, arguments),
+        ]
+        frames.extend(
+            writer.finish_success(
+                stop_reason="tool_calls",
+                usage=ChatStreamUsage(input_tokens=1, output_tokens=1),
+            )
+        )
+    events = [
+        json.loads(line[6:], parse_float=Decimal)
+        for line in "".join(frames).splitlines()
+        if line.startswith("data: ")
+    ]
+    items = [
+        event["item"]
+        for event in events
+        if event["type"] == "response.output_item.done"
+    ]
+    items.extend(events[-1]["response"]["output"])
+    assert len(items) == 2
+    for item in items:
+        actual = (
+            item["arguments"]
+            if search
+            else json.loads(item["arguments"], parse_float=Decimal)
+        )
+        assert actual == json.loads(arguments, parse_float=Decimal)
+        assert type(actual["nested"]["values"][1]) is int
+
+
+@pytest.mark.parametrize("custom", [False, True])
+def test_client_search_reserves_hosted_discovery_names_before_replay(
+    custom: bool,
+) -> None:
+    tool: JsonObject = {
+        "type": "custom" if custom else "function",
+        "name": "fcc_tool_search",
+    }
+    if not custom:
+        tool["parameters"] = {"type": "object"}
+    request = OpenAIResponsesRequest(
+        model="example",
+        tools=[SEARCH],
+        input=[
+            {
+                "type": "tool_search_call",
+                "call_id": "server_search",
+                "execution": "server",
+                "status": "completed",
+                "arguments": {},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": "server_search",
+                "execution": "server",
+                "status": "completed",
+                "tools": [
+                    tool,
+                    {
+                        "type": "function",
+                        "name": "fcc_tool_search_1",
+                        "parameters": {"type": "object"},
+                    },
+                ],
+            },
+        ],
+    )
+    original = request.model_dump()
+    policy = ResponsesToolPolicy(
+        custom_tools_as_functions=True, flatten_namespaces=True, client_tool_search=True
+    )
+    adapter = ResponsesToolAdapter(request, policy)
+    assert adapter.request.tools and len(adapter.request.tools) == 1
+    assert adapter.request.tools[0]["name"] == "fcc_tool_search_2"
+    call = cast(
+        dict[str, Any],
+        adapter.restore_item(
+            {
+                "type": "function_call",
+                "id": "fc",
+                "call_id": "real",
+                "status": "completed",
+                "name": "fcc_tool_search",
+                "arguments": '{"input":"text"}' if custom else "{}",
+            }
+        ),
+    )
+    assert call["type"] == ("custom_tool_call" if custom else "function_call")
+    assert call["name"] == "fcc_tool_search"
+    search = cast(
+        dict[str, Any],
+        adapter.restore_item(
+            {
+                "type": "function_call",
+                "id": "fc_search",
+                "call_id": "client_search",
+                "status": "completed",
+                "name": "fcc_tool_search_2",
+                "arguments": '{"query":"lookup"}',
+            }
+        ),
+    )
+    assert search["type"] == "tool_search_call"
+    assert search["execution"] == "client"
+    continuation = request.model_copy(
+        update={
+            "input": [
+                *cast(list[JsonObject], request.input),
+                call,
+                {
+                    "type": "custom_tool_call_output"
+                    if custom
+                    else "function_call_output",
+                    "call_id": "real",
+                    "output": "done",
+                },
+            ]
+        },
+        deep=True,
+    )
+    replay = ResponsesToolAdapter(continuation, policy)
+    assert (
+        replay.request.tools and replay.request.tools[0]["name"] == "fcc_tool_search_2"
+    )
+    assert (
+        cast(list[dict[str, Any]], replay.request.input)[-2]["name"]
+        == "fcc_tool_search"
+    )
+    assert request.model_dump() == original
