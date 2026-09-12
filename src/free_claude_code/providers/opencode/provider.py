@@ -106,6 +106,8 @@ class OpenCodeProvider(OpenAIChatProvider):
                 custom_tools_as_functions=True,
                 explicit_search_parameters=True,
                 text_only_web_search=True,
+                client_tool_search=True,
+                flatten_namespaces=True,
             ),
         )
 

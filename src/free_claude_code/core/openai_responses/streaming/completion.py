@@ -26,10 +26,12 @@ class ResponseBlockCompleter:
         *,
         events: ResponseEventBuilder,
         on_invalid_function_call: InvalidFunctionCallHandler,
+        prepare_tool_arguments: Callable[[str, str], str] | None = None,
     ) -> None:
         self._ledger = ledger
         self._events = events
         self._on_invalid_function_call = on_invalid_function_call
+        self._prepare_tool_arguments = prepare_tool_arguments
 
     def complete_block(self, state: BlockState) -> list[str]:
         if isinstance(state, TextBlockState):
@@ -66,9 +68,13 @@ class ResponseBlockCompleter:
     def _complete_tool_block(self, state: ToolBlockState) -> list[str]:
         if state.kind == "custom":
             return self._complete_custom_tool_block(state)
-        raw_arguments = "".join(state.argument_parts) or "{}"
+        raw_arguments = "".join(state.argument_parts)
         try:
-            arguments = normalized_function_call_arguments(raw_arguments)
+            arguments = (
+                self._prepare_tool_arguments(state.name, raw_arguments)
+                if self._prepare_tool_arguments is not None
+                else normalized_function_call_arguments(raw_arguments or "{}")
+            )
         except ResponsesConversionError as exc:
             return self._on_invalid_function_call(state, exc)
         item = tool_item(state, status="completed", arguments=arguments)

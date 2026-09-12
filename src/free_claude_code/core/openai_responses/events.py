@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, cast
 
+import simplejson
+
 from free_claude_code.core.diagnostics import safe_exception_message
 from free_claude_code.core.failures import find_execution_failure
 from free_claude_code.core.json_types import JsonObject, JsonValue
@@ -21,7 +23,7 @@ OPENAI_RESPONSES_SSE_HEADERS: dict[str, str] = {
 def format_response_sse_event(event_type: str, data: Mapping[str, Any]) -> str:
     """Format one OpenAI Responses SSE event."""
 
-    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+    return f"event: {event_type}\ndata: {simplejson.dumps(data, use_decimal=True)}\n\n"
 
 
 def committed_response_failure_frame(
