@@ -95,6 +95,10 @@ def test_key_rejection_retains_edits_and_restores_focus(
 def test_unverified_warning_survives_apply(
     page: Page, admin_base_url: str, restart: bool
 ):
+    availability: list[Route] = []
+    page.route(
+        "**/admin/api/providers/local-status", lambda route: availability.append(route)
+    )
     page.route(
         "**/admin/api/config/apply",
         lambda route: route.fulfill(
@@ -131,6 +135,31 @@ def test_unverified_warning_survives_apply(
     expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_editable()
     expect(page.locator("#applyButton")).to_have_text("Apply")
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
+
+    current = page.locator('[data-provider-check-result="lmstudio"]')
+    with page.expect_response("**/admin/api/providers/local-status") as response:
+        old = availability.pop(0)
+        if restart:
+            old.fulfill(status=503, json={"detail": "Old check failed"})
+        else:
+            payload = old.fetch().json()
+            for provider in payload["providers"]:
+                provider.update(
+                    status="offline", label="Offline", message="Old availability result"
+                )
+            old.fulfill(json=payload)
+    response.value.finished()
+    page.evaluate("() => new Promise(requestAnimationFrame)")
+    expect(current).to_be_hidden()
+
+    if restart:
+        availability.pop().fulfill(status=503, json={"detail": "New check failed"})
+        expect(current).to_have_text("Availability check failed. Use Test to retry.")
+    else:
+        availability.pop().continue_()
+        expect(current).to_have_text("Reachable: http://localhost:1234/v1")
+    expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
+    expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_editable()
 
 
 def test_apply_network_error_unlocks_form_and_keeps_edits(
