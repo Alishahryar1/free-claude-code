@@ -283,6 +283,20 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Create one in [W&B User Settings](https://wandb.ai/settings)."
         ),
     },
+    "EXPLABS_API_KEY": {
+        "label": "Experiential Labs API Key",
+        "description": (
+            "Experiential Labs OpenAI-compatible gateway API key for "
+            "api.experientiallabs.ai/v1. Keys look like xpl_ followed by 40 "
+            "hex characters; mint one at platform.experientiallabs.ai/settings/api-keys."
+        ),
+    },
+    "EXPLABS_BASE_URL": {
+        "description": (
+            "Experiential Labs OpenAI-compatible Chat Completions base URL. "
+            "Defaults to https://api.experientiallabs.ai/v1."
+        ),
+    },
 }
 
 

@@ -60,6 +60,7 @@ CASES = [
         401,
     ),
     ("nararoute", "https://router.bynara.id/v1/models", {"data": []}, 401),
+    ("experiential", "https://api.experientiallabs.ai/v1/models", {"data": []}, 401),
     (
         "deepinfra",
         "https://api.deepinfra.com/v1/me",
