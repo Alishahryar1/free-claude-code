@@ -1,4 +1,5 @@
 import json
+import tomllib
 
 import pytest
 from playwright.sync_api import expect
@@ -7,7 +8,7 @@ from free_claude_code.cli import vscode
 
 
 @pytest.mark.parametrize("width", [1280, 390])
-def test_codex_preview_modal_is_noop_and_dismissible(
+def test_codex_connect_disconnect_and_modal_paths(
     page, admin_base_url, tmp_path, width
 ):
     page.set_viewport_size({"width": width, "height": 900})
@@ -19,8 +20,6 @@ def test_codex_preview_modal_is_noop_and_dismissible(
     expect(cards.nth(1)).to_contain_text(
         "Use FCC's models in the Codex CLI, VS Code extension, and desktop app."
     )
-    requests = []
-    page.on("request", lambda request: requests.append(request.url))
     opener = page.locator("#openCodexIntegration")
     dialog = page.get_by_role("dialog", name="Codex", exact=True)
     opener.click()
@@ -28,14 +27,13 @@ def test_codex_preview_modal_is_noop_and_dismissible(
     expect(page.locator("#claudeIntegrationDialog")).not_to_be_visible()
     expect(dialog.get_by_role("button", name="Close", exact=True)).to_be_focused()
     expect(dialog).to_contain_text(
-        "Will configure Codex to use FCC's models through its shared config.toml."
+        "Configure Codex to use FCC. Your selected model stays unchanged."
     )
     assert dialog.evaluate("element => element.scrollWidth <= element.clientWidth")
-    action = dialog.get_by_role("button", name="Connect", exact=True)
-    for _ in range(3):
-        action.click()
-        expect(action).to_be_enabled()
-        expect(dialog).to_be_visible()
+    path = tmp_path / ".codex" / "config.toml"
+    expect(dialog.locator("#codexIntegrationFiles li")).to_have_text(
+        [str(path.resolve())]
+    )
     page.locator("#codexIntegrationDescription").click()
     expect(dialog).to_be_visible()
     dialog.get_by_role("button", name="Close", exact=True).click()
@@ -47,7 +45,29 @@ def test_codex_preview_modal_is_noop_and_dismissible(
     opener.click()
     page.mouse.click(1, 1)
     expect(dialog).not_to_be_visible()
-    assert requests == []
+    assert not path.exists()
+    path.parent.mkdir()
+    path.write_text('model = "my-choice" # Keep this\n')
+    opener.click()
+    page.locator("#confirmCodexIntegration").click()
+    expect(dialog).not_to_be_visible()
+    expect(opener).to_have_text("Disconnect")
+    expect(page.locator("#codexIntegrationStatus")).to_have_text("Connected")
+    expect(page.locator("#codexIntegrationMessage")).to_have_text(
+        "Settings saved. Restart Codex and select an FCC model."
+    )
+    assert tomllib.loads(path.read_text())["model"] == "my-choice"
+    assert "# Keep this" in path.read_text()
+    page.reload()
+    expect(opener).to_have_text("Disconnect")
+    opener.click()
+    expect(page.locator("#confirmCodexIntegration")).to_have_text("Disconnect")
+    expect(dialog.locator("#codexIntegrationFiles li")).to_have_text(
+        [str(path.resolve())]
+    )
+    page.locator("#confirmCodexIntegration").click()
+    expect(opener).to_have_text("Connect")
+    assert tomllib.loads(path.read_text()) == {"model": "my-choice"}
     assert not (tmp_path / "vscode" / "settings.json").exists()
     assert not (tmp_path / ".claude.json").exists()
 
@@ -180,3 +200,44 @@ def test_save_pending_and_failure_stay_in_modal(page, admin_base_url):
     expect(page.locator("#claudeIntegrationDialogMessage")).to_have_text(
         "Could not save settings."
     )
+
+
+def test_codex_existing_setup_revisit_and_invalid_config_retry(
+    page, admin_base_url, tmp_path
+):
+    path = tmp_path / ".codex" / "config.toml"
+    assert page.request.post(
+        f"{admin_base_url}/admin/api/integrations/codex/connect"
+    ).ok
+    page.goto(f"{admin_base_url}/admin/integrations")
+    opener = page.locator("#openCodexIntegration")
+    expect(opener).to_have_text("Disconnect")
+    page.get_by_role("button", name="Providers", exact=True).click()
+    path.write_text("[invalid")
+    page.get_by_role("button", name="Integrations", exact=True).click()
+    expect(page.locator("#codexIntegrationMessage")).to_contain_text("Check the TOML")
+    expect(opener).to_have_text("Retry")
+    path.write_text("")
+    opener.click()
+    expect(opener).to_have_text("Connect")
+
+
+def test_codex_save_pending_and_failure_stay_in_modal(page, admin_base_url, tmp_path):
+    page.goto(f"{admin_base_url}/admin/integrations")
+    page.locator("#openCodexIntegration").click()
+    requests = []
+    page.route(
+        "**/admin/api/integrations/codex/connect", lambda route: requests.append(route)
+    )
+    action = page.locator("#confirmCodexIntegration")
+    action.click()
+    expect(action).to_be_disabled()
+    expect(action).to_have_text("Saving…")
+    expect(page.locator("#openCodexIntegration")).to_be_disabled()
+    requests[0].fulfill(status=503, json={"detail": "Could not save settings."})
+    expect(action).to_be_enabled()
+    expect(page.locator("#codexIntegrationDialog")).to_be_visible()
+    expect(page.locator("#codexIntegrationDialogMessage")).to_have_text(
+        "Could not save settings."
+    )
+    assert not (tmp_path / ".codex" / "config.toml").exists()
