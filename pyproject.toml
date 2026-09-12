@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "free-claude-code"
-version = "6.2.15"
+version = "6.3.0"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 requires-python = ">=3.14.0"
@@ -106,7 +106,7 @@ select = [
     "RUF",  # Ruff-specific rules
 ]
 ignore = [
-    "E501",  # line too long — enforced by the formatter instead
+    "E501",  # line too long â€” enforced by the formatter instead
     "B008",  # FastAPI Depends() in argument defaults is intentional
     "RUF006",  # fire-and-forget tasks intentionally not awaited
 ]
