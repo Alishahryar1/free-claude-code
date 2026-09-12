@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from collections.abc import Callable, Mapping
 
 import httpx2
@@ -1148,3 +1149,48 @@ async def test_preflight_rejects_fields_responses_cannot_represent() -> None:
             transport.preflight_messages(request, reasoning=REASONING_ON)
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_claude_artifact_pattern_is_portable_on_the_sdk_wire():
+    captured = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        captured.append(body)
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_sse(_text_delta("ok"), _completed_event()),
+        )
+
+    pattern = r"^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]{1,200}$"
+    request = _request(
+        tools=[
+            {
+                "name": "Artifact",
+                "description": "Test artifact",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "pattern": pattern},
+                        "slug": {"type": "string", "pattern": "^[a-z]+$"},
+                    },
+                },
+            }
+        ]
+    )
+    client = _client(handler)
+    try:
+        await _collect(_transport(client), request)
+    finally:
+        await client.close()
+    assert len(captured) == 1
+    properties = captured[0]["tools"][0]["parameters"]["properties"]
+    assert properties["slug"]["pattern"] == "^[a-z]+$"
+    regex = re.compile(properties["name"]["pattern"])
+    assert regex.fullmatch("demo")
+    assert not regex.fullmatch("bad\U000e0001name")
+    assert request.tools is not None
+    assert request.tools[0].input_schema is not None
+    assert request.tools[0].input_schema["properties"]["name"]["pattern"] == pattern
