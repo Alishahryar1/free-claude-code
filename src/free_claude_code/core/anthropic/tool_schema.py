@@ -9,11 +9,14 @@ import jsonschema
 # JSON Schema keywords whose values are name->subschema maps. Keywords holding
 # a single subschema or a list of them are covered by the union below; literal-
 # value keywords such as ``enum`` or ``default`` are deliberately absent: their
-# contents are data, not schema.
+# contents are data, not schema. ``dependencies`` values are either a
+# property-name array (data, left as-is by the non-dict passthrough) or a
+# subschema (sanitized), so map traversal handles both forms safely.
 _SCHEMA_MAP_KEYS = frozenset(
     {
         "$defs",
         "definitions",
+        "dependencies",
         "dependentSchemas",
         "patternProperties",
         "properties",
@@ -21,10 +24,12 @@ _SCHEMA_MAP_KEYS = frozenset(
 )
 _SUBSCHEMA_KEYS = _SCHEMA_MAP_KEYS | frozenset(
     {
+        "additionalItems",
         "additionalProperties",
         "allOf",
         "anyOf",
         "contains",
+        "contentSchema",
         "else",
         "if",
         "items",

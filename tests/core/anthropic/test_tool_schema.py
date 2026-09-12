@@ -93,6 +93,38 @@ def test_sanitize_walks_single_subschema_keywords() -> None:
     assert sanitized["patternProperties"] == {r"^[a-z]+$": {"type": "string"}}
 
 
+def test_sanitize_walks_additional_items_and_content_schema() -> None:
+    schema = {
+        "type": "array",
+        "prefixItems": [{"type": "string"}],
+        "additionalItems": {"type": "string", "pattern": r"\p{L}+"},
+        "contentMediaType": "text/plain",
+        "contentSchema": {"type": "string", "pattern": r"\p{N}+"},
+    }
+
+    sanitized = sanitize_tool_schema_patterns(schema)
+
+    assert sanitized["additionalItems"] == {"type": "string"}
+    assert sanitized["contentSchema"] == {"type": "string"}
+    assert sanitized["contentMediaType"] == "text/plain"
+
+
+def test_sanitize_walks_schema_valued_dependencies_only() -> None:
+    schema = {
+        "type": "object",
+        "dependencies": {
+            # Property-name arrays are data, not subschemas, and must survive.
+            "billing": ["shipping"],
+            "credit_card": {"type": "object", "pattern": r"\p{L}+"},
+        },
+    }
+
+    sanitized = sanitize_tool_schema_patterns(schema)
+
+    assert sanitized["dependencies"]["billing"] == ["shipping"]
+    assert sanitized["dependencies"]["credit_card"] == {"type": "object"}
+
+
 def test_sanitize_leaves_literal_value_keywords_untouched() -> None:
     schema = {
         "type": "object",
