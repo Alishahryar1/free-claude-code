@@ -48,6 +48,7 @@ def responses_tool_identity_from_wire_name(
 
     if tools is None:
         return ResponsesToolIdentity(kind="function", name=wire_name)
+    aliases: set[ResponsesToolIdentity] = set()
     for tool in tools:
         if not isinstance(tool, dict):
             continue
@@ -77,6 +78,21 @@ def responses_tool_identity_from_wire_name(
             if not isinstance(nested_tool, dict):
                 continue
             nested_tool_type = nested_tool.get("type")
+            if nested_tool_type in {"function", "custom"}:
+                candidate_name = optional_str(nested_tool.get("name"))
+                if candidate_name and wire_name in {
+                    candidate_name,
+                    f"{namespace}.{candidate_name}",
+                }:
+                    aliases.add(
+                        ResponsesToolIdentity(
+                            kind="custom"
+                            if nested_tool_type == "custom"
+                            else "function",
+                            name=candidate_name,
+                            namespace=namespace,
+                        )
+                    )
             if nested_tool_type == "function":
                 source = nested_tool.get("function")
                 function = source if isinstance(source, dict) else nested_tool
@@ -95,6 +111,10 @@ def responses_tool_identity_from_wire_name(
                     return ResponsesToolIdentity(
                         kind="custom", name=name, namespace=namespace
                     )
+    if len(aliases) == 1:
+        return next(iter(aliases))
+    if len(aliases) > 1:
+        raise ResponsesConversionError("Ambiguous tool name returned by provider.")
     return ResponsesToolIdentity(kind="function", name=wire_name)
 
 

@@ -31,6 +31,7 @@ from .reasoning import (
     combine_reasoning,
     encrypted_reasoning_from_item,
 )
+from .tool_adaptation import ResponsesToolAdapter, ResponsesToolPolicy
 from .tools import (
     call_id_from_item,
     custom_tool_description,
@@ -75,6 +76,7 @@ class ResponsesChatRequest:
     tool_names: OpenAIToolNameCodec
     tool_schemas: dict[str, JsonObject]
     reserved_tool_ids: frozenset[str]
+    tool_adapter: ResponsesToolAdapter
 
 
 @dataclass(slots=True)
@@ -360,6 +362,10 @@ def build_responses_chat_request(
     structured_reasoning_details: bool = False,
 ) -> ResponsesChatRequest:
     """Translate a Responses request directly into one Chat Completions body."""
+    adapter = ResponsesToolAdapter(
+        request, ResponsesToolPolicy(client_tool_search=True)
+    )
+    request = adapter.request
     builder = _ResponsesChatInputBuilder(
         reasoning_replay=reasoning_replay,
         structured_reasoning_details=structured_reasoning_details,
@@ -419,6 +425,7 @@ def build_responses_chat_request(
         tool_names=tool_names,
         tool_schemas=tool_schemas,
         reserved_tool_ids=reserved_tool_ids,
+        tool_adapter=adapter,
     )
 
 

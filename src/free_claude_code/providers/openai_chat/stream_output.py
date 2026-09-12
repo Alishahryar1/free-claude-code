@@ -29,6 +29,7 @@ from free_claude_code.core.openai_responses import (
     ResponseEventBuilder,
     ResponsesConversionError,
     ResponsesOutputLedger,
+    ResponsesToolAdapter,
     TextBlockState,
     ToolBlockState,
     new_call_id,
@@ -491,14 +492,17 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         *,
         input_tokens: int,
         response_model: str | None = None,
+        tool_adapter: ResponsesToolAdapter | None = None,
     ) -> None:
         super().__init__(input_tokens=input_tokens)
         self._request = request
+        self._tool_request = tool_adapter.request if tool_adapter else request
         self._response_model = response_model or request.model
         self._response_id = new_response_id()
         self._created_at = int(time.time())
         self._ledger = ResponsesOutputLedger()
-        self._events = ResponseEventBuilder()
+        tool_events = tool_adapter.event_adapter() if tool_adapter else None
+        self._events = ResponseEventBuilder(tool_events.feed if tool_events else None)
         self._completer = ResponseBlockCompleter(
             self._ledger,
             events=self._events,
@@ -650,7 +654,7 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
 
     def _start_tool_block(self, tool_index: int, state: ChatToolState) -> str:
         identity = responses_tool_identity_from_wire_name(
-            self._request.tools, state.name
+            self._tool_request.tools, state.name
         )
         output_index = self._ledger.reserve_output_slot()
         output_state = ToolBlockState(

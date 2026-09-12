@@ -757,6 +757,7 @@ class OpenAIChatProvider(BaseProvider):
             tool_names=translated.tool_names,
             tool_schemas=translated.tool_schemas,
             reserved_tool_ids=translated.reserved_tool_ids,
+            tool_adapter=translated.tool_adapter,
         )
 
     def _finalize_chat_body(
@@ -1116,6 +1117,7 @@ class OpenAIChatProvider(BaseProvider):
                 request,
                 input_tokens=input_tokens,
                 response_model=public_model,
+                tool_adapter=translated.tool_adapter,
             ),
             input_tokens=input_tokens,
             request_id=request_id,

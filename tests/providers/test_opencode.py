@@ -930,10 +930,17 @@ async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
     def upstream(request: httpx2.Request) -> httpx2.Response:
         body = json.loads(request.content)
         for loaded in body["input"][:2]:
-            assert loaded["execution"] == execution
-            tool = loaded["tools"][0]["tools"][0]
+            if execution == "client":
+                assert loaded["type"] == "function_call_output"
+                tool = json.loads(loaded["output"])[0]
+                assert "defer_loading" not in tool
+                assert tool in body["tools"]
+            else:
+                assert loaded["execution"] == execution
+                tool = loaded["tools"][0]["tools"][0]
+                assert tool["defer_loading"] is True
             assert tool["type"] == "function"
-            for field in ("defer_loading", "allowed_callers", "extension"):
+            for field in ("allowed_callers", "extension"):
                 assert tool[field] == expected_tool[field]
         if len(body["input"]) > 2:
             assert body["input"][2]["type"] == "function_call"
