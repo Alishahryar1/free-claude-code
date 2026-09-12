@@ -271,6 +271,7 @@ textarea:focus-visible,
   padding: 6px 14px;
   font-size: 13px;
 }
+.integration-card h3 { min-height: 2lh; }
 .integration-dialog {
   width: min(480px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
