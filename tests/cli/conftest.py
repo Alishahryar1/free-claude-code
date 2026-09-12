@@ -11,6 +11,7 @@ from urllib.request import Request
 import pytest
 
 from free_claude_code.cli import local_http
+from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.core.json_types import JsonObject
 
 
@@ -102,7 +103,11 @@ def launch_capture(monkeypatch: pytest.MonkeyPatch) -> LaunchCapture:
     from free_claude_code.cli.launchers import common
 
     capture = LaunchCapture()
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "launcher-test-token")
+    store = ManagedConfigStore()
+    store.initialize({})
+    store.commit(
+        dict(store.read({}).managed) | {"ANTHROPIC_AUTH_TOKEN": "launcher-test-token"}
+    )
     monkeypatch.setenv("HOST", "127.0.0.1")
     monkeypatch.setenv("PORT", "8182")
     monkeypatch.setenv("MODEL", "nvidia_nim/catalog-model:variant")
