@@ -41,63 +41,6 @@ def flatten_responses_tool_name(name: str, *, namespace: str | None = None) -> s
     return f"{combined[:prefix_len]}_{digest}"
 
 
-def responses_tool_identity_from_wire_name(
-    tools: list[dict[str, Any]] | None, wire_name: str
-) -> ResponsesToolIdentity:
-    """Return the Responses namespace/name represented by a flat tool name."""
-
-    if tools is None:
-        return ResponsesToolIdentity(kind="function", name=wire_name)
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        tool_type = tool.get("type")
-        if tool_type == "function":
-            source = tool.get("function")
-            function = source if isinstance(source, dict) else tool
-            if (name := optional_str(function.get("name"))) and (
-                flatten_responses_tool_name(name) == wire_name
-            ):
-                return ResponsesToolIdentity(kind="function", name=name)
-            continue
-        if tool_type == "custom":
-            source = custom_tool_source(tool)
-            if (name := optional_str(source.get("name"))) and (
-                flatten_responses_tool_name(name) == wire_name
-            ):
-                return ResponsesToolIdentity(kind="custom", name=name)
-            continue
-        if tool_type != "namespace":
-            continue
-        namespace = optional_str(tool.get("name"))
-        nested_tools = tool.get("tools")
-        if not namespace or not isinstance(nested_tools, list):
-            continue
-        for nested_tool in nested_tools:
-            if not isinstance(nested_tool, dict):
-                continue
-            nested_tool_type = nested_tool.get("type")
-            if nested_tool_type == "function":
-                source = nested_tool.get("function")
-                function = source if isinstance(source, dict) else nested_tool
-                if (name := optional_str(function.get("name"))) and (
-                    flatten_responses_tool_name(name, namespace=namespace) == wire_name
-                ):
-                    return ResponsesToolIdentity(
-                        kind="function", name=name, namespace=namespace
-                    )
-                continue
-            if nested_tool_type == "custom":
-                source = custom_tool_source(nested_tool)
-                if (name := optional_str(source.get("name"))) and (
-                    flatten_responses_tool_name(name, namespace=namespace) == wire_name
-                ):
-                    return ResponsesToolIdentity(
-                        kind="custom", name=name, namespace=namespace
-                    )
-    return ResponsesToolIdentity(kind="function", name=wire_name)
-
-
 def parse_arguments(value: Any) -> dict[str, Any]:
     if value is None or value == "":
         return {}

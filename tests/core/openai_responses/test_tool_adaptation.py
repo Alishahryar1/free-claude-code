@@ -1,3 +1,6 @@
+from copy import deepcopy
+from typing import Any, cast
+
 import pytest
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
@@ -25,6 +28,160 @@ def _presenter(adapter: ResponsesToolAdapter) -> NativeResponsesPresenter:
     return NativeResponsesPresenter(
         public_model="example", tool_events=adapter.event_adapter()
     )
+
+
+@pytest.mark.parametrize("custom", [False, True])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_hosted_discovery_restores_definitions_and_replays_flat_names(
+    custom: bool, wrapped: bool
+) -> None:
+    definition: JsonObject = {
+        "type": "custom" if custom else "function",
+        "name": "lookup",
+        "description": "Find a record",
+        "defer_loading": True,
+    }
+    if custom:
+        definition["format"] = {"type": "text"}
+    else:
+        definition["parameters"] = {"type": "object"}
+    namespace: JsonObject = {
+        "type": "namespace",
+        "name": "crm",
+        "description": "Record tools",
+        "tools": [
+            definition,
+            {"type": "function", "name": "unused", "parameters": {"type": "object"}},
+        ],
+    }
+    request = OpenAIResponsesRequest(
+        model="example",
+        input="Find a record",
+        tools=[
+            {"type": "tool_search", "execution": "server"},
+            namespace,
+        ],
+    )
+    original = request.model_dump()
+    policy = ResponsesToolPolicy(
+        custom_tools_as_functions=True, flatten_namespaces=True, client_tool_search=True
+    )
+    adapter = ResponsesToolAdapter(request, policy)
+    wire_definition = deepcopy(
+        next(
+            tool
+            for tool in adapter.request.tools or []
+            if tool.get("name") == "crm__lookup"
+        )
+    )
+    discovered: JsonObject = {
+        "type": "tool_search_output",
+        "id": "search_output",
+        "call_id": "search",
+        "execution": "server",
+        "status": "completed",
+        "tools": [{**namespace, "tools": [wire_definition]}]
+        if wrapped
+        else [wire_definition],
+    }
+    call: JsonObject = {
+        "type": "function_call",
+        "id": "fc_lookup",
+        "call_id": "lookup_call",
+        "name": "crm__lookup",
+        "status": "completed",
+        "arguments": '{"input":"record"}' if custom else "{}",
+    }
+    presenter = _presenter(adapter)
+    frames = [
+        *presenter.feed(
+            "response.output_item.done", {"output_index": 0, "item": discovered}
+        )
+    ]
+    frames.extend(
+        presenter.feed(
+            "response.completed",
+            {
+                "response": {
+                    "id": "response",
+                    "model": "example",
+                    "status": "completed",
+                    "output": [discovered, call],
+                }
+            },
+        )
+    )
+    events = parse_sse_text("".join(frames))
+    public = cast(list[JsonObject], events[-1].data["response"]["output"])
+    continuation = OpenAIResponsesRequest(
+        model="example",
+        tools=request.tools,
+        input=[
+            *public,
+            {
+                "type": "custom_tool_call_output" if custom else "function_call_output",
+                "call_id": "lookup_call",
+                "output": "Found",
+            },
+        ],
+    )
+    replay = cast(
+        list[dict[str, Any]], ResponsesToolAdapter(continuation, policy).request.input
+    )
+    assert public[0] == events[0].data["item"]
+    assert public[0]["tools"] == [{**namespace, "tools": [definition]}]
+    assert public[1]["name"] == "lookup"
+    assert public[1]["namespace"] == "crm"
+    assert public[1]["type"] == ("custom_tool_call" if custom else "function_call")
+    assert replay[0]["type"] == "tool_search_output"
+    assert replay[0]["tools"] == [wire_definition]
+    assert replay[1]["name"] == "crm__lookup"
+    assert "namespace" not in replay[1]
+    assert request.model_dump() == original
+
+
+def test_hosted_discovery_groups_mixed_flat_and_wrapped_definitions() -> None:
+    first: JsonObject = {
+        "type": "function",
+        "name": "lookup",
+        "parameters": {"type": "object"},
+    }
+    second: JsonObject = {
+        "type": "function",
+        "name": "update",
+        "parameters": {"type": "object"},
+    }
+    namespace: JsonObject = {
+        "type": "namespace",
+        "name": "crm",
+        "description": "Records",
+        "tools": [first, second],
+    }
+    adapter = ResponsesToolAdapter(
+        OpenAIResponsesRequest(model="example", input="Find tools", tools=[namespace]),
+        ResponsesToolPolicy(flatten_namespaces=True),
+    )
+    unrelated: JsonObject = {
+        "type": "function",
+        "name": "other",
+        "parameters": {"type": "object"},
+    }
+    result = cast(
+        dict[str, Any],
+        adapter.restore_item(
+            {
+                "type": "tool_search_output",
+                "execution": "server",
+                "status": "completed",
+                "tools": [
+                    {**first, "name": "crm__lookup"},
+                    unrelated,
+                    {**namespace, "tools": [{**second, "name": "crm__update"}]},
+                ],
+            }
+        ),
+    )
+    assert result["tools"] == [namespace, unrelated]
 
 
 def test_custom_tool_identity_and_history_preserve_namespaces() -> None:
@@ -70,6 +227,7 @@ def test_custom_tool_identity_and_history_preserve_namespaces() -> None:
     nested = wire["tools"][1]["tools"][0]
     assert nested["type"] == "function"
     assert wire["input"][0]["name"] == nested["name"]
+    assert wire["input"][0]["namespace"] == "editor"
     assert wire["tool_choice"] == {
         "type": "function",
         "namespace": "editor",

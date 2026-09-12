@@ -259,6 +259,38 @@ textarea:focus-visible,
   margin: 4px 0 0 0;
 }
 
+.integration-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-bottom: 0;
+}
+.integration-card > button {
+  margin-top: auto;
+  min-height: 38px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+.integration-card h3 { min-height: 2lh; }
+.integration-dialog {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 24px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.integration-dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
+.integration-card .section-heading,
+.integration-dialog .section-heading { border-bottom: 0; padding-bottom: 0; }
+.integration-dialog .section-heading { align-items: center; }
+.integration-dialog p { color: var(--muted); line-height: 1.6; margin: 0 0 24px; }
+.integration-files { margin-bottom: 24px; font-size: 12px; color: var(--muted); }
+.integration-files ul { margin: 8px 0 0; padding-left: 20px; }
+.integration-files code { overflow-wrap: anywhere; }
+
 /* Provider Status Cards */
 .provider-grid {
   display: grid;

@@ -1,6 +1,9 @@
 """OpenAI Responses SSE event builders."""
 
-from typing import Any
+from collections.abc import Callable, Iterable
+from typing import Any, cast
+
+from free_claude_code.core.json_types import JsonObject
 
 from ..events import format_response_sse_event
 
@@ -8,8 +11,13 @@ from ..events import format_response_sse_event
 class ResponseEventBuilder:
     """Build one ordered Responses event stream."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        transform: Callable[[str, JsonObject], Iterable[tuple[str, JsonObject]]]
+        | None = None,
+    ) -> None:
         self._next_sequence_number = 0
+        self._transform = transform
 
     def response_created(self, response: dict[str, Any]) -> str:
         return self._format(
@@ -182,4 +190,9 @@ class ResponseEventBuilder:
     def _format(self, event_type: str, data: dict[str, Any]) -> str:
         data["sequence_number"] = self._next_sequence_number
         self._next_sequence_number += 1
+        if self._transform is not None:
+            return "".join(
+                format_response_sse_event(kind, payload)
+                for kind, payload in self._transform(event_type, cast(JsonObject, data))
+            )
         return format_response_sse_event(event_type, data)

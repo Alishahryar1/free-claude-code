@@ -44,7 +44,6 @@ from .tool_adaptation import (
 from .tools import (
     ResponsesToolIdentity,
     flatten_responses_tool_name,
-    responses_tool_identity_from_wire_name,
 )
 
 __all__ = [
@@ -87,6 +86,5 @@ __all__ = [
     "responses_reasoning_config",
     "responses_reasoning_policy",
     "responses_stream_failure_from_event",
-    "responses_tool_identity_from_wire_name",
     "tool_item",
 ]

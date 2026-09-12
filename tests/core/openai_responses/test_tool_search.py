@@ -3,8 +3,12 @@ from copy import deepcopy
 import pytest
 from jsonschema import Draft202012Validator
 
-from free_claude_code.core.json_types import JsonObject
-from free_claude_code.core.openai_responses.tool_search import normalize_tool_search
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.openai_responses.tool_search import (
+    ClientSearchHistory,
+    active_client_tools,
+    normalize_tool_search,
+)
 
 
 def test_nested_search_arguments_keep_constraints_and_literal_data() -> None:
@@ -81,3 +85,36 @@ def test_nested_search_arguments_keep_constraints_and_literal_data() -> None:
 )
 def test_other_tool_definitions_are_preserved(tool: JsonObject) -> None:
     assert normalize_tool_search(tool) == tool
+
+
+@pytest.mark.parametrize("kind", ["function", "custom"])
+@pytest.mark.parametrize(
+    ("container", "inner", "expected"),
+    [
+        (None, None, "outer"),
+        (None, "", "outer"),
+        (None, 7, "outer"),
+        (None, "inner", "inner"),
+        ("container", "inner", "container"),
+    ],
+)
+def test_nested_tool_namespace_precedence_during_discovery(
+    kind: str, container: str | None, inner: JsonValue, expected: str
+) -> None:
+    tool: JsonObject = {
+        "type": kind,
+        "namespace": "outer",
+        kind: {"name": "run", "namespace": inner},
+    }
+    if container:
+        tool = {"type": "namespace", "name": container, "tools": [tool]}
+    original = deepcopy(tool)
+    resolved = active_client_tools([tool], ClientSearchHistory(frozenset(), {}))
+    assert resolved == [
+        {
+            "type": "namespace",
+            "name": expected,
+            "tools": [{"type": kind, "name": "run"}],
+        }
+    ]
+    assert tool == original

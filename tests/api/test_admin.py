@@ -162,13 +162,16 @@ def _catalog_proxy_env_keys() -> tuple[str, ...]:
     return tuple(keys)
 
 
-def test_admin_page_is_loopback_only(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "path", ["/admin", "/admin/model_config", "/admin/messaging", "/admin/integrations"]
+)
+def test_admin_page_is_loopback_only(monkeypatch, tmp_path, path):
     _set_home(monkeypatch, tmp_path)
     app = create_test_app()
 
-    assert _local_client(app).get("/admin").status_code == 200
+    assert _local_client(app).get(path).status_code == 200
     remote_client = TestClient(app, client=("203.0.113.10", 50000))
-    assert remote_client.get("/admin").status_code == 403
+    assert remote_client.get(path).status_code == 403
 
 
 def test_admin_page_uses_installed_version(monkeypatch, tmp_path):

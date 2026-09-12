@@ -244,11 +244,24 @@ def test_blank_required_process_value_is_rejected() -> None:
         compose_settings_snapshot({}, {"MODEL": " "})
 
 
-def test_blank_process_auth_token_uses_retained_default() -> None:
-    snapshot = compose_settings_snapshot({}, {"ANTHROPIC_AUTH_TOKEN": ""})
+@pytest.mark.parametrize("process_token", ["", "  ", "terminal-token"])
+def test_process_auth_token_cannot_override_retained_default(
+    process_token: str,
+) -> None:
+    snapshot = compose_settings_snapshot({}, {"ANTHROPIC_AUTH_TOKEN": process_token})
 
     assert snapshot.settings.proxy_auth_token == "freecc"
     assert snapshot.sources["proxy_auth_token"] is ConfigSource.DEFAULT
+
+
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_auth_checkbox_does_not_change_retained_token(enabled: str) -> None:
+    snapshot = compose_settings_snapshot(
+        {"PROXY_AUTH_ENABLED": enabled, "ANTHROPIC_AUTH_TOKEN": "managed-token"},
+        {"ANTHROPIC_AUTH_TOKEN": "terminal-token"},
+    )
+    assert snapshot.settings.proxy_auth_enabled is (enabled == "true")
+    assert snapshot.settings.proxy_auth_token == "managed-token"
 
 
 def test_process_precedence_and_managed_token_exception() -> None:

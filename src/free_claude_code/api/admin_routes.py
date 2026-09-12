@@ -1,7 +1,7 @@
 """Local admin UI routes and APIs."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 
 import httpx
@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from free_claude_code.application.connected_accounts import (
     ConnectedAccountLoginMode,
 )
+from free_claude_code.application.errors import ApplicationError
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY
 from free_claude_code.config.model_refs import configured_chat_model_refs
@@ -92,6 +93,9 @@ def admin_page_response() -> HTMLResponse:
 
 
 @router.get("/admin", include_in_schema=False)
+@router.get("/admin/model_config", include_in_schema=False)
+@router.get("/admin/messaging", include_in_schema=False)
+@router.get("/admin/integrations", include_in_schema=False)
 def admin_page(request: Request):
     require_loopback_admin(request)
     return admin_page_response()
@@ -240,6 +244,73 @@ async def models(
 ):
     require_loopback_admin(request)
     return _model_options(services)
+
+
+@router.get("/admin/api/integrations/claude-vscode")
+async def claude_vscode_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.claude_vscode_status)
+
+
+@router.post("/admin/api/integrations/claude-vscode/connect")
+async def connect_claude_vscode(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_claude_vscode)
+
+
+@router.post("/admin/api/integrations/claude-vscode/disconnect")
+async def disconnect_claude_vscode(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_claude_vscode)
+
+
+@router.get("/admin/api/integrations/codex")
+async def codex_integration_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.codex_integration_status)
+
+
+@router.post("/admin/api/integrations/codex/connect")
+async def connect_codex(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_codex)
+
+
+@router.post("/admin/api/integrations/codex/disconnect")
+async def disconnect_codex(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_codex)
+
+
+async def _integration_response(
+    operation: Callable[[], Awaitable[JsonObject]],
+) -> JSONResponse:
+    try:
+        return _no_store(await operation())
+    except ApplicationError as exc:
+        return JSONResponse(
+            {"detail": exc.message},
+            status_code=exc.status_code,
+            headers={"Cache-Control": "no-store"},
+        )
 
 
 @router.post("/admin/api/models/refresh")

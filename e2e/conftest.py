@@ -16,6 +16,7 @@ from e2e.code_support import CodeControl
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.cli import codex_integration, vscode
 from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.env_migrations import recognized_env_keys
 from free_claude_code.config.loader import (
@@ -128,6 +129,13 @@ def admin_base_url(
     """Serve one fully isolated Admin application on an OS-assigned port."""
 
     config_dir = tmp_path / ".fcc"
+    monkeypatch.setattr(
+        codex_integration, "config_path", lambda: tmp_path / ".codex" / "config.toml"
+    )
+    monkeypatch.setattr(vscode, "claude_state_path", lambda: tmp_path / ".claude.json")
+    monkeypatch.setattr(
+        vscode, "settings_path", lambda: tmp_path / "vscode" / "settings.json"
+    )
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     for key in recognized_env_keys():
@@ -141,13 +149,18 @@ def admin_base_url(
     monkeypatch.setenv("VOICE_NOTE_ENABLED", "false")
     monkeypatch.setenv("FCC_OPEN_BROWSER", "false")
     monkeypatch.setenv("PROXY_AUTH_ENABLED", "false")
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "e2e-proxy-token")
     for key, value in getattr(request, "param", {}).items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(paths, "config_dir_path", lambda: config_dir)
     monkeypatch.setattr(env_migrations, "legacy_env_paths", lambda: ())
     monkeypatch.setattr(env_migrations, "verified_checkout_env_path", lambda: None)
     clear_settings_cache()
+
+    store = ManagedConfigStore()
+    store.initialize({})
+    store.commit(
+        dict(store.read({}).managed) | {"ANTHROPIC_AUTH_TOKEN": "e2e-proxy-token"}
+    )
 
     provider_secret = "CREDENTIAL[unrecognized-format-987654321]"
     providers: dict[str, BaseProvider] = {

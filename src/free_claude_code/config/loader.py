@@ -152,18 +152,13 @@ def compose_settings_snapshot(
         if name := aliases.get(key):
             sources[name] = ConfigSource.MANAGED
 
-    managed_owns_token = bool(values.get(ANTHROPIC_AUTH_TOKEN_ENV, "").strip())
     for key in recognized:
         if key not in process:
             continue
-        if key == ANTHROPIC_AUTH_TOKEN_ENV and managed_owns_token:
+        # Servers and independently opened clients share the managed token/default.
+        if key == ANTHROPIC_AUTH_TOKEN_ENV:
             continue
-        value = process[key]
-        if key == ANTHROPIC_AUTH_TOKEN_ENV and not value.strip():
-            values.pop(key, None)
-            sources[aliases[key]] = ConfigSource.DEFAULT
-            continue
-        values[key] = value
+        values[key] = process[key]
         if name := aliases.get(key):
             sources[name] = ConfigSource.PROCESS
 

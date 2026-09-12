@@ -21,9 +21,13 @@ from free_claude_code.application.connected_accounts import (
     ConnectedAccountPort,
     ConnectedAccountStatus,
 )
-from free_claude_code.application.errors import ApplicationUnavailableError
+from free_claude_code.application.errors import (
+    ApplicationUnavailableError,
+    InvalidRequestError,
+)
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.application.ports import StopResult
+from free_claude_code.cli import codex_integration, vscode
 from free_claude_code.config.admin.persistence import (
     PreparedAdminUpdate,
 )
@@ -31,7 +35,10 @@ from free_claude_code.config.admin.state import ConfigInputValue, ValueState
 from free_claude_code.config.admin.status import provider_config_status
 from free_claude_code.config.loader import clear_settings_cache
 from free_claude_code.config.model_refs import parse_provider_type
-from free_claude_code.config.paths import messaging_state_dir_path
+from free_claude_code.config.paths import (
+    codex_model_catalog_path,
+    messaging_state_dir_path,
+)
 from free_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject
@@ -346,6 +353,81 @@ class ApplicationRuntime:
 
     async def admin_values(self) -> ValueState:
         return await self._configuration.admin_values()
+
+    async def claude_vscode_status(self) -> JsonObject:
+        return await self._claude_vscode(None)
+
+    async def connect_claude_vscode(self) -> JsonObject:
+        return await self._claude_vscode(True)
+
+    async def disconnect_claude_vscode(self) -> JsonObject:
+        return await self._claude_vscode(False)
+
+    async def _claude_vscode(self, connected: bool | None) -> JsonObject:
+        async with self._config_lock:
+            if self._draining or self._pending_fields:
+                raise ApplicationUnavailableError(
+                    "Wait for FCC to restart before changing the integration."
+                )
+            settings = self.settings
+            try:
+                return await _await_owned_task(
+                    asyncio.create_task(
+                        to_thread.run_sync(
+                            vscode.configure,
+                            vscode.settings_path(),
+                            vscode.claude_state_path(),
+                            local_proxy_root_url(settings),
+                            settings.proxy_auth_token,
+                            connected,
+                        )
+                    )
+                )
+            except ValueError, UnicodeError:
+                raise InvalidRequestError(
+                    "Could not read Claude integration settings. Check the JSON in VS Code settings.json and .claude.json."
+                ) from None
+            except OSError:
+                raise ApplicationUnavailableError(
+                    "Could not access VS Code settings.json or .claude.json. Check file permissions and try again."
+                ) from None
+
+    async def codex_integration_status(self) -> JsonObject:
+        return await self._codex_integration(None)
+
+    async def connect_codex(self) -> JsonObject:
+        return await self._codex_integration(True)
+
+    async def disconnect_codex(self) -> JsonObject:
+        return await self._codex_integration(False)
+
+    async def _codex_integration(self, connected: bool | None) -> JsonObject:
+        async with self._config_lock:
+            if self._draining or self._pending_fields:
+                raise ApplicationUnavailableError(
+                    "Wait for FCC to restart before changing the integration."
+                )
+            settings = self.settings
+            try:
+                return await _await_owned_task(
+                    asyncio.create_task(
+                        to_thread.run_sync(
+                            codex_integration.configure,
+                            codex_integration.config_path(),
+                            codex_model_catalog_path(),
+                            local_proxy_root_url(settings),
+                            connected,
+                        )
+                    )
+                )
+            except ValueError, UnicodeError:
+                raise InvalidRequestError(
+                    "Could not read Codex settings. Check the TOML in config.toml."
+                ) from None
+            except OSError:
+                raise ApplicationUnavailableError(
+                    "Could not access Codex config.toml. Check file permissions and try again."
+                ) from None
 
     async def admin_status(self) -> JsonObject:
         values = await self.admin_values()

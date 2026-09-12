@@ -30,8 +30,10 @@ _STRIPPED_CODEX_ENV_KEYS = frozenset(
 )
 
 
-def codex_config_args(*, api_url: str, model: str | None = None) -> list[str]:
-    """Build native TOML overrides for the FCC Responses provider."""
+def codex_config_values(
+    *, api_url: str, model: str | None = None
+) -> dict[str, str | list[str]]:
+    """Shared configuration for the FCC Responses provider."""
 
     values: dict[str, str | list[str]] = {
         "model_provider": "fcc",
@@ -43,6 +45,12 @@ def codex_config_args(*, api_url: str, model: str | None = None) -> list[str]:
     }
     if model:
         values["model"] = model
+    return values
+
+
+def codex_config_args(*, api_url: str, model: str | None = None) -> list[str]:
+    """Build native TOML overrides for the FCC Responses provider."""
+    values = codex_config_values(api_url=api_url, model=model)
     return [
         arg
         for key, value in values.items()

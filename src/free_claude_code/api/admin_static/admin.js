@@ -6,7 +6,8 @@ const state = {
   modelOptions: [],
   modelComboboxes: new Set(),
   authPollers: new Map(),
-  activeView: sessionViewFromPath(),
+  localStatusRequest: null,
+  activeView: viewFromLocation(),
 };
 
 const MASKED_SECRET = "********";
@@ -34,6 +35,13 @@ const VIEW_GROUPS = [
     containerId: "messagingSections",
   },
   {
+    id: "integrations",
+    label: "Integrations",
+    title: "Integrations",
+    sections: [],
+    containerId: "view-integrations",
+  },
+  {
     id: "code",
     label: "Code sessions",
     title: "Code sessions",
@@ -42,8 +50,8 @@ const VIEW_GROUPS = [
   },
 ];
 
-function sessionViewFromPath() {
-  return window.location.pathname.startsWith("/admin/code") ? "code" : "providers";
+function viewFromLocation() {
+  return window.location.pathname.split("/")[2] || "providers";
 }
 
 const byId = (id) => document.getElementById(id);
@@ -98,6 +106,7 @@ async function api(path, options = {}) {
 }
 
 async function load() {
+  state.localStatusRequest = null;
   showMessage("Loading admin config");
   const config = await api("/admin/api/config");
   state.config = config;
@@ -106,10 +115,10 @@ async function load() {
   renderProviders(config.provider_status);
   renderSections(config.sections, config.fields);
   byId("configPath").textContent = config.paths.managed;
+  void refreshLocalStatus(config);
   await Promise.all([
     refreshConnectedAccounts(),
     hydrateModelOptions(),
-    refreshLocalStatus(),
     window.CodeSessions.initialize(api),
   ]);
   updateDirtyState();
@@ -145,7 +154,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   document.querySelector(".app-shell").classList.toggle("session-active", sessionActive);
   document.querySelector(".main").classList.toggle("session-main", sessionActive);
   document.querySelector(".topbar").hidden = sessionActive;
-  document.querySelector(".action-bar").hidden = sessionActive;
+  document.querySelector(".action-bar").hidden = sessionActive || activeView.id === "integrations";
 
   document.querySelectorAll(".nav-link").forEach((link) => {
     const selected = link.dataset.view === activeView.id;
@@ -168,15 +177,16 @@ function setActiveView(viewId, { scroll = false } = {}) {
   }
   if (activeView.id === "code") window.CodeSessions.activate(window.location.pathname);
   else window.CodeSessions.deactivate();
+  if (activeView.id === "integrations") {
+    refreshClaudeIntegration();
+    refreshCodexIntegration();
+  }
 }
 
 function navigateToView(viewId) {
-  if (viewId === "code") {
-    if (window.location.pathname !== `/admin/${viewId}`) {
-      window.history.pushState({}, "", `/admin/${viewId}`);
-    }
-  } else if (sessionViewFromPath() !== "providers") {
-    window.history.pushState({}, "", "/admin");
+  const target = viewId === "providers" ? "/admin" : `/admin/${viewId}`;
+  if (window.location.pathname + window.location.search !== target) {
+    window.history.pushState({}, "", target);
   }
   setActiveView(viewId, { scroll: true });
 }
@@ -1092,32 +1102,53 @@ async function apply() {
   }
 }
 
-async function refreshLocalStatus() {
-  const result = await api("/admin/api/providers/local-status");
-  result.providers.forEach((provider) => {
-    if (provider.status === "missing_url") return;
-    if (provider.status === "reachable") {
+async function refreshLocalStatus(config) {
+  const request = {
+    providerIds: new Set(config.provider_status.filter((provider) =>
+      provider.kind === "local" && provider.status === "configured",
+    ).map((provider) => provider.provider_id)),
+  };
+  state.localStatusRequest = request;
+  try {
+    const result = await api("/admin/api/providers/local-status");
+    if (state.localStatusRequest !== request) return;
+    result.providers.forEach((provider) => {
+      if (!request.providerIds.has(provider.provider_id) || provider.status === "missing_url") return;
+      if (provider.status === "reachable") {
+        updateProviderCheckResult(
+          provider.provider_id,
+          "ok",
+          `Reachable: ${provider.base_url}`,
+        );
+        return;
+      }
+      const detail = provider.message
+        ? provider.message
+        : provider.status_code
+          ? `${provider.base_url} returned HTTP ${provider.status_code}`
+          : "The local provider did not respond.";
       updateProviderCheckResult(
         provider.provider_id,
-        "ok",
-        `Reachable: ${provider.base_url}`,
+        "error",
+        `Unavailable: ${detail}`,
       );
-      return;
-    }
-    const detail = provider.message
-      ? provider.message
-      : provider.status_code
-        ? `${provider.base_url} returned HTTP ${provider.status_code}`
-        : "The local provider did not respond.";
-    updateProviderCheckResult(
-      provider.provider_id,
-      "error",
-      `Unavailable: ${detail}`,
-    );
-  });
+    });
+  } catch {
+    if (state.localStatusRequest !== request) return;
+    request.providerIds.forEach((providerId) => {
+      updateProviderCheckResult(
+        providerId,
+        "error",
+        "Availability check failed. Use Test to retry.",
+      );
+    });
+  } finally {
+    if (state.localStatusRequest === request) state.localStatusRequest = null;
+  }
 }
 
 async function testProvider(providerId, button) {
+  state.localStatusRequest?.providerIds.delete(providerId);
   const original = button.textContent;
   button.disabled = true;
   button.textContent = "Checking...";
@@ -1227,7 +1258,7 @@ document.addEventListener("pointerdown", (event) => {
 });
 
 window.addEventListener("popstate", () => {
-  const viewId = sessionViewFromPath();
+  const viewId = viewFromLocation();
   setActiveView(viewId, { scroll: false });
 });
 
@@ -1238,6 +1269,205 @@ try {
 } catch {
   console.warn("Chat draft cleanup deferred until the next page load: storage unavailable");
 }
+
+const claudeIntegrationDialog = byId("claudeIntegrationDialog");
+const claudeIntegration = { connected: null, busy: false, paths: null };
+const claudeIntegrationPath = "/admin/api/integrations/claude-vscode";
+
+function integrationMessage(id, message, error = false) {
+  const element = byId(id);
+  element.textContent = message;
+  element.hidden = !message;
+  element.classList.toggle("error", error);
+}
+
+function renderClaudeIntegration() {
+  const { connected, busy, paths } = claudeIntegration;
+  const action = connected ? "Disconnect" : "Connect";
+  byId("openClaudeIntegration").textContent = connected === null && !busy ? "Retry" : action;
+  byId("openClaudeIntegration").disabled = busy;
+  byId("confirmClaudeIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmClaudeIntegration").disabled = busy || connected === null;
+  byId("openClaudeIntegration").className = connected ? "danger-button" : "primary-button";
+  byId("confirmClaudeIntegration").className = connected ? "danger-button" : "primary-button";
+  const status = byId("claudeIntegrationStatus");
+  status.hidden = connected !== null;
+  status.textContent = busy ? "Checking settings…" : "Could not check settings";
+  byId("claudeIntegrationDescription").textContent = connected
+    ? "Remove FCC's VS Code settings. Claude onboarding stays completed."
+    : "Will set FCC's URL and token, enable model discovery, skip VS Code login, and complete Claude onboarding.";
+  const files = byId("claudeIntegrationFiles");
+  files.replaceChildren();
+  if (paths) {
+    const targets = connected ? [paths.vscode_settings] : [paths.vscode_settings, paths.claude_state];
+    targets.forEach((path) => {
+      const item = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = path;
+      item.appendChild(code);
+      files.appendChild(item);
+    });
+  }
+}
+
+async function refreshClaudeIntegration() {
+  if (claudeIntegration.busy) return;
+  claudeIntegration.busy = true;
+  renderClaudeIntegration();
+  integrationMessage("claudeIntegrationMessage", "");
+  try {
+    const result = await api(claudeIntegrationPath);
+    claudeIntegration.connected = result.connected;
+    claudeIntegration.paths = result.paths;
+  } catch (error) {
+    claudeIntegration.connected = null;
+    integrationMessage("claudeIntegrationMessage", error.message, true);
+  } finally {
+    claudeIntegration.busy = false;
+    renderClaudeIntegration();
+  }
+}
+
+byId("openClaudeIntegration").addEventListener("click", () => {
+  if (claudeIntegration.connected === null) {
+    refreshClaudeIntegration();
+    return;
+  }
+  integrationMessage("claudeIntegrationDialogMessage", "");
+  claudeIntegrationDialog.showModal();
+});
+byId("confirmClaudeIntegration").addEventListener("click", async () => {
+  if (claudeIntegration.busy || claudeIntegration.connected === null) return;
+  const disconnect = claudeIntegration.connected;
+  claudeIntegration.busy = true;
+  renderClaudeIntegration();
+  integrationMessage("claudeIntegrationDialogMessage", "");
+  integrationMessage("claudeIntegrationMessage", "");
+  try {
+    const result = await api(`${claudeIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    claudeIntegration.connected = result.connected;
+    claudeIntegrationDialog.close();
+    integrationMessage("claudeIntegrationMessage", disconnect
+      ? "Settings removed. Reload VS Code to disconnect."
+      : "Settings saved. Reload VS Code to connect.");
+  } catch (error) {
+    integrationMessage("claudeIntegrationDialogMessage", error.message, true);
+    integrationMessage("claudeIntegrationMessage", error.message, true);
+  } finally {
+    claudeIntegration.busy = false;
+    renderClaudeIntegration();
+  }
+});
+byId("closeClaudeIntegration").addEventListener("click", () => claudeIntegrationDialog.close());
+claudeIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== claudeIntegrationDialog) return;
+  const bounds = claudeIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    claudeIntegrationDialog.close();
+  }
+});
+
+const codexIntegrationDialog = byId("codexIntegrationDialog");
+const codexIntegration = { connected: null, busy: false, paths: null };
+const codexIntegrationPath = "/admin/api/integrations/codex";
+
+function renderCodexIntegration() {
+  const { connected, busy, paths } = codexIntegration;
+  const action = connected ? "Disconnect" : "Connect";
+  byId("openCodexIntegration").textContent = connected === null && !busy ? "Retry" : action;
+  byId("openCodexIntegration").disabled = busy;
+  byId("confirmCodexIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmCodexIntegration").disabled = busy || connected === null;
+  byId("openCodexIntegration").className = connected ? "danger-button" : "primary-button";
+  byId("confirmCodexIntegration").className = connected ? "danger-button" : "primary-button";
+  const status = byId("codexIntegrationStatus");
+  status.hidden = connected !== null;
+  status.textContent = busy ? "Checking settings…" : "Could not check settings";
+  byId("codexIntegrationDescription").textContent = connected
+    ? "Remove FCC's Codex configuration. Other settings stay unchanged."
+    : "Configure Codex to use FCC. Your selected model stays unchanged.";
+  const files = byId("codexIntegrationFiles");
+  files.replaceChildren();
+  if (paths) {
+    const targets = [paths.codex_config];
+    targets.forEach((path) => {
+      const item = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = path;
+      item.appendChild(code);
+      files.appendChild(item);
+    });
+  }
+}
+
+async function refreshCodexIntegration() {
+  if (codexIntegration.busy) return;
+  codexIntegration.busy = true;
+  renderCodexIntegration();
+  integrationMessage("codexIntegrationMessage", "");
+  try {
+    const result = await api(codexIntegrationPath);
+    codexIntegration.connected = result.connected;
+    codexIntegration.paths = result.paths;
+  } catch (error) {
+    codexIntegration.connected = null;
+    integrationMessage("codexIntegrationMessage", error.message, true);
+  } finally {
+    codexIntegration.busy = false;
+    renderCodexIntegration();
+  }
+}
+
+byId("openCodexIntegration").addEventListener("click", () => {
+  if (codexIntegration.connected === null) {
+    refreshCodexIntegration();
+    return;
+  }
+  integrationMessage("codexIntegrationDialogMessage", "");
+  codexIntegrationDialog.showModal();
+});
+byId("confirmCodexIntegration").addEventListener("click", async () => {
+  if (codexIntegration.busy || codexIntegration.connected === null) return;
+  const disconnect = codexIntegration.connected;
+  codexIntegration.busy = true;
+  renderCodexIntegration();
+  integrationMessage("codexIntegrationDialogMessage", "");
+  integrationMessage("codexIntegrationMessage", "");
+  try {
+    const result = await api(`${codexIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    codexIntegration.connected = result.connected;
+    codexIntegration.paths = result.paths;
+    codexIntegrationDialog.close();
+    integrationMessage("codexIntegrationMessage", disconnect
+      ? "Settings removed. Restart Codex to disconnect."
+      : "Settings saved. Restart Codex and select an FCC model.");
+  } catch (error) {
+    integrationMessage("codexIntegrationDialogMessage", error.message, true);
+    integrationMessage("codexIntegrationMessage", error.message, true);
+  } finally {
+    codexIntegration.busy = false;
+    renderCodexIntegration();
+  }
+});
+byId("closeCodexIntegration").addEventListener("click", () => codexIntegrationDialog.close());
+codexIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== codexIntegrationDialog) return;
+  const bounds = codexIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    codexIntegrationDialog.close();
+  }
+});
+
+const jetBrainsIntegrationDialog = byId("jetBrainsIntegrationDialog");
+byId("openJetBrainsIntegration").addEventListener("click", () => jetBrainsIntegrationDialog.showModal());
+byId("closeJetBrainsIntegration").addEventListener("click", () => jetBrainsIntegrationDialog.close());
+jetBrainsIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== jetBrainsIntegrationDialog) return;
+  const bounds = jetBrainsIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    jetBrainsIntegrationDialog.close();
+  }
+});
 
 load().then(showRestartNotice).catch((error) => {
   showMessage(error.message, "error");

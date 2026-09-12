@@ -82,6 +82,74 @@
             ></div>
           </section>
 
+          <section id="view-integrations" class="admin-view provider-grid" data-view="integrations" hidden>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
+                  <h3>Claude Code in VS Code</h3>
+                  <p>Use FCC's models in the Claude Code extension for VS Code.</p>
+                  <span id="claudeIntegrationStatus" class="status-pill neutral" role="status">Checking settings…</span>
+                </div>
+              </div>
+              <p id="claudeIntegrationMessage" class="message-area" role="status" hidden></p>
+              <button id="openClaudeIntegration" class="primary-button" type="button" disabled>Connect</button>
+            </article>
+            <dialog id="claudeIntegrationDialog" class="integration-dialog" aria-labelledby="claudeIntegrationTitle" aria-describedby="claudeIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="claudeIntegrationTitle">Claude Code in VS Code</h3>
+                <button id="closeClaudeIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="claudeIntegrationDescription">Will set FCC's URL and token, enable model discovery, skip VS Code login, and complete Claude onboarding.</p>
+              <div class="integration-files">
+                <strong>Files to modify</strong>
+                <ul id="claudeIntegrationFiles"></ul>
+              </div>
+              <button id="confirmClaudeIntegration" class="primary-button" type="button">Connect</button>
+              <p id="claudeIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
+            </dialog>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
+                  <h3>Codex in VS Code and App</h3>
+                  <p>Use FCC's models in the Codex VS Code extension and desktop app.</p>
+                  <span id="codexIntegrationStatus" class="status-pill neutral" role="status">Checking settings…</span>
+                </div>
+              </div>
+              <p id="codexIntegrationMessage" class="message-area" role="status" hidden></p>
+              <button id="openCodexIntegration" class="primary-button" type="button" disabled>Connect</button>
+            </article>
+            <dialog id="codexIntegrationDialog" class="integration-dialog" aria-labelledby="codexIntegrationTitle" aria-describedby="codexIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="codexIntegrationTitle">Codex in VS Code and App</h3>
+                <button id="closeCodexIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="codexIntegrationDescription">Configure Codex to use FCC. Your selected model stays unchanged.</p>
+              <div class="integration-files">
+                <strong>Files to modify</strong>
+                <ul id="codexIntegrationFiles"></ul>
+              </div>
+              <button id="confirmCodexIntegration" class="primary-button" type="button">Connect</button>
+              <p id="codexIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
+            </dialog>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
+                  <h3>Claude Code in JetBrains ACP</h3>
+                  <p>Use FCC's models in Claude Code through JetBrains ACP.</p>
+                </div>
+              </div>
+              <button id="openJetBrainsIntegration" class="primary-button" type="button">Connect</button>
+            </article>
+            <dialog id="jetBrainsIntegrationDialog" class="integration-dialog" aria-labelledby="jetBrainsIntegrationTitle" aria-describedby="jetBrainsIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="jetBrainsIntegrationTitle">Claude Code in JetBrains ACP</h3>
+                <button id="closeJetBrainsIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="jetBrainsIntegrationDescription">Route Claude Code in JetBrains through your FCC server.</p>
+              <button id="confirmJetBrainsIntegration" class="primary-button" type="button">Connect</button>
+            </dialog>
+          </section>
+
           <section id="view-code" class="admin-view" data-view="code" hidden>
             <div id="codeRoot" class="code-root session-root" aria-live="off"></div>
           </section>
