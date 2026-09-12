@@ -1268,11 +1268,8 @@ function renderClaudeIntegration() {
   byId("openClaudeIntegration").className = connected ? "danger-button" : "primary-button";
   byId("confirmClaudeIntegration").className = connected ? "danger-button" : "primary-button";
   const status = byId("claudeIntegrationStatus");
-  status.hidden = connected === true;
-  status.textContent = connected === null
-    ? (busy ? "Checking settings…" : "Could not check settings")
-    : (connected ? "Connected" : "Not connected");
-  status.className = `status-pill ${connected ? "ok" : "neutral"}`;
+  status.hidden = connected !== null;
+  status.textContent = busy ? "Checking settings…" : "Could not check settings";
   byId("claudeIntegrationDescription").textContent = connected
     ? "Remove FCC's VS Code settings. Claude onboarding stays completed."
     : "Will set FCC's URL and token, enable model discovery, skip VS Code login, and complete Claude onboarding.";
@@ -1361,11 +1358,8 @@ function renderCodexIntegration() {
   byId("openCodexIntegration").className = connected ? "danger-button" : "primary-button";
   byId("confirmCodexIntegration").className = connected ? "danger-button" : "primary-button";
   const status = byId("codexIntegrationStatus");
-  status.hidden = connected === true;
-  status.textContent = connected === null
-    ? (busy ? "Checking settings…" : "Could not check settings")
-    : (connected ? "Connected" : "Not connected");
-  status.className = `status-pill ${connected ? "ok" : "neutral"}`;
+  status.hidden = connected !== null;
+  status.textContent = busy ? "Checking settings…" : "Could not check settings";
   byId("codexIntegrationDescription").textContent = connected
     ? "Remove FCC's Codex configuration. Other settings stay unchanged."
     : "Configure Codex to use FCC. Your selected model stays unchanged.";

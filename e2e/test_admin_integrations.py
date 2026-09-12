@@ -7,7 +7,7 @@ from playwright.sync_api import expect
 from free_claude_code.cli import vscode
 
 
-@pytest.mark.parametrize("width", [1280, 390])
+@pytest.mark.parametrize("width", [1280, 1200, 390])
 def test_codex_connect_disconnect_and_modal_paths(
     page, admin_base_url, tmp_path, width
 ):
@@ -17,13 +17,20 @@ def test_codex_connect_disconnect_and_modal_paths(
     expect(page.locator("#messageArea")).to_have_text("")
     cards = page.locator("#view-integrations > article")
     expect(cards).to_have_count(2)
+    expect(page.locator("#claudeIntegrationStatus")).not_to_be_visible()
+    expect(page.locator("#openCodexIntegration")).to_be_enabled()
+    expect(page.locator("#codexIntegrationStatus")).not_to_be_visible()
     expect(cards.nth(1)).to_contain_text(
         "Use FCC's models in the Codex VS Code extension and desktop app."
     )
     bounds = [card.bounding_box() for card in cards.all()]
-    if width == 1280:
+    if width >= 1200:
         assert bounds[0]["y"] == bounds[1]["y"]
         assert bounds[1]["x"] > bounds[0]["x"]
+        descriptions = [
+            card.locator(".section-heading p").bounding_box() for card in cards.all()
+        ]
+        assert descriptions[0]["y"] == descriptions[1]["y"]
     else:
         assert bounds[1]["y"] > bounds[0]["y"]
     opener = page.locator("#openCodexIntegration")
@@ -60,7 +67,7 @@ def test_codex_connect_disconnect_and_modal_paths(
     expect(opener).to_have_text("Disconnect")
     expect(page.locator("#codexIntegrationStatus")).not_to_be_visible()
     expect(opener).to_have_css("color", "rgb(239, 68, 68)")
-    if width == 1280:
+    if width >= 1200:
         buttons = [
             button.bounding_box()
             for button in page.locator(".integration-card > button").all()
@@ -85,6 +92,7 @@ def test_codex_connect_disconnect_and_modal_paths(
     page.locator("#confirmCodexIntegration").click()
     expect(opener).to_have_text("Connect")
     expect(opener).to_have_css("color", "rgb(6, 16, 11)")
+    expect(page.locator("#codexIntegrationStatus")).not_to_be_visible()
     assert tomllib.loads(path.read_text()) == {"model": "my-choice"}
     assert not (tmp_path / "vscode" / "settings.json").exists()
     assert not (tmp_path / ".claude.json").exists()
@@ -155,6 +163,7 @@ def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):
     action.click()
     expect(card_button).to_have_text("Connect")
     expect(card_button).to_have_css("color", "rgb(6, 16, 11)")
+    expect(page.locator("#claudeIntegrationStatus")).not_to_be_visible()
     assert json.loads(path.read_text()) == {}
     assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
 
