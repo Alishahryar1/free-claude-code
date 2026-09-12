@@ -137,6 +137,7 @@ def test_cline_native_configuration_is_available_to_child(launch_capture) -> Non
     from tests.cli.test_launcher_workflow import launch
 
     launch_ids = []
+    hub_paths = []
 
     def inspect(command, env):
         providers_path = Path(env["CLINE_PROVIDER_SETTINGS_PATH"])
@@ -150,6 +151,16 @@ def test_cline_native_configuration_is_available_to_child(launch_capture) -> Non
         assert settings["model"] in models["providers"][CLINE_PROVIDER_ID]["models"]
         assert env["CLINE_SESSION_BACKEND_MODE"] == "local"
         assert command[:3] == ["cline", "--provider", "openai-native"]
+        hub_path = Path(env["CLINE_HUB_DISCOVERY_PATH"])
+        assert hub_path.parent.name == "hub"
+        assert hub_path.name == "production.json"
+        # Hub discovery must resolve inside the same ephemeral tree as the
+        # private provider files. The hub/ directory is pre-created so the
+        # child can record discovery state; the file itself must not exist.
+        assert hub_path.parent.parent == providers_path.parent.parent
+        assert hub_path.parent.is_dir()
+        assert not hub_path.exists()
+        hub_paths.append(hub_path)
 
     launch_capture.on_start = inspect
     args = ["--model", "native-selection", "--data-dir", "native-data-dir"]
@@ -157,3 +168,32 @@ def test_cline_native_configuration_is_available_to_child(launch_capture) -> Non
     assert launch_capture.commands[0][-len(args) :] == args
     launch("cline", [])
     assert launch_ids[0] != launch_ids[1]
+    assert hub_paths[0] != hub_paths[1]
+    assert all(not hub_path.exists() for hub_path in hub_paths)
+
+
+def test_cline_hub_discovery_path_overrides_stale_inherited_value(
+    launch_capture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.cli.test_launcher_workflow import launch
+
+    monkeypatch.setenv("CLINE_HUB_DISCOVERY_PATH", "stale-user-hub-discovery.json")
+    dir_existed_at_start = []
+
+    def inspect(command, env):
+        hub_dir = Path(env["CLINE_HUB_DISCOVERY_PATH"]).parent
+        dir_existed_at_start.append(hub_dir.is_dir())
+
+    launch_capture.on_start = inspect
+    launch("cline", [])
+    hub_path = Path(launch_capture.environments[0]["CLINE_HUB_DISCOVERY_PATH"])
+    # The stale user-level discovery file must be replaced by the isolated
+    # ephemeral path, never inherited by the fcc-cline child. The hub/
+    # directory is pre-created at launch (checked via on_start, since the
+    # ephemeral tree is cleaned up when the launcher exits); only the file
+    # itself must not be pre-created.
+    assert hub_path.name == "production.json"
+    assert hub_path.parent.name == "hub"
+    assert str(hub_path) != "stale-user-hub-discovery.json"
+    assert dir_existed_at_start == [True]
+    assert not hub_path.exists()
