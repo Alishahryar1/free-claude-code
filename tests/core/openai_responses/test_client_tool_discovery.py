@@ -537,6 +537,62 @@ def test_chat_forced_namespaced_custom_choice_is_lowered_once(discovery: bool) -
 
 
 @pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("namespace", [None, "editor"])
+@pytest.mark.parametrize("custom", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+def test_generic_choice_uses_declared_tool_kind(
+    native: bool, namespace: str | None, custom: bool, nested: bool
+) -> None:
+    definition: JsonObject = {
+        "type": "custom" if custom else "function",
+        "name": "edit",
+    }
+    if custom:
+        definition["format"] = {"type": "text"}
+    else:
+        definition["parameters"] = {"type": "object"}
+    choice: JsonObject = {"type": "tool", "name": "edit"}
+    tools = [definition]
+    if namespace:
+        tools = [{"type": "namespace", "name": namespace, "tools": tools}]
+        choice["namespace"] = namespace
+    if nested:
+        choice = {
+            "type": "tool",
+            "custom" if custom else "function": {
+                key: value for key, value in choice.items() if key != "type"
+            },
+        }
+    request = OpenAIResponsesRequest(
+        model="example", input="Edit", tools=tools, tool_choice=choice
+    )
+    original = request.model_dump()
+    wire_name = "editor__edit" if namespace else "edit"
+    if native:
+        prepared = ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(
+                custom_tools_as_functions=True, flatten_namespaces=True
+            ),
+        ).request
+        assert prepared.tool_choice == {"type": "function", "name": wire_name}
+        assert prepared.tools and prepared.tools[0]["name"] == wire_name
+    else:
+        body = build_responses_chat_request(
+            request, reasoning_replay=ReasoningReplayMode.DISABLED
+        ).body
+        assert body["tool_choice"] == {
+            "type": "function",
+            "function": {"name": wire_name},
+        }
+        assert (
+            cast(list[dict[str, Any]], body["tools"])[0]["function"]["name"]
+            == wire_name
+        )
+    assert request.model_dump() == original
+
+
+@pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize(
     "status", ["omitted", None, "completed", "in_progress", "incomplete", "failed"]
 )

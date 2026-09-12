@@ -108,6 +108,7 @@ class _ResponsesChatInputBuilder:
         self._pending_reasoning = _PendingReasoning()
         self._pending_rich_output_parts: list[dict[str, object]] = []
         self._quarantined_call_ids: set[str] = set()
+        self._discovery_outputs: list[dict[str, object]] = []
 
     def add(self, item: JsonValue, *, source_type: str | None = None) -> None:
         if isinstance(item, str):
@@ -136,9 +137,7 @@ class _ResponsesChatInputBuilder:
             self._add_tool_call(item)
             return
         if item_type == "function_call_output":
-            self._add_tool_output(
-                item, function=source_type != "custom_tool_call_output"
-            )
+            self._add_tool_output(item, source_type=source_type)
             return
         if item_type == "computer_call_output":
             self._add_computer_output(item)
@@ -172,6 +171,16 @@ class _ResponsesChatInputBuilder:
         self._flush_rich_outputs()
         self._flush_reasoning()
         return self.system_parts, self.messages
+
+    def encode_discovery_outputs(self, tool_names: OpenAIToolNameCodec) -> None:
+        """Encode FCC's discovery definitions with the final Chat name mapping."""
+        if not tool_names.has_aliases:
+            return
+        for message in self._discovery_outputs:
+            tools = json.loads(cast(str, message["content"]))
+            for tool in tools:
+                tool["name"] = tool_names.encode(tool["name"])
+            message["content"] = json.dumps(tools)
 
     def _add_message(self, item: Mapping[str, JsonValue]) -> None:
         role = required_str(item.get("role", "user"), "input.role")
@@ -236,8 +245,9 @@ class _ResponsesChatInputBuilder:
             message.setdefault("reasoning_content", "")
 
     def _add_tool_output(
-        self, item: Mapping[str, JsonValue], *, function: bool
+        self, item: Mapping[str, JsonValue], *, source_type: str | None
     ) -> None:
+        function = source_type != "custom_tool_call_output"
         call_id = call_id_from_item(item)
         if function and call_id in self._quarantined_call_ids:
             return
@@ -262,6 +272,8 @@ class _ResponsesChatInputBuilder:
                 ),
             }
         )
+        if source_type == "tool_search_output":
+            self._discovery_outputs.append(self.messages[-1])
         if rich_parts is not None:
             self._pending_rich_output_parts.extend(rich_parts)
 
@@ -412,6 +424,7 @@ def build_responses_chat_request(
     tool_schemas = _body_tool_schemas(body)
     reserved_tool_ids = frozenset(_body_tool_call_ids(body))
     tool_names = OpenAIToolNameCodec.from_names(_body_tool_names(body))
+    builder.encode_discovery_outputs(tool_names)
     return ResponsesChatRequest(
         body=body,
         tool_names=tool_names,

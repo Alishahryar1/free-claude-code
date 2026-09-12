@@ -25,11 +25,22 @@ from tests.providers.test_opencode import (
 )
 @pytest.mark.parametrize("custom", [False, True])
 @pytest.mark.parametrize("omit_discovery_metadata", [False, True])
+@pytest.mark.parametrize(
+    ("tool_name", "namespaced"),
+    [(None, True), ("apply patch", False), ("x" * 80, False), ("apply patch", True)],
+)
 async def test_provider_discovery_call_and_result_round_trip(
-    provider_id: str, custom: bool, omit_discovery_metadata: bool
+    provider_id: str,
+    custom: bool,
+    omit_discovery_metadata: bool,
+    tool_name: str | None,
+    namespaced: bool,
 ) -> None:
     native = provider_id == "opencode_zen"
     requests: list[dict[str, Any]] = []
+    client_name = tool_name or ("edit" if custom else "spawn_agent")
+    namespace = ("editor" if custom else "agents") if namespaced else None
+    result_text = json.dumps([{"type": "function", "name": client_name}])
 
     def upstream(request: httpx2.Request) -> httpx2.Response:
         body = json.loads(request.content)
@@ -53,22 +64,32 @@ async def test_provider_discovery_call_and_result_round_trip(
             )
             args = '{"query":"agent"}'
         elif step == 2:
-            name = "editor__edit" if custom else "agents__spawn_agent"
-            assert name in functions
+            name = next(name for name in functions if name != "fcc_tool_search")
+            if not native:
+                assert len(name) <= 64
+                assert all(
+                    char.isascii() and (char.isalnum() or char in "_-") for char in name
+                )
+            assert body["tool_choice"] == (
+                {"type": "function", "name": name}
+                if native
+                else {"type": "function", "function": {"name": name}}
+            )
             assert (
                 messages[-1].get("type") == "function_call_output"
                 if native
                 else messages[-1]["role"] == "tool"
             )
-            assert name.split("__")[-1] in messages[-1][result_field]
+            discovered = json.loads(messages[-1][result_field])
+            assert len(discovered) == 1
+            assert discovered[0]["name"] == name
+            assert discovered[0]["parameters"] == functions[name]["parameters"]
             args = '{"input":"patch"}' if custom else '{"message":"hello"}'
         else:
             if native:
                 replayed_call = messages[-2]
                 assert replayed_call["type"] == "function_call"
-                assert replayed_call["name"] == (
-                    "editor__edit" if custom else "agents__spawn_agent"
-                )
+                assert replayed_call["name"] == requests[1]["tool_choice"]["name"]
                 assert "namespace" not in replayed_call
                 assert "namespace" not in functions[replayed_call["name"]]
                 assert json.loads(replayed_call["arguments"]) == (
@@ -77,8 +98,8 @@ async def test_provider_discovery_call_and_result_round_trip(
             else:
                 replayed_call = messages[-2]["tool_calls"][0]
                 function = replayed_call["function"]
-                assert function["name"] == (
-                    "editor__edit" if custom else "agents__spawn_agent"
+                assert (
+                    function["name"] == requests[1]["tool_choice"]["function"]["name"]
                 )
                 assert json.loads(function["arguments"]) == (
                     {"input": "patch"} if custom else {"message": "hello"}
@@ -90,7 +111,7 @@ async def test_provider_discovery_call_and_result_round_trip(
                 if native
                 else messages[-1]["role"] == "tool"
             )
-            assert messages[-1][result_field] == "completed"
+            assert messages[-1][result_field] == result_text
             name, args = "", ""
         packets: list[dict[str, Any]]
         if native:
@@ -238,6 +259,13 @@ async def test_provider_discovery_call_and_result_round_trip(
                 "model": "responses-selector" if native else "example",
                 "input": history,
                 "tools": [SEARCH],
+                "tool_choice": {
+                    "type": "tool",
+                    "namespace": namespace,
+                    "name": client_name,
+                }
+                if len(requests) == 1
+                else "auto",
                 "max_output_tokens": 128,
             }
         )
@@ -261,18 +289,15 @@ async def test_provider_discovery_call_and_result_round_trip(
         assert search["execution"] == "client"
         assert search["arguments"] == {"query": "agent"}
         assert "name" not in search
-        definitions = (
-            [
-                {
-                    "type": "namespace",
-                    "name": "editor",
-                    "tools": [
-                        {"type": "custom", "name": "edit", "format": {"type": "text"}}
-                    ],
-                }
-            ]
+        definition = (
+            {"type": "custom", "name": client_name, "format": {"type": "text"}}
             if custom
-            else [AGENTS]
+            else {**cast(list[dict[str, Any]], AGENTS["tools"])[0], "name": client_name}
+        )
+        definitions = (
+            [{"type": "namespace", "name": namespace, "tools": [definition]}]
+            if namespaced
+            else [definition]
         )
         history.extend(
             [
@@ -291,8 +316,8 @@ async def test_provider_discovery_call_and_result_round_trip(
             history[-1].pop("status")
         call = (await turn())["output"][0]
         assert call["type"] == ("custom_tool_call" if custom else "function_call")
-        assert call["namespace"] == ("editor" if custom else "agents")
-        assert call["name"] == ("edit" if custom else "spawn_agent")
+        assert call.get("namespace") == namespace
+        assert call["name"] == client_name
         if custom:
             assert call["input"] == "patch"
         else:
@@ -305,7 +330,7 @@ async def test_provider_discovery_call_and_result_round_trip(
                     if custom
                     else "function_call_output",
                     "call_id": call["call_id"],
-                    "output": "completed",
+                    "output": result_text,
                 },
             ]
         )

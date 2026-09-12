@@ -327,6 +327,16 @@ class ResponsesToolAdapter:
             self._policy.flatten_namespaces and kind in ("function", "custom", "tool")
         ) or (self._policy.custom_tools_as_functions and kind == "custom"):
             identity = _definition_identity(choice)
+            if kind == "tool":
+                identity = next(
+                    (
+                        declared
+                        for declared in self._declared
+                        if declared.name == identity.name
+                        and declared.namespace == identity.namespace
+                    ),
+                    identity,
+                )
             result: JsonObject = {
                 **{
                     key: value
@@ -737,6 +747,8 @@ def _definition_identity(
 ) -> ResponsesToolIdentity:
     kind = "custom" if value.get("type") == "custom" else "function"
     nested = value.get(kind)
+    if value.get("type") == "tool" and isinstance(value.get("custom"), dict):
+        nested = value["custom"]
     source = nested if isinstance(nested, dict) else value
     return ResponsesToolIdentity(
         kind=kind,
