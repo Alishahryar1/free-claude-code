@@ -18,6 +18,7 @@ from .nim import NimSettings
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
     NARAROUTE_DEFAULT_BASE,
+    ORCAROUTER_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
     TOKENROUTER_DEFAULT_BASE,
 )
@@ -188,6 +189,15 @@ class Settings(BaseModel):
     # ==================== LLM7.io (OpenAI-compatible) ====================
     llm7_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="LLM7_API_KEY"
+    )
+
+    # ==================== OrcaRouter (OpenAI-compatible gateway) ====================
+    orcarouter_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ORCAROUTER_API_KEY"
+    )
+    orcarouter_base_url: NonEmptyString = Field(
+        default=ORCAROUTER_DEFAULT_BASE,
+        validation_alias="ORCAROUTER_BASE_URL",
     )
 
     # ==================== Fireworks AI Config ====================
@@ -478,6 +488,9 @@ class Settings(BaseModel):
     )
     llm7_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="LLM7_PROXY"
+    )
+    orcarouter_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ORCAROUTER_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"
