@@ -15,7 +15,7 @@
 [![Code style: Ruff](https://img.shields.io/badge/code%20formatting-ruff-f5a623.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
 [![Logging: Loguru](https://img.shields.io/badge/logging-loguru-4ecdc4.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
 
-[Quick Start](#quick-start) · [Providers](#choose-a-provider) · [Clients](#connect-your-client) · [Integrations](#optional-integrations) · [Manage](#manage-your-installation)
+[Quick Start](#quick-start) · [Providers](#choose-a-provider) · [Clients](#connect-your-client) · [Integrations](#optional-integrations) · [Manage](#manage-your-installation) · [Troubleshooting](#troubleshooting)
 
 </div>
 
@@ -588,6 +588,51 @@ Restart `fcc-server`. In **Admin UI → Messaging → Voice**, enable voice note
 ## Manage Your Installation
 
 Run `fcc-server --version` to check the installed version without starting FCC.
+
+<a id="troubleshooting"></a>
+
+### Troubleshooting
+
+<details>
+<summary><strong>macOS: Homebrew symlink errors during Node.js install (Pi / DeepSeek Harness)</strong></summary>
+
+If the installer encounters Homebrew linking conflicts when upgrading Node.js (`Could not symlink ... Target is a symlink belonging to <formula>`):
+
+```bash
+brew link --overwrite brotli ca-certificates openssl@3 xz zstd
+brew install node
+```
+
+Verify Node.js version (&ge; 22.19.0 required):
+```bash
+node -v
+```
+
+</details>
+
+<details>
+<summary><strong>macOS / Linux: <code>~/.zshrc: Permission denied</code> during installation</strong></summary>
+
+If your shell configuration was previously created or modified by root/sudo, reset ownership to your current user:
+
+```bash
+sudo chown "$USER" ~/.zshrc
+```
+
+</details>
+
+<details>
+<summary><strong><code>503 NVIDIA_NIM_API_KEY is not set</code> when using another provider</strong></summary>
+
+If you configured an alternative provider key (such as `OPENROUTER_API_KEY`) but requests fail with `NVIDIA_NIM_API_KEY is not set`:
+
+1. Open the Admin UI or edit `~/.fcc/.env`.
+2. Update the `MODEL_*` mappings to your active provider (for example, `open_router/openrouter/free`).
+3. Restart FCC to reload the configuration:
+   - **Desktop app (macOS/Windows)**: Click the menu-bar/tray icon and select **Restart** (or select **Quit** and launch Free Claude Code again).
+   - **Terminal (`fcc-server`)**: Stop the active server with `Ctrl+C` (or `pkill -f fcc-server`), then start `fcc-server` again.
+
+</details>
 
 ### Update
 
