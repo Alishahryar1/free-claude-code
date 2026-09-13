@@ -42,7 +42,7 @@ def lmstudio_provider(lmstudio_config):
 def test_init(lmstudio_config):
     """Test provider initialization."""
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = LMStudioProvider(lmstudio_config, admission=immediate_admission())
         assert provider._api_key == "lm-studio"
@@ -57,7 +57,7 @@ def test_default_base_url_constant():
 
 def test_build_request_body_basic(lmstudio_provider):
     req = make_request()
-    body = lmstudio_provider._build_request_body(req)
+    body = lmstudio_provider._chat._build_request_body(req)
 
     assert body["model"] == "lmstudio-community/qwen2.5-7b-instruct"
     assert body["messages"][0]["role"] == "system"
@@ -66,7 +66,7 @@ def test_build_request_body_basic(lmstudio_provider):
 def test_adaptive_client_reasoning_uses_documented_named_effort(lmstudio_provider):
     req = make_request()
 
-    body = lmstudio_provider._build_request_body(req, reasoning=REASONING_ON)
+    body = lmstudio_provider._chat._build_request_body(req, reasoning=REASONING_ON)
 
     assert body["extra_body"]["reasoning_effort"] == "high"
     assert "reasoning_effort" not in body
@@ -75,7 +75,7 @@ def test_adaptive_client_reasoning_uses_documented_named_effort(lmstudio_provide
 def test_exact_client_budget_is_not_derived_from_output_tokens(lmstudio_provider):
     req = make_request(max_tokens=8192)
 
-    body = lmstudio_provider._build_request_body(
+    body = lmstudio_provider._chat._build_request_body(
         req,
         reasoning=ReasoningPolicy.on(
             effort=ReasoningEffort.HIGH,
@@ -105,7 +105,7 @@ def test_build_request_body_never_replays_prior_thinking(lmstudio_provider):
             },
         ]
     )
-    body = lmstudio_provider._build_request_body(req)
+    body = lmstudio_provider._chat._build_request_body(req)
 
     roles = [m.get("role") for m in body.get("messages", [])]
     assert "assistant_reasoning_content" not in roles
@@ -129,7 +129,7 @@ def test_preflight_builds_before_context_budget_and_preserves_policy(
         calls.append(("context", estimate))
 
     with (
-        patch.object(lmstudio_provider, "_build_request_body", side_effect=build),
+        patch.object(lmstudio_provider._chat, "_build_request_body", side_effect=build),
         patch.object(
             lmstudio_provider,
             "_preflight_context_budget",
@@ -150,7 +150,7 @@ def test_preflight_conversion_failure_skips_context_budget(lmstudio_provider):
 
     with (
         patch.object(
-            lmstudio_provider,
+            lmstudio_provider._chat,
             "_build_request_body",
             side_effect=conversion_error,
         ),

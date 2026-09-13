@@ -29,10 +29,6 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
-from free_claude_code.providers.openai_chat.provider import (
-    _OpenAIChatStreamRunner,
-    _reserved_anthropic_tool_ids,
-)
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
 )
@@ -40,6 +36,10 @@ from free_claude_code.providers.openai_chat.tool_calls import (
     OpenAIToolCallAssembler,
     OpenAIToolCallCollector,
     iter_heuristic_tool_use_events,
+)
+from free_claude_code.providers.openai_chat.transport import (
+    _OpenAIChatStreamRunner,
+    _reserved_anthropic_tool_ids,
 )
 from free_claude_code.providers.stream_recovery import TruncatedProviderStreamError
 from tests.providers.request_factory import make_messages_request
@@ -141,7 +141,7 @@ def _make_tool_assembler(
     concrete_request = request or _make_request()
     return OpenAIToolCallAssembler(
         reserved_tool_ids=_reserved_anthropic_tool_ids(concrete_request),
-        record_extra_content=provider._record_tool_call_extra_content,
+        record_extra_content=provider._behavior.record_tool_call_extra_content,
     )
 
 
@@ -178,8 +178,8 @@ def _make_stream_runner(
 ) -> _OpenAIChatStreamRunner:
     concrete_request = request or _make_request()
     return _OpenAIChatStreamRunner(
-        provider,
-        body=provider._build_request_body(concrete_request),
+        provider._chat,
+        body=provider._chat._build_request_body(concrete_request),
         tool_names=OpenAIToolNameCodec.from_request(concrete_request),
         tool_schemas=tool_schemas_by_name(concrete_request),
         reserved_tool_ids=_reserved_anthropic_tool_ids(concrete_request),
@@ -338,13 +338,13 @@ class TestStreamingExceptionHandling:
                 return_value=stream,
             ),
             patch.object(
-                provider,
-                "_normalize_stream",
+                provider._behavior,
+                "normalize_stream",
                 side_effect=ValueError("invalid stream wrapper"),
             ),
             pytest.raises(ValueError, match="invalid stream wrapper"),
         ):
-            await provider._create_stream(
+            await provider._chat._create_stream(
                 {"model": "test-model", "messages": []},
                 execution,
                 ProviderOperationKind.GENERATION,
@@ -1311,7 +1311,7 @@ class TestStreamingExceptionHandling:
                 },
             ]
         )
-        body = provider._build_request_body(
+        body = provider._chat._build_request_body(
             replay,
             reasoning=DEFAULT_REASONING_POLICY,
         )
@@ -1823,10 +1823,10 @@ class TestStreamingExceptionHandling:
 
         with (
             patch.object(
-                provider,
+                provider._chat,
                 "_create_stream",
                 new_callable=AsyncMock,
-                wraps=provider._create_stream,
+                wraps=provider._chat._create_stream,
             ) as create_stream,
             patch.object(
                 provider._client.chat.completions,
@@ -1887,7 +1887,7 @@ class TestStreamingExceptionHandling:
                 )
             )
         )
-        body = provider._build_request_body(request)
+        body = provider._chat._build_request_body(request)
         body["stream_options"] = {"include_usage": True}
         response = httpx2.Response(
             status_code=400,
@@ -1908,10 +1908,10 @@ class TestStreamingExceptionHandling:
 
         with (
             patch.object(
-                provider,
+                provider._chat,
                 "_create_stream",
                 new_callable=AsyncMock,
-                wraps=provider._create_stream,
+                wraps=provider._chat._create_stream,
             ) as create_stream,
             patch.object(
                 provider._client.chat.completions,
@@ -2064,10 +2064,10 @@ class TestStreamingExceptionHandling:
 
         with (
             patch.object(
-                provider,
+                provider._chat,
                 "_create_stream",
                 new_callable=AsyncMock,
-                wraps=provider._create_stream,
+                wraps=provider._chat._create_stream,
             ) as create_stream,
             patch.object(
                 provider._client.chat.completions,
@@ -2334,7 +2334,7 @@ class TestStreamingExceptionHandling:
                 thinking="hidden reasoning more",
             ),
         ) as mock_collect:
-            execution = runner._provider._admission.start_execution()
+            execution = runner._transport._admission.start_execution()
             events = await runner._recovery_events(
                 body={"messages": [{"role": "user", "content": "hello"}]},
                 assembler=assembler,
@@ -3190,7 +3190,6 @@ async def test_openai_compat_stream_ends_with_contract_when_tool_name_never_arri
 @pytest.mark.asyncio
 @pytest.mark.parametrize("collector", [False, True])
 async def test_tool_argument_mapping_survives_correction_then_stream_reopen(collector):
-    provider = _alias_provider()
     request = _alias_request()
 
     def responder(bodies):
@@ -3212,7 +3211,11 @@ async def test_tool_argument_mapping_survives_correction_then_stream_reopen(coll
             ]
         return 200, _alias_events()
 
-    async with _harness("chat", responder, chat_provider=provider) as (_, bodies):
+    async with _harness("chat", responder, chat_provider_factory=_alias_provider) as (
+        _,
+        bodies,
+        provider,
+    ):
         if collector:
             runner = _make_stream_runner(provider, request=request)
             execution = provider._admission.start_execution()

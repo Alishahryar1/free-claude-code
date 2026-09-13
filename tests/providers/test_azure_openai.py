@@ -31,7 +31,7 @@ def _provider() -> OpenAIChatProvider:
 
 def test_init_uses_resource_v1_url_and_api_key() -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = _provider()
 
@@ -62,7 +62,7 @@ def test_request_uses_deployment_name_modern_token_field_tools_and_reasoning() -
         ],
     )
 
-    body = _provider()._build_request_body(
+    body = _provider()._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
     )
@@ -88,7 +88,7 @@ def test_reasoning_uses_azure_supported_provider_vocabulary(
     policy: ReasoningPolicy,
     expected: str,
 ) -> None:
-    body = _provider()._build_request_body(
+    body = _provider()._chat._build_request_body(
         make_messages_request(
             AZURE_OPENAI_DEPLOYMENT,
             temperature=None,
@@ -117,7 +117,7 @@ def test_reasoning_history_replays_as_portable_think_tags() -> None:
         ],
     )
 
-    body = _provider()._build_request_body(request)
+    body = _provider()._chat._build_request_body(request)
     assistant = next(
         message for message in body["messages"] if message["role"] == "assistant"
     )

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 def make_openai_compat_stream_request(
     *, model: str = "test-model", stream: bool = True
 ) -> MagicMock:
-    """Minimal request stub matching :meth:`OpenAIChatProvider._build_request_body` needs."""
+    """Minimal request stub matching :meth:`OpenAIChatProvider._chat._build_request_body` needs."""
     req = MagicMock()
     req.model = model
     req.stream = stream

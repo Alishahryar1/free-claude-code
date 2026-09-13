@@ -22,7 +22,10 @@ from free_claude_code.providers.anthropic_messages.transport import (
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint import EndpointContext, HttpEndpoint
 from free_claude_code.providers.http import close_provider_stream
-from free_claude_code.providers.openai_chat import OpenAIChatProvider
+from free_claude_code.providers.openai_chat import (
+    OpenAIChatBehavior,
+    OpenAIChatTransport,
+)
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 
 from .auth import CopilotAuthManager
@@ -98,7 +101,7 @@ class GitHubCopilotProvider(BaseProvider):
             endpoint_transport=self._openai_pool,
             event_adapter_factory=CopilotResponsesEvents,
         )
-        self._chats: dict[str, tuple[CopilotModel, OpenAIChatProvider]] = {}
+        self._chats: dict[str, tuple[CopilotModel, OpenAIChatTransport]] = {}
         self._condition = asyncio.Condition()
         self._active = 0
         self._closing = False
@@ -182,18 +185,20 @@ class GitHubCopilotProvider(BaseProvider):
             reasoning,
         )
 
-    def _chat(self, model: CopilotModel) -> OpenAIChatProvider:
+    def _chat(self, model: CopilotModel) -> OpenAIChatTransport:
         cached = self._chats.get(model.info.model_id)
         if cached is None or cached[0] != model:
-            provider = OpenAIChatProvider(
-                self._config,
-                profile=chat_profile(model),
+            transport = OpenAIChatTransport(
+                behavior=OpenAIChatBehavior(chat_profile(model)),
+                read_timeout_s=self._config.http_read_timeout,
+                log_raw_sse_events=self._config.log_raw_sse_events,
+                log_api_error_tracebacks=self._config.log_api_error_tracebacks,
                 admission=self._admission,
                 client=self._client,
                 endpoint_transport=self._openai_pool,
             )
-            self._chats[model.info.model_id] = (model, provider)
-            return provider
+            self._chats[model.info.model_id] = (model, transport)
+            return transport
         return cached[1]
 
     async def _dispatch(

@@ -39,7 +39,7 @@ def codestral_provider(codestral_config):
 def test_init(codestral_config):
     """Test provider initialization."""
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = profiled_provider(
             "mistral_codestral",
@@ -58,7 +58,7 @@ def test_default_base_url():
 def test_build_request_body_basic(codestral_provider):
     """Basic request body conversion works for Codestral."""
     req = make_request()
-    body = codestral_provider._build_request_body(req)
+    body = codestral_provider._chat._build_request_body(req)
 
     assert body["model"] == "devstral-small-latest"
     assert body["messages"][0]["role"] == "system"
@@ -77,7 +77,7 @@ def test_build_request_body_global_disable_blocks_reasoning_mapping():
         admission=immediate_admission(),
     )
     req = make_request()
-    body = provider._build_request_body(req)
+    body = provider._chat._build_request_body(req)
 
     roles = [m.get("role") for m in body.get("messages", [])]
     assert "assistant_reasoning_content" not in roles

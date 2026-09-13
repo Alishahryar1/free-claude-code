@@ -70,7 +70,7 @@ async def wire_client(provider_id="opencode_zen", handler=None):
         return AsyncOpenAI(**kwargs)
 
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI", side_effect=sdk
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI", side_effect=sdk
     ):
         provider = create_opencode_provider(
             provider_id,

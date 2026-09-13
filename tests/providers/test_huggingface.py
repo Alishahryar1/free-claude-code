@@ -46,7 +46,7 @@ def test_default_base_url_constant():
 
 def test_init_uses_default_base_url_and_api_key(huggingface_config):
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = profiled_provider(
             "huggingface", huggingface_config, admission=immediate_admission()
@@ -60,7 +60,7 @@ def test_init_uses_default_base_url_and_api_key(huggingface_config):
 def test_init_strips_trailing_slash(huggingface_config):
     config = replace(huggingface_config, base_url=f"{HUGGINGFACE_DEFAULT_BASE}/")
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = profiled_provider(
             "huggingface", config, admission=immediate_admission()
         )
@@ -143,7 +143,7 @@ def test_build_request_body_keeps_max_tokens(huggingface_provider):
             "max_tokens": 42,
         }
 
-        body = huggingface_provider._build_request_body(make_request())
+        body = huggingface_provider._chat._build_request_body(make_request())
 
     mock_convert.assert_called_once()
     assert (
@@ -159,7 +159,7 @@ def test_build_request_body_preserves_caller_extra_body(huggingface_provider):
     extra_body = {"provider": "auto", "routing": {"bill_to": "my-org"}}
     req = make_request(extra_body=extra_body)
 
-    body = huggingface_provider._build_request_body(req)
+    body = huggingface_provider._chat._build_request_body(req)
 
     assert body["extra_body"] == extra_body
     assert body["extra_body"] is not extra_body
@@ -177,7 +177,7 @@ def test_build_request_body_preserves_caller_extra_body(huggingface_provider):
 def test_build_request_body_leaves_reasoning_control_to_selected_upstream(
     huggingface_provider, reasoning
 ):
-    body = huggingface_provider._build_request_body(
+    body = huggingface_provider._chat._build_request_body(
         make_request(),
         reasoning=reasoning,
     )
@@ -204,7 +204,7 @@ def test_build_request_body_does_not_replay_prior_thinking_blocks(
         ],
     )
 
-    body = huggingface_provider._build_request_body(req)
+    body = huggingface_provider._chat._build_request_body(req)
 
     assert body["messages"] == [
         {
@@ -230,7 +230,7 @@ def test_build_request_body_does_not_replay_top_level_reasoning_content(
         ],
     )
 
-    body = huggingface_provider._build_request_body(req)
+    body = huggingface_provider._chat._build_request_body(req)
 
     assert body["messages"] == [
         {

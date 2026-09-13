@@ -41,7 +41,7 @@ def test_default_base_url_constant():
 
 def test_init_uses_default_base_url_and_api_key(cohere_config):
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = profiled_provider(
             "cohere", cohere_config, admission=immediate_admission()
@@ -55,7 +55,7 @@ def test_init_uses_default_base_url_and_api_key(cohere_config):
 def test_init_strips_trailing_slash(cohere_config):
     config = replace(cohere_config, base_url=f"{COHERE_DEFAULT_BASE}/")
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = profiled_provider("cohere", config, admission=immediate_admission())
 
     assert provider._base_url == COHERE_DEFAULT_BASE
@@ -81,7 +81,7 @@ def test_build_request_body_sanitizes_documented_unsupported_fields(cohere_provi
             "parallel_tool_calls": True,
         }
 
-        body = cohere_provider._build_request_body(make_request())
+        body = cohere_provider._chat._build_request_body(make_request())
 
     assert body["messages"][0].get("name") is None
     assert body["max_tokens"] == 42
@@ -103,7 +103,7 @@ def test_build_request_body_sanitizes_documented_unsupported_fields(cohere_provi
 
 def test_build_request_body_maps_reasoning_on_to_high(cohere_provider):
     request = make_request()
-    body = cohere_provider._build_request_body(
+    body = cohere_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -126,7 +126,7 @@ def test_build_request_body_preserves_replayed_reasoning_content(cohere_provider
         }
 
         request = make_request()
-        body = cohere_provider._build_request_body(
+        body = cohere_provider._chat._build_request_body(
             request, reasoning=reasoning_for(request)
         )
 
@@ -153,7 +153,7 @@ def test_build_request_body_maps_reasoning_off_to_none():
     )
 
     request = make_request(thinking={"type": "disabled"})
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
     assert body["reasoning_effort"] == "none"
 
@@ -168,7 +168,7 @@ def test_build_request_body_promotes_allowed_extra_body(cohere_provider):
         }
     )
 
-    body = cohere_provider._build_request_body(req, reasoning=reasoning_for(req))
+    body = cohere_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
     assert body["frequency_penalty"] == 0.1
     assert body["presence_penalty"] == 0.2
@@ -181,7 +181,7 @@ def test_build_request_body_rejects_unsupported_extra_body(cohere_provider):
     req = make_request(extra_body={"documents": [{"text": "x"}]})
 
     with pytest.raises(InvalidRequestError, match="Unsupported"):
-        cohere_provider._build_request_body(req, reasoning=reasoning_for(req))
+        cohere_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
 
 @pytest.mark.asyncio

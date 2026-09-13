@@ -245,7 +245,7 @@ def test_poolside_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("poolside", settings)
 
     assert descriptor.display_name == "Poolside AI"
@@ -269,7 +269,7 @@ def test_llm7_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("llm7", settings)
 
     assert descriptor.display_name == "LLM7.io"
@@ -293,7 +293,7 @@ def test_xai_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("xai", settings)
 
     assert descriptor.display_name == "xAI (Grok)"
@@ -312,7 +312,7 @@ def test_qwencloud_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("qwencloud", settings)
 
     assert descriptor.display_name == "QwenCloud Token Plan"
@@ -331,7 +331,7 @@ def test_cline_pass_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("cline_pass", settings)
 
     assert descriptor.display_name == "ClinePass"
@@ -354,7 +354,7 @@ def test_qwencloud_coding_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("qwencloud_coding", settings)
 
     assert descriptor.display_name == "QwenCloud Coding Plan"
@@ -373,7 +373,7 @@ def test_together_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("together", settings)
 
     assert descriptor.display_name == "Together AI"
@@ -392,7 +392,7 @@ def test_deepinfra_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("deepinfra", settings)
 
     assert descriptor.display_name == "DeepInfra"
@@ -411,7 +411,7 @@ def test_siliconflow_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("siliconflow", settings)
 
     assert descriptor.display_name == "SiliconFlow"
@@ -431,7 +431,7 @@ def test_nebius_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("nebius", settings)
 
     assert descriptor.display_name == "Nebius Token Factory"
@@ -454,7 +454,7 @@ def test_chutes_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("chutes", settings)
 
     assert descriptor.display_name == "Chutes"
@@ -477,7 +477,7 @@ def test_featherless_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("featherless", settings)
 
     assert descriptor.display_name == "Featherless AI"
@@ -498,7 +498,7 @@ def test_agnes_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("agnes", settings)
 
     assert descriptor.display_name == "Agnes AI"
@@ -518,7 +518,7 @@ def test_zenmux_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("zenmux", settings)
 
     assert descriptor.display_name == "ZenMux"
@@ -538,7 +538,7 @@ def test_wandb_provider_config_uses_key_base_and_proxy() -> None:
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("wandb", settings)
 
     assert descriptor.display_name == "W&B Inference"
@@ -620,7 +620,7 @@ def test_local_provider_factory_resolves_catalog_static_credential(
     settings = _make_settings()
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider(provider_id, settings)
 
     assert config.api_key == expected_api_key
@@ -655,7 +655,7 @@ def test_zai_api_provider_config_uses_shared_key_general_base_and_own_proxy():
     )
 
     config = build_provider_config(descriptor, settings)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("zai_api", settings)
 
     assert descriptor.display_name == "Z.ai API"
@@ -706,7 +706,7 @@ def test_create_cloudflare_provider_uses_account_scoped_base_url():
         cloudflare_account_id="test-account",
     )
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("cloudflare", settings)
 
     assert isinstance(provider, CloudflareProvider)
@@ -720,10 +720,10 @@ def test_opencode_zen_provider_config_uses_explicit_id_and_name():
         provider = create_provider("opencode_zen", _make_settings())
 
     assert isinstance(provider, OpenCodeProvider)
-    assert provider._base_url == "https://opencode.ai/zen/v1"
-    assert provider._provider_name == "OPENCODE_ZEN"
-    assert provider._api_key == "test_opencode_key"
-    assert provider._responses._admission is provider._admission
+    assert str(provider._client.base_url).rstrip("/") == "https://opencode.ai/zen/v1"
+    assert provider._opencode_profile.provider_name == "OPENCODE_ZEN"
+    assert provider._client.api_key == "test_opencode_key"
+    assert provider._responses._admission is provider._chat._admission
 
 
 def test_opencode_go_provider_config_uses_correct_base_url_and_name():
@@ -731,10 +731,10 @@ def test_opencode_go_provider_config_uses_correct_base_url_and_name():
         provider = create_provider("opencode_go", _make_settings())
 
     assert isinstance(provider, OpenCodeProvider)
-    assert provider._base_url == "https://opencode.ai/zen/go/v1"
-    assert provider._provider_name == "OPENCODE_GO"
-    assert provider._api_key == "test_opencode_key"
-    assert provider._responses._admission is provider._admission
+    assert str(provider._client.base_url).rstrip("/") == "https://opencode.ai/zen/go/v1"
+    assert provider._opencode_profile.provider_name == "OPENCODE_GO"
+    assert provider._client.api_key == "test_opencode_key"
+    assert provider._responses._admission is provider._chat._admission
 
 
 def test_opencode_go_catalog_uses_opencode_api_key() -> None:
@@ -817,7 +817,7 @@ def test_build_provider_config_cohere_uses_api_key_and_proxy() -> None:
 
 
 def test_create_provider_uses_openai_chat_openrouter_by_default():
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = create_provider("open_router", _make_settings())
 
     assert isinstance(provider, OpenRouterProvider)
@@ -913,7 +913,7 @@ def test_create_provider_instantiates_each_builtin():
     }
 
     with (
-        patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"),
+        patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"),
         patch("free_claude_code.providers.github_copilot.provider.AsyncOpenAI"),
         patch("free_claude_code.providers.openai_codex.provider.AsyncOpenAI"),
         patch("httpx.AsyncClient"),
@@ -930,7 +930,11 @@ def test_create_provider_instantiates_each_builtin():
             )
 
             assert isinstance(provider, provider_cls)
-            assert provider._admission is sentinel_admission
+            if isinstance(provider, OpenCodeProvider):
+                assert provider._chat._admission is sentinel_admission
+                assert provider._responses._admission is sentinel_admission
+            else:
+                assert provider._admission is sentinel_admission
             admission_factory.assert_called_once_with(
                 provider_name=provider_id,
                 rate_limit=7,
@@ -945,7 +949,7 @@ def test_create_provider_instantiates_each_builtin():
 def test_provider_runtime_caches_by_provider_id():
     runtime = ProviderRuntime(_make_settings())
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         first = runtime.resolve_provider("nvidia_nim")
         second = runtime.resolve_provider("nvidia_nim")
 
@@ -955,7 +959,7 @@ def test_provider_runtime_caches_by_provider_id():
 def test_provider_runtime_provider_owns_one_admission_controller() -> None:
     runtime = ProviderRuntime(_make_settings())
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         first = runtime.resolve_provider("nvidia_nim")
         second = runtime.resolve_provider("nvidia_nim")
 
@@ -968,7 +972,7 @@ def test_separate_provider_runtimes_never_share_admission_controllers() -> None:
     first_runtime = ProviderRuntime(_make_settings())
     second_runtime = ProviderRuntime(_make_settings())
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         first = first_runtime.resolve_provider("nvidia_nim")
         second = second_runtime.resolve_provider("nvidia_nim")
 
@@ -981,7 +985,7 @@ def test_separate_provider_runtimes_never_share_admission_controllers() -> None:
 def test_different_providers_have_independent_admission_controllers() -> None:
     runtime = ProviderRuntime(_make_settings())
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         nim = runtime.resolve_provider("nvidia_nim")
         open_router = runtime.resolve_provider("open_router")
 

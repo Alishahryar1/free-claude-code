@@ -135,7 +135,7 @@ def test_build_request_body_uses_supported_output_field_tools_and_images(
         ],
     )
 
-    body = zenmux_provider._build_request_body(
+    body = zenmux_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -167,7 +167,7 @@ def test_build_request_body_maps_reasoning_effort_to_documented_vocabulary(
     effort: ReasoningEffort,
     expected: str,
 ) -> None:
-    body = zenmux_provider._build_request_body(
+    body = zenmux_provider._chat._build_request_body(
         _request(),
         reasoning=ReasoningPolicy.on(effort=effort),
     )
@@ -188,7 +188,7 @@ def test_build_request_body_maps_reasoning_control_and_budget(
     reasoning: ReasoningPolicy,
     expected: dict[str, Any],
 ) -> None:
-    body = zenmux_provider._build_request_body(_request(), reasoning=reasoning)
+    body = zenmux_provider._chat._build_request_body(_request(), reasoning=reasoning)
 
     assert body["extra_body"]["reasoning"] == expected
 
@@ -196,7 +196,7 @@ def test_build_request_body_maps_reasoning_control_and_budget(
 def test_build_request_body_leaves_reasoning_to_provider_by_default(
     zenmux_provider: OpenAIChatProvider,
 ) -> None:
-    body = zenmux_provider._build_request_body(
+    body = zenmux_provider._chat._build_request_body(
         _request(),
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -209,7 +209,7 @@ def test_build_request_body_preserves_unrelated_gateway_options(
 ) -> None:
     request = _request(extra_body={"provider": {"fallback": "true"}})
 
-    body = zenmux_provider._build_request_body(
+    body = zenmux_provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -228,7 +228,7 @@ def test_build_request_body_rejects_caller_canonical_override(
     request = _request(extra_body={field: "caller-owned"})
 
     with pytest.raises(InvalidRequestError, match="must not override canonical"):
-        zenmux_provider._build_request_body(
+        zenmux_provider._chat._build_request_body(
             request,
             reasoning=ReasoningPolicy.on(),
         )
@@ -273,7 +273,7 @@ def test_build_request_body_replays_reasoning_and_signed_details_unchanged(
         ]
     )
 
-    body = zenmux_provider._build_request_body(
+    body = zenmux_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -449,7 +449,7 @@ async def test_model_catalog_uses_documented_endpoint_and_auth() -> None:
         return AsyncOpenAI(*args, **kwargs)
 
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         side_effect=build_client,
     ):
         provider = profiled_provider(

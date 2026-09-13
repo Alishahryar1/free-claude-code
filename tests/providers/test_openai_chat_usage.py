@@ -9,7 +9,6 @@ import pytest
 from httpx2 import Request, Response
 from openai.types.completion_usage import CompletionUsage, PromptTokensDetails
 
-from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.sse_aggregation import (
@@ -20,6 +19,7 @@ from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.openai_chat import (
+    OpenAIChatBehavior,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
@@ -38,6 +38,16 @@ from tests.providers.support import (
 )
 
 
+class _UsageTestBehavior(OpenAIChatBehavior):
+    def build_messages_body(
+        self,
+        request: MessagesRequest,
+        *,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+    ) -> dict:
+        return {"model": request.model, "messages": [{"role": "user", "content": "x"}]}
+
+
 class _UsageTestProvider(OpenAIChatProvider):
     def __init__(self):
         super().__init__(
@@ -47,24 +57,17 @@ class _UsageTestProvider(OpenAIChatProvider):
                 rate_limit=100,
                 rate_window=60,
             ),
-            profile=OpenAIChatProfile(
-                OpenAIChatRequestPolicy(
-                    provider_name="USAGE_TEST",
-                    reasoning_replay=ReasoningReplayMode.DISABLED,
-                ),
-                NO_REASONING,
+            behavior=_UsageTestBehavior(
+                OpenAIChatProfile(
+                    OpenAIChatRequestPolicy(
+                        provider_name="USAGE_TEST",
+                        reasoning_replay=ReasoningReplayMode.DISABLED,
+                    ),
+                    NO_REASONING,
+                )
             ),
             admission=immediate_admission(),
         )
-
-    def _build_request_body(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> dict:
-        return {"model": request.model, "messages": [{"role": "user", "content": "x"}]}
 
 
 def _bad_request(message: str, body: object | None = None) -> openai.BadRequestError:
@@ -190,7 +193,7 @@ def test_usage_int_reads_dict_object_and_model_extra():
 def test_extracts_standard_chat_cache_write_tokens(usage, expected) -> None:
     provider = _UsageTestProvider()
 
-    assert provider._cache_write_input_tokens(usage) == expected
+    assert provider._behavior.cache_write_input_tokens(usage) == expected
 
 
 @pytest.mark.parametrize(
@@ -279,7 +282,7 @@ def test_extracts_standard_chat_cache_write_tokens(usage, expected) -> None:
 def test_maps_standard_chat_cache_usage_to_anthropic_fields(usage, expected):
     provider = _UsageTestProvider()
 
-    assert provider._anthropic_usage_fields(usage) == expected
+    assert provider._behavior.anthropic_usage_fields(usage) == expected
 
 
 @pytest.mark.parametrize(
@@ -332,7 +335,7 @@ def test_maps_standard_chat_cache_usage_to_anthropic_fields(usage, expected):
 def test_ignores_incomplete_or_inconsistent_standard_cache_usage(usage):
     provider = _UsageTestProvider()
 
-    assert provider._anthropic_usage_fields(usage) == {}
+    assert provider._behavior.anthropic_usage_fields(usage) == {}
 
 
 def test_stream_usage_rejection_matches_usage_option_400():
@@ -535,7 +538,12 @@ async def test_openai_chat_stream_retries_without_usage_when_option_is_rejected(
     )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        _stream_obj, used_body, attempt, _sent_body = await provider._create_stream(
+        (
+            _stream_obj,
+            used_body,
+            attempt,
+            _sent_body,
+        ) = await provider._chat._create_stream(
             body,
             provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,

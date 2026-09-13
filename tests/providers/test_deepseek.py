@@ -50,7 +50,7 @@ def test_default_base_url_alias():
 
 def test_init(deepseek_config):
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_client:
         provider = DeepSeekProvider(deepseek_config, admission=immediate_admission())
     assert provider._api_key == "test_deepseek_key"
@@ -90,7 +90,7 @@ def test_responses_request_uses_deepseek_chat_policy(deepseek_provider):
         }
     )
 
-    translated = deepseek_provider._build_responses_request_body(
+    translated = deepseek_provider._chat._build_responses_request_body(
         request, reasoning=REASONING_ON
     )
 
@@ -125,7 +125,7 @@ def test_responses_tool_history_keeps_deepseek_replayable_reasoning(
         }
     )
 
-    translated = deepseek_provider._build_responses_request_body(
+    translated = deepseek_provider._chat._build_responses_request_body(
         request, reasoning=REASONING_ON
     )
 
@@ -237,8 +237,10 @@ def test_responses_tool_history_keeps_deepseek_replayable_reasoning(
 def test_maps_only_complete_consistent_cache_usage(
     deepseek_provider, usage, anthropic_expected, responses_cached
 ) -> None:
-    assert deepseek_provider._anthropic_usage_fields(usage) == anthropic_expected
-    assert deepseek_provider._cached_input_tokens(usage) == responses_cached
+    assert (
+        deepseek_provider._behavior.anthropic_usage_fields(usage) == anthropic_expected
+    )
+    assert deepseek_provider._behavior.cached_input_tokens(usage) == responses_cached
 
 
 def test_build_request_body_openai_chat_shape(deepseek_provider):
@@ -248,7 +250,7 @@ def test_build_request_body_openai_chat_shape(deepseek_provider):
         messages=[Message(role="user", content="Hello")],
         system="S",
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["model"] == "deepseek-v4-pro"
@@ -265,7 +267,7 @@ def test_build_request_body_default_max_tokens(deepseek_provider):
         model="m",
         messages=[Message(role="user", content="x")],
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
@@ -279,7 +281,7 @@ def test_build_request_body_thinking_enabled(deepseek_provider):
             "thinking": {"type": "enabled", "budget_tokens": 2000},
         }
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["extra_body"]["thinking"] == {"type": "enabled"}
@@ -301,7 +303,7 @@ def test_build_request_body_tool_list_keeps_thinking(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -319,7 +321,7 @@ def test_build_request_body_tool_choice_keeps_thinking(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -346,7 +348,7 @@ def test_build_request_body_forced_tool_choice_downgrades_to_auto(
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -371,7 +373,7 @@ def test_build_request_body_encodes_reasoning_off():
             "thinking": {"type": "enabled", "budget_tokens": 1},
         }
     )
-    body = provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
     assert body["extra_body"]["thinking"] == {"type": "disabled"}
     assert "stream_options" not in body
 
@@ -395,7 +397,7 @@ def test_non_tool_thinking_survives_conversion(deepseek_provider):
             ],
         }
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["messages"][0] == {
@@ -420,7 +422,7 @@ def test_redacted_thinking_is_kept_until_destination_preparation(deepseek_provid
             ],
         }
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["messages"][0]["reasoning_details"] == [
@@ -470,7 +472,7 @@ def test_tool_history_with_replayable_thinking_preserves_thinking(deepseek_provi
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -521,7 +523,7 @@ def test_tool_history_with_unsigned_thinking_preserves_thinking(deepseek_provide
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -576,7 +578,7 @@ def test_tool_history_without_thinking_keeps_selected_effort(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -623,7 +625,7 @@ def test_tool_history_with_empty_thinking_preserves_reasoning_state(deepseek_pro
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -666,7 +668,7 @@ def test_tool_history_with_empty_top_level_reasoning_preserves_reasoning_state(
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -699,7 +701,7 @@ def test_thinking_off_preserves_historical_reasoning():
             ],
         }
     )
-    body = provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
     assert body["extra_body"]["thinking"] == {"type": "disabled"}
     assert body["messages"][0]["reasoning_content"] == "sec"
 
@@ -744,7 +746,7 @@ def test_thinking_off_still_replays_required_tool_reasoning():
         }
     )
 
-    body = provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
     assert body["extra_body"]["thinking"] == {"type": "disabled"}
     assert body["messages"][0]["reasoning_content"] == "required"
@@ -779,7 +781,7 @@ def test_passthrough_tool_use_and_result(deepseek_provider):
             ],
         }
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "n"
@@ -817,7 +819,7 @@ def test_preflight_strips_user_image():
     )
     # Should not raise; image is stripped.
     provider.preflight_messages(request, reasoning=REASONING_ON)
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
     content = body["messages"][0]["content"]
     assert "attachment omitted" in content.lower()
     assert "image or document inputs" in content.lower()
@@ -855,7 +857,7 @@ def test_vision_model_forwards_user_image():
     )
     # Must not raise on preflight (no InvalidRequestError for image blocks).
     provider.preflight_messages(request, reasoning=REASONING_ON)
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
     content = body["messages"][0]["content"]
     assert isinstance(content, list)
     image_parts = [
@@ -903,7 +905,7 @@ def test_vision_model_strips_user_document():
         admission=immediate_admission(),
     )
     provider.preflight_messages(request, reasoning=REASONING_ON)
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
     content = body["messages"][0]["content"]
     assert content
     if isinstance(content, str):
@@ -995,7 +997,7 @@ def test_preflight_preserves_completed_server_tool_history():
         admission=immediate_admission(),
     )
     provider.preflight_messages(request)
-    body = provider._build_request_body(request)
+    body = provider._chat._build_request_body(request)
     assert "[Earlier tool record]" in body["messages"][0]["content"]
 
 
@@ -1010,7 +1012,7 @@ def test_non_tool_top_level_reasoning_survives_conversion(deepseek_provider):
             )
         ],
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["messages"][0] == {
@@ -1051,7 +1053,7 @@ def test_tool_call_top_level_reasoning_is_replayed(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1129,7 +1131,7 @@ async def test_wire_messages_keep_prefix_and_effort_when_old_reasoning_is_absent
                 "thinking": {"type": "enabled"},
             }
         )
-        return deepseek_provider._build_request_body(
+        return deepseek_provider._chat._build_request_body(
             request, reasoning=reasoning_for(request)
         )
 
@@ -1286,7 +1288,7 @@ def test_preserves_extra_body_for_openai_chat_request(deepseek_provider):
         "extra_body": {"note": 1},
     }
     r = MessagesRequest.model_validate(raw)
-    body = deepseek_provider._build_request_body(r, reasoning=reasoning_for(r))
+    body = deepseek_provider._chat._build_request_body(r, reasoning=reasoning_for(r))
     assert body["extra_body"] == {"note": 1}
 
 
@@ -1324,7 +1326,7 @@ def test_normalizes_tool_result_content_array_to_string(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1360,7 +1362,7 @@ def test_strips_document_blocks_for_deepseek(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1395,7 +1397,7 @@ def test_strips_image_blocks_for_deepseek(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1433,7 +1435,7 @@ def test_normalizes_tool_result_content_dict_to_string(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1485,7 +1487,7 @@ def test_strips_image_block_inside_tool_result(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1538,7 +1540,7 @@ def test_image_only_tool_result_replaced_with_placeholder(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1591,7 +1593,7 @@ def test_document_only_tool_result_replaced_with_generic_placeholder(
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1626,7 +1628,7 @@ def test_image_only_message_replaced_with_placeholder(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1654,7 +1656,7 @@ def test_document_only_message_replaced_with_placeholder(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1718,7 +1720,9 @@ def test_warns_when_stripping_attachment_blocks(deepseek_provider, caplog):
     )
 
     with caplog.at_level(logging.WARNING):
-        deepseek_provider._build_request_body(request, reasoning=reasoning_for(request))
+        deepseek_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
 
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert any("stripped unsupported attachment blocks" in r.message for r in warnings)
@@ -1734,7 +1738,9 @@ def test_no_warning_when_no_attachments(deepseek_provider, caplog):
     )
 
     with caplog.at_level(logging.WARNING):
-        deepseek_provider._build_request_body(request, reasoning=reasoning_for(request))
+        deepseek_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
 
     assert not any(
         "stripped unsupported attachment blocks" in r.message

@@ -140,7 +140,7 @@ def test_opaque_details_stay_with_the_assistant_that_produced_them():
     original = request.model_dump()
     assistants = [
         message
-        for message in provider._build_request_body(request)["messages"]
+        for message in provider._chat._build_request_body(request)["messages"]
         if message["role"] == "assistant"
     ]
     assert "reasoning_details" not in assistants[0]
@@ -216,7 +216,9 @@ def test_deepseek_off_to_on_preserves_effort_and_all_available_history(wire):
             }
         )
         original = deepcopy(request.model_dump())
-        body = provider._build_request_body(request, reasoning=ReasoningPolicy.on())
+        body = provider._chat._build_request_body(
+            request, reasoning=ReasoningPolicy.on()
+        )
     else:
         request = OpenAIResponsesRequest(
             model="synthetic",
@@ -238,7 +240,7 @@ def test_deepseek_off_to_on_preserves_effort_and_all_available_history(wire):
         original = deepcopy(request.model_dump())
         body = cast(
             dict[str, Any],
-            provider._build_responses_request_body(
+            provider._chat._build_responses_request_body(
                 request, reasoning=ReasoningPolicy.on()
             ).body,
         )
@@ -328,7 +330,7 @@ def test_messages_interleaved_reasoning_belongs_to_the_tool_group():
             ],
         }
     )
-    messages = provider._build_request_body(request)["messages"]
+    messages = provider._chat._build_request_body(request)["messages"]
     assistant = next(message for message in messages if message.get("tool_calls"))
     assert assistant["reasoning_content"] == "first\nsecond"
     assert assistant["reasoning_details"] == [
@@ -367,7 +369,7 @@ def test_completed_native_hosted_tools_become_readable_chat_history():
             ],
         }
     )
-    body = provider._build_request_body(request)
+    body = provider._chat._build_request_body(request)
     rendered = json.dumps(body["messages"])
     assert "[Earlier tool record]" in rendered
     assert "sample" in rendered and "web_search_tool_result" in rendered

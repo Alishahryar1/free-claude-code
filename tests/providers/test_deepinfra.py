@@ -122,7 +122,7 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
         }
     )
 
-    body = deepinfra_provider._build_request_body(
+    body = deepinfra_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -158,7 +158,7 @@ def test_build_request_body_encodes_documented_reasoning_effort(
 ) -> None:
     request = _request()
 
-    body = deepinfra_provider._build_request_body(request, reasoning=reasoning)
+    body = deepinfra_provider._chat._build_request_body(request, reasoning=reasoning)
 
     assert body["extra_body"] == {"reasoning_effort": expected}
 
@@ -168,7 +168,7 @@ def test_build_request_body_preserves_extra_body_without_reasoning_override(
 ) -> None:
     request = _request(extra_body={"service_tier": "priority"})
 
-    body = deepinfra_provider._build_request_body(request, reasoning=REASONING_ON)
+    body = deepinfra_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
     assert body["extra_body"] == {
         "service_tier": "priority",
@@ -184,7 +184,7 @@ def test_build_request_body_rejects_caller_reasoning_override(
     request = _request(extra_body={field: "caller-owned"})
 
     with pytest.raises(InvalidRequestError, match="must not override reasoning"):
-        deepinfra_provider._build_request_body(request, reasoning=REASONING_ON)
+        deepinfra_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
 
 def test_build_request_body_replays_documented_reasoning_content(
@@ -207,7 +207,7 @@ def test_build_request_body_replays_documented_reasoning_content(
         }
     )
 
-    body = deepinfra_provider._build_request_body(
+    body = deepinfra_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -282,7 +282,7 @@ async def test_model_catalog_uses_absolute_public_url() -> None:
         return AsyncOpenAI(*args, **kwargs)
 
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         side_effect=build_client,
     ):
         provider = profiled_provider(
