@@ -446,13 +446,25 @@
 }
 
 .session-composer-actions {
+  justify-content: flex-end;
   gap: 12px;
   margin-top: 4px;
 }
 
-.session-composer-status {
+.code-activity {
   color: var(--muted);
+  font-size: 14px;
+  padding: 12px 0;
+}
+
+.code-control-error {
+  color: var(--error);
   font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.code-selection-error {
+  grid-column: 1 / -1;
 }
 
 .session-older {

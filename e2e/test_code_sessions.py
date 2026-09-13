@@ -740,6 +740,194 @@ def test_existing_session_keeps_streaming_while_folder_picker_is_open(
         observer.close()
 
 
+@pytest.mark.parametrize("terminal", ["completed", "failed", "interrupted"])
+def test_thinking_fills_quiet_gaps_without_changing_transcript(
+    page, admin_base_url, tmp_path, code_control, terminal
+):
+    create_session(page, admin_base_url, tmp_path)
+    page.clock.install(time=1000)
+    page.clock.pause_at(1000)
+    send(page, "Inspect this project")
+    connection = code_control.connection()
+    expect(page.locator("#codeStop")).to_be_visible()
+    activity = page.locator("#codeActivity")
+    expect(activity).to_have_count(1)
+    expect(page.locator("#codeComposerStatus")).to_have_count(0)
+    page.clock.run_for(499)
+    expect(activity).to_be_hidden()
+    page.clock.run_for(1)
+    expect(activity).to_have_text("Thinking…")
+    expect(activity).to_be_visible()
+    for chunk in ("A", "AB", "ABC"):
+        code_control.run(connection.text("turn-1", "text", chunk))
+        expect(page.locator('.code-item[data-kind="text"] .code-prose')).to_have_text(
+            chunk
+        )
+        page.clock.run_for(400)
+        expect(activity).to_be_hidden()
+    for kind in ("text", "reasoning", "tool"):
+        for complete, text in ((False, "Streaming"), (True, "Finished")):
+            code_control.run(
+                connection.text("turn-1", kind, text, complete=complete, kind=kind)
+            )
+            item = page.locator(f'.code-item[data-kind="{kind}"]')
+            expect(item.locator(".code-prose")).to_have_text(text)
+            expect(activity).to_be_hidden()
+            page.clock.run_for(499)
+            expect(activity).to_be_hidden()
+            page.clock.run_for(1)
+            expect(activity).to_be_visible()
+    # A duplicate update and an unrelated composer render are not streaming.
+    code_control.run(
+        connection.text("turn-1", "tool", "Finished", complete=True, kind="tool")
+    )
+    page.locator("#codeComposer").fill("Next question")
+    expect(activity).to_be_visible()
+    assert page.locator(".code-items #codeActivity").count() == 0
+    assert (
+        activity.evaluate("node => node.previousElementSibling.className")
+        == "code-items"
+    )
+    code_control.run(connection.finish("turn-1", status=terminal))
+    expect(page.locator("#codeSend")).to_be_visible()
+    expect(activity).to_be_hidden()
+    page.clock.run_for(1000)
+    expect(activity).to_be_hidden()
+    expect(page.locator(".code-item")).to_have_count(4)
+
+
+def test_thinking_respects_prompts_refresh_navigation_and_stop(
+    page, admin_base_url, tmp_path, code_control
+):
+    control_feed(page)
+    url = create_session(page, admin_base_url, tmp_path)
+    page.clock.install(time=1000)
+    page.clock.pause_at(1000)
+    send(page, "Inspect")
+    connection = code_control.connection()
+    code_control.run(connection.prompt(0))
+    expect(page.get_by_role("button", name="Allow", exact=True)).to_be_visible()
+    page.clock.run_for(1000)
+    expect(page.locator("#codeActivity")).to_be_hidden()
+    page.get_by_role("button", name="Allow", exact=True).click()
+    expect(page.locator(".code-prompt-state")).to_have_text("Resolved")
+    page.clock.run_for(499)
+    expect(page.locator("#codeActivity")).to_be_hidden()
+    page.clock.run_for(1)
+    expect(page.locator("#codeActivity")).to_be_visible()
+    code_control.run(
+        connection.sink(
+            HarnessEvent(
+                connection.generation,
+                connection.thread_id,
+                "error",
+                turn_id="turn-1",
+                message="Upstream paused",
+                will_retry=True,
+            )
+        )
+    )
+    notice = page.locator('.code-item[data-kind="notice"] .code-prose')
+    expect(notice).to_have_text("Retrying… Upstream paused")
+    expect(page.locator("#codeActivity")).to_be_hidden()
+    page.reload()
+    expect(notice).to_have_text("Retrying… Upstream paused")
+    expect(page.locator(".code-prompt-state")).to_have_text("Resolved")
+    page.clock.run_for(500)
+    expect(page.locator("#codeActivity")).to_be_visible()
+    # Replaying the connection snapshot does not count as fresh output.
+    page.evaluate("window.replayCodeReady()")
+    expect(page.locator("#codeStop")).to_be_enabled()
+    expect(page.locator("#codeActivity")).to_be_visible()
+    page.get_by_role("button", name="Providers", exact=True).click()
+    page.clock.run_for(1000)
+    assert page.locator("#codeActivity").evaluate("node => node.hidden")
+    page.get_by_role("button", name="Code sessions", exact=True).click()
+    # Return through the library if the main tab opens the library route.
+    if page.url != url:
+        page.locator(".session-card").first.click()
+    expect(page.locator("#codeStop")).to_be_enabled()
+    page.clock.run_for(499)
+    expect(page.locator("#codeActivity")).to_be_hidden()
+    page.clock.run_for(1)
+    expect(page.locator("#codeActivity")).to_be_visible()
+    code_control.harness.interrupt_gate.clear()
+    page.locator("#codeStop").click()
+    expect(page.locator("#codeStop")).to_be_disabled()
+    page.clock.run_for(500)
+    expect(page.locator("#codeActivity")).to_be_visible()
+    code_control.run(release_interrupt(code_control))
+    expect(page.locator(".code-outcome")).to_contain_text("Turn stopped.")
+    page.clock.run_for(1000)
+    expect(page.locator("#codeActivity")).to_be_hidden()
+
+
+async def release_interrupt(code_control):
+    code_control.harness.interrupt_gate.set()
+
+
+def test_thinking_preserves_expanded_items_and_scroll_position(
+    page, admin_base_url, tmp_path, code_control
+):
+    create_session(page, admin_base_url, tmp_path)
+    page.clock.install(time=1000)
+    page.clock.pause_at(1000)
+    send(page, "Inspect")
+    connection = code_control.connection()
+    code_control.run(connection.text("turn-1", "reason", "Reading", kind="reasoning"))
+    reason = page.locator(".session-thinking")
+    expect(reason).to_have_count(1)
+    reason.locator("summary").click()
+    page.evaluate("window.savedReason = document.querySelector('.session-thinking')")
+    code_control.run(connection.text("turn-1", "text", "Paragraph\n\n" * 100))
+    expect(page.locator('.code-item[data-kind="text"] .code-prose')).to_contain_text(
+        "Paragraph"
+    )
+    transcript = page.locator("#codeTranscript")
+    transcript.evaluate("node => node.scrollTop = 0")
+    page.clock.run_for(500)
+    expect(page.locator("#codeActivity")).to_be_visible()
+    assert transcript.evaluate("node => node.scrollTop") == 0
+    assert reason.evaluate("node => node === window.savedReason && node.open")
+    transcript.evaluate("node => node.scrollTop = node.scrollHeight")
+    code_control.run(
+        connection.text("turn-1", "reason", "Reading more", kind="reasoning")
+    )
+    expect(reason.locator(".code-prose")).to_have_text("Reading more")
+    page.clock.run_for(500)
+    assert (
+        transcript.evaluate(
+            "node => node.scrollHeight - node.scrollTop - node.clientHeight"
+        )
+        < 2
+    )
+    assert reason.evaluate("node => node === window.savedReason && node.open")
+
+
+def test_deletion_error_stays_beside_delete_and_survives_refresh(
+    page, admin_base_url, tmp_path, code_control
+):
+    create_session(page, admin_base_url, tmp_path)
+    send(page, "Inspect")
+    connection = code_control.connection()
+    code_control.run(connection.finish("turn-1"))
+    code_control.harness.delete_error = RuntimeError("Delete failed")
+    page.locator("#codeDelete").click()
+    page.get_by_role("button", name="Delete session", exact=True).click()
+    error = page.locator("#codeDeletionError")
+    expect(error).to_contain_text("You can retry deletion")
+    page.reload()
+    expect(error).to_contain_text("You can retry deletion")
+    expect(page.locator("#codeDelete")).to_have_attribute(
+        "aria-describedby", "codeDeletionError"
+    )
+    expect(page.locator("#codeComposerStatus")).to_have_count(0)
+    code_control.harness.delete_error = None
+    page.locator("#codeDelete").click()
+    page.get_by_role("button", name="Delete session", exact=True).click()
+    expect(page).to_have_url(f"{admin_base_url}/admin/code")
+
+
 def test_code_streams_survive_refresh_and_all_viewers_leaving(
     page, context, admin_base_url, tmp_path, code_control
 ):
@@ -1369,7 +1557,7 @@ def test_off_clears_effort_when_reasoning_becomes_unavailable(
     code_control.harness.efforts = ("off",)
     code_control.harness.default_effort = "off"
     page.evaluate("window.CodeSessions.refresh()")
-    expect(page.locator("#codeComposerStatus")).to_contain_text("unavailable")
+    expect(page.locator("#codeSelectionError")).to_contain_text("unavailable")
     expect(effort).to_have_value("high")
     expect(effort.locator("option:checked")).to_have_text("high")
     expect(effort.locator("option:disabled")).to_have_text(
@@ -1394,7 +1582,7 @@ def test_off_clears_effort_when_reasoning_becomes_unavailable(
         effort.select_option("off")
     assert reset.value.json()["reasoning_effort"] == "off"
     assert len(patches) == 1 and patches[0]["reasoning_effort"] == "off"
-    expect(page.locator("#codeComposerStatus")).not_to_contain_text("unavailable")
+    expect(page.locator("#codeSelectionError")).to_be_hidden()
     expect(page.locator("#codeSend")).to_be_enabled()
     page.reload()
     expect(effort).to_have_value("off")
@@ -1628,7 +1816,7 @@ def test_failed_reply_stays_after_its_output_once_and_not_in_composer(
     expect(
         page.locator(".code-outcome").filter(has_text="Provider refused the request")
     ).to_have_count(1)
-    expect(page.locator("#codeComposerStatus")).not_to_contain_text("Provider refused")
+    expect(page.locator("#codeComposerStatus")).to_have_count(0)
     expect(page.locator("#codeNotice")).to_be_hidden()
     send(page, "Second")
     code_control.run(connection.finish("turn-2"))
@@ -1674,7 +1862,7 @@ def test_model_effort_picker_syncs_tabs_and_keeps_missing_selection(
         expect(page.locator("#codeModel")).to_have_value("other")
         expect(page.locator("#codeSend")).to_be_disabled()
         expect(page.locator("#codeComposer")).to_have_value("Preserve me")
-        expect(page.locator("#codeComposerStatus")).to_contain_text("unavailable")
+        expect(page.locator("#codeSelectionError")).to_contain_text("unavailable")
     finally:
         second.close()
 
