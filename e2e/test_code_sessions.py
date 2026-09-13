@@ -797,6 +797,42 @@ def test_thinking_fills_quiet_gaps_without_changing_transcript(
     expect(page.locator(".code-item")).to_have_count(4)
 
 
+@pytest.mark.parametrize("quiet_elapsed", [200, 500])
+@pytest.mark.parametrize("recovered_item", ["reply", "new-reply"])
+def test_recovered_output_restarts_thinking_quiet_interval(
+    page, admin_base_url, tmp_path, code_control, quiet_elapsed, recovered_item
+):
+    control_feed(page)
+    create_session(page, admin_base_url, tmp_path)
+    page.clock.install(time=1000)
+    page.clock.pause_at(1000)
+    send(page, "Inspect")
+    connection = code_control.connection()
+    code_control.run(
+        connection.text("turn-1", "reply", "Before disconnect", complete=True)
+    )
+    expect(page.get_by_text("Before disconnect", exact=True)).to_be_visible()
+    page.clock.run_for(quiet_elapsed)
+    activity = page.locator("#codeActivity")
+    if quiet_elapsed == 500:
+        expect(activity).to_be_visible()
+    else:
+        expect(activity).to_be_hidden()
+
+    page.evaluate("window.dropCodeEvents = ['item.updated']")
+    code_control.run(
+        connection.text("turn-1", recovered_item, "Recovered output", complete=True)
+    )
+    expect(page.get_by_text("Recovered output", exact=True)).to_have_count(0)
+    page.evaluate("window.replayCodeReady()")
+    expect(page.get_by_text("Recovered output", exact=True)).to_be_visible()
+    expect(activity).to_be_hidden()
+    page.clock.run_for(499)
+    expect(activity).to_be_hidden()
+    page.clock.run_for(1)
+    expect(activity).to_be_visible()
+
+
 def test_thinking_respects_prompts_refresh_navigation_and_stop(
     page, admin_base_url, tmp_path, code_control
 ):
