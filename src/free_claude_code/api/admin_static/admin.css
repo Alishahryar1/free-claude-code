@@ -267,10 +267,28 @@ textarea:focus-visible,
   margin-bottom: 0;
 }
 .integration-card > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin-top: auto;
   min-height: 38px;
   padding: 6px 14px;
   font-size: 13px;
+}
+.integration-card > button[aria-busy="true"]::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: integration-spinner 0.8s linear infinite;
+}
+@keyframes integration-spinner {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .integration-card > button[aria-busy="true"]::before { animation: none; }
 }
 .integration-card h3 { min-height: 2lh; }
 .integration-dialog {
