@@ -4,7 +4,7 @@
     const element = document.createElement(tag);
     if (className) element.className = className;
     element.textContent = text;
-    return element;
+    return window.FccFormControls.configure(element);
   }
   function button(label, className, action) {
     const element = node("button", className, label);
