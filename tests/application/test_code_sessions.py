@@ -693,13 +693,14 @@ async def test_failed_outcome_is_durable_once_after_partial_output_and_older_pag
 
 @pytest.mark.asyncio
 async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(code):
-    service, harness, _ = code
+    service, harness, directory = code
     session = await session_for(code)
     await service.send(
         session.id, new_id(), session.revision, "hello", expected_epoch=service.epoch
     )
     await harness.started.wait()
     connection = harness.connections[0]
+    await connection.text("turn-1", "before", "Before retry", complete=True)
     await connection.sink(
         HarnessEvent(
             connection.generation,
@@ -710,7 +711,19 @@ async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(code)
             will_retry=True,
         )
     )
-    assert (await service.get_detail(session.id)).run.status == "running"
+    detail = await service.get_detail(session.id)
+    assert detail.run.status == "running"
+    assert [item.kind for item in detail.items] == ["user", "text", "notice"]
+    assert detail.items[-1].text == "Retrying… retry"
+    assert detail.items[-1].sequence > detail.items[-2].sequence
+    await connection.sink(
+        HarnessEvent(
+            connection.generation, connection.thread_id, "error", turn_id="turn-1"
+        )
+    )
+    detail = await service.get_detail(session.id)
+    assert detail.run.status == "running"
+    assert detail.items[-1].text == "Codex reported an error."
     await connection.text("turn-1", "text", "success", complete=True)
     await connection.finish("turn-1")
     subscription, _ = await service.subscribe()
@@ -727,6 +740,16 @@ async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(code)
     assert service.cursor == cursor
     await subscription.aclose()
     assert (await service.get_detail(session.id)).run.error is None
+    detail = await service.get_detail(session.id)
+    await service.close()
+    restarted = CodeService(
+        SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+    )
+    await restarted.start()
+    try:
+        assert (await restarted.get_detail(session.id)).items == detail.items
+    finally:
+        await restarted.close()
 
 
 @pytest.mark.asyncio

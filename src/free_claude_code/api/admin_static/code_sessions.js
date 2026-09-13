@@ -41,6 +41,9 @@
     notice = "",
     available = false;
   let activeDialog = null;
+  let viewActive = false,
+    activityKey = null,
+    activityTimer = null;
 
   function element(tag, text, className) {
     const node = document.createElement(tag);
@@ -113,11 +116,6 @@
     if (version >= record.version) {
       if (!record.session || data.session.revision >= record.session.revision)
         record.session = data.session;
-      if (
-        record.run?.id !== data.run?.id ||
-        !activeStatuses.has(data.run?.status)
-      )
-        record.runNotice = "";
       record.run = data.run;
       if (data.active_review_ids)
         record.activeReviewIds = new Set(data.active_review_ids);
@@ -159,19 +157,24 @@
     const data = JSON.parse(event.data);
     if (data.epoch !== epoch) return;
     const previousRevision = records.get(data.session_id)?.session?.revision;
+    const previousItem = records.get(data.session_id)?.items.get(data.item?.id);
+    let outputChanged = false;
     if (type === "session.deleted") {
       removeDeletedSession(data.session_id, "Session deleted.");
     } else {
       merge(data);
       if (type === "session.notice" && data.session_id === selected)
         notice = data.message;
-      if (type === "run.notice") {
-        const record = records.get(data.session_id);
-        if (record && busy(record) && data.version >= record.version)
-          record.runNotice = data.will_retry
-            ? `Retrying… ${data.message}`
-            : data.message;
-      }
+      const record = records.get(data.session_id);
+      outputChanged =
+        type === "item.updated" &&
+        data.session_id === selected &&
+        data.item?.run_id === record?.run?.id &&
+        record?.items.get(data.item?.id)?.value === data.item &&
+        data.version > (previousItem?.version ?? -1) &&
+        ["kind", "title", "text", "html", "detail", "complete"].some(
+          (key) => previousItem?.value[key] !== data.item[key],
+        );
     }
     if (
       !selected &&
@@ -179,7 +182,41 @@
         data.session?.revision !== previousRevision)
     )
       void refreshLibrary();
-    render();
+    render(outputChanged);
+  }
+
+  function clearActivity() {
+    clearTimeout(activityTimer);
+    activityTimer = null;
+    activityKey = null;
+    const node = root?.querySelector("#codeActivity");
+    if (node) node.hidden = true;
+  }
+
+  function renderActivity(outputChanged) {
+    const record = records.get(selected),
+      node = root?.querySelector("#codeActivity");
+    if (!viewActive || !node || !busy(record) || pending(record)) {
+      clearActivity();
+      return;
+    }
+    const key = `${selected}:${record.run.id}`;
+    if (activityKey === key && !outputChanged) return;
+    clearActivity();
+    activityKey = key;
+    activityTimer = setTimeout(() => {
+      activityTimer = null;
+      if (activityKey !== key) return;
+      const current = records.get(selected);
+      if (!viewActive || !busy(current) || pending(current)) {
+        clearActivity();
+        return;
+      }
+      const transcript = root.querySelector("#codeTranscript"),
+        bottom = UI.nearBottom(transcript);
+      node.hidden = false;
+      if (bottom) transcript.scrollTop = transcript.scrollHeight;
+    }, 500);
   }
 
   async function list(cursor = null) {
@@ -316,7 +353,6 @@
       ) {
         // The run is no longer active; detail supplies its actual outcome.
         record.run = null;
-        record.runNotice = "";
         record.loaded = false;
         record.cursor = readyData.cursor;
       }
@@ -370,7 +406,6 @@
       "item.updated",
       "prompt.updated",
       "session.notice",
-      "run.notice",
     ])
       source.addEventListener(type, (event) => {
         if (feed === source) receive(type, event);
@@ -418,6 +453,7 @@
     activate(path);
   }
   function activate(path) {
+    viewActive = true;
     if (path !== desiredPath) dismissDialog();
     desiredPath = path;
     if (!api) return;
@@ -449,6 +485,7 @@
       render();
     }
     connect();
+    render();
   }
 
   function accepted(id, operationId) {
@@ -778,6 +815,7 @@
     return node;
   }
   function shell() {
+    clearActivity();
     dismissDialog();
     root.replaceChildren();
     modelComboboxes.clear();
@@ -880,8 +918,30 @@
         harnessControl.group,
         modeControl.group,
       );
+      const selectionMessage = element(
+        "div",
+        "",
+        "code-control-error code-selection-error",
+      );
+      selectionMessage.id = "codeSelectionError";
+      selectionMessage.setAttribute("role", "status");
+      selectionMessage.hidden = true;
+      controls.append(selectionMessage);
+      for (const control of [
+        providerControl.select,
+        modelControl.input,
+        reasoningControl.select,
+      ])
+        control.setAttribute("aria-describedby", selectionMessage.id);
       const deletion = button("Delete", remove, "danger-button");
       deletion.id = "codeDelete";
+      const deletionMessage = element("div", "", "code-control-error");
+      deletionMessage.id = "codeDeletionError";
+      deletionMessage.setAttribute("role", "status");
+      deletionMessage.hidden = true;
+      deletion.setAttribute("aria-describedby", deletionMessage.id);
+      const deletionGroup = element("div");
+      deletionGroup.append(deletion, deletionMessage);
       const header = UI.header(
         "← Code sessions",
         () => navigate(null),
@@ -894,7 +954,7 @@
           )
             void updateSettings({ title: title.value });
         },
-        [deletion],
+        [deletionGroup],
         controls,
       );
       header.append(element("p", "", "code-folder"));
@@ -920,7 +980,11 @@
         "secondary-button session-older",
       );
       older.id = "codeOlder";
-      transcript.append(older, element("div", undefined, "code-items"));
+      const activity = element("div", "Thinking…", "code-activity");
+      activity.id = "codeActivity";
+      activity.setAttribute("role", "status");
+      activity.hidden = true;
+      transcript.append(older, element("div", undefined, "code-items"), activity);
       const composer = UI.composer(
         "code",
         saved(id).draft || "",
@@ -977,7 +1041,7 @@
     rendered = selected || "library";
   }
 
-  function render() {
+  function render(outputChanged = false) {
     if (!root) return;
     if (rendered !== (selected || "library")) shell();
     const message = root.querySelector("#codeNotice");
@@ -1075,6 +1139,7 @@
         run.error ||
         (run.status === "interrupted" ? "Turn stopped." : "This turn failed.");
     }
+    renderActivity(outputChanged);
     if (bottom) transcript.scrollTop = transcript.scrollHeight;
     root.querySelector("#codeOlder").hidden = !record?.nextBefore;
     renderControls();
@@ -1116,7 +1181,9 @@
     deletion.textContent =
       record?.session?.status === "delete_uncertain"
         ? "Check deletion"
-        : "Delete";
+        : record?.session?.status === "deleting"
+          ? "Deleting…"
+          : "Delete";
     deletion.disabled =
       !synchronized ||
       !record?.loaded ||
@@ -1166,18 +1233,12 @@
     for (const option of reasoningControl.select.options)
       option.disabled = !model?.reasoning_efforts.includes(option.value);
     reasoningControl.select.disabled = disabled || !model;
-    root.querySelector("#codeComposerStatus").textContent =
-      record?.session?.error ||
-      selectionError(record) ||
-      (record?.session?.status !== "ready"
-        ? "Deleting…"
-        : record.run?.stop_requested && isBusy
-          ? "Stopping…"
-          : pending(record)
-            ? "Waiting for input"
-            : isBusy
-              ? record.runNotice || "Working…"
-              : "Codex");
+    const selectionMessage = root.querySelector("#codeSelectionError"),
+      deletionMessage = root.querySelector("#codeDeletionError");
+    selectionMessage.textContent = selectionError(record);
+    selectionMessage.hidden = !selectionMessage.textContent;
+    deletionMessage.textContent = record?.session?.error || "";
+    deletionMessage.hidden = !deletionMessage.textContent;
     for (const node of root.querySelectorAll(".code-prompt")) {
       const prompt = record?.prompts.get(node.dataset.id)?.value;
       for (const control of node.querySelectorAll("input, select, button"))
@@ -1516,7 +1577,12 @@
     }
     form.append(actions);
   }
-  window.addEventListener("pagehide", dismissDialog);
+  function deactivate() {
+    viewActive = false;
+    clearActivity();
+    dismissDialog();
+  }
+  window.addEventListener("pagehide", deactivate);
   window.CodeSessions = {
     initialize(client) {
       api = client;
@@ -1524,7 +1590,7 @@
       if (desiredPath) activate(desiredPath);
     },
     activate,
-    deactivate: dismissDialog,
+    deactivate,
     async refresh() {
       if (!api || !epoch) return;
       try {

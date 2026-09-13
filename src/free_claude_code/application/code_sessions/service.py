@@ -1001,15 +1001,14 @@ class CodeService:
                             )
                             owner.prompts[prompt.id] = resolved
                             self._publish_prompt(owner, resolved)
-                elif event.kind == "error" and matches:
-                    self._publish(
-                        owner,
-                        "run.notice",
-                        message=event.message or "Codex reported an error.",
-                        will_retry=event.will_retry,
-                    )
-                elif event.kind == "notice" and event.message and run is not None:
+                elif run is not None and (
+                    (event.kind == "error" and matches)
+                    or (event.kind == "notice" and event.message)
+                ):
                     await self._flush_locked(owner)
+                    message = event.message or "Codex reported an error."
+                    if event.kind == "error" and event.will_retry:
+                        message = f"Retrying… {message}"
                     item = CodeItem(
                         id=str(uuid.uuid4()),
                         session_id=owner.session.id,
@@ -1017,7 +1016,7 @@ class CodeService:
                         run_id=run.id,
                         kind="notice",
                         title="Notice",
-                        text=event.message,
+                        text=message,
                         complete=True,
                         raw=event.raw,
                     )

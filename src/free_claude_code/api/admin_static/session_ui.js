@@ -144,10 +144,7 @@
     textarea.value = draft;
     textarea.placeholder = placeholder;
     textarea.setAttribute("aria-label", "Message");
-    const actions = node("div", "session-composer-actions"),
-      status = node("span", "session-composer-status");
-    status.id = `${id}ComposerStatus`;
-    status.setAttribute("aria-live", "polite");
+    const actions = node("div", "session-composer-actions");
     const send = button("Send", "primary-button", onSend),
       stop = button("Stop", "danger-button", onStop);
     send.id = `${id}Send`;
@@ -163,7 +160,7 @@
         if (!send.disabled && !send.hidden) onSend();
       }
     });
-    actions.append(status, send, stop);
+    actions.append(send, stop);
     element.append(textarea, actions);
     return element;
   }
