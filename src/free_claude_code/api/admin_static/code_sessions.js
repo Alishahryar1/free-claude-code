@@ -128,7 +128,20 @@
       [...(data.runs || []), ...(data.run ? [data.run] : [])],
       version,
     );
-    mergeEntries(record.items, data.item ? [data.item] : data.items, version);
+    const items = data.item ? [data.item] : data.items || [],
+      outputChanged =
+        id === selected &&
+        items.some((item) => {
+          const previous = record.items.get(item.id);
+          return (
+            item.run_id === record.run?.id &&
+            version > (previous?.version ?? -1) &&
+            ["kind", "title", "text", "html", "detail", "complete"].some(
+              (key) => previous?.value[key] !== item[key],
+            )
+          );
+        });
+    mergeEntries(record.items, items, version);
     const prompts = data.prompt ? [data.prompt] : data.prompts || [];
     mergeEntries(record.prompts, prompts, version);
     for (const prompt of prompts) {
@@ -151,30 +164,20 @@
           });
       }
     }
+    return outputChanged;
   }
 
   function receive(type, event) {
     const data = JSON.parse(event.data);
     if (data.epoch !== epoch) return;
     const previousRevision = records.get(data.session_id)?.session?.revision;
-    const previousItem = records.get(data.session_id)?.items.get(data.item?.id);
     let outputChanged = false;
     if (type === "session.deleted") {
       removeDeletedSession(data.session_id, "Session deleted.");
     } else {
-      merge(data);
+      outputChanged = merge(data) && type === "item.updated";
       if (type === "session.notice" && data.session_id === selected)
         notice = data.message;
-      const record = records.get(data.session_id);
-      outputChanged =
-        type === "item.updated" &&
-        data.session_id === selected &&
-        data.item?.run_id === record?.run?.id &&
-        record?.items.get(data.item?.id)?.value === data.item &&
-        data.version > (previousItem?.version ?? -1) &&
-        ["kind", "title", "text", "html", "detail", "complete"].some(
-          (key) => previousItem?.value[key] !== data.item[key],
-        );
     }
     if (
       !selected &&
@@ -307,11 +310,11 @@
       deleted.has(id)
     )
       return;
-    merge(data);
+    const outputChanged = merge(data);
     const record = get(id);
     record.loaded = true;
     record.nextBefore = data.next_before;
-    render();
+    render(!before && outputChanged);
   }
   async function bootstrap() {
     const token = syncToken;
