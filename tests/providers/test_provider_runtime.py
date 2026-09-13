@@ -12,6 +12,7 @@ from free_claude_code.application.errors import (
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
     AGNES_DEFAULT_BASE,
+    ALIBABA_MODELSTUDIO_DEFAULT_BASE,
     BEDROCK_DEFAULT_BASE,
     CHUTES_DEFAULT_BASE,
     CLINE_DEFAULT_BASE,
@@ -104,6 +105,8 @@ def _make_settings(**overrides):
     mock.nararoute_base_url = NARAROUTE_DEFAULT_BASE
     mock.xkiro_api_key = "test_xkiro_key"
     mock.xkiro_base_url = XKIRO_DEFAULT_BASE
+    mock.alibaba_modelstudio_api_key = "test_modelstudio_key"
+    mock.alibaba_modelstudio_base_url = ALIBABA_MODELSTUDIO_DEFAULT_BASE
     mock.agnes_api_key = "test_agnes_key"
     mock.zenmux_api_key = "test_zenmux_key"
     mock.wandb_api_key = "test_wandb_key"
@@ -136,6 +139,7 @@ def _make_settings(**overrides):
     mock.tokenrouter_proxy = None
     mock.nararoute_proxy = None
     mock.xkiro_proxy = None
+    mock.alibaba_modelstudio_proxy = None
     mock.agnes_proxy = None
     mock.zenmux_proxy = None
     mock.wandb_proxy = None
@@ -892,6 +896,7 @@ def test_create_provider_instantiates_each_builtin():
         "tokenrouter": OpenAIChatProvider,
         "nararoute": OpenAIChatProvider,
         "xkiro": OpenAIChatProvider,
+        "alibaba_modelstudio": OpenAIChatProvider,
         "agnes": OpenAIChatProvider,
         "zenmux": OpenAIChatProvider,
         "wandb": OpenAIChatProvider,

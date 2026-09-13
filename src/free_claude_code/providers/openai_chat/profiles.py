@@ -681,6 +681,28 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             enabled_value="high",
         ),
     ),
+    "alibaba_modelstudio": OpenAIChatProfile(
+        _policy(
+            "ALIBABA_MODELSTUDIO",
+            ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        # Qwen models in Model Studio are hybrid reasoners and their default
+        # varies per model (qwen3-max ships without reasoning while
+        # qwen3.8-max-0902 reasons out of the box), so the DashScope
+        # `enable_thinking` boolean — verified to switch thinking in both
+        # directions on both model kinds — forwards the client's resolved
+        # intent instead of leaving the per-model default in place.
+        NamedEffortReasoning(
+            (),
+            disabled_value=False,
+            enabled_value=True,
+            field="enable_thinking",
+            use_extra_body=True,
+        ),
+    ),
     "poolside": OpenAIChatProfile(
         _policy(
             "POOLSIDE",

@@ -16,6 +16,7 @@ from .constants import DEFAULT_MODEL, HTTP_CONNECT_TIMEOUT_DEFAULT
 from .model_refs import parse_model_fallbacks
 from .nim import NimSettings
 from .provider_catalog import (
+    ALIBABA_MODELSTUDIO_DEFAULT_BASE,
     BEDROCK_DEFAULT_BASE,
     NARAROUTE_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
@@ -188,6 +189,15 @@ class Settings(BaseModel):
     xkiro_base_url: NonEmptyString = Field(
         default=XKIRO_DEFAULT_BASE,
         validation_alias="XKIRO_BASE_URL",
+    )
+
+    # ==================== Alibaba Cloud Model Studio (pay-as-you-go) ====================
+    alibaba_modelstudio_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ALIBABA_MODELSTUDIO_API_KEY"
+    )
+    alibaba_modelstudio_base_url: NonEmptyString = Field(
+        default=ALIBABA_MODELSTUDIO_DEFAULT_BASE,
+        validation_alias="ALIBABA_MODELSTUDIO_BASE_URL",
     )
 
     # ==================== Poolside AI (OpenAI-compatible) ====================
@@ -485,6 +495,9 @@ class Settings(BaseModel):
     )
     xkiro_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="XKIRO_PROXY"
+    )
+    alibaba_modelstudio_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ALIBABA_MODELSTUDIO_PROXY"
     )
     poolside_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="POOLSIDE_PROXY"

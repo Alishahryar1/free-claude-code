@@ -276,6 +276,24 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Defaults to https://api.xkiro.com/v1."
         ),
     },
+    "ALIBABA_MODELSTUDIO_API_KEY": {
+        "label": "Alibaba Model Studio API Key",
+        "description": (
+            "Alibaba Cloud Model Studio pay-as-you-go API key for the "
+            "OpenAI-compatible endpoint at dashscope-intl.aliyuncs.com/compatible-mode/v1. "
+            "Keys begin with sk-; create one in the Model Studio console "
+            "(modelstudio.console.alibabacloud.com)."
+        ),
+    },
+    "ALIBABA_MODELSTUDIO_BASE_URL": {
+        "description": (
+            "Alibaba Model Studio OpenAI-compatible Chat Completions base URL. "
+            "Defaults to https://dashscope-intl.aliyuncs.com/compatible-mode/v1 "
+            "(Singapore). Beijing, US and Hong Kong users must point this at "
+            "their region; workspace-dedicated endpoints follow "
+            "https://{WorkspaceId}.{region}.maas.aliyuncs.com/compatible-mode/v1."
+        ),
+    },
     "AGNES_API_KEY": {
         "label": "Agnes AI API Key",
         "description": (

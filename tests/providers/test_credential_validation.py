@@ -61,6 +61,12 @@ CASES = [
     ),
     ("nararoute", "https://router.bynara.id/v1/models", {"data": []}, 401),
     (
+        "alibaba_modelstudio",
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+        {"data": []},
+        401,
+    ),
+    (
         "deepinfra",
         "https://api.deepinfra.com/v1/me",
         {"uid": "id", "email": None},

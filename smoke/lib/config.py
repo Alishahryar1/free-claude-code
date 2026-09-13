@@ -91,6 +91,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "tokenrouter": "tokenrouter/moonshotai/kimi-k3-free",
     "nararoute": "nararoute/kimi-k3-free",
     "xkiro": "xkiro/deepseek/deepseek-v4-flash",
+    "alibaba_modelstudio": "alibaba_modelstudio/qwen3-max",
     "poolside": "poolside/poolside/laguna-s-2.1",
     "llm7": "llm7/default",
     "agnes": "agnes/agnes-2.0-flash",

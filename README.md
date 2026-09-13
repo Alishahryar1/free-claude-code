@@ -232,6 +232,7 @@ from more than one provider before succeeding.
 | [TokenRouter](https://www.tokenrouter.com/) | `TOKENROUTER_API_KEY` | `tokenrouter/moonshotai/kimi-k3-free` |
 | [NaraRoute](https://router.bynara.id/) | `NARAROUTE_API_KEY` | `nararoute/kimi-k3-free` |
 | [xKiro](https://xkiro.com/dashboard/api/keys) | `XKIRO_API_KEY` | `xkiro/deepseek/deepseek-v4-flash` |
+| [Alibaba Model Studio](https://www.alibabacloud.com/help/en/model-studio/get-api-key) | `ALIBABA_MODELSTUDIO_API_KEY` | `alibaba_modelstudio/qwen3-max` |
 | [Poolside AI](https://platform.poolside.ai/) | `POOLSIDE_API_KEY` | `poolside/poolside/laguna-s-2.1` |
 | [LLM7.io](https://dash.llm7.io/) | `LLM7_API_KEY` | `llm7/default` |
 | [Ollama Cloud](https://ollama.com/settings/keys) | `OLLAMA_API_KEY` | `ollama_cloud/qwen3-coder:480b` |

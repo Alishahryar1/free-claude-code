@@ -78,6 +78,10 @@ TOKENROUTER_DEFAULT_BASE = "https://api.tokenrouter.com/v1"
 NARAROUTE_DEFAULT_BASE = "https://router.bynara.id/v1"
 # xKiro OpenAI-compatible multi-vendor Chat Completions gateway.
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
+# Alibaba Cloud Model Studio pay-as-you-go OpenAI-compatible API.
+ALIBABA_MODELSTUDIO_DEFAULT_BASE = (
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+)
 # Poolside AI OpenAI-compatible Chat Completions API.
 POOLSIDE_DEFAULT_BASE = "https://inference.poolside.ai/v1"
 # LLM7.io OpenAI-compatible Chat Completions API.
@@ -538,6 +542,16 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=XKIRO_DEFAULT_BASE,
         base_url_attr="xkiro_base_url",
         proxy_attr="xkiro_proxy",
+    ),
+    "alibaba_modelstudio": ProviderDescriptor(
+        provider_id="alibaba_modelstudio",
+        display_name="Alibaba Model Studio",
+        credential_env="ALIBABA_MODELSTUDIO_API_KEY",
+        credential_url="https://www.alibabacloud.com/help/en/model-studio/get-api-key",
+        credential_attr="alibaba_modelstudio_api_key",
+        default_base_url=ALIBABA_MODELSTUDIO_DEFAULT_BASE,
+        base_url_attr="alibaba_modelstudio_base_url",
+        proxy_attr="alibaba_modelstudio_proxy",
     ),
     "poolside": ProviderDescriptor(
         provider_id="poolside",

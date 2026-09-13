@@ -51,6 +51,7 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "tokenrouter",
     "nararoute",
     "xkiro",
+    "alibaba_modelstudio",
     "poolside",
     "llm7",
     "ollama_cloud",
