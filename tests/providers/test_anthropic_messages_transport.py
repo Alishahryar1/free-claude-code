@@ -595,12 +595,13 @@ async def test_auth_refresh_cannot_exceed_single_attempt_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_preflight_rejects_invalid_conversion_without_request_io() -> None:
+async def test_startup_rejects_invalid_conversion_without_request_io() -> None:
     async with httpx.AsyncClient() as client:
         transport = _transport(client)
         with pytest.raises(InvalidRequestError):
-            transport.preflight_responses(
+            transport.stream_responses(
                 OpenAIResponsesRequest(
                     model="native", input=[{"type": "input_file", "file_id": "remote"}]
-                )
+                ),
+                endpoint_context=Endpoint(),
             )

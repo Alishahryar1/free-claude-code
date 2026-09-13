@@ -45,8 +45,6 @@ class CanonicalFailureProvider:
         self._message = message
         self._retryable = retryable
         self._grouped = grouped
-        self.preflight_messages = MagicMock()
-        self.preflight_responses = MagicMock()
         self.stream_kwargs: list[dict[str, Any]] = []
 
     async def stream_messages(
@@ -101,23 +99,6 @@ class StalledProvider:
     def __init__(self, *, responses_chunks: tuple[str, ...] = ()) -> None:
         self._responses_chunks = responses_chunks
         self.close_calls = 0
-
-    def preflight_messages(
-        self,
-        _request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        del reasoning
-
-    def preflight_responses(
-        self,
-        _request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        del reasoning
 
     async def stream_messages(
         self,

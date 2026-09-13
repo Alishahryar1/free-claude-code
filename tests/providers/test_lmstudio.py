@@ -1,16 +1,23 @@
 """Tests for LM Studio (OpenAI-compatible chat completions) provider."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.config.provider_catalog import LMSTUDIO_DEFAULT_BASE
-from free_claude_code.core.anthropic import get_token_count
+from free_claude_code.core.anthropic import MessagesRequest, get_token_count
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.openai_responses import (
+    OpenAIResponsesRequest,
+    estimate_responses_input_tokens,
+)
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.lmstudio import LMStudioProvider
+from tests.application.test_execution import _routed_request, _routed_responses_request
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
@@ -36,7 +43,12 @@ def lmstudio_config():
 
 @pytest.fixture
 def lmstudio_provider(lmstudio_config):
-    return LMStudioProvider(lmstudio_config, admission=immediate_admission())
+    provider = LMStudioProvider(lmstudio_config, admission=immediate_admission())
+    with patch(
+        "free_claude_code.providers.lmstudio.client.httpx.get",
+        side_effect=httpx.ConnectError("offline test"),
+    ):
+        yield provider
 
 
 def test_init(lmstudio_config):
@@ -113,53 +125,133 @@ def test_build_request_body_never_replays_prior_thinking(lmstudio_provider):
     assert "prior reasoning" in str(body)
 
 
-def test_preflight_builds_before_context_budget_and_preserves_policy(
-    lmstudio_provider,
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+def test_startup_builds_before_context_budget_and_preserves_policy(
+    lmstudio_provider, wire
 ):
-    request = make_request()
-    calls: list[tuple[str, object]] = []
+    request = (
+        make_request()
+        if wire == "messages"
+        else OpenAIResponsesRequest(model="model", input="hello")
+    )
+    calls = []
+    name = (
+        "_build_request_body" if wire == "messages" else "_build_responses_request_body"
+    )
+    original = getattr(lmstudio_provider._chat, name)
 
-    def build(request_arg, *, reasoning, model_info):
+    def build(request_arg, *, reasoning):
         assert request_arg is request
-        assert model_info is None
         calls.append(("build", reasoning))
-        return {}
+        return original(request_arg, reasoning=reasoning)
 
-    def check_context(estimate: int):
+    def check_context(estimate):
         calls.append(("context", estimate))
 
     with (
-        patch.object(lmstudio_provider._chat, "_build_request_body", side_effect=build),
+        patch.object(lmstudio_provider._chat, name, side_effect=build),
         patch.object(
-            lmstudio_provider,
-            "_preflight_context_budget",
-            side_effect=check_context,
+            lmstudio_provider, "_validate_context_budget", side_effect=check_context
         ),
+        patch.object(
+            lmstudio_provider._chat._admission, "start_execution"
+        ) as admission,
     ):
-        lmstudio_provider.preflight_messages(request, reasoning=REASONING_OFF)
+        getattr(lmstudio_provider, f"stream_{wire}")(request, reasoning=REASONING_OFF)
+    estimate = (
+        get_token_count(request.messages, request.system, request.tools)
+        if isinstance(request, MessagesRequest)
+        else estimate_responses_input_tokens(request)
+    )
+    assert calls == [("build", REASONING_OFF), ("context", estimate)]
+    admission.assert_not_called()
 
-    assert calls == [
-        ("build", REASONING_OFF),
-        ("context", get_token_count(request.messages, request.system, request.tools)),
-    ]
 
-
-def test_preflight_conversion_failure_skips_context_budget(lmstudio_provider):
-    request = make_request()
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+def test_startup_conversion_failure_skips_context_budget(lmstudio_provider, wire):
+    request = (
+        make_request()
+        if wire == "messages"
+        else OpenAIResponsesRequest(model="model", input="hello")
+    )
     conversion_error = InvalidRequestError("invalid request conversion")
 
     with (
         patch.object(
             lmstudio_provider._chat,
-            "_build_request_body",
+            "_build_request_body"
+            if wire == "messages"
+            else "_build_responses_request_body",
             side_effect=conversion_error,
         ),
-        patch.object(lmstudio_provider, "_preflight_context_budget") as context,
+        patch.object(lmstudio_provider, "_validate_context_budget") as context,
         pytest.raises(InvalidRequestError, match="invalid request conversion"),
     ):
-        lmstudio_provider.preflight_messages(request, reasoning=REASONING_ON)
+        getattr(lmstudio_provider, f"stream_{wire}")(request, reasoning=REASONING_ON)
 
     context.assert_not_called()
+
+
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+def test_context_rejection_never_starts_admission_or_generation(
+    lmstudio_provider, wire
+):
+    request = (
+        make_request()
+        if wire == "messages"
+        else OpenAIResponsesRequest(model="model", input="hello")
+    )
+    with (
+        patch.object(lmstudio_provider, "_loaded_context_length", return_value=1),
+        patch.object(
+            lmstudio_provider._chat._admission, "start_execution"
+        ) as admission,
+        patch.object(
+            lmstudio_provider._client.chat.completions, "create"
+        ) as generation,
+        pytest.raises(ExecutionFailure) as error,
+    ):
+        getattr(lmstudio_provider, f"stream_{wire}")(request)
+    assert error.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
+    admission.assert_not_called()
+    generation.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_primary_context_validation_counts_toward_progress_timeout(
+    lmstudio_provider, wire
+):
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+
+    def slow_lookup():
+        nonlocal now
+        now += 2
+        return 100_000
+
+    executor = ProviderExecutor(lambda _: lmstudio_provider, progress_timeout_seconds=1)
+    routed = _routed_request() if wire == "messages" else _routed_responses_request()
+    with (
+        patch.object(loop, "time", side_effect=lambda: now),
+        patch.object(
+            lmstudio_provider, "_loaded_context_length", side_effect=slow_lookup
+        ),
+        patch.object(
+            lmstudio_provider._chat._admission, "start_execution"
+        ) as admission,
+        patch.object(
+            lmstudio_provider._client.chat.completions, "create"
+        ) as generation,
+    ):
+        stream = getattr(executor, f"stream_{wire}")(
+            routed, raw_log_payload={}, request_id="context-timeout"
+        )
+        with pytest.raises(ExecutionFailure) as error:
+            await anext(stream)
+    assert error.value.kind is FailureKind.TIMEOUT
+    admission.assert_not_called()
+    generation.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -242,29 +334,29 @@ async def test_cleanup(lmstudio_provider):
     await lmstudio_provider.cleanup()
 
 
-# --- Context-budget preflight (new: guards against LM Studio's silent
+# --- Context-budget validation (new: guards against LM Studio's silent
 # mid-stream truncation when a prompt exceeds the loaded model's context) ---
 
 
-def test_preflight_context_budget_noop_when_context_length_unknown(lmstudio_provider):
-    """No LM Studio /api/v0/models data available -> preflight is a no-op (fail open)."""
+def test_validate_context_budget_noop_when_context_length_unknown(lmstudio_provider):
+    """No LM Studio /api/v0/models data available -> validation is a no-op (fail open)."""
     with patch.object(lmstudio_provider, "_loaded_context_length", return_value=None):
-        lmstudio_provider._preflight_context_budget(1)  # must not raise
+        lmstudio_provider._validate_context_budget(1)  # must not raise
 
 
-def test_preflight_context_budget_allows_request_under_budget(lmstudio_provider):
+def test_validate_context_budget_allows_request_under_budget(lmstudio_provider):
     with patch.object(
         lmstudio_provider, "_loaded_context_length", return_value=100_000
     ):
-        lmstudio_provider._preflight_context_budget(1)  # must not raise
+        lmstudio_provider._validate_context_budget(1)  # must not raise
 
 
-def test_preflight_context_budget_rejects_request_over_90_percent(lmstudio_provider):
+def test_validate_context_budget_rejects_request_over_90_percent(lmstudio_provider):
     with (
         patch.object(lmstudio_provider, "_loaded_context_length", return_value=1000),
         pytest.raises(ExecutionFailure) as exc_info,
     ):
-        lmstudio_provider._preflight_context_budget(901)
+        lmstudio_provider._validate_context_budget(901)
 
     failure = exc_info.value
     assert failure.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED

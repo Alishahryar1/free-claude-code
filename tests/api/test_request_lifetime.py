@@ -399,23 +399,6 @@ class _ControlledProvider:
         self.closed = asyncio.Event()
         self.request_ids: list[str] = []
 
-    def preflight_messages(
-        self,
-        _request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        del reasoning
-
-    def preflight_responses(
-        self,
-        _request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        del reasoning
-
     async def stream_messages(
         self,
         _request: MessagesRequest,

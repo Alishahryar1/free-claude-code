@@ -190,29 +190,16 @@ class ControlledFallbackProvider:
         chunks_before_failure: tuple[str, ...] = (),
         responses_chunks_before_failure: tuple[str, ...] = (),
         text: str | None = None,
-        preflight_error: InvalidRequestError | None = None,
+        validation_error: InvalidRequestError | None = None,
     ) -> None:
         self._failure = failure
         self._chunks_before_failure = chunks_before_failure
         self._responses_chunks_before_failure = responses_chunks_before_failure
         self._text = text
-        self._preflight_error = preflight_error
-        self.preflight_models: list[str] = []
+        self._validation_error = validation_error
         self.stream_models: list[str] = []
         self.response_models: list[str] = []
         self.close_calls = 0
-
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        del reasoning
-        self.preflight_models.append(request.model)
-        if self._preflight_error is not None:
-            raise self._preflight_error
 
     async def stream_messages(
         self,
@@ -226,6 +213,8 @@ class ControlledFallbackProvider:
         model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         del input_tokens, request_id, reasoning
+        if self._validation_error is not None:
+            raise self._validation_error
         self.stream_models.append(request.model)
         public_model = response_model or request.model
         self.response_models.append(public_model)
@@ -240,17 +229,6 @@ class ControlledFallbackProvider:
         finally:
             self.close_calls += 1
 
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        del reasoning
-        self.preflight_models.append(request.model)
-        if self._preflight_error is not None:
-            raise self._preflight_error
-
     async def stream_responses(
         self,
         request: OpenAIResponsesRequest,
@@ -262,6 +240,8 @@ class ControlledFallbackProvider:
         request_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[str]:
         del input_tokens, request_id, reasoning
+        if self._validation_error is not None:
+            raise self._validation_error
         self.stream_models.append(request.model)
         public_model = response_model or request.model
         self.response_models.append(public_model)

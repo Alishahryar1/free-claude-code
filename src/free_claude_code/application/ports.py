@@ -15,14 +15,6 @@ from .model_metadata import ProviderModelInfo
 class ProviderPort(Protocol):
     """Minimal provider capability required to execute one request."""
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None: ...
-
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -34,13 +26,6 @@ class ProviderPort(Protocol):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]: ...
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None: ...
 
     def stream_responses(
         self,

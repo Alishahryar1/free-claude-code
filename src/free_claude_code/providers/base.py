@@ -38,25 +38,6 @@ class BaseProvider(ABC):
         self._config = config
 
     @abstractmethod
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        """Validate a Messages request before opening its SSE stream."""
-
-    @abstractmethod
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        """Validate a Responses request before opening its SSE stream."""
-
-    @abstractmethod
     async def cleanup(self) -> None:
         """Release any resources held by this provider."""
 
@@ -76,7 +57,7 @@ class BaseProvider(ABC):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
-        """Stream response in Anthropic SSE format."""
+        """Validate the request before yielding a response in Anthropic SSE format."""
 
     @abstractmethod
     def stream_responses(
@@ -89,4 +70,4 @@ class BaseProvider(ABC):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream response in OpenAI Responses SSE format."""
+        """Validate the request before yielding OpenAI Responses SSE events."""

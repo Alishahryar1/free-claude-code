@@ -377,7 +377,7 @@ def test_completed_native_hosted_tools_become_readable_chat_history():
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_malformed_carrier_fails_preflight_before_inference(wire):
+def test_malformed_carrier_fails_startup_before_inference(wire):
     from free_claude_code.application.errors import InvalidRequestError
 
     provider = OpenRouterProvider(
@@ -386,7 +386,7 @@ def test_malformed_carrier_fails_preflight_before_inference(wire):
     )
     with pytest.raises(InvalidRequestError, match="replay"):
         if wire == "messages":
-            provider.preflight_messages(
+            provider.stream_messages(
                 MessagesRequest.model_validate(
                     {
                         "model": "m",
@@ -405,7 +405,7 @@ def test_malformed_carrier_fails_preflight_before_inference(wire):
                 )
             )
         else:
-            provider.preflight_responses(
+            provider.stream_responses(
                 OpenAIResponsesRequest(
                     model="m",
                     input=[

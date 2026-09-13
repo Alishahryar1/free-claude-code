@@ -722,7 +722,6 @@ async def test_responses_tool_search_accepts_optional_codex_arguments() -> None:
     )
     try:
         await provider.list_model_infos()
-        provider.preflight_responses(request)
         body = "".join([chunk async for chunk in provider.stream_responses(request)])
     finally:
         await provider.cleanup()
@@ -1216,18 +1215,16 @@ async def test_cold_route_specific_conversion_failure_precedes_generation() -> N
 
 
 @pytest.mark.asyncio
-async def test_warm_preflight_rejects_unknown_and_route_specific_fields() -> None:
+async def test_warm_startup_rejects_unknown_and_route_specific_fields() -> None:
     provider, generation_requests, _catalog_requests = _provider_with_wire_transports(
         _catalog_payload()
     )
     try:
         await provider.list_model_infos()
         with pytest.raises(InvalidRequestError, match="does not advertise"):
-            provider.preflight_messages(_request("missing"))
+            await _collect(provider, "missing")
         with pytest.raises(InvalidRequestError, match="stop_sequences"):
-            provider.preflight_messages(
-                _request("responses-selector", stop_sequences=["done"])
-            )
+            await _collect(provider, "responses-selector", stop_sequences=["done"])
     finally:
         await provider.cleanup()
 

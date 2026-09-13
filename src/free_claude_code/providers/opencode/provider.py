@@ -162,45 +162,6 @@ class OpenCodeProvider(BaseProvider):
                 return {"x-opencode-session": session_id}
         return {}
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        """Validate synchronously when a route snapshot is already warm."""
-        snapshot = self._catalog.current_snapshot
-        if snapshot is None:
-            return
-        route = self._require_route(snapshot, request.model)
-        routed = _routed_messages_request(request, route)
-        if route.transport is OpenCodeUpstreamTransport.RESPONSES:
-            self._responses.preflight_messages(
-                routed, reasoning=reasoning, model_info=route.model_info
-            )
-            return
-        self._chat.preflight_messages(
-            routed, reasoning=reasoning, model_info=route.model_info
-        )
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        """Validate native Responses ingress against a warm catalog route."""
-        snapshot = self._catalog.current_snapshot
-        if snapshot is None:
-            return
-        route = self._require_route(snapshot, request.model)
-        routed = _routed_responses_request(request, route)
-        if route.transport is OpenCodeUpstreamTransport.RESPONSES:
-            self._responses.preflight_responses(routed, reasoning=reasoning)
-            return
-        self._chat.preflight_responses(routed, reasoning=reasoning)
-
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -240,9 +201,6 @@ class OpenCodeProvider(BaseProvider):
         selected_stream: AsyncIterator[str] | None = None
         try:
             if route.transport is OpenCodeUpstreamTransport.RESPONSES:
-                self._responses.preflight_messages(
-                    routed, reasoning=reasoning, model_info=route.model_info
-                )
                 selected_stream = self._responses.stream_messages(
                     routed,
                     input_tokens=input_tokens,
@@ -254,9 +212,6 @@ class OpenCodeProvider(BaseProvider):
                     model_info=route.model_info,
                 )
             else:
-                self._chat.preflight_messages(
-                    routed, reasoning=reasoning, model_info=route.model_info
-                )
                 selected_stream = self._chat.stream_messages(
                     routed,
                     input_tokens=input_tokens,
@@ -316,7 +271,6 @@ class OpenCodeProvider(BaseProvider):
         selected_stream: AsyncIterator[str] | None = None
         try:
             if route.transport is OpenCodeUpstreamTransport.RESPONSES:
-                self._responses.preflight_responses(routed, reasoning=reasoning)
                 selected_stream = self._responses.stream_responses(
                     routed,
                     input_tokens=input_tokens,
@@ -327,7 +281,6 @@ class OpenCodeProvider(BaseProvider):
                     extra_headers=self._upstream_headers(request_headers or {}),
                 )
             else:
-                self._chat.preflight_responses(routed, reasoning=reasoning)
                 selected_stream = self._chat.stream_responses(
                     routed,
                     input_tokens=input_tokens,

@@ -1141,14 +1141,20 @@ async def test_cancellation_closes_the_sdk_stream() -> None:
 
 
 @pytest.mark.asyncio
-async def test_preflight_rejects_fields_responses_cannot_represent() -> None:
+async def test_startup_rejects_fields_responses_cannot_represent() -> None:
     client = _client(lambda _request: httpx2.Response(500))
     transport = _transport(client)
     request = _request(stop_sequences=["done"])
 
     try:
         with pytest.raises(InvalidRequestError, match="stop_sequences"):
-            transport.preflight_messages(request, reasoning=REASONING_ON)
+            transport.stream_messages(
+                request,
+                input_tokens=0,
+                request_id=None,
+                response_model=request.model,
+                reasoning=REASONING_ON,
+            )
     finally:
         await client.close()
 

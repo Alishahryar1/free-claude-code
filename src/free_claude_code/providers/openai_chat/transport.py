@@ -639,25 +639,6 @@ class OpenAIChatTransport:
             tool_adapter=translated.tool_adapter,
         )
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        """Validate OpenAI-chat request conversion before streaming."""
-        self._build_request_body(request, reasoning=reasoning, model_info=model_info)
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        """Validate direct Responses-to-Chat conversion before streaming."""
-        self._build_responses_request_body(request, reasoning=reasoning)
-
     async def _create_stream(
         self,
         body: dict,

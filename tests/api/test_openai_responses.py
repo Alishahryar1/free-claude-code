@@ -35,7 +35,7 @@ _RESPONSE_ID = "resp_test"
 class FakeProvider:
     def __init__(self, chunks: list[str]) -> None:
         self.chunks = chunks
-        self.preflight_responses = MagicMock()
+        self.startup_error: InvalidRequestError | None = None
         self.requests: list[OpenAIResponsesRequest] = []
         self.stream_kwargs: list[dict[str, object]] = []
 
@@ -44,6 +44,8 @@ class FakeProvider:
         request_data: OpenAIResponsesRequest,
         **kwargs: object,
     ) -> AsyncIterator[str]:
+        if self.startup_error is not None:
+            raise self.startup_error
         self.requests.append(request_data)
         self.stream_kwargs.append(kwargs)
         for chunk in self.chunks:
@@ -129,7 +131,7 @@ def test_create_response_stream_routes_native_request_through_provider(
     assert events[-1].data["response"]["output"][0]["content"][0]["text"] == (
         "Hello from provider"
     )
-    assert provider.preflight_responses.called
+    assert len(provider.requests) == 1
     routed = provider.requests[0]
     assert routed.model == _UPSTREAM_MODEL
     assert routed.input == "Hello"
@@ -163,9 +165,9 @@ def test_create_response_stream_preserves_output_limit_as_incomplete() -> None:
     assert incomplete["output"][0]["content"][0]["text"] == "partial output"
 
 
-def test_create_response_preflight_rejection_stays_an_ordinary_http_error() -> None:
+def test_create_response_startup_rejection_stays_an_ordinary_http_error() -> None:
     provider = FakeProvider(_responses_text_stream("unused"))
-    provider.preflight_responses.side_effect = InvalidRequestError("bad tool shape")
+    provider.startup_error = InvalidRequestError("bad tool shape")
     app = create_test_app()
 
     with (
@@ -540,7 +542,7 @@ def test_create_response_preserves_muse_code_request_shape() -> None:
         effort=ReasoningEffort.HIGH,
     )
     assert provider.stream_kwargs[0]["reasoning"] == expected_policy
-    assert provider.preflight_responses.call_args.kwargs["reasoning"] == expected_policy
+    assert provider.stream_kwargs[0]["reasoning"] == expected_policy
 
 
 def test_create_response_preserves_custom_tool_request() -> None:
@@ -700,7 +702,7 @@ def test_create_response_preserves_and_resolves_reasoning_effort(
     assert response.status_code == 200
     assert provider.requests[0].reasoning == reasoning
     assert provider.stream_kwargs[0]["reasoning"] == expected_policy
-    assert provider.preflight_responses.call_args.kwargs["reasoning"] == expected_policy
+    assert provider.stream_kwargs[0]["reasoning"] == expected_policy
 
 
 def test_create_response_relays_encrypted_reasoning() -> None:
@@ -732,7 +734,7 @@ def test_create_response_provider_rejects_unsupported_tool(
     responses_client: tuple[TestClient, FakeProvider],
 ) -> None:
     client, provider = responses_client
-    provider.preflight_responses.side_effect = InvalidRequestError(
+    provider.startup_error = InvalidRequestError(
         "Unsupported Responses tool type: 'web_search_preview'"
     )
 

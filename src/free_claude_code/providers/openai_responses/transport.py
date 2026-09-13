@@ -123,21 +123,6 @@ class OpenAIResponsesTransport:
         self._read_timeout_s = read_timeout_s
         self._log_raw_sse_events = log_raw_sse_events
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-        model_info: ProviderModelInfo | None = None,
-        can_disable_reasoning: bool = True,
-    ) -> None:
-        self._build_messages_body(
-            request,
-            reasoning=reasoning,
-            model_info=model_info,
-            can_disable_reasoning=can_disable_reasoning,
-        )
-
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -184,14 +169,6 @@ class OpenAIResponsesTransport:
                 )
             ),
         )
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        self._build_native_body(request, reasoning=reasoning)
 
     def stream_responses(
         self,

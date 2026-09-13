@@ -497,7 +497,7 @@ async def test_build_request_body_omits_reasoning_when_request_disables_thinking
     assert "reasoning_budget" not in extra
 
 
-def test_preflight_and_build_request_issue_206_post_tool_text(nim_provider):
+def test_startup_and_build_request_issue_206_post_tool_text(nim_provider):
     """Regression: assistant message with tool_use then text plus tool results (GitHub #206)."""
     tool_id = "toolu_issue_206"
     req = make_request(
@@ -527,7 +527,7 @@ def test_preflight_and_build_request_issue_206_post_tool_text(nim_provider):
             ),
         ],
     )
-    nim_provider.preflight_messages(req, reasoning=REASONING_OFF)
+    nim_provider.stream_messages(req, reasoning=REASONING_OFF)
     body = nim_provider._chat._build_request_body(req, reasoning=REASONING_OFF)
     assert "messages" in body
     assert any(m.get("role") == "tool" for m in body["messages"])
