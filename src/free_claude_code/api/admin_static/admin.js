@@ -1286,15 +1286,13 @@ function integrationMessage(id, message, error = false) {
 function renderClaudeIntegration() {
   const { connected, busy, paths } = claudeIntegration;
   const action = connected ? "Disconnect" : "Connect";
-  byId("openClaudeIntegration").textContent = connected === null && !busy ? "Retry" : action;
+  byId("openClaudeIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
   byId("openClaudeIntegration").disabled = busy;
+  byId("openClaudeIntegration").setAttribute("aria-busy", String(busy));
   byId("confirmClaudeIntegration").textContent = busy ? "Saving…" : action;
   byId("confirmClaudeIntegration").disabled = busy || connected === null;
-  byId("openClaudeIntegration").className = connected ? "danger-button" : "primary-button";
+  byId("openClaudeIntegration").className = connected && !busy ? "danger-button" : "primary-button";
   byId("confirmClaudeIntegration").className = connected ? "danger-button" : "primary-button";
-  const status = byId("claudeIntegrationStatus");
-  status.hidden = connected !== null;
-  status.textContent = busy ? "Checking settings…" : "Could not check settings";
   byId("claudeIntegrationDescription").textContent = connected
     ? "Remove FCC's VS Code settings. Claude onboarding stays completed."
     : "Will set FCC's URL and token, enable model discovery, skip VS Code login, and complete Claude onboarding.";
@@ -1376,15 +1374,13 @@ const codexIntegrationPath = "/admin/api/integrations/codex";
 function renderCodexIntegration() {
   const { connected, busy, paths } = codexIntegration;
   const action = connected ? "Disconnect" : "Connect";
-  byId("openCodexIntegration").textContent = connected === null && !busy ? "Retry" : action;
+  byId("openCodexIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
   byId("openCodexIntegration").disabled = busy;
+  byId("openCodexIntegration").setAttribute("aria-busy", String(busy));
   byId("confirmCodexIntegration").textContent = busy ? "Saving…" : action;
   byId("confirmCodexIntegration").disabled = busy || connected === null;
-  byId("openCodexIntegration").className = connected ? "danger-button" : "primary-button";
+  byId("openCodexIntegration").className = connected && !busy ? "danger-button" : "primary-button";
   byId("confirmCodexIntegration").className = connected ? "danger-button" : "primary-button";
-  const status = byId("codexIntegrationStatus");
-  status.hidden = connected !== null;
-  status.textContent = busy ? "Checking settings…" : "Could not check settings";
   byId("codexIntegrationDescription").textContent = connected
     ? "Remove FCC's Codex configuration. Other settings stay unchanged."
     : "Configure Codex to use FCC. Your selected model stays unchanged.";

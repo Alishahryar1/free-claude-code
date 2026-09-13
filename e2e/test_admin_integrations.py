@@ -8,6 +8,45 @@ from playwright.sync_api import expect
 from free_claude_code.cli import vscode
 
 
+@pytest.mark.parametrize(
+    "integration,button_id",
+    [
+        ("claude-vscode", "openClaudeIntegration"),
+        ("codex", "openCodexIntegration"),
+    ],
+)
+@pytest.mark.parametrize("connected", [False, True])
+def test_connection_check_uses_disabled_loading_button(
+    page, admin_base_url, integration, button_id, connected
+):
+    pending = []
+    page.route(
+        f"**/admin/api/integrations/{integration}", lambda route: pending.append(route)
+    )
+    page.goto(f"{admin_base_url}/admin/integrations")
+    button = page.locator(f"#{button_id}")
+    for visit in range(2):
+        if visit:
+            page.get_by_role("button", name="Providers", exact=True).click()
+            page.get_by_role("button", name="Integrations", exact=True).click()
+        expect(button).to_be_disabled()
+        expect(button).to_have_text("Loading…")
+        expect(button).to_have_attribute("aria-busy", "true")
+        expect(button).to_have_css("background-color", "rgb(23, 27, 38)")
+        assert (
+            button.evaluate(
+                "element => getComputedStyle(element, '::before').animationName"
+            )
+            == "integration-spinner"
+        )
+        expect(page.locator("#view-integrations .status-pill")).to_have_count(0)
+        assert len(pending) == 1
+        pending.pop().fulfill(json={"connected": connected, "paths": None})
+        expect(button).to_be_enabled()
+        expect(button).to_have_text("Disconnect" if connected else "Connect")
+        expect(button).to_have_attribute("aria-busy", "false")
+
+
 @pytest.mark.parametrize("width", [1280, 1200, 390])
 def test_codex_connect_disconnect_and_modal_paths(
     page, admin_base_url, tmp_path, width
@@ -25,9 +64,9 @@ def test_codex_connect_disconnect_and_modal_paths(
             "Claude Code in JetBrains ACP",
         ]
     )
-    expect(page.locator("#claudeIntegrationStatus")).not_to_be_visible()
+    expect(page.locator("#claudeIntegrationStatus")).to_have_count(0)
     expect(page.locator("#openCodexIntegration")).to_be_enabled()
-    expect(page.locator("#codexIntegrationStatus")).not_to_be_visible()
+    expect(page.locator("#codexIntegrationStatus")).to_have_count(0)
     expect(cards.nth(1)).to_contain_text(
         "Use FCC's models in the Codex VS Code extension and desktop app."
     )
@@ -76,7 +115,7 @@ def test_codex_connect_disconnect_and_modal_paths(
     page.locator("#confirmCodexIntegration").click()
     expect(dialog).not_to_be_visible()
     expect(opener).to_have_text("Disconnect")
-    expect(page.locator("#codexIntegrationStatus")).not_to_be_visible()
+    expect(page.locator("#codexIntegrationStatus")).to_have_count(0)
     expect(opener).to_have_css("color", "rgb(239, 68, 68)")
     if width >= 1200:
         buttons = [
@@ -103,7 +142,7 @@ def test_codex_connect_disconnect_and_modal_paths(
     page.locator("#confirmCodexIntegration").click()
     expect(opener).to_have_text("Connect")
     expect(opener).to_have_css("color", "rgb(6, 16, 11)")
-    expect(page.locator("#codexIntegrationStatus")).not_to_be_visible()
+    expect(page.locator("#codexIntegrationStatus")).to_have_count(0)
     assert tomllib.loads(path.read_text()) == {"model": "my-choice"}
     assert not (tmp_path / "vscode" / "settings.json").exists()
     assert not (tmp_path / ".claude.json").exists()
@@ -229,7 +268,7 @@ def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):
     action.click()
     expect(dialog).not_to_be_visible()
     expect(card_button).to_have_text("Disconnect")
-    expect(page.locator("#claudeIntegrationStatus")).not_to_be_visible()
+    expect(page.locator("#claudeIntegrationStatus")).to_have_count(0)
     expect(card_button).to_have_css("color", "rgb(239, 68, 68)")
     expect(page.locator("#claudeIntegrationMessage")).to_contain_text("Reload VS Code")
     assert json.loads(path.read_text())["claudeCode.disableLoginPrompt"] is True
@@ -247,7 +286,7 @@ def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):
     action.click()
     expect(card_button).to_have_text("Connect")
     expect(card_button).to_have_css("color", "rgb(6, 16, 11)")
-    expect(page.locator("#claudeIntegrationStatus")).not_to_be_visible()
+    expect(page.locator("#claudeIntegrationStatus")).to_have_count(0)
     assert json.loads(path.read_text()) == {}
     assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
 
@@ -285,9 +324,11 @@ def test_invalid_settings_error_can_be_retried_and_does_not_break_admin(
     path.write_text("{invalid}")
     page.goto(f"{admin_base_url}/admin/integrations")
     expect(page.locator("#claudeIntegrationMessage")).to_contain_text("Check the JSON")
-    expect(page.locator("#claudeIntegrationStatus")).to_have_text(
-        "Could not check settings"
+    expect(page.locator("#openClaudeIntegration")).to_have_text("Retry")
+    expect(page.locator("#openClaudeIntegration")).to_have_attribute(
+        "aria-busy", "false"
     )
+    expect(page.locator("#view-integrations .status-pill")).to_have_count(0)
     page.get_by_role("button", name="Providers", exact=True).click()
     expect(page.locator('[data-provider="nvidia_nim"]')).to_be_visible()
     page.get_by_role("button", name="Integrations", exact=True).click()
