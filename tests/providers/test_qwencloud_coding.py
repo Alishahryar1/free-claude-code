@@ -79,7 +79,7 @@ def test_build_request_body_preserves_tools_and_images_without_inventing_a_cap(
         }
     )
 
-    body = qwencloud_coding_provider._build_request_body(
+    body = qwencloud_coding_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -109,7 +109,7 @@ def test_build_request_body_preserves_explicit_client_cap(
         }
     )
 
-    body = qwencloud_coding_provider._build_request_body(
+    body = qwencloud_coding_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -136,7 +136,9 @@ def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
         }
     )
 
-    body = qwencloud_coding_provider._build_request_body(request, reasoning=reasoning)
+    body = qwencloud_coding_provider._chat._build_request_body(
+        request, reasoning=reasoning
+    )
     extra_body = body.get("extra_body", {})
 
     for field in (
@@ -172,7 +174,7 @@ def test_build_request_body_replays_prior_reasoning_content(
         }
     )
 
-    body = qwencloud_coding_provider._build_request_body(
+    body = qwencloud_coding_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )

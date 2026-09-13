@@ -170,9 +170,11 @@ def _sse(*events: Mapping[str, object]) -> str:
 
 def _client(
     handler: Callable[[httpx2.Request], httpx2.Response],
+    *,
+    api_key: str = "test-key",
 ) -> AsyncOpenAI:
     return AsyncOpenAI(
-        api_key="test-key",
+        api_key=api_key,
         base_url="https://provider.invalid/v1",
         max_retries=0,
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),

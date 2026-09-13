@@ -19,6 +19,7 @@ from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.admission import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
+from free_claude_code.providers.nvidia_nim.client import _PROFILE as NIM_PROFILE
 from free_claude_code.providers.nvidia_nim.tool_schema import (
     NIM_TOOL_ARGUMENT_ALIASES_KEY,
 )
@@ -168,7 +169,6 @@ def _alias_events():
     ],
 )
 async def test_argument_aliases_survive_request_corrections(wire, correction):
-    provider = _alias_provider()
     request = _alias_request(wire, reasoning_history=correction == "reasoning_content")
     original = deepcopy(request.model_dump())
 
@@ -177,7 +177,11 @@ async def test_argument_aliases_survive_request_corrections(wire, correction):
             return 400, {"message": f"Unsupported field: {correction}"}
         return 200, _alias_events()
 
-    async with _harness("chat", responder, chat_provider=provider) as (_, bodies):
+    async with _harness("chat", responder, chat_provider_factory=_alias_provider) as (
+        _,
+        bodies,
+        provider,
+    ):
         stream = (
             provider.stream_messages
             if wire == "messages"
@@ -207,9 +211,14 @@ async def test_argument_aliases_survive_request_corrections(wire, correction):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("early_sse", [False, True])
 async def test_argument_aliases_survive_shared_history_correction(early_sse):
-    provider = _alias_provider()
     # Test adapter exercises the shared history path; native NIM disables details.
-    provider._profile = replace(provider._profile, structured_reasoning_details=True)
+    def provider_factory():
+        with patch(
+            "free_claude_code.providers.nvidia_nim.client._PROFILE",
+            replace(NIM_PROFILE, structured_reasoning_details=True),
+        ):
+            return _alias_provider()
+
     request = _alias_request()
     request.messages.insert(
         0,
@@ -232,7 +241,11 @@ async def test_argument_aliases_survive_shared_history_correction(early_sse):
             return (200, [{"error": error}]) if early_sse else (400, error)
         return 200, _alias_events()
 
-    async with _harness("chat", responder, chat_provider=provider) as (_, bodies):
+    async with _harness("chat", responder, chat_provider_factory=provider_factory) as (
+        _,
+        bodies,
+        provider,
+    ):
         saved = await _saved_reply(provider.stream_messages(request), "messages")
     call = next(block for block in saved[0]["content"] if block["type"] == "tool_use")
     assert call["input"] == {"pattern": "needle", "type": "py"}
@@ -330,7 +343,7 @@ def _make_internal_server_error(message: str) -> openai.InternalServerError:
 async def test_init(provider_config):
     """Test provider initialization."""
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = NvidiaNimProvider(
             provider_config,
@@ -354,7 +367,7 @@ async def test_init_uses_configurable_timeouts():
         http_connect_timeout=5.0,
     )
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         NvidiaNimProvider(
             config, nim_settings=NimSettings(), admission=immediate_admission()
@@ -375,7 +388,7 @@ async def test_build_request_body(provider_config):
         admission=immediate_admission(),
     )
     req = make_request()
-    body = provider._build_request_body(req, reasoning=reasoning_for(req))
+    body = provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
     assert body["model"] == "test-model"
     assert body["temperature"] == 0.5
@@ -417,7 +430,9 @@ def test_responses_request_uses_nim_chat_policy(provider_config):
         }
     )
 
-    translated = provider._build_responses_request_body(request, reasoning=REASONING_ON)
+    translated = provider._chat._build_responses_request_body(
+        request, reasoning=REASONING_ON
+    )
 
     body = translated.body
     tools = body["tools"]
@@ -454,7 +469,7 @@ async def test_build_request_body_encodes_explicit_reasoning_off(
         admission=immediate_admission(),
     )
     req = make_request()
-    body = provider._build_request_body(req, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(req, reasoning=REASONING_OFF)
 
     extra = body.get("extra_body", {})
     assert extra["chat_template_kwargs"] == {
@@ -475,7 +490,7 @@ async def test_build_request_body_omits_reasoning_when_request_disables_thinking
     )
     req = make_request()
     req.thinking.enabled = False
-    body = provider._build_request_body(req)
+    body = provider._chat._build_request_body(req)
 
     extra = body.get("extra_body", {})
     assert "chat_template_kwargs" not in extra
@@ -513,7 +528,7 @@ def test_preflight_and_build_request_issue_206_post_tool_text(nim_provider):
         ],
     )
     nim_provider.preflight_messages(req, reasoning=REASONING_OFF)
-    body = nim_provider._build_request_body(req, reasoning=REASONING_OFF)
+    body = nim_provider._chat._build_request_body(req, reasoning=REASONING_OFF)
     assert "messages" in body
     assert any(m.get("role") == "tool" for m in body["messages"])
 

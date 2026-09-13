@@ -87,7 +87,7 @@ def test_init_composes_account_scoped_openai_chat_base_url(
 ) -> None:
     with (
         patch(
-            "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+            "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
         ) as mock_openai,
         patch("httpx.AsyncClient") as mock_httpx_client,
     ):
@@ -126,7 +126,7 @@ def test_build_request_body_preserves_literal_cf_model_id_and_controls_thinking(
         }
     )
 
-    body = cloudflare_provider._build_request_body(
+    body = cloudflare_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -147,7 +147,7 @@ def test_build_request_body_disabled_thinking_sets_cloudflare_template_flag(
         }
     )
 
-    body = cloudflare_provider._build_request_body(
+    body = cloudflare_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -165,7 +165,7 @@ def test_build_request_body_preserves_user_extra_body_without_overriding_thinkin
         }
     )
 
-    body = cloudflare_provider._build_request_body(
+    body = cloudflare_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 

@@ -313,7 +313,7 @@ async def test_hot_replacement_owns_admission_per_provider_generation() -> None:
         return client
 
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         side_effect=create_client,
     ):
         manager = ProviderRuntimeManager(first_settings)

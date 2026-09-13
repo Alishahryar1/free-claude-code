@@ -4,6 +4,7 @@ import json
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import httpx2
@@ -130,7 +131,7 @@ def _events_for(protocol):
 
 
 @asynccontextmanager
-async def _harness(protocol, responder=None, *, key="a", chat_provider=None):
+async def _harness(protocol, responder=None, *, key="a", chat_provider_factory=None):
     bodies: list[dict[str, Any]] = []
 
     def reply(request):
@@ -157,19 +158,24 @@ async def _harness(protocol, responder=None, *, key="a", chat_provider=None):
         endpoint.token = key
         extras = {"endpoint_context": endpoint}
     else:
-        client = _client(reply)
-        client.api_key = key
+        client = _client(reply, api_key=key)
         if protocol == "responses":
             provider = responses_transport(client)
         else:
-            provider = chat_provider or OpenRouterProvider(
-                make_provider_config(
-                    api_key=key, base_url="https://provider.invalid/v1"
-                ),
-                admission=immediate_admission(max_attempts=5),
-            )
-            await provider._client.close()
-            provider._client = client
+            with patch(
+                "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
+                return_value=client,
+            ):
+                provider = (
+                    chat_provider_factory()
+                    if chat_provider_factory is not None
+                    else OpenRouterProvider(
+                        make_provider_config(
+                            api_key=key, base_url="https://provider.invalid/v1"
+                        ),
+                        admission=immediate_admission(max_attempts=5),
+                    )
+                )
         extras = {}
 
     def stream(wire, history):
@@ -196,7 +202,7 @@ async def _harness(protocol, responder=None, *, key="a", chat_provider=None):
         )
 
     try:
-        yield stream, bodies
+        yield stream, bodies, provider
     finally:
         if isinstance(client, httpx.AsyncClient):
             await client.aclose()
@@ -231,7 +237,7 @@ def _carrier(history, wire):
 @pytest.mark.parametrize("protocol", ["responses", "messages", "chat"])
 @pytest.mark.parametrize("wire", ["responses", "messages"])
 async def test_provider_a_b_a_preserves_exact_native_history(protocol, wire):
-    async with _harness(protocol) as (send, bodies):
+    async with _harness(protocol) as (send, bodies, _):
         saved = await _saved_reply(
             send(wire, [{"role": "user", "content": "hello"}]), wire
         )
@@ -245,7 +251,7 @@ async def test_provider_a_b_a_preserves_exact_native_history(protocol, wire):
             json.dumps([*saved, {"role": "user", "content": "continue"}])
         )
         original = deepcopy(history)
-        async with _harness(protocol, key="b") as (foreign, foreign_bodies):
+        async with _harness(protocol, key="b") as (foreign, foreign_bodies, _):
             await _saved_reply(foreign(wire, history), wire)
             foreign_wire = json.dumps(foreign_bodies[-1])
             assert (
@@ -291,7 +297,7 @@ async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changi
         {"role": "user", "content": "continue"},
     ]
     original = deepcopy(history)
-    async with _harness("responses", responder) as (send, bodies):
+    async with _harness("responses", responder) as (send, bodies, _):
         await _saved_reply(send(wire, history), wire)
         assert len(bodies) == 3
         assert ":" not in bodies[1]["input"][0]["id"]
@@ -327,7 +333,7 @@ async def test_explicit_legacy_rejection_corrects_only_history_before_commit(pro
         {"role": "user", "content": "continue"},
     ]
     original = deepcopy(history)
-    async with _harness(protocol, responder) as (send, bodies):
+    async with _harness(protocol, responder) as (send, bodies, _):
         await _saved_reply(send("messages", history), "messages")
         assert len(bodies) == 2
         assert "opaque-original" in json.dumps(bodies[0])
@@ -392,7 +398,7 @@ async def test_stream_history_rejection_respects_the_public_commit_boundary(
         {"role": "assistant", "content": [block, {"type": "text", "text": "17"}]},
         {"role": "user", "content": "continue"},
     ]
-    async with _harness(protocol, responder) as (send, bodies):
+    async with _harness(protocol, responder) as (send, bodies, _):
         if committed:
             output = ""
             with pytest.raises(ExecutionFailure):
@@ -429,14 +435,16 @@ async def test_successful_fallback_stamps_its_own_origin_and_gets_unmodified_inp
             ),
         )
 
-    provider = OpenRouterProvider(
-        make_provider_config(
-            api_key="fallback-key", base_url="https://provider.invalid/v1"
-        ),
-        admission=immediate_admission(),
-    )
-    await provider._client.close()
-    provider._client = _client(reply)
+    with patch(
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
+        return_value=_client(reply),
+    ):
+        provider = OpenRouterProvider(
+            make_provider_config(
+                api_key="fallback-key", base_url="https://provider.invalid/v1"
+            ),
+            admission=immediate_admission(),
+        )
     routed = _routed_request(_target("open_router", "fallback-model"))
     original = routed.request.model_dump()
     executor = ProviderExecutor(
@@ -480,7 +488,7 @@ async def test_history_corrections_exhaust_the_shared_attempt_budget():
             "message": "The encrypted content could not be verified.",
         }
 
-    async with _harness("responses", responder) as (send, bodies):
+    async with _harness("responses", responder) as (send, bodies, _):
         with pytest.raises(ExecutionFailure):
             await _saved_reply(send("responses", history), "responses")
         assert len(bodies) == 5
@@ -564,10 +572,6 @@ async def test_chat_buffered_content_preserves_reasoning_through_next_request(
         "properties": {"query": {"type": "string"}},
         "required": ["query"],
     }
-    provider = OpenRouterProvider(
-        make_provider_config(api_key="a", base_url="https://provider.invalid/v1"),
-        admission=immediate_admission(),
-    )
 
     def send(history):
         if wire == "messages":
@@ -594,9 +598,7 @@ async def test_chat_buffered_content_preserves_reasoning_through_next_request(
             reasoning=ReasoningPolicy.on(),
         )
 
-    async with _harness(
-        "chat", lambda bodies: (200, events), chat_provider=provider
-    ) as (_, bodies):
+    async with _harness("chat", lambda bodies: (200, events)) as (_, bodies, provider):
         saved = await _saved_reply(send([{"role": "user", "content": "hello"}]), wire)
         assert decode_replay(_carrier(saved, wire)).native == {
             "reasoning_content": "Plan.",
@@ -651,7 +653,7 @@ async def test_chat_encrypted_only_completion_does_not_add_blank_text(wire):
     details = [{"type": "reasoning.encrypted", "data": "opaque-only", "index": 0}]
     events = _chat_reasoning_events([{"reasoning_details": details}])
     events[-1]["choices"][0]["delta"] = {}
-    async with _harness("chat", lambda bodies: (200, events)) as (send, _):
+    async with _harness("chat", lambda bodies: (200, events)) as (send, _, _):
         saved = await _saved_reply(
             send(wire, [{"role": "user", "content": "hello"}]), wire
         )
@@ -687,7 +689,7 @@ async def test_chat_pending_reasoning_is_finalized_on_failure_or_discarded_on_re
     def responder(bodies):
         return 200, events if len(bodies) == 1 else _events_for("chat")
 
-    async with _harness("chat", responder) as (send, bodies):
+    async with _harness("chat", responder) as (send, bodies, _):
         stream = send(wire, [{"role": "user", "content": "hello"}])
         if not committed:
             saved = await _saved_reply(stream, wire)
@@ -732,7 +734,7 @@ async def test_chat_plaintext_beside_encrypted_details_survives_switching(
     events = _chat_reasoning_events(
         [{"reasoning_content": text, "reasoning_details": details}]
     )
-    async with _harness("chat", lambda bodies: (200, events)) as (source, sent):
+    async with _harness("chat", lambda bodies: (200, events)) as (source, sent, _):
         saved = await _saved_reply(
             source(wire, [{"role": "user", "content": "hello"}]), wire
         )
@@ -748,7 +750,7 @@ async def test_chat_plaintext_beside_encrypted_details_survives_switching(
             assert record.native["reasoning_content"] == text
         history = json.loads(json.dumps([*saved, {"role": "user", "content": "next"}]))
         original = deepcopy(history)
-        async with _harness(destination, key="b") as (foreign, bodies):
+        async with _harness(destination, key="b") as (foreign, bodies, _):
             await _saved_reply(foreign(wire, history), wire)
             outgoing = json.dumps(bodies[-1])
             assert outgoing.count(text) == 1
@@ -775,7 +777,7 @@ async def test_chat_summary_fragments_remain_readable_and_restore_exactly(
             {"reasoning_details": [second, *([opaque] if encrypted else [])]},
         ]
     )
-    async with _harness("chat", lambda bodies: (200, events)) as (source, sent):
+    async with _harness("chat", lambda bodies: (200, events)) as (source, sent, _):
         saved = await _saved_reply(
             source(wire, [{"role": "user", "content": "hello"}]), wire
         )
@@ -783,7 +785,7 @@ async def test_chat_summary_fragments_remain_readable_and_restore_exactly(
         record = decode_replay(_carrier(saved, wire))
         assert record.native["reasoning_details"] == details
         history = [*saved, {"role": "user", "content": "next"}]
-        async with _harness("responses", key="b") as (foreign, bodies):
+        async with _harness("responses", key="b") as (foreign, bodies, _):
             await _saved_reply(foreign(wire, history), wire)
             assert bodies[-1]["input"][0] == {
                 "role": "assistant",
@@ -809,13 +811,13 @@ async def test_chat_alternate_readable_fields_replay_once(native_first):
     events = _chat_reasoning_events(
         [native, typed] if native_first else [typed, native]
     )
-    async with _harness("chat", lambda bodies: (200, events)) as (source, sent):
+    async with _harness("chat", lambda bodies: (200, events)) as (source, sent, _):
         saved = await _saved_reply(
             source("messages", [{"role": "user", "content": "hi"}]), "messages"
         )
         assert json.dumps(saved).count("One readable thought.") == 1
         history = [*saved, {"role": "user", "content": "next"}]
-        async with _harness("responses", key="b") as (foreign, bodies):
+        async with _harness("responses", key="b") as (foreign, bodies, _):
             await _saved_reply(foreign("messages", history), "messages")
             assert json.dumps(bodies[-1]).count("One readable thought.") == 1
         await _saved_reply(source("messages", history), "messages")
@@ -846,7 +848,7 @@ async def test_chat_reasoning_groups_do_not_inherit_previous_plaintext():
             },
         ]
     )
-    async with _harness("chat", lambda bodies: (200, events)) as (source, _):
+    async with _harness("chat", lambda bodies: (200, events)) as (source, _, _):
         saved = await _saved_reply(
             source("messages", [{"role": "user", "content": "hi"}]), "messages"
         )
@@ -884,11 +886,11 @@ async def test_chat_plaintext_matching_multiple_detail_parts_is_not_repeated():
             }
         ]
     )
-    async with _harness("chat", lambda bodies: (200, events)) as (source, _):
+    async with _harness("chat", lambda bodies: (200, events)) as (source, _, _):
         saved = await _saved_reply(
             source("messages", [{"role": "user", "content": "hi"}]), "messages"
         )
-    async with _harness("responses", key="b") as (foreign, bodies):
+    async with _harness("responses", key="b") as (foreign, bodies, _):
         await _saved_reply(
             foreign("messages", [*saved, {"role": "user", "content": "next"}]),
             "messages",

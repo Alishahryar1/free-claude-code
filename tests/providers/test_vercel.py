@@ -46,7 +46,7 @@ def test_default_base_url_constant():
 
 def test_init_uses_default_base_url_and_api_key(vercel_config):
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = profiled_provider(
             "vercel",
@@ -62,7 +62,7 @@ def test_init_uses_default_base_url_and_api_key(vercel_config):
 def test_init_strips_trailing_slash(vercel_config):
     config = replace(vercel_config, base_url=f"{VERCEL_AI_GATEWAY_DEFAULT_BASE}/")
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = profiled_provider(
             "vercel",
             config,
@@ -127,7 +127,7 @@ def test_build_request_body_keeps_max_tokens(vercel_provider):
             "max_tokens": 42,
         }
 
-        body = vercel_provider._build_request_body(make_request())
+        body = vercel_provider._chat._build_request_body(make_request())
 
     assert body["messages"][0].get("name") == "alice"
     assert body["max_tokens"] == 42
@@ -137,7 +137,7 @@ def test_build_request_body_keeps_max_tokens(vercel_provider):
 def test_build_request_body_preserves_caller_extra_body(vercel_provider):
     req = make_request(extra_body={"providerOptions": {"openai": {"reasoning": "low"}}})
 
-    body = vercel_provider._build_request_body(req)
+    body = vercel_provider._chat._build_request_body(req)
 
     assert body["extra_body"] == {"providerOptions": {"openai": {"reasoning": "low"}}}
 

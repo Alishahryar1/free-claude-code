@@ -43,7 +43,7 @@ def mistral_provider(mistral_config):
 def test_init(mistral_config):
     """Test provider initialization."""
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = MistralProvider(mistral_config, admission=immediate_admission())
         assert provider._api_key == "test_mistral_key"
@@ -123,7 +123,7 @@ async def test_model_catalog_degrades_incomplete_capabilities_to_unknown(
 def test_build_request_body_basic(mistral_provider):
     """Basic request body conversion works for Mistral."""
     req = make_request()
-    body = mistral_provider._build_request_body(req, reasoning=reasoning_for(req))
+    body = mistral_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
     assert body["model"] == "devstral-small-latest"
     assert body["messages"][0]["role"] == "system"
@@ -162,7 +162,7 @@ def test_build_request_body_replays_prior_thinking_as_mistral_chunks(
         ],
     )
 
-    body = mistral_provider._build_request_body(req, reasoning=reasoning_for(req))
+    body = mistral_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
     assistant = body["messages"][0]
     assert "reasoning_content" not in assistant
@@ -193,7 +193,7 @@ def test_build_request_body_preserves_tools_tool_choice_and_params(mistral_provi
         stop_sequences=["STOP"],
     )
 
-    body = mistral_provider._build_request_body(req, reasoning=reasoning_for(req))
+    body = mistral_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
     assert body["max_tokens"] == 100
     assert body["temperature"] == 0.5
@@ -214,7 +214,7 @@ def test_build_request_body_reasoning_off_uses_native_none():
         admission=immediate_admission(),
     )
     req = make_request()
-    body = provider._build_request_body(req, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(req, reasoning=REASONING_OFF)
 
     assert body["reasoning_effort"] == "none"
     assert all("reasoning_content" not in m for m in body.get("messages", []))
@@ -243,7 +243,7 @@ def test_reasoning_off_keeps_replay_separate_from_new_turn_compute():
         ],
     )
 
-    body = provider._build_request_body(req, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(req, reasoning=REASONING_OFF)
 
     assert body["reasoning_effort"] == "none"
     assert body["messages"][0]["content"] == [
@@ -858,7 +858,7 @@ def test_retry_body_without_reasoning_returns_none(mistral_provider):
     body = {"model": "x", "messages": [{"role": "user", "content": "hi"}]}
 
     assert (
-        mistral_provider._get_retry_request_body(
+        mistral_provider._behavior.retry_request_body(
             _make_bad_request_error("Unsupported field: reasoning_effort"), body
         )
         is None

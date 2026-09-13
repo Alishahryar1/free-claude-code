@@ -240,7 +240,7 @@ def groq_provider():
 
 @pytest.mark.asyncio
 async def test_create_stream_clamps_and_learns_on_cap_rejection(groq_provider):
-    body = groq_provider._build_request_body(
+    body = groq_provider._chat._build_request_body(
         make_messages_request(
             "llama-3.3-70b-versatile",
             max_tokens=64000,
@@ -265,7 +265,12 @@ async def test_create_stream_clamps_and_learns_on_cap_rejection(groq_provider):
     create = AsyncMock(side_effect=[error, object()])
 
     with patch.object(groq_provider._client.chat.completions, "create", create):
-        _stream, used_body, attempt, _sent_body = await groq_provider._create_stream(
+        (
+            _stream,
+            used_body,
+            attempt,
+            _sent_body,
+        ) = await groq_provider._chat._create_stream(
             body,
             groq_provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,
@@ -275,12 +280,12 @@ async def test_create_stream_clamps_and_learns_on_cap_rejection(groq_provider):
     assert create.call_count == 2
     assert create.call_args_list[1].kwargs["max_completion_tokens"] == 16384
     assert used_body["max_completion_tokens"] == 16384
-    assert groq_provider._model_output_caps[model] == 16384
+    assert groq_provider._chat._model_output_caps[model] == 16384
 
 
 @pytest.mark.asyncio
 async def test_learned_cap_clamps_next_request_without_a_400(groq_provider):
-    body = groq_provider._build_request_body(
+    body = groq_provider._chat._build_request_body(
         make_messages_request(
             "llama-3.3-70b-versatile",
             max_tokens=64000,
@@ -288,11 +293,16 @@ async def test_learned_cap_clamps_next_request_without_a_400(groq_provider):
         )
     )
     model = body["model"]
-    groq_provider._model_output_caps[model] = 40960
+    groq_provider._chat._model_output_caps[model] = 40960
 
     create = AsyncMock(return_value=object())
     with patch.object(groq_provider._client.chat.completions, "create", create):
-        _stream, used_body, attempt, _sent_body = await groq_provider._create_stream(
+        (
+            _stream,
+            used_body,
+            attempt,
+            _sent_body,
+        ) = await groq_provider._chat._create_stream(
             body,
             groq_provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,
@@ -306,7 +316,7 @@ async def test_learned_cap_clamps_next_request_without_a_400(groq_provider):
 
 @pytest.mark.asyncio
 async def test_unrelated_400_is_not_clamped_and_propagates(groq_provider):
-    body = groq_provider._build_request_body(
+    body = groq_provider._chat._build_request_body(
         make_messages_request(
             "llama-3.3-70b-versatile",
             max_tokens=100,
@@ -319,19 +329,19 @@ async def test_unrelated_400_is_not_clamped_and_propagates(groq_provider):
         patch.object(groq_provider._client.chat.completions, "create", create),
         pytest.raises(Exception, match="wizard"),
     ):
-        await groq_provider._create_stream(
+        await groq_provider._chat._create_stream(
             body,
             groq_provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,
         )
 
     assert create.call_count == 1
-    assert groq_provider._model_output_caps == {}
+    assert groq_provider._chat._model_output_caps == {}
 
 
 @pytest.mark.asyncio
 async def test_mixed_field_400_does_not_retry_or_poison_learned_cap(groq_provider):
-    body = groq_provider._build_request_body(
+    body = groq_provider._chat._build_request_body(
         make_messages_request(
             "llama-3.3-70b-versatile",
             max_tokens=64000,
@@ -353,11 +363,11 @@ async def test_mixed_field_400_does_not_retry_or_poison_learned_cap(groq_provide
         patch.object(groq_provider._client.chat.completions, "create", create),
         pytest.raises(Exception, match="temperature"),
     ):
-        await groq_provider._create_stream(
+        await groq_provider._chat._create_stream(
             body,
             groq_provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,
         )
 
     assert create.call_count == 1
-    assert groq_provider._model_output_caps == {}
+    assert groq_provider._chat._model_output_caps == {}

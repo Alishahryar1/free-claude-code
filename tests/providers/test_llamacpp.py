@@ -39,7 +39,7 @@ def provider() -> OpenAIChatProvider:
 )
 def test_init_normalizes_openai_base_url(configured: str, expected: str) -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = profiled_provider(
             "llamacpp",
@@ -60,7 +60,7 @@ def test_init_uses_openai_chat_client() -> None:
         http_connect_timeout=5.0,
     )
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = profiled_provider(
             "llamacpp", config, admission=immediate_admission()
@@ -78,7 +78,7 @@ def test_build_request_body_uses_openai_chat_shape(
 ) -> None:
     request = make_messages_request(LLAMACPP_MODEL, max_tokens=None)
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
     assert body["model"] == LLAMACPP_MODEL
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
@@ -104,7 +104,7 @@ def test_replay_is_independent_of_current_turn_reasoning_control(
         ],
     )
 
-    body = provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
     assert body["messages"][1]["content"] == ("<think>\nprivate\n</think>\n\nvisible")
     assert body["extra_body"]["thinking_budget_tokens"] == 0

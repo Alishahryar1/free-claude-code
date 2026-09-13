@@ -190,7 +190,7 @@ def test_create_response_preflight_rejection_stays_an_ordinary_http_error() -> N
 
 def test_create_response_rejects_unportable_image_as_invalid_request() -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         return_value=MagicMock(),
     ):
         provider = OpenAIChatProvider(

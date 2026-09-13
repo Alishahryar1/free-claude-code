@@ -1,5 +1,6 @@
 import json
 from typing import Any, cast
+from unittest.mock import patch
 
 import httpx2
 import pytest
@@ -229,26 +230,34 @@ async def test_provider_discovery_call_and_result_round_trip(
             _catalog_payload(), generation_response=upstream
         )
     else:
-        provider = cast(
-            OpenAIChatProvider,
-            create_provider(
-                provider_id,
-                Settings(
-                    open_router_api_key="test",
-                    nvidia_nim_api_key="test",
-                    groq_api_key="test",
-                    mistral_api_key="test",
-                ),
-            ),
-        )
-        provider._admission = immediate_admission(provider_name=provider_id)
-        await provider._client.close()
-        provider._client = AsyncOpenAI(
+        client = AsyncOpenAI(
             api_key="test",
             base_url="https://provider.test/v1",
             http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(upstream)),
             max_retries=0,
         )
+        with (
+            patch(
+                "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
+                return_value=client,
+            ),
+            patch(
+                "free_claude_code.providers.runtime.factory.ProviderAdmissionController",
+                return_value=immediate_admission(provider_name=provider_id),
+            ),
+        ):
+            provider = cast(
+                OpenAIChatProvider,
+                create_provider(
+                    provider_id,
+                    Settings(
+                        open_router_api_key="test",
+                        nvidia_nim_api_key="test",
+                        groq_api_key="test",
+                        mistral_api_key="test",
+                    ),
+                ),
+            )
     history: list[dict[str, Any]] = [
         {"role": "user", "content": "Find a tool and use it"}
     ]

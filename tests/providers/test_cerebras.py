@@ -71,7 +71,7 @@ def cerebras_provider(cerebras_config):
 def test_init(cerebras_config):
     """Test provider initialization."""
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = profiled_provider(
             "cerebras", cerebras_config, admission=immediate_admission()
@@ -88,7 +88,9 @@ def test_default_base_url_constant():
 def test_build_request_body_basic(cerebras_provider):
     """Basic request body conversion attaches system message from Claude request."""
     req = make_request()
-    body = cerebras_provider._build_request_body(req, reasoning=reasoning_for(req))
+    body = cerebras_provider._chat._build_request_body(
+        req, reasoning=reasoning_for(req)
+    )
 
     assert body["model"] == "llama3.1-8b"
     assert body["messages"][0]["role"] == "system"
@@ -96,7 +98,9 @@ def test_build_request_body_basic(cerebras_provider):
 
 
 def test_build_request_body_replays_reasoning_as_tagged_content(cerebras_provider):
-    body = cerebras_provider._build_request_body(make_reasoning_tool_history_request())
+    body = cerebras_provider._chat._build_request_body(
+        make_reasoning_tool_history_request()
+    )
 
     assistant = next(
         message for message in body["messages"] if message["role"] == "assistant"
@@ -127,7 +131,7 @@ def test_replay_is_independent_of_current_turn_reasoning_control():
         ),
         admission=immediate_admission(),
     )
-    body = provider._build_request_body(
+    body = provider._chat._build_request_body(
         make_reasoning_tool_history_request(), reasoning=REASONING_OFF
     )
 
@@ -152,7 +156,9 @@ def test_build_request_body_remaps_max_tokens_preserves_message_name(cerebras_pr
             "max_tokens": 42,
         }
         req = make_request()
-        body = cerebras_provider._build_request_body(req, reasoning=reasoning_for(req))
+        body = cerebras_provider._chat._build_request_body(
+            req, reasoning=reasoning_for(req)
+        )
 
     assert body["messages"][0].get("name") == "alice"
     assert body.get("max_tokens") is None
@@ -169,7 +175,7 @@ def test_build_request_body_prefers_existing_max_completion_tokens(cerebras_prov
             "max_completion_tokens": 77,
             "max_tokens": 999,
         }
-        body = cerebras_provider._build_request_body(make_request())
+        body = cerebras_provider._chat._build_request_body(make_request())
 
     assert body["max_completion_tokens"] == 77
     assert "max_tokens" not in body
@@ -178,7 +184,9 @@ def test_build_request_body_prefers_existing_max_completion_tokens(cerebras_prov
 def test_build_request_body_preserves_caller_extra_body(cerebras_provider):
     req = make_request(extra_body={"clear_thinking": False})
 
-    body = cerebras_provider._build_request_body(req, reasoning=reasoning_for(req))
+    body = cerebras_provider._chat._build_request_body(
+        req, reasoning=reasoning_for(req)
+    )
 
     eb = body.get("extra_body")
     assert isinstance(eb, dict)

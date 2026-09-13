@@ -89,7 +89,7 @@ def test_provider_catalog_contract_is_metadata_only() -> None:
 @pytest.mark.asyncio
 async def test_nim_lists_openai_compatible_model_infos() -> None:
     config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = NvidiaNimProvider(
             config, nim_settings=NimSettings(), admission=immediate_admission()
         )

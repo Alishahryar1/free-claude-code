@@ -55,7 +55,7 @@ def _cloud_provider() -> OpenAIChatProvider:
 )
 def test_init_normalizes_openai_base_url(configured: str, expected: str) -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = _provider(configured)
 
@@ -67,7 +67,7 @@ def test_init_normalizes_openai_base_url(configured: str, expected: str) -> None
 
 def test_cloud_init_uses_fixed_openai_endpoint_and_api_key() -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = _cloud_provider()
 
@@ -79,7 +79,7 @@ def test_cloud_init_uses_fixed_openai_endpoint_and_api_key() -> None:
 
 
 def test_build_request_body_uses_openai_chat_shape() -> None:
-    body = _provider()._build_request_body(make_messages_request(OLLAMA_MODEL))
+    body = _provider()._chat._build_request_body(make_messages_request(OLLAMA_MODEL))
 
     assert body["model"] == OLLAMA_MODEL
     assert body["messages"][0]["role"] == "system"
@@ -92,7 +92,7 @@ def test_cloud_build_request_body_forwards_client_reasoning_effort() -> None:
     request = make_messages_request(
         OLLAMA_CLOUD_MODEL, output_config={"effort": "high"}
     )
-    body = _cloud_provider()._build_request_body(
+    body = _cloud_provider()._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -129,7 +129,7 @@ def test_cloud_build_request_body_replays_thinking_in_ollama_reasoning_field() -
         ],
     )
 
-    body = _cloud_provider()._build_request_body(
+    body = _cloud_provider()._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -156,7 +156,7 @@ def test_replay_is_independent_of_disabled_current_turn_reasoning(provider) -> N
         ],
     )
 
-    body = provider()._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider()._chat._build_request_body(request, reasoning=REASONING_OFF)
     assistant = next(
         message for message in body["messages"] if message["role"] == "assistant"
     )

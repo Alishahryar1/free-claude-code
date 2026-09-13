@@ -120,7 +120,7 @@ def test_build_request_body_preserves_shared_chat_contract(
         ],
     )
 
-    body = featherless_provider._build_request_body(
+    body = featherless_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -147,7 +147,7 @@ def test_build_request_body_encodes_documented_thinking_control(
     reasoning: ReasoningPolicy,
     enabled: bool,
 ) -> None:
-    body = featherless_provider._build_request_body(
+    body = featherless_provider._chat._build_request_body(
         _request(),
         reasoning=reasoning,
     )
@@ -158,7 +158,7 @@ def test_build_request_body_encodes_documented_thinking_control(
 def test_build_request_body_omits_thinking_control_for_provider_default(
     featherless_provider: OpenAIChatProvider,
 ) -> None:
-    body = featherless_provider._build_request_body(
+    body = featherless_provider._chat._build_request_body(
         _request(),
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -177,7 +177,7 @@ def test_build_request_body_rejects_caller_reasoning_override(
     request = _request(extra_body={field: "caller-owned"})
 
     with pytest.raises(InvalidRequestError, match="must not override reasoning"):
-        featherless_provider._build_request_body(request, reasoning=REASONING_ON)
+        featherless_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
 
 def test_build_request_body_replays_reasoning_and_tool_history(
@@ -212,7 +212,7 @@ def test_build_request_body_replays_reasoning_and_tool_history(
         ]
     )
 
-    body = featherless_provider._build_request_body(
+    body = featherless_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )

@@ -100,7 +100,7 @@ def test_build_request_body_requests_split_output_and_max_completion_tokens(
         }
     )
 
-    body = minimax_provider._build_request_body(
+    body = minimax_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -119,7 +119,7 @@ def test_build_request_body_does_not_invent_unsupported_compute_control(
         messages=[Message(role="user", content="Hello")],
     )
 
-    body = minimax_provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = minimax_provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
     assert body["extra_body"] == {"reasoning_split": True}
 

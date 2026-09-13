@@ -254,7 +254,7 @@ async def test_tpm_correction_is_one_shot_per_stream_creation() -> None:
         patch.object(provider._client.chat.completions, "create", create),
         pytest.raises(openai.APIStatusError),
     ):
-        await provider._create_stream(
+        await provider._chat._create_stream(
             _body(),
             provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,
@@ -272,7 +272,7 @@ async def test_tpm_correction_respects_physical_attempt_ceiling() -> None:
         patch.object(provider._client.chat.completions, "create", create),
         pytest.raises(openai.APIStatusError),
     ):
-        await provider._create_stream(
+        await provider._chat._create_stream(
             _body(),
             provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,
@@ -296,7 +296,7 @@ async def test_tpm_and_reasoning_corrections_compose(
 ) -> None:
     provider = _provider()
     request = make_messages_request(_MODEL, max_tokens=_ORIGINAL_MAX)
-    body = provider._build_request_body(
+    body = provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
     )
@@ -308,7 +308,12 @@ async def test_tpm_and_reasoning_corrections_compose(
     execution = provider._admission.start_execution()
 
     with patch.object(provider._client.chat.completions, "create", create):
-        _stream, accepted_body, attempt, _sent_body = await provider._create_stream(
+        (
+            _stream,
+            accepted_body,
+            attempt,
+            _sent_body,
+        ) = await provider._chat._create_stream(
             body,
             execution,
             ProviderOperationKind.GENERATION,
@@ -331,7 +336,12 @@ async def test_distinct_bodies_get_independent_tpm_corrections() -> None:
     create = AsyncMock(side_effect=[_status_error(), object(), second_error, object()])
 
     with patch.object(provider._client.chat.completions, "create", create):
-        _stream, first_body, first_attempt, _sent_body = await provider._create_stream(
+        (
+            _stream,
+            first_body,
+            first_attempt,
+            _sent_body,
+        ) = await provider._chat._create_stream(
             _body(),
             execution,
             ProviderOperationKind.CONTINUATION,
@@ -343,7 +353,7 @@ async def test_distinct_bodies_get_independent_tpm_corrections() -> None:
             second_body,
             second_attempt,
             _sent_body,
-        ) = await provider._create_stream(
+        ) = await provider._chat._create_stream(
             _body(20_000),
             execution,
             ProviderOperationKind.TOOL_REPAIR,
