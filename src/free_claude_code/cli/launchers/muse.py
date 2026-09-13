@@ -3,18 +3,12 @@
 import re
 from collections.abc import Sequence
 
-from free_claude_code.cli.environment import client_environment
+from free_claude_code.config.server_urls import proxy_v1_url
+from free_claude_code.harnesses.environment import client_environment
+from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
+from free_claude_code.harnesses.resources import LaunchResources
 
-from .common import proxy_v1_url
-from .resources import LaunchResources
-from .runner import (
-    HarnessSpec,
-    LaunchContext,
-    NativeCheck,
-    PreparedLaunch,
-    launch_harness,
-    version_at_least,
-)
+from .runner import HarnessSpec, LaunchContext, launch_harness, version_at_least
 
 _INSTALL_HINT = (
     "Install Muse Code on native Windows with "

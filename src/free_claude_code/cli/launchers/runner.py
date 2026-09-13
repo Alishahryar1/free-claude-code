@@ -13,24 +13,15 @@ from typing import Literal
 from free_claude_code.config.loader import get_settings
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.config.settings import Settings
-
-from .common import preflight_proxy, resolve_client_binary, run_client_process
-from .model_catalog import (
+from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
+from free_claude_code.harnesses.model_catalog import (
     ClientModel,
     client_models_from_response,
-    fetch_proxy_models_response,
 )
-from .resources import LaunchResources
+from free_claude_code.harnesses.resources import LaunchResources
 
-
-@dataclass(frozen=True, slots=True)
-class NativeCheck:
-    """A fixed native probe; its adapter owns output interpretation."""
-
-    args: tuple[str, ...]
-    accepts: Callable[[str], bool]
-    failure_message: str
-    timeout_seconds: float = 5.0
+from .catalog_http import fetch_proxy_models_response
+from .common import preflight_proxy, resolve_client_binary, run_client_process
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,13 +33,6 @@ class LaunchContext:
     base_env: Mapping[str, str] = field(repr=False)
     models: tuple[ClientModel, ...]
     launch_id: str = field(default_factory=lambda: secrets.token_hex(16))
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedLaunch:
-    command: list[str] = field(repr=False)
-    env: Mapping[str, str] = field(repr=False)
-    activation_check: NativeCheck | None = None
 
 
 @dataclass(frozen=True, slots=True)

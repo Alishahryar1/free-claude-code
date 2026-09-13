@@ -3,8 +3,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from free_claude_code.cli import vscode
 from free_claude_code.config.settings import Settings
+from free_claude_code.harnesses import claude_integration
 from tests.api.support import create_test_app, runtime_for_app
 
 ROOT = "/admin/api/integrations/claude-vscode"
@@ -13,8 +13,10 @@ ROOT = "/admin/api/integrations/claude-vscode"
 @pytest.fixture
 def integration(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"
-    monkeypatch.setattr(vscode, "settings_path", lambda: path)
-    monkeypatch.setattr(vscode, "claude_state_path", lambda: tmp_path / ".claude.json")
+    monkeypatch.setattr(claude_integration, "settings_path", lambda: path)
+    monkeypatch.setattr(
+        claude_integration, "claude_state_path", lambda: tmp_path / ".claude.json"
+    )
     app = create_test_app(
         Settings(host="0.0.0.0", port=4321, proxy_auth_token="integration-secret")
     )
@@ -121,7 +123,7 @@ def test_io_failure_returns_safe_error(integration, monkeypatch):
     def fail(*args):
         raise PermissionError("integration-secret")
 
-    monkeypatch.setattr(vscode, "configure", fail)
+    monkeypatch.setattr(claude_integration, "configure", fail)
     response = client.post(f"{ROOT}/connect")
     assert response.status_code == 503
     assert "integration-secret" not in response.text

@@ -1,17 +1,198 @@
 import asyncio
+import json
 import os
 import sys
+import tomllib
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from free_claude_code.application.code_sessions import CodeService
-from free_claude_code.application.code_sessions.models import CodeUnavailableError
+from free_claude_code.application.code_sessions.models import (
+    CodeConflictError,
+    CodeUnavailableError,
+)
+from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.ports import RequestRuntimePort
+from free_claude_code.config.paths import launcher_temp_dir_path
+from free_claude_code.config.settings import Settings
+from free_claude_code.core.gateway_model_ids import no_thinking_gateway_model_id
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
-from free_claude_code.runtime.codex_app_server import CodexAppServer
+from free_claude_code.runtime.codex_app_server import (
+    CodexAppServer,
+    CodexHarnessFactory,
+)
 from tests.code_sessions_support import FakeHarness
+
+
+@dataclass
+class FactoryPeer:
+    mode: str = "factory-ready"
+    command: tuple[str, ...] = ()
+    env: dict[str, str] = field(default_factory=dict, repr=False)
+    catalog: Path | None = None
+    process: asyncio.subprocess.Process | None = None
+
+
+@pytest.fixture
+def factory_peer(tmp_path, monkeypatch):
+    peer = FactoryPeer()
+    spawn = asyncio.create_subprocess_exec
+
+    async def start(*command, **kwargs):
+        if command[0] != "test-codex":
+            return await spawn(*command, **kwargs)
+        peer.command, peer.env = command, dict(kwargs["env"])
+        config = tomllib.loads(
+            "\n".join(command[i + 1] for i, arg in enumerate(command) if arg == "-c")
+        )
+        path = config.get("model_catalog_json")
+        peer.catalog = Path(path) if path else None
+        peer.process = await spawn(
+            sys.executable,
+            str(Path(__file__).with_name("codex_fake_process.py")),
+            peer.mode,
+            path or "",
+            str(tmp_path / "catalog-at-exit.json"),
+            **kwargs,
+        )
+        return peer.process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", start)
+    return peer
+
+
+@pytest.fixture
+def factory_runtime():
+    runtime = MagicMock(spec=RequestRuntimePort)
+    runtime.current_settings.return_value = Settings(
+        model="nvidia_nim/default", port=8182, proxy_auth_token="factory-token"
+    )
+    runtime.cached_model_info.return_value = None
+    runtime.cached_prefixed_model_infos.return_value = (
+        ProviderModelInfo(
+            "open_router/selected", supports_thinking=False, context_window_tokens=32000
+        ),
+    )
+    runtime.acquire.side_effect = AssertionError("Setup must not acquire a provider")
+    return runtime
+
+
+@pytest.mark.asyncio
+async def test_factory_open_preserves_setup_and_catalog_until_process_exit(
+    tmp_path, factory_peer, factory_runtime
+):
+    env = dict(os.environ) | {
+        "CODEX_HOME": str(tmp_path / "codex-home"),
+        "CODEX_THREAD_ID": "parent-thread",
+        "OPENAI_API_KEY": "parent-token",
+        "OPENAI_CUSTOM": "parent-route",
+        "KEEP_ME": "yes",
+    }
+    before = dict(env)
+    factory = CodexHarnessFactory(factory_runtime, binary="test-codex", env=env)
+    selection = factory.prepare("open_router/selected", None, "config")
+    native = await selection.open(str(tmp_path), AsyncMock())
+    try:
+        config = tomllib.loads(
+            "\n".join(
+                factory_peer.command[i + 1]
+                for i, arg in enumerate(factory_peer.command)
+                if arg == "-c"
+            )
+        )
+        assert config["model"] == no_thinking_gateway_model_id(selection.model)
+        assert config["model_providers"]["fcc"] == {
+            "name": "Free Claude Code",
+            "base_url": "http://127.0.0.1:8182/v1",
+            "auth": {"command": "fcc-codex", "args": ["--print-proxy-auth-token"]},
+            "wire_api": "responses",
+        }
+        assert factory_peer.command[-5:] == (
+            "-c",
+            "features.default_mode_request_user_input=true",
+            "-c",
+            "tools.experimental_request_user_input.enabled=true",
+            "app-server",
+        )
+        assert factory_peer.env["CODEX_HOME"] == env["CODEX_HOME"]
+        assert factory_peer.env["KEEP_ME"] == "yes"
+        assert "CODEX_THREAD_ID" not in factory_peer.env
+        assert not any(key.startswith("OPENAI_") for key in factory_peer.env)
+        assert "127.0.0.1" in factory_peer.env["NO_PROXY"].split(",")
+        assert env == before
+        assert factory_peer.catalog is not None
+        catalog = json.loads(factory_peer.catalog.read_text())
+        assert any(model["slug"] == config["model"] for model in catalog["models"])
+        assert "factory-token" not in factory_peer.catalog.read_text()
+        assert native.process.returncode is None
+    finally:
+        await native.close()
+    assert native.process.returncode == 0
+    assert json.loads((tmp_path / "catalog-at-exit.json").read_text()) == catalog
+    assert not factory_peer.catalog.parent.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["reject", "cancel"])
+async def test_factory_initialization_failure_reaps_before_catalog_cleanup(
+    tmp_path, monkeypatch, factory_peer, factory_runtime, failure
+):
+    factory_peer.mode = "factory-fail" if failure == "reject" else "factory-wait"
+    initialized = asyncio.Event()
+    write = CodexAppServer._write
+
+    async def observe_write(native, message):
+        await write(native, message)
+        if message.get("method") == "initialize":
+            initialized.set()
+
+    monkeypatch.setattr(CodexAppServer, "_write", observe_write)
+    factory = CodexHarnessFactory(factory_runtime, binary="test-codex")
+    selection = factory.prepare("open_router/selected", None, "config")
+    opening = asyncio.create_task(selection.open(str(tmp_path), AsyncMock()))
+    try:
+        await asyncio.wait_for(initialized.wait(), 3)
+        if failure == "cancel":
+            opening.cancel()
+        error = asyncio.CancelledError if failure == "cancel" else CodeConflictError
+        with pytest.raises(error):
+            await asyncio.wait_for(opening, 8)
+    finally:
+        if not opening.done():
+            opening.cancel()
+        await asyncio.gather(opening, return_exceptions=True)
+    assert factory_peer.process.returncode == 0
+    assert json.loads((tmp_path / "catalog-at-exit.json").read_text())["models"]
+    assert not factory_peer.catalog.parent.exists()
+
+
+@pytest.mark.asyncio
+async def test_history_open_needs_no_fcc_setup_or_inventory(tmp_path, factory_peer):
+    runtime = MagicMock(spec=RequestRuntimePort)
+    for name in (
+        "current_settings",
+        "cached_model_info",
+        "cached_prefixed_model_infos",
+    ):
+        getattr(runtime, name).side_effect = AssertionError(
+            "History needs no inventory"
+        )
+    env = dict(os.environ) | {"CODEX_THREAD_ID": "parent", "OPENAI_API_KEY": "keep"}
+    factory = CodexHarnessFactory(runtime, binary="test-codex", env=env)
+    native = await factory.open_history(str(tmp_path), AsyncMock())
+    try:
+        assert factory_peer.command == ("test-codex", "app-server")
+        assert factory_peer.env == env
+        assert factory_peer.catalog is None
+        assert not launcher_temp_dir_path().exists()
+    finally:
+        await native.close()
+    assert native.process.returncode == 0
+    assert json.loads((tmp_path / "catalog-at-exit.json").read_text()) is None
 
 
 @pytest.mark.asyncio

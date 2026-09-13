@@ -11,8 +11,14 @@ from free_claude_code.application.ports import (
     RequestRuntimePort,
 )
 from free_claude_code.config.settings import Settings
+from free_claude_code.harnesses.codex_model_catalog import build_codex_model_catalog
+from free_claude_code.harnesses.model_catalog import client_models_from_response
 from free_claude_code.runtime.codex_app_server import CodexHarnessFactory
-from free_claude_code.runtime.codex_catalog import CodexModelCatalogPublisher
+from free_claude_code.runtime.codex_catalog import (
+    CodexModelCatalogPublisher,
+    write_codex_model_catalog,
+)
+from tests.harnesses.test_codex_model_catalog import _models_payload
 
 
 class FakeRequestRuntime(RequestRuntimePort):
@@ -118,7 +124,6 @@ def test_code_picker_and_native_selection_use_the_same_advertised_efforts():
     assert model.reasoning_efforts == ("off", "low", "medium", "high", "xhigh", "max")
     selected = factory.prepare(model.id, None, "config")
     assert selected.model == model.id
-    assert selected.context.settings.model == model.id
     assert selected.reasoning_effort == model.default_reasoning_effort == "medium"
     for effort in model.reasoning_efforts:
         assert factory.prepare(model.id, effort, "config").reasoning_effort == effort
@@ -144,3 +149,47 @@ def test_non_reasoning_model_off_selection_is_available():
     assert model.reasoning_efforts == ("off",)
     assert model.default_reasoning_effort == "off"
     assert factory.prepare(model.id, "off", "config").reasoning_effort == "off"
+
+
+def test_catalog_writer_skips_identical_content_and_replaces_changes(
+    tmp_path: Path,
+) -> None:
+    catalog_path = tmp_path / "codex-model-catalog.json"
+    first = build_codex_model_catalog(
+        client_models_from_response(_models_payload("nvidia_nim/first"))
+    )
+    second = build_codex_model_catalog(
+        client_models_from_response(_models_payload("nvidia_nim/second"))
+    )
+
+    assert write_codex_model_catalog(catalog_path, first) is True
+    assert write_codex_model_catalog(catalog_path, first) is False
+    assert list(tmp_path.glob(".codex-model-catalog.json.*.tmp")) == []
+
+    assert write_codex_model_catalog(catalog_path, second) is True
+    assert json.loads(catalog_path.read_text(encoding="utf-8")) == second
+    assert list(tmp_path.glob(".codex-model-catalog.json.*.tmp")) == []
+
+
+def test_catalog_writer_cleans_temporary_file_after_replace_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog_path = tmp_path / "codex-model-catalog.json"
+    catalog_path.write_text("previous\n", encoding="utf-8")
+
+    def fail_replace(_source: Path, _destination: Path) -> Path:
+        raise PermissionError("destination is locked")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(PermissionError, match="locked"):
+        write_codex_model_catalog(
+            catalog_path,
+            build_codex_model_catalog(
+                client_models_from_response(_models_payload("nvidia_nim/replacement"))
+            ),
+        )
+
+    assert catalog_path.read_text(encoding="utf-8") == "previous\n"
+    assert list(tmp_path.glob(".codex-model-catalog.json.*.tmp")) == []

@@ -2,11 +2,10 @@
 
 from dataclasses import dataclass
 
+from free_claude_code.config.server_urls import proxy_v1_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
-
-from .common import proxy_v1_url
-from .model_catalog import ClientModel
+from free_claude_code.harnesses.model_catalog import ClientModel
 
 OPENCODE_API_KEY_ENV = "FCC_OPENCODE_API_KEY"
 OPENCODE_PROVIDER_ID = "free-claude-code"

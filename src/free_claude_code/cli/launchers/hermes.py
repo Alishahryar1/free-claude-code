@@ -6,21 +6,15 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
-from free_claude_code.cli.environment import (
+from free_claude_code.harnesses.environment import (
     client_environment,
     require_unset_environment,
 )
+from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
+from free_claude_code.harnesses.resources import LaunchResources
 
 from .hermes_config import HERMES_KEY_ENV_PREFIX, build_hermes_managed_config
-from .resources import LaunchResources
-from .runner import (
-    HarnessSpec,
-    LaunchContext,
-    NativeCheck,
-    PreparedLaunch,
-    launch_harness,
-    version_at_least,
-)
+from .runner import HarnessSpec, LaunchContext, launch_harness, version_at_least
 
 _INSTALL_HINT = (
     "Install Hermes Agent from: https://hermes-agent.nousresearch.com/docs/installation"

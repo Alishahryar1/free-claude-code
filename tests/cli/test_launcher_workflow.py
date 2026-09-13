@@ -9,8 +9,8 @@ from urllib.error import URLError
 import pytest
 
 from free_claude_code.cli.launchers.aider_config import build_aider_config
-from free_claude_code.cli.launchers.model_catalog import ClientModel
 from free_claude_code.config.paths import codex_model_catalog_path
+from free_claude_code.harnesses.model_catalog import ClientModel
 from tests.cli.conftest import LaunchCapture
 
 HARNESSES = (

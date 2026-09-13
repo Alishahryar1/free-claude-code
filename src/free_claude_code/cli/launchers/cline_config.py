@@ -3,11 +3,10 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from free_claude_code.config.server_urls import proxy_v1_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
-
-from .common import proxy_v1_url
-from .model_catalog import ClientModel
+from free_claude_code.harnesses.model_catalog import ClientModel
 
 # Cline's released session gateway only instantiates built-in providers. FCC
 # replaces this process-local Responses provider's endpoint and catalog instead

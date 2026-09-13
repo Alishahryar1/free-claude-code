@@ -10,7 +10,7 @@ import subprocess
 import uuid
 from collections.abc import Mapping
 from contextlib import ExitStack, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from free_claude_code.application.code_sessions.models import (
     CodeCatalog,
@@ -25,15 +25,15 @@ from free_claude_code.application.code_sessions.models import (
 )
 from free_claude_code.application.code_sessions.ports import EventSink, HarnessSelection
 from free_claude_code.application.ports import RequestRuntimePort
-from free_claude_code.cli.launchers.codex import SPEC, prepare_codex_launch
-from free_claude_code.cli.launchers.codex_model_catalog import build_codex_model_catalog
-from free_claude_code.cli.launchers.resources import LaunchResources
-from free_claude_code.cli.launchers.runner import LaunchContext
 from free_claude_code.cli.process_registry import register_pid, unregister_pid
 from free_claude_code.config.model_refs import split_provider_model_ref
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.version import package_version
+from free_claude_code.harnesses.codex import CODEX_INSTALL_HINT, prepare_codex_launch
+from free_claude_code.harnesses.codex_model_catalog import build_codex_model_catalog
+from free_claude_code.harnesses.model_catalog import ClientModel
+from free_claude_code.harnesses.resources import LaunchResources
 
 from .codex_catalog import current_codex_models
 from .codex_protocol import (
@@ -575,7 +575,10 @@ class CodexAppServer:
 
 @dataclass(frozen=True, slots=True)
 class _CodexSelection:
-    context: LaunchContext
+    binary_path: str
+    proxy_root_url: str
+    base_env: Mapping[str, str] = field(repr=False)
+    models: tuple[ClientModel, ...]
     model: str
     configuration_key: str
     fingerprints: dict[str, str]
@@ -586,15 +589,19 @@ class _CodexSelection:
         resources = ExitStack()
         try:
             prepared = prepare_codex_launch(
-                self.context,
-                [
+                binary_path=self.binary_path,
+                proxy_root_url=self.proxy_root_url,
+                model=self.model,
+                models=self.models,
+                base_env=self.base_env,
+                args=[
                     "-c",
                     "features.default_mode_request_user_input=true",
                     "-c",
                     "tools.experimental_request_user_input.enabled=true",
                     "app-server",
                 ],
-                LaunchResources(resources),
+                files=LaunchResources(resources),
             )
             connection = CodexAppServer(
                 prepared.command,
@@ -602,13 +609,12 @@ class _CodexSelection:
                 cwd,
                 sink,
                 model_slugs={
-                    model.provider_model_ref: model.wire_slug
-                    for model in self.context.models
+                    model.provider_model_ref: model.wire_slug for model in self.models
                 },
                 fingerprints=self.fingerprints,
                 reasoning={
                     model.provider_model_ref: model.supports_reasoning is not False
-                    for model in self.context.models
+                    for model in self.models
                 },
                 resources=resources,
             )
@@ -632,7 +638,7 @@ class CodexHarnessFactory:
     def availability(self) -> tuple[bool, str | None]:
         if self._binary or shutil.which("codex"):
             return True, None
-        return False, "Codex is not installed. " + SPEC.install_hint
+        return False, "Codex is not installed. " + CODEX_INSTALL_HINT
 
     def catalog(self) -> CodeCatalog:
         settings = self._runtime.current_settings()
@@ -655,7 +661,7 @@ class CodexHarnessFactory:
     ) -> _CodexSelection:
         binary = self._binary or shutil.which("codex")
         if binary is None:
-            raise CodeUnavailableError("Codex is not installed. " + SPEC.install_hint)
+            raise CodeUnavailableError("Codex is not installed. " + CODEX_INSTALL_HINT)
         settings = self._runtime.current_settings()
         models = current_codex_models(self._runtime, settings)
         selected = next(
@@ -693,16 +699,16 @@ class CodexHarnessFactory:
             model.provider_model_ref: _fingerprint(entries[model.wire_slug])
             for model in models
         }
-        context = LaunchContext(
-            binary,
-            settings.model_copy(update={"model": model}),
-            local_proxy_root_url(settings),
-            settings.proxy_auth_token,
-            dict(self._env if self._env is not None else os.environ),
-            models,
-        )
         return _CodexSelection(
-            context, model, fingerprints[model], fingerprints, effort, mode
+            binary_path=binary,
+            proxy_root_url=local_proxy_root_url(settings),
+            base_env=dict(self._env if self._env is not None else os.environ),
+            models=models,
+            model=model,
+            configuration_key=fingerprints[model],
+            fingerprints=fingerprints,
+            reasoning_effort=effort,
+            mode=mode,
         )
 
     async def open_history(self, cwd: str, sink: EventSink) -> CodexAppServer:
@@ -710,7 +716,7 @@ class CodexHarnessFactory:
         if binary is None:
             raise CodeUnavailableError(
                 "Codex is needed to remove its native conversation. "
-                + SPEC.install_hint
+                + CODEX_INSTALL_HINT
             )
         connection = CodexAppServer(
             [binary, "app-server"],

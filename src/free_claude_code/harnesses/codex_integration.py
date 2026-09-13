@@ -9,11 +9,13 @@ from tomlkit.exceptions import ParseError
 from tomlkit.items import InlineTable, Table
 from tomlkit.toml_document import TOMLDocument
 
-from free_claude_code.cli.config_file import atomic_write_text
-from free_claude_code.cli.launchers.codex import codex_config_values
-from free_claude_code.cli.launchers.common import proxy_v1_url
-from free_claude_code.config.server_urls import same_proxy_url
+from free_claude_code.config.server_urls import proxy_v1_url, same_proxy_url
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.harnesses.codex import (
+    PRINT_PROXY_AUTH_TOKEN_FLAG,
+    codex_config_values,
+)
+from free_claude_code.harnesses.config_file import atomic_write_text
 
 
 def config_path() -> Path:
@@ -74,7 +76,7 @@ def _connected(document: TOMLDocument, catalog_path: Path, proxy_root_url: str) 
         and same_proxy_url(provider.get("base_url"), proxy_v1_url(proxy_root_url))
         and provider.get("wire_api") == "responses"
         and auth.get("command") == "fcc-codex"
-        and auth.get("args") == ["--print-proxy-auth-token"]
+        and auth.get("args") == [PRINT_PROXY_AUTH_TOKEN_FLAG]
     )
 
 

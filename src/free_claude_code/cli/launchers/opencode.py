@@ -4,21 +4,15 @@ import json
 import re
 from collections.abc import Sequence
 
-from free_claude_code.cli.environment import (
+from free_claude_code.harnesses.environment import (
     client_environment,
     require_unset_environment,
 )
+from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
+from free_claude_code.harnesses.resources import LaunchResources
 
 from .opencode_config import OPENCODE_API_KEY_ENV, build_opencode_config
-from .resources import LaunchResources
-from .runner import (
-    HarnessSpec,
-    LaunchContext,
-    NativeCheck,
-    PreparedLaunch,
-    launch_harness,
-    version_at_least,
-)
+from .runner import HarnessSpec, LaunchContext, launch_harness, version_at_least
 
 _VERSION_PATTERN = re.compile(
     r"(?m)^\s*(?:(?:opencode(?:\s+version)?\s+)|v)?"

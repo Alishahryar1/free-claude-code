@@ -7,8 +7,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from free_claude_code.cli.launchers import common, resources
+from free_claude_code.cli.launchers import common
 from free_claude_code.config.paths import launcher_temp_dir_path
+from free_claude_code.harnesses import resources
 from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
 

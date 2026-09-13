@@ -1,11 +1,8 @@
 """Build Codex model catalogs from the FCC model-list route."""
 
-import json
-import uuid
-from collections.abc import Mapping, Sequence
-from pathlib import Path
+from collections.abc import Sequence
 
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 
 from .model_catalog import ClientModel
@@ -41,28 +38,6 @@ def build_codex_model_catalog(models: Sequence[ClientModel]) -> JsonObject:
             for priority, model in enumerate(models)
         ]
     }
-
-
-def write_codex_model_catalog(
-    catalog_path: Path, catalog: Mapping[str, JsonValue]
-) -> bool:
-    """Atomically write changed Codex model catalog JSON."""
-
-    content = (json.dumps(catalog, ensure_ascii=True, indent=2) + "\n").encode()
-    try:
-        if catalog_path.read_bytes() == content:
-            return False
-    except FileNotFoundError:
-        pass
-
-    catalog_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = catalog_path.with_name(f".{catalog_path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        temp_path.write_bytes(content)
-        temp_path.replace(catalog_path)
-    finally:
-        temp_path.unlink(missing_ok=True)
-    return True
 
 
 def _codex_catalog_entry(candidate: ClientModel, *, priority: int) -> JsonObject:

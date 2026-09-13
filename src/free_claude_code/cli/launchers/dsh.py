@@ -3,17 +3,12 @@
 import re
 from collections.abc import Sequence
 
-from free_claude_code.cli.environment import client_environment
+from free_claude_code.harnesses.environment import client_environment
+from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
+from free_claude_code.harnesses.resources import LaunchResources
 
 from .dsh_config import DSH_API_KEY_ENV, DSH_ENV_PREFIX, build_dsh_launch_config
-from .resources import LaunchResources
-from .runner import (
-    HarnessSpec,
-    LaunchContext,
-    NativeCheck,
-    PreparedLaunch,
-    launch_harness,
-)
+from .runner import HarnessSpec, LaunchContext, launch_harness
 
 _VERSION_PATTERN = re.compile(
     r"(?im)^\s*(?:dsh\s+)?v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?)\s*$"

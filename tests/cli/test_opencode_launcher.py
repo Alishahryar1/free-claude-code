@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from free_claude_code.cli.launchers.model_catalog import ClientModel
 from free_claude_code.cli.launchers.opencode_config import build_opencode_config
 from free_claude_code.core.model_capabilities import ModelInputModality
+from free_claude_code.harnesses.model_catalog import ClientModel
 
 
 def test_opencode_config_uses_responses_sdk_and_only_known_metadata() -> None:

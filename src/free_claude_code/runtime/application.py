@@ -27,7 +27,6 @@ from free_claude_code.application.errors import (
 )
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.application.ports import StopResult
-from free_claude_code.cli import codex_integration, vscode
 from free_claude_code.config.admin.persistence import (
     PreparedAdminUpdate,
 )
@@ -42,6 +41,7 @@ from free_claude_code.config.paths import (
 from free_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.harnesses import claude_integration, codex_integration
 from free_claude_code.messaging.platforms import factory as messaging_platform_factory
 from free_claude_code.messaging.platforms.factory import MessagingPlatformOptions
 from free_claude_code.messaging.platforms.ports import (
@@ -374,9 +374,9 @@ class ApplicationRuntime:
                 return await _await_owned_task(
                     asyncio.create_task(
                         to_thread.run_sync(
-                            vscode.configure,
-                            vscode.settings_path(),
-                            vscode.claude_state_path(),
+                            claude_integration.configure,
+                            claude_integration.settings_path(),
+                            claude_integration.claude_state_path(),
                             local_proxy_root_url(settings),
                             settings.proxy_auth_token,
                             connected,

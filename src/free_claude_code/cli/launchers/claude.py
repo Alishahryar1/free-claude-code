@@ -2,10 +2,11 @@
 
 from collections.abc import Sequence
 
-from free_claude_code.cli.claude_env import CLAUDE_BINARY_NAME, build_claude_proxy_env
+from free_claude_code.harnesses.claude import CLAUDE_BINARY_NAME, build_claude_proxy_env
+from free_claude_code.harnesses.launch import PreparedLaunch
+from free_claude_code.harnesses.resources import LaunchResources
 
-from .resources import LaunchResources
-from .runner import HarnessSpec, LaunchContext, PreparedLaunch, launch_harness
+from .runner import HarnessSpec, LaunchContext, launch_harness
 
 
 def _configure(

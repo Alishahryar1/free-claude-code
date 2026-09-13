@@ -415,7 +415,7 @@ def test_serve_handles_keyboard_interrupt_without_traceback() -> None:
 
 
 def test_claude_child_env_targets_current_proxy_config() -> None:
-    from free_claude_code.cli.claude_env import build_claude_proxy_env
+    from free_claude_code.harnesses.claude import build_claude_proxy_env
 
     env = build_claude_proxy_env(
         proxy_root_url="http://127.0.0.1:9090",

@@ -5,7 +5,7 @@ from itertools import pairwise
 import pytest
 from playwright.sync_api import expect
 
-from free_claude_code.cli import vscode
+from free_claude_code.harnesses import claude_integration
 
 
 @pytest.mark.parametrize(
@@ -294,7 +294,7 @@ def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):
 def test_manual_setup_and_revisit_read_the_file(page, admin_base_url, tmp_path):
     path = tmp_path / "vscode" / "settings.json"
     status = page.request.get(f"{admin_base_url}/admin/api/status").json()
-    vscode.configure(
+    claude_integration.configure(
         path,
         tmp_path / ".claude.json",
         f"http://localhost:{status['port']}/",

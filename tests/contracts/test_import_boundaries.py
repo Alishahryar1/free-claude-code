@@ -17,13 +17,15 @@ ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
     "messaging": {"core"},
     "providers": {"application", "config", "core"},
     "api": {"application", "config", "core"},
-    "cli": {"config", "core"},
+    "harnesses": {"config", "core"},
+    "cli": {"config", "core", "harnesses"},
     "runtime": {
         "api",
         "application",
         "cli",
         "config",
         "core",
+        "harnesses",
         "messaging",
         "providers",
     },
@@ -139,6 +141,39 @@ def test_api_configuration_access_goes_through_runtime() -> None:
     )
 
 
+def test_shared_harness_setup_has_no_terminal_owner() -> None:
+    former_paths = {
+        "cli/environment.py",
+        "cli/claude_env.py",
+        "cli/vscode.py",
+        "cli/codex_integration.py",
+        "cli/config_file.py",
+        "cli/launchers/resources.py",
+        "cli/launchers/model_catalog.py",
+        "cli/launchers/codex_model_catalog.py",
+    }
+    former_modules = {
+        f"{_PACKAGE_NAME}.{path.removesuffix('.py').replace('/', '.')}"
+        for path in former_paths
+    }
+    callers = {
+        f"{_PACKAGE_NAME}.runtime.codex_app_server",
+        f"{_PACKAGE_NAME}.runtime.codex_catalog",
+    }
+    records = _scan_imports(_PACKAGE_ROOT, known_modules=former_modules)
+    offenders = [
+        record.describe()
+        for record in records
+        if record.imported in former_modules
+        or (
+            record.importer in callers
+            and record.imported.startswith(f"{_PACKAGE_NAME}.cli.launchers")
+        )
+    ]
+    remaining = sorted(path for path in former_paths if (_PACKAGE_ROOT / path).exists())
+    assert not offenders and not remaining, "\n".join(offenders + remaining)
+
+
 def test_package_dependencies_follow_declarative_policy() -> None:
     modules = _module_paths(_PACKAGE_ROOT)
     records = _scan_imports(_PACKAGE_ROOT)
@@ -247,7 +282,6 @@ def test_cli_local_http_transport_has_one_owner() -> None:
     cli_root = _PACKAGE_ROOT / "cli"
     owner = cli_root / "local_http.py"
     owned_urllib_names = {"ProxyHandler", "build_opener", "urlopen"}
-    owned_environment_keys = {"NO_PROXY", "no_proxy"}
     offenders: list[str] = []
 
     for path in cli_root.rglob("*.py"):
@@ -262,9 +296,23 @@ def test_cli_local_http_transport_has_one_owner() -> None:
                     for alias in node.names
                     if alias.name in owned_urllib_names
                 )
-            if isinstance(node, ast.Constant) and node.value in owned_environment_keys:
-                offenders.append(f"{relative_path}:{node.lineno}: {node.value}")
+    assert sorted(offenders) == []
 
+
+def test_child_proxy_environment_has_one_owner() -> None:
+    owner = _PACKAGE_ROOT / "harnesses" / "environment.py"
+    offenders: list[str] = []
+    for root in (_PACKAGE_ROOT / "cli", _PACKAGE_ROOT / "harnesses"):
+        for path in root.rglob("*.py"):
+            if path == owner:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            offenders.extend(
+                f"{path.relative_to(_REPO_ROOT).as_posix()}:{node.lineno}: {node.value}"
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Constant)
+                and node.value in {"NO_PROXY", "no_proxy"}
+            )
     assert sorted(offenders) == []
 
 
@@ -636,9 +684,11 @@ def _module_name(package_root: Path, path: Path) -> str:
     return ".".join((package_root.name, *module_parts))
 
 
-def _scan_imports(package_root: Path) -> list[ImportRecord]:
+def _scan_imports(
+    package_root: Path, *, known_modules: set[str] | None = None
+) -> list[ImportRecord]:
     module_paths = _module_paths(package_root)
-    modules = set(module_paths)
+    modules = set(module_paths) | (known_modules or set())
     records: list[ImportRecord] = []
     for importer, path in sorted(module_paths.items()):
         visitor = _ImportVisitor(

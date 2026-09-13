@@ -2,11 +2,12 @@
 
 from collections.abc import Sequence
 
-from free_claude_code.cli.environment import client_environment
+from free_claude_code.harnesses.environment import client_environment
+from free_claude_code.harnesses.launch import PreparedLaunch
+from free_claude_code.harnesses.resources import LaunchResources
 
 from .aider_config import AIDER_API_KEY_ENV_PREFIX, build_aider_config
-from .resources import LaunchResources
-from .runner import HarnessSpec, LaunchContext, PreparedLaunch, launch_harness
+from .runner import HarnessSpec, LaunchContext, launch_harness
 
 
 def _configure(

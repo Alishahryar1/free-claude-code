@@ -1,16 +1,10 @@
-"""Shared FCC model-catalog projection for installed client launchers."""
+"""Shared FCC model-catalog projection for native clients."""
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
-from urllib.request import Request
 
-from free_claude_code.cli.local_http import open_local_request
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.model_capabilities import ModelInputModality
-
-from .common import PROXY_PREFLIGHT_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,29 +55,6 @@ def catalog_wire_slug_for_ref(
         if model.provider_model_ref == provider_model_ref:
             return model.wire_slug
     return provider_model_ref
-
-
-def fetch_proxy_models_response(
-    proxy_root_url: str,
-    auth_token: str,
-    view: Literal["messages", "responses"] = "responses",
-) -> JsonObject:
-    """Fetch the authenticated FCC-local `/v1/models` response directly."""
-
-    url = f"{proxy_root_url.rstrip('/')}/v1/models?view={view}"
-    request = Request(
-        url,
-        headers={"Authorization": f"Bearer {auth_token}"},
-        method="GET",
-    )
-    with open_local_request(
-        request, timeout=PROXY_PREFLIGHT_TIMEOUT_SECONDS
-    ) as response:
-        payload: JsonValue = json.loads(response.read().decode("utf-8"))
-
-    if not isinstance(payload, dict):
-        raise ValueError("model list response was not a JSON object")
-    return payload
 
 
 def _catalog_candidates(

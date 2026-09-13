@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from free_claude_code.cli import codex_integration
+from free_claude_code.harnesses import codex_integration
 
 URL = "http://127.0.0.1:8082"
 

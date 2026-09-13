@@ -5,8 +5,7 @@ from dataclasses import dataclass, field
 
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
-
-from .model_catalog import ClientModel
+from free_claude_code.harnesses.model_catalog import ClientModel
 
 AIDER_API_KEY_ENV_PREFIX = "FCC_AIDER_PROXY_AUTH_"
 _AIDER_API_KEY_ENV_PATTERN = re.compile(rf"{AIDER_API_KEY_ENV_PREFIX}[A-Z0-9]+")

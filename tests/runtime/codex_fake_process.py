@@ -28,7 +28,12 @@ for line in sys.stdin.buffer:
     method = request.get("method")
     request_id = request.get("id")
     if method == "initialize":
-        emit({"id": request_id, "result": {"userAgent": "codex/0.153.0"}})
+        if mode == "factory-wait":
+            continue
+        if mode == "factory-fail":
+            emit({"id": request_id, "error": {"message": "Initialization rejected"}})
+        else:
+            emit({"id": request_id, "result": {"userAgent": "codex/0.153.0"}})
     elif method == "initialized":
         pass
     elif method in {"thread/start", "thread/resume"}:
@@ -194,6 +199,11 @@ for line in sys.stdin.buffer:
         sys.stdout.buffer.flush()
     else:
         emit({"id": request_id, "result": {}})
+
+if mode.startswith("factory-"):
+    # The catalog must still be readable when the native process exits.
+    catalog = json.loads(Path(sys.argv[2]).read_text()) if sys.argv[2] else None
+    Path(sys.argv[3]).write_text(json.dumps(catalog))
 
 if mode == "child-warning-on-close":
     emit(

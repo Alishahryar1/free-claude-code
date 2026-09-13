@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from free_claude_code.cli import vscode
+from free_claude_code.harnesses import claude_integration
 
 URL = "http://127.0.0.1:8000"
 TOKEN = "test-integration-token"
@@ -12,7 +12,9 @@ LOGIN = "claudeCode.disableLoginPrompt"
 
 
 def operate(path, connected=None):
-    result = vscode.configure(path, path.parent / ".claude.json", URL, TOKEN, connected)
+    result = claude_integration.configure(
+        path, path.parent / ".claude.json", URL, TOKEN, connected
+    )
     return {"connected": result["connected"]}
 
 
@@ -330,17 +332,17 @@ def test_failed_replace_preserves_original_and_removes_tempfile(
     ],
 )
 def test_standard_global_path(tmp_path, monkeypatch, platform, suffix):
-    monkeypatch.setattr(vscode.sys, "platform", platform)
+    monkeypatch.setattr(claude_integration.sys, "platform", platform)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    assert vscode.settings_path() == tmp_path / suffix
+    assert claude_integration.settings_path() == tmp_path / suffix
 
 
 @pytest.mark.parametrize(
     "platform,variable", [("win32", "APPDATA"), ("linux", "XDG_CONFIG_HOME")]
 )
 def test_config_root_override(tmp_path, monkeypatch, platform, variable):
-    monkeypatch.setattr(vscode.sys, "platform", platform)
+    monkeypatch.setattr(claude_integration.sys, "platform", platform)
     monkeypatch.setenv(variable, str(tmp_path))
-    assert vscode.settings_path() == tmp_path / "Code/User/settings.json"
+    assert claude_integration.settings_path() == tmp_path / "Code/User/settings.json"

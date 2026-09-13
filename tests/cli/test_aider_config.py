@@ -5,8 +5,8 @@ import json
 import pytest
 
 from free_claude_code.cli.launchers.aider_config import build_aider_config
-from free_claude_code.cli.launchers.model_catalog import ClientModel
 from free_claude_code.core.model_capabilities import ModelInputModality
+from free_claude_code.harnesses.model_catalog import ClientModel
 
 
 def _models() -> tuple[ClientModel, ...]:

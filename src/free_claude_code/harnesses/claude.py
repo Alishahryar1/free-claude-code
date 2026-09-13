@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from free_claude_code.cli.environment import client_environment
+from free_claude_code.harnesses.environment import client_environment
 
 CLAUDE_CODE_AUTO_COMPACT_WINDOW = "190000"
 CLAUDE_BINARY_NAME = "claude"

@@ -110,6 +110,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
             "tests/api/test_openai_responses.py",
             "tests/cli/test_entrypoints.py",
             "tests/cli/test_codex_model_catalog.py",
+            "tests/harnesses/test_codex_model_catalog.py",
+            "tests/runtime/test_codex_catalog.py",
             "tests/core/openai_responses/test_native.py",
             "tests/providers/test_openai_chat_stream_output.py",
         ),
@@ -134,7 +136,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         "OpenCode discovers FCC models and sends Responses through the proxy",
         (
             "tests/cli/test_opencode_launcher.py",
-            "tests/cli/test_model_catalog.py",
+            "tests/harnesses/test_model_catalog.py",
+            "tests/cli/test_catalog_http.py",
         ),
         ("test_probe_and_models_routes",),
         ("test_opencode_cli_prompt_e2e",),
@@ -151,7 +154,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         (
             "tests/cli/test_aider_config.py",
             "tests/cli/test_aider_launcher.py",
-            "tests/cli/test_model_catalog.py",
+            "tests/harnesses/test_model_catalog.py",
+            "tests/cli/test_catalog_http.py",
         ),
         ("test_probe_and_models_routes",),
         ("test_aider_cli_prompt_e2e",),
@@ -167,7 +171,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         "Cline discovers FCC models and sends Responses through the proxy",
         (
             "tests/cli/test_cline_launcher.py",
-            "tests/cli/test_model_catalog.py",
+            "tests/harnesses/test_model_catalog.py",
+            "tests/cli/test_catalog_http.py",
         ),
         ("test_probe_and_models_routes",),
         ("test_cline_cli_prompt_e2e",),
@@ -213,7 +218,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         "Grok Build discovers FCC models and sends Responses through the proxy",
         (
             "tests/cli/test_grok_launcher.py",
-            "tests/cli/test_model_catalog.py",
+            "tests/harnesses/test_model_catalog.py",
+            "tests/cli/test_catalog_http.py",
         ),
         ("test_probe_and_models_routes",),
         ("test_grok_cli_headless_e2e",),
