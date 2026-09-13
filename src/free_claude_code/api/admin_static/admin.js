@@ -637,7 +637,7 @@ function renderField(field) {
     label.appendChild(sourceEl);
   }
 
-  const input = inputForField(field);
+  const input = window.FccFormControls.configure(inputForField(field));
   input.id = `field-${field.key}`;
   input.dataset.key = field.key;
   input.dataset.original = comparableValue(field.value);
@@ -737,7 +737,9 @@ function inputForField(field) {
   const input = document.createElement("input");
   input.type = field.type === "number" ? "number" : "text";
   if (field.type === "secret") {
-    input.type = "password";
+    input.setAttribute("autocapitalize", "none");
+    input.spellcheck = false;
+    input.setAttribute("autocorrect", "off");
     input.placeholder = field.configured
       ? "Configured - enter a new value to replace"
       : "Not configured";
@@ -779,7 +781,7 @@ class ModelListEditor {
 
     const addRow = document.createElement("div");
     addRow.className = "model-list-add";
-    this.addInput = document.createElement("input");
+    this.addInput = window.FccFormControls.configure(document.createElement("input"));
     this.addInput.id = this.inputId;
     this.addInput.type = "text";
     this.addInput.autocomplete = "off";
@@ -1468,6 +1470,14 @@ jetBrainsIntegrationDialog.addEventListener("click", (event) => {
     jetBrainsIntegrationDialog.close();
   }
 });
+
+// Keep footer clearance exact when messages wrap or a view hides the bar.
+new ResizeObserver(([entry]) => {
+  document.documentElement.style.setProperty(
+    "--action-bar-height",
+    `${entry.target.getBoundingClientRect().height}px`,
+  );
+}).observe(document.querySelector(".action-bar"), { box: "border-box" });
 
 load().then(showRestartNotice).catch((error) => {
   showMessage(error.message, "error");

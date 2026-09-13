@@ -43,6 +43,7 @@ _ADMIN_ASSET_FILENAMES = frozenset(
     {
         "admin.css",
         "admin.js",
+        "form_controls.js",
         "app-icon.svg",
         "code_sessions.css",
         "code_sessions.js",

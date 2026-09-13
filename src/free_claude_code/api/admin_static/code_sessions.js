@@ -49,7 +49,7 @@
     const node = document.createElement(tag);
     if (text !== undefined) node.textContent = text;
     if (className) node.className = className;
-    return node;
+    return window.FccFormControls.configure(node);
   }
   function button(text, action, className = "secondary-button") {
     const node = element("button", text, className);

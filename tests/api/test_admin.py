@@ -193,6 +193,7 @@ def test_admin_page_uses_installed_version(monkeypatch, tmp_path):
     assert 'href="/admin/assets/9.8.7/admin.css"' in response.text
     assert 'href="/admin/assets/9.8.7/code_sessions.css"' in response.text
     assert 'src="/admin/assets/9.8.7/model_combobox.js"' in response.text
+    assert 'src="/admin/assets/9.8.7/form_controls.js"' in response.text
     assert 'src="/admin/assets/9.8.7/code_sessions.js"' in response.text
     assert 'src="/admin/assets/9.8.7/admin.js"' in response.text
     assert 'href="/admin/assets/admin.css"' not in response.text
@@ -206,6 +207,7 @@ def test_admin_page_uses_installed_version(monkeypatch, tmp_path):
     (
         ("admin.css", "text/css"),
         ("admin.js", "text/javascript"),
+        ("form_controls.js", "text/javascript"),
         ("code_sessions.css", "text/css"),
         ("code_sessions.js", "text/javascript"),
         ("session_ui.js", "text/javascript"),

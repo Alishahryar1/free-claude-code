@@ -205,7 +205,7 @@ textarea:focus-visible,
 .main {
   min-width: 0;
   padding: 40px 48px;
-  padding-bottom: calc(40px + 96px); /* Fixed action bar clearance */
+  padding-bottom: calc(40px + var(--action-bar-height, 0px));
 }
 
 .topbar {
@@ -215,9 +215,10 @@ textarea:focus-visible,
 .topbar h2 {
   font-size: 30px;
   font-weight: 800;
+  line-height: 1;
   letter-spacing: -0.02em;
   color: var(--text-strong);
-  margin: 0;
+  margin: calc((1cap - 1em) / 2) 0 0;
 }
 
 /* Provider Strip & Panels */
@@ -481,6 +482,10 @@ textarea:focus-visible,
 .form-sections {
   display: grid;
   gap: 24px;
+}
+
+.form-sections > .settings-section:last-child {
+  margin-bottom: 0;
 }
 
 .settings-section {
@@ -852,7 +857,7 @@ textarea:focus-visible,
 
   .main {
     padding: 24px 20px;
-    padding-bottom: calc(24px + 180px); /* Stacked action bar clearance */
+    padding-bottom: calc(24px + var(--action-bar-height, 0px));
   }
 
   .action-bar {

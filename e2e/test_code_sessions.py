@@ -5,6 +5,7 @@ import uuid
 import pytest
 from playwright.sync_api import expect
 
+from e2e.form_support import assert_autofill_opt_out
 from free_claude_code.application.code_sessions.models import (
     HarnessEvent,
     PromptRequest,
@@ -1226,6 +1227,7 @@ def test_question_input_survives_streaming_and_secret_answer_is_not_stored(
     create_session(page, admin_base_url, tmp_path)
     send(page, "Ask me a question")
     connection = code_control.connection()
+    assert_autofill_opt_out(page)
     prompt = PromptRequest(
         7,
         "questions",
@@ -1267,6 +1269,7 @@ def test_question_input_survives_streaming_and_secret_answer_is_not_stored(
     secret = page.get_by_label("Your answer", exact=True)
     secret.fill("private-answer")
     expect(secret).to_have_attribute("type", "password")
+    assert_autofill_opt_out(page)
     secret.focus()
     secret.evaluate(
         "input => { window.savedPromptInput = input; input.setSelectionRange(2, 6); }"
