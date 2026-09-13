@@ -641,7 +641,11 @@ class CodexHarnessFactory:
         return CodeCatalog(
             settings.model,
             tuple(
-                _model_option(model.provider_model_ref, object_value(entry))
+                _model_option(
+                    model.provider_model_ref,
+                    object_value(entry),
+                    context_window_tokens=model.context_window_tokens,
+                )
                 for model, entry in zip(models, entries, strict=True)
             ),
         )
@@ -672,7 +676,11 @@ class CodexHarnessFactory:
             for value in array_value(catalog.get("models"))
             if (entry := object_value(value))
         }
-        option = _model_option(model, entries[selected.wire_slug])
+        option = _model_option(
+            model,
+            entries[selected.wire_slug],
+            context_window_tokens=selected.context_window_tokens,
+        )
         if (
             reasoning_effort is not None
             and reasoning_effort not in option.reasoning_efforts
@@ -714,7 +722,9 @@ class CodexHarnessFactory:
         return connection
 
 
-def _model_option(model: str, entry: JsonObject) -> CodeModel:
+def _model_option(
+    model: str, entry: JsonObject, *, context_window_tokens: int | None
+) -> CodeModel:
     provider_id, model_name = split_provider_model_ref(model)
     efforts = tuple(
         string_value(object_value(level).get("effort"))
@@ -731,6 +741,7 @@ def _model_option(model: str, entry: JsonObject) -> CodeModel:
         or ("off",),
         default_reasoning_effort=string_value(entry.get("default_reasoning_level"))
         or "off",
+        context_window_tokens=context_window_tokens,
     )
 
 

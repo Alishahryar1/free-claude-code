@@ -38,6 +38,92 @@ def test_five_header_controls_fit_without_hiding_composer(
     page.screenshot(path=str(tmp_path / f"code-modes-{width}.png"))
 
 
+@pytest.mark.parametrize("width", [1440, 390])
+def test_context_usage_is_live_persistent_and_uses_only_raw_provider_capacity(
+    page, admin_base_url, tmp_path, code_control, width
+):
+    code_control.harness.context_windows["provider/model"] = 100_000
+    code_control.harness.configurations["provider/unknown"] = "unknown"
+    page.set_viewport_size({"width": width, "height": 900})
+    create_session(page, admin_base_url, tmp_path)
+    usage = page.locator("#codeContextUsage")
+    expect(usage).to_be_hidden()
+
+    send(page, "Measure the active context")
+    connection = code_control.connection()
+    code_control.run(connection.context_usage("turn-1", 90_000))
+    expect(usage).to_have_text("90K / 100K (90%)")
+    code_control.run(connection.context_usage("turn-1", 12_438))
+    expect(usage).to_have_text("12.4K / 100K (12%)")
+    expect(usage).to_have_attribute(
+        "title", "Context used: 12,438 of 100,000 tokens (12%)"
+    )
+    expect(usage).to_have_accessible_name(
+        "Context used: 12,438 of 100,000 tokens (12%)"
+    )
+    usage_box = usage.bounding_box()
+    stop_box = page.locator("#codeStop").bounding_box()
+    assert usage_box["x"] + usage_box["width"] <= stop_box["x"]
+    assert stop_box["x"] + stop_box["width"] <= width
+
+    page.reload()
+    expect(usage).to_have_text("12.4K / 100K (12%)")
+    code_control.run(connection.context_usage("turn-1", 104_000))
+    expect(usage).to_have_text("104K / 100K (104%)")
+    code_control.run(connection.finish("turn-1"))
+
+    page.locator("#codeModel").fill("unknown")
+    page.get_by_role("option", name="unknown", exact=True).click()
+    expect(usage).to_have_text("104K")
+    expect(usage).to_have_accessible_name("Context used: 104,000 tokens")
+    send(page, "Use the model without capacity metadata")
+    code_control.run(code_control.harness.wait_inputs(2))
+    code_control.run(connection.context_usage("turn-2", 12_438))
+    expect(usage).to_have_text("12.4K")
+    expect(usage).to_have_attribute("title", "Context used: 12,438 tokens")
+    expect(usage).to_have_accessible_name("Context used: 12,438 tokens")
+    code_control.run(connection.finish("turn-2"))
+
+
+def test_delayed_settings_response_cannot_replace_newer_context_usage(
+    page, admin_base_url, tmp_path, code_control
+):
+    code_control.harness.context_windows["provider/model"] = 100_000
+    create_session(page, admin_base_url, tmp_path)
+    send(page, "Start")
+    connection = code_control.connection()
+    code_control.run(connection.context_usage("turn-1", 10_000))
+    code_control.run(connection.finish("turn-1"))
+    usage = page.locator("#codeContextUsage")
+    expect(usage).to_have_text("10K / 100K (10%)")
+
+    page.evaluate(
+        """
+        () => {
+          const originalFetch = window.fetch;
+          window.fetch = async (...args) => {
+            const response = await originalFetch(...args);
+            const options = args[1] || {};
+            if (options.method === "PATCH" && String(args[0]).includes("/sessions/")) {
+              await new Promise((resolve) => { window.releaseCodeSettings = resolve; });
+            }
+            return response;
+          };
+        }
+        """
+    )
+    title = page.get_by_role("textbox", name="Code title", exact=True)
+    title.fill("Renamed while usage changes")
+    title.press("Tab")
+    page.wait_for_function("() => typeof window.releaseCodeSettings === 'function'")
+
+    code_control.run(connection.context_usage("turn-1", 20_000))
+    expect(usage).to_have_text("20K / 100K (20%)")
+    page.evaluate("window.releaseCodeSettings()")
+    expect(title).to_be_enabled()
+    expect(usage).to_have_text("20K / 100K (20%)")
+
+
 def test_header_provider_draft_and_mode_sync(
     page, context, admin_base_url, tmp_path, code_control
 ):

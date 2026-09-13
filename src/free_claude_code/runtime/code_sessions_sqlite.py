@@ -146,6 +146,7 @@ def _write_session(
             "model",
             "reasoning_effort",
             "mode",
+            "context_used_tokens",
             "revision",
             "updated_at",
         }
@@ -154,6 +155,7 @@ def _write_session(
             "native_thread_id",
             "native_permission_defaults",
             "native_may_have_input",
+            "context_used_tokens",
             "revision",
             "updated_at",
             "status",
@@ -428,6 +430,12 @@ class SQLiteCodeStore:
                 "(json_valid(native_permission_defaults) AND json_type(native_permission_defaults) = 'object'))"
             )
             connection.execute("PRAGMA user_version = 2")
+        if connection.execute("PRAGMA user_version").fetchone()[0] == 2:
+            connection.execute(
+                "ALTER TABLE code_sessions ADD COLUMN context_used_tokens INTEGER "
+                "CHECK(context_used_tokens IS NULL OR context_used_tokens >= 0)"
+            )
+            connection.execute("PRAGMA user_version = 3")
         connection.execute(
             "UPDATE code_runs SET status = 'interrupted', finished_at = ?, error = ? "
             "WHERE status IN ('preparing','running','stopping')",

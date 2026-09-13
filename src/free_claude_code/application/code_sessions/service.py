@@ -875,6 +875,20 @@ class CodeService:
                     return
                 if owner.session.status != "ready":
                     return
+                if event.kind == "context_usage":
+                    if (
+                        event.context_used_tokens is None
+                        or event.context_used_tokens
+                        == owner.session.context_used_tokens
+                    ):
+                        return
+                    session = owner.session.model_copy(
+                        update={"context_used_tokens": event.context_used_tokens}
+                    )
+                    await self._persist(owner, session)
+                    owner.session = session
+                    self._publish(owner, "session.updated")
+                    return
                 run = owner.run
                 matches = (
                     run is not None

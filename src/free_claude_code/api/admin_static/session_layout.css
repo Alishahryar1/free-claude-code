@@ -451,6 +451,13 @@
   margin-top: 4px;
 }
 
+.code-context-usage {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .code-activity {
   color: var(--muted);
   font-size: 14px;

@@ -20,6 +20,7 @@ from .models import (
     NativeThread,
 )
 
+# Harness connections must await each call and preserve native wire order.
 type EventSink = Callable[[HarnessEvent], Awaitable[None]]
 
 

@@ -48,7 +48,9 @@ def _runtime() -> FakeRequestRuntime:
     settings = Settings().model_copy(update={"model": "nvidia_nim/configured"})
     return FakeRequestRuntime(
         settings=settings,
-        cached_infos=(ProviderModelInfo("open_router/discovered"),),
+        cached_infos=(
+            ProviderModelInfo("open_router/discovered", context_window_tokens=100_000),
+        ),
     )
 
 
@@ -111,6 +113,8 @@ def test_code_picker_and_native_selection_use_the_same_advertised_efforts():
     advertised = factory.catalog()
     assert advertised.default_model == "nvidia_nim/configured"
     model = advertised.models[1]
+    assert advertised.models[0].context_window_tokens is None
+    assert model.context_window_tokens == 100_000
     assert model.reasoning_efforts == ("off", "low", "medium", "high", "xhigh", "max")
     selected = factory.prepare(model.id, None, "config")
     assert selected.model == model.id

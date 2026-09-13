@@ -63,7 +63,27 @@ for line in sys.stdin.buffer:
                 },
             }
         )
-        if mode in {"prompt", "child-prompt"}:
+        if mode == "ordered-usage":
+            emit(
+                {
+                    "method": "thread/tokenUsage/updated",
+                    "params": {
+                        "threadId": "native-1",
+                        "turnId": turn,
+                        "tokenUsage": {"last": {"totalTokens": 12_438}},
+                    },
+                }
+            )
+            emit(
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "native-1",
+                        "turn": {"id": turn, "status": "completed"},
+                    },
+                }
+            )
+        elif mode in {"prompt", "child-prompt"}:
             if mode == "child-prompt":
                 emit(
                     {
