@@ -171,6 +171,30 @@ async def test_mode_and_original_defaults_survive_restart_and_cannot_be_rewritte
 
 
 @pytest.mark.asyncio
+async def test_context_usage_progress_and_model_clear_use_existing_session_writes(
+    store,
+):
+    session = await _session(store)
+    snapshot = session.model_copy(update={"context_used_tokens": 12_438})
+    await store.save_progress(snapshot, session.revision)
+    saved = await store.get_session(session.id)
+    assert saved.context_used_tokens == 12_438
+    assert saved.revision == session.revision
+    assert saved.updated_at == session.updated_at
+
+    changed = snapshot.model_copy(
+        update={
+            "model": "provider/other",
+            "context_used_tokens": None,
+            "revision": snapshot.revision + 1,
+        }
+    )
+    changed = await store.update_settings(changed, snapshot.revision)
+    assert changed.model == "provider/other"
+    assert changed.context_used_tokens is None
+
+
+@pytest.mark.asyncio
 async def test_mode_is_guarded_by_sqlite_busy_and_run_immutability(store):
     session, run = await _admit(store, await _session(store))
     with pytest.raises(CodeConflictError):
@@ -198,6 +222,7 @@ async def test_version_one_database_gains_mode_without_losing_history(store, tmp
         connection.execute(
             "ALTER TABLE code_sessions DROP COLUMN native_permission_defaults"
         )
+        connection.execute("ALTER TABLE code_sessions DROP COLUMN context_used_tokens")
         connection.execute("ALTER TABLE code_runs DROP COLUMN mode")
         connection.execute("PRAGMA user_version = 1")
     for _ in range(2):
@@ -208,12 +233,38 @@ async def test_version_one_database_gains_mode_without_losing_history(store, tmp
         assert (await store.get_run(session.id, run.id)).mode == "config"
         assert await store.items(session.id, None, None) == items
         with closing(sqlite3.connect(tmp_path / "code.db")) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
             with pytest.raises(sqlite3.IntegrityError):
                 connection.execute("UPDATE code_sessions SET mode = 'unknown'")
             with pytest.raises(sqlite3.IntegrityError):
                 connection.execute(
                     "UPDATE code_sessions SET native_permission_defaults = '[]'"
+                )
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_version_two_database_gains_nullable_context_usage(store, tmp_path):
+    session = await _session(store)
+    await store.close()
+    with closing(sqlite3.connect(tmp_path / "code.db")) as connection, connection:
+        connection.execute("ALTER TABLE code_sessions DROP COLUMN context_used_tokens")
+        connection.execute("PRAGMA user_version = 2")
+    for _ in range(2):
+        await store.start()
+        assert (await store.get_session(session.id)).context_used_tokens is None
+        with closing(sqlite3.connect(tmp_path / "code.db")) as connection:
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+            column = next(
+                row
+                for row in connection.execute("PRAGMA table_info(code_sessions)")
+                if row[1] == "context_used_tokens"
+            )
+            assert column[3] == 0
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    "UPDATE code_sessions SET context_used_tokens = -1 WHERE id = ?",
+                    (session.id,),
                 )
         await store.close()
 
@@ -504,6 +555,7 @@ async def _legacy_prompt_database(store, path):
         connection.execute(
             "ALTER TABLE code_sessions DROP COLUMN native_permission_defaults"
         )
+        connection.execute("ALTER TABLE code_sessions DROP COLUMN context_used_tokens")
         connection.execute("ALTER TABLE code_runs DROP COLUMN mode")
         connection.execute("PRAGMA user_version = 0")
         for prompt in prompts:
@@ -563,7 +615,7 @@ async def test_legacy_prompts_migrate_once_to_run_ends_without_resequencing(
             )
             assert saved[prompt.id] == expected
         with closing(sqlite3.connect(path)) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
             assert any(
                 row[2] == "code_items"

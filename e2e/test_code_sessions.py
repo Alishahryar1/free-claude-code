@@ -38,6 +38,52 @@ def test_five_header_controls_fit_without_hiding_composer(
     page.screenshot(path=str(tmp_path / f"code-modes-{width}.png"))
 
 
+@pytest.mark.parametrize("width", [1440, 390])
+def test_context_usage_is_live_persistent_and_uses_only_raw_provider_capacity(
+    page, admin_base_url, tmp_path, code_control, width
+):
+    code_control.harness.context_windows["provider/model"] = 100_000
+    code_control.harness.configurations["provider/unknown"] = "unknown"
+    page.set_viewport_size({"width": width, "height": 900})
+    create_session(page, admin_base_url, tmp_path)
+    usage = page.locator("#codeContextUsage")
+    expect(usage).to_be_hidden()
+
+    send(page, "Measure the active context")
+    connection = code_control.connection()
+    code_control.run(connection.context_usage("turn-1", 90_000))
+    expect(usage).to_have_text("90K / 100K (90%)")
+    code_control.run(connection.context_usage("turn-1", 12_438))
+    expect(usage).to_have_text("12.4K / 100K (12%)")
+    expect(usage).to_have_attribute(
+        "title", "Context used: 12,438 of 100,000 tokens (12%)"
+    )
+    expect(usage).to_have_attribute(
+        "aria-label", "Context used: 12,438 of 100,000 tokens (12%)"
+    )
+    usage_box = usage.bounding_box()
+    stop_box = page.locator("#codeStop").bounding_box()
+    assert usage_box["x"] + usage_box["width"] <= stop_box["x"]
+    assert stop_box["x"] + stop_box["width"] <= width
+
+    page.reload()
+    expect(usage).to_have_text("12.4K / 100K (12%)")
+    code_control.run(connection.context_usage("turn-1", 104_000))
+    expect(usage).to_have_text("104K / 100K (104%)")
+    code_control.run(connection.finish("turn-1"))
+
+    page.locator("#codeModel").fill("unknown")
+    page.get_by_role("option", name="unknown", exact=True).click()
+    expect(usage).to_be_hidden()
+    send(page, "Use the model without capacity metadata")
+    code_control.run(code_control.harness.wait_inputs(2))
+    code_control.run(connection.context_usage("turn-2", 12_438))
+    expect(usage).to_have_text("12.4K")
+    expect(usage).to_have_attribute("title", "Context used: 12,438 tokens")
+    expect(usage).to_have_attribute("aria-label", "Context used: 12,438 tokens")
+    code_control.run(connection.finish("turn-2"))
+
+
 def test_header_provider_draft_and_mode_sync(
     page, context, admin_base_url, tmp_path, code_control
 ):

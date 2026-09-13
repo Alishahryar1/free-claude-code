@@ -1619,6 +1619,89 @@ async def test_streaming_does_not_invalidate_rename_revision(code):
 
 
 @pytest.mark.asyncio
+async def test_context_usage_is_an_absolute_deduplicated_session_snapshot(code):
+    service, harness, _ = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "hello", expected_epoch=service.epoch
+    )
+    await harness.started.wait()
+    connection = harness.connections[0]
+    before = await service.get_detail(session.id)
+    subscription, _ = await service.subscribe()
+    events = subscription.__aiter__()
+    try:
+        await connection.context_usage("turn-1", 90_000)
+        async with asyncio.timeout(2):
+            event = await anext(events)
+        after = await service.get_detail(session.id)
+        assert event.event == "session.updated"
+        assert event.data["session"]["context_used_tokens"] == 90_000
+        assert after.session.context_used_tokens == 90_000
+        assert after.session.revision == before.session.revision
+        assert after.session.updated_at == before.session.updated_at
+        assert (
+            await service._store.get_session(session.id)
+        ).context_used_tokens == 90_000
+
+        await connection.context_usage("turn-1", 90_000)
+        duplicate = await service.get_detail(session.id)
+        assert duplicate.version == after.version
+
+        await connection.finish("turn-1")
+        finished = await service.get_detail(session.id)
+        await connection.context_usage("turn-1", 25_000)
+        compacted = await service.get_detail(session.id)
+        assert compacted.session.context_used_tokens == 25_000
+        assert compacted.session.revision == finished.session.revision
+        assert compacted.session.updated_at == finished.session.updated_at
+    finally:
+        await subscription.aclose()
+
+
+@pytest.mark.asyncio
+async def test_context_usage_follows_the_current_run_model_across_model_changes(code):
+    service, harness, _ = code
+    harness.configurations["provider/other"] = "other"
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "first", expected_epoch=service.epoch
+    )
+    await harness.started.wait()
+    connection = harness.connections[0]
+    await connection.context_usage("turn-1", 40_000)
+    await connection.finish("turn-1")
+
+    detail = await service.get_detail(session.id)
+    same_model = await service.update_settings(
+        session.id, detail.session.revision, {"model": "provider/model"}
+    )
+    assert same_model.context_used_tokens == 40_000
+    changed = await service.update_settings(
+        session.id, same_model.revision, {"model": "provider/other"}
+    )
+    assert changed.context_used_tokens is None
+    assert (await service._store.get_session(session.id)).context_used_tokens is None
+
+    await service.send(
+        session.id,
+        new_id(),
+        changed.revision,
+        "second",
+        expected_epoch=service.epoch,
+    )
+    await harness.wait_inputs(2)
+    await connection.context_usage("turn-1", 41_000)
+    await connection.context_usage("unknown-replay-turn", 42_000)
+    assert (await service.get_detail(session.id)).session.context_used_tokens is None
+
+    await connection.context_usage("turn-2", 7_500)
+    current = await service.get_detail(session.id)
+    assert current.session.context_used_tokens == 7_500
+    await connection.finish("turn-2")
+
+
+@pytest.mark.asyncio
 async def test_catalog_replacement_is_limited_to_selected_entry_and_session(code):
     service, harness, _ = code
     harness.configurations["provider/other"] = "other-1"

@@ -101,6 +101,49 @@
   function ready(record) {
     return synchronized && record?.loaded && record.session?.status === "ready";
   }
+  function compactTokens(tokens) {
+    let value = tokens;
+    let unit = 0;
+    const units = ["", "K", "M", "B"];
+    while (value >= 1000 && unit < units.length - 1) {
+      value /= 1000;
+      unit += 1;
+    }
+    let rounded = Math.round(value * 10) / 10;
+    if (rounded >= 1000 && unit < units.length - 1) {
+      rounded /= 1000;
+      unit += 1;
+    }
+    return `${rounded}${units[unit]}`;
+  }
+  function renderContextUsage(record) {
+    const node = root.querySelector("#codeContextUsage"),
+      used = record?.session?.context_used_tokens;
+    if (!node || !Number.isInteger(used) || used < 0) {
+      if (node) {
+        node.hidden = true;
+        node.textContent = "";
+        node.removeAttribute("title");
+        node.removeAttribute("aria-label");
+      }
+      return;
+    }
+    const maximum = catalog.find(
+        (model) => model.id === record.session.model,
+      )?.context_window_tokens,
+      knownMaximum = Number.isInteger(maximum) && maximum > 0,
+      percentage = knownMaximum ? Math.round((used / maximum) * 100) : null,
+      exactUsed = used.toLocaleString("en-US");
+    node.textContent = knownMaximum
+      ? `${compactTokens(used)} / ${compactTokens(maximum)} (${percentage}%)`
+      : compactTokens(used);
+    const description = knownMaximum
+      ? `Context used: ${exactUsed} of ${maximum.toLocaleString("en-US")} tokens (${percentage}%)`
+      : `Context used: ${exactUsed} tokens`;
+    node.title = description;
+    node.setAttribute("aria-label", description);
+    node.hidden = false;
+  }
   function mergeEntries(target, entries, version) {
     for (const value of entries || []) {
       if ((target.get(value.id)?.version ?? -1) <= version)
@@ -1001,6 +1044,10 @@
           void stop();
         },
       );
+      const contextUsage = element("span", "", "code-context-usage");
+      contextUsage.id = "codeContextUsage";
+      contextUsage.hidden = true;
+      composer.querySelector(".session-composer-actions").prepend(contextUsage);
       root.append(UI.shell(header, message, transcript, composer));
       UI.resizeComposer(composer.querySelector("textarea"));
     } else {
@@ -1153,6 +1200,7 @@
     const record = records.get(selected),
       isBusy = busy(record),
       input = root.querySelector("#codeComposer");
+    renderContextUsage(record);
     if (
       providerDraft &&
       (providerDraft.id !== selected ||

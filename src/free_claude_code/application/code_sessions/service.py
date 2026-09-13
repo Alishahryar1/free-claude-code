@@ -408,6 +408,8 @@ class CodeService:
                         "This effort is unavailable. Choose another effort."
                     )
                 updates.update(model=model, reasoning_effort=effort)
+                if model != owner.session.model:
+                    updates["context_used_tokens"] = None
             session = await self._store.update_settings(
                 _revision(owner.session, **updates), revision
             )
@@ -874,6 +876,30 @@ class CodeService:
                 ):
                     return
                 if owner.session.status != "ready":
+                    return
+                if event.kind == "context_usage":
+                    source = next(
+                        (
+                            candidate
+                            for candidate in owner.runs.values()
+                            if candidate.native_turn_id == event.turn_id
+                        ),
+                        None,
+                    )
+                    if (
+                        source is None
+                        or source.model != owner.session.model
+                        or event.context_used_tokens is None
+                        or event.context_used_tokens
+                        == owner.session.context_used_tokens
+                    ):
+                        return
+                    session = owner.session.model_copy(
+                        update={"context_used_tokens": event.context_used_tokens}
+                    )
+                    await self._persist(owner, session)
+                    owner.session = session
+                    self._publish(owner, "session.updated")
                     return
                 run = owner.run
                 matches = (
