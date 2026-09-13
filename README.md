@@ -41,6 +41,11 @@ Free-tier availability and limits are controlled by each provider and may change
   <p><em>Claude Code running with FCC.</em></p>
 </div>
 
+<div align="center">
+  <img src="assets/browser-code-session.png" alt="Native Codex browser session in FCC, showing model controls and a repository exploration" width="700">
+  <p><em>A native Codex session in FCC's browser UI.</em></p>
+</div>
+
 ## Quick Start
 
 <a id="install"></a>
