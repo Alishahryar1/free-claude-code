@@ -58,8 +58,8 @@ def test_context_usage_is_live_persistent_and_uses_only_raw_provider_capacity(
     expect(usage).to_have_attribute(
         "title", "Context used: 12,438 of 100,000 tokens (12%)"
     )
-    expect(usage).to_have_attribute(
-        "aria-label", "Context used: 12,438 of 100,000 tokens (12%)"
+    expect(usage).to_have_accessible_name(
+        "Context used: 12,438 of 100,000 tokens (12%)"
     )
     usage_box = usage.bounding_box()
     stop_box = page.locator("#codeStop").bounding_box()
@@ -74,13 +74,14 @@ def test_context_usage_is_live_persistent_and_uses_only_raw_provider_capacity(
 
     page.locator("#codeModel").fill("unknown")
     page.get_by_role("option", name="unknown", exact=True).click()
-    expect(usage).to_be_hidden()
+    expect(usage).to_have_text("104K")
+    expect(usage).to_have_accessible_name("Context used: 104,000 tokens")
     send(page, "Use the model without capacity metadata")
     code_control.run(code_control.harness.wait_inputs(2))
     code_control.run(connection.context_usage("turn-2", 12_438))
     expect(usage).to_have_text("12.4K")
     expect(usage).to_have_attribute("title", "Context used: 12,438 tokens")
-    expect(usage).to_have_attribute("aria-label", "Context used: 12,438 tokens")
+    expect(usage).to_have_accessible_name("Context used: 12,438 tokens")
     code_control.run(connection.finish("turn-2"))
 
 

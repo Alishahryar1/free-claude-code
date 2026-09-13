@@ -211,6 +211,55 @@ async def connect(tmp_path, mode):
 
 
 @pytest.mark.asyncio
+async def test_jsonl_sink_preserves_usage_before_turn_completion(tmp_path):
+    events = []
+    usage_received = asyncio.Event()
+    release_usage = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def receive(event):
+        events.append(event.kind)
+        if event.kind == "context_usage":
+            usage_received.set()
+            await release_usage.wait()
+        elif event.kind == "turn_completed":
+            completed.set()
+
+    native = CodexAppServer(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("codex_fake_process.py")),
+            "ordered-usage",
+        ],
+        dict(os.environ),
+        str(tmp_path),
+        receive,
+        model_slugs={"provider/model": "provider/model"},
+        fingerprints={"provider/model": "capabilities-1"},
+    )
+    try:
+        await native.start()
+        await native.create_thread()
+        turn_id = await native.start_turn(
+            "hello",
+            FakeHarness().prepare("provider/model", None, "config"),
+            "input-1",
+            FakeHarness().permission_defaults,
+        )
+        assert turn_id == "turn-1"
+        await asyncio.wait_for(usage_received.wait(), 3)
+        assert not completed.is_set()
+        release_usage.set()
+        await asyncio.wait_for(completed.wait(), 3)
+        assert [
+            kind for kind in events if kind in {"context_usage", "turn_completed"}
+        ] == ["context_usage", "turn_completed"]
+    finally:
+        release_usage.set()
+        await native.close()
+
+
+@pytest.mark.asyncio
 async def test_jsonl_large_unicode_events_can_precede_rpc_ack(tmp_path):
     native, events, completed, _ = await connect(tmp_path, "large")
     try:

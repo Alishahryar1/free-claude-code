@@ -1046,6 +1046,7 @@
       );
       const contextUsage = element("span", "", "code-context-usage");
       contextUsage.id = "codeContextUsage";
+      contextUsage.setAttribute("role", "status");
       contextUsage.hidden = true;
       composer.querySelector(".session-composer-actions").prepend(contextUsage);
       root.append(UI.shell(header, message, transcript, composer));

@@ -171,7 +171,7 @@ async def test_mode_and_original_defaults_survive_restart_and_cannot_be_rewritte
 
 
 @pytest.mark.asyncio
-async def test_context_usage_progress_and_model_clear_use_existing_session_writes(
+async def test_context_usage_progress_and_settings_use_existing_session_writes(
     store,
 ):
     session = await _session(store)
@@ -185,13 +185,12 @@ async def test_context_usage_progress_and_model_clear_use_existing_session_write
     changed = snapshot.model_copy(
         update={
             "model": "provider/other",
-            "context_used_tokens": None,
             "revision": snapshot.revision + 1,
         }
     )
     changed = await store.update_settings(changed, snapshot.revision)
     assert changed.model == "provider/other"
-    assert changed.context_used_tokens is None
+    assert changed.context_used_tokens == 12_438
 
 
 @pytest.mark.asyncio
