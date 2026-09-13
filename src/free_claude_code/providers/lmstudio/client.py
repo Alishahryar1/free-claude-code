@@ -12,6 +12,7 @@ heuristic recovery on top.
 """
 
 import time
+from collections.abc import AsyncIterator, Mapping
 
 import httpx
 from loguru import logger
@@ -30,6 +31,7 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.endpoint import EndpointContext
 from free_claude_code.providers.failure_policy import (
     context_window_exceeded_provider_failure,
 )
@@ -81,28 +83,57 @@ class LMStudioProvider(OpenAIChatProvider):
         )
         self._loaded_context_cache: tuple[float, int | None] = (0.0, None)
 
-    def preflight_messages(
+    def stream_messages(
         self,
         request: MessagesRequest,
+        input_tokens: int = 0,
         *,
+        request_id: str | None = None,
+        response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        super().preflight_messages(request, reasoning=reasoning, model_info=model_info)
-        self._preflight_context_budget(
+        endpoint_context: EndpointContext | None = None,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[str]:
+        stream = super().stream_messages(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            model_info=model_info,
+            endpoint_context=endpoint_context,
+            request_headers=request_headers,
+        )
+        self._validate_context_budget(
             get_token_count(request.messages, request.system, request.tools)
         )
+        return stream
 
-    def preflight_responses(
+    def stream_responses(
         self,
         request: OpenAIResponsesRequest,
+        input_tokens: int = 0,
         *,
+        request_id: str | None = None,
+        response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        super().preflight_responses(request, reasoning=reasoning)
-        self._preflight_context_budget(estimate_responses_input_tokens(request))
+        endpoint_context: EndpointContext | None = None,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[str]:
+        stream = super().stream_responses(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            request_headers=request_headers,
+        )
+        self._validate_context_budget(estimate_responses_input_tokens(request))
+        return stream
 
-    def _preflight_context_budget(self, estimate: int) -> None:
+    def _validate_context_budget(self, estimate: int) -> None:
         loaded_context = self._loaded_context_length()
         if loaded_context is None:
             return
@@ -141,7 +172,7 @@ class LMStudioProvider(OpenAIChatProvider):
             value = max(loaded) if loaded else None
         except Exception as error:  # backstop only — never block the request
             logger.debug(
-                "LMSTUDIO context preflight unavailable: {}", type(error).__name__
+                "LMSTUDIO context validation unavailable: {}", type(error).__name__
             )
             value = None
         self._loaded_context_cache = (time.monotonic(), value)

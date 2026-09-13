@@ -128,23 +128,6 @@ class ScriptedSelectionProvider:
         self.stream_kwargs: list[dict[str, object]] = []
         self.close_count = 0
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        return None
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        raise AssertionError("Web-search selection received a Responses request")
-
     async def stream_responses(
         self,
         request: OpenAIResponsesRequest,

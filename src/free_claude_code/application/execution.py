@@ -167,20 +167,11 @@ class ProviderExecutor:
         raw_log_payload: object,
         request_id: str,
     ) -> AsyncIterator[str]:
-        """Preflight and execute one Anthropic Messages request."""
+        """Execute one Anthropic Messages request."""
 
         primary = routed.resolved.primary
         primary_provider = self._provider_resolver(primary.provider_id)
         primary_request = routed.request.model_copy(deep=True)
-        primary_failure: ExecutionFailure | None = None
-        try:
-            primary_provider.preflight_messages(
-                primary_request,
-                reasoning=routed.reasoning,
-                model_info=self._model_infos.get(primary.provider_model_ref),
-            )
-        except ExecutionFailure as failure:
-            primary_failure = failure
         input_tokens = self._token_counter(
             routed.request.messages,
             routed.request.system,
@@ -204,14 +195,6 @@ class ProviderExecutor:
                     deep=True,
                 )
             )
-            if index == 0 and primary_failure is not None:
-                raise primary_failure
-            if index > 0:
-                provider.preflight_messages(
-                    request,
-                    reasoning=routed.reasoning,
-                    model_info=self._model_infos.get(target.provider_model_ref),
-                )
             return provider.stream_messages(
                 request,
                 input_tokens=input_tokens,
@@ -242,19 +225,11 @@ class ProviderExecutor:
         raw_log_payload: object,
         request_id: str,
     ) -> AsyncIterator[str]:
-        """Preflight and execute one native OpenAI Responses request."""
+        """Execute one native OpenAI Responses request."""
 
         primary = routed.resolved.primary
         primary_provider = self._provider_resolver(primary.provider_id)
         primary_request = routed.request.model_copy(deep=True)
-        primary_failure: ExecutionFailure | None = None
-        try:
-            primary_provider.preflight_responses(
-                primary_request,
-                reasoning=routed.reasoning,
-            )
-        except ExecutionFailure as failure:
-            primary_failure = failure
         input_tokens = self._responses_token_counter(routed.request)
 
         def open_candidate(
@@ -274,10 +249,6 @@ class ProviderExecutor:
                     deep=True,
                 )
             )
-            if index == 0 and primary_failure is not None:
-                raise primary_failure
-            if index > 0:
-                provider.preflight_responses(request, reasoning=routed.reasoning)
             return provider.stream_responses(
                 request,
                 input_tokens=input_tokens,
@@ -324,7 +295,7 @@ class ProviderExecutor:
         request_id: str,
         open_candidate: CandidateStreamOpener,
     ) -> AsyncIterator[str]:
-        """Run one protocol-blind candidate lifecycle after eager preflight."""
+        """Start and consume candidates through one protocol-blind lifecycle."""
 
         primary = resolved.primary
         candidates = (primary, *resolved.fallbacks)

@@ -92,25 +92,6 @@ class OpenAICodexProvider(BaseProvider):
             session_id=session_id,
         )
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        self._responses.preflight_messages(
-            request, reasoning=reasoning, model_info=model_info
-        )
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        self._responses.preflight_responses(request, reasoning=reasoning)
-
     async def cleanup(self) -> None:
         await self._client.close()
 

@@ -5,6 +5,7 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import httpx2
@@ -37,6 +38,9 @@ from free_claude_code.core.reasoning import (
 from free_claude_code.providers.anthropic_messages.request_policy import (
     MessagesModelCapabilities,
 )
+from free_claude_code.providers.anthropic_messages.transport import (
+    AnthropicMessagesTransport,
+)
 from free_claude_code.providers.endpoint import HttpEndpoint
 from free_claude_code.providers.github_copilot.auth import CopilotAuthManager
 from free_claude_code.providers.github_copilot.provider import GitHubCopilotProvider
@@ -44,6 +48,10 @@ from free_claude_code.providers.github_copilot.types import (
     CopilotEgress,
     CopilotEndpoint,
     CopilotModel,
+)
+from free_claude_code.providers.openai_chat import OpenAIChatTransport
+from free_claude_code.providers.openai_responses.transport import (
+    OpenAIResponsesTransport,
 )
 from tests.providers.copilot_support import FakeRuntime, FakeSession
 from tests.providers.support import immediate_admission, make_provider_config
@@ -56,6 +64,48 @@ from tests.providers.test_openai_responses_transport import (
 from tests.providers.test_openai_responses_transport import (
     _sse as responses_sse,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("egress", list(CopilotEgress))
+@pytest.mark.parametrize("responses", [False, True])
+async def test_conversion_runs_once_under_current_account_lease(
+    tmp_path, egress, responses
+):
+    harness = Harness(tmp_path, egress)
+    cls, name = {
+        (CopilotEgress.CHAT, False): (OpenAIChatTransport, "_build_request_body"),
+        (CopilotEgress.CHAT, True): (
+            OpenAIChatTransport,
+            "_build_responses_request_body",
+        ),
+        (CopilotEgress.RESPONSES, False): (
+            OpenAIResponsesTransport,
+            "_build_messages_body",
+        ),
+        (CopilotEgress.RESPONSES, True): (
+            OpenAIResponsesTransport,
+            "_build_native_body",
+        ),
+        (CopilotEgress.MESSAGES, False): (AnthropicMessagesTransport, "_messages_body"),
+        (CopilotEgress.MESSAGES, True): (AnthropicMessagesTransport, "_responses_body"),
+    }[egress, responses]
+    original = getattr(cls, name)
+
+    def build(transport, *args, **kwargs):
+        assert harness.runtime.session_calls == 1
+        assert not harness.runtime.sessions[0].closed
+        assert harness.provider._active == 1
+        assert harness.seen == []
+        return original(transport, *args, **kwargs)
+
+    try:
+        with patch.object(cls, name, autospec=True, side_effect=build) as conversion:
+            assert "ok" in await collect(harness.stream(responses))
+        assert conversion.call_count == len(harness.seen) == 1
+        assert harness.provider._active == 0
+    finally:
+        await harness.close()
 
 
 class Wire(httpx.AsyncByteStream, httpx2.AsyncByteStream):

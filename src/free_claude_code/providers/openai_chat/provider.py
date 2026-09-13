@@ -201,25 +201,6 @@ class OpenAIChatProvider(BaseProvider):
             collection_field=listing.collection_field,
         )
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        self._chat.preflight_messages(
-            request, reasoning=reasoning, model_info=model_info
-        )
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        self._chat.preflight_responses(request, reasoning=reasoning)
-
     def stream_messages(
         self,
         request: MessagesRequest,

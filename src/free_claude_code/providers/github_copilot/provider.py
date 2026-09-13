@@ -118,25 +118,6 @@ class GitHubCopilotProvider(BaseProvider):
                 "Choose a concrete model from the connected Copilot account."
             )
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        # Endpoint family and capabilities belong to the current account lease.
-        # Conversion runs after acquisition and before opening the physical stream.
-        self._check_model(request.model)
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        self._check_model(request.model)
-
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         if self._closing:
             raise ExecutionFailure(
@@ -157,7 +138,7 @@ class GitHubCopilotProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
-        self.preflight_messages(request, reasoning=reasoning)
+        self._check_model(request.model)
         return self._dispatch(
             request,
             input_tokens,
@@ -176,7 +157,7 @@ class GitHubCopilotProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[str]:
-        self.preflight_responses(request, reasoning=reasoning)
+        self._check_model(request.model)
         return self._dispatch(
             request,
             input_tokens,

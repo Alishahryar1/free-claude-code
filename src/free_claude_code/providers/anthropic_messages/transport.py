@@ -146,23 +146,6 @@ class AnthropicMessagesTransport:
         except (NativeMessagesError, ResponsesConversionError, ValueError) as error:
             raise InvalidRequestError(str(error)) from error
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        self._messages_body(request, reasoning, model_info)
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        self._responses_body(request, reasoning)
-
     def stream_messages(
         self,
         request: MessagesRequest,

@@ -65,23 +65,6 @@ class AdminModelProvider(BaseProvider):
         self._model_infos = model_infos
         self._error = error
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        return None
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        return None
-
     async def cleanup(self) -> None:
         return None
 

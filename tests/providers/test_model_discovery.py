@@ -354,23 +354,6 @@ class FakeProvider(BaseProvider):
         self.cleaned = False
         self.model_list_calls = 0
 
-    def preflight_messages(
-        self,
-        request: Any,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        return None
-
-    def preflight_responses(
-        self,
-        request: Any,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        return None
-
     async def cleanup(self) -> None:
         self.cleaned = True
 

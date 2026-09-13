@@ -788,7 +788,7 @@ def test_passthrough_tool_use_and_result(deepseek_provider):
     assert body["messages"][1]["role"] == "tool"
 
 
-def test_preflight_strips_user_image():
+def test_startup_strips_user_image():
     """Image blocks are silently stripped (DeepSeek lacks vision); request must not fail."""
     request = MessagesRequest(
         model="m",
@@ -818,7 +818,7 @@ def test_preflight_strips_user_image():
         admission=immediate_admission(),
     )
     # Should not raise; image is stripped.
-    provider.preflight_messages(request, reasoning=REASONING_ON)
+    provider.stream_messages(request, reasoning=REASONING_ON)
     body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
     content = body["messages"][0]["content"]
     assert "attachment omitted" in content.lower()
@@ -855,8 +855,8 @@ def test_vision_model_forwards_user_image():
         ),
         admission=immediate_admission(),
     )
-    # Must not raise on preflight (no InvalidRequestError for image blocks).
-    provider.preflight_messages(request, reasoning=REASONING_ON)
+    # Must not raise on validation (no InvalidRequestError for image blocks).
+    provider.stream_messages(request, reasoning=REASONING_ON)
     body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
     content = body["messages"][0]["content"]
     assert isinstance(content, list)
@@ -904,7 +904,7 @@ def test_vision_model_strips_user_document():
         ),
         admission=immediate_admission(),
     )
-    provider.preflight_messages(request, reasoning=REASONING_ON)
+    provider.stream_messages(request, reasoning=REASONING_ON)
     body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
     content = body["messages"][0]["content"]
     assert content
@@ -925,7 +925,7 @@ def test_vision_model_strips_user_document():
     assert "image or document inputs" in lowered
 
 
-def test_preflight_rejects_mcp_servers():
+def test_startup_rejects_mcp_servers():
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -941,10 +941,10 @@ def test_preflight_rejects_mcp_servers():
         admission=immediate_admission(),
     )
     with pytest.raises(InvalidRequestError, match="mcp_servers"):
-        provider.preflight_messages(request)
+        provider.stream_messages(request)
 
 
-def test_preflight_rejects_listed_server_tools_in_tools_list():
+def test_startup_rejects_listed_server_tools_in_tools_list():
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -960,10 +960,10 @@ def test_preflight_rejects_listed_server_tools_in_tools_list():
         admission=immediate_admission(),
     )
     with pytest.raises(InvalidRequestError, match="web_search"):
-        provider.preflight_messages(request)
+        provider.stream_messages(request)
 
 
-def test_preflight_preserves_completed_server_tool_history():
+def test_startup_preserves_completed_server_tool_history():
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -996,7 +996,7 @@ def test_preflight_preserves_completed_server_tool_history():
         ),
         admission=immediate_admission(),
     )
-    provider.preflight_messages(request)
+    provider.stream_messages(request)
     body = provider._chat._build_request_body(request)
     assert "[Earlier tool record]" in body["messages"][0]["content"]
 
