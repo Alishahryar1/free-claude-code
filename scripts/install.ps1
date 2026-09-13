@@ -17,7 +17,7 @@ $ProgressPreference = "SilentlyContinue"
 $RepoArchiveUrl = "https://github.com/Alishahryar1/free-claude-code/archive/refs/heads/main.zip"
 # Windows on ARM emulates x64, whose Python package ecosystem has broader wheel support.
 $PythonRequest = "cpython-3.14.0-windows-x86_64-none"
-$MinUvVersion = "0.11.16"
+$MinUvVersion = "0.12.13"
 $ClaudeInstallUrl = "https://claude.ai/install.ps1"
 $CodexInstallUrl = "https://chatgpt.com/codex/install.ps1"
 $PiInstallUrl = "https://pi.dev/install.ps1"

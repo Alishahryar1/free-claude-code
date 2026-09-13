@@ -3,7 +3,7 @@ set -eu
 
 REPO_ARCHIVE_URL="https://github.com/Alishahryar1/free-claude-code/archive/refs/heads/main.zip"
 PYTHON_VERSION="3.14.0"
-MIN_UV_VERSION="0.11.16"
+MIN_UV_VERSION="0.12.13"
 CLAUDE_INSTALL_URL="https://claude.ai/install.sh"
 CODEX_INSTALL_URL="https://chatgpt.com/codex/install.sh"
 PI_INSTALL_URL="https://pi.dev/install.sh"

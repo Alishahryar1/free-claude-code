@@ -520,7 +520,7 @@ chmod +x "$uv_bin/uv"
         metadata.mode = 0o755
         metadata.size = len(rtk_command)
         archive.addfile(metadata, io.BytesIO(rtk_command))
-    _write_executable(fixtures / "uv-command.sh", _posix_uv_command("0.11.28"))
+    _write_executable(fixtures / "uv-command.sh", _posix_uv_command("0.12.13"))
     _write_executable(
         fixtures / "fcc-command.sh",
         """#!/bin/sh
@@ -1191,7 +1191,7 @@ def test_install_sh_preserves_unrelated_macos_desktop_link(
     assert desktop_link.readlink() == unrelated
 
 
-@pytest.mark.parametrize("uv_version", ("0.11.16", "0.11.16+build.1"))
+@pytest.mark.parametrize("uv_version", ("0.12.13", "0.12.13+build.1", "0.12.14"))
 def test_install_sh_preserves_valid_existing_tools(
     posix_harness: PosixHarness,
     uv_version: str,
@@ -1219,7 +1219,7 @@ def test_install_sh_replaces_unrelated_pi_command(
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_unrelated_pi()
-    posix_harness.add_uv("0.11.16")
+    posix_harness.add_uv("0.12.13")
 
     result = posix_harness.run()
 
@@ -1234,7 +1234,7 @@ def test_install_sh_discovers_custom_pi_npm_prefix(
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_npm_prefix(posix_harness.root / "custom-npm")
-    posix_harness.add_uv("0.11.16")
+    posix_harness.add_uv("0.12.13")
 
     result = posix_harness.run()
 
@@ -1298,17 +1298,21 @@ def test_install_sh_continues_when_pi_resolution_changes_to_unrelated_command(
     assert "fcc-server:--version" in calls
 
 
-def test_install_sh_replaces_obsolete_uv(posix_harness: PosixHarness) -> None:
+@pytest.mark.parametrize("uv_version", ("0.5.9", "0.11.16", "0.12.9", "0.12.12"))
+def test_install_sh_replaces_obsolete_uv(
+    posix_harness: PosixHarness,
+    uv_version: str,
+) -> None:
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_client("pi")
-    posix_harness.add_uv("0.5.9")
+    posix_harness.add_uv(uv_version)
 
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "uv 0.5.9 does not satisfy stable >=0.11.16" in result.stdout
     assert "uv-install" in posix_harness.calls()
+    assert f"uv {uv_version} does not satisfy stable >=0.12.13" in result.stdout
 
 
 def test_install_sh_prioritizes_replacement_uv_over_obsolete_cargo_uv(
@@ -1324,7 +1328,7 @@ def test_install_sh_prioritizes_replacement_uv_over_obsolete_cargo_uv(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.11.28." in result.stdout
+    assert "Verified uv 0.12.13." in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -1344,7 +1348,7 @@ def test_install_sh_prioritizes_forced_cargo_home_uv_install_layout(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.11.28." in result.stdout
+    assert "Verified uv 0.12.13." in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -1374,7 +1378,7 @@ def test_install_sh_prioritizes_replacement_uv_from_unmanaged_install_directory(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.11.28." in result.stdout
+    assert "Verified uv 0.12.13." in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -1393,10 +1397,10 @@ def test_install_sh_infers_home_for_replacement_uv(
     assert result.returncode == 0, result.stderr
     relative_uv = Path(".cargo/bin/uv") if cargo_layout else Path(".local/bin/uv")
     assert (inferred_home / relative_uv).is_file()
-    assert "Verified uv 0.11.28." in result.stdout
+    assert "Verified uv 0.12.13." in result.stdout
 
 
-@pytest.mark.parametrize("version", ("0.11.16-alpha.1", "0.12.0-rc.1"))
+@pytest.mark.parametrize("version", ("0.12.13-alpha.1", "0.13.0-rc.1"))
 def test_install_sh_replaces_prerelease_uv(
     posix_harness: PosixHarness,
     version: str,
@@ -1409,7 +1413,7 @@ def test_install_sh_replaces_prerelease_uv(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert f"uv {version} does not satisfy stable >=0.11.16" in result.stdout
+    assert f"uv {version} does not satisfy stable >=0.12.13" in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -1560,7 +1564,7 @@ def test_install_sh_rechecks_for_fcc_process_before_tool_replacement(
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_client("pi")
-    posix_harness.add_uv("0.11.16")
+    posix_harness.add_uv("0.12.13")
     posix_harness.env["FCC_RUNNING_COMMAND"] = "fcc-server"
     posix_harness.env["FCC_RUNNING_PHASE"] = "late"
 
@@ -1976,7 +1980,7 @@ def powershell_harness(
         _batch_client("aider"), encoding="utf-8"
     )
     (fixtures / "rtk-command.cmd").write_text(_batch_rtk(), encoding="utf-8")
-    (fixtures / "uv-command.cmd").write_text(_batch_uv("0.11.28"), encoding="utf-8")
+    (fixtures / "uv-command.cmd").write_text(_batch_uv("0.12.13"), encoding="utf-8")
     (fixtures / "fcc-command.cmd").write_text(
         """@echo off
 for %%I in ("%~f0") do set "FCC_NAME=%%~nI"
@@ -2770,7 +2774,7 @@ def test_install_ps1_preserves_unowned_desktop_shortcut(
     assert desktop_shortcut.read_bytes() == original_shortcut
 
 
-@pytest.mark.parametrize("uv_version", ("0.11.16", "0.11.16+build.1"))
+@pytest.mark.parametrize("uv_version", ("0.12.13", "0.12.13+build.1", "0.12.14"))
 def test_install_ps1_preserves_valid_existing_tools(
     powershell_harness: PowerShellHarness,
     uv_version: str,
@@ -2805,7 +2809,7 @@ def test_install_ps1_replaces_unrelated_pi_command(
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_unrelated_pi()
-    powershell_harness.add_uv("0.11.16")
+    powershell_harness.add_uv("0.12.13")
 
     result = powershell_harness.run()
 
@@ -2820,7 +2824,7 @@ def test_install_ps1_discovers_custom_pi_npm_prefix(
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_npm_prefix(powershell_harness.root / "custom-npm")
-    powershell_harness.add_uv("0.11.16")
+    powershell_harness.add_uv("0.12.13")
 
     result = powershell_harness.run()
 
@@ -2884,19 +2888,21 @@ def test_install_ps1_continues_when_pi_resolution_changes_to_unrelated_command(
     assert "fcc-server:--version" in calls
 
 
+@pytest.mark.parametrize("uv_version", ("0.5.9", "0.11.16", "0.12.9", "0.12.12"))
 def test_install_ps1_replaces_obsolete_uv(
     powershell_harness: PowerShellHarness,
+    uv_version: str,
 ) -> None:
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_client("pi")
-    powershell_harness.add_uv("0.5.9")
+    powershell_harness.add_uv(uv_version)
 
     result = powershell_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "uv 0.5.9 does not satisfy stable >=0.11.16" in result.stdout
     assert "uv-install" in powershell_harness.calls()
+    assert f"uv {uv_version} does not satisfy stable >=0.12.13" in result.stdout
 
 
 def test_install_ps1_prioritizes_replacement_uv_from_custom_install_directory(
@@ -2909,7 +2915,7 @@ def test_install_ps1_prioritizes_replacement_uv_from_custom_install_directory(
     result = powershell_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.11.28." in result.stdout
+    assert "Verified uv 0.12.13." in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
@@ -2930,7 +2936,7 @@ def test_install_ps1_prioritizes_forced_cargo_home_uv_install_layout(
     result = powershell_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.11.28." in result.stdout
+    assert "Verified uv 0.12.13." in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
@@ -2960,11 +2966,11 @@ def test_install_ps1_prioritizes_replacement_uv_from_unmanaged_install_directory
     result = powershell_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.11.28." in result.stdout
+    assert "Verified uv 0.12.13." in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
-@pytest.mark.parametrize("version", ("0.11.16-alpha.1", "0.12.0-rc.1"))
+@pytest.mark.parametrize("version", ("0.12.13-alpha.1", "0.13.0-rc.1"))
 def test_install_ps1_replaces_prerelease_uv(
     powershell_harness: PowerShellHarness,
     version: str,
@@ -2977,7 +2983,7 @@ def test_install_ps1_replaces_prerelease_uv(
     result = powershell_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert f"uv {version} does not satisfy stable >=0.11.16" in result.stdout
+    assert f"uv {version} does not satisfy stable >=0.12.13" in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
@@ -3119,7 +3125,7 @@ def test_install_ps1_rechecks_for_fcc_process_before_tool_replacement(
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_client("pi")
-    powershell_harness.add_uv("0.11.16")
+    powershell_harness.add_uv("0.12.13")
     powershell_harness.env["FCC_RUNNING_COMMAND"] = "fcc-server"
     powershell_harness.env["FCC_RUNNING_PHASE"] = "late"
 
