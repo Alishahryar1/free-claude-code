@@ -42,17 +42,25 @@ _OMITTED_ATTACHMENT_TEXT = (
 )
 _OMITTED_ATTACHMENT_BLOCK = {"type": "text", "text": _OMITTED_ATTACHMENT_TEXT}
 
+# DeepSeek-V4.1-Flash moved vision into the primary API, so the ``vision`` name
+# heuristic below no longer catches it. Only the first-party GA id is listed:
+# legacy ``deepseek-v4-flash`` is deliberately excluded because gateways still
+# serve the older, text-only model under that name.
+_VISION_CAPABLE_MODEL_IDS = frozenset({"deepseek-flash"})
+
 
 def _is_vision_capable_model(model: str | None) -> bool:
     """True when the DeepSeek model accepts OpenAI image parts.
 
     DeepSeek's vision models (e.g. ``deepseek-v4-flash-vision-exp``) support
-    image inputs natively. Document blocks are still stripped because the
-    shared OpenAI conversion path has no document parts.
+    image inputs natively, as does DeepSeek-V4.1-Flash (``deepseek-flash``).
+    Document blocks are still stripped because the shared OpenAI conversion
+    path has no document parts.
     """
     if not model:
         return False
-    return "vision" in str(model).rsplit("/", 1)[-1].lower()
+    name = str(model).rsplit("/", 1)[-1].lower()
+    return "vision" in name or name in _VISION_CAPABLE_MODEL_IDS
 
 
 def build_deepseek_request_body(
@@ -204,7 +212,8 @@ def _strip_unsupported_attachment_blocks(
         logger.warning(
             "DEEPSEEK_REQUEST: stripped unsupported attachment blocks "
             "(top_level={} nested_in_tool_result={} placeholder_tool_results={}). "
-            "DeepSeek has no vision/document support; the model will not see this content.",
+            "This model does not accept these attachment types; it will not see "
+            "this content.",
             dict(top_level_dropped),
             dict(nested_dropped),
             placeholder_replacements,

@@ -925,6 +925,103 @@ def test_vision_model_strips_user_document():
     assert "image or document inputs" in lowered
 
 
+def _image_request(model: str) -> MessagesRequest:
+    return MessagesRequest(
+        model=model,
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    ContentBlockImage(
+                        type="image",
+                        source={
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "YQ==",
+                        },
+                    ),
+                    {"type": "text", "text": "Describe this image"},
+                ],
+            )
+        ],
+    )
+
+
+def test_v4_1_flash_forwards_user_image(deepseek_provider):
+    """``deepseek-flash`` has vision under the primary id, with no ``vision`` in it."""
+    request = _image_request("deepseek-flash")
+    deepseek_provider.stream_messages(request, reasoning=REASONING_ON)
+    body = deepseek_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
+    content = body["messages"][0]["content"]
+    assert isinstance(content, list)
+    image_parts = [
+        part
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    ]
+    assert len(image_parts) == 1
+    assert image_parts[0]["image_url"]["url"] == "data:image/png;base64,YQ=="
+
+
+def test_v4_1_flash_strips_user_document(deepseek_provider):
+    """Vision does not imply document support; PDFs are still omitted."""
+    request = MessagesRequest(
+        model="deepseek-flash",
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    ContentBlockDocument(
+                        type="document",
+                        source={
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": "YQ==",
+                        },
+                    ),
+                ],
+            )
+        ],
+    )
+    deepseek_provider.stream_messages(request, reasoning=REASONING_ON)
+    body = deepseek_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
+    content = body["messages"][0]["content"]
+    lowered = content.lower() if isinstance(content, str) else str(content).lower()
+    assert "attachment omitted" in lowered
+    assert not any(
+        isinstance(part, dict) and part.get("type") == "image_url"
+        for part in (content if isinstance(content, list) else ())
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "cline-pass/deepseek-v4-flash",
+        "novita/deepseek/deepseek-v4-flash-0731",
+    ],
+)
+def test_text_only_deepseek_models_still_strip_images(deepseek_provider, model):
+    """Legacy and gateway ids keep the old text-only behaviour."""
+    request = _image_request(model)
+    deepseek_provider.stream_messages(request, reasoning=REASONING_ON)
+    body = deepseek_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
+    content = body["messages"][0]["content"]
+    parts = content if isinstance(content, list) else ()
+    assert not any(
+        isinstance(part, dict) and part.get("type") == "image_url" for part in parts
+    )
+    assert "attachment omitted" not in str(content).lower()
+
+
 def test_startup_rejects_mcp_servers():
     request = MessagesRequest(
         model="m",
