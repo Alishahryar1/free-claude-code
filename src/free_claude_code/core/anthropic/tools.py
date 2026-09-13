@@ -300,6 +300,161 @@ class ParserState(Enum):
     PARSING_PARAMETERS = 3
 
 
+_MAX_TERMINAL_JSON_CANDIDATE_CHARS = 4 * 1024 * 1024
+
+
+class TerminalJsonToolParser:
+    """Recover one exact terminal JSON object as a validated tool use."""
+
+    _tool_names: OpenAIToolNameCodec
+    _schemas: dict[str, dict[str, Any]]
+    _enabled: bool
+    _decided_passthrough: bool
+    _candidate: bool
+    _parts: list[str]
+    _length: int
+
+    def __init__(self) -> None:
+        raise TypeError("Use TerminalJsonToolParser.from_schemas()")
+
+    @classmethod
+    def from_schemas(
+        cls,
+        *,
+        tool_names: OpenAIToolNameCodec,
+        schemas: Mapping[str, Mapping[str, Any]],
+        enabled: bool,
+    ) -> TerminalJsonToolParser:
+        parser = cls.__new__(cls)
+        parser._tool_names = tool_names
+        parser._schemas = {name: dict(schema) for name, schema in schemas.items()}
+        parser._enabled = bool(enabled and parser._schemas)
+        parser._decided_passthrough = not parser._enabled
+        parser._candidate = False
+        parser._parts = []
+        parser._length = 0
+        return parser
+
+    def feed(self, text: str) -> str:
+        """Hold a possible terminal JSON tool call or release normal text."""
+        if not text:
+            return ""
+
+        if self._decided_passthrough:
+            return text
+
+        if self._candidate:
+            self._parts.append(text)
+            self._length += len(text)
+
+            if self._length > _MAX_TERMINAL_JSON_CANDIDATE_CHARS:
+                return self._release_candidate()
+
+            return ""
+
+        self._parts.append(text)
+        self._length += len(text)
+
+        combined = "".join(self._parts)
+        stripped = combined.lstrip()
+
+        if not stripped:
+            return ""
+
+        if stripped.startswith("{"):
+            self._candidate = True
+
+            if self._length > _MAX_TERMINAL_JSON_CANDIDATE_CHARS:
+                return self._release_candidate()
+
+            return ""
+
+        self._decided_passthrough = True
+        self._parts.clear()
+        self._length = 0
+        return combined
+
+    def disable(self) -> str:
+        """Disable recovery and release any held candidate unchanged."""
+        if self._decided_passthrough:
+            return ""
+
+        text = "".join(self._parts)
+        self._parts.clear()
+        self._length = 0
+        self._candidate = False
+        self._decided_passthrough = True
+        return text
+
+    def finish(self) -> tuple[str, tuple[dict[str, Any], ...]]:
+        """Finalize atomically as unchanged text or one validated tool use."""
+        if self._decided_passthrough:
+            return "", ()
+
+        raw = "".join(self._parts)
+        self._parts.clear()
+        self._length = 0
+        self._decided_passthrough = True
+
+        if not raw:
+            return "", ()
+
+        def reject_nonstandard_constant(value: str) -> None:
+            raise ValueError(f"non-standard JSON constant: {value}")
+
+        try:
+            parsed = json.loads(
+                raw,
+                parse_constant=reject_nonstandard_constant,
+            )
+        except json.JSONDecodeError, TypeError, ValueError, RecursionError:
+            return raw, ()
+
+        if not isinstance(parsed, dict):
+            return raw, ()
+
+        if set(parsed) != {"name", "arguments"}:
+            return raw, ()
+
+        name = parsed.get("name")
+        arguments = parsed.get("arguments")
+
+        if not isinstance(name, str) or not name.strip():
+            return raw, ()
+
+        if not isinstance(arguments, dict):
+            return raw, ()
+
+        decoded_name = self._tool_names.decode(name)
+        schema = self._schemas.get(decoded_name)
+
+        if schema is None:
+            return raw, ()
+
+        if not arguments_match_schema(arguments, schema):
+            return raw, ()
+
+        return (
+            "",
+            (
+                {
+                    "type": "tool_use",
+                    "id": f"toolu_terminal_json_{uuid.uuid4().hex[:8]}",
+                    "name": decoded_name,
+                    "input": arguments,
+                },
+            ),
+        )
+
+    def _release_candidate(self) -> str:
+        text = "".join(self._parts)
+        self._parts.clear()
+        self._length = 0
+        self._candidate = False
+        self._decided_passthrough = True
+        return text
+
+
 class HeuristicToolParser:
     """
     Stateful parser for raw text tool calls.
