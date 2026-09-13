@@ -1702,6 +1702,32 @@ async def test_context_usage_follows_the_current_run_model_across_model_changes(
 
 
 @pytest.mark.asyncio
+async def test_late_context_usage_from_an_older_same_model_run_is_ignored(code):
+    service, harness, _ = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "first", expected_epoch=service.epoch
+    )
+    await harness.started.wait()
+    connection = harness.connections[0]
+    await connection.context_usage("turn-1", 10_000)
+    await connection.finish("turn-1")
+
+    session = (await service.get_detail(session.id)).session
+    await service.send(
+        session.id, new_id(), session.revision, "second", expected_epoch=service.epoch
+    )
+    await harness.wait_inputs(2)
+    await connection.context_usage("turn-2", 20_000)
+    await connection.context_usage("turn-1", 11_000)
+
+    detail = await service.get_detail(session.id)
+    assert detail.session.context_used_tokens == 20_000
+    assert (await service._store.get_session(session.id)).context_used_tokens == 20_000
+    await connection.finish("turn-2")
+
+
+@pytest.mark.asyncio
 async def test_catalog_replacement_is_limited_to_selected_entry_and_session(code):
     service, harness, _ = code
     harness.configurations["provider/other"] = "other-1"

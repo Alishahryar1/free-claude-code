@@ -790,7 +790,7 @@
       });
       if (
         !deleted.has(id) &&
-        session.revision >= (records.get(id)?.session?.revision || 0)
+        session.revision > (records.get(id)?.session?.revision || 0)
       )
         get(id).session = session;
     } catch (error) {

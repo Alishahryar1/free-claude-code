@@ -888,6 +888,8 @@ class CodeService:
                     )
                     if (
                         source is None
+                        or owner.run is None
+                        or source.id != owner.run.id
                         or source.model != owner.session.model
                         or event.context_used_tokens is None
                         or event.context_used_tokens

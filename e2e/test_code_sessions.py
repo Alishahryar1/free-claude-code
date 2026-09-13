@@ -84,6 +84,45 @@ def test_context_usage_is_live_persistent_and_uses_only_raw_provider_capacity(
     code_control.run(connection.finish("turn-2"))
 
 
+def test_delayed_settings_response_cannot_replace_newer_context_usage(
+    page, admin_base_url, tmp_path, code_control
+):
+    code_control.harness.context_windows["provider/model"] = 100_000
+    create_session(page, admin_base_url, tmp_path)
+    send(page, "Start")
+    connection = code_control.connection()
+    code_control.run(connection.context_usage("turn-1", 10_000))
+    code_control.run(connection.finish("turn-1"))
+    usage = page.locator("#codeContextUsage")
+    expect(usage).to_have_text("10K / 100K (10%)")
+
+    page.evaluate(
+        """
+        () => {
+          const originalFetch = window.fetch;
+          window.fetch = async (...args) => {
+            const response = await originalFetch(...args);
+            const options = args[1] || {};
+            if (options.method === "PATCH" && String(args[0]).includes("/sessions/")) {
+              await new Promise((resolve) => { window.releaseCodeSettings = resolve; });
+            }
+            return response;
+          };
+        }
+        """
+    )
+    title = page.get_by_role("textbox", name="Code title", exact=True)
+    title.fill("Renamed while usage changes")
+    title.press("Tab")
+    page.wait_for_function("() => typeof window.releaseCodeSettings === 'function'")
+
+    code_control.run(connection.context_usage("turn-1", 20_000))
+    expect(usage).to_have_text("20K / 100K (20%)")
+    page.evaluate("window.releaseCodeSettings()")
+    expect(title).to_be_enabled()
+    expect(usage).to_have_text("20K / 100K (20%)")
+
+
 def test_header_provider_draft_and_mode_sync(
     page, context, admin_base_url, tmp_path, code_control
 ):
