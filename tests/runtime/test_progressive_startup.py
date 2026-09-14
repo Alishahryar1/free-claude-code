@@ -249,8 +249,12 @@ async def test_complete_catalog_publication_preserves_prior_file_until_all_attem
 
 
 @pytest.mark.asyncio
-async def test_catalog_wait_follows_replacement_when_retired_startup_is_cancelled():
-    entered = asyncio.Event()
+@pytest.mark.parametrize("retained_request", [False, True])
+@pytest.mark.parametrize("catalog_file", [False, True])
+async def test_catalog_wait_follows_replacement(
+    tmp_path, retained_request, catalog_file
+):
+    entered, release = asyncio.Event(), asyncio.Event()
     count = 0
 
     def runtime(settings):
@@ -262,8 +266,8 @@ async def test_catalog_wait_follows_replacement_when_retired_startup_is_cancelle
         async def models():
             if old:
                 entered.set()
-                await asyncio.Event().wait()
-            return frozenset({ProviderModelInfo("current")})
+                await release.wait()
+            return frozenset({ProviderModelInfo("old" if old else "current")})
 
         provider.list_model_infos = AsyncMock(side_effect=models)
 
@@ -272,15 +276,106 @@ async def test_catalog_wait_follows_replacement_when_retired_startup_is_cancelle
 
         return ProviderRuntime(settings, provider_constructor=construct)
 
-    manager = ProviderRuntimeManager(_settings(), runtime_factory=runtime)
-    waiting = asyncio.create_task(manager.wait_for_catalog())
+    path = tmp_path / "catalog.json"
+    manager = ProviderRuntimeManager(
+        _settings(),
+        runtime_factory=runtime,
+        model_catalog_publisher=CodexModelCatalogPublisher(path),
+    )
+    lease = await manager.acquire() if retained_request else None
+    request = (
+        asyncio.create_task(lease.resolve_provider("nvidia_nim")) if lease else None
+    )
+    waiting = asyncio.create_task(
+        manager.wait_for_catalog_file(InitializationWait())
+        if catalog_file
+        else manager.wait_for_catalog()
+    )
     try:
         await entered.wait()
         settings = _settings().model_copy(update={"model": "nvidia_nim/current"})
         await manager.replace(settings, commit=AsyncMock())
-        snapshot = await asyncio.wait_for(waiting, 1)
-        assert snapshot.settings is settings
-        assert snapshot.cached_model_info("nvidia_nim", "current") is not None
+        await manager.wait_for_catalog()
+        result = await asyncio.wait_for(asyncio.shield(waiting), 1)
+        if catalog_file:
+            assert isinstance(result, int)
+            assert result == manager.current_generation_id
+            assert "nvidia_nim/current" in path.read_text(encoding="utf-8")
+        else:
+            assert not isinstance(result, int)
+            assert result.settings is settings
+            assert result.cached_model_info("nvidia_nim", "current") is not None
+        if request is not None:
+            assert lease is not None
+            assert not request.done()
+            release.set()
+            await request
+            assert lease.model_info("nvidia_nim", "old") is not None
     finally:
-        await manager.close()
+        release.set()
+        waiting.cancel()
         await asyncio.gather(waiting, return_exceptions=True)
+        if request is not None:
+            await asyncio.gather(request, return_exceptions=True)
+        if lease is not None:
+            await lease.release()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("catalog_file", [False, True])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_catalog_waiter_exit_preserves_shared_discovery(
+    monkeypatch, catalog_file, cancel
+):
+    existing_tasks = asyncio.all_tasks()
+    entered, release = asyncio.Event(), asyncio.Event()
+    provider = MagicMock(spec=BaseProvider)
+
+    async def models():
+        entered.set()
+        await release.wait()
+        return frozenset({ProviderModelInfo("one")})
+
+    provider.list_model_infos = AsyncMock(side_effect=models)
+
+    async def construct(_id, _settings):
+        return provider
+
+    manager = ProviderRuntimeManager(
+        _settings(),
+        runtime_factory=lambda settings: ProviderRuntime(
+            settings, provider_constructor=construct
+        ),
+    )
+    wait = InitializationWait(1 if cancel else 0.01)
+    monkeypatch.setattr(
+        "free_claude_code.runtime.provider_manager.InitializationWait", lambda: wait
+    )
+    waiting = asyncio.create_task(
+        manager.wait_for_catalog_file(wait)
+        if catalog_file
+        else manager.wait_for_catalog()
+    )
+    try:
+        await entered.wait()
+        if cancel:
+            waiting.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiting
+        else:
+            with pytest.raises(ApplicationUnavailableError, match="still starting"):
+                await waiting
+        monkeypatch.setattr(
+            "free_claude_code.runtime.provider_manager.InitializationWait",
+            InitializationWait,
+        )
+        release.set()
+        snapshot = await manager.wait_for_catalog()
+        assert snapshot.cached_model_info("nvidia_nim", "one") is not None
+    finally:
+        release.set()
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+        await manager.close()
+    assert asyncio.all_tasks() <= existing_tasks

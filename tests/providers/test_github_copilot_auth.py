@@ -62,6 +62,65 @@ async def test_existing_native_profile_connects_persists_only_safe_state_and_res
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("login_finishes_first", [False, True])
+async def test_reconnect_survives_stale_broker_construction(
+    tmp_path: Path, login_finishes_first: bool
+) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "enabled": True,
+                "identity": {"host": "github.com", "login": "octocat"},
+                "revision": 1,
+            }
+        )
+    )
+    old_runtime, login_runtime = FakeRuntime(), FakeRuntime()
+    login_runtime.model_gate.clear()
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def construct() -> FakeRuntime:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+            return old_runtime
+        return login_runtime
+
+    manager = CopilotAuthManager(state_path=path, runtime_factory=construct)
+    old_fetch = asyncio.create_task(manager.models())
+    try:
+        await entered.wait()
+        await manager.start_login(DEVICE)
+        await login_runtime.model_entered.wait()
+        if login_finishes_first:
+            login_runtime.model_gate.set()
+            await settled(manager)
+        release.set()
+        # A stale connection must retire independently of unfinished login discovery.
+        await asyncio.wait({old_fetch}, timeout=0.1)
+        login_runtime.model_gate.set()
+        await settled(manager)
+        assert manager.is_connected(), manager.status().message
+        with pytest.raises(ExecutionFailure) as error:
+            await old_fetch
+        assert error.value.status_code == 401
+        assert list(await manager.models()) == ["model"]
+        assert old_runtime.close_calls == 1
+        assert login_runtime.close_calls == 0
+    finally:
+        release.set()
+        login_runtime.model_gate.set()
+        await asyncio.gather(old_fetch, return_exceptions=True)
+        await manager.close()
+    assert login_runtime.close_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_device_login_challenge_and_fresh_validation_after_cli_finishes(
     tmp_path: Path,
 ) -> None:

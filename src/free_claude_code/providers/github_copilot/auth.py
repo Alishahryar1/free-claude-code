@@ -239,7 +239,15 @@ class CopilotAuthManager:
                 revision = self._revision
                 broker = await self._new_broker(self._identity)
                 if self._closed or not self._enabled or self._revision != revision:
-                    await self._drain_retired()
+                    # A newer login may own another, not-yet-published broker.
+                    try:
+                        await broker.close()
+                    except Exception as error:
+                        raise CopilotUnavailable(
+                            "Copilot cleanup could not finish. Retry disconnect."
+                        ) from error
+                    if broker in self._owners:
+                        self._owners.remove(broker)
                     raise CopilotAuthenticationRequired(
                         "Copilot connection changed. Retry after connecting in Admin."
                     )

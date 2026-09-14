@@ -51,6 +51,7 @@ class _ProviderGeneration:
     retired: bool = False
     closed: bool = False
     drained: asyncio.Event = field(default_factory=asyncio.Event)
+    replaced: asyncio.Event = field(default_factory=asyncio.Event)
     cleanup_task: asyncio.Task[bool] | None = None
     catalog_tasks: dict[str, asyncio.Task[ProviderModelRefreshResult]] = field(
         default_factory=dict
@@ -362,7 +363,7 @@ class ProviderRuntimeManager:
             if not generation.initial_complete:
                 task = self._start_pass(generation)
                 try:
-                    await wait.wait(task)
+                    await self._wait_for_catalog_work(generation, task, wait)
                 except ApplicationUnavailableError:
                     if generation is self._current:
                         raise
@@ -370,13 +371,40 @@ class ProviderRuntimeManager:
             if generation is self._current and generation.initial_complete:
                 return generation.snapshot()
 
+    async def _wait_for_catalog_work(
+        self,
+        generation: _ProviderGeneration,
+        task: asyncio.Task[ProviderModelRefreshResult],
+        wait: InitializationWait,
+    ) -> None:
+        if generation is not self._current:
+            return
+        if task.done():
+            await wait.wait(task)
+            return
+        replaced = asyncio.create_task(generation.replaced.wait())
+        settled = asyncio.create_task(
+            asyncio.wait((task, replaced), return_when=asyncio.FIRST_COMPLETED)
+        )
+        try:
+            await wait.wait(settled)
+            if generation is self._current:
+                await wait.wait(task)
+        finally:
+            # These waits belong to the caller; discovery belongs to its generation.
+            settled.cancel()
+            replaced.cancel()
+            await asyncio.gather(settled, replaced, return_exceptions=True)
+
     async def wait_for_catalog_file(self, wait: InitializationWait) -> int:
         while True:
             self._ensure_open()
             generation = self._current
             if not generation.initial_complete:
                 try:
-                    await wait.wait(self._start_pass(generation))
+                    await self._wait_for_catalog_work(
+                        generation, self._start_pass(generation), wait
+                    )
                 except ApplicationUnavailableError:
                     if generation is self._current:
                         raise
@@ -506,6 +534,7 @@ class ProviderRuntimeManager:
                 self._current = candidate
                 self._catalog_revision += 1
                 previous.retired = True
+                previous.replaced.set()
                 self._retired[previous.generation_id] = previous
                 self._trace_published(candidate, previous=previous, reason=reason)
                 self._trace_retired(previous, reason=reason)
