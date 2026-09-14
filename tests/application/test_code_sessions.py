@@ -1,11 +1,13 @@
 import asyncio
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 import pytest_asyncio
 
 from free_claude_code.application.code_sessions import CodeConflictError, CodeService
+from free_claude_code.application.code_sessions import service as service_module
 from free_claude_code.application.code_sessions.models import (
     CodeUnavailableError,
     CodeValidationError,
@@ -37,6 +39,22 @@ async def code(tmp_path):
 async def session_for(code):
     service, _, directory = code
     return await service.create_session(new_id(), str(directory))
+
+
+@pytest.fixture
+def flush_timer(monkeypatch):
+    sleeping, release = asyncio.Event(), asyncio.Event()
+
+    async def sleep(delay):
+        assert delay == 0.25
+        sleeping.set()
+        await release.wait()
+
+    monkeypatch.setattr(
+        service_module, "asyncio", SimpleNamespace(**(vars(asyncio) | {"sleep": sleep}))
+    )
+    yield sleeping, release
+    release.set()
 
 
 @pytest.mark.asyncio
@@ -1822,6 +1840,308 @@ async def test_cancelled_http_admission_still_commits_and_executes_once(tmp_path
         )
         assert repeat.id == operation_id
         assert len(harness.connections[0].inputs) == 1
+    finally:
+        release.set()
+        await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trigger", ["timer", "size", "complete", "detail"])
+async def test_buffer_staging_and_each_flush_preserve_commit_and_observer_order(
+    code, monkeypatch, flush_timer, trigger
+):
+    service, harness, _ = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "hello", expected_epoch=service.epoch
+    )
+    await harness.started.wait()
+    before = await service.get_detail(session.id)
+    connection = harness.connections[0]
+    subscription, _ = await service.subscribe()
+    save = service._store.save_progress
+    writes = []
+
+    async def observe_save(session, revision, **values):
+        if values.get("items"):
+            assert service.cursor == before.cursor
+        await save(session, revision, **values)
+        if values.get("items"):
+            assert service.cursor == before.cursor
+            writes.append(tuple(values["items"]))
+
+    monkeypatch.setattr(service._store, "save_progress", observe_save)
+    try:
+        text = "x" * 4095
+        await connection.text("turn-1", "answer", text)
+        await asyncio.wait_for(flush_timer[0].wait(), 3)
+        await connection.text("turn-1", "answer", text)
+        observer, snapshot = await service.subscribe()
+        await observer.aclose()
+        assert snapshot["sessions"][0]["version"] == before.version + 1
+        assert snapshot["cursor"] == before.cursor
+        assert await service._store.items(session.id, None, None) == before.items
+        assert writes == []
+
+        if trigger == "timer":
+            flush_timer[1].set()
+        elif trigger == "size":
+            await connection.text("turn-1", "answer", text + "x")
+        elif trigger == "complete":
+            await connection.text("turn-1", "answer", text, complete=True)
+        else:
+            await service.get_detail(session.id)
+
+        event = await asyncio.wait_for(anext(aiter(subscription)), 3)
+        assert event.event == "item.updated"
+        assert event.id == before.cursor + 1
+        assert event.data["version"] == before.version + (
+            3 if trigger in {"size", "complete"} else 2
+        )
+        assert len(writes) == 1 and len(writes[0]) == 1
+        saved = (await service._store.items(session.id, None, None))[-1]
+        assert saved == writes[0][0]
+        assert event.data["item"] == saved.model_dump(mode="json")
+        assert saved.text == text + ("x" if trigger == "size" else "")
+        assert saved.complete == (trigger == "complete")
+    finally:
+        flush_timer[1].set()
+        await subscription.aclose()
+
+
+@pytest.mark.asyncio
+async def test_failed_terminal_bundle_retains_committed_records_and_staged_output(
+    code, monkeypatch, flush_timer
+):
+    service, harness, _ = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "hello", expected_epoch=service.epoch
+    )
+    await harness.started.wait()
+    connection = harness.connections[0]
+    await connection.prompt(1)
+    before = await service.get_detail(session.id)
+    await connection.text("turn-1", "answer", "unsaved")
+    await asyncio.wait_for(flush_timer[0].wait(), 3)
+    save, publish = service._store.save_progress, service._events.publish
+    attempted, published = [], []
+
+    async def reject_terminal(session, revision, **values):
+        run = values.get("run")
+        if run is not None and run.status == "completed":
+            attempted.append((session, values))
+            raise CodeUnavailableError("Terminal commit failed")
+        await save(session, revision, **values)
+
+    def observe(event, data):
+        published.append((event, data))
+        return publish(event, data)
+
+    monkeypatch.setattr(service._store, "save_progress", reject_terminal)
+    monkeypatch.setattr(service._events, "publish", observe)
+    await connection.finish("turn-1")
+    await asyncio.wait_for(service.wait_idle(session.id), 3)
+    assert len(attempted) == 1
+    candidate_session, values = attempted[0]
+    assert candidate_session.revision == before.session.revision + 1
+    assert [item.text for item in values["items"]] == ["unsaved"]
+    assert [prompt.status for prompt in values["prompts"]] == ["expired"]
+    assert await service._store.get_session(session.id) == before.session
+    assert await service._store.latest_run(session.id) == before.run
+    assert await service._store.items(session.id, None, None) == before.items
+    assert await service._store.prompts(session.id) == before.prompts
+    owner = service._owners[session.id]
+    assert owner.state.session == before.session and owner.state.run == before.run
+    assert owner.state.runs[before.run.id] == before.run
+    assert tuple(owner.state.prompts.values()) == before.prompts
+    assert [item.text for item in owner.state.pending_items] == ["unsaved"]
+    assert connection.closed
+    assert published and all(event == "session.notice" for event, _ in published)
+    assert all(
+        data["run"] == before.run.model_dump(mode="json") for _, data in published
+    )
+    with pytest.raises(CodeUnavailableError):
+        await service.get_detail(session.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", [False, True])
+async def test_review_liveness_flush_includes_pending_output_and_keeps_staging_version(
+    code, monkeypatch, flush_timer, fail
+):
+    service, harness, _ = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "Delegate", expected_epoch=service.epoch
+    )
+    await harness.started.wait()
+    first = harness.connections[0]
+    packets = CodexPackets(first)
+    await packets.spawn()
+    await packets.review()
+    review = (await service.get_detail(session.id)).items[-1]
+    await first.finish("turn-1")
+    harness.configurations[harness.model] = "replacement"
+    session = (await service.get_detail(session.id)).session
+    harness.started.clear()
+    await service.send(
+        session.id, new_id(), session.revision, "Continue", expected_epoch=service.epoch
+    )
+    await asyncio.wait_for(harness.started.wait(), 3)
+    second = harness.connections[1]
+    before = await service.get_detail(session.id)
+    packets = CodexPackets(second)
+    await packets.spawn()
+    await second.text("turn-2", "reply", "pending")
+    await asyncio.wait_for(flush_timer[0].wait(), 3)
+    save, publish = service._store.save_progress, service._events.publish
+    writes, published = [], []
+
+    async def observe_save(session, revision, **values):
+        assert service._owners[session.id].version == before.version + 1
+        assert service.cursor == before.cursor
+        writes.append(tuple(values["items"]))
+        if fail:
+            raise CodeUnavailableError("Review flush failed")
+        await save(session, revision, **values)
+
+    def observe(event, data):
+        published.append((event, data))
+        return publish(event, data)
+
+    monkeypatch.setattr(service._store, "save_progress", observe_save)
+    monkeypatch.setattr(service._events, "publish", observe)
+    await packets.review()
+    assert len(writes) == 1
+    assert {item.id for item in writes[0]} == {
+        review.id,
+        next(item.id for item in writes[0] if item.text == "pending"),
+    }
+    if fail:
+        await asyncio.wait_for(service.wait_idle(session.id), 3)
+        assert second.closed
+        assert all(event != "item.updated" for event, _ in published)
+        assert published[-1][1]["active_review_ids"] == []
+        assert {
+            item.id for item in service._owners[session.id].state.pending_items
+        } == {item.id for item in writes[0]}
+    else:
+        assert [event for event, _ in published] == ["item.updated", "item.updated"]
+        assert [data["version"] for _, data in published] == [
+            before.version + 2,
+            before.version + 3,
+        ]
+        assert all(data["active_review_ids"] == [review.id] for _, data in published)
+        assert next(item for item in writes[0] if item.id == review.id) == review
+    monkeypatch.setattr(service._store, "save_progress", save)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_exists", [False, True])
+async def test_startup_reconciles_persisted_deletion_without_another_native_delete(
+    code, native_exists
+):
+    service, harness, directory = code
+    session = await idle_native(code)
+    await service._store.save_progress(
+        session.model_copy(
+            update={"status": "deleting", "revision": session.revision + 1}
+        ),
+        session.revision,
+    )
+    await service.close()
+    if not native_exists:
+        harness.histories.pop(session.native_thread_id)
+    restarted = CodeService(
+        SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+    )
+    try:
+        await restarted.start()
+        await asyncio.wait_for(restarted.wait_idle(session.id), 3)
+        if native_exists:
+            detail = await restarted.get_detail(session.id)
+            assert detail.session.status == "ready" and detail.items
+        else:
+            assert not (await restarted.list_sessions()).sessions
+            assert await restarted._store.is_deleted(session.id)
+        assert all(connection.deleted == [] for connection in harness.connections)
+    finally:
+        await restarted.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("may_have_input", [False, True])
+async def test_missing_native_history_is_recreated_only_before_possible_input(
+    code, may_have_input
+):
+    service, harness, directory = code
+    session = await session_for(code)
+    await service._store.save_progress(
+        session.model_copy(
+            update={
+                "native_thread_id": "missing",
+                "native_may_have_input": may_have_input,
+            }
+        ),
+        session.revision,
+    )
+    await service.close()
+    restarted = CodeService(
+        SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+    )
+    try:
+        await restarted.start()
+        await restarted.send(
+            session.id,
+            new_id(),
+            session.revision,
+            "next",
+            expected_epoch=restarted.epoch,
+        )
+        if not may_have_input:
+            await asyncio.wait_for(harness.started.wait(), 3)
+            await harness.connections[-1].finish("turn-1")
+        await asyncio.wait_for(restarted.wait_idle(session.id), 3)
+        detail = await restarted.get_detail(session.id)
+        assert detail.run is not None
+        assert detail.run.status == ("failed" if may_have_input else "completed")
+        assert len(harness.connections[-1].inputs) == (0 if may_have_input else 1)
+    finally:
+        await restarted.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_close_waiter_does_not_cancel_owned_shutdown(code, monkeypatch):
+    service, harness, _ = code
+    session = await idle_native(code)
+    connection = harness.connections[0]
+    entered, release = asyncio.Event(), asyncio.Event()
+    close = connection.close
+
+    async def gated_close():
+        entered.set()
+        await release.wait()
+        await close()
+
+    monkeypatch.setattr(connection, "close", gated_close)
+    waiter = asyncio.create_task(service.close())
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        with pytest.raises(CodeUnavailableError):
+            await service.send(
+                session.id,
+                new_id(),
+                session.revision,
+                "late",
+                expected_epoch=service.epoch,
+            )
+        release.set()
+        await asyncio.wait_for(asyncio.gather(service.close(), service.close()), 3)
+        assert connection.closed and service.availability()[0] is False
     finally:
         release.set()
         await service.close()

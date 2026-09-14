@@ -464,6 +464,74 @@ async def test_jsonl_large_unicode_events_can_precede_rpc_ack(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_terminal_storage_failure_drains_the_native_dispatcher(
+    tmp_path, monkeypatch
+):
+    harness = FakeHarness()
+    prepare = harness.prepare
+    connections = []
+
+    def select(model, effort, mode):
+        selection = prepare(model, effort, mode)
+
+        async def open_native(cwd, sink):
+            native = CodexAppServer(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("codex_fake_process.py")),
+                    "large",
+                ],
+                dict(os.environ),
+                cwd,
+                sink,
+                model_slugs={model: model},
+                fingerprints=selection.catalog,
+            )
+            await native.start()
+            connections.append(native)
+            return native
+
+        monkeypatch.setattr(selection, "open", open_native)
+        return selection
+
+    monkeypatch.setattr(harness, "prepare", select)
+    store = SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock")
+    save = store.save_progress
+    rejected = []
+
+    async def reject_terminal(session, revision, **values):
+        run = values.get("run")
+        if run is not None and run.status == "completed":
+            rejected.append(run)
+            raise CodeUnavailableError("Terminal commit failed")
+        await save(session, revision, **values)
+
+    monkeypatch.setattr(store, "save_progress", reject_terminal)
+    service = CodeService(store, harness)
+    await service.start()
+    try:
+        session = await service.create_session(str(uuid.uuid4()), str(tmp_path))
+        await service.send(
+            session.id,
+            str(uuid.uuid4()),
+            session.revision,
+            "hello",
+            expected_epoch=service.epoch,
+        )
+        await asyncio.wait_for(service.wait_idle(session.id), 5)
+        assert len(rejected) == 1 and len(connections) == 1
+        native = connections[0]
+        assert native.process.returncode is not None
+        assert native._reader.done() and native._dispatcher.done()
+        saved = await store.latest_run(session.id)
+        assert saved is not None and saved.status == "running"
+        with pytest.raises(CodeUnavailableError):
+            await service.get_detail(session.id)
+    finally:
+        await asyncio.wait_for(service.close(), 5)
+
+
+@pytest.mark.asyncio
 async def test_server_rpc_during_start_preserves_numeric_zero_id(tmp_path):
     native, events, completed, prompted = await connect(tmp_path, "prompt")
     try:
