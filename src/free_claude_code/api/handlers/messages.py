@@ -38,8 +38,7 @@ from free_claude_code.api.web_tools.request import (
 from free_claude_code.api.web_tools.streaming import stream_web_server_tool_response
 from free_claude_code.application.errors import ApplicationError, InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor, TokenCounter
-from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.application.ports import ProviderResolver
+from free_claude_code.application.ports import ModelInfoLookup, ProviderResolver
 from free_claude_code.application.routing import ModelRouter, RoutedMessagesRequest
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
@@ -86,7 +85,7 @@ class MessagesHandler:
         provider_executor: ProviderExecutor | None = None,
         generation_id: int | None = None,
         request_headers: Mapping[str, str] | None = None,
-        model_infos: tuple[ProviderModelInfo, ...] = (),
+        model_info_lookup: ModelInfoLookup | None = None,
     ) -> None:
         self._settings = settings
         self._model_router = model_router or ModelRouter(settings)
@@ -98,7 +97,7 @@ class MessagesHandler:
             generation_id=generation_id,
             log_raw_payloads=settings.log_raw_api_payloads,
             request_headers=request_headers,
-            model_infos=model_infos,
+            model_info_lookup=model_info_lookup,
         )
         self._message_intercepts: tuple[MessageIntercept, ...] = (
             self._intercept_web_server_tool,

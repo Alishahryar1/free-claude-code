@@ -2,7 +2,7 @@ import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-codin
 
 const API_KEY_ENV = "FCC_PI_API_KEY";
 const BASE_URL_ENV = "FCC_PI_BASE_URL";
-const CATALOG_TIMEOUT_MS = 3000;
+const CATALOG_TIMEOUT_MS = 35000;
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 16384;
 

@@ -4,7 +4,7 @@ import json
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import httpx2
@@ -448,7 +448,7 @@ async def test_successful_fallback_stamps_its_own_origin_and_gets_unmodified_inp
     routed = _routed_request(_target("open_router", "fallback-model"))
     original = routed.request.model_dump()
     executor = ProviderExecutor(
-        lambda name: primary if name == "provider" else provider,
+        AsyncMock(side_effect=lambda name: primary if name == "provider" else provider),
         progress_timeout_seconds=10,
     )
     try:

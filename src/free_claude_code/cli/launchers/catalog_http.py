@@ -7,7 +7,7 @@ from urllib.request import Request
 from free_claude_code.cli.local_http import open_local_request
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
-from .common import PROXY_PREFLIGHT_TIMEOUT_SECONDS
+CATALOG_TIMEOUT_SECONDS = 35.0
 
 
 def fetch_proxy_models_response(
@@ -23,9 +23,7 @@ def fetch_proxy_models_response(
         headers={"Authorization": f"Bearer {auth_token}"},
         method="GET",
     )
-    with open_local_request(
-        request, timeout=PROXY_PREFLIGHT_TIMEOUT_SECONDS
-    ) as response:
+    with open_local_request(request, timeout=CATALOG_TIMEOUT_SECONDS) as response:
         payload: JsonValue = json.loads(response.read().decode("utf-8"))
 
     if not isinstance(payload, dict):

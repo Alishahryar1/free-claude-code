@@ -331,7 +331,7 @@ def _automatic_search_service(
     effective_settings = settings or Settings()
     return MessagesHandler(
         effective_settings,
-        provider_resolver=lambda _: provider,
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
         model_router=FixedProviderModelRouter(
             effective_settings,
             _PROVIDER_IDS[0],
@@ -554,7 +554,7 @@ async def test_service_rejects_forced_server_tool_when_local_handler_is_disabled
     assert settings.enable_web_server_tools is False
     service = MessagesHandler(
         settings,
-        provider_resolver=lambda _: MagicMock(),
+        provider_resolver=AsyncMock(side_effect=lambda _: MagicMock()),
         model_router=FixedProviderModelRouter(settings, provider_id),
     )
     request = MessagesRequest(
@@ -1122,7 +1122,7 @@ async def test_service_streams_forced_web_search_by_default(monkeypatch):
         "free_claude_code.api.web_tools.outbound._run_web_search", fake_search
     )
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": True})
-    provider_resolver = MagicMock()
+    provider_resolver = AsyncMock()
     service = MessagesHandler(
         settings,
         provider_resolver=provider_resolver,
@@ -1166,7 +1166,7 @@ async def test_service_aggregates_forced_web_search_when_stream_false(monkeypatc
         "free_claude_code.api.web_tools.outbound._run_web_search", fake_search
     )
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": True})
-    provider_resolver = MagicMock()
+    provider_resolver = AsyncMock()
     service = MessagesHandler(
         settings,
         provider_resolver=provider_resolver,
@@ -1257,7 +1257,7 @@ async def test_service_aggregates_forced_web_fetch_when_stream_false(monkeypatch
         "free_claude_code.api.web_tools.outbound._run_web_fetch", fake_fetch
     )
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": True})
-    provider_resolver = MagicMock()
+    provider_resolver = AsyncMock()
     service = MessagesHandler(
         settings,
         provider_resolver=provider_resolver,
@@ -1475,7 +1475,7 @@ async def test_service_rejects_listed_server_tools_for_every_provider(
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": False})
     service = MessagesHandler(
         settings,
-        provider_resolver=lambda _: MagicMock(),
+        provider_resolver=AsyncMock(side_effect=lambda _: MagicMock()),
         model_router=FixedProviderModelRouter(settings, provider_id),
     )
     request = MessagesRequest(

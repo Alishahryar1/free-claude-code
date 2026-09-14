@@ -1978,6 +1978,7 @@ def test_model_effort_picker_syncs_tabs_and_keeps_missing_selection(
         page.locator("#codeReasoning").select_option("medium")
         expect(second.locator("#codeReasoning")).to_have_value("medium")
         page.get_by_role("textbox", name="Message", exact=True).fill("Preserve me")
+        page.wait_for_function("!state.startupRequest && !state.startupTimer")
         code_control.harness.configurations.pop("provider/other")
         if refresh_first:
             page.evaluate("window.CodeSessions.refresh()")

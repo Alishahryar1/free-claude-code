@@ -31,7 +31,7 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.endpoint import EndpointContext
+from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
     context_window_exceeded_provider_failure,
 )

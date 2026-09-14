@@ -7,6 +7,7 @@ import pytest
 from free_claude_code.application.code_sessions.models import CodeValidationError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.ports import (
+    ModelCatalogSnapshot,
     RequestRuntimeLease,
     RequestRuntimePort,
 )
@@ -36,6 +37,9 @@ class FakeRequestRuntime(RequestRuntimePort):
     ) -> RequestRuntimeLease:
         del include_model_infos
         raise AssertionError("Catalog publication must not acquire a provider lease.")
+
+    async def wait_for_catalog(self) -> ModelCatalogSnapshot:
+        return ModelCatalogSnapshot(self._settings, self._cached_infos)
 
     def current_settings(self) -> Settings:
         return self._settings
@@ -79,24 +83,6 @@ def test_publisher_projects_the_application_catalog_without_compatibility_ids(
     ]
 
 
-def test_startup_publication_creates_missing_catalog_and_preserves_existing(
-    tmp_path: Path,
-) -> None:
-    catalog_path = tmp_path / "codex-model-catalog.json"
-    publisher = CodexModelCatalogPublisher(catalog_path)
-
-    publisher.ensure_exists(_runtime())
-    assert _catalog_slugs(catalog_path) == [
-        "nvidia_nim/configured",
-        "open_router/discovered",
-    ]
-
-    catalog_path.write_text("complete prior catalog\n", encoding="utf-8")
-    publisher.ensure_exists(_runtime())
-
-    assert catalog_path.read_text(encoding="utf-8") == "complete prior catalog\n"
-
-
 def test_empty_projection_preserves_existing_catalog(tmp_path: Path) -> None:
     catalog_path = tmp_path / "codex-model-catalog.json"
     catalog_path.write_text("last known good\n", encoding="utf-8")
@@ -114,7 +100,8 @@ def test_empty_projection_preserves_existing_catalog(tmp_path: Path) -> None:
     assert catalog_path.read_text(encoding="utf-8") == "last known good\n"
 
 
-def test_code_picker_and_native_selection_use_the_same_advertised_efforts():
+@pytest.mark.asyncio
+async def test_code_picker_and_native_selection_use_the_same_advertised_efforts():
     factory = CodexHarnessFactory(_runtime(), binary="codex")
     advertised = factory.catalog()
     assert advertised.default_model == "nvidia_nim/configured"
@@ -122,18 +109,21 @@ def test_code_picker_and_native_selection_use_the_same_advertised_efforts():
     assert advertised.models[0].context_window_tokens is None
     assert model.context_window_tokens == 100_000
     assert model.reasoning_efforts == ("off", "low", "medium", "high", "xhigh", "max")
-    selected = factory.prepare(model.id, None, "config")
+    selected = await factory.prepare(model.id, None, "config")
     assert selected.model == model.id
     assert selected.reasoning_effort == model.default_reasoning_effort == "medium"
     for effort in model.reasoning_efforts:
-        assert factory.prepare(model.id, effort, "config").reasoning_effort == effort
+        assert (
+            await factory.prepare(model.id, effort, "config")
+        ).reasoning_effort == effort
     with pytest.raises(CodeValidationError, match="effort"):
-        factory.prepare(model.id, "unsupported", "config")
+        (await factory.prepare(model.id, "unsupported", "config"))
     with pytest.raises(CodeValidationError, match="model"):
-        factory.prepare("missing/model", None, "config")
+        (await factory.prepare("missing/model", None, "config"))
 
 
-def test_non_reasoning_model_off_selection_is_available():
+@pytest.mark.asyncio
+async def test_non_reasoning_model_off_selection_is_available():
     runtime = FakeRequestRuntime(
         settings=Settings().model_copy(update={"model": "nvidia_nim/configured"}),
         cached_infos=(
@@ -148,7 +138,7 @@ def test_non_reasoning_model_off_selection_is_available():
     )
     assert model.reasoning_efforts == ("off",)
     assert model.default_reasoning_effort == "off"
-    assert factory.prepare(model.id, "off", "config").reasoning_effort == "off"
+    assert (await factory.prepare(model.id, "off", "config")).reasoning_effort == "off"
 
 
 def test_catalog_writer_skips_identical_content_and_replaces_changes(

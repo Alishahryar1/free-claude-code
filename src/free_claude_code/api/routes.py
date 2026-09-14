@@ -52,14 +52,15 @@ async def _create_messages_response(
 ) -> object:
     lease: RequestRuntimeLease | None = None
     try:
-        lease = await services.requests.acquire(include_model_infos=True)
+        lease = await services.requests.acquire()
+        await lease.wait_for_token_estimation()
         handler = MessagesHandler(
             lease.settings,
             provider_resolver=_provider_resolver(lease),
             token_counter=get_token_count,
             generation_id=lease.generation_id,
             request_headers=request_headers,
-            model_infos=lease.model_infos,
+            model_info_lookup=lease.model_info,
         )
         response = await handler.create(request_data, request_id=request_id)
     except ApplicationError as exc:
@@ -88,6 +89,7 @@ async def _create_responses_response(
     lease: RequestRuntimeLease | None = None
     try:
         lease = await services.requests.acquire()
+        await lease.wait_for_token_estimation()
         handler = ResponsesHandler(
             lease.settings,
             provider_resolver=_provider_resolver(lease),
@@ -161,12 +163,17 @@ async def probe_responses(_auth=Depends(require_proxy_auth)):
 async def count_tokens(
     request: Request,
     request_data: TokenCountRequest,
-    settings: Settings = Depends(get_settings),
+    services: ApiServices = Depends(get_services),
     _auth=Depends(require_anthropic_proxy_auth),
 ):
     """Count tokens for a request."""
-    handler = TokenCountHandler(settings, token_counter=get_token_count)
-    return handler.count(request_data, request_id=get_request_id(request))
+    lease = await services.requests.acquire()
+    try:
+        await lease.wait_for_token_estimation()
+        handler = TokenCountHandler(lease.settings, token_counter=get_token_count)
+        return handler.count(request_data, request_id=get_request_id(request))
+    finally:
+        await lease.release()
 
 
 @router.api_route("/v1/messages/count_tokens", methods=["HEAD", "OPTIONS"])
@@ -209,12 +216,12 @@ async def probe_health():
 async def list_models(
     view: ModelCatalogView = ModelCatalogView.CLAUDE,
     services: ApiServices = Depends(get_services),
-    settings: Settings = Depends(get_settings),
     _auth=Depends(require_proxy_auth),
 ):
     """List the model ids this proxy advertises to compatible clients."""
     trace_event(stage="ingress", event="free_claude_code.api.models.list", source="api")
-    return build_models_list_response(settings, services.requests, view=view)
+    snapshot = await services.requests.wait_for_catalog()
+    return build_models_list_response(snapshot.settings, snapshot, view=view)
 
 
 @router.get(
@@ -224,12 +231,12 @@ async def list_models(
 )
 async def list_muse_models(
     services: ApiServices = Depends(get_services),
-    settings: Settings = Depends(get_settings),
     _auth=Depends(require_proxy_auth),
 ):
     """List the direct Responses models expected by Muse Code."""
     trace_event(stage="ingress", event="free_claude_code.api.models.list", source="api")
-    return build_muse_models_list_response(settings, services.requests)
+    snapshot = await services.requests.wait_for_catalog()
+    return build_muse_models_list_response(snapshot.settings, snapshot)
 
 
 @router.post("/stop")

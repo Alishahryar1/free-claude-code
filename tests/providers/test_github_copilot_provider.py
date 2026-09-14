@@ -5,7 +5,7 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import httpx2
@@ -41,7 +41,7 @@ from free_claude_code.providers.anthropic_messages.request_policy import (
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
-from free_claude_code.providers.endpoint import HttpEndpoint
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.github_copilot.auth import CopilotAuthManager
 from free_claude_code.providers.github_copilot.provider import GitHubCopilotProvider
 from free_claude_code.providers.github_copilot.types import (
@@ -181,7 +181,8 @@ class Harness:
             encoding="utf-8",
         )
         self.auth = CopilotAuthManager(
-            state_path=state, runtime_factory=lambda: self.runtime
+            state_path=state,
+            runtime_factory=AsyncMock(side_effect=lambda: self.runtime),
         )
         self.seen: list[httpx.Request | httpx2.Request] = []
         self.wires: list[Wire] = []

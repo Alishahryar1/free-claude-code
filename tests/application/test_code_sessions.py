@@ -41,6 +41,47 @@ async def session_for(code):
     return await service.create_session(new_id(), str(directory))
 
 
+@pytest.mark.asyncio
+async def test_catalog_wait_releases_session_lock_and_revalidates_before_admission(
+    code, monkeypatch
+):
+    service, harness, _ = code
+    session = await session_for(code)
+    entered, release = asyncio.Event(), asyncio.Event()
+    prepare = harness.prepare
+
+    async def held_prepare(*args):
+        entered.set()
+        await release.wait()
+        return await prepare(*args)
+
+    monkeypatch.setattr(harness, "prepare", held_prepare)
+    sending = asyncio.create_task(
+        service.send(
+            session.id, new_id(), session.revision, "Work", expected_epoch=service.epoch
+        )
+    )
+    try:
+        await entered.wait()
+        detail = await asyncio.wait_for(service.get_detail(session.id), 1)
+        assert detail.run is None
+        updated = await asyncio.wait_for(
+            service.update_settings(
+                session.id, session.revision, {"title": "Renamed during initialization"}
+            ),
+            1,
+        )
+        release.set()
+        with pytest.raises(CodeConflictError):
+            await sending
+        assert updated.title == "Renamed during initialization"
+        assert not harness.connections
+        assert (await service.get_detail(session.id)).run is None
+    finally:
+        release.set()
+        await asyncio.gather(sending, return_exceptions=True)
+
+
 @pytest.fixture
 def flush_timer(monkeypatch):
     sleeping, release = asyncio.Event(), asyncio.Event()

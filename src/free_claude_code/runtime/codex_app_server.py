@@ -656,14 +656,15 @@ class CodexHarnessFactory:
             ),
         )
 
-    def prepare(
+    async def prepare(
         self, model: str, reasoning_effort: str | None, mode: CodeMode
     ) -> _CodexSelection:
         binary = self._binary or shutil.which("codex")
         if binary is None:
             raise CodeUnavailableError("Codex is not installed. " + CODEX_INSTALL_HINT)
-        settings = self._runtime.current_settings()
-        models = current_codex_models(self._runtime, settings)
+        snapshot = await self._runtime.wait_for_catalog()
+        settings = snapshot.settings
+        models = current_codex_models(snapshot, settings)
         selected = next(
             (
                 candidate

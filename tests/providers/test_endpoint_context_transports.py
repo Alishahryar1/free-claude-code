@@ -14,7 +14,7 @@ from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
-from free_claude_code.providers.endpoint import HttpEndpoint
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatProfile,

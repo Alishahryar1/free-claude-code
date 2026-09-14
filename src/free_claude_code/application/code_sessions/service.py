@@ -8,6 +8,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from free_claude_code.application.errors import ApplicationUnavailableError
+from free_claude_code.application.readiness import InitializationWait
 from free_claude_code.application.session_events import (
     EventPublisher,
     EventSubscription,
@@ -65,25 +67,54 @@ class CodeService:
         self._jobs: set[asyncio.Task] = set()
         self._accepting = False
         self._started = False
+        self._stopping = False
+        self._start_task: asyncio.Task[None] | None = None
+        self._storage_state = "starting"
         self._message: str | None = "Code sessions is starting."
         self._close_task: asyncio.Task[None] | None = None
 
+    def _ensure_start(self) -> asyncio.Task[None]:
+        if self._start_task is None:
+            self._start_task = asyncio.create_task(self._start())
+        return self._start_task
+
     async def start(self) -> None:
+        await asyncio.shield(self._ensure_start())
+
+    def storage_status(self) -> JsonObject:
+        return {"state": self._storage_state, "message": self._message}
+
+    async def _wait_for_store(self) -> None:
+        if self._started:
+            return
+        if self._stopping:
+            raise CodeUnavailableError("Code sessions is stopping.")
+        try:
+            await InitializationWait().wait(self._ensure_start())
+        except ApplicationUnavailableError as exc:
+            raise CodeUnavailableError(exc.message) from None
+        self._require_available()
+
+    async def _start(self) -> None:
         if self._started:
             return
         try:
             await self._store.start()
-            self._started = True
             pending = await self._store.pending_deletions()
+            self._started = True
         except Exception as exc:
             await self._store.close()
             self._started = False
             self._message = _error_message(exc)
+            self._storage_state = "failed"
             return
         except BaseException:
             await self._store.close()
             raise
+        if self._stopping:
+            return
         self._accepting = True
+        self._storage_state = "ready"
         self._message = None
         for session in pending:
             owner = await self._owner(session.id)
@@ -99,6 +130,8 @@ class CodeService:
         return self._harness.catalog()
 
     def begin_shutdown(self) -> None:
+        self._stopping = True
+        self._storage_state = "stopping"
         self._accepting = False
         self._message = "Code sessions is stopping."
         self._events.disconnect_subscribers()
@@ -110,6 +143,10 @@ class CodeService:
         await asyncio.shield(self._close_task)
 
     async def _close(self) -> None:
+        if self._start_task is not None:
+            if not self._start_task.done():
+                self._start_task.cancel()
+            await asyncio.gather(self._start_task, return_exceptions=True)
         if self._commands:
             await asyncio.gather(*tuple(self._commands), return_exceptions=True)
         owners = tuple(self._owners.values())
@@ -177,6 +214,7 @@ class CodeService:
             raise CodeUnavailableError(self._message or "Code sessions is unavailable.")
 
     async def _owner(self, session_id: str) -> _SessionRuntime:
+        await self._wait_for_store()
         _validate_id(session_id)
         async with self._load_lock:
             owner = self._owners.get(session_id)
@@ -204,6 +242,7 @@ class CodeService:
         return await self._command(self._create(session_id, cwd))
 
     async def _create(self, session_id: str, cwd: str) -> CodeSession:
+        await self._wait_for_store()
         self._require_available()
         _validate_id(session_id)
         try:
@@ -227,9 +266,11 @@ class CodeService:
     async def list_sessions(
         self, cursor: tuple[int, str] | None = None, limit: int = 25, query: str = ""
     ) -> CodePage:
+        await self._wait_for_store()
         return await self._store.list_sessions(cursor, max(1, min(limit, 25)), query)
 
     async def subscribe(self) -> tuple[EventSubscription, JsonObject]:
+        await self._wait_for_store()
         self._require_available()
         subscription = self._events.subscribe()
         summaries = [
@@ -387,11 +428,21 @@ class CodeService:
                 )
             self._editable(owner, revision)
             owner.state.check_can_send()
-            selection = self._harness.prepare(
-                owner.state.session.model,
-                owner.state.session.reasoning_effort,
-                owner.state.session.mode,
-            )
+            selected = owner.state.session
+        selection = await self._harness.prepare(
+            selected.model, selected.reasoning_effort, selected.mode
+        )
+        async with owner.lock:
+            previous = await self._store.get_run(session_id, operation_id)
+            if previous:
+                owner.state.check_receipt(previous, text)
+                return previous
+            if expected_epoch != self.epoch:
+                raise CodeConflictError(
+                    "FCC restarted. Your draft has been kept; send it when you are ready."
+                )
+            self._editable(owner, revision)
+            owner.state.check_can_send()
             session, run, item = owner.state.prepare_admission(
                 operation_id,
                 text,

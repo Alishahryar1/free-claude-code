@@ -11,6 +11,10 @@
     harnesses = [],
     catalog = [],
     catalogLoaded = false,
+    catalogPhase = "starting",
+    catalogVersion = null,
+    catalogInstance = null,
+    catalogRequest = 0,
     settingsPending = false;
   let visibleIds = [],
     query = "",
@@ -359,18 +363,31 @@
     record.nextBefore = data.next_before;
     render(!before && outputChanged);
   }
+  function olderCatalog(candidate) {
+    return candidate && catalogVersion && (candidate.generation_id < catalogVersion.generation_id ||
+      (candidate.generation_id === catalogVersion.generation_id && candidate.catalog_revision < catalogVersion.catalog_revision));
+  }
   async function bootstrap() {
     const token = syncToken;
+    const request = ++catalogRequest;
     try {
       const data = await api(`${base}/bootstrap`);
-      if (token !== syncToken || (epoch && data.epoch !== epoch)) return;
+      if (request !== catalogRequest || token !== syncToken || (epoch && data.epoch !== epoch) || olderCatalog(data.startup)) return false;
+      if (data.startup) catalogVersion = data.startup;
       available = data.available;
-      catalog = data.models;
-      harnesses = data.harnesses;
-      catalogLoaded = true;
+      catalogPhase = data.startup?.catalog || "ready";
+      if (catalogPhase === "ready" || !catalogLoaded) {
+        catalog = data.models;
+        harnesses = data.harnesses;
+      }
+      if (catalogPhase === "ready") catalogLoaded = true;
       availabilityNotice = data.message || "";
+      return true;
     } catch (error) {
-      if (token === syncToken) catalogLoaded = false;
+      if (request === catalogRequest && token === syncToken) {
+        availabilityNotice = error.message;
+        if (!catalogLoaded) catalogPhase = "failed";
+      }
       throw error;
     }
   }
@@ -382,6 +399,11 @@
     clearTimeout(retryTimer);
     retryTimer = null;
     if (epoch !== readyData.epoch) {
+      if (epoch) {
+        catalogVersion = null;
+        catalogLoaded = false;
+        catalogPhase = "starting";
+      }
       epoch = readyData.epoch;
       records.clear();
       providerDraft = null;
@@ -406,11 +428,11 @@
     for (const summary of readyData.sessions)
       merge({ ...summary, cursor: readyData.cursor });
     render();
+    void bootstrap().then(() => render()).catch(() => render());
     try {
       const results = await Promise.allSettled([
         list(),
         selected ? detail(selected) : Promise.resolve(),
-        bootstrap(),
       ]);
       if (token !== syncToken || !connected) return;
       for (const result of results)
@@ -812,7 +834,7 @@
   function selectionError(record) {
     if (!record?.session) return "";
     if (providerDraft) return "Choose a model for the selected provider.";
-    if (!catalogLoaded) return "Model list unavailable. Reconnecting…";
+    if (!catalogLoaded) return catalogPhase === "starting" ? "Models are loading…" : "Model list unavailable.";
     const model = catalog.find((model) => model.id === record.session.model);
     if (!model) return "Selected model is unavailable. Choose another model.";
     if (
@@ -1218,9 +1240,12 @@
     stop.hidden = !isBusy;
     stop.disabled = !connected || record?.run?.stop_requested;
     send.textContent = saved(selected).pending ? "Retry Send" : "Send";
+    send.classList.toggle("startup-busy", !catalogLoaded && catalogPhase === "starting");
+    send.setAttribute("aria-busy", String(!catalogLoaded && catalogPhase === "starting"));
     send.disabled =
       !ready(record) ||
       !available ||
+      !catalogLoaded ||
       pending(record) ||
       sends.has(selected) ||
       settingsPending ||
@@ -1643,13 +1668,20 @@
     },
     activate,
     deactivate,
-    async refresh() {
-      if (!api || !epoch) return;
+    async refresh(status) {
+      if (!api) return false;
+      if (status?.startup) {
+        if (catalogInstance !== status.instance_id) catalogVersion = null;
+        catalogInstance = status.instance_id;
+        if (!olderCatalog(status.startup)) catalogVersion = status.startup;
+      }
       try {
-        await bootstrap();
+        const refreshed = await bootstrap();
         render();
-      } catch (error) {
-        restart(error.message);
+        return refreshed;
+      } catch {
+        render();
+        return false;
       }
     },
   };

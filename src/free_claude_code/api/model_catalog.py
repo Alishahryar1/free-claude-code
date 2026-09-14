@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from free_claude_code.application.ports import RequestRuntimePort
+from free_claude_code.application.ports import ModelCatalogPort
 from free_claude_code.config.model_refs import configured_chat_model_refs
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import (
@@ -149,7 +149,7 @@ class _InventoryModel:
 
 def build_models_list_response(
     settings: Settings,
-    runtime: RequestRuntimePort,
+    runtime: ModelCatalogPort,
     *,
     view: ModelCatalogView = ModelCatalogView.CLAUDE,
 ) -> ModelsListResponse:
@@ -160,7 +160,7 @@ def build_models_list_response(
 
 
 def build_muse_models_list_response(
-    settings: Settings, runtime: RequestRuntimePort
+    settings: Settings, runtime: ModelCatalogPort
 ) -> ModelsListResponse:
     """Keep routable IDs while making them visible to Muse's native picker."""
     catalog = build_models_list_response(
@@ -187,7 +187,7 @@ def build_muse_models_list_response(
 
 
 def _build_claude_models_response(
-    settings: Settings, runtime: RequestRuntimePort
+    settings: Settings, runtime: ModelCatalogPort
 ) -> ModelsListResponse:
     """Preserve the established Claude-compatible catalog exactly."""
     models: list[ModelResponse] = []
@@ -225,7 +225,7 @@ def _build_claude_models_response(
 
 def _build_direct_models_response(
     settings: Settings,
-    runtime: RequestRuntimePort,
+    runtime: ModelCatalogPort,
     *,
     view: ModelCatalogView,
 ) -> ModelsListResponse:
@@ -285,7 +285,7 @@ def _build_direct_models_response(
 
 
 def _collect_inventory(
-    settings: Settings, runtime: RequestRuntimePort
+    settings: Settings, runtime: ModelCatalogPort
 ) -> tuple[_InventoryModel, ...]:
     inventory: list[_InventoryModel] = []
     seen: set[str] = set()

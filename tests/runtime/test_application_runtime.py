@@ -316,7 +316,7 @@ async def test_provider_check_never_returns_unrecognized_credentials(
     }
     log_text = " | ".join(record.getMessage() for record in caplog.records)
     assert "provider=nvidia_nim" in log_text
-    assert "exc_type=RuntimeError" in log_text
+    assert "RuntimeError" in log_text
     assert secret not in log_text
     assert "error_type" not in result
     await manager.close()
@@ -995,8 +995,8 @@ async def test_startup_failure_closes_owned_transcriber() -> None:
 
     with (
         patch.object(
-            manager,
-            "warm_referenced_model_cache",
+            runtime._configuration,
+            "initialize",
             AsyncMock(side_effect=RuntimeError("startup failed")),
         ),
         pytest.raises(RuntimeError, match="startup failed"),
@@ -1029,11 +1029,9 @@ async def test_startup_cancellation_cleans_partial_messaging_and_reraises() -> N
         "_start_messaging_if_configured",
         side_effect=start_messaging,
     ):
-        start_task = asyncio.create_task(runtime.start())
+        await runtime.start()
         await entered.wait()
-        start_task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await start_task
+        assert await runtime.close()
 
     assert events == [
         "messaging.quiesce",
@@ -1048,7 +1046,11 @@ async def test_startup_cancellation_cleans_partial_messaging_and_reraises() -> N
 @pytest.mark.asyncio
 async def test_public_start_retries_transient_partial_messaging_cleanup() -> None:
     events: list[str] = []
-    manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
+    manager = ProviderRuntimeManager(
+        _settings("nvidia_nim/model").model_copy(
+            update={"messaging_platform": "telegram"}
+        )
+    )
     runtime = ApplicationRuntime(
         manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
     )
@@ -1073,11 +1075,6 @@ async def test_public_start_retries_transient_partial_messaging_cleanup() -> Non
         raise startup_failure
 
     with (
-        patch.object(
-            manager,
-            "warm_referenced_model_cache",
-            AsyncMock(),
-        ),
         patch.object(manager, "start_model_list_refresh"),
         patch(
             "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
@@ -1088,9 +1085,12 @@ async def test_public_start_retries_transient_partial_messaging_cleanup() -> Non
             "_start_messaging_workflow",
             side_effect=fail_after_publication,
         ),
-        pytest.raises(RuntimeError, match="cleanup incomplete") as raised,
     ):
         await runtime.start()
+        with pytest.raises(RuntimeError, match="cleanup incomplete") as raised:
+            await asyncio.gather(*runtime._startup_tasks)
+        assert runtime._messaging_state == "failed"
+        assert await runtime.close() is True
 
     assert raised.value.__cause__ is startup_failure
     assert events == [
@@ -1111,7 +1111,11 @@ async def test_public_start_retains_persistently_unclean_partial_messaging_graph
     None
 ):
     events: list[str] = []
-    manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
+    manager = ProviderRuntimeManager(
+        _settings("nvidia_nim/model").model_copy(
+            update={"messaging_platform": "telegram"}
+        )
+    )
     transcriber = TrackingTranscriber(events)
     runtime = ApplicationRuntime(
         manager,
@@ -1139,11 +1143,6 @@ async def test_public_start_retains_persistently_unclean_partial_messaging_graph
         raise startup_failure
 
     with (
-        patch.object(
-            manager,
-            "warm_referenced_model_cache",
-            AsyncMock(),
-        ),
         patch.object(manager, "start_model_list_refresh"),
         patch(
             "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
@@ -1154,9 +1153,12 @@ async def test_public_start_retains_persistently_unclean_partial_messaging_graph
             "_start_messaging_workflow",
             side_effect=fail_after_publication,
         ),
-        pytest.raises(RuntimeError, match="cleanup incomplete") as raised,
     ):
         await runtime.start()
+        with pytest.raises(RuntimeError, match="cleanup incomplete") as raised:
+            await asyncio.gather(*runtime._startup_tasks)
+        assert runtime._messaging_state == "failed"
+        assert await runtime.close() is False
 
     assert raised.value.__cause__ is startup_failure
     assert events == ["messaging.quiesce", "messaging.quiesce"]
@@ -1288,15 +1290,16 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
 
     with (
         patch(
-            "free_claude_code.runtime.application.cli_managed.ManagedClaudeSessionManager",
+            "free_claude_code.cli.managed.ManagedClaudeSessionManager",
             return_value=cli_manager,
         ) as manager_constructor,
-        patch("free_claude_code.runtime.application.messaging_session.SessionStore"),
+        patch("free_claude_code.messaging.session.SessionStore"),
         patch(
-            "free_claude_code.runtime.application.messaging_workflow_module.MessagingWorkflow",
+            "free_claude_code.messaging.workflow.MessagingWorkflow",
             return_value=workflow,
         ),
     ):
+        runtime.http_started()
         await runtime._start_messaging_workflow(components)
 
     assert events == [
@@ -1319,7 +1322,7 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
 async def test_folder_picker_is_stopped_before_http_shutdown_drains(monkeypatch):
     import uvicorn
 
-    from free_claude_code.cli.commands import RuntimeServer
+    from free_claude_code.cli.uvicorn_server import RuntimeServer
 
     runtime, _manager = _runtime_with_admin_provider(AdminModelProvider())
     started = asyncio.Event()
@@ -1341,7 +1344,10 @@ async def test_folder_picker_is_stopped_before_http_shutdown_drains(monkeypatch)
 
     monkeypatch.setattr(uvicorn.Server, "shutdown", drain)
     server = RuntimeServer(
-        uvicorn.Config("unused:app"), begin_shutdown=runtime.begin_shutdown
+        uvicorn.Config("unused:app"),
+        begin_shutdown=runtime.begin_shutdown,
+        on_started=runtime.http_started,
+        close_runtime=runtime.close,
     )
     await server.shutdown()
     assert await runtime.close() is True

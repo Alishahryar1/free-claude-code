@@ -1,6 +1,6 @@
 """Tests that API and SSE logging avoid raw sensitive payloads by default."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -24,7 +24,9 @@ async def test_create_message_skips_full_payload_debug_log_by_default():
         yield "event: ping\ndata: {}\n\n"
 
     mock_provider.stream_messages = fake_stream
-    service = MessagesHandler(settings, provider_resolver=lambda _: mock_provider)
+    service = MessagesHandler(
+        settings, provider_resolver=AsyncMock(side_effect=lambda _: mock_provider)
+    )
 
     request = MessagesRequest(
         model="claude-3-haiku-20240307",
@@ -53,7 +55,9 @@ async def test_create_message_logs_full_payload_when_opt_in():
         yield "event: ping\ndata: {}\n\n"
 
     mock_provider.stream_messages = fake_stream
-    service = MessagesHandler(settings, provider_resolver=lambda _: mock_provider)
+    service = MessagesHandler(
+        settings, provider_resolver=AsyncMock(side_effect=lambda _: mock_provider)
+    )
     request = MessagesRequest(
         model="claude-3-haiku-20240307",
         max_tokens=10,
@@ -110,7 +114,9 @@ async def test_create_message_unexpected_error_default_logs_exclude_exception_te
         raise RuntimeError(secret)
 
     mock_provider.stream_messages = stream_boom
-    service = MessagesHandler(settings, provider_resolver=lambda _: mock_provider)
+    service = MessagesHandler(
+        settings, provider_resolver=AsyncMock(side_effect=lambda _: mock_provider)
+    )
     request = MessagesRequest(
         model="claude-3-haiku-20240307",
         max_tokens=10,
@@ -143,7 +149,9 @@ async def test_create_message_unexpected_error_terminal_json_ignores_status_code
         raise WeirdError("no")
 
     mock_provider.stream_messages = stream_boom
-    service = MessagesHandler(settings, provider_resolver=lambda _: mock_provider)
+    service = MessagesHandler(
+        settings, provider_resolver=AsyncMock(side_effect=lambda _: mock_provider)
+    )
     request = MessagesRequest(
         model="claude-3-haiku-20240307",
         max_tokens=10,

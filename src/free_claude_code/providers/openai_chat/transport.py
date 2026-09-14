@@ -63,7 +63,8 @@ from free_claude_code.providers.admission import (
     ProviderExecution,
     ProviderOperationKind,
 )
-from free_claude_code.providers.endpoint import EndpointContext, RequestEndpoint
+from free_claude_code.providers.endpoint import RequestEndpoint
+from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
     RetryableToolProtocolError,
     classify_provider_failure,

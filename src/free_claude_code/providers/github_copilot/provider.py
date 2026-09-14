@@ -20,7 +20,7 @@ from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
-from free_claude_code.providers.endpoint import EndpointContext, HttpEndpoint
+from free_claude_code.providers.endpoint_types import EndpointContext, HttpEndpoint
 from free_claude_code.providers.http import close_provider_stream
 from free_claude_code.providers.openai_chat import (
     OpenAIChatBehavior,

@@ -8,7 +8,7 @@ from dataclasses import replace
 from types import MappingProxyType
 
 from free_claude_code.application.errors import InvalidRequestError
-from free_claude_code.providers.endpoint import HttpEndpoint
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 
 from .lifecycle import drain_owned
 from .types import (

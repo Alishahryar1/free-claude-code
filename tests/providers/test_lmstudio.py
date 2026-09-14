@@ -230,7 +230,9 @@ async def test_primary_context_validation_counts_toward_progress_timeout(
         now += 2
         return 100_000
 
-    executor = ProviderExecutor(lambda _: lmstudio_provider, progress_timeout_seconds=1)
+    executor = ProviderExecutor(
+        AsyncMock(side_effect=lambda _: lmstudio_provider), progress_timeout_seconds=1
+    )
     routed = _routed_request() if wire == "messages" else _routed_responses_request()
     with (
         patch.object(loop, "time", side_effect=lambda: now),

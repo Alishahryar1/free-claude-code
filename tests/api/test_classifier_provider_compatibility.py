@@ -145,7 +145,7 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
         )
     try:
         response = await MessagesHandler(
-            Settings(), provider_resolver=lambda _: provider
+            Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
         ).create(classifier_request())
         assert isinstance(response, JSONResponse)
         assert len(bodies) == (2 if corrects else 1)
@@ -218,7 +218,9 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(reject_off, 
         return result
 
     try:
-        handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+        handler = MessagesHandler(
+            Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        )
         with patch.object(
             provider._client.chat.completions,
             "create",
@@ -276,12 +278,19 @@ async def test_handler_uses_cached_capabilities_for_the_selected_provider(
     try:
         handler = MessagesHandler(
             Settings(),
-            provider_resolver=lambda _: provider,
-            model_infos=(
-                ProviderModelInfo(
-                    "open_router/dynamic-route",
-                    reasoning_capability=ReasoningCapability(capability),
+            provider_resolver=AsyncMock(side_effect=lambda _: provider),
+            model_info_lookup=lambda provider_id, model_id: next(
+                (
+                    info
+                    for info in (
+                        ProviderModelInfo(
+                            "open_router/dynamic-route",
+                            reasoning_capability=ReasoningCapability(capability),
+                        ),
+                    )
+                    if info.model_id == f"{provider_id}/{model_id}"
                 ),
+                None,
             ),
         )
         with patch.object(

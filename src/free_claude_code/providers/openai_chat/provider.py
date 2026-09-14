@@ -21,7 +21,7 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
-from free_claude_code.providers.endpoint import EndpointContext
+from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.model_listing import (
     extract_openai_model_infos,
     merge_model_list_pages,

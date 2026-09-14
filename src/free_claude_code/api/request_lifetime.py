@@ -5,7 +5,12 @@ import asyncio
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _CLIENT_OWNED_PATHS = frozenset(
-    {"/v1/messages", "/v1/responses", "/admin/api/code/folder-picker"}
+    {
+        "/v1/messages",
+        "/v1/responses",
+        "/v1/messages/count_tokens",
+        "/admin/api/code/folder-picker",
+    }
 )
 
 
@@ -80,10 +85,11 @@ class ClientRequestLifetimeMiddleware:
 
 def _owns_client_lifetime(scope: Scope) -> bool:
     path = scope.get("path")
-    return (
-        scope["type"] == "http"
-        and scope.get("method") == "POST"
-        and path in _CLIENT_OWNED_PATHS
+    return scope["type"] == "http" and (
+        (scope.get("method") == "POST" and path in _CLIENT_OWNED_PATHS)
+        or (
+            scope.get("method") == "GET" and path in {"/v1/models", "/muse-code/models"}
+        )
     )
 
 

@@ -172,7 +172,7 @@ class FakeHarness:
             ),
         )
 
-    def prepare(self, model, reasoning_effort, mode):
+    async def prepare(self, model, reasoning_effort, mode):
         if model not in self.configurations:
             raise CodeValidationError("This model is unavailable.")
         if reasoning_effort is not None and reasoning_effort not in self.efforts:
@@ -187,7 +187,7 @@ class FakeHarness:
         )
 
     async def open_history(self, cwd: str, sink: EventSink):
-        return await self.prepare(self.model, None, "config").open(cwd, sink)
+        return await (await self.prepare(self.model, None, "config")).open(cwd, sink)
 
     async def wait_inputs(self, count: int):
         while sum(len(connection.inputs) for connection in self.connections) < count:

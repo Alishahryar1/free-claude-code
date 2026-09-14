@@ -173,6 +173,7 @@ def test_jetbrains_preview_connect_is_noop_and_modal_dismisses(
         tmp_path / ".codex" / "config.toml",
     ]
     before = {path: path.read_bytes() if path.exists() else None for path in paths}
+    page.wait_for_function("!state.startupRequest && !state.startupTimer")
     requests = []
 
     def record_request(request):
