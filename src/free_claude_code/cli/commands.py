@@ -31,6 +31,37 @@ if TYPE_CHECKING:
     import uvicorn
 
 SERVER_GRACEFUL_SHUTDOWN_SECONDS = 5
+_BROWSER_HANDOFF_SECONDS = 5.0
+
+
+def _start_admin_browser(
+    settings: Settings, eligible: Callable[[], bool]
+) -> threading.Event:
+    """Hand off an optional browser action without keeping FCC alive."""
+    completed = threading.Event()
+    url = local_admin_url(settings)
+
+    def open_browser() -> None:
+        try:
+            if eligible() and not webbrowser.open(url):
+                logger.warning(
+                    "Could not open Admin in a browser. Open {} manually.", url
+                )
+        except Exception as exc:
+            logger.warning("Could not open Admin: {}. Open {} manually.", exc, url)
+        finally:
+            completed.set()
+
+    try:
+        threading.Thread(
+            target=open_browser, name="fcc-open-admin-browser", daemon=True
+        ).start()
+    except Exception as exc:
+        logger.warning(
+            "Could not start the Admin browser: {}. Open {} manually.", exc, url
+        )
+        completed.set()
+    return completed
 
 
 def serve() -> None:
@@ -63,7 +94,6 @@ class ServerSupervisor:
         self.stop_event = threading.Event()
         self._ready_settings: Settings | None = None
         self._pending_admin = False
-        self._browser_threads: list[threading.Thread] = []
         self._auto_browser_opened = False
         self._owned_server = False
         self._restart_generation = 0
@@ -143,9 +173,6 @@ class ServerSupervisor:
             with self._lock:
                 self._server = None
                 self._running = False
-            for browser_thread in self._browser_threads:
-                browser_thread.join()
-            self._browser_threads.clear()
             if self._owned_server:
                 kill_all_best_effort()
 
@@ -189,21 +216,18 @@ class ServerSupervisor:
             self._open_admin(settings, generation)
 
     def _open_admin(self, settings: Settings, generation: int) -> None:
-        def open_browser() -> None:
+        def eligible() -> bool:
             with self._lock:
                 if (
                     self.stop_event.is_set()
                     or self._restart_generation != generation
                     or self._ready_settings is not settings
                 ):
-                    return
+                    return False
                 self._pending_admin = False
-            webbrowser.open(local_admin_url(settings))
+                return True
 
-        thread = threading.Thread(target=open_browser, name="fcc-open-admin-browser")
-        with self._lock:
-            self._browser_threads.append(thread)
-            thread.start()
+        _start_admin_browser(settings, eligible)
 
     def _run_once(
         self,
@@ -320,7 +344,7 @@ def load_server_settings() -> Settings:
 def open_admin_when_ready(
     settings: Settings, *, stop_event: threading.Event | None = None
 ) -> bool:
-    """Verify an external FCC instance before opening its local Admin page."""
+    """Recognize an external FCC instance and attempt to open its local Admin page."""
     stop = stop_event or threading.Event()
     deadline = time.monotonic() + 30.0
     url = f"{local_proxy_root_url(settings)}/admin/api/status"
@@ -339,7 +363,14 @@ def open_admin_when_ready(
             ):
                 return False
             if payload["status"] == "running" and not stop.is_set():
-                return webbrowser.open(local_admin_url(settings))
+                completed = _start_admin_browser(settings, lambda: not stop.is_set())
+                # This extra launcher is about to exit: allow a brief URL handoff.
+                handoff_deadline = time.monotonic() + _BROWSER_HANDOFF_SECONDS
+                while not stop.is_set():
+                    remaining = handoff_deadline - time.monotonic()
+                    if remaining <= 0 or completed.wait(min(0.05, remaining)):
+                        break
+                return True
         except HTTPError, ValueError, UnicodeError:
             return False
         except URLError, OSError:

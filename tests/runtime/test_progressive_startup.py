@@ -142,6 +142,106 @@ async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_w
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("refresh", [False, True])
+async def test_failed_discovery_construction_recovers_in_same_generation(refresh):
+    provider = MagicMock(spec=BaseProvider)
+    provider.list_model_infos = AsyncMock(
+        return_value=frozenset({ProviderModelInfo("one")})
+    )
+    attempts = 0
+
+    async def construct(_id, _settings):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("construction failed")
+        return provider
+
+    manager = ProviderRuntimeManager(
+        _settings(),
+        runtime_factory=lambda settings: ProviderRuntime(
+            settings, provider_constructor=construct
+        ),
+    )
+    generation = manager.current_generation_id
+    try:
+        result = await manager.refresh_provider("nvidia_nim")
+        assert result.failed_provider_ids == ("nvidia_nim",)
+        if refresh:
+            result = await manager.refresh_provider("nvidia_nim")
+            assert result.refreshed_provider_ids == ("nvidia_nim",)
+        async with await manager.acquire() as lease:
+            assert await lease.resolve_provider("nvidia_nim") is provider
+            assert (lease.model_info("nvidia_nim", "one") is not None) is refresh
+        assert manager.current_generation_id == generation
+        assert attempts == 2
+    finally:
+        await manager.close()
+    provider.cleanup.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_recovery_wait_uses_remaining_budget_without_orphaning_waiter(
+    monkeypatch, cancel
+):
+    entered, release = asyncio.Event(), asyncio.Event()
+    provider = MagicMock(spec=BaseProvider)
+    attempts = 0
+    construction = None
+
+    async def construct(_id, _settings):
+        nonlocal attempts, construction
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("construction failed")
+        construction = asyncio.current_task()
+        entered.set()
+        await release.wait()
+        return provider
+
+    manager = ProviderRuntimeManager(
+        _settings(),
+        runtime_factory=lambda settings: ProviderRuntime(
+            settings, provider_constructor=construct
+        ),
+    )
+    wait = InitializationWait(1 if cancel else 0.01)
+    monkeypatch.setattr(
+        "free_claude_code.runtime.provider_manager.InitializationWait", lambda: wait
+    )
+    lease = await manager.acquire()
+    waiting = None
+    try:
+        result = await manager.refresh_provider("nvidia_nim")
+        assert result.failed_provider_ids == ("nvidia_nim",)
+        existing_tasks = asyncio.all_tasks()
+        waiting = asyncio.create_task(lease.resolve_provider("nvidia_nim"))
+        await asyncio.wait_for(entered.wait(), 1)
+        if cancel:
+            waiting.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiting
+        else:
+            with pytest.raises(ApplicationUnavailableError, match="still starting"):
+                await asyncio.wait_for(asyncio.shield(waiting), 1)
+        assert construction is not None and not construction.done()
+        assert asyncio.all_tasks() <= existing_tasks | {construction}
+        release.set()
+        await construction
+        wait.remaining = 0
+        assert await lease.resolve_provider("nvidia_nim") is provider
+        assert attempts == 2
+    finally:
+        release.set()
+        if waiting is not None:
+            waiting.cancel()
+            await asyncio.gather(waiting, return_exceptions=True)
+        await lease.release()
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_cancellation_drains_the_actual_worker():
     entered, release = threading.Event(), threading.Event()
 

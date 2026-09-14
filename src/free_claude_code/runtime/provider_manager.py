@@ -105,7 +105,17 @@ class ProviderGenerationLease:
         if provider_id not in generation.initialized:
             task = self._manager._catalog_task(generation, provider_id)
             await self._wait.wait(task)
-        provider = await generation.runtime.resolve_provider(provider_id)
+        if generation.runtime.is_cached(provider_id):
+            provider = await generation.runtime.resolve_provider(provider_id)
+        else:
+            waiting = asyncio.create_task(
+                generation.runtime.resolve_provider(provider_id)
+            )
+            try:
+                provider = await self._wait.wait(waiting)
+            finally:
+                waiting.cancel()
+                await asyncio.gather(waiting, return_exceptions=True)
         if provider_id not in self._model_infos:
             self._model_infos[provider_id] = {
                 info.model_id: replace(info, model_id=f"{provider_id}/{info.model_id}")

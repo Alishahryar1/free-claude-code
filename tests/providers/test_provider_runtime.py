@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import subprocess
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -980,6 +981,197 @@ async def test_provider_runtime_caches_by_provider_id():
         second = await runtime.resolve_provider("nvidia_nim")
 
     assert first is second
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_provider_creation_retries_after_shared_failure(cancelled):
+    entered, release = asyncio.Event(), asyncio.Event()
+    provider = MagicMock(cleanup=AsyncMock())
+    attempts = 0
+
+    async def construct(_id, _settings):
+        nonlocal attempts
+        attempts += 1
+        attempt = attempts
+        entered.set()
+        await release.wait()
+        if attempt == 1:
+            if cancelled:
+                raise asyncio.CancelledError()
+            raise RuntimeError("construction failed")
+        return provider
+
+    runtime = ProviderRuntime(_make_settings(), provider_constructor=construct)
+    waiting = []
+    try:
+        for attempt in (1, 2):
+            entered.clear()
+            release.clear()
+            waiting = [
+                asyncio.create_task(runtime.resolve_provider("nvidia_nim"))
+                for _ in range(3)
+            ]
+            # Give the whole group a chance to join the held constructor.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert attempts == attempt
+            assert entered.is_set()
+            release.set()
+            results = await asyncio.gather(*waiting, return_exceptions=True)
+            if attempt == 1:
+                error = asyncio.CancelledError if cancelled else RuntimeError
+                assert all(isinstance(result, error) for result in results)
+            else:
+                assert all(result is provider for result in results)
+        assert await runtime.resolve_provider("nvidia_nim") is provider
+        assert attempts == 2
+    finally:
+        release.set()
+        await asyncio.gather(*waiting, return_exceptions=True)
+        await runtime.cleanup()
+    provider.cleanup.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_finished_creation_callback_cannot_forget_a_new_retry():
+    retry_entered, release = asyncio.Event(), asyncio.Event()
+    provider = MagicMock(cleanup=AsyncMock())
+    attempts = 0
+    retry = None
+
+    async def construct(_id, _settings):
+        nonlocal attempts, retry
+        attempts += 1
+        if attempts == 1:
+            # Queue a real acquisition ahead of the failed task's callbacks.
+            retry = asyncio.create_task(runtime.resolve_provider("nvidia_nim"))
+            raise RuntimeError("construction failed")
+        retry_entered.set()
+        await release.wait()
+        return provider
+
+    runtime = ProviderRuntime(_make_settings(), provider_constructor=construct)
+    later = None
+    try:
+        with pytest.raises(RuntimeError, match="construction failed"):
+            await runtime.resolve_provider("nvidia_nim")
+        await asyncio.wait_for(retry_entered.wait(), 1)
+        later = asyncio.create_task(runtime.resolve_provider("nvidia_nim"))
+        await asyncio.sleep(0)
+        release.set()
+        assert retry is not None
+        assert await retry is provider
+        assert await later is provider
+        assert attempts == 2
+    finally:
+        release.set()
+        await asyncio.gather(
+            *(task for task in (retry, later) if task is not None),
+            return_exceptions=True,
+        )
+        await runtime.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_acquisition_keeps_construction_available_to_next_caller():
+    entered, release = asyncio.Event(), asyncio.Event()
+    provider = MagicMock(cleanup=AsyncMock())
+    attempts = 0
+
+    async def construct(_id, _settings):
+        nonlocal attempts
+        attempts += 1
+        entered.set()
+        await release.wait()
+        return provider
+
+    runtime = ProviderRuntime(_make_settings(), provider_constructor=construct)
+    first = asyncio.create_task(runtime.resolve_provider("nvidia_nim"))
+    second = None
+    try:
+        await entered.wait()
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        second = asyncio.create_task(runtime.resolve_provider("nvidia_nim"))
+        await asyncio.sleep(0)
+        release.set()
+        assert await second is provider
+        assert attempts == 1
+    finally:
+        release.set()
+        await asyncio.gather(
+            *(task for task in (first, second) if task is not None),
+            return_exceptions=True,
+        )
+        await runtime.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_abandoned_creation_failure_has_no_unretrieved_exception():
+    entered, release, failed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    errors = []
+
+    async def construct(_id, _settings):
+        entered.set()
+        await release.wait()
+        failed.set()
+        raise RuntimeError("abandoned construction failed")
+
+    runtime = ProviderRuntime(_make_settings(), provider_constructor=construct)
+    waiting = asyncio.create_task(runtime.resolve_provider("nvidia_nim"))
+    loop.set_exception_handler(lambda _loop, context: errors.append(context))
+    try:
+        await entered.wait()
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        del waiting
+        release.set()
+        await failed.wait()
+        await asyncio.sleep(0)
+        del runtime
+        gc.collect()
+        # Python 3.14's shield explicitly logs abandoned failures even if observed.
+        # It must not also report a task exception that FCC failed to retrieve.
+        assert all(
+            error["message"] == "RuntimeError exception in shielded future"
+            for error in errors
+        )
+    finally:
+        release.set()
+        loop.set_exception_handler(previous_handler)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drains_construction_that_finishes_during_cancellation():
+    entered = asyncio.Event()
+    provider = MagicMock(cleanup=AsyncMock())
+
+    async def construct(_id, _settings):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return provider
+
+    runtime = ProviderRuntime(_make_settings(), provider_constructor=construct)
+    waiting = asyncio.create_task(runtime.resolve_provider("nvidia_nim"))
+    try:
+        await entered.wait()
+        await runtime.cleanup()
+        assert await waiting is provider
+        provider.cleanup.assert_awaited_once_with()
+        with pytest.raises(ApplicationUnavailableError, match="shutting down"):
+            await runtime.resolve_provider("nvidia_nim")
+        await runtime.cleanup()
+        provider.cleanup.assert_awaited_once_with()
+    finally:
+        await runtime.cleanup()
+        await asyncio.gather(waiting, return_exceptions=True)
 
 
 @pytest.mark.asyncio

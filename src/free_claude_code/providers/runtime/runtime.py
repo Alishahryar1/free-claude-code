@@ -64,10 +64,19 @@ class ProviderRuntime:
         if provider_id in self._providers:
             return self._providers[provider_id]
         task = self._creations.get(provider_id)
-        if task is None:
+        if task is None or task.done():
             task = asyncio.create_task(self._construct(provider_id))
             self._creations[provider_id] = task
+            task.add_done_callback(partial(self._creation_done, provider_id))
         return await asyncio.shield(task)
+
+    def _creation_done(
+        self, provider_id: str, task: asyncio.Task[BaseProvider]
+    ) -> None:
+        if self._creations.get(provider_id) is task:
+            del self._creations[provider_id]
+        if not task.cancelled():
+            task.exception()  # Observe failures even when every caller stopped waiting.
 
     async def _construct(self, provider_id: str) -> BaseProvider:
         provider = await self._provider_constructor(provider_id, self.settings)
@@ -77,10 +86,11 @@ class ProviderRuntime:
     async def cleanup(self) -> None:
         """Release every provider client constructed by this generation."""
         self._closing = True
-        for task in self._creations.values():
+        creations = tuple(self._creations.values())
+        for task in creations:
             if not task.done():
                 task.cancel()
-        await asyncio.gather(*self._creations.values(), return_exceptions=True)
+        await asyncio.gather(*creations, return_exceptions=True)
         self._creations.clear()
         errors: list[Exception] = []
         for provider_id, provider in list(self._providers.items()):
