@@ -311,6 +311,29 @@ def test_build_responses_provider_request_omits_choice_without_tools() -> None:
     assert "tool_choice" not in body
 
 
+@pytest.mark.parametrize("choice", ["auto", "any", "none"])
+def test_build_responses_provider_request_omits_explicit_choice_without_tools(
+    choice: str,
+) -> None:
+    # An explicit choice must not survive either: "any" would otherwise become
+    # "required", demanding a tool call when no tool exists.
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "tool_choice": {"type": choice},
+        }
+    )
+
+    body = build_responses_provider_request(
+        request,
+        reasoning=ReasoningPolicy.off(),
+    )
+
+    assert "tools" not in body
+    assert "tool_choice" not in body
+
+
 def test_build_responses_provider_request_uses_resolved_reasoning_policy() -> None:
     request = MessagesRequest.model_validate(
         {
