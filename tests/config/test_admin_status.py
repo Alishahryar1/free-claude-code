@@ -34,10 +34,14 @@ def test_remote_status_exposes_ordered_configuration_targets() -> None:
         "provider_id": "nvidia_nim",
         "display_name": "NVIDIA NIM",
         "kind": "remote",
+        "auth_kind": "configuration",
         "status": "missing_key",
         "label": "Missing key",
         "configuration_keys": ["NVIDIA_NIM_API_KEY"],
         "missing_configuration_keys": ["NVIDIA_NIM_API_KEY"],
+        "local": False,
+        "credential_env": "NVIDIA_NIM_API_KEY",
+        "credential_url": "https://build.nvidia.com/settings/api-keys",
     }
     assert configured["status"] == "configured"
     assert configured["label"] == "Configured"
