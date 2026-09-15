@@ -20,9 +20,9 @@ from free_claude_code.application.connected_accounts import (
     ConnectedAccountLoginMode,
 )
 from free_claude_code.application.errors import ApplicationError
+from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY
-from free_claude_code.config.model_refs import configured_chat_model_refs
 from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     ProviderAuthKind,
@@ -329,18 +329,12 @@ def _model_options(
     *,
     refresh_result: ProviderModelRefreshResult | None = None,
 ) -> dict[str, list[str]]:
-    configured = {
-        ref.model_ref
-        for ref in configured_chat_model_refs(services.requests.current_settings())
-    }
-    discovered = {
-        info.model_id for info in services.requests.cached_prefixed_model_infos()
-    }
+    catalog = read_model_catalog(services.requests)
     failed_provider_ids = (
         refresh_result.failed_provider_ids if refresh_result is not None else ()
     )
     return {
-        "models": sorted(configured | discovered, key=str.casefold),
+        "models": [model.provider_model_ref for model in catalog.models],
         "failed_providers": list(failed_provider_ids),
     }
 

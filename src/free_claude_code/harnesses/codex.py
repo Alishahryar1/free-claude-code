@@ -3,12 +3,15 @@
 import json
 from collections.abc import Mapping, Sequence
 
+from free_claude_code.application.model_catalog import (
+    CatalogModel,
+    catalog_wire_slug_for_ref,
+)
 from free_claude_code.config.server_urls import proxy_v1_url
 from free_claude_code.harnesses.environment import client_environment
 
 from .codex_model_catalog import build_codex_model_catalog
 from .launch import PreparedLaunch
-from .model_catalog import ClientModel, catalog_wire_slug_for_ref
 from .resources import LaunchResources
 
 PRINT_PROXY_AUTH_TOKEN_FLAG = "--print-proxy-auth-token"
@@ -62,7 +65,7 @@ def prepare_codex_launch(
     binary_path: str,
     proxy_root_url: str,
     model: str,
-    models: Sequence[ClientModel],
+    models: Sequence[CatalogModel],
     base_env: Mapping[str, str],
     args: Sequence[str],
     files: LaunchResources,

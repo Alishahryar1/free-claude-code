@@ -1,10 +1,10 @@
 from collections.abc import Mapping
 from typing import Any, cast
 
+from free_claude_code.cli.launchers.catalog_http import catalog_models_from_response
 from free_claude_code.harnesses.codex_model_catalog import (
     build_codex_model_catalog,
 )
-from free_claude_code.harnesses.model_catalog import client_models_from_response
 
 
 def _models_payload(*model_ids: str) -> dict[str, Any]:
@@ -43,7 +43,7 @@ def _slugs(catalog: Mapping[str, Any]) -> list[str]:
 
 def test_codex_catalog_uses_direct_configured_and_cached_model_slugs() -> None:
     catalog = build_codex_model_catalog(
-        client_models_from_response(
+        catalog_models_from_response(
             _models_payload(
                 "nvidia_nim/nvidia/nemotron-3-super",
                 "open_router/meta-llama/llama-3.3-70b",
@@ -73,7 +73,7 @@ def test_codex_catalog_uses_direct_configured_and_cached_model_slugs() -> None:
 
 def test_codex_catalog_ignores_rows_without_direct_provider_identity() -> None:
     catalog = build_codex_model_catalog(
-        client_models_from_response(
+        catalog_models_from_response(
             {
                 "data": [
                     {"id": "claude-opus-4-20250514"},
@@ -92,7 +92,7 @@ def test_codex_catalog_ignores_rows_without_direct_provider_identity() -> None:
 
 def test_codex_catalog_deduplicates_direct_wire_ids() -> None:
     catalog = build_codex_model_catalog(
-        client_models_from_response(
+        catalog_models_from_response(
             _models_payload(
                 "nvidia_nim/provider-model",
                 "nvidia_nim/provider-model",
@@ -105,7 +105,7 @@ def test_codex_catalog_deduplicates_direct_wire_ids() -> None:
 
 def test_codex_catalog_preserves_no_thinking_only_entries_for_routing() -> None:
     catalog = build_codex_model_catalog(
-        client_models_from_response(
+        catalog_models_from_response(
             _models_payload("claude-3-freecc-no-thinking/open_router/plain-model")
         )
     )
@@ -115,7 +115,7 @@ def test_codex_catalog_preserves_no_thinking_only_entries_for_routing() -> None:
 
 def test_codex_catalog_ordering_and_priorities_are_deterministic() -> None:
     catalog = build_codex_model_catalog(
-        client_models_from_response(
+        catalog_models_from_response(
             _models_payload(
                 "anthropic/gemini/models/gemini-test",
                 "nvidia_nim/nvidia/test",
@@ -138,7 +138,7 @@ def test_codex_catalog_accepts_direct_provider_slugs_without_a_provider_registry
     None
 ):
     catalog = build_codex_model_catalog(
-        client_models_from_response(
+        catalog_models_from_response(
             _models_payload(
                 "nvidia_nim/provider-model",
                 "future_provider/provider-model",
@@ -156,7 +156,7 @@ def test_codex_catalog_projects_known_capabilities_and_preserves_unknown_default
     None
 ):
     catalog = build_codex_model_catalog(
-        client_models_from_response(
+        catalog_models_from_response(
             {
                 "data": [
                     {

@@ -29,6 +29,7 @@ _ROUTING_ENV_KEYS = frozenset(
 def _configure(
     ctx: LaunchContext, args: list[str], _files: LaunchResources
 ) -> PreparedLaunch:
+    catalog = ctx.require_catalog()
     connection = ["--provider", "meta", "--base-url", proxy_v1_url(ctx.proxy_root_url)]
     if args and args[0] in {"exec", "resume"}:
         command = [ctx.binary_path, args[0], *connection, *args[1:]]
@@ -43,7 +44,7 @@ def _configure(
             remove_prefixes=("FCC_MUSE_",),
             updates={
                 "META_API_KEY": ctx.auth_token,
-                "MUSE_MODEL": ctx.models[0].wire_slug,
+                "MUSE_MODEL": catalog.default_model_id,
             },
         ),
     )

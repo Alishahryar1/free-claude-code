@@ -136,7 +136,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         "OpenCode discovers FCC models and sends Responses through the proxy",
         (
             "tests/cli/test_opencode_launcher.py",
-            "tests/harnesses/test_model_catalog.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
             "tests/cli/test_catalog_http.py",
         ),
         ("test_probe_and_models_routes",),
@@ -154,7 +155,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         (
             "tests/cli/test_aider_config.py",
             "tests/cli/test_aider_launcher.py",
-            "tests/harnesses/test_model_catalog.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
             "tests/cli/test_catalog_http.py",
         ),
         ("test_probe_and_models_routes",),
@@ -171,7 +173,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         "Cline discovers FCC models and sends Responses through the proxy",
         (
             "tests/cli/test_cline_launcher.py",
-            "tests/harnesses/test_model_catalog.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
             "tests/cli/test_catalog_http.py",
         ),
         ("test_probe_and_models_routes",),
@@ -218,7 +221,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         "Grok Build discovers FCC models and sends Responses through the proxy",
         (
             "tests/cli/test_grok_launcher.py",
-            "tests/harnesses/test_model_catalog.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
             "tests/cli/test_catalog_http.py",
         ),
         ("test_probe_and_models_routes",),

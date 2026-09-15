@@ -2,10 +2,10 @@
 
 from dataclasses import dataclass
 
+from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.config.server_urls import proxy_v1_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
-from free_claude_code.harnesses.model_catalog import ClientModel
 
 OPENCODE_API_KEY_ENV = "FCC_OPENCODE_API_KEY"
 OPENCODE_PROVIDER_ID = "free-claude-code"
@@ -20,7 +20,7 @@ class OpenCodeConfig:
 
 
 def build_opencode_config(
-    models: tuple[ClientModel, ...], *, proxy_root_url: str
+    models: tuple[CatalogModel, ...], *, default_model_id: str, proxy_root_url: str
 ) -> OpenCodeConfig:
     """Translate a non-empty FCC model snapshot into OpenCode v1 config."""
 
@@ -38,7 +38,7 @@ def build_opencode_config(
             "apiKey": f"{{env:{OPENCODE_API_KEY_ENV}}}",
         },
     }
-    default_model = f"{OPENCODE_PROVIDER_ID}/{models[0].wire_slug}"
+    default_model = f"{OPENCODE_PROVIDER_ID}/{default_model_id}"
 
     return OpenCodeConfig(
         file={
@@ -59,7 +59,7 @@ def build_opencode_config(
     )
 
 
-def _model_config(model: ClientModel) -> JsonObject:
+def _model_config(model: CatalogModel) -> JsonObject:
     config: JsonObject = {
         "name": model.display_name,
         "reasoning": model.supports_reasoning is not False,

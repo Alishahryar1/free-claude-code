@@ -75,9 +75,9 @@ export function projectFccModels(payload: unknown): ProviderModelConfig[] {
 	const seen = new Set<string>();
 	for (const entry of payload.data) {
 		if (!isRecord(entry) || typeof entry.id !== "string" || typeof entry.provider_model_ref !== "string") continue;
-		const id = entry.id.trim();
-		const providerModel = entry.provider_model_ref.trim();
-		if (!id || !providerModel.includes("/") || seen.has(id)) continue;
+		const id = entry.id;
+		const providerModel = entry.provider_model_ref;
+		if (!id.trim() || !providerModel.includes("/") || seen.has(id)) continue;
 		seen.add(id);
 		models.push(
 			modelDefinition(

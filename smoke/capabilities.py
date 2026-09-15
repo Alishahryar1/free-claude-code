@@ -593,7 +593,8 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
         "version, proxy, config conflict, or catalog failure exits without fallback",
         (
             "tests/cli/test_opencode_launcher.py",
-            "tests/harnesses/test_model_catalog.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
             "tests/cli/test_catalog_http.py",
         ),
         ("test_opencode_cli_prompt_e2e",),
@@ -609,7 +610,8 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
         (
             "tests/cli/test_aider_config.py",
             "tests/cli/test_aider_launcher.py",
-            "tests/harnesses/test_model_catalog.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
             "tests/cli/test_catalog_http.py",
         ),
         ("test_aider_cli_prompt_e2e",),
@@ -624,7 +626,8 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
         "version, proxy, catalog, or private-file failure exits before inference",
         (
             "tests/cli/test_cline_launcher.py",
-            "tests/harnesses/test_model_catalog.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
             "tests/cli/test_catalog_http.py",
         ),
         ("test_cline_cli_prompt_e2e",),
@@ -671,7 +674,8 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
         "version, process config conflict, proxy, or catalog failure exits before inference",
         (
             "tests/cli/test_grok_launcher.py",
-            "tests/harnesses/test_model_catalog.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
             "tests/cli/test_catalog_http.py",
         ),
         ("test_grok_cli_headless_e2e",),

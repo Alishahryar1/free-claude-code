@@ -17,8 +17,8 @@ ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
     "messaging": {"core"},
     "providers": {"application", "config", "core"},
     "api": {"application", "config", "core"},
-    "harnesses": {"config", "core"},
-    "cli": {"config", "core", "harnesses"},
+    "harnesses": {"application", "config", "core"},
+    "cli": {"application", "config", "core", "harnesses"},
     "runtime": {
         "api",
         "application",
@@ -172,6 +172,26 @@ def test_shared_harness_setup_has_no_terminal_owner() -> None:
     ]
     remaining = sorted(path for path in former_paths if (_PACKAGE_ROOT / path).exists())
     assert not offenders and not remaining, "\n".join(offenders + remaining)
+
+
+def test_native_model_catalog_has_no_http_formatter_or_decoder_dependency() -> None:
+    callers = {
+        f"{_PACKAGE_NAME}.runtime.codex_app_server",
+        f"{_PACKAGE_NAME}.runtime.codex_catalog",
+        f"{_PACKAGE_NAME}.harnesses.codex_model_catalog",
+    }
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if record.importer in callers
+        and record.imported.startswith(
+            (f"{_PACKAGE_NAME}.api.", f"{_PACKAGE_NAME}.cli.launchers.")
+        )
+    ]
+    assert not offenders, (
+        "Native catalog policy belongs outside HTTP adapters:\n" + "\n".join(offenders)
+    )
+    assert not (_PACKAGE_ROOT / "harnesses/model_catalog.py").exists()
 
 
 def test_package_dependencies_follow_declarative_policy() -> None:

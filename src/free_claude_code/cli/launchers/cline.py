@@ -19,8 +19,10 @@ _VERSION_PATTERN = re.compile(
 def _configure(
     ctx: LaunchContext, args: list[str], files: LaunchResources
 ) -> PreparedLaunch:
+    catalog = ctx.require_catalog()
     config = build_cline_config(
-        ctx.models,
+        catalog.models,
+        default_model_id=catalog.default_model_id,
         proxy_root_url=ctx.proxy_root_url,
         auth_token=ctx.auth_token,
         launch_id=ctx.launch_id,

@@ -4,16 +4,16 @@ import json
 
 import pytest
 
+from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.cli.launchers.hermes_config import (
     build_hermes_managed_config,
 )
 from free_claude_code.core.model_capabilities import ModelInputModality
-from free_claude_code.harnesses.model_catalog import ClientModel
 
 
-def _models() -> tuple[ClientModel, ...]:
+def _models() -> tuple[CatalogModel, ...]:
     return (
-        ClientModel(
+        CatalogModel(
             wire_slug="nvidia_nim/vendor/model",
             provider_model_ref="nvidia_nim/vendor/model",
             display_name="Nested model",
@@ -24,7 +24,7 @@ def _models() -> tuple[ClientModel, ...]:
             context_window_tokens=131072,
             max_output_tokens=8192,
         ),
-        ClientModel(
+        CatalogModel(
             wire_slug="claude-3-freecc-no-thinking/open_router/plain-model",
             provider_model_ref="open_router/plain-model",
             display_name="No-thinking model",
@@ -32,7 +32,7 @@ def _models() -> tuple[ClientModel, ...]:
             input_modalities=frozenset({ModelInputModality.TEXT}),
             max_output_tokens=4096,
         ),
-        ClientModel(
+        CatalogModel(
             wire_slug="future_provider/unknown-model",
             provider_model_ref="future_provider/unknown-model",
             display_name="Unknown model",
@@ -43,7 +43,8 @@ def _models() -> tuple[ClientModel, ...]:
 
 def test_hermes_config_pins_responses_catalog_and_fallbacks() -> None:
     managed = build_hermes_managed_config(
-        (_models()[1], _models()[0], _models()[2]),
+        _models(),
+        default_model_id="claude-3-freecc-no-thinking/open_router/plain-model",
         proxy_root_url="http://127.0.0.1:9191/",
         nonce="a1b2c3",
     )
@@ -139,9 +140,10 @@ def test_hermes_config_pins_responses_catalog_and_fallbacks() -> None:
     assert "timeout" not in serialized
 
 
-def test_hermes_config_uses_first_model_by_default() -> None:
+def test_hermes_config_uses_explicit_default() -> None:
     managed = build_hermes_managed_config(
         _models(),
+        default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191",
         nonce="ABC123",
     )
@@ -154,6 +156,7 @@ def test_hermes_config_rejects_empty_catalog() -> None:
     with pytest.raises(ValueError, match="at least one"):
         build_hermes_managed_config(
             (),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
             nonce="abc123",
         )
@@ -164,6 +167,7 @@ def test_hermes_config_rejects_unsafe_nonce(nonce: str) -> None:
     with pytest.raises(ValueError, match="alphanumeric"):
         build_hermes_managed_config(
             _models(),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
             nonce=nonce,
         )

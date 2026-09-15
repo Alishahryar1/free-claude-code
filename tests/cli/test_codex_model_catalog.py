@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.cli.launchers.catalog_http import catalog_models_from_response
 from free_claude_code.harnesses.codex import codex_config_args
 from free_claude_code.harnesses.codex_model_catalog import (
     build_codex_model_catalog,
 )
-from free_claude_code.harnesses.model_catalog import client_models_from_response
 from free_claude_code.runtime.codex_catalog import write_codex_model_catalog
 from tests.harnesses.test_codex_model_catalog import _models_payload
 
@@ -26,7 +26,7 @@ def test_launcher_config_composes_with_persistent_codex_config(
     write_codex_model_catalog(
         catalog_path,
         build_codex_model_catalog(
-            client_models_from_response(_models_payload("nvidia_nim/test-model"))
+            catalog_models_from_response(_models_payload("nvidia_nim/test-model"))
         ),
     )
     codex_home = tmp_path / "codex-home"

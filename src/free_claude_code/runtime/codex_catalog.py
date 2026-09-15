@@ -5,35 +5,13 @@ import uuid
 from collections.abc import Mapping
 from pathlib import Path
 
-from free_claude_code.api.model_catalog import (
-    ModelCatalogView,
-    build_models_list_response,
-)
+from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.ports import ModelCatalogPort
 from free_claude_code.config.paths import codex_model_catalog_path
-from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonValue
 from free_claude_code.harnesses.codex_model_catalog import (
     build_codex_model_catalog,
 )
-from free_claude_code.harnesses.model_catalog import (
-    ClientModel,
-    client_models_from_response,
-)
-
-
-def current_codex_models(
-    runtime: ModelCatalogPort, settings: Settings | None = None
-) -> tuple[ClientModel, ...]:
-    """Read the current FCC inventory without a request to the server itself."""
-    response = build_models_list_response(
-        settings or runtime.current_settings(),
-        runtime,
-        view=ModelCatalogView.RESPONSES,
-    )
-    return client_models_from_response(
-        response.model_dump(by_alias=True, exclude_none=True)
-    )
 
 
 class CodexModelCatalogPublisher:
@@ -52,7 +30,7 @@ class CodexModelCatalogPublisher:
         runtime: ModelCatalogPort,
         catalog_path: Path,
     ) -> None:
-        catalog = build_codex_model_catalog(current_codex_models(runtime))
+        catalog = build_codex_model_catalog(read_model_catalog(runtime).models)
         models = catalog.get("models")
         if not isinstance(models, list) or not models:
             raise ValueError("Codex model catalog contains no routable models.")

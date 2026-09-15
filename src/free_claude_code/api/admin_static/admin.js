@@ -1271,10 +1271,7 @@ async function testProvider(providerId, button) {
         "ok",
         `${result.models.length} models available`,
       );
-      setModelOptions([
-        ...state.modelOptions,
-        ...result.models.map((model) => `${providerId}/${model}`),
-      ]);
+      await hydrateModelOptions();
     } else {
       updateProviderCheckResult(
         providerId,
@@ -1354,7 +1351,7 @@ function providerDisplayName(providerId) {
 function setModelOptions(models) {
   state.modelOptions = Array.from(
     new Set(models.filter((model) => typeof model === "string" && model.trim())),
-  ).sort((left, right) => left.localeCompare(right));
+  );
   state.modelComboboxes.forEach((combobox) => {
     if (combobox.isOpen) combobox.render(combobox.query);
   });

@@ -27,13 +27,14 @@ def test_codex_selects_the_advertised_slug_from_opaque_catalog_data(
     launch_capture: LaunchCapture,
 ) -> None:
     launch_capture.catalog = {
+        "default_model_id": "arbitrary-wire-id",
         "data": [
             {
                 "id": "arbitrary-wire-id",
                 "provider_model_ref": "nvidia_nim/catalog-model:variant",
                 "supportsReasoning": False,
             }
-        ]
+        ],
     }
     launch("codex", ["exec", "--model", "native-choice", "hello"])
     command = launch_capture.commands[0]
