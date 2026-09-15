@@ -24,6 +24,7 @@ from free_claude_code.providers.nvidia_nim.native_tool_stream import (
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
+from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import make_provider_config, profiled_provider
 from tests.providers.test_openai_responses_transport import (
@@ -247,7 +248,7 @@ async def test_cancelled_normalizer_construction_cleanup_releases_admission():
                 task = asyncio.create_task(
                     provider._chat._create_stream(
                         {"model": "model", "messages": []},
-                        admission.start_execution(),
+                        RequestRecovery(admission.start_execution()),
                         ProviderOperationKind.GENERATION,
                     )
                 )
@@ -382,7 +383,7 @@ async def test_normalizer_construction_failure_closes_response_before_retry(oper
             async with asyncio.timeout(2):
                 stream, _, attempt, _ = await provider._chat._create_stream(
                     {"model": "model", "messages": []},
-                    admission.start_execution(),
+                    RequestRecovery(admission.start_execution()),
                     operation,
                 )
         try:

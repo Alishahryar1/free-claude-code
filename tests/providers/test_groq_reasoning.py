@@ -26,6 +26,7 @@ from free_claude_code.providers.groq.client import (
     _parse_reasoning_vocabulary,
     _rewrite_reasoning_effort,
 )
+from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
@@ -420,7 +421,7 @@ async def test_exact_issue_retries_with_default_and_learns_model() -> None:
     with patch.object(provider._client.chat.completions, "create", create):
         _stream, used_body, attempt, _sent_body = await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
         await _stream.aclose()
@@ -443,7 +444,7 @@ async def test_exact_issue_retries_with_default_and_learns_model() -> None:
             _sent_body,
         ) = await provider._chat._create_stream(
             next_body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
         await _stream.aclose()
@@ -514,7 +515,7 @@ async def test_unknown_vocabulary_retries_without_effort_and_negative_caches() -
     with patch.object(provider._client.chat.completions, "create", create):
         _stream, used_body, attempt, _sent_body = await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
         await attempt.aclose()
@@ -569,7 +570,7 @@ async def test_concurrent_first_requests_can_learn_without_state_corruption() ->
     async def execute(body: dict):
         _stream, used_body, attempt, _sent_body = await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
         await attempt.aclose()
@@ -608,7 +609,7 @@ async def test_stale_cache_self_heals_without_guessing_original_effort() -> None
             _sent_body,
         ) = await provider._chat._create_stream(
             cached_body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
         await attempt.aclose()
@@ -636,7 +637,7 @@ async def test_unrelated_400_propagates_without_cache_poisoning() -> None:
     ):
         await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 
@@ -666,7 +667,7 @@ async def test_nested_unrelated_allow_list_cannot_retry_or_poison_cache() -> Non
     ):
         await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 
@@ -690,7 +691,7 @@ async def test_advertised_current_value_does_not_retry_or_cache() -> None:
     ):
         await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 
@@ -711,7 +712,7 @@ async def test_last_attempt_learns_but_does_not_exceed_budget() -> None:
     ):
         await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 
@@ -739,7 +740,7 @@ async def test_output_cap_and_reasoning_corrections_share_one_session() -> None:
     with patch.object(provider._client.chat.completions, "create", create):
         _stream, used_body, attempt, _sent_body = await provider._chat._create_stream(
             body,
-            execution,
+            RequestRecovery(execution),
             ProviderOperationKind.GENERATION,
         )
         await attempt.aclose()
@@ -769,7 +770,7 @@ async def test_corrected_request_cannot_enter_vocabulary_retry_loop() -> None:
     ):
         await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 

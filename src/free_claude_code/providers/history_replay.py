@@ -5,10 +5,8 @@ import json
 import re
 from collections.abc import Iterator, Mapping
 from copy import deepcopy
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
-
-from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
@@ -22,7 +20,10 @@ from free_claude_code.core.history_replay import (
     reasoning_context,
 )
 
-from .endpoint import HttpEndpoint
+from .endpoint_types import HttpEndpoint
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 
 def validate_history(body: Mapping[str, Any]) -> None:

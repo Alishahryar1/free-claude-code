@@ -41,6 +41,7 @@ from free_claude_code.providers.openai_chat.transport import (
     _OpenAIChatStreamRunner,
     _reserved_anthropic_tool_ids,
 )
+from free_claude_code.providers.request_recovery import RequestRecovery
 from free_claude_code.providers.stream_recovery import TruncatedProviderStreamError
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
@@ -347,7 +348,7 @@ class TestStreamingExceptionHandling:
         ):
             await provider._chat._create_stream(
                 {"model": "test-model", "messages": []},
-                execution,
+                RequestRecovery(execution),
                 ProviderOperationKind.GENERATION,
             )
 
@@ -1754,7 +1755,7 @@ class TestStreamingExceptionHandling:
             await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -1787,7 +1788,7 @@ class TestStreamingExceptionHandling:
             await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -1839,7 +1840,7 @@ class TestStreamingExceptionHandling:
             recovered = await runner._collect_recovery_output(
                 body,
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -1851,8 +1852,8 @@ class TestStreamingExceptionHandling:
         assert "stream_options" not in create.await_args_list[2].kwargs
         assert create_stream.await_count == 2
         assert (
-            create_stream.await_args_list[0].kwargs["used_retry_kinds"]
-            is create_stream.await_args_list[1].kwargs["used_retry_kinds"]
+            create_stream.await_args_list[0].kwargs["corrections"]
+            is create_stream.await_args_list[1].kwargs["corrections"]
         )
         assert recovered.text == "visible"
         assert failed_stream.closed
@@ -1925,7 +1926,7 @@ class TestStreamingExceptionHandling:
                 body=body,
                 output=assembler.output,
                 tool_argument_alias_buffers=assembler.tool_argument_alias_buffers,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
             )
 
         assert events is not None
@@ -1937,8 +1938,8 @@ class TestStreamingExceptionHandling:
         assert "stream_options" not in create.await_args_list[2].kwargs
         assert create_stream.await_count == 2
         assert (
-            create_stream.await_args_list[0].kwargs["used_retry_kinds"]
-            is create_stream.await_args_list[1].kwargs["used_retry_kinds"]
+            create_stream.await_args_list[0].kwargs["corrections"]
+            is create_stream.await_args_list[1].kwargs["corrections"]
         )
         assert invalid_repair.closed
         assert valid_repair.closed
@@ -1965,7 +1966,7 @@ class TestStreamingExceptionHandling:
             result = await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -2116,7 +2117,7 @@ class TestStreamingExceptionHandling:
             result = await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -2152,7 +2153,7 @@ class TestStreamingExceptionHandling:
             result = await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -2185,7 +2186,7 @@ class TestStreamingExceptionHandling:
             await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -2211,7 +2212,7 @@ class TestStreamingExceptionHandling:
                 runner._collect_recovery_output(
                     {"model": "test-model", "messages": []},
                     include_reasoning=True,
-                    execution=execution,
+                    request_recovery=RequestRecovery(execution),
                     operation_kind=ProviderOperationKind.CONTINUATION,
                 )
             )
@@ -2260,7 +2261,7 @@ class TestStreamingExceptionHandling:
             result = await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -2342,7 +2343,7 @@ class TestStreamingExceptionHandling:
                 error=TimeoutError("cutoff"),
                 tool_argument_alias_buffers={},
                 output_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
             )
 
         assert events is not None
@@ -3222,7 +3223,7 @@ async def test_tool_argument_mapping_survives_correction_then_stream_reopen(coll
                 recovered = await runner._collect_recovery_output(
                     runner._body,
                     include_reasoning=False,
-                    execution=execution,
+                    request_recovery=RequestRecovery(execution),
                     operation_kind=ProviderOperationKind.CONTINUATION,
                 )
                 arguments = json.loads(recovered.tool_calls[0]["function"]["arguments"])

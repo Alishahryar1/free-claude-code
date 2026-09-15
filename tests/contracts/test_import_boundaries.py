@@ -141,6 +141,34 @@ def test_api_configuration_access_goes_through_runtime() -> None:
     )
 
 
+def test_request_recovery_policy_has_no_client_or_transport_binding() -> None:
+    owners = {
+        f"{_PACKAGE_NAME}.providers.request_recovery",
+        f"{_PACKAGE_NAME}.providers.endpoint",
+    }
+    forbidden = (
+        "openai",
+        "httpx",
+        "httpx2",
+        f"{_PACKAGE_NAME}.providers.openai_client",
+        f"{_PACKAGE_NAME}.providers.openai_chat",
+        f"{_PACKAGE_NAME}.providers.openai_responses",
+        f"{_PACKAGE_NAME}.providers.anthropic_messages",
+    )
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if record.importer in owners
+        and any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in forbidden
+        )
+    ]
+    assert not offenders, (
+        "Request recovery policy depends on an adapter:\n" + "\n".join(offenders)
+    )
+
+
 def test_shared_harness_setup_has_no_terminal_owner() -> None:
     former_paths = {
         "cli/environment.py",

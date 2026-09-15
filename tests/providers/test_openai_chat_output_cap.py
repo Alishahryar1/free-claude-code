@@ -16,6 +16,7 @@ from free_claude_code.providers.openai_chat.output_cap import (
     clamp_output_tokens,
     parse_output_token_cap,
 )
+from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
@@ -273,7 +274,7 @@ async def test_create_stream_clamps_and_learns_on_cap_rejection(groq_provider):
             _sent_body,
         ) = await groq_provider._chat._create_stream(
             body,
-            groq_provider._admission.start_execution(),
+            RequestRecovery(groq_provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
         await _stream.aclose()
@@ -306,7 +307,7 @@ async def test_learned_cap_clamps_next_request_without_a_400(groq_provider):
             _sent_body,
         ) = await groq_provider._chat._create_stream(
             body,
-            groq_provider._admission.start_execution(),
+            RequestRecovery(groq_provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
         await _stream.aclose()
@@ -334,7 +335,7 @@ async def test_unrelated_400_is_not_clamped_and_propagates(groq_provider):
     ):
         await groq_provider._chat._create_stream(
             body,
-            groq_provider._admission.start_execution(),
+            RequestRecovery(groq_provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 
@@ -368,7 +369,7 @@ async def test_mixed_field_400_does_not_retry_or_poison_learned_cap(groq_provide
     ):
         await groq_provider._chat._create_stream(
             body,
-            groq_provider._admission.start_execution(),
+            RequestRecovery(groq_provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 

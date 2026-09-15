@@ -31,6 +31,7 @@ from free_claude_code.providers.openai_chat.usage import (
     request_stream_usage,
     usage_int,
 )
+from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
@@ -554,7 +555,7 @@ async def test_openai_chat_stream_retries_without_usage_when_option_is_rejected(
             _sent_body,
         ) = await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
         await attempt.aclose()
