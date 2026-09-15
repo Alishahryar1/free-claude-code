@@ -2,28 +2,12 @@
 
 import ipaddress
 import socket
-from dataclasses import dataclass
 from urllib.parse import urlparse
 
-
-@dataclass(frozen=True, slots=True)
-class WebFetchEgressPolicy:
-    """Egress rules for user-influenced web_fetch URLs."""
-
-    allow_private_network_targets: bool
-    allowed_schemes: frozenset[str]
-
-
-class WebFetchEgressViolation(ValueError):
-    """Raised when a web_fetch URL is rejected by egress policy (SSRF guard)."""
-
-
-def web_fetch_allowed_scheme_set(raw_schemes: str) -> frozenset[str]:
-    """Return normalized schemes allowed for web_fetch."""
-
-    return frozenset(
-        part.strip().lower() for part in raw_schemes.split(",") if part.strip()
-    )
+from free_claude_code.application.web_tools.ports import (
+    WebFetchEgressPolicy,
+    WebFetchEgressViolation,
+)
 
 
 def _port_for_url(parsed) -> int:
@@ -50,7 +34,7 @@ def get_validated_stream_addrinfos_for_egress(
 
     Each HTTP connect pins to only these `getaddrinfo` results so a malicious DNS
     server cannot rebind to a disallowed address between resolution and the TCP
-    connect (used by :func:`api.web_tools.outbound._run_web_fetch`).
+    connect (used by :meth:`runtime.web_tools.client.HTTPWebToolsClient.fetch`).
     """
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()

@@ -56,6 +56,7 @@ async def _create_messages_response(
         await lease.wait_for_token_estimation()
         handler = MessagesHandler(
             lease.settings,
+            web_tools=services.web_tools,
             provider_resolver=_provider_resolver(lease),
             token_counter=get_token_count,
             generation_id=lease.generation_id,

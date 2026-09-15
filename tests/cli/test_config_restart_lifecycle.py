@@ -17,6 +17,7 @@ from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.asgi import RuntimeASGIApp
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.web_tools_support import StubWebToolsClient
 
 
 @pytest.mark.parametrize("stop_during_commit", [False, True])
@@ -46,7 +47,14 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
         )
         runtimes.append(runtime)
         return RuntimeASGIApp(
-            create_app(ApiServices(requests=manager, admin=runtime, tasks=runtime)),
+            create_app(
+                ApiServices(
+                    requests=manager,
+                    admin=runtime,
+                    tasks=runtime,
+                    web_tools=StubWebToolsClient(),
+                )
+            ),
             runtime,
         )
 

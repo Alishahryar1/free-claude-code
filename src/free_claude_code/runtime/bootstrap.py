@@ -34,6 +34,7 @@ from .codex_app_server import CodexHarnessFactory
 from .codex_catalog import CodexModelCatalogPublisher
 from .configuration import ConfigurationService
 from .provider_manager import ProviderRuntimeManager
+from .web_tools.client import HTTPWebToolsClient
 
 
 def build_asgi_app(
@@ -88,6 +89,7 @@ def build_asgi_app(
         requests=provider_manager,
         admin=runtime,
         tasks=runtime,
+        web_tools=HTTPWebToolsClient(),
         code=code_service,
     )
     return RuntimeASGIApp(create_app(services), runtime)

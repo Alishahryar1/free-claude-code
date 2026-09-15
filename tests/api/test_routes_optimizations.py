@@ -8,6 +8,7 @@ from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.ports import StopResult
 from free_claude_code.config.settings import Settings
 from tests.api.support import create_test_app
+from tests.web_tools_support import StubWebToolsClient
 
 
 @pytest.fixture
@@ -190,6 +191,7 @@ def test_stop_cli_with_messaging_workflow(app, client):
         requests=services.requests,
         admin=services.admin,
         tasks=session_control,
+        web_tools=StubWebToolsClient(),
     )
 
     response = client.post("/stop")
@@ -207,6 +209,7 @@ def test_stop_cli_fallback_to_manager(app, client):
         requests=services.requests,
         admin=services.admin,
         tasks=session_control,
+        web_tools=StubWebToolsClient(),
     )
 
     response = client.post("/stop")

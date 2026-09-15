@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic import MessagesRequest, Tool
 
-from .parsers import content_text
-
 WEB_SEARCH_TYPE = "web_search_20250305"
 WEB_FETCH_TYPE = "web_fetch_20250910"
 HIDDEN_WEB_SEARCH_NAME = "fcc_web_search"
@@ -239,3 +237,29 @@ def _parse_domains(value: object, *, field: str) -> tuple[str, ...]:
     if len(domains) != len(set(domains)):
         raise InvalidRequestError(f"{field} must not contain duplicate hostnames.")
     return tuple(domains)
+
+
+def content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text", "")))
+            else:
+                parts.append(str(getattr(item, "text", "")))
+        return "\n".join(part for part in parts if part)
+    return str(content)
+
+
+def extract_query(text: str) -> str:
+    match = re.search(r"query:\s*(.+)", text, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(1).strip().strip("\"'")
+    return text.strip()
+
+
+def extract_url(text: str) -> str:
+    match = re.search(r"https?://\S+", text)
+    return match.group(0).rstrip(").,]") if match else text.strip()

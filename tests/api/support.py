@@ -17,6 +17,7 @@ from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime, RestartCallback
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.web_tools_support import StubWebToolsClient
 
 
 class ApiTestRuntime(ProviderRuntimeManager):
@@ -85,6 +86,7 @@ def create_test_app(
             admin=runtime,
             tasks=runtime,
             code=code,
+            web_tools=StubWebToolsClient(),
         )
     )
 

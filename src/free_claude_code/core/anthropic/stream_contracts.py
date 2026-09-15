@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from .server_tool_sse import (
+from .server_tool_types import (
     SERVER_TOOL_USE,
     WEB_FETCH_TOOL_RESULT,
     WEB_SEARCH_TOOL_RESULT,

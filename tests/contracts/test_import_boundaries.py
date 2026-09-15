@@ -565,6 +565,25 @@ def test_core_does_not_import_provider_transport_sdks() -> None:
     assert sorted(offenders) == []
 
 
+def test_web_tool_workflow_has_no_http_adapter_owner() -> None:
+    former_owner = "free_claude_code.api.web_tools"
+    application_owner = "free_claude_code.application.web_tools"
+    forbidden_clients = {"aiohttp", "httpx", "requests", "socket"}
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if record.imported.startswith(former_owner)
+        or (
+            record.importer.startswith(application_owner)
+            and record.imported.split(".", 1)[0] in forbidden_clients
+        )
+    ]
+    remaining = list((_PACKAGE_ROOT / "api" / "web_tools").glob("*.py"))
+    assert not offenders and not remaining, "\n".join(
+        [*offenders, *(str(path.relative_to(_REPO_ROOT)) for path in remaining)]
+    )
+
+
 def test_providers_do_not_own_wire_error_type_literals() -> None:
     wire_types = {
         "api_error",

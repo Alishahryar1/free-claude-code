@@ -21,6 +21,7 @@ from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.codex_catalog import CodexModelCatalogPublisher
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.web_tools_support import StubWebToolsClient
 
 
 def _settings():
@@ -60,7 +61,9 @@ async def test_http_and_admin_serve_while_selected_catalog_is_held():
         configuration=ConfigurationService(ManagedConfigStore()),
         transcriber=None,
     )
-    app = create_app(ApiServices(manager, runtime, runtime))
+    app = create_app(
+        ApiServices(manager, runtime, runtime, web_tools=StubWebToolsClient())
+    )
     try:
         await asyncio.wait_for(runtime.start(), 1)
         await asyncio.wait_for(entered.wait(), 1)

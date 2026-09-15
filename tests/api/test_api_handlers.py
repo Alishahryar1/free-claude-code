@@ -23,6 +23,7 @@ from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from tests.web_tools_support import StubWebToolsClient
 
 _LEGACY_CLASSIFIER_SYSTEM = (
     "You are a security monitor. Respond with <block>yes</block> or <block>no</block>."
@@ -126,7 +127,9 @@ def _trace_events(trace_mock: MagicMock, event: str) -> list[dict[str, Any]]:
 async def test_messages_handler_passes_routed_request_and_stream_metadata() -> None:
     provider = FakeProvider()
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
@@ -167,7 +170,9 @@ async def test_messages_handler_startup_invalid_request_stays_http_error(
 
     provider = RejectStartupProvider()
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
@@ -241,7 +246,9 @@ async def test_messages_handler_aggregates_provider_stream_when_stream_false() -
         ]
     )
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
@@ -282,7 +289,9 @@ async def test_messages_handler_returns_error_json_for_stream_false_sse_error() 
         ]
     )
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
@@ -351,7 +360,9 @@ async def test_messages_handler_discards_partial_stream_false_output_on_error() 
         ]
     )
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
@@ -406,7 +417,9 @@ async def test_messages_handler_stream_false_provider_exception_keeps_status() -
 
     provider = FailingProvider()
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
@@ -441,7 +454,9 @@ async def test_messages_handler_normalizes_safety_classifier_policy(
 ) -> None:
     provider = FakeProvider()
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
@@ -483,7 +498,9 @@ async def test_messages_handler_normalizes_safety_classifier_policy(
 async def test_messages_handler_preserves_thinking_for_non_classifier() -> None:
     provider = FakeProvider()
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
@@ -523,7 +540,9 @@ async def test_messages_handler_preserves_thinking_for_non_classifier() -> None:
 async def test_messages_handler_tolerates_required_thinking_for_classifier() -> None:
     provider = FakeProvider()
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="claude-3-freecc-no-thinking/nvidia_nim/test-model",
@@ -564,7 +583,9 @@ async def test_messages_handler_prefers_no_thinking_without_classifier_stop_hint
 ):
     provider = FakeProvider()
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
@@ -600,7 +621,9 @@ async def test_messages_handler_prefers_no_thinking_without_classifier_stop_hint
 async def test_messages_handler_preserves_unowned_classifier_stop_sequences() -> None:
     provider = FakeProvider()
     handler = MessagesHandler(
-        Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        web_tools=StubWebToolsClient(),
     )
     original_stops = ["custom", "</severity>", "custom", "</severity>", "tail"]
     request = MessagesRequest(
@@ -631,7 +654,9 @@ async def test_messages_handler_optimization_intercepts_before_provider_executio
     None
 ):
     provider_resolver = AsyncMock()
-    handler = MessagesHandler(Settings(), provider_resolver=provider_resolver)
+    handler = MessagesHandler(
+        Settings(), provider_resolver=provider_resolver, web_tools=StubWebToolsClient()
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,

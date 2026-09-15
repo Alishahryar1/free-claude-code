@@ -1,6 +1,7 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+import socket
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,27 +9,10 @@ import httpx
 import pytest
 from fastapi.responses import JSONResponse, StreamingResponse
 
-import free_claude_code.api.web_tools.constants as web_tool_constants
+import free_claude_code.runtime.web_tools.constants as web_tool_constants
 from free_claude_code.api.handlers import MessagesHandler
-from free_claude_code.api.web_tools import egress as web_egress
-from free_claude_code.api.web_tools.egress import (
-    WebFetchEgressPolicy,
-    WebFetchEgressViolation,
-    enforce_web_fetch_egress,
-)
-from free_claude_code.api.web_tools.outbound import (
-    _drain_response_body_capped,
-    _read_response_body_capped,
-    _run_web_fetch,
-)
-from free_claude_code.api.web_tools.request import (
-    HIDDEN_WEB_SEARCH_NAME,
-    is_web_server_tool_request,
-    plan_automatic_web_search,
-    unsupported_server_tool_error,
-)
-from free_claude_code.api.web_tools.streaming import stream_web_server_tool_response
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.routing import (
     ModelRouter,
@@ -36,6 +20,17 @@ from free_claude_code.application.routing import (
     ResolvedModelRoute,
     RoutedMessagesRequest,
 )
+from free_claude_code.application.web_tools.ports import (
+    WebFetchEgressPolicy,
+    WebFetchEgressViolation,
+)
+from free_claude_code.application.web_tools.request import (
+    HIDDEN_WEB_SEARCH_NAME,
+    is_web_server_tool_request,
+    plan_automatic_web_search,
+    unsupported_server_tool_error,
+)
+from free_claude_code.application.web_tools.service import WebToolService
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
@@ -55,7 +50,16 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.version import package_version
+from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
 from free_claude_code.messaging.event_parser import parse_cli_event
+from free_claude_code.runtime.web_tools import egress as web_egress
+from free_claude_code.runtime.web_tools.client import (
+    HTTPWebToolsClient,
+    _drain_response_body_capped,
+    _read_response_body_capped,
+)
+from free_claude_code.runtime.web_tools.egress import enforce_web_fetch_egress
+from tests.web_tools_support import StubWebToolsClient
 
 _STRICT_EGRESS = WebFetchEgressPolicy(
     allow_private_network_targets=False,
@@ -106,6 +110,41 @@ class FixedProviderModelRouter(ModelRouter):
             resolved=resolved,
             reasoning=ReasoningPolicy.off(),
         )
+
+
+def _local_tool_body(
+    request: MessagesRequest,
+    input_tokens: int,
+    *,
+    web_fetch_egress: WebFetchEgressPolicy,
+    verbose_client_errors: bool = False,
+) -> AsyncGenerator[str]:
+    settings = Settings().model_copy(
+        update={
+            "enable_web_server_tools": True,
+            "web_fetch_allow_private_networks": web_fetch_egress.allow_private_network_targets,
+            "web_fetch_allowed_schemes": ",".join(
+                sorted(web_fetch_egress.allowed_schemes)
+            ),
+            "log_api_error_tracebacks": verbose_client_errors,
+        }
+    )
+
+    async def unexpected_provider(_provider_id: str):
+        pytest.fail("Forced local tools must not resolve a provider")
+
+    service = WebToolService(
+        settings=settings,
+        client=StubWebToolsClient(),
+        executor=ProviderExecutor(unexpected_provider, progress_timeout_seconds=30),
+        token_counter=lambda *_: input_tokens,
+    )
+    routed = FixedProviderModelRouter(
+        settings, _PROVIDER_IDS[0]
+    ).resolve_messages_request(request)
+    body = service.try_stream_messages(routed, request_id="req_local_tool")
+    assert isinstance(body, AsyncGenerator)
+    return body
 
 
 class ScriptedSelectionProvider:
@@ -337,6 +376,7 @@ def _automatic_search_service(
             _PROVIDER_IDS[0],
             provider_model="upstream-model",
         ),
+        web_tools=StubWebToolsClient(),
     )
 
 
@@ -556,6 +596,7 @@ async def test_service_rejects_forced_server_tool_when_local_handler_is_disabled
         settings,
         provider_resolver=AsyncMock(side_effect=lambda _: MagicMock()),
         model_router=FixedProviderModelRouter(settings, provider_id),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
@@ -580,9 +621,7 @@ async def test_automatic_web_search_replays_provider_response_when_declined(
     events = _provider_text_events("No search needed")
     provider = ScriptedSelectionProvider(events)
     search = AsyncMock()
-    monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_search", search
-    )
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
     service = _automatic_search_service(provider)
 
     response = await service.create(
@@ -627,15 +666,15 @@ async def test_automatic_web_search_uses_model_query_and_filters_domains(
     )
     seen_queries: list[str] = []
 
-    async def fake_search(query: str) -> list[dict[str, str]]:
+    async def fake_search(self, query: str) -> list[WebSearchResult]:
         seen_queries.append(query)
         return [
-            {"title": "Allowed", "url": "https://docs.example.com/page"},
-            {"title": "Filtered", "url": "https://unrelated.test/page"},
+            WebSearchResult(title="Allowed", url="https://docs.example.com/page"),
+            WebSearchResult(title="Filtered", url="https://unrelated.test/page"),
         ]
 
     monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_search", fake_search
+        "tests.web_tools_support.StubWebToolsClient.search", fake_search
     )
     service = _automatic_search_service(provider)
     request = _automatic_search_request(
@@ -699,11 +738,11 @@ async def test_automatic_web_search_aggregates_when_stream_false(
         _provider_tool_events(arguments={"query": "json query"})
     )
 
-    async def fake_search(_query: str) -> list[dict[str, str]]:
-        return [{"title": "JSON result", "url": "https://example.com/json"}]
+    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+        return [WebSearchResult(title="JSON result", url="https://example.com/json")]
 
     monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_search", fake_search
+        "tests.web_tools_support.StubWebToolsClient.search", fake_search
     )
     service = _automatic_search_service(provider)
 
@@ -740,9 +779,7 @@ async def test_automatic_web_search_rejects_malformed_provider_selection(
 ) -> None:
     provider = ScriptedSelectionProvider(events)
     search = AsyncMock()
-    monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_search", search
-    )
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
     service = _automatic_search_service(provider)
 
     response = await service.create(
@@ -772,9 +809,7 @@ async def test_automatic_web_search_preserves_provider_failure_before_public_com
         ),
     )
     search = AsyncMock()
-    monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_search", search
-    )
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
     service = _automatic_search_service(provider)
 
     response = await service.create(
@@ -804,9 +839,7 @@ async def test_automatic_web_search_converts_internal_post_start_failure_to_json
         failure_after_events=True,
     )
     search = AsyncMock()
-    monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_search", search
-    )
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
     service = _automatic_search_service(provider)
 
     response = await service.create(
@@ -956,16 +989,59 @@ def _aiohttp_client_session_patch(
     return client_cm, session
 
 
-def test_enforce_web_fetch_egress_documents_connect_time_pinning():
-    assert enforce_web_fetch_egress.__doc__ and "resolved addresses" in (
-        enforce_web_fetch_egress.__doc__ or ""
+@pytest.mark.asyncio
+async def test_web_fetch_pins_validated_addresses_for_every_redirect(monkeypatch):
+    addresses = iter(["8.8.8.8", "1.1.1.1"])
+    resolved_hosts = []
+
+    def resolve(host, port, **kwargs):
+        resolved_hosts.append(host)
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                (next(addresses), port),
+            )
+        ]
+
+    monkeypatch.setattr(web_egress.socket, "getaddrinfo", resolve)
+    redirect = _aiohttp_response(
+        302, url="https://first.example/", location="https://next.example/", body=b""
     )
-    assert (
-        web_egress.get_validated_stream_addrinfos_for_egress.__doc__
-        and "pinning"
-        in (web_egress.get_validated_stream_addrinfos_for_egress.__doc__ or "")
-    )
-    assert "DNS-pinned" in (_run_web_fetch.__doc__ or "")
+    final = _aiohttp_response(200, url="https://next.example/", body=b"done")
+    client_cm, _ = _aiohttp_client_session_patch(redirect, final)
+    connectors = []
+
+    def connector(**kwargs):
+        value = MagicMock()
+        value.close = AsyncMock()
+        connectors.append((kwargs["resolver"], value))
+        return value
+
+    with (
+        patch(
+            "free_claude_code.runtime.web_tools.client.ClientSession",
+            return_value=client_cm,
+        ),
+        patch(
+            "free_claude_code.runtime.web_tools.client.TCPConnector",
+            side_effect=connector,
+        ),
+    ):
+        result = await HTTPWebToolsClient().fetch(
+            "https://first.example/", egress=_STRICT_EGRESS
+        )
+
+    assert result.data == "done"
+    assert resolved_hosts == ["first.example", "next.example"]
+    for (resolver, value), expected in zip(
+        connectors, ["8.8.8.8", "1.1.1.1"], strict=True
+    ):
+        pinned = await resolver.resolve("ignored.example", 443)
+        assert [row["host"] for row in pinned] == [expected]
+        value.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -976,11 +1052,14 @@ async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
     res_ok = _aiohttp_response(200, url="http://8.8.8.8/final", body=b"hello world")
     client_cm, session = _aiohttp_client_session_patch(res_redirect, res_ok)
     with patch(
-        "free_claude_code.api.web_tools.outbound.ClientSession", return_value=client_cm
+        "free_claude_code.runtime.web_tools.client.ClientSession",
+        return_value=client_cm,
     ):
-        out = await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
+        out = await HTTPWebToolsClient().fetch(
+            "http://8.8.8.8/start", egress=_STRICT_EGRESS
+        )
 
-    assert out["data"] == "hello world"
+    assert out.data == "hello world"
     assert session.get.call_count == 2
 
 
@@ -991,12 +1070,15 @@ async def test_run_web_fetch_truncates_large_body_to_byte_cap(monkeypatch):
     client_cm, _ = _aiohttp_client_session_patch(res_ok)
     monkeypatch.setattr(web_tool_constants, "_MAX_WEB_FETCH_RESPONSE_BYTES", 100)
     with patch(
-        "free_claude_code.api.web_tools.outbound.ClientSession", return_value=client_cm
+        "free_claude_code.runtime.web_tools.client.ClientSession",
+        return_value=client_cm,
     ):
-        out = await _run_web_fetch("http://8.8.8.8/big", _STRICT_EGRESS)
+        out = await HTTPWebToolsClient().fetch(
+            "http://8.8.8.8/big", egress=_STRICT_EGRESS
+        )
 
-    assert len(out["data"]) <= 100
-    assert out["data"] == "x" * 100
+    assert len(out.data) <= 100
+    assert out.data == "x" * 100
 
 
 @pytest.mark.asyncio
@@ -1010,12 +1092,12 @@ async def test_run_web_fetch_redirect_to_blocked_host_raises():
     client_cm, session = _aiohttp_client_session_patch(res_redirect)
     with (
         patch(
-            "free_claude_code.api.web_tools.outbound.ClientSession",
+            "free_claude_code.runtime.web_tools.client.ClientSession",
             return_value=client_cm,
         ),
         pytest.raises(WebFetchEgressViolation),
     ):
-        await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
+        await HTTPWebToolsClient().fetch("http://8.8.8.8/start", egress=_STRICT_EGRESS)
 
     session.get.assert_called_once()
 
@@ -1026,12 +1108,12 @@ async def test_run_web_fetch_redirect_without_location_raises():
     client_cm, _ = _aiohttp_client_session_patch(res_bad)
     with (
         patch(
-            "free_claude_code.api.web_tools.outbound.ClientSession",
+            "free_claude_code.runtime.web_tools.client.ClientSession",
             return_value=client_cm,
         ),
         pytest.raises(WebFetchEgressViolation, match="missing Location"),
     ):
-        await _run_web_fetch("http://8.8.8.8/here", _STRICT_EGRESS)
+        await HTTPWebToolsClient().fetch("http://8.8.8.8/here", egress=_STRICT_EGRESS)
 
 
 @pytest.mark.asyncio
@@ -1040,24 +1122,28 @@ async def test_run_web_fetch_excess_redirects_raises():
     res2 = _aiohttp_response(302, url="http://8.8.8.8/b", location="/c", body=b"")
     client_cm, _ = _aiohttp_client_session_patch(res1, res2)
     with (
-        patch("free_claude_code.api.web_tools.constants._MAX_WEB_FETCH_REDIRECTS", 1),
         patch(
-            "free_claude_code.api.web_tools.outbound.ClientSession",
+            "free_claude_code.runtime.web_tools.constants._MAX_WEB_FETCH_REDIRECTS", 1
+        ),
+        patch(
+            "free_claude_code.runtime.web_tools.client.ClientSession",
             return_value=client_cm,
         ),
         pytest.raises(WebFetchEgressViolation, match="exceeded maximum redirects"),
     ):
-        await _run_web_fetch("http://8.8.8.8/a", _STRICT_EGRESS)
+        await HTTPWebToolsClient().fetch("http://8.8.8.8/a", egress=_STRICT_EGRESS)
 
 
 @pytest.mark.asyncio
 async def test_streams_web_search_server_tool_result(monkeypatch):
-    async def fake_search(query: str) -> list[dict[str, str]]:
+    async def fake_search(self, query: str) -> list[WebSearchResult]:
         assert query == "DeepSeek V4 model release 2026"
-        return [{"title": "DeepSeek V4 Released", "url": "https://example.com/v4"}]
+        return [
+            WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
+        ]
 
     monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_search", fake_search
+        "tests.web_tools_support.StubWebToolsClient.search", fake_search
     )
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
@@ -1077,7 +1163,7 @@ async def test_streams_web_search_server_tool_result(monkeypatch):
     raw = "".join(
         [
             event
-            async for event in stream_web_server_tool_response(
+            async for event in _local_tool_body(
                 request, input_tokens=42, web_fetch_egress=_STRICT_EGRESS
             )
         ]
@@ -1115,11 +1201,13 @@ async def test_streams_web_search_server_tool_result(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_service_streams_forced_web_search_by_default(monkeypatch):
-    async def fake_search(_query: str) -> list[dict[str, str]]:
-        return [{"title": "DeepSeek V4 Released", "url": "https://example.com/v4"}]
+    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+        return [
+            WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
+        ]
 
     monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_search", fake_search
+        "tests.web_tools_support.StubWebToolsClient.search", fake_search
     )
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": True})
     provider_resolver = AsyncMock()
@@ -1131,6 +1219,7 @@ async def test_service_streams_forced_web_search_by_default(monkeypatch):
             _PROVIDER_IDS[0],
             provider_model="upstream-model",
         ),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
@@ -1159,11 +1248,13 @@ async def test_service_streams_forced_web_search_by_default(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_service_aggregates_forced_web_search_when_stream_false(monkeypatch):
-    async def fake_search(_query: str) -> list[dict[str, str]]:
-        return [{"title": "DeepSeek V4 Released", "url": "https://example.com/v4"}]
+    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+        return [
+            WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
+        ]
 
     monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_search", fake_search
+        "tests.web_tools_support.StubWebToolsClient.search", fake_search
     )
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": True})
     provider_resolver = AsyncMock()
@@ -1171,6 +1262,7 @@ async def test_service_aggregates_forced_web_search_when_stream_false(monkeypatc
         settings,
         provider_resolver=provider_resolver,
         model_router=FixedProviderModelRouter(settings, _PROVIDER_IDS[0]),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
@@ -1202,18 +1294,13 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
     """Only the latest user message supplies the URL (not earlier transcript text)."""
     target = "https://new-only.example.com/page"
 
-    async def fake_fetch(url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def fake_fetch(
+        self, url: str, *, egress: WebFetchEgressPolicy
+    ) -> WebFetchResult:
         assert url == target
-        return {
-            "url": url,
-            "title": "T",
-            "media_type": "text/plain",
-            "data": "x",
-        }
+        return WebFetchResult(url=url, title="T", media_type="text/plain", data="x")
 
-    monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_fetch", fake_fetch
-    )
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", fake_fetch)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -1235,7 +1322,7 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
     raw = "".join(
         [
             event
-            async for event in stream_web_server_tool_response(
+            async for event in _local_tool_body(
                 request, input_tokens=1, web_fetch_egress=_STRICT_EGRESS
             )
         ]
@@ -1245,23 +1332,24 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
 
 @pytest.mark.asyncio
 async def test_service_aggregates_forced_web_fetch_when_stream_false(monkeypatch):
-    async def fake_fetch(url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
-        return {
-            "url": url,
-            "title": "Example Article",
-            "media_type": "text/plain",
-            "data": "Article body",
-        }
+    async def fake_fetch(
+        self, url: str, *, egress: WebFetchEgressPolicy
+    ) -> WebFetchResult:
+        return WebFetchResult(
+            url=url,
+            title="Example Article",
+            media_type="text/plain",
+            data="Article body",
+        )
 
-    monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_fetch", fake_fetch
-    )
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", fake_fetch)
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": True})
     provider_resolver = AsyncMock()
     service = MessagesHandler(
         settings,
         provider_resolver=provider_resolver,
         model_router=FixedProviderModelRouter(settings, _PROVIDER_IDS[0]),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
@@ -1290,18 +1378,18 @@ async def test_service_aggregates_forced_web_fetch_when_stream_false(monkeypatch
 
 @pytest.mark.asyncio
 async def test_streams_web_fetch_server_tool_result(monkeypatch):
-    async def fake_fetch(url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def fake_fetch(
+        self, url: str, *, egress: WebFetchEgressPolicy
+    ) -> WebFetchResult:
         assert url == "https://example.com/article"
-        return {
-            "url": url,
-            "title": "Example Article",
-            "media_type": "text/plain",
-            "data": "Article body",
-        }
+        return WebFetchResult(
+            url=url,
+            title="Example Article",
+            media_type="text/plain",
+            data="Article body",
+        )
 
-    monkeypatch.setattr(
-        "free_claude_code.api.web_tools.outbound._run_web_fetch", fake_fetch
-    )
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", fake_fetch)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -1315,7 +1403,7 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
     raw = "".join(
         [
             event
-            async for event in stream_web_server_tool_response(
+            async for event in _local_tool_body(
                 request, input_tokens=42, web_fetch_egress=_STRICT_EGRESS
             )
         ]
@@ -1352,10 +1440,10 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
 async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
     secret = "sensitive-upstream-token"
 
-    async def boom(_url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def boom(self, _url: str, *, egress: WebFetchEgressPolicy) -> WebFetchResult:
         raise ValueError(secret)
 
-    monkeypatch.setattr("free_claude_code.api.web_tools.outbound._run_web_fetch", boom)
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", boom)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -1369,11 +1457,13 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
         tool_choice={"type": "tool", "name": "web_fetch"},
     )
 
-    with patch("free_claude_code.api.web_tools.outbound.logger.warning") as log_warn:
+    with patch(
+        "free_claude_code.application.web_tools.service.logger.warning"
+    ) as log_warn:
         raw = "".join(
             [
                 event
-                async for event in stream_web_server_tool_response(
+                async for event in _local_tool_body(
                     request,
                     input_tokens=1,
                     web_fetch_egress=_STRICT_EGRESS,
@@ -1410,10 +1500,10 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
 async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
     monkeypatch,
 ):
-    async def boom(_url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def boom(self, _url: str, *, egress: WebFetchEgressPolicy) -> WebFetchResult:
         raise OSError(5, "oops")
 
-    monkeypatch.setattr("free_claude_code.api.web_tools.outbound._run_web_fetch", boom)
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", boom)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -1425,7 +1515,7 @@ async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
     raw = "".join(
         [
             event
-            async for event in stream_web_server_tool_response(
+            async for event in _local_tool_body(
                 request,
                 input_tokens=1,
                 web_fetch_egress=_STRICT_EGRESS,
@@ -1477,6 +1567,7 @@ async def test_service_rejects_listed_server_tools_for_every_provider(
         settings,
         provider_resolver=AsyncMock(side_effect=lambda _: MagicMock()),
         model_router=FixedProviderModelRouter(settings, provider_id),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="m",
@@ -1486,3 +1577,174 @@ async def test_service_rejects_listed_server_tools_for_every_provider(
     )
     with pytest.raises(InvalidRequestError, match="ENABLE_WEB_SERVER_TOOLS=false"):
         await service.create(request)
+
+
+@pytest.mark.asyncio
+async def test_automatic_selection_stays_private_until_provider_finishes() -> None:
+    release = asyncio.Event()
+    provider = ScriptedSelectionProvider(
+        _provider_text_events("declined"), wait_for=release
+    )
+    task = asyncio.create_task(
+        _automatic_search_service(provider).create(_automatic_search_request())
+    )
+    try:
+        await asyncio.wait_for(provider.started.wait(), 1)
+        assert not task.done()
+        release.set()
+        response = await asyncio.wait_for(task, 1)
+        assert isinstance(response, StreamingResponse)
+        assert await _streaming_body_text(response) == "".join(provider.events)
+        assert provider.close_count == 1
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["web_search", "web_fetch"])
+@pytest.mark.parametrize("close_before_outbound", [False, True])
+async def test_local_tool_start_precedes_outbound_and_cancellation_closes_operation(
+    monkeypatch, tool_name: str, close_before_outbound: bool
+) -> None:
+    entered, closed = asyncio.Event(), asyncio.Event()
+
+    async def blocked(*_args, **_kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    monkeypatch.setattr(
+        f"tests.web_tools_support.StubWebToolsClient.{tool_name.removeprefix('web_')}",
+        blocked,
+    )
+    tool_type = (
+        "web_search_20250305" if tool_name == "web_search" else "web_fetch_20250910"
+    )
+    request = MessagesRequest(
+        model="public-model",
+        messages=[Message(role="user", content="https://example.com/")],
+        tools=[Tool(name=tool_name, type=tool_type)],
+        tool_choice={"type": "tool", "name": tool_name},
+    )
+    body = _local_tool_body(request, 7, web_fetch_egress=_STRICT_EGRESS)
+    pending = None
+    try:
+        prefix = [await anext(body) for _ in range(3)]
+        assert [event.event for event in parse_sse_text("".join(prefix))] == [
+            "message_start",
+            "content_block_start",
+            "content_block_stop",
+        ]
+        assert not entered.is_set()
+        if close_before_outbound:
+            await body.aclose()
+            assert not entered.is_set()
+            return
+        pending = asyncio.create_task(anext(body))
+        await asyncio.wait_for(entered.wait(), 1)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert closed.is_set()
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await body.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "automatic"),
+    [("web_search", False), ("web_fetch", False), ("web_search", True)],
+)
+@pytest.mark.parametrize("stream", [False, True])
+async def test_local_failures_remain_completed_tool_results(
+    monkeypatch, tool_name: str, automatic: bool, stream: bool
+) -> None:
+    async def fail(*_args, **_kwargs):
+        raise OSError("private upstream detail")
+
+    monkeypatch.setattr(
+        f"tests.web_tools_support.StubWebToolsClient.{tool_name.removeprefix('web_')}",
+        fail,
+    )
+    provider = ScriptedSelectionProvider(
+        _provider_tool_events(arguments={"query": "query"})
+    )
+    handler = _automatic_search_service(provider)
+    request = _automatic_search_request().model_copy(update={"stream": stream})
+    if not automatic:
+        tool_type = (
+            "web_search_20250305" if tool_name == "web_search" else "web_fetch_20250910"
+        )
+        request = request.model_copy(
+            update={
+                "tools": [Tool(name=tool_name, type=tool_type)],
+                "tool_choice": {"type": "tool", "name": tool_name},
+            }
+        )
+    response = await handler.create(request)
+    if stream:
+        assert isinstance(response, StreamingResponse)
+        raw = await _streaming_body_text(response)
+        events = parse_sse_text(raw)
+        assert_anthropic_stream_contract(events)
+        assert not any(event.event == "error" for event in events)
+        result = next(
+            event.data["content_block"]
+            for event in events
+            if event.event == "content_block_start" and event.data["index"] == 1
+        )
+        usage = next(
+            event.data["usage"] for event in events if event.event == "message_delta"
+        )
+        assert events[-1].event == "message_stop"
+    else:
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 200
+        message = _json_body(response)
+        result, usage = message["content"][1], message["usage"]
+        assert message["stop_reason"] == "end_turn"
+    assert result["type"] == f"{tool_name}_tool_result"
+    expected_error = (
+        "web_search_tool_result_error"
+        if tool_name == "web_search"
+        else "web_fetch_tool_error"
+    )
+    assert result["content"] == {"type": expected_error, "error_code": "unavailable"}
+    assert usage["server_tool_use"] == {f"{tool_name}_requests": 1}
+    assert len(provider.requests) == int(automatic)
+
+
+@pytest.mark.parametrize("tool_name", ["web_search", "web_fetch"])
+def test_forced_tools_keep_permissive_matching(tool_name: str) -> None:
+    tool_type = (
+        "web_search_20250305" if tool_name == "web_search" else "web_fetch_20250910"
+    )
+    request = MessagesRequest(
+        model="model",
+        messages=[
+            Message(
+                role="assistant",
+                content=[
+                    ContentBlockServerToolUse(
+                        type="server_tool_use", id="old", name=tool_name, input={}
+                    )
+                ],
+            )
+        ],
+        tools=[
+            Tool(name=tool_name, type=tool_type, max_uses=0, unsupported_option=True),
+            Tool(name="client_tool", input_schema={"type": "object"}),
+        ],
+        tool_choice={"type": "tool", "name": tool_name, "extra": True},
+    )
+    assert is_web_server_tool_request(request)
+    assert plan_automatic_web_search(request, web_tools_enabled=True) is None
+    assert unsupported_server_tool_error(request, web_tools_enabled=True) is None

@@ -25,6 +25,7 @@ from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from tests.web_tools_support import StubWebToolsClient
 
 
 def _http_scope(
@@ -561,6 +562,7 @@ async def _disconnect_real_app(
             requests=cast(RequestRuntimePort, requests),
             admin=cast(AdminRuntimePort, object()),
             tasks=cast(TaskController, object()),
+            web_tools=StubWebToolsClient(),
         )
     )
     body = json.dumps(payload).encode()

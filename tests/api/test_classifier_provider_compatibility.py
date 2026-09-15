@@ -22,6 +22,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
 from free_claude_code.core.reasoning import ReasoningCapability
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.web_tools_support import StubWebToolsClient
 
 
 class ClassifierStream:
@@ -145,7 +146,9 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
         )
     try:
         response = await MessagesHandler(
-            Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+            Settings(),
+            provider_resolver=AsyncMock(side_effect=lambda _: provider),
+            web_tools=StubWebToolsClient(),
         ).create(classifier_request())
         assert isinstance(response, JSONResponse)
         assert len(bodies) == (2 if corrects else 1)
@@ -219,7 +222,9 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(reject_off, 
 
     try:
         handler = MessagesHandler(
-            Settings(), provider_resolver=AsyncMock(side_effect=lambda _: provider)
+            Settings(),
+            provider_resolver=AsyncMock(side_effect=lambda _: provider),
+            web_tools=StubWebToolsClient(),
         )
         with patch.object(
             provider._client.chat.completions,
@@ -292,6 +297,7 @@ async def test_handler_uses_cached_capabilities_for_the_selected_provider(
                 ),
                 None,
             ),
+            web_tools=StubWebToolsClient(),
         )
         with patch.object(
             provider._client.chat.completions,
