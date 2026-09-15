@@ -9,6 +9,7 @@ from free_claude_code.config.provider_catalog import SAMBANOVA_DEFAULT_BASE
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -127,7 +128,7 @@ async def test_stream_messages_text(sambanova_provider):
     with patch.object(
         sambanova_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in sambanova_provider.stream_messages(make_request())
@@ -162,7 +163,7 @@ async def test_stream_messages_tool_call(sambanova_provider):
     with patch.object(
         sambanova_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in sambanova_provider.stream_messages(make_request())
@@ -198,7 +199,7 @@ async def test_stream_messages_reasoning_content(sambanova_provider):
     with patch.object(
         sambanova_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in sambanova_provider.stream_messages(make_request())

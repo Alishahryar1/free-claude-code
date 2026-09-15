@@ -59,6 +59,7 @@ from free_claude_code.providers.history_replay import (
     validate_history,
 )
 from free_claude_code.providers.http import ProviderAttemptScope, maybe_await_aclose
+from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
 from free_claude_code.providers.reasoning_compatibility import (
     ReasoningCorrection,
     prepare_messages_reasoning,
@@ -80,22 +81,6 @@ type ResponsesEventAdapter = Callable[[str, JsonObject], JsonObject]
 
 class _TruncatedResponsesStream(RetryableProviderProtocolError):
     """A Responses stream ended without a terminal lifecycle event."""
-
-
-class _ClosableResponsesStream(AsyncIterator[ResponseStreamEvent]):
-    """Expose the OpenAI SDK stream through the shared ``aclose`` contract."""
-
-    def __init__(self, stream: AsyncStream[ResponseStreamEvent]) -> None:
-        self._stream = stream
-
-    def __aiter__(self) -> AsyncIterator[ResponseStreamEvent]:
-        return self
-
-    async def __anext__(self) -> ResponseStreamEvent:
-        return await anext(self._stream)
-
-    async def aclose(self) -> None:
-        await self._stream.close()
 
 
 class OpenAIResponsesTransport:
@@ -371,7 +356,7 @@ class OpenAIResponsesTransport:
                     endpoint=endpoint,
                     extra_headers=extra_headers,
                 )
-                stream = scope.retain(_ClosableResponsesStream(sdk_stream))
+                stream = scope.retain(OpenAIStreamAdapter(sdk_stream))
                 stream_opened = True
 
                 async for upstream_event in stream:

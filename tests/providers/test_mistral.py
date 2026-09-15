@@ -15,6 +15,7 @@ from free_claude_code.providers.mistral import MistralProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     reasoning_for,
@@ -279,7 +280,7 @@ async def test_stream_messages_text(mistral_provider):
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in mistral_provider.stream_messages(req)]
 
@@ -312,7 +313,7 @@ async def test_stream_messages_reasoning_content(mistral_provider):
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in mistral_provider.stream_messages(req)]
 
@@ -349,7 +350,7 @@ async def test_stream_messages_native_mistral_thinking_chunk(mistral_provider):
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in mistral_provider.stream_messages(req)]
 
@@ -381,7 +382,7 @@ async def test_stream_messages_native_mistral_text_chunk(mistral_provider):
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in mistral_provider.stream_messages(req)]
 
@@ -415,7 +416,7 @@ async def test_stream_messages_preserves_native_thinking_and_string_text(
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in mistral_provider.stream_messages(req)]
 
@@ -453,7 +454,7 @@ async def test_stream_messages_preserves_native_reasoning_and_string_text(
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in mistral_provider.stream_messages(req)]
 
@@ -493,7 +494,7 @@ async def test_stream_messages_preserves_mixed_native_content_array(
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in mistral_provider.stream_messages(req)]
 
@@ -532,7 +533,7 @@ async def test_stream_messages_ignores_unknown_native_content_chunks(
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in mistral_provider.stream_messages(req)]
 
@@ -572,7 +573,7 @@ async def test_stream_messages_suppresses_native_mistral_thinking_when_disabled(
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event
@@ -637,7 +638,7 @@ async def test_stream_messages_retries_without_mistral_reasoning_on_rejection(
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.side_effect = [error, mock_stream()]
+        mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
 
         events = [
             e
@@ -708,7 +709,7 @@ async def test_stream_messages_reasoning_retry_preserves_visible_text_and_tools(
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.side_effect = [error, mock_stream()]
+        mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
 
         events = [
             e
@@ -750,7 +751,7 @@ async def test_stream_messages_retries_on_mistral_422_reasoning_rejection(
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.side_effect = [error, mock_stream()]
+        mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
 
         events = [
             e
@@ -807,7 +808,7 @@ async def test_stream_messages_retries_when_model_disables_reasoning_input(
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.side_effect = [error, mock_stream()]
+        mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
 
         events = [e async for e in mistral_provider.stream_messages(req)]
 

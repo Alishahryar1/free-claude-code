@@ -83,6 +83,7 @@ from free_claude_code.providers.http import (
     close_provider_stream,
     maybe_await_aclose,
 )
+from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
 from free_claude_code.providers.reasoning_compatibility import (
     ReasoningCorrection,
     prepare_messages_reasoning,
@@ -692,9 +693,11 @@ class OpenAIChatTransport:
                         structured_details=self._profile.structured_reasoning_details,
                     ),
                 )
-                stream = await client.chat.completions.create(
-                    **create_body,
-                    stream=True,
+                stream = OpenAIStreamAdapter(
+                    await client.chat.completions.create(
+                        **create_body,
+                        stream=True,
+                    )
                 )
                 stream = self._behavior.normalize_stream(stream, body)
                 retain_attempt = True
@@ -727,14 +730,16 @@ class OpenAIChatTransport:
                     raise
             finally:
                 if not retain_attempt:
-                    if stream is not None:
-                        await close_provider_stream(
-                            stream,
-                            active_error=sys.exception(),
-                            provider_name=self._provider_name,
-                            request_id=execution.request_id,
-                        )
-                    await attempt.aclose()
+                    try:
+                        if stream is not None:
+                            await close_provider_stream(
+                                stream,
+                                active_error=sys.exception(),
+                                provider_name=self._provider_name,
+                                request_id=execution.request_id,
+                            )
+                    finally:
+                        await attempt.aclose()
 
         if execution.last_failure is not None:
             raise execution.last_failure

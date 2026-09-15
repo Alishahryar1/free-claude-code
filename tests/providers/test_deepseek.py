@@ -27,6 +27,7 @@ from free_claude_code.providers.deepseek import DeepSeekProvider
 from tests.providers.support import (
     REASONING_OFF,
     REASONING_ON,
+    SDKStreamDouble,
     capture_openai_chat_wire_body,
     immediate_admission,
     make_provider_config,
@@ -1156,7 +1157,7 @@ async def test_stream_uses_chat_completions_and_maps_cache_usage(deepseek_provid
             ),
         )
 
-    create = AsyncMock(return_value=fake_stream())
+    create = AsyncMock(return_value=SDKStreamDouble(fake_stream()))
     with patch.object(deepseek_provider._client.chat.completions, "create", create):
         chunks = [
             chunk
@@ -1222,7 +1223,7 @@ async def test_responses_stream_maps_deepseek_cache_usage(deepseek_provider):
             ),
         )
 
-    create = AsyncMock(return_value=fake_stream())
+    create = AsyncMock(return_value=SDKStreamDouble(fake_stream()))
     with patch.object(deepseek_provider._client.chat.completions, "create", create):
         chunks = [
             chunk

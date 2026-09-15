@@ -12,6 +12,7 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
 )
@@ -71,7 +72,10 @@ async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
             new_callable=AsyncMock,
         ) as mock_create,
     ):
-        mock_create.side_effect = [_internal_5xx(status_code), mock_stream()]
+        mock_create.side_effect = [
+            _internal_5xx(status_code),
+            SDKStreamDouble(mock_stream()),
+        ]
         events = [e async for e in provider.stream_messages(req)]
 
     assert mock_create.await_count == 2
@@ -115,7 +119,7 @@ async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
             new_callable=AsyncMock,
         ) as mock_create,
     ):
-        mock_create.side_effect = [_connection_error(), mock_stream()]
+        mock_create.side_effect = [_connection_error(), SDKStreamDouble(mock_stream())]
         events = [e async for e in provider.stream_messages(req)]
 
     assert mock_create.await_count == 2

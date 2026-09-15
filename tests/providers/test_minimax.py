@@ -17,6 +17,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.support import (
     REASONING_OFF,
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -24,13 +25,11 @@ from tests.providers.support import (
 )
 
 
-class AsyncStream:
+class AsyncStream(SDKStreamDouble):
     def __init__(self, chunks):
         self._chunks = chunks
         self.closed = False
-
-    def __aiter__(self):
-        return self._iter()
+        super().__init__(self._iter(), close=self.aclose)
 
     async def _iter(self):
         for chunk in self._chunks:

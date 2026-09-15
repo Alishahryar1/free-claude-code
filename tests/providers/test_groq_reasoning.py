@@ -28,6 +28,7 @@ from free_claude_code.providers.groq.client import (
 )
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     capture_openai_chat_wire_body,
     immediate_admission,
     make_provider_config,
@@ -122,7 +123,7 @@ async def test_classifier_correction_does_not_change_later_requests(message):
         sent.append(body)
         if len(sent) == 1:
             raise _BadRequest(message, body={"message": message})
-        return _successful_stream("<severity>0</severity>")
+        return SDKStreamDouble(_successful_stream("<severity>0</severity>"))
 
     try:
         with patch.object(provider._client.chat.completions, "create", create):
@@ -412,7 +413,9 @@ async def test_exact_issue_retries_with_default_and_learns_model() -> None:
     provider = _provider()
     policy = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
     body = provider._chat._build_request_body(_request(), reasoning=policy)
-    create = AsyncMock(side_effect=[_vocabulary_error(), object()])
+    create = AsyncMock(
+        side_effect=[_vocabulary_error(), SDKStreamDouble(_successful_stream())]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
         _stream, used_body, attempt, _sent_body = await provider._chat._create_stream(
@@ -420,6 +423,7 @@ async def test_exact_issue_retries_with_default_and_learns_model() -> None:
             provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,
         )
+        await _stream.aclose()
         await attempt.aclose()
 
     assert create.await_count == 2
@@ -430,7 +434,7 @@ async def test_exact_issue_retries_with_default_and_learns_model() -> None:
 
     next_body = provider._chat._build_request_body(_request(), reasoning=policy)
     assert next_body["reasoning_effort"] == "default"
-    next_create = AsyncMock(return_value=object())
+    next_create = AsyncMock(return_value=SDKStreamDouble(_successful_stream()))
     with patch.object(provider._client.chat.completions, "create", next_create):
         (
             _stream,
@@ -442,6 +446,7 @@ async def test_exact_issue_retries_with_default_and_learns_model() -> None:
             provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,
         )
+        await _stream.aclose()
         await next_attempt.aclose()
     assert next_create.await_count == 1
     assert next_used_body["reasoning_effort"] == "default"
@@ -776,7 +781,9 @@ async def test_reasoning_correction_emits_one_downstream_lifecycle() -> None:
     provider = _provider()
     request = _request()
     policy = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
-    create = AsyncMock(side_effect=[_vocabulary_error(), _successful_stream()])
+    create = AsyncMock(
+        side_effect=[_vocabulary_error(), SDKStreamDouble(_successful_stream())]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
         raw = "".join(

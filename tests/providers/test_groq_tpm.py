@@ -14,7 +14,11 @@ from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.groq.tpm import correct_tpm_completion_budget
 from tests.providers.request_factory import make_messages_request
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    SDKStreamDouble,
+    immediate_admission,
+    make_provider_config,
+)
 
 _MODEL = "openai/gpt-oss-120b"
 _LIMIT = 8_000
@@ -222,7 +226,9 @@ def test_non_authoritative_tpm_rejection_is_not_corrected(
 async def test_tpm_correction_emits_one_downstream_lifecycle() -> None:
     provider = _provider()
     request = make_messages_request(_MODEL, max_tokens=_ORIGINAL_MAX)
-    create = AsyncMock(side_effect=[_status_error(), _successful_stream()])
+    create = AsyncMock(
+        side_effect=[_status_error(), SDKStreamDouble(_successful_stream())]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
         raw = "".join(

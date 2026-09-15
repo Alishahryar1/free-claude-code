@@ -14,6 +14,7 @@ from free_claude_code.providers.google_openai import (
 )
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     reasoning_for,
@@ -452,7 +453,7 @@ async def test_stream_messages_text(gemini_provider):
     with patch.object(
         gemini_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event
@@ -508,7 +509,7 @@ async def test_stream_messages_preserves_tool_call_extra_content(gemini_provider
     with patch.object(
         gemini_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in gemini_provider.stream_messages(req)]
 
@@ -585,7 +586,7 @@ async def test_colliding_stream_tool_id_rekeys_cached_thought_signature(
         gemini_provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=mock_stream(),
+        return_value=SDKStreamDouble(mock_stream()),
     ):
         events = [event async for event in gemini_provider.stream_messages(request)]
 
@@ -663,7 +664,7 @@ async def test_stream_messages_reasoning_content(gemini_provider):
     with patch.object(
         gemini_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in gemini_provider.stream_messages(req)]
 

@@ -45,6 +45,7 @@ from free_claude_code.providers.stream_recovery import TruncatedProviderStreamEr
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -57,15 +58,13 @@ from tests.providers.test_nvidia_nim import (
 )
 
 
-class AsyncStreamMock:
+class AsyncStreamMock(SDKStreamDouble):
     """Async iterable mock that yields chunks then optionally raises."""
 
     def __init__(self, chunks, error=None):
         self._chunks = chunks
         self._error = error
-
-    def __aiter__(self):
-        return self._aiter()
+        super().__init__(self._aiter())
 
     async def _aiter(self):
         for chunk in self._chunks:
@@ -97,17 +96,19 @@ class ClosableAsyncStreamMock(AsyncStreamMock):
         if self._close_error is not None:
             raise self._close_error
 
+    async def close(self):
+        await super().close()
+        await self.aclose()
 
-class BlockingClosableAsyncStreamMock:
+
+class BlockingClosableAsyncStreamMock(SDKStreamDouble):
     """Async stream that blocks until its consumer is cancelled."""
 
     def __init__(self, *, close_error=None):
         self.entered = asyncio.Event()
         self.close_calls = 0
         self._close_error = close_error
-
-    def __aiter__(self):
-        return self._aiter()
+        super().__init__(self._aiter(), close=self.aclose)
 
     async def _aiter(self):
         self.entered.set()
@@ -1658,14 +1659,14 @@ class TestStreamingExceptionHandling:
         """A truncated text stream is continued and duplicate overlap is trimmed."""
         provider = _make_provider()
         request = _make_request()
-        stream_mock = AsyncStreamMock([_make_chunk(content="hello wor")])
-
         with (
             patch.object(
                 provider._client.chat.completions,
                 "create",
                 new_callable=AsyncMock,
-                return_value=stream_mock,
+                side_effect=lambda **kwargs: AsyncStreamMock(
+                    [_make_chunk(content="hello wor")]
+                ),
             ),
             patch.object(
                 _OpenAIChatStreamRunner,
@@ -2435,14 +2436,12 @@ class TestStreamingExceptionHandling:
         tool_chunk = _make_tool_calls_chunk(
             name="echo_smoke", arguments='{"message":', tool_id="call_repair"
         )
-        stream_mock = AsyncStreamMock([tool_chunk])
-
         with (
             patch.object(
                 provider._client.chat.completions,
                 "create",
                 new_callable=AsyncMock,
-                return_value=stream_mock,
+                side_effect=lambda **kwargs: AsyncStreamMock([tool_chunk]),
             ),
             patch.object(
                 _OpenAIChatStreamRunner,

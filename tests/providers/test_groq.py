@@ -9,6 +9,7 @@ from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
 from free_claude_code.providers.groq import GroqProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
 )
@@ -238,7 +239,7 @@ async def test_stream_messages_text(groq_provider):
     with patch.object(
         groq_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in groq_provider.stream_messages(req)]
 
@@ -271,7 +272,7 @@ async def test_stream_messages_reasoning_content(groq_provider):
     with patch.object(
         groq_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in groq_provider.stream_messages(req)]
 

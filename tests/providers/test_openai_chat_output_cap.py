@@ -18,6 +18,7 @@ from free_claude_code.providers.openai_chat.output_cap import (
 )
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
 )
@@ -262,7 +263,7 @@ async def test_create_stream_clamps_and_learns_on_cap_rejection(groq_provider):
             "param": "max_completion_tokens",
         },
     )
-    create = AsyncMock(side_effect=[error, object()])
+    create = AsyncMock(side_effect=[error, SDKStreamDouble(AsyncMock())])
 
     with patch.object(groq_provider._client.chat.completions, "create", create):
         (
@@ -275,6 +276,7 @@ async def test_create_stream_clamps_and_learns_on_cap_rejection(groq_provider):
             groq_provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,
         )
+        await _stream.aclose()
         await attempt.aclose()
 
     assert create.call_count == 2
@@ -295,7 +297,7 @@ async def test_learned_cap_clamps_next_request_without_a_400(groq_provider):
     model = body["model"]
     groq_provider._chat._model_output_caps[model] = 40960
 
-    create = AsyncMock(return_value=object())
+    create = AsyncMock(return_value=SDKStreamDouble(AsyncMock()))
     with patch.object(groq_provider._client.chat.completions, "create", create):
         (
             _stream,
@@ -307,6 +309,7 @@ async def test_learned_cap_clamps_next_request_without_a_400(groq_provider):
             groq_provider._admission.start_execution(),
             ProviderOperationKind.GENERATION,
         )
+        await _stream.aclose()
         await attempt.aclose()
 
     assert create.call_count == 1
