@@ -455,8 +455,7 @@ function buildProviderEditor(provider) {
     "primary-button",
   );
   const cancel = providerActionButton("Cancel", () => {
-    editor.hidden = true;
-    syncProviderToggle(editor.closest(".provider-card"), provider);
+    closeProviderEditor(editor.closest(".provider-card"), provider);
   });
   actions.append(save, cancel);
   editor.appendChild(actions);
@@ -503,6 +502,12 @@ function renderInlineField(field, provider) {
   input.id = inputId;
   input.dataset.key = field.key;
   input.dataset.original = comparableValue(field.value);
+  input.dataset.base =
+    input.type === "checkbox"
+      ? input.checked
+        ? "true"
+        : "false"
+      : input.value;
   input.dataset.secret = field.secret ? "true" : "false";
   input.dataset.configured = field.configured ? "true" : "false";
   input.dataset.nullable = field.nullable ? "true" : "false";
@@ -547,21 +552,27 @@ function toggleProviderEditor(card, provider) {
     showMessage("Provider configuration is unavailable.", "error");
     return;
   }
-  editor.hidden = !editor.hidden;
-  syncProviderToggle(card, provider);
   if (!editor.hidden) {
-    const keys =
-      (Array.isArray(provider.missing_configuration_keys) &&
-        provider.missing_configuration_keys.length
-        ? provider.missing_configuration_keys
-        : provider.configuration_keys) || [];
-    const target = keys.length
-      ? editor.querySelector(`[data-key="${CSS.escape(keys[0])}"]`)
-      : null;
+    closeProviderEditor(card, provider);
+    return;
+  }
+  editor.hidden = false;
+  syncProviderToggle(card, provider);
+  const keys =
+    (Array.isArray(provider.missing_configuration_keys) &&
+      provider.missing_configuration_keys.length
+      ? provider.missing_configuration_keys
+      : provider.configuration_keys) || [];
+  const target = keys.length
+    ? editor.querySelector(
+        `input[data-key="${CSS.escape(keys[0])}"], select[data-key="${CSS.escape(keys[0])}"], textarea[data-key="${CSS.escape(keys[0])}"]`,
+      )
+    : null;
+  const focusTarget = () =>
     (target || editor.querySelector("input, select, textarea"))?.focus({
       preventScroll: true,
     });
-  }
+  requestAnimationFrame(focusTarget);
 }
 
 function syncProviderToggle(card, provider) {
@@ -589,6 +600,34 @@ async function saveInlineProvider(provider, editor) {
     return;
   }
   await submitApply(values);
+}
+
+function closeProviderEditor(card, provider) {
+  const editor = card.querySelector(".provider-inline");
+  if (!editor) {
+    showMessage("Provider configuration is unavailable.", "error");
+    return;
+  }
+  discardInlineEdits(editor);
+  editor.hidden = true;
+  syncProviderToggle(card, provider);
+}
+
+function discardInlineEdits(editor) {
+  editor.querySelectorAll("[data-key]").forEach((input) => {
+    if (input.disabled || !input.matches("input, select, textarea")) return;
+    if (input.type === "checkbox") {
+      input.checked = input.dataset.base === "true";
+    } else {
+      input.value = input.dataset.base ?? "";
+    }
+    input.dataset.remove = "false";
+    input.readOnly = false;
+    const removeButton = input.closest(".field")?.querySelector(".secret-remove");
+    if (removeButton) removeButton.textContent = "Remove";
+    clearCredentialError(input);
+  });
+  updateDirtyState();
 }
 
 function connectedAccountName(provider) {
@@ -1226,6 +1265,7 @@ function changedValues() {
   const values = {};
   document.querySelectorAll("[data-key]").forEach((input) => {
     if (input.disabled || !input.matches("input, select, textarea")) return;
+    if (input.closest(".provider-inline")?.hidden) return;
     const value = readFieldValue(input);
     if (comparableValue(value) !== input.dataset.original) {
       values[input.dataset.key] = value;
