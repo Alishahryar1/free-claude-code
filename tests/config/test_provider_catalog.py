@@ -13,6 +13,8 @@ def test_provider_descriptors_are_immutable_values() -> None:
     descriptor = ProviderDescriptor(
         provider_id="local",
         display_name="Local",
+        website_url="https://example.test/",
+        logo_filename="local.svg",
         local=True,
     )
 

@@ -49,9 +49,12 @@ _ADMIN_ASSET_FILENAMES = frozenset(
         "code_sessions.js",
         "session_layout.css",
         "session_ui.js",
-        "model_combobox.js",
         "usage.css",
         "usage.js",
+        *(
+            f"providers/{provider.logo_filename}"
+            for provider in PROVIDER_CATALOG.values()
+        ),
     }
 )
 LOCAL_PROVIDER_PATHS = {
@@ -105,7 +108,7 @@ def admin_page(request: Request):
     return admin_page_response()
 
 
-@router.get("/admin/assets/{version}/{filename}", include_in_schema=False)
+@router.get("/admin/assets/{version}/{filename:path}", include_in_schema=False)
 async def admin_asset(version: str, filename: str, request: Request):
     require_loopback_admin(request)
     if version != package_version() or filename not in _ADMIN_ASSET_FILENAMES:

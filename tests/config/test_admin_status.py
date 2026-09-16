@@ -33,11 +33,14 @@ def test_remote_status_exposes_ordered_configuration_targets() -> None:
     assert missing == {
         "provider_id": "nvidia_nim",
         "display_name": "NVIDIA NIM",
+        "website_url": "https://build.nvidia.com/",
+        "logo_filename": "nvidia-color.svg",
         "kind": "remote",
         "status": "missing_key",
         "label": "Missing key",
         "configuration_keys": ["NVIDIA_NIM_API_KEY"],
         "missing_configuration_keys": ["NVIDIA_NIM_API_KEY"],
+        "settings_keys": ["NVIDIA_NIM_API_KEY", "NVIDIA_NIM_PROXY"],
     }
     assert configured["status"] == "configured"
     assert configured["label"] == "Configured"
@@ -96,3 +99,30 @@ def test_every_catalog_configuration_attribute_has_an_admin_field() -> None:
             assert any(
                 field.settings_attr == settings_attr for field in FIELD_BY_KEY.values()
             ), settings_attr
+
+
+def test_provider_modals_include_optional_settings_and_shared_credentials() -> None:
+    statuses = {status["provider_id"]: status for status in provider_config_status({})}
+    assert statuses["azure_openai"]["settings_keys"] == [
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_BASE_URL",
+        "AZURE_OPENAI_PROXY",
+    ]
+    assert statuses["vertex"]["settings_keys"] == [
+        "VERTEX_PROJECT_ID",
+        "VERTEX_LOCATION",
+        "VERTEX_PROXY",
+    ]
+    assert statuses["openai"]["settings_keys"] == ["OPENAI_PROXY"]
+    keys_by_provider = {}
+    for provider_id, status in statuses.items():
+        keys = status["settings_keys"]
+        assert isinstance(keys, list)
+        keys_by_provider[provider_id] = keys
+    for provider_id in ("opencode_zen", "opencode_go"):
+        assert "OPENCODE_API_KEY" in keys_by_provider[provider_id]
+    for provider_id in ("zai", "zai_api"):
+        assert "ZAI_API_KEY" in keys_by_provider[provider_id]
+    for field in FIELD_BY_KEY.values():
+        owners = [keys for keys in keys_by_provider.values() if field.key in keys]
+        assert bool(owners) == (field.section_id == "providers"), field.key

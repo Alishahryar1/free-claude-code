@@ -46,6 +46,7 @@ class ConfigFieldSpec:
     section_id: str
     field_type: FieldType = "text"
     settings_attr: str | None = None
+    provider_ids: tuple[str, ...] = ()
     options: tuple[str | ConfigOptionSpec, ...] = ()
     secret: bool = False
     advanced: bool = False

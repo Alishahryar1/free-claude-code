@@ -1,10 +1,20 @@
 from playwright.sync_api import expect
 
+from e2e.provider_support import close_provider, open_provider
 from e2e.test_code_sessions import create_session
 
 
 def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url):
     starting = True
+    provider_tests = []
+    page.on(
+        "request",
+        lambda request: (
+            provider_tests.append(request.url)
+            if request.url.endswith("/test")
+            else None
+        ),
+    )
 
     def status(route):
         data = route.fetch().json()
@@ -16,25 +26,40 @@ def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url)
 
     page.route("**/admin/api/status", status)
     page.goto(f"{admin_base_url}/admin")
-    card = page.locator('[data-provider="open_router"]')
-    test = card.get_by_role("button", name="Refresh models", exact=True)
+    dialog = open_provider(page, "open_router")
+    test = dialog.get_by_role("button", name="Refresh models", exact=True)
     expect(test).to_be_disabled()
     expect(test).to_have_attribute("aria-busy", "true")
-    page.locator('[data-provider="nvidia_nim"]').get_by_role(
-        "button", name="Configure", exact=True
-    ).click()
-    key = page.locator("#field-NVIDIA_NIM_API_KEY")
-    key.fill("unsaved-key")
+    expect(page.locator('[data-provider-check-result="open_router"]')).to_have_text(
+        "Checking models…"
+    )
+    expect(dialog.locator("#providerDialogCheck")).to_have_text("Checking models…")
+    close_provider(page)
     page.get_by_role("button", name="Messaging", exact=True).click()
     expect(page.locator("#startupMessage")).to_be_visible()
     expect(page.locator("#startupMessage")).to_have_class(
         "startup-message startup-spinner"
     )
-    starting = False
-    expect(page.locator("#startupMessage")).to_be_hidden()
     page.get_by_role("button", name="Providers", exact=True).click()
-    expect(test).to_be_enabled()
+    open_provider(page, "nvidia_nim")
+    key = page.locator("#field-NVIDIA_NIM_API_KEY")
+    key.fill("unsaved-key")
+    starting = False
+    page.wait_for_function("state.startup?.startup?.providers?.open_router === 'ready'")
     expect(key).to_have_value("unsaved-key")
+    close_provider(page)
+    dialog = open_provider(page, "open_router")
+    expect(
+        dialog.get_by_role("button", name="Refresh models", exact=True)
+    ).to_be_enabled()
+    expect(page.locator('[data-provider-check-result="open_router"]')).to_have_text(
+        "3 models available"
+    )
+    expect(dialog.locator("#providerDialogCheck")).to_have_text("3 models available")
+    close_provider(page)
+    page.get_by_role("button", name="Messaging", exact=True).click()
+    expect(page.locator("#startupMessage")).to_be_hidden()
+    assert provider_tests == []
 
 
 def test_codex_connect_waits_for_catalog_and_recovers_from_publication_error(

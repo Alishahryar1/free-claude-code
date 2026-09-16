@@ -41,30 +41,11 @@
 
         <div id="adminViews" class="admin-views">
           <section id="view-providers" class="admin-view active" data-view="providers">
-            <section
-              id="connectedAccountsSection"
-              class="provider-strip"
-              aria-label="Connected accounts"
-              hidden
-            >
-              <div class="strip-header">
-                <div>
-                  <h3>Connected accounts</h3>
-                  <p>Use an existing subscription without storing credentials in .env.</p>
-                </div>
-              </div>
-              <div id="connectedAccountGrid" class="provider-grid"></div>
-            </section>
-            <section class="provider-strip" aria-label="Provider status">
-              <div class="strip-header">
-                <h3>Providers</h3>
-              </div>
-              <div id="providerGrid" class="provider-grid"></div>
-            </section>
+            <div id="providerGroups"></div>
             <div
               id="providersSections"
               class="form-sections"
-              aria-label="Provider configuration"
+              aria-label="Runtime configuration"
             ></div>
           </section>
 
@@ -171,6 +152,22 @@
         </div>
       </footer>
     </div>
+    <dialog id="providerDialog" class="integration-dialog provider-dialog" aria-labelledby="providerDialogTitle">
+      <div class="section-heading">
+        <h3 id="providerDialogTitle"></h3>
+        <button id="closeProviderDialog" class="ghost-button" type="button" aria-label="Close provider settings">&#x2715;</button>
+      </div>
+      <div id="providerDialogBody">
+        <div id="providerDialogActions" class="provider-actions"></div>
+        <div id="providerDialogCheck" class="provider-check-result" role="status" hidden></div>
+        <div id="providerFields" class="field-grid"></div>
+      </div>
+      <div id="providerMessage" class="message-area" role="status"></div>
+      <div class="provider-dialog-footer">
+        <button id="cancelProviderDialog" class="secondary-button" type="button">Cancel</button>
+        <button id="saveProvider" class="primary-button" type="button" disabled>Save</button>
+      </div>
+    </dialog>
     <script src="/admin/assets/__FCC_VERSION__/form_controls.js"></script>
     <script src="/admin/assets/__FCC_VERSION__/model_combobox.js"></script>
     <script src="/admin/assets/__FCC_VERSION__/session_ui.js"></script>
