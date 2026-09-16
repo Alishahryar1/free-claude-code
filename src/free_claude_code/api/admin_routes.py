@@ -49,6 +49,7 @@ _ADMIN_ASSET_FILENAMES = frozenset(
         "code_sessions.js",
         "session_layout.css",
         "session_ui.js",
+        "model_combobox.js",
         "usage.css",
         "usage.js",
         *(
