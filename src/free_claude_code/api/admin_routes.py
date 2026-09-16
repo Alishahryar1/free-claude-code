@@ -50,6 +50,8 @@ _ADMIN_ASSET_FILENAMES = frozenset(
         "session_layout.css",
         "session_ui.js",
         "model_combobox.js",
+        "usage.css",
+        "usage.js",
     }
 )
 LOCAL_PROVIDER_PATHS = {
@@ -97,6 +99,7 @@ def admin_page_response() -> HTMLResponse:
 @router.get("/admin/model_config", include_in_schema=False)
 @router.get("/admin/messaging", include_in_schema=False)
 @router.get("/admin/integrations", include_in_schema=False)
+@router.get("/admin/usage", include_in_schema=False)
 def admin_page(request: Request):
     require_loopback_admin(request)
     return admin_page_response()

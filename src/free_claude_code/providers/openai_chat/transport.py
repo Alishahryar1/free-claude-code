@@ -544,6 +544,16 @@ class OpenAIChatTransport:
         self._endpoint_transport = endpoint_transport
         self._model_output_caps: dict[str, int] = {}
 
+    def _record_headers(self, headers: Any) -> None:
+        try:
+            if not headers:
+                return
+            from free_claude_code.application.usage import get_usage_service
+            svc = get_usage_service()
+            asyncio.create_task(svc.update_provider_headers(self._provider_name.lower(), dict(headers)))
+        except Exception:
+            pass
+
     def _log_stream_transport_error(
         self,
         tag: str,
@@ -703,18 +713,30 @@ class OpenAIChatTransport:
                         structured_details=self._profile.structured_reasoning_details,
                     ),
                 )
-                stream = OpenAIStreamAdapter(
-                    await client.chat.completions.create(
+                raw_response = None
+                with_raw = getattr(client.chat.completions, "with_raw_response", None)
+                if with_raw is not None and hasattr(with_raw, "create"):
+                    try:
+                        raw_response = await with_raw.create(**create_body, stream=True)
+                        self._record_headers(getattr(raw_response, "headers", None))
+                        response_stream = raw_response.parse()
+                    except Exception:
+                        raw_response = None
+                if raw_response is None:
+                    response_stream = await client.chat.completions.create(
                         **create_body,
                         stream=True,
                     )
-                )
+                stream = OpenAIStreamAdapter(response_stream)
                 stream = self._behavior.normalize_stream(stream, body)
                 retain_attempt = True
                 return stream, body, attempt, create_body
             except asyncio.CancelledError:
                 raise
             except Exception as error:
+                resp = getattr(error, "response", None)
+                if resp is not None and hasattr(resp, "headers"):
+                    self._record_headers(resp.headers)
                 retry_body = await request_recovery.retry_request(
                     error,
                     provider_authentication_status(error),

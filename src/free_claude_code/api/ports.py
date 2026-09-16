@@ -75,3 +75,4 @@ class ApiServices:
     tasks: TaskController
     web_tools: WebToolsPort
     code: CodeApplicationPort | None = None
+    usage: Any = None

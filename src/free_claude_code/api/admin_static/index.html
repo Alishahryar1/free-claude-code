@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/admin.css" />
     <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/code_sessions.css" />
     <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/session_layout.css" />
+    <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/usage.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -149,6 +150,10 @@
             </dialog>
           </section>
 
+          <section id="view-usage" class="admin-view" data-view="usage" hidden>
+            <div id="usageRoot" class="usage-root"></div>
+          </section>
+
           <section id="view-code" class="admin-view" data-view="code" hidden>
             <div id="codeRoot" class="code-root session-root" aria-live="off"></div>
           </section>
@@ -170,6 +175,7 @@
     <script src="/admin/assets/__FCC_VERSION__/model_combobox.js"></script>
     <script src="/admin/assets/__FCC_VERSION__/session_ui.js"></script>
     <script src="/admin/assets/__FCC_VERSION__/code_sessions.js"></script>
+    <script src="/admin/assets/__FCC_VERSION__/usage.js"></script>
     <script src="/admin/assets/__FCC_VERSION__/admin.js"></script>
   </body>
 </html>
