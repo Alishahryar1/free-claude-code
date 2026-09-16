@@ -3,6 +3,8 @@
 import pytest
 from playwright.sync_api import Page, expect
 
+from e2e.provider_support import close_provider, open_provider
+
 
 def _open_models(page: Page, admin_base_url: str) -> None:
     page.emulate_media(reduced_motion="reduce")
@@ -14,8 +16,10 @@ def _open_models(page: Page, admin_base_url: str) -> None:
 def _refresh_openrouter_models(page: Page) -> None:
     page.get_by_role("button", name="Providers", exact=True).click()
     card = page.locator('[data-provider="open_router"]')
-    card.get_by_role("button", name="Refresh models", exact=True).click()
+    dialog = open_provider(page, "open_router")
+    dialog.get_by_role("button", name="Refresh models", exact=True).click()
     expect(card.locator(".provider-check-result")).to_have_text("3 models available")
+    close_provider(page)
     page.get_by_role("button", name="Model Config", exact=True).click()
 
 
@@ -162,10 +166,10 @@ def test_model_suggestions_keep_server_order_after_provider_check_and_late_respo
         lambda route: route.fulfill(json={"ok": True, "models": ["new-model"]}),
     )
     page.get_by_role("button", name="Providers", exact=True).click()
+    dialog = open_provider(page, "open_router")
     with page.expect_request("**/admin/api/models"):
-        page.locator('[data-provider="open_router"]').get_by_role(
-            "button", name="Refresh models", exact=True
-        ).click()
+        dialog.get_by_role("button", name="Refresh models", exact=True).click()
+    close_provider(page)
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(field.locator("input")).to_have_value("open_router/custom-unsaved")
     field.locator("input").fill("")

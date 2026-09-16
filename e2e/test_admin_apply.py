@@ -3,6 +3,8 @@
 import pytest
 from playwright.sync_api import Page, Route, expect
 
+from e2e.provider_support import close_provider, open_provider
+
 
 def test_apply_is_the_only_config_action_and_retains_invalid_edits(
     page: Page,
@@ -49,11 +51,14 @@ def test_key_rejection_retains_edits_and_restores_focus(
     page.route("**/admin/api/config/apply", lambda route: pending.append(route))
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
+    page.get_by_role("button", name="Model Config", exact=True).click()
+    other = page.locator("#field-MODEL_SONNET")
+    other.fill("open_router/other-edit")
+    page.get_by_role("button", name="Providers", exact=True).click()
+    open_provider(page, "mistral")
     key = page.locator("#field-MISTRAL_API_KEY")
-    other = page.locator("#field-NVIDIA_NIM_API_KEY")
     key.fill("bad-key")
-    other.fill("other-edit")
-    page.get_by_role("button", name="Apply", exact=True).click()
+    page.get_by_role("button", name="Save", exact=True).click()
     expect(page.locator("#messageArea")).to_have_text("Checking API keys…")
     expect(page.locator("#view-providers")).to_have_attribute("inert", "")
     expect(page.locator("#applyButton")).to_be_disabled()
@@ -62,7 +67,6 @@ def test_key_rejection_retains_edits_and_restores_focus(
     assert isinstance(submitted, dict)
     assert submitted["values"] == {
         "MISTRAL_API_KEY": "bad-key",
-        "NVIDIA_NIM_API_KEY": "other-edit",
     }
     pending.pop().fulfill(
         json={
@@ -83,12 +87,14 @@ def test_key_rejection_retains_edits_and_restores_focus(
         "Check this API key."
     )
     expect(key).to_have_value("bad-key")
-    expect(other).to_have_value("other-edit")
-    expect(page.locator("#dirtyState")).to_have_text("2 unsaved changes")
-    expect(page.locator("#field-OPENROUTER_API_KEY")).to_be_disabled()
+    expect(other).to_have_value("open_router/other-edit")
+    expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
     key.fill("corrected")
     expect(page.locator("#field-MISTRAL_API_KEY-error")).to_have_count(0)
-    expect(page.locator("#applyButton")).to_be_enabled()
+    expect(page.locator("#saveProvider")).to_be_enabled()
+    close_provider(page)
+    open_provider(page, "open_router")
+    expect(page.locator("#field-OPENROUTER_API_KEY")).to_be_disabled()
 
 
 @pytest.mark.parametrize("restart", [False, True])
@@ -128,11 +134,12 @@ def test_unverified_warning_survives_apply(
     )
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
+    open_provider(page, "nvidia_nim")
     page.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
-    page.get_by_role("button", name="Apply", exact=True).click()
+    page.get_by_role("button", name="Save", exact=True).click()
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
     expect(page.locator("#dirtyState")).to_have_text("No changes")
-    expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_editable()
+    expect(page.locator('[data-provider="nvidia_nim"]')).to_be_enabled()
     expect(page.locator("#applyButton")).to_have_text("Apply")
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
 
@@ -159,7 +166,7 @@ def test_unverified_warning_survives_apply(
         availability.pop().continue_()
         expect(current).to_have_text("Reachable: http://localhost:1234/v1")
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
-    expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_editable()
+    expect(page.locator('[data-provider="nvidia_nim"]')).to_be_enabled()
 
 
 def test_apply_network_error_unlocks_form_and_keeps_edits(
@@ -168,13 +175,14 @@ def test_apply_network_error_unlocks_form_and_keeps_edits(
     page.route("**/admin/api/config/apply", lambda route: route.abort())
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
+    open_provider(page, "nvidia_nim")
     key = page.locator("#field-NVIDIA_NIM_API_KEY")
     key.fill("unsaved-key")
-    page.get_by_role("button", name="Apply", exact=True).click()
+    page.get_by_role("button", name="Save", exact=True).click()
     expect(page.locator("#messageArea")).to_contain_text("Could not apply settings")
     expect(key).to_have_value("unsaved-key")
     expect(key).to_be_editable()
-    expect(page.locator("#applyButton")).to_be_enabled()
+    expect(page.locator("#saveProvider")).to_be_enabled()
 
 
 def test_restart_waits_for_a_new_running_server(page: Page, admin_base_url: str):
@@ -199,9 +207,10 @@ def test_restart_waits_for_a_new_running_server(page: Page, admin_base_url: str)
     expect(page.locator("#messageArea")).to_have_text("")
     page.wait_for_function("!state.startupRequest && !state.startupTimer")
     page.route("**/admin/api/status", lambda route: pending.append(route))
+    open_provider(page, "nvidia_nim")
     page.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
     with page.expect_request("**/admin/api/status"):
-        page.get_by_role("button", name="Apply", exact=True).click()
+        page.get_by_role("button", name="Save", exact=True).click()
     expect(page.locator("#applyButton")).to_have_text("Reconnecting…")
     for status in (
         {"status": "running", "instance_id": "old-server"},
@@ -212,7 +221,7 @@ def test_restart_waits_for_a_new_running_server(page: Page, admin_base_url: str)
         expect(page.locator("#view-providers")).to_have_attribute("inert", "")
         expect(page.locator("#dirtyState")).to_have_text("Changes saved")
     pending.pop(0).fulfill(json={"status": "running", "instance_id": "new-server"})
-    expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_editable()
+    expect(page.locator('[data-provider="nvidia_nim"]')).to_be_enabled()
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     expect(page.locator("#messageArea")).to_have_text("Applied")
 
@@ -256,9 +265,10 @@ def test_restart_timeout_can_reconnect_without_resubmitting_keys(
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
     page.clock.install()
+    open_provider(page, "nvidia_nim")
     page.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
     with page.expect_request("**/admin/api/status"):
-        page.get_by_role("button", name="Apply", exact=True).click()
+        page.get_by_role("button", name="Save", exact=True).click()
     expect(page.locator("#applyButton")).to_have_text("Reconnecting…")
     page.clock.fast_forward(31_000)
     page.clock.run_for(1_000)
@@ -272,7 +282,7 @@ def test_restart_timeout_can_reconnect_without_resubmitting_keys(
     )
     ready = True
     reconnect.click()
-    expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_editable()
+    expect(page.locator('[data-provider="nvidia_nim"]')).to_be_enabled()
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
     assert submissions == [{"values": {"NVIDIA_NIM_API_KEY": "new-key"}}]
 
@@ -312,10 +322,11 @@ def test_restart_to_another_local_origin_keeps_the_warning(
     )
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
+    open_provider(page, "nvidia_nim")
     page.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
-    page.get_by_role("button", name="Apply", exact=True).click()
+    page.get_by_role("button", name="Save", exact=True).click()
     page.wait_for_url(target)
-    expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_editable()
+    expect(page.locator('[data-provider="nvidia_nim"]')).to_be_enabled()
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
     assert "new-key" not in page.url
     page.reload()

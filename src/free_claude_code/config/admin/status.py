@@ -18,6 +18,9 @@ def provider_config_status(
     """Return provider configuration status without making network calls."""
     statuses: list[JsonObject] = []
     for provider_id, descriptor in PROVIDER_CATALOG.items():
+        settings_keys = [
+            field.key for field in FIELDS if provider_id in field.provider_ids
+        ]
         if descriptor.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT:
             statuses.append(
                 {
@@ -26,6 +29,7 @@ def provider_config_status(
                     "kind": "connected_account",
                     "status": "disconnected",
                     "label": "Not connected",
+                    "settings_keys": settings_keys,
                 }
             )
             continue
@@ -57,6 +61,7 @@ def provider_config_status(
                     "base_url": base_url or descriptor.default_base_url or "",
                     "configuration_keys": configuration_keys,
                     "missing_configuration_keys": missing_configuration_keys,
+                    "settings_keys": settings_keys,
                 }
             )
             continue
@@ -84,6 +89,7 @@ def provider_config_status(
                 ),
                 "configuration_keys": configuration_keys,
                 "missing_configuration_keys": missing_configuration_keys,
+                "settings_keys": settings_keys,
             }
         )
     return statuses
