@@ -233,6 +233,33 @@ def test_build_request_body_strips_unsupported_metadata_key(gemini_provider):
     assert "metadata" not in wire_json
 
 
+@pytest.mark.parametrize("choice", ["auto", "any", "none"])
+def test_build_request_body_omits_tool_choice_without_tools(gemini_provider, choice):
+    """Regression for #565: Gemini rejects the whole request with "Function
+    calling config is set without function_declarations" when a tool choice
+    reaches it with no tools to choose from.
+    """
+    req = make_request(tool_choice={"type": choice})
+
+    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
+    wire_json = _simulate_openai_sdk_wire_json(body)
+
+    assert "tools" not in wire_json
+    assert "tool_choice" not in wire_json
+
+
+def test_build_request_body_keeps_tool_choice_with_tools(gemini_provider):
+    req = make_request(
+        tool_choice={"type": "auto"},
+        tools=[{"name": "Read", "input_schema": {"type": "object"}}],
+    )
+
+    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
+
+    assert body["tool_choice"] == "auto"
+    assert [tool["function"]["name"] for tool in body["tools"]] == ["Read"]
+
+
 def test_build_request_body_merges_caller_nested_google(gemini_provider):
     req = make_request(
         thinking=None,
