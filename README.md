@@ -249,11 +249,11 @@ from more than one provider before succeeding.
 <summary><strong>Provider-specific setup</strong></summary>
 
 - OpenAI uses your ChatGPT subscription rather than an API key. Connect from
-  **Providers → Connected accounts** in the Admin UI. Use device code on
-  headless systems. Restart an already-running agent after connecting.
+  **Providers → OAuth providers → OpenAI / ChatGPT → Connect** in the Admin UI
+  and finish signing in through your browser. Restart an already-running agent after connecting.
 - GitHub Copilot uses your signed-in GitHub account and subscription. Install
   [Copilot CLI 1.0.83](https://github.com/github/copilot-cli/releases/tag/v1.0.83)
-  on PATH, then choose **Providers → Connected accounts → GitHub Copilot → Connect**.
+  on PATH, then choose **Providers → OAuth providers → GitHub Copilot → Connect**.
   FCC reuses the native profile or shows a GitHub device code when sign-in is needed.
   You can also sign in first with `copilot login --device-code`. Select a concrete
   `github_copilot/<model-id>` from the discovered list; available models and quotas

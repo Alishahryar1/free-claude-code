@@ -181,7 +181,7 @@ def test_account_modes_wait_for_status_and_recover_after_load_failure(
 
     expect(copilot.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
     expect(copilot.get_by_role("button", name="Use device code")).to_have_count(0)
-    expect(openai.get_by_role("button", name="Use device code")).to_be_enabled()
+    expect(openai.get_by_role("button", name="Use device code")).to_have_count(0)
     expect(copilot.locator(".provider-meta")).to_contain_text("GitHub Copilot")
     assert "ChatGPT" not in copilot.inner_text()
 
@@ -219,12 +219,13 @@ def test_device_code_connect_copy_and_cancel_ignore_an_old_poll(
     expect(copilot.get_by_role("button", name="Copy code")).to_have_count(0)
 
 
-def test_openai_browser_login_preopens_popup_and_retains_device_choice(
+def test_openai_connect_uses_browser_login(
     page: Page, admin_base_url: str, accounts: _Accounts
 ) -> None:
     accounts.hold_login = True
     _open(page, admin_base_url)
     openai = page.locator('[data-provider="openai"]')
+    expect(openai.get_by_role("button", name="Use device code")).to_have_count(0)
     with page.expect_popup() as opened:
         openai.get_by_role("button", name="Connect", exact=True).click()
     popup = opened.value
@@ -244,12 +245,8 @@ def test_openai_browser_login_preopens_popup_and_retains_device_choice(
         "Finish signing in, then return to this page."
     )
     openai.get_by_role("button", name="Cancel sign-in", exact=True).click()
-    accounts.hold_login = False
-    openai.get_by_role("button", name="Use device code", exact=True).click()
-    expect(openai.get_by_role("button", name="Copy code")).to_be_visible()
-    assert accounts.login_requests[-1] == ("openai", "device")
-    assert len(page.context.pages) == 1
-    openai.get_by_role("button", name="Cancel sign-in", exact=True).click()
+    expect(openai.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
+    expect(openai.get_by_role("button", name="Use device code")).to_have_count(0)
 
 
 @pytest.mark.parametrize("restart", [False, True])

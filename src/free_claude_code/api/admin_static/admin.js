@@ -489,14 +489,6 @@ function populateConnectedAccountActions(provider, status, actions) {
       (button) => startConnectedAccountLogin(providerId, defaultMode, button),
     ),
   );
-  modes.filter((mode) => mode !== defaultMode).forEach((mode) => {
-    const label = { browser: "Use browser", device: "Use device code" }[mode];
-    if (label) {
-      actions.appendChild(
-        authButton(label, (button) => startConnectedAccountLogin(providerId, mode, button), "secondary-button"),
-      );
-    }
-  });
 }
 
 function authButton(label, action, className = "primary-button") {
