@@ -3,6 +3,7 @@
 import pytest
 from playwright.sync_api import Dialog, Page, Route, expect
 
+from e2e.provider_support import open_provider
 from free_claude_code.application.connected_accounts import (
     ConnectedAccountLoginMode,
     ConnectedAccountState,
@@ -72,6 +73,7 @@ class _Accounts:
                 "kind": "connected_account",
                 "status": "disconnected",
                 "label": "Not connected",
+                "settings_keys": ["OPENAI_PROXY"] if provider_id == "openai" else [],
             }
             for provider_id, name in (
                 ("openai", "OpenAI / ChatGPT"),
@@ -79,6 +81,18 @@ class _Accounts:
             )
         ]
         route.fulfill(response=response, json=config)
+
+    def startup(self, route: Route) -> None:
+        data = route.fetch().json()
+        for provider_id, status in self.statuses.items():
+            if status["connected"]:
+                model_count = status["model_count"]
+                assert isinstance(model_count, int)
+                data["startup"]["providers"][provider_id] = "ready"
+                data["cached_models"][provider_id] = [
+                    f"model-{index}" for index in range(model_count)
+                ]
+        route.fulfill(json=data)
 
     def auth(self, route: Route) -> None:
         request = route.request
@@ -121,6 +135,7 @@ class _Accounts:
 def accounts(page: Page, admin_base_url: str) -> _Accounts:
     result = _Accounts(admin_base_url)
     page.route("**/admin/api/config", result.config)
+    page.route("**/admin/api/status", result.startup)
     page.route("**/admin/api/providers/*/auth**", result.auth)
     page.context.route(
         "**/account-test-sign-in",
@@ -154,7 +169,9 @@ def test_account_modes_wait_for_status_and_recover_after_load_failure(
     accounts.pending_status.pop().fulfill(
         status=503, json={"detail": "Account status unavailable."}
     )
-    expect(copilot.locator(".status-pill")).to_have_text("Needs attention")
+    expect(copilot.locator(".provider-meta")).to_have_text(
+        "Account status unavailable."
+    )
     expect(copilot.get_by_role("button", name="Connect", exact=True)).to_have_count(0)
     copilot.get_by_role("button", name="Retry", exact=True).click()
     expect(copilot.get_by_role("button", name="Loading…", exact=True)).to_be_disabled()
@@ -164,7 +181,7 @@ def test_account_modes_wait_for_status_and_recover_after_load_failure(
 
     expect(copilot.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
     expect(copilot.get_by_role("button", name="Use device code")).to_have_count(0)
-    expect(openai.get_by_role("button", name="Use device code")).to_be_enabled()
+    expect(openai.get_by_role("button", name="Use device code")).to_have_count(0)
     expect(copilot.locator(".provider-meta")).to_contain_text("GitHub Copilot")
     assert "ChatGPT" not in copilot.inner_text()
 
@@ -188,8 +205,8 @@ def test_device_code_connect_copy_and_cancel_ignore_an_old_poll(
     accounts.hold_status.add("github_copilot")
     with page.expect_request("**/admin/api/providers/github_copilot/auth"):
         pass
-    copilot.get_by_role("button", name="Cancel", exact=True).click()
-    expect(copilot.locator(".status-pill")).to_have_text("Not connected")
+    copilot.get_by_role("button", name="Cancel sign-in", exact=True).click()
+    expect(copilot.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
     assert accounts.cancelled == ["github_copilot"]
     assert len(accounts.pending_status) == 1
     accounts.hold_status.clear()
@@ -197,20 +214,20 @@ def test_device_code_connect_copy_and_cancel_ignore_an_old_poll(
         accounts.pending_status.pop().fulfill(json=stale_status)
     response.value.finished()
     page.evaluate("() => new Promise(requestAnimationFrame)")
-    expect(copilot.locator(".status-pill")).to_have_text("Not connected")
+    expect(copilot.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
     expect(copilot.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
     expect(copilot.get_by_role("button", name="Copy code")).to_have_count(0)
 
 
-def test_openai_browser_login_preopens_popup_and_retains_device_choice(
+def test_openai_connect_uses_browser_login(
     page: Page, admin_base_url: str, accounts: _Accounts
 ) -> None:
     accounts.hold_login = True
-    accounts.statuses["openai"] = _status("openai", connected=True)
     _open(page, admin_base_url)
     openai = page.locator('[data-provider="openai"]')
+    expect(openai.get_by_role("button", name="Use device code")).to_have_count(0)
     with page.expect_popup() as opened:
-        openai.get_by_role("button", name="Reconnect", exact=True).click()
+        openai.get_by_role("button", name="Connect", exact=True).click()
     popup = opened.value
     try:
         assert popup.url == "about:blank"
@@ -221,21 +238,19 @@ def test_openai_browser_login_preopens_popup_and_retains_device_choice(
         popup.wait_for_url(f"{admin_base_url}/account-test-sign-in")
     finally:
         popup.close()
-    expect(openai.get_by_role("button", name="Cancel", exact=True)).to_be_visible()
+    expect(
+        openai.get_by_role("button", name="Cancel sign-in", exact=True)
+    ).to_be_visible()
     expect(openai.locator(".provider-meta")).to_have_text(
         "Finish signing in, then return to this page."
     )
-    openai.get_by_role("button", name="Cancel", exact=True).click()
-    accounts.hold_login = False
-    openai.get_by_role("button", name="Use device code", exact=True).click()
-    expect(openai.get_by_role("button", name="Copy code")).to_be_visible()
-    assert accounts.login_requests[-1] == ("openai", "device")
-    assert len(page.context.pages) == 1
-    openai.get_by_role("button", name="Cancel", exact=True).click()
+    openai.get_by_role("button", name="Cancel sign-in", exact=True).click()
+    expect(openai.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
+    expect(openai.get_by_role("button", name="Use device code")).to_have_count(0)
 
 
 @pytest.mark.parametrize("restart", [False, True])
-def test_connected_identities_and_modes_survive_apply_and_disconnect_independently(
+def test_connected_counts_and_modes_survive_apply_and_disconnect_independently(
     page: Page, admin_base_url: str, accounts: _Accounts, restart: bool
 ) -> None:
     accounts.statuses = {
@@ -257,24 +272,25 @@ def test_connected_identities_and_modes_survive_apply_and_disconnect_independent
             }
         ),
     )
-    page.route(
-        "**/admin/api/status",
-        lambda route: route.fulfill(
-            json={"status": "running", "instance_id": "after-restart"}
-        ),
-    )
     _open(page, admin_base_url)
+    open_provider(page, "nvidia_nim")
     page.locator("#field-NVIDIA_NIM_API_KEY").fill("unused-test-key")
-    page.get_by_role("button", name="Apply", exact=True).click()
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.locator("#providerDialog")).not_to_be_visible()
+    expect(page.locator("#messageArea")).to_have_text("Applied")
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     copilot = page.locator('[data-provider="github_copilot"]')
     openai = page.locator('[data-provider="openai"]')
-    expect(copilot.locator(".provider-meta")).to_contain_text(
-        "octocat. 14 models available."
-    )
-    expect(openai.locator(".provider-meta")).to_contain_text("person@example.com.")
-    expect(copilot.locator(".provider-meta")).to_contain_text("Restart your agent")
+    expect(copilot.locator(".provider-meta")).to_have_text("14 models available")
+    expect(openai.locator(".provider-meta")).to_have_text("14 models available")
     assert "ChatGPT" not in copilot.inner_text()
+    expect(page.get_by_role("button", name="Reconnect", exact=True)).to_have_count(0)
+    connected = page.locator(
+        '[data-provider-group="oauth"] [data-provider-subgroup="configured"]'
+    )
+    expect(connected.locator(".provider-title strong")).to_have_text(
+        ["GitHub Copilot", "OpenAI / ChatGPT"]
+    )
     confirmations: list[str] = []
 
     def accept_disconnect(dialog: Dialog) -> None:
@@ -283,12 +299,152 @@ def test_connected_identities_and_modes_survive_apply_and_disconnect_independent
 
     page.once("dialog", accept_disconnect)
     copilot.get_by_role("button", name="Disconnect", exact=True).click()
-    expect(copilot.locator(".status-pill")).to_have_text("Not connected")
+    expect(copilot.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
     assert confirmations == ["Disconnect this GitHub Copilot account from FCC?"]
     assert accounts.disconnected == ["github_copilot"]
-    expect(openai.locator(".status-pill")).to_have_text("Connected")
-    expect(openai.locator(".provider-meta")).to_contain_text("person@example.com.")
+    expect(connected.locator(".provider-title strong")).to_have_text(
+        ["OpenAI / ChatGPT"]
+    )
+    expect(
+        page.locator(
+            '[data-provider-group="oauth"] [data-provider-subgroup="unconfigured"] .provider-title strong'
+        )
+    ).to_have_text(["GitHub Copilot"])
+    expect(openai.get_by_role("button", name="Disconnect", exact=True)).to_have_class(
+        "danger-button"
+    )
+    expect(openai.locator(".provider-meta")).to_have_text("14 models available")
     copilot.get_by_role("button", name="Connect", exact=True).click()
     expect(copilot.get_by_role("button", name="Copy code")).to_be_visible()
     assert accounts.login_requests[-1] == ("github_copilot", "device")
-    copilot.get_by_role("button", name="Cancel", exact=True).click()
+    copilot.get_by_role("button", name="Cancel sign-in", exact=True).click()
+
+
+@pytest.mark.parametrize("provider_id", ["openai", "github_copilot"])
+@pytest.mark.parametrize("outcome", ["ready", "failed"])
+def test_oauth_card_follows_model_discovery_without_replacing_settings(
+    page: Page, admin_base_url: str, accounts: _Accounts, provider_id: str, outcome: str
+) -> None:
+    account = _status(provider_id, connected=True)
+    account["model_count"] = 0
+    accounts.statuses[provider_id] = account
+    phase = "starting"
+
+    def status(route: Route) -> None:
+        data = route.fetch().json()
+        data["startup"]["providers"][provider_id] = phase
+        data["startup"]["providers"]["open_router"] = phase
+        data["cached_models"][provider_id] = (
+            ["model-a", "model-b"] if phase == "ready" else []
+        )
+        route.fulfill(json=data)
+
+    page.route("**/admin/api/status", status)
+    _open(page, admin_base_url)
+    card = page.locator(f'[data-provider="{provider_id}"]')
+    other = page.locator('[data-provider-check-result="open_router"]')
+    expect(card.get_by_role("button", name="Disconnect", exact=True)).to_be_enabled()
+    expect(card.locator(".provider-meta")).to_have_text("Checking models…")
+    expect(card.locator(".provider-meta")).to_have_css(
+        "color", other.evaluate("element => getComputedStyle(element).color")
+    )
+    dialog = open_provider(page, "openai")
+    proxy = dialog.locator("#field-OPENAI_PROXY")
+    proxy.fill("http://pending-proxy:8080")
+    proxy.evaluate("input => input.setSelectionRange(7, 14)")
+    phase = outcome
+    expect(card.locator(".provider-meta")).to_have_text(
+        "2 models available"
+        if outcome == "ready"
+        else "Could not load models. Check the provider's settings and retry."
+    )
+    expect(card.locator(".provider-meta")).to_have_css(
+        "color", other.evaluate("element => getComputedStyle(element).color")
+    )
+    expect(proxy).to_have_value("http://pending-proxy:8080")
+    expect(proxy).to_be_focused()
+    assert proxy.evaluate("input => [input.selectionStart, input.selectionEnd]") == [
+        7,
+        14,
+    ]
+
+
+def test_late_account_response_cannot_replace_discovered_model_count(
+    page: Page, admin_base_url: str, accounts: _Accounts
+) -> None:
+    accounts.hold_status.add("openai")
+    account = _status("openai", connected=True)
+    account["model_count"] = 0
+
+    def status(route: Route) -> None:
+        data = route.fetch().json()
+        data["startup"]["providers"]["openai"] = "ready"
+        data["cached_models"]["openai"] = ["model-a", "model-b"]
+        route.fulfill(json=data)
+
+    page.route("**/admin/api/status", status)
+    page.goto(f"{admin_base_url}/admin")
+    page.wait_for_function("state.startup?.startup?.providers?.openai === 'ready'")
+    accounts.hold_status.clear()
+    accounts.pending_status.pop().fulfill(json=account)
+    card = page.locator('[data-provider="openai"]')
+    expect(card.get_by_role("button", name="Disconnect", exact=True)).to_be_enabled()
+    expect(card.locator(".provider-meta")).to_have_text("2 models available")
+
+
+def test_auth_status_refresh_preserves_proxy_edit_and_selection(
+    page: Page, admin_base_url: str, accounts: _Accounts
+) -> None:
+    accounts.hold_status.add("openai")
+    page.goto(f"{admin_base_url}/admin")
+    dialog = open_provider(page, "openai")
+    proxy = dialog.locator("#field-OPENAI_PROXY")
+    proxy.fill("http://pending-proxy:8080")
+    proxy.evaluate("input => input.setSelectionRange(7, 14)")
+    accounts.hold_status.clear()
+    accounts.pending_status.pop().fulfill(json=_status("openai", connected=True))
+    expect(
+        page.locator('[data-provider="openai"]').get_by_role(
+            "button", name="Disconnect", exact=True
+        )
+    ).to_have_count(1)
+    expect(proxy).to_have_value("http://pending-proxy:8080")
+    expect(proxy).to_be_focused()
+    assert proxy.evaluate("input => [input.selectionStart, input.selectionEnd]") == [
+        7,
+        14,
+    ]
+    expect(dialog.get_by_role("button", name="Connect", exact=True)).to_have_count(0)
+
+
+def test_slow_initial_account_check_does_not_erase_a_later_save_warning(
+    page: Page, admin_base_url: str, accounts: _Accounts
+) -> None:
+    accounts.hold_status.add("github_copilot")
+    page.route(
+        "**/admin/api/config/apply",
+        lambda route: route.fulfill(
+            json={
+                "applied": True,
+                "credential_checks": [
+                    {
+                        "key": "NVIDIA_NIM_API_KEY",
+                        "status": "unverified",
+                        "message": "Verification unavailable.",
+                    }
+                ],
+            }
+        ),
+    )
+    page.goto(f"{admin_base_url}/admin")
+    dialog = open_provider(page, "nvidia_nim")
+    assert len(accounts.pending_status) == 1
+    accounts.hold_status.clear()
+    dialog.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
+    dialog.get_by_role("button", name="Save", exact=True).click()
+    expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
+    with page.expect_response("**/admin/api/providers/github_copilot/auth") as response:
+        accounts.pending_status.pop().fulfill(json=_status("github_copilot"))
+    response.value.finished()
+    page.evaluate("() => new Promise(requestAnimationFrame)")
+    expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")

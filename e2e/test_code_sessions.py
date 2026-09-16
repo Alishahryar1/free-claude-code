@@ -6,6 +6,7 @@ import pytest
 from playwright.sync_api import expect
 
 from e2e.form_support import assert_autofill_opt_out
+from e2e.provider_support import open_provider
 from free_claude_code.application.code_sessions.models import (
     HarnessEvent,
     PromptRequest,
@@ -605,9 +606,9 @@ def test_settings_apply_preserves_open_creation_and_picker(
     page.route("**/admin/api/config/apply", lambda route: pending.append(route))
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
-    page.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
+    page.locator("#field-PORT").fill("8081")
     page.get_by_role("button", name="Apply", exact=True).click()
-    expect(page.locator("#messageArea")).to_have_text("Checking API keys…")
+    expect(page.locator("#messageArea")).to_have_text("Applying…")
     assert len(pending) == 1
     page.get_by_role("button", name="Code sessions", exact=True).click()
     page.get_by_role("button", name="New code session", exact=True).click()
@@ -1514,6 +1515,7 @@ def test_hidden_code_removal_preserves_providers_and_deleted_history(
     page.get_by_role("button", name="Providers", exact=True).click()
     providers_url = f"{admin_base_url}/admin"
     expect(page).to_have_url(providers_url)
+    open_provider(page, "mistral")
     field = page.locator("#field-MISTRAL_API_KEY")
     field.fill("Keep this provider edit")
     field.evaluate("input => input.setSelectionRange(2, 7)")
