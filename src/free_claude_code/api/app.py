@@ -29,7 +29,6 @@ from free_claude_code.core.version import package_version
 from .admin_cache import AdminNoStoreMiddleware, attach_admin_no_store
 from .admin_routes import router as admin_router
 from .code_sessions_routes import router as code_router
-from .usage_routes import router as usage_router
 from .ports import ApiServices
 from .request_errors import ordinary_application_error_response
 from .request_ids import (
@@ -39,6 +38,7 @@ from .request_ids import (
 )
 from .request_lifetime import ClientRequestLifetimeMiddleware
 from .routes import router
+from .usage_routes import router as usage_router
 from .validation_log import summarize_request_validation_body
 
 

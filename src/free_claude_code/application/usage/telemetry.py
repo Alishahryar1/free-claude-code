@@ -54,7 +54,12 @@ class StreamTelemetryTracker:
             self._mono_first_token = monotonic()
 
         # Fast heuristic check for SSE usage payloads before full JSON parsing
-        if "usage" in chunk or "message_start" in chunk or "message_delta" in chunk or "response.completed" in chunk:
+        if (
+            "usage" in chunk
+            or "message_start" in chunk
+            or "message_delta" in chunk
+            or "response.completed" in chunk
+        ):
             self._try_parse_chunk_usage(chunk)
         else:
             self._accumulated_text_chars += len(chunk)
@@ -103,14 +108,22 @@ class StreamTelemetryTracker:
                 if isinstance(resp, dict):
                     usage = resp.get("usage")
                     if isinstance(usage, dict):
-                        self._input_tokens = int(usage.get("input_tokens", self._input_tokens))
-                        self._output_tokens = int(usage.get("output_tokens", self._output_tokens))
+                        self._input_tokens = int(
+                            usage.get("input_tokens", self._input_tokens)
+                        )
+                        self._output_tokens = int(
+                            usage.get("output_tokens", self._output_tokens)
+                        )
                         details = usage.get("output_token_details")
                         if isinstance(details, dict):
-                            self._reasoning_tokens = int(details.get("reasoning_tokens", 0))
+                            self._reasoning_tokens = int(
+                                details.get("reasoning_tokens", 0)
+                            )
                         cached_details = usage.get("input_token_details")
                         if isinstance(cached_details, dict):
-                            self._cached_tokens = int(cached_details.get("cached_tokens", 0))
+                            self._cached_tokens = int(
+                                cached_details.get("cached_tokens", 0)
+                            )
                         self._has_exact_usage = True
 
     def on_success(self) -> UsageRecord:
@@ -131,7 +144,9 @@ class StreamTelemetryTracker:
 
         total_tokens = self._input_tokens + out_tokens
         dur_s = dur_ms / 1000.0
-        tok_s = round(out_tokens / dur_s, 2) if (out_tokens > 0 and dur_s > 0.05) else None
+        tok_s = (
+            round(out_tokens / dur_s, 2) if (out_tokens > 0 and dur_s > 0.05) else None
+        )
 
         return UsageRecord(
             request_id=self.request_id,
@@ -176,7 +191,9 @@ class StreamTelemetryTracker:
         if hasattr(error, "kind") and error.kind:
             err_kind = str(error.kind)
 
-        err_msg = str(getattr(error, "message", None) or error or "Unknown execution error")
+        err_msg = str(
+            getattr(error, "message", None) or error or "Unknown execution error"
+        )
 
         return UsageRecord(
             request_id=self.request_id,

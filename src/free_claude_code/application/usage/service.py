@@ -145,7 +145,11 @@ class UsageService:
         now = time.time()
         delta = _range_to_seconds(time_range)
         interval = _range_to_bucket_interval(time_range)
-        since = max(0.0, now - delta) if time_range != "all" else max(0.0, now - (30 * 86400.0))
+        since = (
+            max(0.0, now - delta)
+            if time_range != "all"
+            else max(0.0, now - (30 * 86400.0))
+        )
         return await self._store.query_timeseries(
             since,
             now,

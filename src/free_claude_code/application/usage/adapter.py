@@ -19,7 +19,7 @@ def _int_or_none(value: Any) -> int | None:
             return None
         # Handle cases where value might be float string like "100.0"
         return int(float(val_str))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 
@@ -28,7 +28,10 @@ def _clean_header_dict(headers: Mapping[str, str]) -> dict[str, str]:
     clean: dict[str, str] = {}
     for k, v in headers.items():
         lower_k = k.lower()
-        if any(token in lower_k for token in ("ratelimit", "rate-limit", "retry-after", "quota")):
+        if any(
+            token in lower_k
+            for token in ("ratelimit", "rate-limit", "retry-after", "quota")
+        ):
             clean[lower_k] = str(v)
     return clean
 
@@ -82,13 +85,17 @@ class GroqUsageAdapter(ProviderUsageAdapter):
         tok_reset = norm.get("x-ratelimit-reset-tokens")
 
         retry_after = _int_or_none(norm.get("retry-after"))
-        quota_available = (req_limit is not None or tok_limit is not None or req_rem is not None)
+        quota_available = (
+            req_limit is not None or tok_limit is not None or req_rem is not None
+        )
 
         return RateLimitSnapshot(
             provider_id=self.provider_id,
             updated_at=ts,
             quota_available=quota_available,
-            status_label="Connected" if quota_available else "Provider quota unavailable",
+            status_label="Connected"
+            if quota_available
+            else "Provider quota unavailable",
             requests_limit=req_limit,
             requests_remaining=req_rem,
             requests_reset=req_reset,
@@ -123,13 +130,17 @@ class AnthropicUsageAdapter(ProviderUsageAdapter):
         tok_reset = norm.get("anthropic-ratelimit-tokens-reset")
 
         retry_after = _int_or_none(norm.get("retry-after"))
-        quota_available = (req_limit is not None or tok_limit is not None or req_rem is not None)
+        quota_available = (
+            req_limit is not None or tok_limit is not None or req_rem is not None
+        )
 
         return RateLimitSnapshot(
             provider_id=self.provider_id,
             updated_at=ts,
             quota_available=quota_available,
-            status_label="Connected" if quota_available else "Provider quota unavailable",
+            status_label="Connected"
+            if quota_available
+            else "Provider quota unavailable",
             requests_limit=req_limit,
             requests_remaining=req_rem,
             requests_reset=req_reset,
@@ -198,7 +209,9 @@ class NvidiaNimUsageAdapter(ProviderUsageAdapter):
         tok_reset = norm.get("x-ratelimit-reset-tokens")
 
         retry_after = _int_or_none(norm.get("retry-after"))
-        quota_available = (req_limit is not None or tok_limit is not None or req_rem is not None)
+        quota_available = (
+            req_limit is not None or tok_limit is not None or req_rem is not None
+        )
 
         return RateLimitSnapshot(
             provider_id=self.provider_id,
@@ -228,34 +241,30 @@ class StandardOpenAIUsageAdapter(ProviderUsageAdapter):
         ts = updated_at or time.time()
         norm = {k.lower(): str(v) for k, v in headers.items()}
 
-        req_limit = (
-            _int_or_none(norm.get("x-ratelimit-limit-requests"))
-            or _int_or_none(norm.get("ratelimit-limit-requests"))
-        )
-        req_rem = (
-            _int_or_none(norm.get("x-ratelimit-remaining-requests"))
-            or _int_or_none(norm.get("ratelimit-remaining-requests"))
-        )
-        req_reset = (
-            norm.get("x-ratelimit-reset-requests")
-            or norm.get("ratelimit-reset-requests")
+        req_limit = _int_or_none(
+            norm.get("x-ratelimit-limit-requests")
+        ) or _int_or_none(norm.get("ratelimit-limit-requests"))
+        req_rem = _int_or_none(
+            norm.get("x-ratelimit-remaining-requests")
+        ) or _int_or_none(norm.get("ratelimit-remaining-requests"))
+        req_reset = norm.get("x-ratelimit-reset-requests") or norm.get(
+            "ratelimit-reset-requests"
         )
 
-        tok_limit = (
-            _int_or_none(norm.get("x-ratelimit-limit-tokens"))
-            or _int_or_none(norm.get("ratelimit-limit-tokens"))
+        tok_limit = _int_or_none(norm.get("x-ratelimit-limit-tokens")) or _int_or_none(
+            norm.get("ratelimit-limit-tokens")
         )
-        tok_rem = (
-            _int_or_none(norm.get("x-ratelimit-remaining-tokens"))
-            or _int_or_none(norm.get("ratelimit-remaining-tokens"))
-        )
-        tok_reset = (
-            norm.get("x-ratelimit-reset-tokens")
-            or norm.get("ratelimit-reset-tokens")
+        tok_rem = _int_or_none(
+            norm.get("x-ratelimit-remaining-tokens")
+        ) or _int_or_none(norm.get("ratelimit-remaining-tokens"))
+        tok_reset = norm.get("x-ratelimit-reset-tokens") or norm.get(
+            "ratelimit-reset-tokens"
         )
 
         retry_after = _int_or_none(norm.get("retry-after"))
-        quota_available = (req_limit is not None or tok_limit is not None or req_rem is not None)
+        quota_available = (
+            req_limit is not None or tok_limit is not None or req_rem is not None
+        )
 
         label = (
             "Local / none"

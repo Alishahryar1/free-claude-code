@@ -3,6 +3,7 @@
 import asyncio
 import random
 import time
+
 from free_claude_code.application.usage.models import RateLimitSnapshot, UsageRecord
 from free_claude_code.config.paths import usage_database_path
 from free_claude_code.runtime.usage_sqlite import UsageSqliteStore
@@ -63,9 +64,27 @@ async def main():
 
     # 2. Add realistic records across past 24 hours
     models = [
-        ("groq", "llama-3.3-70b-versatile", "groq:llama-3.3-70b-versatile", 250.0, 140.0),
-        ("anthropic", "claude-3-5-sonnet-20241022", "anthropic:claude-3-5-sonnet-20241022", 1200.0, 45.0),
-        ("nvidia_nim", "meta/llama-3.1-405b-instruct", "nvidia_nim:meta/llama-3.1-405b-instruct", 900.0, 60.0),
+        (
+            "groq",
+            "llama-3.3-70b-versatile",
+            "groq:llama-3.3-70b-versatile",
+            250.0,
+            140.0,
+        ),
+        (
+            "anthropic",
+            "claude-3-5-sonnet-20241022",
+            "anthropic:claude-3-5-sonnet-20241022",
+            1200.0,
+            45.0,
+        ),
+        (
+            "nvidia_nim",
+            "meta/llama-3.1-405b-instruct",
+            "nvidia_nim:meta/llama-3.1-405b-instruct",
+            900.0,
+            60.0,
+        ),
         ("ollama", "qwen2.5-coder:7b", "ollama:qwen2.5-coder:7b", 650.0, 85.0),
     ]
 
@@ -128,9 +147,11 @@ async def main():
             await store.insert_record(fb_rec)
 
     summary = await store.query_summary(since=now - 86400, time_range_label="24h")
-    print(f"Sample data loaded successfully!")
+    print("Sample data loaded successfully!")
     print(f"Total requests: {summary.total_requests}")
-    print(f"Successful: {summary.successful_requests}, Failed: {summary.failed_requests}")
+    print(
+        f"Successful: {summary.successful_requests}, Failed: {summary.failed_requests}"
+    )
     print(f"Total tokens: {summary.total_tokens:,}")
     print(f"Fallbacks: {summary.fallback_count}")
 

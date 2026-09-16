@@ -42,7 +42,9 @@ class RateLimitSnapshot:
     provider_id: str
     updated_at: float
     quota_available: bool
-    status_label: str  # e.g. "Quota active", "Provider quota unavailable", "Local / none"
+    status_label: (
+        str  # e.g. "Quota active", "Provider quota unavailable", "Local / none"
+    )
     requests_limit: int | None = None
     requests_remaining: int | None = None
     requests_reset: str | None = None

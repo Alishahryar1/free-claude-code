@@ -10,6 +10,8 @@ from typing import Literal
 
 from loguru import logger
 
+from free_claude_code.application.usage import UsageService, get_usage_service
+from free_claude_code.application.usage.telemetry import StreamTelemetryTracker
 from free_claude_code.core.anthropic import (
     Message,
     SystemContent,
@@ -28,8 +30,6 @@ from free_claude_code.core.trace import (
     trace_event,
     traced_async_stream,
 )
-from free_claude_code.application.usage import UsageService, get_usage_service
-from free_claude_code.application.usage.telemetry import StreamTelemetryTracker
 
 from .ports import ModelInfoLookup, ProviderResolver
 from .routing import (
@@ -76,7 +76,9 @@ class ProviderExecutor:
         self._log_raw_payloads = log_raw_payloads
         self._request_headers = MappingProxyType(dict(request_headers or {}))
         self._progress_timeout_seconds = float(progress_timeout_seconds)
-        self._usage_service = usage_service if usage_service is not None else get_usage_service()
+        self._usage_service = (
+            usage_service if usage_service is not None else get_usage_service()
+        )
 
     def _progress_timeout_failure(
         self,
@@ -470,9 +472,8 @@ class ProviderExecutor:
                     candidate_count=len(candidates),
                 )
                 fallback_from_ref = target.provider_model_ref
-                fallback_reason = (
-                    getattr(candidate_failure, "message", None)
-                    or str(candidate_failure)
+                fallback_reason = getattr(candidate_failure, "message", None) or str(
+                    candidate_failure
                 )
 
         stream_trace: dict[str, object] = {

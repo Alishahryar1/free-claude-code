@@ -136,7 +136,9 @@ async def test_usage_api_endpoints(test_usage_env):
         assert clear_res.json() == {"status": "cleared"}
 
         # Verify summary is now 0
-        cleared_summary = (await client.get("/admin/api/usage/summary?time_range=24h")).json()
+        cleared_summary = (
+            await client.get("/admin/api/usage/summary?time_range=24h")
+        ).json()
         assert cleared_summary["total_requests"] == 0
 
 

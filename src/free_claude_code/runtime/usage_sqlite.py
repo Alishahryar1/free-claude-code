@@ -42,6 +42,7 @@ class UsageSqliteStore:
 
     async def _run[T](self, operation: Callable[[sqlite3.Connection], T]) -> T:
         from typing import cast
+
         result = await asyncio.to_thread(self._execute, operation)
         return cast(T, result)
 
@@ -75,10 +76,18 @@ class UsageSqliteStore:
                     tokens_per_second REAL
                 );
             """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_records(timestamp);")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_prov ON usage_records(provider_id);")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_mod ON usage_records(gateway_model);")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_status ON usage_records(status);")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_records(timestamp);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_usage_prov ON usage_records(provider_id);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_usage_mod ON usage_records(gateway_model);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_usage_status ON usage_records(status);"
+            )
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS provider_quotas (
@@ -292,12 +301,21 @@ class UsageSqliteStore:
                     if pricing:
                         if pricing["is_free"]:
                             cost_has_verified = True
-                        elif pricing["input_cost_per_m"] is not None and pricing["output_cost_per_m"] is not None:
+                        elif (
+                            pricing["input_cost_per_m"] is not None
+                            and pricing["output_cost_per_m"] is not None
+                        ):
                             cost_has_verified = True
-                            accum += (d_row["inp"] / 1_000_000.0) * pricing["input_cost_per_m"]
-                            accum += (d_row["out"] / 1_000_000.0) * pricing["output_cost_per_m"]
+                            accum += (d_row["inp"] / 1_000_000.0) * pricing[
+                                "input_cost_per_m"
+                            ]
+                            accum += (d_row["out"] / 1_000_000.0) * pricing[
+                                "output_cost_per_m"
+                            ]
                             if pricing["cached_cost_per_m"] is not None:
-                                accum += (d_row["cch"] / 1_000_000.0) * pricing["cached_cost_per_m"]
+                                accum += (d_row["cch"] / 1_000_000.0) * pricing[
+                                    "cached_cost_per_m"
+                                ]
                 if cost_has_verified:
                     total_cost = round(accum, 4)
 
@@ -318,7 +336,9 @@ class UsageSqliteStore:
                 estimated_tokens=row["est_tok"] or 0,
                 fallback_count=row["fallbacks"] or 0,
                 avg_duration_ms=round(row["avg_dur"] or 0.0, 1),
-                avg_ttft_ms=round(row["avg_ttft"], 1) if row["avg_ttft"] is not None else None,
+                avg_ttft_ms=round(row["avg_ttft"], 1)
+                if row["avg_ttft"] is not None
+                else None,
                 estimated_cost=total_cost,
                 cost_label=cost_label,
             )
@@ -382,7 +402,9 @@ class UsageSqliteStore:
                         cached_tokens=r["cached_tokens"],
                         reasoning_tokens=r["reasoning_tokens"],
                         avg_duration_ms=round(r["avg_duration_ms"] or 0.0, 1),
-                        tokens_per_second=round(r["avg_speed"], 1) if r["avg_speed"] is not None else None,
+                        tokens_per_second=round(r["avg_speed"], 1)
+                        if r["avg_speed"] is not None
+                        else None,
                         error_count=errs,
                         error_rate=round(errs / reqs, 3) if reqs else 0.0,
                     )
@@ -449,7 +471,9 @@ class UsageSqliteStore:
                         failure_count=fails,
                         error_rate=round(fails / reqs, 3) if reqs else 0.0,
                         quota=quotas.get(p_id),
-                        avg_speed_tok_s=round(r["avg_speed"], 1) if r["avg_speed"] is not None else None,
+                        avg_speed_tok_s=round(r["avg_speed"], 1)
+                        if r["avg_speed"] is not None
+                        else None,
                     )
                 )
 
@@ -554,7 +578,9 @@ class UsageSqliteStore:
                 """,
                 params,
             )
-            reasons = tuple((r["fallback_reason"], r["cnt"]) for r in reasons_cursor.fetchall())
+            reasons = tuple(
+                (r["fallback_reason"], r["cnt"]) for r in reasons_cursor.fetchall()
+            )
 
             success_rate = (
                 round(total_fallback_successes / total_fallback_attempts, 3)
@@ -665,7 +691,9 @@ class UsageSqliteStore:
         cutoff = time.time() - (retention_days * 86400.0)
 
         def op(conn: sqlite3.Connection) -> int:
-            cursor = conn.execute("DELETE FROM usage_records WHERE timestamp < ?", (cutoff,))
+            cursor = conn.execute(
+                "DELETE FROM usage_records WHERE timestamp < ?", (cutoff,)
+            )
             return cursor.rowcount
 
         return await self._run(op)

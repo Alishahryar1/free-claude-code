@@ -5,7 +5,7 @@ import json
 import sys
 from collections.abc import AsyncIterator, Callable, Mapping
 from functools import partial
-from typing import cast
+from typing import Any, cast
 
 import httpx
 
@@ -108,8 +108,11 @@ class AnthropicMessagesTransport:
             if not headers:
                 return
             from free_claude_code.application.usage import get_usage_service
+
             svc = get_usage_service()
-            asyncio.create_task(svc.update_provider_headers(self._provider_name.lower(), dict(headers)))
+            asyncio.create_task(
+                svc.update_provider_headers(self._provider_name.lower(), dict(headers))
+            )
         except Exception:
             pass
 
