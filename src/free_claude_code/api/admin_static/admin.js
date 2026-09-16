@@ -1,3 +1,5 @@
+const adminAssetBase = new URL(".", document.currentScript.src);
+
 const state = {
   config: null,
   applying: false,
@@ -344,7 +346,18 @@ function updateProviderCard(provider) {
   title.className = "provider-title";
   const name = document.createElement("strong");
   name.textContent = connectedAccountName(provider);
-  title.appendChild(name);
+  const website = document.createElement("a");
+  website.href = provider.website_url;
+  website.target = "_blank";
+  website.rel = "noopener noreferrer";
+  const logo = document.createElement("img");
+  logo.className = "provider-logo";
+  logo.src = new URL(`providers/${provider.logo_filename}`, adminAssetBase);
+  logo.alt = "";
+  logo.width = 20;
+  logo.height = 20;
+  website.append(name, logo);
+  title.appendChild(website);
   const meta = document.createElement("span");
   meta.className = "provider-meta";
   meta.hidden = !oauth;
@@ -371,8 +384,8 @@ function updateProviderCard(provider) {
     section.hidden = section.querySelector(".provider-grid").childElementCount === 0;
   });
   if (focused) {
-    const buttons = [...actions.querySelectorAll("button:not(:disabled)")];
-    (buttons.find((button) => button.textContent === focusedLabel) || buttons[0])?.focus({ preventScroll: true });
+    const controls = [...card.querySelectorAll("a[href], button:not(:disabled)")];
+    (controls.find((control) => control.textContent === focusedLabel) || actions.querySelector("button:not(:disabled)"))?.focus({ preventScroll: true });
   }
   renderProviderCheckResult(provider.provider_id);
 }
