@@ -16,7 +16,7 @@ def test_retired_provider_is_absent_and_default_setup_remains_available(
     card = page.locator('[data-provider="nvidia_nim"]')
     expect(card.locator(".status-pill")).to_have_text("Missing key")
     card.get_by_role("button", name="Configure", exact=True).click()
-    expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_focused()
+    expect(page.locator("#field-NVIDIA_NIM_API_KEY-nvidia_nim")).to_be_focused()
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(page.locator("#field-MODEL")).to_have_value(
         "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
@@ -49,7 +49,7 @@ def test_missing_provider_configuration_scrolls_to_exact_field(
 ) -> None:
     _open_admin(page, admin_base_url, viewport)
     card = page.locator('[data-provider="nvidia_nim"]')
-    key_input = page.locator("#field-NVIDIA_NIM_API_KEY")
+    key_input = page.locator("#field-NVIDIA_NIM_API_KEY-nvidia_nim")
 
     expect(card.locator(".status-pill")).to_have_text("Missing key")
     expect(card.locator(".provider-meta")).to_have_text("NVIDIA_NIM_API_KEY")
@@ -158,7 +158,7 @@ def test_multi_field_provider_targets_first_missing_configuration(
 ) -> None:
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
     card = page.locator('[data-provider="cloudflare"]')
-    account_input = page.locator("#field-CLOUDFLARE_ACCOUNT_ID")
+    account_input = page.locator("#field-CLOUDFLARE_ACCOUNT_ID-cloudflare")
 
     expect(card.locator(".status-pill")).to_have_text("Missing configuration")
     expect(card.locator(".provider-meta")).to_have_text(
@@ -180,7 +180,9 @@ def test_admin_loading_finishes_before_local_availability_checks(
         "**/admin/api/providers/local-status", lambda route: pending.append(route)
     )
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
-    key = page.locator("#field-NVIDIA_NIM_API_KEY")
+    card = page.locator('[data-provider="nvidia_nim"]')
+    card.get_by_role("button", name="Configure", exact=True).click()
+    key = page.locator("#field-NVIDIA_NIM_API_KEY-nvidia_nim")
     key.fill("unsaved-key")
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
     expect(page.locator("#applyButton")).to_be_enabled()
@@ -218,7 +220,7 @@ def test_local_availability_failure_does_not_fail_admin_loading(
     )
     with page.expect_request("**/admin/api/providers/local-status"):
         page.goto(f"{admin_base_url}/admin")
-    expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_editable()
+    expect(page.locator("#field-NVIDIA_NIM_API_KEY-nvidia_nim")).to_be_editable()
     if failure == "http":
         pending.pop().fulfill(status=503, json={"detail": "private-diagnostic-marker"})
     else:
@@ -288,3 +290,69 @@ def test_manual_provider_test_takes_precedence_over_automatic_availability(
         )
         expect(result).to_have_text("1 models available")
     expect(card.get_by_role("button", name="Test", exact=True)).to_be_enabled()
+
+
+@pytest.mark.parametrize("dismiss", ["Cancel", "Close"])
+def test_dismissing_provider_editor_discards_unsaved_field(
+    page: Page, admin_base_url: str, dismiss: str
+) -> None:
+    _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
+    card = page.locator('[data-provider="nvidia_nim"]')
+    key_input = page.locator("#field-NVIDIA_NIM_API_KEY-nvidia_nim")
+
+    card.get_by_role("button", name="Configure", exact=True).click()
+    expect(key_input).to_be_visible()
+    key_input.fill("should-not-save")
+    expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
+    expect(page.locator("#applyButton")).to_be_enabled()
+
+    card.get_by_role("button", name=dismiss, exact=True).click()
+
+    expect(key_input).not_to_be_visible()
+    expect(key_input).to_have_value("")
+    expect(page.locator("#dirtyState")).to_have_text("No changes")
+    expect(page.locator("#applyButton")).to_be_disabled()
+    expect(card.get_by_role("button", name="Configure", exact=True)).to_be_visible()
+
+
+def test_cancelled_secret_replacement_is_rolled_back(
+    page: Page, admin_base_url: str
+) -> None:
+    page.route(
+        "**/admin/api/config",
+        lambda route: _unlock_open_router_config(route),
+    )
+    _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
+    card = page.locator('[data-provider="open_router"]')
+
+    card.get_by_role("button", name="Edit", exact=True).click()
+    remove_button = card.get_by_role("button", name="Remove", exact=True)
+    expect(remove_button).to_be_visible()
+    remove_button.click()
+    expect(card.get_by_role("button", name="Undo removal", exact=True)).to_be_visible()
+    expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
+
+    card.get_by_role("button", name="Cancel", exact=True).click()
+
+    expect(page.locator("#dirtyState")).to_have_text("No changes")
+    expect(page.locator("#applyButton")).to_be_disabled()
+    key_input = page.locator("#field-OPENROUTER_API_KEY-open_router")
+    expect(key_input).not_to_be_visible()
+    assert key_input.evaluate("el => el.dataset.remove") == "false"
+    assert key_input.evaluate("el => el.readOnly") is False
+    assert (
+        key_input.evaluate(
+            "el => el.closest('.field').querySelector('.secret-remove').textContent"
+        )
+        == "Remove"
+    )
+
+
+def _unlock_open_router_config(route: Route) -> None:
+    response = route.fetch()
+    payload = response.json()
+    for field in payload.get("fields", []):
+        if field.get("key") == "OPENROUTER_API_KEY":
+            field.update(source="managed", locked=False)
+            break
+    route.fulfill(json=payload)

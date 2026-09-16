@@ -24,8 +24,12 @@ def provider_config_status(
                     "provider_id": provider_id,
                     "display_name": descriptor.display_name,
                     "kind": "connected_account",
+                    "auth_kind": descriptor.auth_kind.value,
                     "status": "disconnected",
                     "label": "Not connected",
+                    "local": False,
+                    "credential_env": None,
+                    "credential_url": None,
                 }
             )
             continue
@@ -52,11 +56,15 @@ def provider_config_status(
                     "provider_id": provider_id,
                     "display_name": descriptor.display_name,
                     "kind": "local",
+                    "auth_kind": descriptor.auth_kind.value,
                     "status": "missing_url" if missing_attrs else "configured",
                     "label": "Missing URL" if missing_attrs else "Configured",
                     "base_url": base_url or descriptor.default_base_url or "",
                     "configuration_keys": configuration_keys,
                     "missing_configuration_keys": missing_configuration_keys,
+                    "local": True,
+                    "credential_env": None,
+                    "credential_url": None,
                 }
             )
             continue
@@ -68,6 +76,7 @@ def provider_config_status(
                 "provider_id": provider_id,
                 "display_name": descriptor.display_name,
                 "kind": "remote",
+                "auth_kind": descriptor.auth_kind.value,
                 "status": (
                     "configured"
                     if configured
@@ -84,6 +93,9 @@ def provider_config_status(
                 ),
                 "configuration_keys": configuration_keys,
                 "missing_configuration_keys": missing_configuration_keys,
+                "local": False,
+                "credential_env": descriptor.credential_env,
+                "credential_url": descriptor.credential_url,
             }
         )
     return statuses

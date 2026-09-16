@@ -59,6 +59,18 @@ def test_admin_retains_code_without_chat_markup():
     assert client.get("/admin/code").status_code == 200
 
 
+def test_admin_documentation_view_is_bundled(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    response = _local_client(create_test_app()).get("/admin/documentation")
+
+    assert response.status_code == 200
+    assert 'id="view-documentation"' in response.text
+    assert 'id="doc-purpose"' in response.text
+    assert 'id="doc-troubleshooting"' in response.text
+    assert 'id="doc-maintenance"' in response.text
+    assert 'class="doc-section"' in response.text
+
+
 def test_admin_retirement_preview_apply_and_runtime_agree(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -163,7 +175,14 @@ def _catalog_proxy_env_keys() -> tuple[str, ...]:
 
 
 @pytest.mark.parametrize(
-    "path", ["/admin", "/admin/model_config", "/admin/messaging", "/admin/integrations"]
+    "path",
+    [
+        "/admin",
+        "/admin/model_config",
+        "/admin/messaging",
+        "/admin/integrations",
+        "/admin/documentation",
+    ],
 )
 def test_admin_page_is_loopback_only(monkeypatch, tmp_path, path):
     _set_home(monkeypatch, tmp_path)
@@ -2236,6 +2255,31 @@ def test_admin_config_exposes_structured_provider_configuration_targets(
     assert "configuration" not in providers["nvidia_nim"]
     assert providers["lmstudio"]["status"] == "configured"
     assert providers["lmstudio"]["configuration_keys"] == ["LM_STUDIO_BASE_URL"]
+
+
+def test_admin_provider_status_exposes_credential_targets(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+
+    response = _local_client(create_test_app()).get("/admin/api/config")
+
+    assert response.status_code == 200
+    providers = {
+        provider["provider_id"]: provider
+        for provider in response.json()["provider_status"]
+    }
+    assert providers["nvidia_nim"]["credential_env"] == "NVIDIA_NIM_API_KEY"
+    assert (
+        providers["nvidia_nim"]["credential_url"]
+        == "https://build.nvidia.com/settings/api-keys"
+    )
+    assert providers["open_router"]["credential_url"] == "https://openrouter.ai/keys"
+    assert providers["openai"]["auth_kind"] == "connected_account"
+    assert providers["openai"]["credential_env"] is None
+    assert providers["openai"]["credential_url"] is None
+    assert providers["lmstudio"]["local"] is True
+    assert providers["lmstudio"]["credential_url"] is None
+    assert len(providers) == len(PROVIDER_CATALOG)
 
 
 def test_admin_local_provider_failure_does_not_return_exception_text(

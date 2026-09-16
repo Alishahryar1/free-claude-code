@@ -43,20 +43,29 @@
             <section
               id="connectedAccountsSection"
               class="provider-strip"
-              aria-label="Connected accounts"
+              aria-label="Connected and configured providers"
               hidden
             >
               <div class="strip-header">
                 <div>
-                  <h3>Connected accounts</h3>
-                  <p>Use an existing subscription without storing credentials in .env.</p>
+                  <h3>Connected &amp; configured</h3>
+                  <p>
+                    Providers ready to use — OAuth connections and providers
+                    with their API key already set.
+                  </p>
                 </div>
               </div>
               <div id="connectedAccountGrid" class="provider-grid"></div>
             </section>
             <section class="provider-strip" aria-label="Provider status">
               <div class="strip-header">
-                <h3>Providers</h3>
+                <div>
+                  <h3>Providers</h3>
+                  <p>
+                    Open a card and press Configure to add its API key or base
+                    URL, or Get key to grab one first.
+                  </p>
+                </div>
               </div>
               <div id="providerGrid" class="provider-grid"></div>
             </section>
@@ -152,7 +161,236 @@
           <section id="view-code" class="admin-view" data-view="code" hidden>
             <div id="codeRoot" class="code-root session-root" aria-live="off"></div>
           </section>
-        </div>
+
+          <section id="view-documentation" class="admin-view" data-view="documentation" hidden>
+            <div class="doc" aria-label="Free Claude Code documentation">
+              <article class="doc-section">
+                <h3 id="doc-purpose">Purpose</h3>
+                <p>
+                  <strong>Free Claude Code (FCC)</strong> is an independent, open-source
+                  local proxy and Admin UI that connects coding agents such as Claude Code,
+                  Codex, Pi, OpenCode, Cline, Hermes, Aider, and more to dozens of
+                  ToS-friendly AI providers — free, paid, subscription, and local — from a
+                  single place.
+                </p>
+                <ul>
+                  <li><strong>Where it runs:</strong> on your own machine, as a local server.</li>
+                  <li><strong>What it gives you:</strong> one model catalog for many agents, automatic fallback across providers, and live-browser Code sessions.</li>
+                  <li><strong>What it is not:</strong> an Anthropic product. FCC is not affiliated with or endorsed by Anthropic. “Claude” and “Claude Code” are trademarks of Anthropic.</li>
+                </ul>
+                <p>
+                  Free-tier availability and limits are controlled by each provider and may
+                  change at any time. FCC follows provider terms and removes integrations
+                  when they stop being allowed.
+                </p>
+              </article>
+
+              <article class="doc-section">
+                <h3 id="doc-clarity">How it works</h3>
+                <p>
+                  Agents normally talk to a single vendor API. FCC inserts a local proxy
+                  between your agent and the providers you choose:
+                </p>
+                <ol>
+                  <li>You start <code>fcc-server</code>. It binds the Admin UI and proxy to <code>http://127.0.0.1:8082</code>.</li>
+                  <li>On the <strong>Providers</strong> page you add API keys and pick a model (<code>MODEL</code>).</li>
+                  <li>Your agent is pointed at the proxy URL and token, so it discovers only your chosen models.</li>
+                  <li>FCC translates the agent’s Anthropic/OpenAI-style calls to the provider’s API, then streams the response back — tools, thinking, and images intact.</li>
+                  <li>If a provider fails after retries, FCC automatically retries your next configured model without interrupting the turn.</li>
+                </ol>
+                <p class="doc-note">
+                  The Admin UI and proxy are local-only by default. Enable <strong>Proxy
+                  Authentication</strong> to require a bearer token.
+                </p>
+              </article>
+
+              <article class="doc-section">
+                <h3 id="doc-structure">Project structure</h3>
+                <pre class="doc-code"><code>free-claude-code/
+├── scripts/            # install.sh / install.ps1 (one-command setup), uninstallers
+├── src/free_claude_code/
+│   ├── api/            # FastAPI routes, Admin UI HTML/JS/CSS
+│   ├── application/    # code sessions, connected accounts, model metadata
+│   ├── cli/            # fcc-server and per-agent launchers (fcc-claude, fcc-codex, …)
+│   ├── config/         # settings, provider catalog, Admin config manifest
+│   ├── core/           # Anthropic / OpenAI wire protocol and streaming
+│   ├── providers/      # per-provider adapter factories and credential checks
+│   ├── messaging/      # Discord and Telegram bots
+│   └── harnesses/      # agent integration helpers
+├── tests/              # pytest suite (API, config, CLI)
+├── pyproject.toml      # package metadata, dependency groups, tool config
+├── uv.lock             # locked dependency set (use uv)
+└── README.md           # full user guide</code></pre>
+              </article>
+
+              <article class="doc-section">
+                <h3 id="doc-run">Run it step by step</h3>
+                <h4>1. Prerequisites</h4>
+                <ul>
+                  <li><a href="https://git-scm.com/" target="_blank" rel="noopener noreferrer">Git</a></li>
+                  <li><a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer">Python 3.14+</a> (recommended via uv below)</li>
+                  <li><a href="https://docs.astral.sh/uv/" target="_blank" rel="noopener noreferrer">uv</a> — the project’s package manager</li>
+                </ul>
+                <h4>2. Install uv (if missing)</h4>
+                <p>Windows PowerShell:</p>
+                <pre class="doc-code"><code>powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"</code></pre>
+                <p>macOS / Linux:</p>
+                <pre class="doc-code"><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
+                <h4>3. Clone the repository</h4>
+                <pre class="doc-code"><code>git clone https://github.com/Alishahryar1/free-claude-code.git
+cd free-claude-code</code></pre>
+                <h4>4. Install the pinned Python 3.14</h4>
+                <pre class="doc-code"><code>uv python install 3.14.0</code></pre>
+                <h4>5. Create the environment and install dependencies</h4>
+                <pre class="doc-code"><code>uv sync</code></pre>
+                <h4>6. Start the server</h4>
+                <pre class="doc-code"><code>uv run fcc-server</code></pre>
+                <p>
+                  Keep this terminal open. After startup, the Admin UI opens at
+                  <code>http://127.0.0.1:8082/admin</code>. On Windows and macOS the
+                  desktop launcher adds a tray / menu-bar icon.
+                </p>
+                <h4>7. Configure a provider</h4>
+                <ol>
+                  <li>Open the Admin UI and find your provider below in <em>Provider examples</em>.</li>
+                  <li>Generate an API key with the <strong>Get key</strong> button on the provider card.</li>
+                  <li>Paste the key into its field, pick a model, click <strong>Apply</strong>.</li>
+                </ol>
+                <h4>8. Run a coding agent</h4>
+                <p>Each agent has a launcher (most still require that agent’s own CLI to be installed):</p>
+                <pre class="doc-code"><code>fcc-server   # keep running
+fcc-claude   # Claude Code
+fcc-codex    # Codex
+fcc-opencode # OpenCode
+fcc-pi       # Pi
+fcc-cline    # Cline
+fcc-aider    # Aider</code></pre>
+                <p class="doc-note">
+                  You can also open <strong>Code sessions</strong> in the browser UI without
+                  installing any agent CLI.
+                </p>
+              </article>
+
+              <article class="doc-section">
+                <h3 id="doc-examples">Provider examples</h3>
+                <p>
+                  Set the <code>MODEL</code> select to the provider’s setting and one of its
+                  models. If a provider cannot list models, type
+                  <code>&lt;provider-id&gt;/&lt;exact-provider-model-id&gt;</code> manually.
+                </p>
+                <table class="doc-table">
+                  <thead>
+                    <tr><th>Provider</th><th>Admin setting</th><th>Example <code>MODEL</code></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>NVIDIA NIM</td><td><code>NVIDIA_NIM_API_KEY</code></td><td><code>nvidia_nim/nvidia/nemotron-3-super-120b-a12b</code></td></tr>
+                    <tr><td>OpenRouter</td><td><code>OPENROUTER_API_KEY</code></td><td><code>open_router/openrouter/free</code></td></tr>
+                    <tr><td>Groq</td><td><code>GROQ_API_KEY</code></td><td><code>groq/llama-3.3-70b-versatile</code></td></tr>
+                    <tr><td>Google AI Studio</td><td><code>GEMINI_API_KEY</code></td><td><code>gemini/models/gemini-3.1-flash-lite</code></td></tr>
+                    <tr><td>DeepSeek</td><td><code>DEEPSEEK_API_KEY</code></td><td><code>deepseek/deepseek-chat</code></td></tr>
+                    <tr><td>OpenAI / ChatGPT</td><td>Connect account</td><td><code>openai/&lt;model-id&gt;</code></td></tr>
+                    <tr><td>GitHub Copilot</td><td>Connect account</td><td><code>github_copilot/&lt;model-id&gt;</code></td></tr>
+                    <tr><td>Ollama (local)</td><td><code>OLLAMA_BASE_URL</code></td><td><code>ollama/&lt;model-tag&gt;</code></td></tr>
+                    <tr><td>LM Studio (local)</td><td><code>LM_STUDIO_BASE_URL</code></td><td><code>lmstudio/&lt;model-id&gt;</code></td></tr>
+                  </tbody>
+                </table>
+                <h4>Fallback models</h4>
+                <p>
+                  Add an ordered <strong>Fallback Models</strong> list under
+                  <strong>Model Config</strong>. A failed request may reach and consume usage
+                  from more than one provider before succeeding.
+                </p>
+              </article>
+
+              <article class="doc-section">
+                <h3 id="doc-accuracy">Connecting clients</h3>
+                <p>
+                  For terminal use, just run the matching <code>fcc-*</code> launcher after
+                  <code>fcc-server</code>. For editors, point each client at the proxy:
+                </p>
+                <h4>Claude Code in VS Code</h4>
+                <pre class="doc-code"><code>"claudeCode.environmentVariables": [
+  { "name": "ANTHROPIC_BASE_URL", "value": "http://localhost:8082" },
+  { "name": "ANTHROPIC_AUTH_TOKEN", "value": "freecc" },
+  { "name": "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "value": "1" }
+]</code></pre>
+                <h4>Codex App / VS Code</h4>
+                <pre class="doc-code"><code>model_provider = "fcc"
+model = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+
+[model_providers.fcc]
+name = "Free Claude Code"
+base_url = "http://127.0.0.1:8082/v1"
+wire_api = "responses"
+
+[model_providers.fcc.auth]
+command = "fcc-codex"
+args = ["--print-proxy-auth-token"]</code></pre>
+                <p class="doc-note">
+                  Match the port and token to this Admin UI. Restart the client or reload the
+                  extension after changing the model or provider.
+                </p>
+              </article>
+
+              <article class="doc-section">
+                <h3 id="doc-troubleshooting">Troubleshooting</h3>
+                <h4>The server does not start / “port already in use”</h4>
+                <p>Another FCC instance (or process) is holding <code>8082</code>. Stop it, or change <code>PORT</code> in Admin settings and restart.</p>
+                <h4>The agent still asks me to log in</h4>
+                <p>
+                  Claude Code caches an onboarding flag. Merge the following into
+                  <code>%USERPROFILE%\.claude.json</code> (Windows) or
+                  <code>~/.claude.json</code> (macOS/Linux) and restart:
+                </p>
+                <pre class="doc-code"><code>{ "hasCompletedOnboarding": true }</code></pre>
+                <h4>A model is missing from the dropdown</h4>
+                <p>Enter the exact slug manually: <code>&lt;provider-id&gt;/&lt;model-id&gt;</code>, e.g. <code>groq/llama-3.3-70b-versatile</code>.</p>
+                <h4>Local provider is not reachable</h4>
+                <p>Start the local server first (<code>ollama serve</code>, LM Studio’s server, <code>llama-server</code>), confirm its URL, and use enough context for the agent’s system prompt and tool definitions.</p>
+                <h4>“The provider rejected this API key”</h4>
+                <p>The key is wrong or expired. Generate a fresh key on the provider’s page and re-Apply. Restart the agent to refresh its model picker.</p>
+                <h4>Something else</h4>
+                <p>Check the server terminal output, then report issues at the <a href="https://github.com/Alishahryar1/free-claude-code/issues" target="_blank" rel="noopener noreferrer">project issue tracker</a>.</p>
+              </article>
+
+              <article class="doc-section">
+                <h3 id="doc-consistency">Consistency</h3>
+                <ul>
+                  <li>Run <strong>one</strong> <code>fcc-server</code> at a time; several agents share its proxy and model catalog.</li>
+                  <li>The proxy URL (<code>http://127.0.0.1:8082</code>) and token (<code>freecc</code>) must match across every client configuration.</li>
+                  <li>After connecting an account, changing providers, or changing models, restart the already-running agent so its model picker refreshes.</li>
+                  <li>Model-tier routing (<code>MODEL_OPUS</code>, <code>MODEL_SONNET</code>, <code>MODEL_HAIKU</code>, <code>MODEL_FABLE</code>) lets each Claude tier use a compatible provider individually.</li>
+                </ul>
+              </article>
+
+              <article class="doc-section">
+                <h3 id="doc-maintenance">Maintenance</h3>
+                <h4>Check the version</h4>
+                <pre class="doc-code"><code>uv run fcc-server --version</code></pre>
+                <h4>Update from a git checkout</h4>
+                <pre class="doc-code"><code>git pull --rebase
+uv sync</code></pre>
+                <p>Then restart <code>uv run fcc-server</code>.</p>
+                <h4>Update via the official installer</h4>
+                <p>Windows PowerShell:</p>
+                <pre class="doc-code"><code>irm https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1 | iex</code></pre>
+                <p>macOS / Linux:</p>
+                <pre class="doc-code"><code>curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh" | sh</code></pre>
+                <h4>Uninstall</h4>
+                <p>
+                  Stop every running FCC command first, then run the matching uninstaller from
+                  the <code>scripts/</code> directory. It removes FCC and <code>~/.fcc/</code>
+                  but keeps uv, Python, and your installed coding agents.
+                </p>
+                <h4>Maintain yourself</h4>
+                <ul>
+                  <li>Keep the repository gated on Python 3.14 (see <code>pyproject.toml</code>).</li>
+                  <li>Run <code>uv run ruff check</code>, <code>uv run ty check</code>, and <code>uv run pytest</code> before contributing; see <code>CONTRIBUTING.md</code>.</li>
+                  <li>Version bumps in <code>pyproject.toml</code> require a matching <code>uv lock</code> update.</li>
+                </ul>
+              </article>
+            </div>
+          </section>
       </main>
 
       <footer class="action-bar">

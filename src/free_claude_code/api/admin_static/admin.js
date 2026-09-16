@@ -23,7 +23,7 @@ const VIEW_GROUPS = [
     id: "providers",
     label: "Providers",
     title: "Providers",
-    sections: ["providers", "runtime"],
+    sections: ["runtime"],
     containerId: "providersSections",
   },
   {
@@ -46,6 +46,13 @@ const VIEW_GROUPS = [
     title: "Integrations",
     sections: [],
     containerId: "view-integrations",
+  },
+  {
+    id: "documentation",
+    label: "Documentation",
+    title: "Documentation",
+    sections: [],
+    containerId: "view-documentation",
   },
   {
     id: "code",
@@ -249,7 +256,10 @@ function setActiveView(viewId, { scroll = false } = {}) {
   document.querySelector(".app-shell").classList.toggle("session-active", sessionActive);
   document.querySelector(".main").classList.toggle("session-main", sessionActive);
   document.querySelector(".topbar").hidden = sessionActive;
-  document.querySelector(".action-bar").hidden = sessionActive || activeView.id === "integrations";
+  document.querySelector(".action-bar").hidden =
+    sessionActive ||
+    activeView.id === "integrations" ||
+    activeView.id === "documentation";
 
   document.querySelectorAll(".nav-link").forEach((link) => {
     const selected = link.dataset.view === activeView.id;
@@ -288,73 +298,34 @@ function navigateToView(viewId) {
 
 function renderProviders(providerStatus) {
   const grid = byId("providerGrid");
-  const connectedGrid = byId("connectedAccountGrid");
+  const readyGrid = byId("connectedAccountGrid");
   grid.innerHTML = "";
-  connectedGrid.innerHTML = "";
-  const connected = providerStatus.filter(
-    (provider) => provider.kind === "connected_account",
-  );
-  byId("connectedAccountsSection").hidden = connected.length === 0;
+  readyGrid.innerHTML = "";
+
+  const ready = [];
+  const setup = [];
   providerStatus.forEach((provider) => {
-    if (provider.kind === "connected_account") {
-      connectedGrid.appendChild(renderConnectedAccountCard(provider));
-      return;
+    if (
+      provider.kind === "connected_account" ||
+      provider.status === "configured"
+    ) {
+      ready.push(provider);
+    } else {
+      setup.push(provider);
     }
-    const card = document.createElement("article");
-    card.className = "provider-card";
-    card.dataset.provider = provider.provider_id;
+  });
 
-    const title = document.createElement("div");
-    title.className = "provider-title";
-    const name = document.createElement("strong");
-    name.textContent = provider.display_name || provider.provider_id;
+  byId("connectedAccountsSection").hidden = ready.length === 0;
 
-    const pill = document.createElement("span");
-    pill.className = `status-pill ${statusClass(provider.status)}`;
-    pill.textContent = provider.label;
-    title.append(name, pill);
-
-    const meta = document.createElement("div");
-    meta.className = "provider-meta";
-    const configurationKeys = Array.isArray(provider.configuration_keys)
-      ? provider.configuration_keys
-      : [];
-    const missingConfigurationKeys = Array.isArray(
-      provider.missing_configuration_keys,
-    )
-      ? provider.missing_configuration_keys
-      : [];
-    meta.textContent = configurationKeys.join(" + ");
-
-    const result = document.createElement("div");
-    result.className = "provider-check-result";
-    result.dataset.providerCheckResult = provider.provider_id;
-    result.setAttribute("aria-live", "polite");
-    result.hidden = true;
-
-    const actions = document.createElement("div");
-    actions.className = "provider-actions";
-    if (configurationKeys.length) {
-      const configuring = missingConfigurationKeys.length > 0;
-      actions.appendChild(
-        providerActionButton(configuring ? "Configure" : "Edit", () =>
-          navigateToProviderConfiguration(provider, configuring),
-        ),
-      );
-    }
-
-    if (missingConfigurationKeys.length === 0) {
-      const button = providerActionButton(
-        provider.kind === "local" ? "Test" : "Refresh models",
-        () => testProvider(provider.provider_id, button),
-        "secondary-button",
-      );
-      button.dataset.startupProvider = provider.provider_id;
-      actions.appendChild(button);
-    }
-
-    card.append(title, meta, result, actions);
-    grid.appendChild(card);
+  ready.forEach((provider) => {
+    readyGrid.appendChild(
+      provider.kind === "connected_account"
+        ? renderConnectedAccountCard(provider)
+        : renderProviderCard(provider),
+    );
+  });
+  setup.forEach((provider) => {
+    grid.appendChild(renderProviderCard(provider));
   });
 }
 
@@ -367,24 +338,296 @@ function providerActionButton(label, action, className = "test-button") {
   return button;
 }
 
-function navigateToProviderConfiguration(provider, configuring) {
-  const keys = configuring
+function renderProviderCard(provider) {
+  const card = document.createElement("article");
+  card.className = "provider-card";
+  card.dataset.provider = provider.provider_id;
+
+  const title = document.createElement("div");
+  title.className = "provider-title";
+  const name = document.createElement("strong");
+  name.textContent = provider.display_name || provider.provider_id;
+
+  const pill = document.createElement("span");
+  pill.className = `status-pill ${statusClass(provider.status)}`;
+  pill.textContent = provider.label;
+  title.append(name, pill);
+
+  const meta = document.createElement("div");
+  meta.className = "provider-meta";
+  const configurationKeys = Array.isArray(provider.configuration_keys)
+    ? provider.configuration_keys
+    : [];
+  const missingConfigurationKeys = Array.isArray(
+    provider.missing_configuration_keys,
+  )
     ? provider.missing_configuration_keys
-    : provider.configuration_keys;
-  const fieldKey = Array.isArray(keys) ? keys[0] : null;
-  const input = fieldKey ? byId(`field-${fieldKey}`) : null;
-  if (!input) {
-    showMessage("Provider configuration field is unavailable.", "error");
+    : [];
+  meta.textContent = configurationKeys.join(" + ");
+
+  const result = document.createElement("div");
+  result.className = "provider-check-result";
+  result.dataset.providerCheckResult = provider.provider_id;
+  result.setAttribute("aria-live", "polite");
+  result.hidden = true;
+
+  const actions = document.createElement("div");
+  actions.className = "provider-actions";
+  if (provider.credential_url) {
+    const link = document.createElement("a");
+    link.className = "secondary-button key-link";
+    link.href = provider.credential_url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "Get key";
+    actions.appendChild(link);
+  }
+  if (configurationKeys.length) {
+    const configuring = missingConfigurationKeys.length > 0;
+    const toggle = providerActionButton(
+      configuring ? "Configure" : "Edit",
+      () => toggleProviderEditor(card, provider),
+    );
+    toggle.dataset.providerToggle = "true";
+    actions.appendChild(toggle);
+  }
+  if (missingConfigurationKeys.length === 0) {
+    const button = providerActionButton(
+      provider.kind === "local" ? "Test" : "Refresh models",
+      () => testProvider(provider.provider_id, button),
+      "secondary-button",
+    );
+    button.dataset.startupProvider = provider.provider_id;
+    actions.appendChild(button);
+  }
+
+  card.append(title, meta, result, actions);
+  card.appendChild(buildProviderEditor(provider));
+  return card;
+}
+
+function buildProviderEditor(provider) {
+  const editor = document.createElement("div");
+  editor.className = "provider-inline";
+  editor.hidden = true;
+
+  const configurationKeys = Array.isArray(provider.configuration_keys)
+    ? provider.configuration_keys
+    : [];
+  const fields = configurationKeys
+    .map((key) => state.fields.get(key))
+    .filter((field) => field);
+  const extras = providerExtraFields(provider).filter((field) => field);
+
+  fields.forEach((field) => {
+    editor.appendChild(renderInlineField(field, provider));
+  });
+  if (extras.length) {
+    const advanced = document.createElement("div");
+    advanced.className = "provider-advanced";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "ghost-button advanced-toggle";
+    toggle.textContent = "Show advanced";
+    toggle.addEventListener("click", () => {
+      const showing = advanced.classList.toggle("show");
+      toggle.textContent = showing ? "Hide advanced" : "Show advanced";
+    });
+    const list = document.createElement("div");
+    list.className = "provider-advanced-fields";
+    extras.forEach((field) => list.appendChild(renderInlineField(field, provider)));
+    advanced.append(toggle, list);
+    editor.appendChild(advanced);
+  }
+  if (!fields.length && !extras.length) {
+    const note = document.createElement("p");
+    note.className = "provider-inline-note";
+    note.textContent =
+      "This provider is configured elsewhere and has no editable fields on this card.";
+    editor.appendChild(note);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "provider-actions provider-inline-actions";
+  const save = providerActionButton(
+    "Save",
+    () => saveInlineProvider(provider, editor),
+    "primary-button",
+  );
+  const cancel = providerActionButton("Cancel", () => {
+    closeProviderEditor(editor.closest(".provider-card"), provider);
+  });
+  actions.append(save, cancel);
+  editor.appendChild(actions);
+  return editor;
+}
+
+function providerExtraFields(provider) {
+  const extras = [];
+  for (const field of state.fields.values()) {
+    if (field.section !== "providers") continue;
+    if (field.advanced && field.label === `${provider.display_name} Proxy`) {
+      extras.push(field);
+    } else if (
+      provider.provider_id === "vertex" &&
+      field.key === "VERTEX_LOCATION"
+    ) {
+      extras.push(field);
+    }
+  }
+  return extras;
+}
+
+function renderInlineField(field, provider) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "field";
+  wrapper.dataset.key = field.key;
+
+  const label = document.createElement("label");
+  const inputId = `field-${field.key}-${provider.provider_id}`;
+  label.htmlFor = inputId;
+  const labelText = document.createElement("span");
+  labelText.textContent = field.label;
+  label.appendChild(labelText);
+
+  const source = sourceText(field);
+  if (source) {
+    const sourceEl = document.createElement("span");
+    sourceEl.className = "field-source";
+    sourceEl.textContent = source;
+    label.appendChild(sourceEl);
+  }
+
+  const input = window.FccFormControls.configure(inputForField(field));
+  input.id = inputId;
+  input.dataset.key = field.key;
+  input.dataset.original = comparableValue(field.value);
+  input.dataset.base =
+    input.type === "checkbox"
+      ? input.checked
+        ? "true"
+        : "false"
+      : input.value;
+  input.dataset.secret = field.secret ? "true" : "false";
+  input.dataset.configured = field.configured ? "true" : "false";
+  input.dataset.nullable = field.nullable ? "true" : "false";
+  input.dataset.remove = "false";
+  input.dataset.fieldType = field.type;
+  input.disabled = field.locked;
+  input.addEventListener("input", updateDirtyState);
+  input.addEventListener("change", updateDirtyState);
+  input.addEventListener("input", () => {
+    input.dataset.remove = "false";
+    clearCredentialError(input);
+  });
+  wrapper.append(label, input);
+
+  if (field.secret && field.nullable && field.configured && !field.locked) {
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "ghost-button secret-remove";
+    removeButton.textContent = "Remove";
+    removeButton.addEventListener("click", () => {
+      const removing = input.dataset.remove !== "true";
+      input.dataset.remove = removing ? "true" : "false";
+      input.readOnly = removing;
+      removeButton.textContent = removing ? "Undo removal" : "Remove";
+      clearCredentialError(input);
+      updateDirtyState();
+    });
+    wrapper.appendChild(removeButton);
+  }
+  if (field.description) {
+    const description = document.createElement("div");
+    description.className = "field-description";
+    description.textContent = field.description;
+    wrapper.appendChild(description);
+  }
+  return wrapper;
+}
+
+function toggleProviderEditor(card, provider) {
+  const editor = card.querySelector(".provider-inline");
+  if (!editor) {
+    showMessage("Provider configuration is unavailable.", "error");
     return;
   }
-  const reducedMotion = window.matchMedia(
-    "(prefers-reduced-motion: reduce)",
-  ).matches;
-  input.scrollIntoView({
-    behavior: reducedMotion ? "instant" : "smooth",
-    block: "center",
+  if (!editor.hidden) {
+    closeProviderEditor(card, provider);
+    return;
+  }
+  editor.hidden = false;
+  syncProviderToggle(card, provider);
+  const keys =
+    (Array.isArray(provider.missing_configuration_keys) &&
+      provider.missing_configuration_keys.length
+      ? provider.missing_configuration_keys
+      : provider.configuration_keys) || [];
+  const target = keys.length
+    ? editor.querySelector(
+        `input[data-key="${CSS.escape(keys[0])}"], select[data-key="${CSS.escape(keys[0])}"], textarea[data-key="${CSS.escape(keys[0])}"]`,
+      )
+    : null;
+  const focusTarget = () =>
+    (target || editor.querySelector("input, select, textarea"))?.focus({
+      preventScroll: true,
+    });
+  requestAnimationFrame(focusTarget);
+}
+
+function syncProviderToggle(card, provider) {
+  const toggle = card.querySelector("[data-provider-toggle]");
+  if (!toggle) return;
+  const editor = card.querySelector(".provider-inline");
+  const configuring =
+    (provider.missing_configuration_keys || []).length > 0;
+  toggle.textContent =
+    editor && !editor.hidden ? "Close" : configuring ? "Configure" : "Edit";
+}
+
+async function saveInlineProvider(provider, editor) {
+  if (state.applying) return;
+  const values = {};
+  editor.querySelectorAll("[data-key]").forEach((input) => {
+    if (input.disabled || !input.matches("input, select, textarea")) return;
+    const value = readFieldValue(input);
+    if (comparableValue(value) !== input.dataset.original) {
+      values[input.dataset.key] = value;
+    }
   });
-  input.focus({ preventScroll: true });
+  if (!Object.keys(values).length) {
+    showMessage("No changes to save.", "warn");
+    return;
+  }
+  await submitApply(values);
+}
+
+function closeProviderEditor(card, provider) {
+  const editor = card.querySelector(".provider-inline");
+  if (!editor) {
+    showMessage("Provider configuration is unavailable.", "error");
+    return;
+  }
+  discardInlineEdits(editor);
+  editor.hidden = true;
+  syncProviderToggle(card, provider);
+}
+
+function discardInlineEdits(editor) {
+  editor.querySelectorAll("[data-key]").forEach((input) => {
+    if (input.disabled || !input.matches("input, select, textarea")) return;
+    if (input.type === "checkbox") {
+      input.checked = input.dataset.base === "true";
+    } else {
+      input.value = input.dataset.base ?? "";
+    }
+    input.dataset.remove = "false";
+    input.readOnly = false;
+    const removeButton = input.closest(".field")?.querySelector(".secret-remove");
+    if (removeButton) removeButton.textContent = "Remove";
+    clearCredentialError(input);
+  });
+  updateDirtyState();
 }
 
 function connectedAccountName(provider) {
@@ -1022,6 +1265,7 @@ function changedValues() {
   const values = {};
   document.querySelectorAll("[data-key]").forEach((input) => {
     if (input.disabled || !input.matches("input, select, textarea")) return;
+    if (input.closest(".provider-inline")?.hidden) return;
     const value = readFieldValue(input);
     if (comparableValue(value) !== input.dataset.original) {
       values[input.dataset.key] = value;
@@ -1046,7 +1290,12 @@ function clearCredentialError(input) {
 function showCredentialErrors(checks) {
   let first = null;
   checks.forEach((check) => {
-    const input = byId(`field-${check.key}`);
+    const candidates = Array.from(
+      document.querySelectorAll(`[data-key="${CSS.escape(check.key)}"]`),
+    );
+    const input =
+      candidates.find((candidate) => !candidate.closest(".provider-inline")?.hidden) ||
+      candidates[0];
     if (!input) return;
     clearCredentialError(input);
     if (check.status !== "rejected") return;
@@ -1160,6 +1409,11 @@ async function apply() {
   }
   const values = changedValues();
   if (!Object.keys(values).length) return;
+  await submitApply(values);
+}
+
+async function submitApply(values) {
+  if (state.applying) return;
   const checkingKeys = Object.keys(values).some((key) => {
     const field = state.fields.get(key);
     return field?.secret && field.section === "providers" && values[key] !== null;
@@ -1201,7 +1455,9 @@ async function apply() {
     setApplying(false);
     if (rejectedField) {
       navigateToView("providers");
-      rejectedField.closest(".settings-section")?.classList.add("show-advanced");
+      rejectedField
+        .closest(".settings-section, .provider-inline")
+        ?.classList.add("show-advanced", "show");
       rejectedField.scrollIntoView({ block: "center", behavior: "instant" });
       rejectedField.focus();
     }
