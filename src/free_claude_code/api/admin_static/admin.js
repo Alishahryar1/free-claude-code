@@ -134,7 +134,7 @@ function renderStartup() {
     startupButton(button, Object.values(startup.providers || {}).includes("starting"));
   });
   state.config.provider_status.forEach((provider) => {
-    if (provider.kind !== "connected_account") renderProviderCheckResult(provider.provider_id);
+    renderProviderCheckResult(provider.provider_id);
   });
   renderCodexIntegration();
 }
@@ -347,9 +347,7 @@ function updateProviderCard(provider) {
   title.appendChild(name);
   const meta = document.createElement("span");
   meta.className = "provider-meta";
-  if (oauth && status?.state === "error") meta.classList.add("error");
   meta.hidden = !oauth;
-  if (oauth) meta.textContent = connectedAccountMeta(provider, status);
   const result = document.createElement("span");
   result.className = "provider-check-result";
   result.dataset.providerCheckResult = provider.provider_id;
@@ -376,7 +374,7 @@ function updateProviderCard(provider) {
     const buttons = [...actions.querySelectorAll("button:not(:disabled)")];
     (buttons.find((button) => button.textContent === focusedLabel) || buttons[0])?.focus({ preventScroll: true });
   }
-  if (!oauth) renderProviderCheckResult(provider.provider_id);
+  renderProviderCheckResult(provider.provider_id);
 }
 
 function openProviderDialog(providerId) {
@@ -446,9 +444,7 @@ function connectedAccountMeta(provider, status) {
     return status.message || "Finish signing in, then return to this page.";
   }
   if (status.connected) {
-    return Number.isInteger(status.model_count)
-      ? modelCountMessage(status.model_count)
-      : "";
+    return providerCheckResult(provider.provider_id)?.message || "Checking models…";
   }
   return status.message || `Connect your ${providerName} account to discover models.`;
 }
@@ -679,6 +675,18 @@ function renderProviderCheckResult(providerId) {
   const { status = "", message = "" } = providerCheckResult(providerId) || {};
   const card = document.querySelector(`[data-provider="${providerId}"]`);
   if (!card) return;
+  const provider = connectedAccountDescriptor(providerId);
+  if (provider.kind === "connected_account") {
+    const account = state.authStatuses.get(providerId);
+    const meta = card.querySelector(".provider-meta");
+    meta.textContent = connectedAccountMeta(provider, account);
+    meta.className = "provider-meta";
+    if (account?.connected && account.state !== "connecting") {
+      meta.classList.add("provider-check-result", status || "checking");
+    }
+    if (account?.state === "error") meta.classList.add("error");
+    return;
+  }
   const result = card.querySelector(".provider-check-result");
   result.className = `provider-check-result ${status}`;
   result.textContent = message;

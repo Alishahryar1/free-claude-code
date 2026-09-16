@@ -82,6 +82,18 @@ class _Accounts:
         ]
         route.fulfill(response=response, json=config)
 
+    def startup(self, route: Route) -> None:
+        data = route.fetch().json()
+        for provider_id, status in self.statuses.items():
+            if status["connected"]:
+                model_count = status["model_count"]
+                assert isinstance(model_count, int)
+                data["startup"]["providers"][provider_id] = "ready"
+                data["cached_models"][provider_id] = [
+                    f"model-{index}" for index in range(model_count)
+                ]
+        route.fulfill(json=data)
+
     def auth(self, route: Route) -> None:
         request = route.request
         provider_id = request.url.split("/providers/", 1)[1].split("/", 1)[0]
@@ -123,6 +135,7 @@ class _Accounts:
 def accounts(page: Page, admin_base_url: str) -> _Accounts:
     result = _Accounts(admin_base_url)
     page.route("**/admin/api/config", result.config)
+    page.route("**/admin/api/status", result.startup)
     page.route("**/admin/api/providers/*/auth**", result.auth)
     page.context.route(
         "**/account-test-sign-in",
@@ -262,12 +275,6 @@ def test_connected_counts_and_modes_survive_apply_and_disconnect_independently(
             }
         ),
     )
-    page.route(
-        "**/admin/api/status",
-        lambda route: route.fulfill(
-            json={"status": "running", "instance_id": "after-restart"}
-        ),
-    )
     _open(page, admin_base_url)
     open_provider(page, "nvidia_nim")
     page.locator("#field-NVIDIA_NIM_API_KEY").fill("unused-test-key")
@@ -314,6 +321,78 @@ def test_connected_counts_and_modes_survive_apply_and_disconnect_independently(
     expect(copilot.get_by_role("button", name="Copy code")).to_be_visible()
     assert accounts.login_requests[-1] == ("github_copilot", "device")
     copilot.get_by_role("button", name="Cancel sign-in", exact=True).click()
+
+
+@pytest.mark.parametrize("provider_id", ["openai", "github_copilot"])
+@pytest.mark.parametrize("outcome", ["ready", "failed"])
+def test_oauth_card_follows_model_discovery_without_replacing_settings(
+    page: Page, admin_base_url: str, accounts: _Accounts, provider_id: str, outcome: str
+) -> None:
+    account = _status(provider_id, connected=True)
+    account["model_count"] = 0
+    accounts.statuses[provider_id] = account
+    phase = "starting"
+
+    def status(route: Route) -> None:
+        data = route.fetch().json()
+        data["startup"]["providers"][provider_id] = phase
+        data["startup"]["providers"]["open_router"] = phase
+        data["cached_models"][provider_id] = (
+            ["model-a", "model-b"] if phase == "ready" else []
+        )
+        route.fulfill(json=data)
+
+    page.route("**/admin/api/status", status)
+    _open(page, admin_base_url)
+    card = page.locator(f'[data-provider="{provider_id}"]')
+    other = page.locator('[data-provider-check-result="open_router"]')
+    expect(card.get_by_role("button", name="Disconnect", exact=True)).to_be_enabled()
+    expect(card.locator(".provider-meta")).to_have_text("Checking models…")
+    expect(card.locator(".provider-meta")).to_have_css(
+        "color", other.evaluate("element => getComputedStyle(element).color")
+    )
+    dialog = open_provider(page, "openai")
+    proxy = dialog.locator("#field-OPENAI_PROXY")
+    proxy.fill("http://pending-proxy:8080")
+    proxy.evaluate("input => input.setSelectionRange(7, 14)")
+    phase = outcome
+    expect(card.locator(".provider-meta")).to_have_text(
+        "2 models available"
+        if outcome == "ready"
+        else "Could not load models. Check the provider's settings and retry."
+    )
+    expect(card.locator(".provider-meta")).to_have_css(
+        "color", other.evaluate("element => getComputedStyle(element).color")
+    )
+    expect(proxy).to_have_value("http://pending-proxy:8080")
+    expect(proxy).to_be_focused()
+    assert proxy.evaluate("input => [input.selectionStart, input.selectionEnd]") == [
+        7,
+        14,
+    ]
+
+
+def test_late_account_response_cannot_replace_discovered_model_count(
+    page: Page, admin_base_url: str, accounts: _Accounts
+) -> None:
+    accounts.hold_status.add("openai")
+    account = _status("openai", connected=True)
+    account["model_count"] = 0
+
+    def status(route: Route) -> None:
+        data = route.fetch().json()
+        data["startup"]["providers"]["openai"] = "ready"
+        data["cached_models"]["openai"] = ["model-a", "model-b"]
+        route.fulfill(json=data)
+
+    page.route("**/admin/api/status", status)
+    page.goto(f"{admin_base_url}/admin")
+    page.wait_for_function("state.startup?.startup?.providers?.openai === 'ready'")
+    accounts.hold_status.clear()
+    accounts.pending_status.pop().fulfill(json=account)
+    card = page.locator('[data-provider="openai"]')
+    expect(card.get_by_role("button", name="Disconnect", exact=True)).to_be_enabled()
+    expect(card.locator(".provider-meta")).to_have_text("2 models available")
 
 
 def test_auth_status_refresh_preserves_proxy_edit_and_selection(
