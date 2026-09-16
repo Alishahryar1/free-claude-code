@@ -34,5 +34,6 @@ def test_muse_connection_placement_keeps_native_model_options(
 
 
 def test_muse_install_hint_covers_windows_and_posix() -> None:
-    assert "install-muse.ps1" in SPEC.install_hint
+    assert "https://dev.meta.ai/install.ps1" in SPEC.install_hint
     assert "https://dev.meta.ai/install.sh" in SPEC.install_hint
+    assert "free-claude-code/main/scripts/install-muse.ps1" not in SPEC.install_hint

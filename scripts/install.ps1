@@ -26,7 +26,9 @@ $HermesInstallUrl = "https://hermes-agent.nousresearch.com/install.ps1"
 $DshVersion = "0.1.0-rc.8"
 $DshPackage = "@deepseek-ai/dsh@$DshVersion"
 $GrokInstallUrl = "https://x.ai/cli/install.ps1"
-$MuseInstallUrl = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1"
+$MuseInstallUrl = "https://dev.meta.ai/install.ps1"
+$MuseLegacyOwner = "free-claude-code-muse-installer"
+$MuseLegacyOwnerSchemaVersion = 1
 $RtkVersion = "0.44.2"
 $RtkReleaseBaseUrl = "https://github.com/rtk-ai/rtk/releases/download/v$RtkVersion"
 $RtkWindowsAssetName = "rtk-x86_64-pc-windows-msvc.zip"
@@ -290,7 +292,6 @@ function Add-KnownBinDirectories {
     if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
         Add-PathEntry (Join-Path $env:LOCALAPPDATA "Programs\OpenAI\Codex\bin")
         Add-PathEntry (Join-Path $env:LOCALAPPDATA "pi-node\current")
-        Add-PathEntry (Join-Path $env:LOCALAPPDATA "Programs\Muse Code\bin")
     }
     if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
         Add-PathEntry (Join-Path $env:APPDATA "npm")
@@ -898,10 +899,346 @@ function Ensure-Aider {
     Confirm-Application -CommandName "aider" -DisplayName "Aider"
 }
 
+function Get-MuseInstallPaths {
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        throw "LOCALAPPDATA is not set; cannot locate the Muse Code installation."
+    }
+
+    $upstreamRoot = if ([string]::IsNullOrWhiteSpace($env:MUSE_INSTALL_DIR)) {
+        Join-Path $env:LOCALAPPDATA "Programs\muse"
+    }
+    else {
+        [IO.Path]::GetFullPath($env:MUSE_INSTALL_DIR)
+    }
+    $legacyRoot = Join-Path $env:LOCALAPPDATA "Programs\Muse Code"
+    $legacyBin = Join-Path $legacyRoot "bin"
+    return [pscustomobject] @{
+        UpstreamRoot = $upstreamRoot
+        UpstreamCommand = Join-Path $upstreamRoot "muse.cmd"
+        LegacyRoot = $legacyRoot
+        LegacyBin = $legacyBin
+        LegacyExecutable = Join-Path $legacyBin "muse.exe"
+        LegacyRecord = Join-Path $legacyRoot ".fcc-muse-install.json"
+    }
+}
+
+function Get-MuseCanonicalPath {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string] $Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+    try {
+        $fullPath = [IO.Path]::GetFullPath($Path.Trim())
+        $root = [IO.Path]::GetPathRoot($fullPath)
+        while (
+            $fullPath.Length -gt $root.Length -and
+            ($fullPath.EndsWith("\") -or $fullPath.EndsWith("/"))
+        ) {
+            $fullPath = $fullPath.Substring(0, $fullPath.Length - 1)
+        }
+        return $fullPath
+    }
+    catch {
+        return $null
+    }
+}
+
+function Test-MuseEquivalentPath {
+    param(
+        [string] $Left,
+        [string] $Right
+    )
+
+    $canonicalLeft = Get-MuseCanonicalPath -Path $Left
+    $canonicalRight = Get-MuseCanonicalPath -Path $Right
+    return (
+        $null -ne $canonicalLeft -and
+        $null -ne $canonicalRight -and
+        [string]::Equals(
+            $canonicalLeft,
+            $canonicalRight,
+            [StringComparison]::OrdinalIgnoreCase
+        )
+    )
+}
+
+function Test-MuseCommandInDirectory {
+    param(
+        $Command,
+        [string] $Directory
+    )
+
+    if ($null -eq $Command -or [string]::IsNullOrWhiteSpace([string] $Command.Source)) {
+        return $false
+    }
+    return Test-MuseEquivalentPath `
+        -Left (Split-Path -Parent $Command.Source) `
+        -Right $Directory
+}
+
+function Test-MusePositiveInteger {
+    param($Value)
+
+    foreach ($integerType in @(
+        [byte],
+        [sbyte],
+        [int16],
+        [uint16],
+        [int32],
+        [uint32],
+        [int64],
+        [uint64]
+    )) {
+        if ($Value -is $integerType) {
+            return ([decimal] $Value) -gt 0
+        }
+    }
+    return $false
+}
+
+function Get-MuseLegacyOwnership {
+    param($Paths)
+
+    $rootExists = Test-Path -LiteralPath $Paths.LegacyRoot -PathType Container
+    $recordExists = Test-Path -LiteralPath $Paths.LegacyRecord -PathType Leaf
+    if (-not $rootExists -and -not $recordExists) {
+        return "None"
+    }
+    if (-not $rootExists -or -not $recordExists) {
+        return "Ambiguous"
+    }
+
+    try {
+        $record = Get-Content -LiteralPath $Paths.LegacyRecord -Raw | ConvertFrom-Json
+        $expectedFields = @(
+            "schema_version",
+            "owner",
+            "release_version",
+            "artifact_key",
+            "sha256",
+            "size"
+        )
+        $actualFields = @($record.PSObject.Properties.Name)
+        $valid = (
+            $actualFields.Count -eq $expectedFields.Count -and
+            @($expectedFields | Where-Object { $_ -notin $actualFields }).Count -eq 0 -and
+            $record.schema_version -eq $MuseLegacyOwnerSchemaVersion -and
+            $record.owner -eq $MuseLegacyOwner -and
+            ([string] $record.release_version) -match '^\d+\.\d+\.\d+-R\d+(?:\.\d+)?$' -and
+            $record.artifact_key -in @("x86_windows", "aarch64_windows") -and
+            ([string] $record.sha256) -cmatch '^[0-9a-f]{64}$' -and
+            (Test-MusePositiveInteger -Value $record.size)
+        )
+        if ($valid) {
+            return "Owned"
+        }
+    }
+    catch {
+        # Invalid ownership evidence is preserved and reported by the caller.
+    }
+    return "Ambiguous"
+}
+
+function Get-MusePathWithoutEntry {
+    param(
+        [AllowEmptyString()][string] $PathValue,
+        [Parameter(Mandatory = $true)][string] $Entry
+    )
+
+    if ([string]::IsNullOrEmpty($PathValue)) {
+        return ""
+    }
+    $separator = [IO.Path]::PathSeparator
+    return @(
+        $PathValue -split [regex]::Escape([string] $separator) |
+            Where-Object {
+                -not (Test-MuseEquivalentPath -Left ([string] $_) -Right $Entry)
+            }
+    ) -join $separator
+}
+
+function Get-MusePrioritizedPathValue {
+    param(
+        [AllowEmptyString()][string] $PathValue,
+        [Parameter(Mandatory = $true)][string] $Entry
+    )
+
+    $remaining = Get-MusePathWithoutEntry -PathValue $PathValue -Entry $Entry
+    if ([string]::IsNullOrEmpty($remaining)) {
+        return $Entry
+    }
+    return "$Entry$([IO.Path]::PathSeparator)$remaining"
+}
+
+function Get-MuseUserPathValue {
+    return [Environment]::GetEnvironmentVariable("Path", "User")
+}
+
+function Set-MuseUserPathValue {
+    param([AllowEmptyString()][string] $Value)
+
+    [Environment]::SetEnvironmentVariable("Path", $Value, "User")
+}
+
+function Set-MuseUpstreamPathPriority {
+    param(
+        $Paths,
+        [switch] $Persist
+    )
+
+    $env:Path = Get-MusePrioritizedPathValue `
+        -PathValue ([string] $env:Path) `
+        -Entry $Paths.UpstreamRoot
+    if (-not $Persist) {
+        return
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:MUSE_NO_MODIFY_PATH)) {
+        Write-Host "MUSE_NO_MODIFY_PATH is set; add '$($Paths.UpstreamRoot)' before '$($Paths.LegacyBin)' in your user PATH."
+        return
+    }
+
+    $userPath = [string] (Get-MuseUserPathValue)
+    $prioritized = Get-MusePrioritizedPathValue `
+        -PathValue $userPath `
+        -Entry $Paths.UpstreamRoot
+    if (-not [string]::Equals($userPath, $prioritized, [StringComparison]::Ordinal)) {
+        Set-MuseUserPathValue -Value $prioritized
+    }
+}
+
+function Confirm-MuseApplicationPath {
+    param([string] $Path)
+
+    if ($DryRun) {
+        Write-Host "+ $(Format-Command -FilePath $Path -Arguments @('--version'))"
+        return
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Meta's Muse Code installer completed, but '$Path' was not created."
+    }
+    Invoke-NativeCommand -FilePath $Path -Arguments @("--version")
+}
+
+function Remove-EmptyMuseDirectory {
+    param([string] $Path)
+
+    if (
+        (Test-Path -LiteralPath $Path -PathType Container) -and
+        @(Get-ChildItem -LiteralPath $Path -Force).Count -eq 0
+    ) {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Remove-LegacyMuseInstallation {
+    param(
+        $Paths,
+        [string] $ReplacementDirectory
+    )
+
+    $reuseLegacyBin = Test-MuseEquivalentPath `
+        -Left $ReplacementDirectory `
+        -Right $Paths.LegacyBin
+    if (Test-Path -LiteralPath $Paths.LegacyExecutable -PathType Leaf) {
+        Remove-Item -LiteralPath $Paths.LegacyExecutable -Force
+    }
+
+    if (Test-Path -LiteralPath $Paths.LegacyBin -PathType Container) {
+        $residue = @(Get-ChildItem -LiteralPath $Paths.LegacyBin -Force -File | Where-Object {
+            $_.Name -cmatch '^\.muse-[0-9a-f]{32}\.(?:staging|backup)\.exe$'
+        })
+        foreach ($file in $residue) {
+            Remove-Item -LiteralPath $file.FullName -Force
+        }
+    }
+    $recordResidue = @(Get-ChildItem -LiteralPath $Paths.LegacyRoot -Force -File | Where-Object {
+        $_.Name -cmatch '^\.fcc-muse-install\.json\.[0-9a-f]{32}\.(?:tmp|backup)$'
+    })
+    foreach ($file in $recordResidue) {
+        Remove-Item -LiteralPath $file.FullName -Force
+    }
+
+    if (-not $reuseLegacyBin) {
+        $env:Path = Get-MusePathWithoutEntry `
+            -PathValue ([string] $env:Path) `
+            -Entry $Paths.LegacyBin
+        if ([string]::IsNullOrWhiteSpace($env:MUSE_NO_MODIFY_PATH)) {
+            $userPath = [string] (Get-MuseUserPathValue)
+            $withoutLegacy = Get-MusePathWithoutEntry `
+                -PathValue $userPath `
+                -Entry $Paths.LegacyBin
+            if (-not [string]::Equals($userPath, $withoutLegacy, [StringComparison]::Ordinal)) {
+                Set-MuseUserPathValue -Value $withoutLegacy
+            }
+        }
+    }
+
+    Remove-Item -LiteralPath $Paths.LegacyRecord -Force
+    Remove-EmptyMuseDirectory -Path $Paths.LegacyBin
+    Remove-EmptyMuseDirectory -Path $Paths.LegacyRoot
+    if (Test-Path -LiteralPath $Paths.LegacyRoot -PathType Container) {
+        Write-Host "Removed FCC's legacy Muse Code installation; unknown files in '$($Paths.LegacyRoot)' were preserved."
+    }
+    else {
+        Write-Host "Removed FCC's legacy Muse Code installation."
+    }
+}
+
 function Ensure-Muse {
     $script:MuseAvailable = $false
-    Invoke-DownloadedPowerShellInstaller -Url $MuseInstallUrl -Name "Muse Code"
-    Add-KnownBinDirectories
+    $paths = Get-MuseInstallPaths
+    $legacyOwnership = Get-MuseLegacyOwnership -Paths $paths
+    $command = Get-ApplicationCommand "muse"
+    $commandIsLegacy = Test-MuseCommandInDirectory `
+        -Command $command `
+        -Directory $paths.LegacyBin
+    $installUpstream = ($null -eq $command) -or $commandIsLegacy
+
+    if ($DryRun) {
+        if ($installUpstream) {
+            Invoke-DownloadedPowerShellInstaller -Url $MuseInstallUrl -Name "Muse Code"
+            Confirm-MuseApplicationPath -Path $paths.UpstreamCommand
+        }
+        else {
+            Write-Host "Muse Code already found on PATH; verifying it."
+        }
+        if ($legacyOwnership -eq "Owned") {
+            Write-Host "+ retire FCC's marker-owned Muse Code installation after replacement verification"
+        }
+        elseif ($legacyOwnership -eq "Ambiguous") {
+            Write-Host "FCC could not prove ownership of '$($paths.LegacyRoot)'; it will be preserved."
+        }
+        Confirm-Application -CommandName "muse" -DisplayName "Muse Code"
+        $script:MuseAvailable = $true
+        return
+    }
+
+    $replacementDirectory = $null
+    if ($installUpstream) {
+        Invoke-DownloadedPowerShellInstaller -Url $MuseInstallUrl -Name "Muse Code"
+        Confirm-MuseApplicationPath -Path $paths.UpstreamCommand
+        $persistPriority = $legacyOwnership -ne "None"
+        Set-MuseUpstreamPathPriority -Paths $paths -Persist:$persistPriority
+        $replacementDirectory = $paths.UpstreamRoot
+    }
+    else {
+        Write-Host "Muse Code already found on PATH; verifying it."
+        if ($legacyOwnership -eq "Owned") {
+            Invoke-NativeCommand -FilePath $command.Source -Arguments @("--version")
+        }
+        $replacementDirectory = Split-Path -Parent $command.Source
+    }
+
+    if ($legacyOwnership -eq "Owned") {
+        Remove-LegacyMuseInstallation `
+            -Paths $paths `
+            -ReplacementDirectory $replacementDirectory
+    }
+    elseif ($legacyOwnership -eq "Ambiguous") {
+        Write-Host "FCC could not prove ownership of '$($paths.LegacyRoot)'; it was preserved. Remove it manually if it is no longer needed."
+    }
+
     Confirm-Application -CommandName "muse" -DisplayName "Muse Code"
     $script:MuseAvailable = $true
 }

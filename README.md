@@ -600,19 +600,13 @@ Re-run the matching command from [Install Or Update](#install).
 
 ### Muse Code on native Windows
 
-Rerunning FCC's Windows installer with Muse Code selected installs or updates FCC's managed Muse executable. To install or update only Muse Code:
+FCC delegates a missing Muse Code installation to Meta's official installer. To install or refresh Muse Code directly:
 
 ```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1")))
+& ([scriptblock]::Create((irm "https://dev.meta.ai/install.ps1")))
 ```
 
-To remove only that managed Muse executable while preserving Muse data and other installations:
-
-```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/uninstall-muse.ps1")))
-```
-
-FCC's ordinary uninstaller below continues to leave Muse Code installed.
+FCC's ordinary uninstaller below leaves Muse Code and its data installed.
 
 ### Uninstall
 

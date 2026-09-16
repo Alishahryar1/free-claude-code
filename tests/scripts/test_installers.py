@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -1898,6 +1899,16 @@ class PowerShellHarness:
     def add_rtk(self) -> None:
         _write_executable(self.bin_dir / "rtk.cmd", _batch_rtk())
 
+    def set_user_path(self, *entries: Path | str) -> None:
+        Path(self.env["FAKE_USER_PATH_FILE"]).write_text(
+            os.pathsep.join(str(entry) for entry in entries),
+            encoding="utf-8",
+        )
+
+    def user_path_entries(self) -> list[str]:
+        value = Path(self.env["FAKE_USER_PATH_FILE"]).read_text(encoding="utf-8")
+        return value.split(os.pathsep) if value else []
+
     def add_unrelated_rtk(self) -> None:
         _write_executable(
             self.bin_dir / "rtk.cmd",
@@ -2051,15 +2062,23 @@ Add-Content -LiteralPath $env:CALL_LOG -Value "grok-install"
     )
     (fixtures / "muse-installer.ps1").write_text(
         r"""if ($env:FAIL_STEP -eq "muse-install") { exit 68 }
-$existing = Get-Command "muse" -CommandType Application -ErrorAction SilentlyContinue
-if ($existing) {
-    Add-Content -LiteralPath $env:CALL_LOG -Value "muse-install:external"
-    return
+$bin = if ([string]::IsNullOrWhiteSpace($env:MUSE_INSTALL_DIR)) {
+    Join-Path $env:LOCALAPPDATA "Programs\muse"
 }
-$bin = Join-Path $env:LOCALAPPDATA "Programs\Muse Code\bin"
+else {
+    $env:MUSE_INSTALL_DIR
+}
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
 Copy-Item (Join-Path $env:FAKE_FIXTURES "muse-command.cmd") (Join-Path $bin "muse.cmd") -Force
-Add-Content -LiteralPath $env:CALL_LOG -Value "muse-install"
+if ([string]::IsNullOrWhiteSpace($env:MUSE_NO_MODIFY_PATH)) {
+    $userPath = [IO.File]::ReadAllText($env:FAKE_USER_PATH_FILE)
+    $entries = @($userPath.Split(';', [StringSplitOptions]::RemoveEmptyEntries))
+    if ($entries -notcontains $bin) {
+        $newUserPath = if ([string]::IsNullOrEmpty($userPath)) { $bin } else { "$bin;$userPath" }
+        [IO.File]::WriteAllText($env:FAKE_USER_PATH_FILE, $newUserPath)
+    }
+}
+Add-Content -LiteralPath $env:CALL_LOG -Value "muse-install:$bin"
 """,
         encoding="utf-8",
     )
@@ -2133,7 +2152,7 @@ function Invoke-RestMethod {
         ($env:FAIL_STEP -eq "opencode-download" -and $Uri.Contains("anomalyco/opencode")) -or
         ($env:FAIL_STEP -eq "hermes-download" -and $Uri.Contains("hermes-agent.nousresearch.com")) -or
         ($env:FAIL_STEP -eq "grok-download" -and $Uri.Contains("x.ai/cli")) -or
-        ($env:FAIL_STEP -eq "muse-download" -and $Uri.Contains("scripts/install-muse.ps1")) -or
+        ($env:FAIL_STEP -eq "muse-download" -and $Uri.Contains("dev.meta.ai")) -or
         ($env:FAIL_STEP -eq "rtk-download" -and $Uri.Contains("rtk-ai/rtk")) -or
         ($env:FAIL_STEP -eq "uv-download" -and $Uri.Contains("astral.sh"))
     ) {
@@ -2154,7 +2173,7 @@ function Invoke-RestMethod {
     elseif ($Uri.Contains("x.ai/cli")) {
         $source = Join-Path $env:FAKE_FIXTURES "grok-installer.ps1"
     }
-    elseif ($Uri.Contains("scripts/install-muse.ps1")) {
+    elseif ($Uri -eq "https://dev.meta.ai/install.ps1") {
         $source = Join-Path $env:FAKE_FIXTURES "muse-installer.ps1"
     }
     elseif ($Uri.Contains("opencode-windows-")) {
@@ -2195,6 +2214,25 @@ function Get-Process {
     }
 }
 $installerSource = [IO.File]::ReadAllText($env:FCC_INSTALLER)
+$fakeMuseUserPath = @'
+function Get-MuseUserPathValue {
+    return [IO.File]::ReadAllText($env:FAKE_USER_PATH_FILE)
+}
+
+function Set-MuseUserPathValue {
+    param([AllowEmptyString()][string] $Value)
+
+    [IO.File]::WriteAllText($env:FAKE_USER_PATH_FILE, $Value)
+}
+'@
+$museUserPathStart = $installerSource.IndexOf("function Get-MuseUserPathValue {")
+$museUserPathEnd = $installerSource.IndexOf("function Set-MuseUpstreamPathPriority {", $museUserPathStart)
+if ($museUserPathStart -lt 0 -or $museUserPathEnd -lt 0) {
+    throw "failed to isolate the Muse user PATH helpers"
+}
+$installerSource = $installerSource.Substring(0, $museUserPathStart) + `
+    $fakeMuseUserPath.TrimEnd() + "`r`n`r`n" + `
+    $installerSource.Substring($museUserPathEnd)
 $nativeVersionProbe = '    $output = Invoke-Utf8NativeCapture -FilePath $OpenCodePath -Arguments @("--version")'
 $fakeArchiveVersionProbe = @'
     $output = if ([IO.Path]::GetFileName($OpenCodePath) -eq "opencode.exe") {
@@ -2212,6 +2250,8 @@ $installer = [scriptblock]::Create($installerSource)
     )
 
     system_root = os.environ["SYSTEMROOT"]
+    user_path_file = tmp_path / "user-path.txt"
+    user_path_file.write_text("", encoding="utf-8")
     env = os.environ.copy()
     env.update(
         {
@@ -2226,6 +2266,7 @@ $installer = [scriptblock]::Create($installerSource)
             "CLAUDE_CONFIG_DIR": "",
             "FAKE_FIXTURES": str(fixtures),
             "FAKE_TOOL_BIN": str(tool_bin),
+            "FAKE_USER_PATH_FILE": str(user_path_file),
             "FAKE_NPM_PREFIX": str(npm_prefix),
             "FCC_INSTALLER": str(_repo_root() / "scripts" / "install.ps1"),
             "FCC_PROCESS_MARKER": str(tmp_path / "fcc-process-ready"),
@@ -2248,6 +2289,39 @@ $installer = [scriptblock]::Create($installerSource)
     )
 
 
+def _install_legacy_muse(
+    harness: PowerShellHarness,
+    *,
+    marker: str = "valid",
+) -> tuple[Path, Path, Path, Path]:
+    root = Path(harness.env["LOCALAPPDATA"]) / "Programs" / "Muse Code"
+    bin_dir = root / "bin"
+    executable = bin_dir / "muse.exe"
+    record = root / ".fcc-muse-install.json"
+    bin_dir.mkdir(parents=True)
+    shutil.copy2(sys.executable, executable)
+    ownership = {
+        "schema_version": 1,
+        "owner": "free-claude-code-muse-installer",
+        "release_version": "1.0.3-R2198.1",
+        "artifact_key": "x86_windows",
+        "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        "size": executable.stat().st_size,
+    }
+    if marker == "valid":
+        record.write_text(json.dumps(ownership), encoding="utf-8")
+    elif marker == "foreign":
+        ownership["owner"] = "someone-else"
+        record.write_text(json.dumps(ownership), encoding="utf-8")
+    elif marker == "malformed":
+        record.write_text("{", encoding="utf-8")
+    elif marker != "missing":
+        raise AssertionError(f"unknown marker fixture: {marker}")
+    harness.env["PATH"] = f"{bin_dir}{os.pathsep}{harness.env['PATH']}"
+    harness.set_user_path(bin_dir, harness.root / "unrelated-bin")
+    return root, bin_dir, executable, record
+
+
 def test_install_ps1_fresh_install_is_verified(
     powershell_harness: PowerShellHarness,
 ) -> None:
@@ -2268,7 +2342,11 @@ def test_install_ps1_fresh_install_is_verified(
         "dsh:--version"
     )
     assert calls.index("grok-install") < calls.index("grok:--version")
-    assert calls.index("muse-install") < calls.index("muse:--version")
+    muse_install = next(call for call in calls if call.startswith("muse-install:"))
+    assert calls.index(muse_install) < calls.index("muse:--version")
+    muse_dir = Path(powershell_harness.env["LOCALAPPDATA"]) / "Programs" / "muse"
+    assert (muse_dir / "muse.cmd").is_file()
+    assert powershell_harness.user_path_entries()[0] == str(muse_dir)
     assert not any("hermes:setup" in call for call in calls)
     assert calls.index("uv-install") < calls.index("uv:--version")
     aider_install = (
@@ -2366,7 +2444,7 @@ def test_install_ps1_preserves_upstream_managed_harness_without_parsing_version(
     assert not any(install_call in call for call in calls)
 
 
-def test_install_ps1_delegates_compatible_external_muse_without_adopting_it(
+def test_install_ps1_preserves_compatible_external_muse_without_adopting_it(
     powershell_harness: PowerShellHarness,
 ) -> None:
     powershell_harness.add_client("muse")
@@ -2375,12 +2453,149 @@ def test_install_ps1_delegates_compatible_external_muse_without_adopting_it(
 
     assert result.returncode == 0, result.stderr
     calls = powershell_harness.calls()
-    assert "muse-install:external" in calls
-    assert calls.index("muse-install:external") < calls.index("muse:--version")
+    assert "muse:--version" in calls
+    assert not any(call.startswith("muse-install:") for call in calls)
+    assert "download:https://dev.meta.ai/install.ps1" not in calls
     managed_root = (
         Path(powershell_harness.env["LOCALAPPDATA"]) / "Programs" / "Muse Code"
     )
     assert not managed_root.exists()
+
+
+def test_install_ps1_migrates_owned_muse_after_upstream_verification(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    root, legacy_bin, executable, record = _install_legacy_muse(powershell_harness)
+    unknown = root / "user-notes.txt"
+    unknown.write_text("keep", encoding="utf-8")
+    residue = legacy_bin / f".muse-{'a' * 32}.staging.exe"
+    residue.write_bytes(b"staging")
+    record_residue = root / f".fcc-muse-install.json.{'b' * 32}.backup"
+    record_residue.write_bytes(b"backup")
+
+    result = powershell_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    upstream = Path(powershell_harness.env["LOCALAPPDATA"]) / "Programs" / "muse"
+    assert (upstream / "muse.cmd").is_file()
+    assert not executable.exists()
+    assert not record.exists()
+    assert not residue.exists()
+    assert not record_residue.exists()
+    assert unknown.read_text(encoding="utf-8") == "keep"
+    user_path = powershell_harness.user_path_entries()
+    assert user_path[0] == str(upstream)
+    assert str(legacy_bin) not in user_path
+    calls = powershell_harness.calls()
+    muse_install = next(call for call in calls if call.startswith("muse-install:"))
+    assert calls.index(muse_install) < calls.index("muse:--version")
+
+
+def test_install_ps1_failed_upstream_verification_preserves_owned_muse(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    _, legacy_bin, executable, record = _install_legacy_muse(powershell_harness)
+
+    result = powershell_harness.run(fail_step="muse-verify")
+
+    assert result.returncode != 0
+    assert executable.is_file()
+    assert record.is_file()
+    assert str(legacy_bin) in powershell_harness.user_path_entries()
+    assert "Free Claude Code is installed and verified." not in result.stdout
+
+
+@pytest.mark.parametrize("marker", ("missing", "malformed", "foreign"))
+def test_install_ps1_preserves_ambiguous_legacy_muse_and_prioritizes_upstream(
+    powershell_harness: PowerShellHarness,
+    marker: str,
+) -> None:
+    root, legacy_bin, executable, record = _install_legacy_muse(
+        powershell_harness,
+        marker=marker,
+    )
+    upstream = Path(powershell_harness.env["LOCALAPPDATA"]) / "Programs" / "muse"
+    powershell_harness.set_user_path(legacy_bin, upstream)
+    unknown = root / "user-notes.txt"
+    unknown.write_text("keep", encoding="utf-8")
+
+    result = powershell_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert executable.is_file()
+    assert record.exists() is (marker != "missing")
+    assert unknown.read_text(encoding="utf-8") == "keep"
+    assert powershell_harness.user_path_entries()[:2] == [
+        str(upstream),
+        str(legacy_bin),
+    ]
+    assert "could not prove ownership" in result.stdout
+    assert "was preserved" in result.stdout
+
+
+def test_install_ps1_honors_custom_upstream_muse_directory(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    custom_dir = powershell_harness.root / "custom-muse"
+    powershell_harness.env["MUSE_INSTALL_DIR"] = str(custom_dir)
+
+    result = powershell_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert (custom_dir / "muse.cmd").is_file()
+    assert powershell_harness.user_path_entries()[0] == str(custom_dir)
+    assert f"muse-install:{custom_dir}" in powershell_harness.calls()
+
+
+def test_install_ps1_migrates_when_upstream_reuses_legacy_bin(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    _, legacy_bin, executable, record = _install_legacy_muse(powershell_harness)
+    powershell_harness.env["MUSE_INSTALL_DIR"] = str(legacy_bin)
+
+    result = powershell_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert (legacy_bin / "muse.cmd").is_file()
+    assert not executable.exists()
+    assert not record.exists()
+    assert powershell_harness.user_path_entries().count(str(legacy_bin)) == 1
+
+
+def test_install_ps1_honors_muse_path_opt_out_during_migration(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    _, _, executable, record = _install_legacy_muse(powershell_harness)
+    original_user_path = powershell_harness.user_path_entries()
+    powershell_harness.env["MUSE_NO_MODIFY_PATH"] = "1"
+
+    result = powershell_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert not executable.exists()
+    assert not record.exists()
+    assert powershell_harness.user_path_entries() == original_user_path
+    assert "MUSE_NO_MODIFY_PATH is set" in result.stdout
+
+
+def test_install_ps1_muse_migration_preserves_empty_path_entries(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    _, legacy_bin, _, _ = _install_legacy_muse(powershell_harness)
+    unrelated = powershell_harness.root / "unrelated-bin"
+    powershell_harness.set_user_path("", legacy_bin, "", unrelated, "")
+
+    result = powershell_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    upstream = Path(powershell_harness.env["LOCALAPPDATA"]) / "Programs" / "muse"
+    assert powershell_harness.user_path_entries() == [
+        str(upstream),
+        "",
+        "",
+        str(unrelated),
+        "",
+    ]
 
 
 @pytest.mark.parametrize("failure", ["muse-download", "muse-install"])
@@ -2795,11 +3010,10 @@ def test_install_ps1_preserves_valid_existing_tools(
     download_calls = [
         call for call in powershell_harness.calls() if call.startswith("download:")
     ]
-    assert download_calls == [
-        "download:https://raw.githubusercontent.com/Alishahryar1/"
-        "free-claude-code/main/scripts/install-muse.ps1"
-    ]
-    assert "muse-install:external" in powershell_harness.calls()
+    assert download_calls == []
+    assert not any(
+        call.startswith("muse-install:") for call in powershell_harness.calls()
+    )
     assert "leaving it unchanged" in result.stdout
 
 
@@ -3175,10 +3389,8 @@ def test_installers_use_native_clients_and_single_python_selection() -> None:
     assert "https://x.ai/cli/install.sh" in shell
     assert "https://x.ai/cli/install.ps1" in powershell
     assert "https://dev.meta.ai/install.sh" in shell
-    assert (
-        "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/"
-        "main/scripts/install-muse.ps1"
-    ) in powershell
+    assert "https://dev.meta.ai/install.ps1" in powershell
+    assert "main/scripts/install-muse.ps1" not in powershell
 
 
 def test_install_ps1_uses_x64_python_for_windows_arm_compatibility() -> None:
