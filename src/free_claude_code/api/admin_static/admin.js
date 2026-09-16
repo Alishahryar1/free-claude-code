@@ -446,12 +446,9 @@ function connectedAccountMeta(provider, status) {
     return status.message || "Finish signing in, then return to this page.";
   }
   if (status.connected) {
-    const identity = status.display_identity || status.email || `${providerName} account connected`;
-    const models = Number.isInteger(status.model_count)
-      ? `${status.model_count} model${status.model_count === 1 ? "" : "s"} available. `
+    return Number.isInteger(status.model_count)
+      ? modelCountMessage(status.model_count)
       : "";
-    const error = status.message ? `${status.message} ` : "";
-    return `${identity}. ${models}${error}Restart your agent to refresh its model picker.`;
   }
   return status.message || `Connect your ${providerName} account to discover models.`;
 }

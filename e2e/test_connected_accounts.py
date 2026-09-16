@@ -240,7 +240,7 @@ def test_openai_browser_login_preopens_popup_and_retains_device_choice(
 
 
 @pytest.mark.parametrize("restart", [False, True])
-def test_connected_identities_and_modes_survive_apply_and_disconnect_independently(
+def test_connected_counts_and_modes_survive_apply_and_disconnect_independently(
     page: Page, admin_base_url: str, accounts: _Accounts, restart: bool
 ) -> None:
     accounts.statuses = {
@@ -277,11 +277,8 @@ def test_connected_identities_and_modes_survive_apply_and_disconnect_independent
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     copilot = page.locator('[data-provider="github_copilot"]')
     openai = page.locator('[data-provider="openai"]')
-    expect(copilot.locator(".provider-meta")).to_contain_text(
-        "octocat. 14 models available."
-    )
-    expect(openai.locator(".provider-meta")).to_contain_text("person@example.com.")
-    expect(copilot.locator(".provider-meta")).to_contain_text("Restart your agent")
+    expect(copilot.locator(".provider-meta")).to_have_text("14 models available")
+    expect(openai.locator(".provider-meta")).to_have_text("14 models available")
     assert "ChatGPT" not in copilot.inner_text()
     expect(page.get_by_role("button", name="Reconnect", exact=True)).to_have_count(0)
     connected = page.locator(
@@ -312,7 +309,7 @@ def test_connected_identities_and_modes_survive_apply_and_disconnect_independent
     expect(openai.get_by_role("button", name="Disconnect", exact=True)).to_have_class(
         "danger-button"
     )
-    expect(openai.locator(".provider-meta")).to_contain_text("person@example.com.")
+    expect(openai.locator(".provider-meta")).to_have_text("14 models available")
     copilot.get_by_role("button", name="Connect", exact=True).click()
     expect(copilot.get_by_role("button", name="Copy code")).to_be_visible()
     assert accounts.login_requests[-1] == ("github_copilot", "device")
