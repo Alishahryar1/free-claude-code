@@ -379,6 +379,18 @@ button.startup-busy::before,
   color: var(--text-strong);
 }
 
+.provider-title a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  color: var(--text-strong);
+  text-decoration: none;
+}
+.provider-title a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.provider-title a:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.provider-logo { width: 20px; height: 20px; flex: none; object-fit: contain; }
+
 .provider-meta {
   color: var(--muted);
   font-size: 12px;

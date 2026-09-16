@@ -18,14 +18,19 @@ def provider_config_status(
     """Return provider configuration status without making network calls."""
     statuses: list[JsonObject] = []
     for provider_id, descriptor in PROVIDER_CATALOG.items():
+        metadata = {
+            "provider_id": provider_id,
+            "display_name": descriptor.display_name,
+            "website_url": descriptor.website_url,
+            "logo_filename": descriptor.logo_filename,
+        }
         settings_keys = [
             field.key for field in FIELDS if provider_id in field.provider_ids
         ]
         if descriptor.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT:
             statuses.append(
                 {
-                    "provider_id": provider_id,
-                    "display_name": descriptor.display_name,
+                    **metadata,
                     "kind": "connected_account",
                     "status": "disconnected",
                     "label": "Not connected",
@@ -53,8 +58,7 @@ def provider_config_status(
                 base_url = _value_for_settings_attr(state, descriptor.base_url_attr)
             statuses.append(
                 {
-                    "provider_id": provider_id,
-                    "display_name": descriptor.display_name,
+                    **metadata,
                     "kind": "local",
                     "status": "missing_url" if missing_attrs else "configured",
                     "label": "Missing URL" if missing_attrs else "Configured",
@@ -70,8 +74,7 @@ def provider_config_status(
         missing_key = descriptor.credential_attr in missing_attrs
         statuses.append(
             {
-                "provider_id": provider_id,
-                "display_name": descriptor.display_name,
+                **metadata,
                 "kind": "remote",
                 "status": (
                     "configured"

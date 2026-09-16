@@ -61,6 +61,11 @@ class _Accounts:
         assert isinstance(config, dict)
         providers = config["provider_status"]
         assert isinstance(providers, list)
+        originals = {
+            provider["provider_id"]: provider
+            for provider in providers
+            if isinstance(provider, dict)
+        }
         config["provider_status"] = [
             provider
             for provider in providers
@@ -68,6 +73,7 @@ class _Accounts:
             and provider.get("provider_id") not in self.statuses
         ] + [
             {
+                **originals[provider_id],
                 "provider_id": provider_id,
                 "display_name": name,
                 "kind": "connected_account",
