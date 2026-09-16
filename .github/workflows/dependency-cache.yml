@@ -1,7 +1,7 @@
 name: Dependency Cache
 
 env:
-  CI_UV_VERSION: "0.11.16"
+  CI_UV_VERSION: "0.12.13"
   UV_MALWARE_CHECK: "1"
   UV_PREVIEW_FEATURES: "malware-check"
   UV_CACHE_DIR: /tmp/.uv-cache

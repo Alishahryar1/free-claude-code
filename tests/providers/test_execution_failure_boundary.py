@@ -19,12 +19,13 @@ from free_claude_code.providers.http import (
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
 )
 
 
-class _FailingStream:
+class _FailingStream(SDKStreamDouble[object]):
     def __init__(
         self,
         chunks: list[object],
@@ -36,9 +37,7 @@ class _FailingStream:
         self._error = error
         self._close_error = close_error
         self.close_calls = 0
-
-    def __aiter__(self) -> AsyncIterator[object]:
-        return self._iterate()
+        super().__init__(self._iterate(), close=self.aclose)
 
     async def _iterate(self) -> AsyncIterator[object]:
         for chunk in self._chunks:

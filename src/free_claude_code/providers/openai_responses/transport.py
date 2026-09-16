@@ -5,6 +5,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import replace
+from functools import partial
 from typing import cast
 
 import httpx2
@@ -38,11 +39,11 @@ from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
 from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
-    ProviderCorrectionAction,
     ProviderExecution,
     ProviderOperationKind,
 )
-from free_claude_code.providers.endpoint import EndpointContext, RequestEndpoint
+from free_claude_code.providers.endpoint import RequestEndpoint
+from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
     RetryableProviderProtocolError,
     classify_provider_failure,
@@ -53,14 +54,19 @@ from free_claude_code.providers.failure_policy import (
     reports_context_window_incomplete,
 )
 from free_claude_code.providers.history_replay import (
-    history_retry_body,
     replay_origin,
     validate_history,
 )
 from free_claude_code.providers.http import ProviderAttemptScope, maybe_await_aclose
+from free_claude_code.providers.openai_client import OpenAIRequestClient
+from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
 from free_claude_code.providers.reasoning_compatibility import (
     ReasoningCorrection,
     prepare_messages_reasoning,
+)
+from free_claude_code.providers.request_recovery import (
+    RequestCorrections,
+    RequestRecovery,
 )
 from free_claude_code.providers.stream_recovery import (
     RecoveryController,
@@ -79,22 +85,6 @@ type ResponsesEventAdapter = Callable[[str, JsonObject], JsonObject]
 
 class _TruncatedResponsesStream(RetryableProviderProtocolError):
     """A Responses stream ended without a terminal lifecycle event."""
-
-
-class _ClosableResponsesStream(AsyncIterator[ResponseStreamEvent]):
-    """Expose the OpenAI SDK stream through the shared ``aclose`` contract."""
-
-    def __init__(self, stream: AsyncStream[ResponseStreamEvent]) -> None:
-        self._stream = stream
-
-    def __aiter__(self) -> AsyncIterator[ResponseStreamEvent]:
-        return self
-
-    async def __anext__(self) -> ResponseStreamEvent:
-        return await anext(self._stream)
-
-    async def aclose(self) -> None:
-        await self._stream.close()
 
 
 class OpenAIResponsesTransport:
@@ -266,10 +256,9 @@ class OpenAIResponsesTransport:
         execution = self._admission.start_execution(request_id=request_id)
         outcome = ResponsesExecutionOutcome()
         endpoint = (
-            RequestEndpoint(endpoint_context, self._endpoint_transport)
-            if endpoint_context is not None
-            else None
+            RequestEndpoint(endpoint_context) if endpoint_context is not None else None
         )
+        request_client = OpenAIRequestClient(self._endpoint_transport)
         provider_stream = self._run_execution(
             body,
             reasoning_correction=reasoning_correction,
@@ -279,12 +268,11 @@ class OpenAIResponsesTransport:
             execution=execution,
             outcome=outcome,
             endpoint=endpoint,
+            request_client=request_client,
             extra_headers=extra_headers,
         )
         try:
             async for event in provider_stream:
-                if endpoint is not None:
-                    endpoint.commit()
                 yield event
         except asyncio.CancelledError:
             raise
@@ -301,8 +289,7 @@ class OpenAIResponsesTransport:
                 await maybe_await_aclose(provider_stream)
             finally:
                 try:
-                    if endpoint is not None:
-                        await endpoint.aclose()
+                    await request_client.aclose()
                 finally:
                     execution.abandon()
 
@@ -316,10 +303,15 @@ class OpenAIResponsesTransport:
         execution: ProviderExecution,
         outcome: ResponsesExecutionOutcome,
         endpoint: RequestEndpoint | None = None,
+        request_client: OpenAIRequestClient,
         extra_headers: Mapping[str, str] | None = None,
         reasoning_correction: ReasoningCorrection | None = None,
     ) -> AsyncIterator[str]:
         recovery = RecoveryController()
+        request_recovery = RequestRecovery(
+            execution, endpoint=endpoint, stream=recovery
+        )
+        corrections = RequestCorrections("responses", reasoning_correction)
         trace_event(
             stage="provider",
             event="provider.request.sent",
@@ -346,7 +338,7 @@ class OpenAIResponsesTransport:
             stream_opened = False
             try:
                 client = (
-                    await endpoint.openai_client(self._client)
+                    request_client.for_endpoint(self._client, await endpoint.resolve())
                     if endpoint is not None
                     else self._client
                 )
@@ -367,10 +359,10 @@ class OpenAIResponsesTransport:
                 sdk_stream = await self._create_sdk_stream(
                     sent_body,
                     client=client,
-                    endpoint=endpoint,
+                    request_client=request_client,
                     extra_headers=extra_headers,
                 )
-                stream = scope.retain(_ClosableResponsesStream(sdk_stream))
+                stream = scope.retain(OpenAIStreamAdapter(sdk_stream))
                 stream_opened = True
 
                 async for upstream_event in stream:
@@ -444,48 +436,25 @@ class OpenAIResponsesTransport:
                 raise
             except Exception as raw_error:
                 error = _effective_error(raw_error)
-                if (
-                    scope is not None
-                    and endpoint is not None
-                    and await endpoint.retry_authentication(
-                        error, scope.attempt, execution
+                if scope is not None:
+                    corrected_body = await request_recovery.retry_request(
+                        error,
+                        provider_authentication_status(error),
+                        scope.attempt,
+                        body,
+                        operation_kind=ProviderOperationKind.GENERATION,
+                        propose_correction=partial(
+                            corrections.next_body,
+                            raw_error,
+                            body,
+                            sent_body=sent_body,
+                            reasoning_error=raw_error,
+                        ),
                     )
-                ):
-                    recovery.discard()
-                    continue
-                if scope is not None and not recovery.committed:
-                    corrected_history = history_retry_body(
-                        raw_error, sent_body, "responses"
-                    )
-                    if corrected_history is not None:
-                        retry = (
-                            execution.can_attempt
-                            if scope.attempt.accepted
-                            else await scope.attempt.correct(error)
-                            is ProviderCorrectionAction.RETRY
-                        )
-                        if retry:
-                            body = corrected_history
-                            recovery.discard()
-                            continue
-                if (
-                    scope is not None
-                    and reasoning_correction is not None
-                    and not recovery.committed
-                ):
-                    corrected_body = reasoning_correction.retry_body(raw_error, body)
                     if corrected_body is not None:
-                        retry = (
-                            execution.can_attempt
-                            if scope.attempt.accepted
-                            else await scope.attempt.correct(error)
-                            is ProviderCorrectionAction.RETRY
-                        )
-                        reasoning_correction = None
-                        if retry:
-                            body = corrected_body
-                            recovery.discard()
-                            continue
+                        body = corrected_body
+                        recovery.discard()
+                        continue
                 attempt_failure = None
                 if scope is not None and not scope.attempt.accepted:
                     attempt_failure = await scope.attempt.fail(error)
@@ -559,7 +528,7 @@ class OpenAIResponsesTransport:
         body: JsonObject,
         *,
         client: AsyncOpenAI,
-        endpoint: RequestEndpoint | None = None,
+        request_client: OpenAIRequestClient,
         extra_headers: Mapping[str, str] | None = None,
     ) -> AsyncStream[ResponseStreamEvent]:
         model = body.get("model")
@@ -579,7 +548,7 @@ class OpenAIResponsesTransport:
             extra_body=extra_body or None,
             extra_headers={
                 **(extra_headers or {}),
-                **(endpoint.openai_headers() if endpoint is not None else {}),
+                **request_client.openai_headers(),
             }
             or None,
         )

@@ -25,6 +25,7 @@ from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from tests.web_tools_support import StubWebToolsClient
 
 
 def _http_scope(
@@ -446,15 +447,20 @@ class _Lease:
 
     def __init__(self, settings: Settings, provider: ProviderPort) -> None:
         self.settings = settings
-        self.model_infos: tuple[ProviderModelInfo, ...] = ()
         self._provider = provider
         self.release_calls = 0
+
+    async def wait_for_token_estimation(self) -> None:
+        pass
+
+    def model_info(self, provider_id: str, model_id: str) -> ProviderModelInfo | None:
+        return None
 
     def is_provider_cached(self, provider_id: str) -> bool:
         del provider_id
         return True
 
-    def resolve_provider(self, provider_id: str) -> ProviderPort:
+    async def resolve_provider(self, provider_id: str) -> ProviderPort:
         assert provider_id == "nvidia_nim"
         return self._provider
 
@@ -466,10 +472,7 @@ class _Requests:
     def __init__(self, lease: _Lease) -> None:
         self._lease = lease
 
-    async def acquire(
-        self, *, include_model_infos: bool = False
-    ) -> RequestRuntimeLease:
-        del include_model_infos
+    async def acquire(self) -> RequestRuntimeLease:
         return self._lease
 
     def current_settings(self) -> Settings:
@@ -559,6 +562,7 @@ async def _disconnect_real_app(
             requests=cast(RequestRuntimePort, requests),
             admin=cast(AdminRuntimePort, object()),
             tasks=cast(TaskController, object()),
+            web_tools=StubWebToolsClient(),
         )
     )
     body = json.dumps(payload).encode()

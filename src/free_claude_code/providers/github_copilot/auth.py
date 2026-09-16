@@ -17,14 +17,14 @@ from free_claude_code.application.connected_accounts import (
 )
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.config.paths import github_copilot_auth_path
+from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.providers.endpoint import HttpEndpoint
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 
 from .broker import CopilotBroker, CopilotLease
 from .lifecycle import drain_owned
 from .login import LOGIN_TIMEOUT_SECONDS, DeviceChallenge, device_login
-from .sdk import SdkRuntime
 from .types import (
     CopilotAuthenticationRequired,
     CopilotEgress,
@@ -35,6 +35,16 @@ from .types import (
 )
 
 LoginFlow = Callable[[Callable[[DeviceChallenge], None]], Awaitable[None]]
+
+
+async def _create_sdk_runtime() -> CopilotRuntime:
+    def load():
+        from .sdk import SdkRuntime
+
+        return SdkRuntime
+
+    runtime_type = await run_sync_owned(load)
+    return runtime_type()
 
 
 class AuthenticatedLease:
@@ -81,7 +91,7 @@ class CopilotAuthManager:
         self,
         *,
         state_path: Path | None = None,
-        runtime_factory: Callable[[], CopilotRuntime] = SdkRuntime,
+        runtime_factory: Callable[[], Awaitable[CopilotRuntime]] = _create_sdk_runtime,
         login_flow: LoginFlow = device_login,
         login_timeout_s: float = LOGIN_TIMEOUT_SECONDS,
     ) -> None:
@@ -96,6 +106,7 @@ class CopilotAuthManager:
         self._broker: CopilotBroker | None = None
         self._owners: list[CopilotBroker] = []
         self._operation_lock = asyncio.Lock()
+        self._broker_lock = asyncio.Lock()
         self._login_task: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
@@ -185,6 +196,8 @@ class CopilotAuthManager:
             self._ensure_open()
             saved = self._disable()
             await self._cancel_login()
+            async with self._broker_lock:
+                pass  # Let any in-flight constructor publish its owned broker.
             await self._drain_retired()
             if saved:
                 self._last_error = None
@@ -199,28 +212,47 @@ class CopilotAuthManager:
     async def _close(self) -> None:
         async with self._operation_lock:
             # Preserve opt-in on process shutdown; credentials belong to the CLI.
-            self._broker = None
             await self._cancel_login()
+            async with self._broker_lock:
+                self._broker = None
             await self._drain_retired()
 
     def _ensure_open(self) -> None:
         if self._closed:
             raise CopilotUnavailable("Copilot account manager is closing.")
 
-    def _new_broker(self, identity: CopilotIdentity | None) -> CopilotBroker:
-        broker = CopilotBroker(self._runtime_factory(), expected_identity=identity)
+    async def _new_broker(self, identity: CopilotIdentity | None) -> CopilotBroker:
+        broker = CopilotBroker(
+            await self._runtime_factory(), expected_identity=identity
+        )
         self._owners.append(broker)
         return broker
 
-    def _current_broker(self) -> CopilotBroker:
-        self._ensure_open()
-        if not self._enabled:
-            raise CopilotAuthenticationRequired(
-                "Connect your GitHub Copilot account in Admin."
-            )
-        if self._broker is None:
-            self._broker = self._new_broker(self._identity)
-        return self._broker
+    async def _current_broker(self) -> CopilotBroker:
+        async with self._broker_lock:
+            self._ensure_open()
+            if not self._enabled:
+                raise CopilotAuthenticationRequired(
+                    "Connect your GitHub Copilot account in Admin."
+                )
+            if self._broker is None:
+                revision = self._revision
+                broker = await self._new_broker(self._identity)
+                if self._closed or not self._enabled or self._revision != revision:
+                    # A newer login may own another, not-yet-published broker.
+                    try:
+                        await broker.close()
+                    except Exception as error:
+                        raise CopilotUnavailable(
+                            "Copilot cleanup could not finish. Retry disconnect."
+                        ) from error
+                    if broker in self._owners:
+                        self._owners.remove(broker)
+                    raise CopilotAuthenticationRequired(
+                        "Copilot connection changed. Retry after connecting in Admin."
+                    )
+                self._broker = broker
+            return self._broker
 
     def ensure_current(self, broker: CopilotBroker, revision: int) -> None:
         if (
@@ -236,7 +268,7 @@ class CopilotAuthManager:
         broker: CopilotBroker | None = None
         revision = self._revision
         try:
-            broker = self._current_broker()
+            broker = await self._current_broker()
             models = await broker.snapshot(refresh=refresh)
             self.ensure_current(broker, revision)
             return models
@@ -248,7 +280,7 @@ class CopilotAuthManager:
         broker: CopilotBroker | None = None
         revision = self._revision
         try:
-            broker = self._current_broker()
+            broker = await self._current_broker()
             async with broker.lease(model_id) as lease:
                 self.ensure_current(broker, revision)
                 yield AuthenticatedLease(self, broker, lease, revision)
@@ -311,7 +343,10 @@ class CopilotAuthManager:
         return self._cleanup_task
 
     async def _drain_retired(self) -> None:
-        await drain_owned(self._schedule_cleanup())
+        while True:
+            await drain_owned(self._schedule_cleanup())
+            if not any(owner is not self._broker for owner in self._owners):
+                return
 
     async def _cleanup_retired(self) -> None:
         failures = False
@@ -340,7 +375,7 @@ class CopilotAuthManager:
         try:
             async with asyncio.timeout(self._login_timeout_s):
                 await self._drain_retired()
-                broker = self._new_broker(None)
+                broker = await self._new_broker(None)
                 try:
                     await broker.snapshot(refresh=True)
                 except CopilotAuthenticationRequired:
@@ -349,7 +384,7 @@ class CopilotAuthManager:
                         self._owners.remove(broker)
                     broker = None
                     await self._login_flow(on_challenge)
-                    broker = self._new_broker(None)
+                    broker = await self._new_broker(None)
                     await broker.snapshot(refresh=True)
                 identity = broker.identity
                 if identity is None:

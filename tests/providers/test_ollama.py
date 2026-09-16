@@ -16,6 +16,7 @@ from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -190,7 +191,7 @@ async def test_stream_messages_uses_shared_openai_chat_provider() -> None:
         provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=stream(),
+        return_value=SDKStreamDouble(stream()),
     ) as create:
         output = "".join(
             [
@@ -230,7 +231,7 @@ async def test_cloud_stream_maps_ollama_reasoning_delta_to_anthropic_thinking() 
         client._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=stream(),
+        return_value=SDKStreamDouble(stream()),
     ):
         output = "".join(
             [

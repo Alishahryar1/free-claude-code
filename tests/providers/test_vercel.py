@@ -11,6 +11,7 @@ from free_claude_code.config.provider_catalog import VERCEL_AI_GATEWAY_DEFAULT_B
 from free_claude_code.core.model_capabilities import ModelInputModality
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -163,7 +164,7 @@ async def test_stream_messages_text(vercel_provider):
     with patch.object(
         vercel_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in vercel_provider.stream_messages(make_request())
@@ -195,7 +196,7 @@ async def test_stream_messages_reasoning_content(vercel_provider):
     with patch.object(
         vercel_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in vercel_provider.stream_messages(make_request())

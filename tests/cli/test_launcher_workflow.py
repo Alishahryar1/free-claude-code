@@ -8,9 +8,9 @@ from urllib.error import URLError
 
 import pytest
 
+from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.cli.launchers.aider_config import build_aider_config
 from free_claude_code.config.paths import codex_model_catalog_path
-from free_claude_code.harnesses.model_catalog import ClientModel
 from tests.cli.conftest import LaunchCapture
 
 HARNESSES = (
@@ -32,6 +32,75 @@ def launch(name: str, args: list[str], exit_code: int = 23) -> None:
     with pytest.raises(SystemExit) as exc:
         module.launch(args)
     assert exc.value.code == exit_code
+
+
+@pytest.mark.parametrize(
+    "name", ["aider", "cline", "dsh", "grok", "hermes", "muse", "opencode"]
+)
+def test_launch_default_is_server_selection_not_first_row_or_local_settings(
+    name: str,
+    launch_capture: LaunchCapture,
+) -> None:
+    selected = "claude-3-freecc-no-thinking/open_router/Zulu"
+    launch_capture.catalog = {
+        "default_model_id": selected,
+        "data": [
+            {"id": "deepseek/alpha", "provider_model_ref": "deepseek/alpha"},
+            {
+                "id": selected,
+                "provider_model_ref": "open_router/Zulu",
+                "supportsReasoning": False,
+            },
+        ],
+    }
+
+    def inspect(command, env):
+        if name in {"aider", "muse"}:
+            assert env[f"{name.upper()}_MODEL"] == selected
+        elif name == "grok":
+            for key in (
+                "DEFAULT",
+                "IMAGE_DESCRIPTION",
+                "PROMPT_SUGGESTIONS",
+                "SESSION_SUMMARY",
+                "WEB_SEARCH",
+            ):
+                assert env[f"GROK_{key}_MODEL"] == selected
+        elif name == "hermes":
+            config = json.loads(
+                (Path(env["HERMES_MANAGED_DIR"]) / "config.yaml").read_text()
+            )
+            assert (
+                config["model"]["default"] == env["HERMES_INFERENCE_MODEL"] == selected
+            )
+            assert next(iter(config["providers"].values()))["default_model"] == selected
+        elif name == "opencode":
+            config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+            assert (
+                config["model"]
+                == config["small_model"]
+                == f"free-claude-code/{selected}"
+            )
+        elif name == "cline":
+            path = Path(env["CLINE_PROVIDER_SETTINGS_PATH"])
+            config = json.loads(path.read_text())
+            assert config["providers"]["openai-native"]["settings"]["model"] == selected
+            registry = json.loads(path.with_name("models.json").read_text())
+            assert (
+                registry["providers"]["openai-native"]["provider"]["defaultModelId"]
+                == selected
+            )
+        else:
+            rows = json.loads(Path(command[command.index("--patch") + 1]).read_text())
+            assert (
+                next(row for row in rows if row["id"] == "agent-default-model")[
+                    "config"
+                ]["model"]
+                == selected
+            )
+
+    launch_capture.on_start = inspect
+    launch(name, [])
 
 
 @pytest.mark.parametrize("name", HARNESSES)
@@ -126,7 +195,7 @@ def test_aider_native_settings_resolve_bare_and_transport_names_without_rewritin
 ):
     wire_name = "nvidia_nim/catalog-model:variant"
     config = build_aider_config(
-        (ClientModel(wire_name, wire_name, "Model", False),),
+        (CatalogModel(wire_name, wire_name, "Model", False),),
         messages_url="http://localhost:8182/v1/messages",
         api_key_env="FCC_AIDER_PROXY_AUTH_TEST123",
         launch_id="launch-a",

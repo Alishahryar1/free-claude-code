@@ -1,6 +1,6 @@
 import asyncio
 import threading
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -47,7 +47,7 @@ async def test_shutdown_drains_initialization_worker(cancel, fail):
 
     with (
         patch.object(loader, "consolidate_managed_config", blocked_consolidation),
-        patch.object(manager, "warm_referenced_model_cache", AsyncMock()) as warm,
+        patch.object(manager, "start_model_list_refresh") as start_features,
     ):
         start = asyncio.create_task(runtime.start())
         close = None
@@ -79,7 +79,7 @@ async def test_shutdown_drains_initialization_worker(cancel, fail):
             assert finished.is_set()
             assert unhandled_errors == []
             assert store.path.exists() is not fail
-            warm.assert_not_awaited()
+            start_features.assert_not_called()
             lock = InterprocessFileLock(config_lock_path())
             try:
                 assert lock.acquire()

@@ -27,6 +27,7 @@ class LaunchCapture:
     environments: list[dict[str, str]] = field(default_factory=list)
     catalog: JsonObject = field(
         default_factory=lambda: {
+            "default_model_id": "nvidia_nim/catalog-model:variant",
             "data": [
                 {
                     "id": "nvidia_nim/catalog-model:variant",

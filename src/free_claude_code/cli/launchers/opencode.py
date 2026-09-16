@@ -24,8 +24,13 @@ _PROCESS_CONFIG_KEYS = ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT")
 def _configure(
     ctx: LaunchContext, args: list[str], files: LaunchResources
 ) -> PreparedLaunch:
+    catalog = ctx.require_catalog()
     require_unset_environment(ctx.base_env, _PROCESS_CONFIG_KEYS)
-    config = build_opencode_config(ctx.models, proxy_root_url=ctx.proxy_root_url)
+    config = build_opencode_config(
+        catalog.models,
+        default_model_id=catalog.default_model_id,
+        proxy_root_url=ctx.proxy_root_url,
+    )
     path = files.write_json("opencode.json", config.file)
     return PreparedLaunch(
         [ctx.binary_path, *args],

@@ -16,7 +16,7 @@ from free_claude_code.application.code_sessions.models import (
     CodeUnavailableError,
 )
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.application.ports import RequestRuntimePort
+from free_claude_code.application.ports import ModelCatalogSnapshot, RequestRuntimePort
 from free_claude_code.config.paths import launcher_temp_dir_path
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import no_thinking_gateway_model_id
@@ -77,6 +77,9 @@ def factory_runtime():
             "open_router/selected", supports_thinking=False, context_window_tokens=32000
         ),
     )
+    runtime.wait_for_catalog.return_value = ModelCatalogSnapshot(
+        runtime.current_settings(), runtime.cached_prefixed_model_infos()
+    )
     runtime.acquire.side_effect = AssertionError("Setup must not acquire a provider")
     return runtime
 
@@ -94,7 +97,7 @@ async def test_factory_open_preserves_setup_and_catalog_until_process_exit(
     }
     before = dict(env)
     factory = CodexHarnessFactory(factory_runtime, binary="test-codex", env=env)
-    selection = factory.prepare("open_router/selected", None, "config")
+    selection = await factory.prepare("open_router/selected", None, "config")
     native = await selection.open(str(tmp_path), AsyncMock())
     try:
         config = tomllib.loads(
@@ -152,7 +155,7 @@ async def test_factory_initialization_failure_reaps_before_catalog_cleanup(
 
     monkeypatch.setattr(CodexAppServer, "_write", observe_write)
     factory = CodexHarnessFactory(factory_runtime, binary="test-codex")
-    selection = factory.prepare("open_router/selected", None, "config")
+    selection = await factory.prepare("open_router/selected", None, "config")
     opening = asyncio.create_task(selection.open(str(tmp_path), AsyncMock()))
     try:
         await asyncio.wait_for(initialized.wait(), 3)
@@ -205,8 +208,8 @@ async def test_child_warning_during_shutdown_allows_connection_replacement(
     releases = []
     warning = asyncio.Event()
 
-    def selection_for(model, effort, mode):
-        selection = prepare(model, effort, mode)
+    async def selection_for(model, effort, mode):
+        selection = await prepare(model, effort, mode)
 
         async def open_native(cwd, sink):
             release = tmp_path / f"release-{len(connections)}"
@@ -343,7 +346,7 @@ async def test_complete_mode_overrides_restore_native_defaults(
         },
     }
     for mode in ("ask", "auto_review", "full_access", "config"):
-        selection = harness.prepare(harness.model, "high", mode)
+        selection = await harness.prepare(harness.model, "high", mode)
         await native.start_turn("hello", selection, "input", thread.permission_defaults)
         params = rpc.call_args.args[1]
         assert {
@@ -423,7 +426,7 @@ async def test_jsonl_sink_preserves_usage_before_turn_completion(tmp_path):
         await native.create_thread()
         turn_id = await native.start_turn(
             "hello",
-            FakeHarness().prepare("provider/model", None, "config"),
+            (await FakeHarness().prepare("provider/model", None, "config")),
             "input-1",
             FakeHarness().permission_defaults,
         )
@@ -448,7 +451,7 @@ async def test_jsonl_large_unicode_events_can_precede_rpc_ack(tmp_path):
         assert (
             await native.start_turn(
                 "hello",
-                FakeHarness().prepare("provider/model", None, "config"),
+                (await FakeHarness().prepare("provider/model", None, "config")),
                 "input-1",
                 FakeHarness().permission_defaults,
             )
@@ -464,13 +467,81 @@ async def test_jsonl_large_unicode_events_can_precede_rpc_ack(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_terminal_storage_failure_drains_the_native_dispatcher(
+    tmp_path, monkeypatch
+):
+    harness = FakeHarness()
+    prepare = harness.prepare
+    connections = []
+
+    async def select(model, effort, mode):
+        selection = await prepare(model, effort, mode)
+
+        async def open_native(cwd, sink):
+            native = CodexAppServer(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("codex_fake_process.py")),
+                    "large",
+                ],
+                dict(os.environ),
+                cwd,
+                sink,
+                model_slugs={model: model},
+                fingerprints=selection.catalog,
+            )
+            await native.start()
+            connections.append(native)
+            return native
+
+        monkeypatch.setattr(selection, "open", open_native)
+        return selection
+
+    monkeypatch.setattr(harness, "prepare", select)
+    store = SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock")
+    save = store.save_progress
+    rejected = []
+
+    async def reject_terminal(session, revision, **values):
+        run = values.get("run")
+        if run is not None and run.status == "completed":
+            rejected.append(run)
+            raise CodeUnavailableError("Terminal commit failed")
+        await save(session, revision, **values)
+
+    monkeypatch.setattr(store, "save_progress", reject_terminal)
+    service = CodeService(store, harness)
+    await service.start()
+    try:
+        session = await service.create_session(str(uuid.uuid4()), str(tmp_path))
+        await service.send(
+            session.id,
+            str(uuid.uuid4()),
+            session.revision,
+            "hello",
+            expected_epoch=service.epoch,
+        )
+        await asyncio.wait_for(service.wait_idle(session.id), 5)
+        assert len(rejected) == 1 and len(connections) == 1
+        native = connections[0]
+        assert native.process.returncode is not None
+        assert native._reader.done() and native._dispatcher.done()
+        saved = await store.latest_run(session.id)
+        assert saved is not None and saved.status == "running"
+        with pytest.raises(CodeUnavailableError):
+            await service.get_detail(session.id)
+    finally:
+        await asyncio.wait_for(service.close(), 5)
+
+
+@pytest.mark.asyncio
 async def test_server_rpc_during_start_preserves_numeric_zero_id(tmp_path):
     native, events, completed, prompted = await connect(tmp_path, "prompt")
     try:
         await native.create_thread()
         await native.start_turn(
             "hello",
-            FakeHarness().prepare("provider/model", None, "config"),
+            (await FakeHarness().prepare("provider/model", None, "config")),
             "input-1",
             FakeHarness().permission_defaults,
         )
@@ -555,7 +626,7 @@ async def test_spawned_agent_prompt_is_visible_in_its_registered_root_session(tm
         await native.create_thread()
         await native.start_turn(
             "delegate",
-            FakeHarness().prepare("provider/model", None, "config"),
+            (await FakeHarness().prepare("provider/model", None, "config")),
             "input-1",
             FakeHarness().permission_defaults,
         )
@@ -599,7 +670,7 @@ async def test_turn_start_resets_sticky_effort_and_preserves_client_identity(
     for effort in (None, "high", "off", "max", None):
         await native.start_turn(
             "hello",
-            harness.prepare("provider/model", effort, "config"),
+            (await harness.prepare("provider/model", effort, "config")),
             "operation",
             harness.permission_defaults,
         )

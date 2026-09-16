@@ -28,6 +28,16 @@ class ProviderModelCache:
         }
         self._model_infos_by_provider[provider_id] = clean_infos
 
+    def copy(self, available_provider_ids: Iterable[str]) -> ProviderModelCache:
+        """Seed a generation without sharing mutable dictionaries with its predecessor."""
+        result = ProviderModelCache(available_provider_ids)
+        for provider_id, infos in self._model_infos_by_provider.items():
+            result.cache_model_infos(provider_id, infos.values())
+        return result
+
+    def provider_infos(self, provider_id: str) -> tuple[ProviderModelInfo, ...]:
+        return tuple(self._model_infos_by_provider.get(provider_id, {}).values())
+
     def set_available_providers(self, provider_ids: Iterable[str]) -> None:
         """Replace the provider scope and discard entries outside it."""
         self._available_provider_ids = frozenset(provider_ids)

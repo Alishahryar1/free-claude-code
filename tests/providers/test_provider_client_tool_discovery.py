@@ -10,7 +10,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
-from free_claude_code.providers.runtime.factory import create_provider
+from free_claude_code.providers.runtime.runtime import create_provider
 from tests.core.openai_responses.test_client_tool_discovery import AGENTS, SEARCH
 from tests.providers.support import immediate_admission
 from tests.providers.test_opencode import (
@@ -248,14 +248,16 @@ async def test_provider_discovery_call_and_result_round_trip(
         ):
             provider = cast(
                 OpenAIChatProvider,
-                create_provider(
-                    provider_id,
-                    Settings(
-                        open_router_api_key="test",
-                        nvidia_nim_api_key="test",
-                        groq_api_key="test",
-                        mistral_api_key="test",
-                    ),
+                (
+                    await create_provider(
+                        provider_id,
+                        Settings(
+                            open_router_api_key="test",
+                            nvidia_nim_api_key="test",
+                            groq_api_key="test",
+                            mistral_api_key="test",
+                        ),
+                    )
                 ),
             )
     history: list[dict[str, Any]] = [

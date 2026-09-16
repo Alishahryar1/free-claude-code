@@ -1960,9 +1960,7 @@ def test_reverting_pending_restart_restores_hot_apply(monkeypatch, tmp_path):
     app = create_test_app(settings, restart_callback=callback)
     client = _local_client(app)
     client.post("/admin/api/config/apply", json={"values": {"PORT": "9090"}})
-    with patch.object(
-        provider_manager_for_app(app), "_refresh_generation_in_background", AsyncMock()
-    ):
+    with patch.object(provider_manager_for_app(app), "_start_pass", MagicMock()):
         result = client.post(
             "/admin/api/config/apply",
             json={"values": {"PORT": str(settings.port), "MODEL": "nvidia_nim/new"}},

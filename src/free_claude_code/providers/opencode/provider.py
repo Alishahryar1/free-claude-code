@@ -17,7 +17,7 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
-from free_claude_code.providers.endpoint import EndpointContext
+from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.http import close_provider_stream
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,

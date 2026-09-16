@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from .lifecycle import drain_owned
-from .sdk import profile_environment, verified_cli_path
+from .native_cli import profile_environment, verified_cli_path
 from .types import CopilotUnavailable
 
 LOGIN_TIMEOUT_SECONDS = 15 * 60

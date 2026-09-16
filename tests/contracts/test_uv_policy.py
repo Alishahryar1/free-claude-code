@@ -1,7 +1,7 @@
 import tomllib
 from pathlib import Path
 
-UV_MINIMUM = "0.11.16"
+UV_MINIMUM = "0.12.13"
 UV_WORKFLOWS = (
     Path(".github/workflows/tests.yml"),
     Path(".github/workflows/dependency-cache.yml"),

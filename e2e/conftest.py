@@ -34,6 +34,7 @@ from free_claude_code.runtime.asgi import RuntimeASGIApp
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.folder_picker import NativeFolderPicker
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.web_tools_support import StubWebToolsClient
 
 
 class _ModelListingProvider(BaseProvider):
@@ -212,6 +213,7 @@ def admin_base_url(
                 requests=manager,
                 admin=runtime,
                 tasks=runtime,
+                web_tools=StubWebToolsClient(),
                 code=code_control.service,
             )
         ),

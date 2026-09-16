@@ -1,5 +1,6 @@
 import math
 
+import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -38,6 +39,35 @@ def _cache_models(app, provider_id: str, *model_ids: str) -> None:
     )
 
 
+@pytest.mark.parametrize("view", ["messages", "responses"])
+def test_sorted_catalog_retains_an_explicit_no_thinking_server_default(view):
+    settings = _settings(
+        model="open_router/Zulu",
+        model_opus=None,
+        model_haiku=None,
+        model_fallbacks=("wafer/z-fallback", "deepseek/a-fallback"),
+    )
+    app = create_test_app(settings)
+    provider_manager_for_app(app).cache_model_infos(
+        "open_router",
+        {
+            ProviderModelInfo("Zulu", supports_thinking=False),
+            ProviderModelInfo("apple"),
+        },
+    )
+    payload = TestClient(app).get(f"/v1/models?view={view}").json()
+    assert [row["provider_model_ref"] for row in payload["data"]] == [
+        "deepseek/a-fallback",
+        "open_router/apple",
+        "open_router/Zulu",
+        "wafer/z-fallback",
+    ]
+    assert payload["default_model_id"] == "claude-3-freecc-no-thinking/open_router/Zulu"
+    assert payload["first_id"] == "deepseek/a-fallback"
+    assert payload["last_id"] == "wafer/z-fallback"
+    assert settings.model_fallbacks == ("wafer/z-fallback", "deepseek/a-fallback")
+
+
 def test_models_list_includes_configured_refs_cached_provider_models_and_aliases():
     app = create_test_app(_settings())
     _cache_models(app, "deepseek", "deepseek-chat")
@@ -53,7 +83,8 @@ def test_models_list_includes_configured_refs_cached_provider_models_and_aliases
     assert response.status_code == 200
     data = response.json()
     ids = [item["id"] for item in data["data"]]
-    assert ids[:6] == [
+    assert ids[0] == "claude-fable-5"
+    assert [model_id for model_id in ids if "/" in model_id] == [
         "anthropic/deepseek/deepseek-chat",
         "claude-3-freecc-no-thinking/deepseek/deepseek-chat",
         "anthropic/open_router/anthropic/claude-opus",
@@ -122,7 +153,7 @@ def test_models_list_uses_cached_metadata_for_configured_refs():
 
     ids = [item["id"] for item in response.json()["data"]]
     assert "anthropic/open_router/plain-model" not in ids
-    assert ids[0] == "claude-3-freecc-no-thinking/open_router/plain-model"
+    assert ids[-1] == "claude-3-freecc-no-thinking/open_router/plain-model"
 
 
 def test_models_list_includes_cached_wafer_models():
@@ -168,7 +199,8 @@ def test_models_list_works_with_empty_discovery_catalog():
 
     assert response.status_code == 200
     ids = [item["id"] for item in response.json()["data"]]
-    assert ids[:4] == [
+    assert ids[0] == "claude-fable-5"
+    assert [model_id for model_id in ids if "/" in model_id] == [
         "anthropic/deepseek/deepseek-chat",
         "claude-3-freecc-no-thinking/deepseek/deepseek-chat",
         "anthropic/open_router/anthropic/claude-opus",
@@ -414,3 +446,31 @@ def test_unknown_model_view_is_rejected():
     response = TestClient(create_test_app(_settings())).get("/v1/models?view=other")
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("view", ["messages", "responses"])
+def test_real_json_catalog_agrees_with_application_identity_and_known_metadata(view):
+    from free_claude_code.application.model_catalog import read_model_catalog
+    from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
+
+    app = create_test_app(
+        _settings(model="open_router/Zulu", model_opus=None, model_haiku=None)
+    )
+    provider_manager_for_app(app).cache_model_infos(
+        "open_router",
+        {
+            ProviderModelInfo(
+                "Zulu", supports_thinking=False, context_window_tokens=32000
+            ),
+            ProviderModelInfo(
+                "vendor/vision ",
+                input_modalities=frozenset(
+                    {ModelInputModality.TEXT, ModelInputModality.IMAGE}
+                ),
+                max_output_tokens=4096,
+            ),
+        },
+    )
+    expected = read_model_catalog(app.state.services.requests)
+    payload = TestClient(app).get(f"/v1/models?view={view}").json()
+    assert model_catalog_from_response(payload) == expected

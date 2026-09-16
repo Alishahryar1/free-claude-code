@@ -8,6 +8,7 @@ from free_claude_code.config.provider_catalog import CEREBRAS_DEFAULT_BASE
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -217,7 +218,7 @@ async def test_stream_messages_text(cerebras_provider):
     with patch.object(
         cerebras_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in cerebras_provider.stream_messages(req)]
 
@@ -250,7 +251,7 @@ async def test_stream_messages_reasoning(cerebras_provider):
     with patch.object(
         cerebras_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in cerebras_provider.stream_messages(req)]
 

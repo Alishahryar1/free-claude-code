@@ -18,6 +18,7 @@ from free_claude_code.providers.cloudflare import (
     cloudflare_ai_base_url,
 )
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     reasoning_for,
@@ -222,7 +223,7 @@ async def test_stream_uses_openai_chat_completions(
         cloudflare_provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=_stream(_chunk(delta)),
+        return_value=SDKStreamDouble(_stream(_chunk(delta))),
     ) as mock_create:
         events = [
             event async for event in cloudflare_provider.stream_messages(_request())
@@ -253,7 +254,7 @@ async def test_stream_maps_cloudflare_reasoning_delta_to_thinking(
         cloudflare_provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=_stream(_chunk(delta)),
+        return_value=SDKStreamDouble(_stream(_chunk(delta))),
     ):
         events = [
             event async for event in cloudflare_provider.stream_messages(_request())
@@ -304,7 +305,9 @@ async def test_stream_maps_openai_tool_calls_to_tool_use(
         cloudflare_provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=_stream(_chunk(delta, finish_reason="tool_calls")),
+        return_value=SDKStreamDouble(
+            _stream(_chunk(delta, finish_reason="tool_calls"))
+        ),
     ):
         events = [event async for event in cloudflare_provider.stream_messages(request)]
 

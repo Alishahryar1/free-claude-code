@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.providers.endpoint import HttpEndpoint
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 
 from .auth import OpenAIAccess, OpenAIAuthManager, OpenAIReconnectRequired
 

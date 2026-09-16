@@ -18,7 +18,7 @@ from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
-from free_claude_code.providers.endpoint import HttpEndpoint
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.http import maybe_await_aclose
 from tests.providers.support import immediate_admission
 

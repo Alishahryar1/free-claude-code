@@ -55,9 +55,10 @@ def _compatible_version(output: str) -> bool:
 def _configure(
     ctx: LaunchContext, args: list[str], _files: LaunchResources
 ) -> PreparedLaunch:
+    catalog = ctx.require_catalog()
     require_unset_environment(ctx.base_env, _PROCESS_CONFIG_KEYS)
     v1_url = proxy_v1_url(ctx.proxy_root_url)
-    default_model = ctx.models[0].wire_slug
+    default_model = catalog.default_model_id
     env = client_environment(
         ctx.base_env,
         proxy_root_url=ctx.proxy_root_url,
@@ -76,7 +77,7 @@ def _configure(
             "GROK_CONFIG": json.dumps(
                 {
                     "models": {
-                        "allowed_models": [model.wire_slug for model in ctx.models]
+                        "allowed_models": [model.wire_slug for model in catalog.models]
                     },
                     "shell_environment_policy": {"ignore_default_excludes": False},
                 },

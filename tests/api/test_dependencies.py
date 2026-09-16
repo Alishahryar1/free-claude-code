@@ -72,29 +72,34 @@ def test_get_settings_reads_current_request_runtime_settings() -> None:
     assert get_settings(app.state.services).model == "deepseek/test-model"
 
 
-def test_resolve_provider_uses_retained_lease_and_logs_first_initialization() -> None:
+@pytest.mark.asyncio
+async def test_resolve_provider_uses_retained_lease_and_logs_first_initialization() -> (
+    None
+):
     provider = MagicMock()
     lease = _lease(provider=provider)
 
     with patch("free_claude_code.api.dependencies.logger.info") as log_info:
-        result = resolve_provider("nvidia_nim", lease=lease)
+        result = await resolve_provider("nvidia_nim", lease=lease)
 
     assert result is provider
     lease.resolve_provider.assert_called_once_with("nvidia_nim")
     log_info.assert_called_once_with("Provider initialized: {}", "nvidia_nim")
 
 
-def test_resolve_provider_skips_initialization_log_for_cached_provider() -> None:
+@pytest.mark.asyncio
+async def test_resolve_provider_skips_initialization_log_for_cached_provider() -> None:
     lease = _lease()
     lease.is_provider_cached.return_value = True
 
     with patch("free_claude_code.api.dependencies.logger.info") as log_info:
-        resolve_provider("nvidia_nim", lease=lease)
+        await resolve_provider("nvidia_nim", lease=lease)
 
     log_info.assert_not_called()
 
 
-def test_resolve_provider_missing_key_preserves_readiness_error() -> None:
+@pytest.mark.asyncio
+async def test_resolve_provider_missing_key_preserves_readiness_error() -> None:
     lease = _lease(
         error=ApplicationUnavailableError(
             "OPENROUTER_API_KEY is required. Get one at https://openrouter.ai"
@@ -102,18 +107,19 @@ def test_resolve_provider_missing_key_preserves_readiness_error() -> None:
     )
 
     with pytest.raises(ApplicationUnavailableError) as exc_info:
-        resolve_provider("open_router", lease=lease)
+        await resolve_provider("open_router", lease=lease)
 
     assert exc_info.value.status_code == 503
     assert "OPENROUTER_API_KEY" in exc_info.value.message
     assert "openrouter.ai" in exc_info.value.message
 
 
-def test_resolve_provider_unrelated_error_is_not_reclassified() -> None:
+@pytest.mark.asyncio
+async def test_resolve_provider_unrelated_error_is_not_reclassified() -> None:
     lease = _lease(error=ValueError("unrelated config"))
 
     with pytest.raises(ValueError, match="unrelated config"):
-        resolve_provider("nvidia_nim", lease=lease)
+        await resolve_provider("nvidia_nim", lease=lease)
 
 
 def test_require_proxy_auth_allows_when_disabled_with_retained_token():

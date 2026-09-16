@@ -22,6 +22,7 @@ from free_claude_code.providers.kilo import KiloProvider
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     reasoning_for,
@@ -46,13 +47,11 @@ def kilo_provider(kilo_config):
     )
 
 
-class AsyncStream:
+class AsyncStream(SDKStreamDouble):
     def __init__(self, chunks):
         self._chunks = chunks
         self.closed = False
-
-    def __aiter__(self):
-        return self._iter()
+        super().__init__(self._iter(), close=self.aclose)
 
     async def _iter(self):
         for chunk in self._chunks:

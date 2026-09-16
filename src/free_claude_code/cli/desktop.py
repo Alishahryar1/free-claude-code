@@ -4,24 +4,22 @@ import threading
 from collections.abc import Callable
 from typing import Protocol
 
+from loguru import logger
+
 from free_claude_code.cli.commands import (
     ServerStatus,
     ServerSupervisor,
     load_server_settings,
     open_admin_when_ready,
-    schedule_open_admin_browser,
 )
-from free_claude_code.cli.launchers.common import preflight_proxy
-from free_claude_code.config.loader import get_settings
 from free_claude_code.config.paths import config_dir_path
-from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
 
 class DesktopTray(Protocol):
     """UI loop owned by the platform tray adapter."""
 
-    def run(self) -> None: ...
+    def run(self, setup: Callable[[], None]) -> None: ...
 
     def stop(self) -> None: ...
 
@@ -55,9 +53,11 @@ class DesktopController:
         supervisor: ServerOwner,
         tray_factory: DesktopTrayFactory,
         open_admin: Callable[[], None],
+        run_server: Callable[[], None] | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._open_admin = open_admin
+        self._server_run = run_server or supervisor.run
         self._thread_lock = threading.Lock()
         self._server_thread: threading.Thread | None = None
         self._tray = tray_factory(self)
@@ -69,9 +69,8 @@ class DesktopController:
     def run(self) -> None:
         """Run the tray on this thread and the FCC server on its owned worker."""
 
-        self._start_server()
         try:
-            self._tray.run()
+            self._tray.run(self._start_server)
         finally:
             self._supervisor.request_stop()
             self._tray.stop()
@@ -112,28 +111,46 @@ class DesktopController:
             self._server_thread.start()
 
     def _run_server(self) -> None:
-        self._supervisor.run()
+        self._server_run()
 
 
 def launch_desktop(tray_factory: DesktopTrayFactory) -> None:
-    """Start the singleton desktop host or focus the already running FCC UI."""
+    """Show the tray before acquiring configuration, singleton and server ownership."""
+    supervisor = ServerSupervisor(console_logging=False)
 
-    settings = load_server_settings()
-    instance_lock = InterprocessFileLock(config_dir_path() / "desktop.lock")
-    if not instance_lock.acquire():
-        open_admin_when_ready(settings)
-        return
+    def reuse_existing(settings) -> bool:
+        reused = open_admin_when_ready(settings, stop_event=supervisor.stop_event)
+        if reused:
+            controller.quit()
+        return reused
 
-    try:
-        if preflight_proxy(local_proxy_root_url(settings)) is None:
-            open_admin_when_ready(settings)
+    def run_server() -> None:
+        instance_lock = InterprocessFileLock(config_dir_path() / "desktop.lock")
+        try:
+            acquired = instance_lock.acquire()
+        except OSError as exc:
+            logger.error("Could not acquire the desktop lock: {}", exc)
+            controller.quit()
             return
+        if not acquired:
+            try:
+                open_admin_when_ready(
+                    load_server_settings(), stop_event=supervisor.stop_event
+                )
+            finally:
+                controller.quit()
+            return
+        try:
+            supervisor.run(existing_server=reuse_existing)
+        except Exception as exc:
+            logger.error("Desktop server could not start: {}", exc)
+        finally:
+            instance_lock.release()
 
-        supervisor = ServerSupervisor(console_logging=False)
-
-        def open_current_admin() -> None:
-            schedule_open_admin_browser(get_settings())
-
-        DesktopController(supervisor, tray_factory, open_current_admin).run()
-    finally:
-        instance_lock.release()
+    controller = DesktopController(
+        supervisor,
+        tray_factory,
+        supervisor.request_open_admin,
+        run_server,
+    )
+    controller.run()

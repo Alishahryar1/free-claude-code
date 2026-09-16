@@ -85,13 +85,15 @@ def code_page(request: Request, session_id: str | None = None):
 
 
 @router.get("/admin/api/code/bootstrap")
-def bootstrap(services: ApiServices = Depends(get_services)) -> JsonObject:
+async def bootstrap(services: ApiServices = Depends(get_services)) -> JsonObject:
     code = _code(services)
     available, message = code.availability()
     catalog = code.catalog()
     return {
         "available": available,
         "message": message,
+        "storage": code.storage_status(),
+        "startup": services.requests.catalog_status(),
         "harnesses": [{"id": "codex", "name": "Codex"}],
         "epoch": code.epoch,
         "models": [model.model_dump(mode="json") for model in catalog.models],

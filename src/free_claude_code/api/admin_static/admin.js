@@ -7,6 +7,12 @@ const state = {
   modelComboboxes: new Set(),
   authPollers: new Map(),
   localStatusRequest: null,
+  startup: null,
+  startupRequest: null,
+  startupTimer: null,
+  startupAgain: false,
+  codeCatalogRetry: false,
+  modelOptionsRequest: 0,
   activeView: viewFromLocation(),
 };
 
@@ -105,8 +111,93 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+function startupButton(button, loading) {
+  if (button.dataset.operationBusy) return;
+  button.disabled = loading;
+  button.classList.toggle("startup-busy", loading);
+  button.setAttribute("aria-busy", String(loading));
+}
+
+function renderStartup() {
+  const startup = state.startup?.startup;
+  const message = byId("startupMessage");
+  if (message) {
+    const messaging = startup?.messaging;
+    const visible = state.activeView === "messaging" && ["starting", "failed"].includes(messaging?.state);
+    message.hidden = !visible;
+    message.classList.toggle("startup-spinner", visible && messaging.state === "starting");
+    message.classList.toggle("error", messaging?.state === "failed");
+    message.textContent = messaging?.state === "failed" ? messaging.message || "Messaging could not start." : "";
+    message.setAttribute("aria-label", "Messaging is starting");
+  }
+  if (!startup) return;
+  document.querySelectorAll("[data-startup-provider]").forEach((button) => {
+    startupButton(button, startup.providers?.[button.dataset.startupProvider] === "starting");
+  });
+  document.querySelectorAll("[data-startup-catalog]").forEach((button) => {
+    startupButton(button, Object.values(startup.providers || {}).includes("starting"));
+  });
+  renderCodexIntegration();
+}
+
+async function refreshStartup() {
+  if (!state.config || document.hidden || state.restart) return;
+  if (state.startupRequest) { state.startupAgain = true; return; }
+  clearTimeout(state.startupTimer);
+  state.startupTimer = null;
+  const request = { controller: new AbortController(), config: state.config };
+  state.startupRequest = request;
+  let pending = false;
+  try {
+    const result = await api("/admin/api/status", { signal: request.controller.signal });
+    if (state.startupRequest !== request || state.config !== request.config) return;
+    const previous = state.startup;
+    const current = result.startup;
+    if (!current) return;
+    if (previous?.instance_id === result.instance_id && (
+      current.generation_id < previous.startup.generation_id ||
+      (current.generation_id === previous.startup.generation_id &&
+       current.catalog_revision < previous.startup.catalog_revision)
+    )) return;
+    state.startup = result;
+    renderStartup();
+    const changed = !previous || previous.instance_id !== result.instance_id ||
+      JSON.stringify(previous.startup) !== JSON.stringify(current);
+    if (changed) void hydrateModelOptions();
+    if (changed || state.codeCatalogRetry) state.codeCatalogRetry = await window.CodeSessions?.refresh(result) === false;
+    pending = state.codeCatalogRetry || current.catalog === "starting" || current.catalog_file === "starting" ||
+      current.code?.state === "starting" || current.messaging?.state === "starting" ||
+      Object.values(current.providers || {}).includes("starting");
+  } catch (error) {
+    if (error.name !== "AbortError") pending = true;
+  } finally {
+    if (state.startupRequest === request) {
+      state.startupRequest = null;
+      if ((pending || state.startupAgain) && !document.hidden) state.startupTimer = setTimeout(refreshStartup, 500);
+      state.startupAgain = false;
+    }
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  clearTimeout(state.startupTimer);
+  if (document.hidden) {
+    state.startupRequest?.controller.abort();
+    state.startupRequest = null;
+  } else {
+    void refreshStartup();
+  }
+});
+window.addEventListener("pagehide", () => {
+  clearTimeout(state.startupTimer);
+  state.startupRequest?.controller.abort();
+  state.startupRequest = null;
+});
+
 async function load() {
   state.localStatusRequest = null;
+  state.startupRequest?.controller.abort();
+  state.startupRequest = null;
   showMessage("Loading admin config");
   const config = await api("/admin/api/config");
   state.config = config;
@@ -116,6 +207,7 @@ async function load() {
   renderSections(config.sections, config.fields);
   byId("configPath").textContent = config.paths.managed;
   void refreshLocalStatus(config);
+  void refreshStartup();
   await Promise.all([
     refreshConnectedAccounts(),
     hydrateModelOptions(),
@@ -150,6 +242,9 @@ function setActiveView(viewId, { scroll = false } = {}) {
     VIEW_GROUPS.find((view) => view.id === viewId) || VIEW_GROUPS[0];
   state.activeView = activeView.id;
   byId("pageTitle").textContent = activeView.title;
+  renderStartup();
+  if (activeView.id === "code") state.codeCatalogRetry = true;
+  void refreshStartup();
   const sessionActive = activeView.id === "code";
   document.querySelector(".app-shell").classList.toggle("session-active", sessionActive);
   document.querySelector(".main").classList.toggle("session-main", sessionActive);
@@ -254,6 +349,7 @@ function renderProviders(providerStatus) {
         () => testProvider(provider.provider_id, button),
         "secondary-button",
       );
+      button.dataset.startupProvider = provider.provider_id;
       actions.appendChild(button);
     }
 
@@ -436,6 +532,7 @@ async function refreshConnectedAccount(provider) {
 }
 
 function updateConnectedAccountCard(provider, status) {
+  if (status) void refreshStartup();
   const current = document.querySelector(
     `[data-provider="${provider.provider_id}"][data-connected-account="true"]`,
   );
@@ -589,6 +686,7 @@ function renderSections(sections, fields) {
         refreshButton.type = "button";
         refreshButton.className = "secondary-button";
         refreshButton.textContent = "Refresh models";
+        refreshButton.dataset.startupCatalog = "true";
         refreshButton.addEventListener("click", () => refreshModelOptions(refreshButton));
         heading.appendChild(refreshButton);
       }
@@ -1007,6 +1105,11 @@ function appendAdminLink(target) {
 }
 
 async function reconnectAfterRestart() {
+  clearTimeout(state.startupTimer);
+  state.startupTimer = null;
+  state.startupRequest?.controller.abort();
+  state.startupRequest = null;
+  state.startupAgain = false;
   const { restart, warnings } = state.restart;
   const target = new URL(restart.admin_url || "/admin", window.location.href);
   setApplying(true);
@@ -1021,6 +1124,7 @@ async function reconnectAfterRestart() {
     }
     await load();
     state.restart = null;
+    void refreshStartup();
     showMessage(["Applied", ...warnings].join("\n"), warnings.length ? "warn" : "ok");
   } catch (error) {
     showMessage([`Settings were saved. ${error.message} Use Reconnect to try again.`, ...warnings].join("\n"), "warn");
@@ -1152,6 +1256,7 @@ async function refreshLocalStatus(config) {
 async function testProvider(providerId, button) {
   state.localStatusRequest?.providerIds.delete(providerId);
   const original = button.textContent;
+  button.dataset.operationBusy = "true";
   button.disabled = true;
   button.textContent = "Checking...";
   updateProviderCheckResult(providerId, "checking", "Checking...");
@@ -1166,10 +1271,7 @@ async function testProvider(providerId, button) {
         "ok",
         `${result.models.length} models available`,
       );
-      setModelOptions([
-        ...state.modelOptions,
-        ...result.models.map((model) => `${providerId}/${model}`),
-      ]);
+      await hydrateModelOptions();
     } else {
       updateProviderCheckResult(
         providerId,
@@ -1184,8 +1286,11 @@ async function testProvider(providerId, button) {
       "Provider check could not be completed.",
     );
   } finally {
+    delete button.dataset.operationBusy;
     button.disabled = false;
     button.textContent = original;
+    void refreshStartup();
+    renderStartup();
   }
 }
 
@@ -1198,16 +1303,19 @@ async function hydrateModelOptions() {
 }
 
 async function loadModelOptions(refresh = false) {
+  const request = ++state.modelOptionsRequest;
+  const config = state.config;
   const result = await api("/admin/api/models" + (refresh ? "/refresh" : ""), {
     method: refresh ? "POST" : "GET",
   });
-  setModelOptions(result.models);
+  if (request === state.modelOptionsRequest && config === state.config) setModelOptions(result.models);
   if (refresh && window.CodeSessions) await window.CodeSessions.refresh();
   return result;
 }
 
 async function refreshModelOptions(button) {
   const original = button.textContent;
+  button.dataset.operationBusy = "true";
   button.disabled = true;
   button.textContent = "Refreshing";
   try {
@@ -1225,8 +1333,11 @@ async function refreshModelOptions(button) {
   } catch (error) {
     showMessage(`Could not refresh models: ${error.message}`, "error");
   } finally {
+    delete button.dataset.operationBusy;
     button.disabled = false;
     button.textContent = original;
+    void refreshStartup();
+    renderStartup();
   }
 }
 
@@ -1240,7 +1351,7 @@ function providerDisplayName(providerId) {
 function setModelOptions(models) {
   state.modelOptions = Array.from(
     new Set(models.filter((model) => typeof model === "string" && model.trim())),
-  ).sort((left, right) => left.localeCompare(right));
+  );
   state.modelComboboxes.forEach((combobox) => {
     if (combobox.isOpen) combobox.render(combobox.query);
   });
@@ -1372,13 +1483,19 @@ const codexIntegration = { connected: null, busy: false, paths: null };
 const codexIntegrationPath = "/admin/api/integrations/codex";
 
 function renderCodexIntegration() {
-  const { connected, busy, paths } = codexIntegration;
+  const { connected, paths } = codexIntegration;
+  const initializing = connected === false && state.startup?.startup?.catalog_file === "starting";
+  const unavailable = connected === false && state.startup?.startup?.catalog_file === "failed";
+  const busy = codexIntegration.busy || initializing;
+  const catalogError = "Could not prepare the Codex model catalog. Refresh models to retry.";
+  if (unavailable) integrationMessage("codexIntegrationMessage", catalogError, true);
+  else if (byId("codexIntegrationMessage").textContent === catalogError) integrationMessage("codexIntegrationMessage", "");
   const action = connected ? "Disconnect" : "Connect";
   byId("openCodexIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
   byId("openCodexIntegration").disabled = busy;
   byId("openCodexIntegration").setAttribute("aria-busy", String(busy));
   byId("confirmCodexIntegration").textContent = busy ? "Saving…" : action;
-  byId("confirmCodexIntegration").disabled = busy || connected === null;
+  byId("confirmCodexIntegration").disabled = busy || connected === null || unavailable;
   byId("openCodexIntegration").className = connected && !busy ? "danger-button" : "primary-button";
   byId("confirmCodexIntegration").className = connected ? "danger-button" : "primary-button";
   byId("codexIntegrationDescription").textContent = connected

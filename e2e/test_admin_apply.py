@@ -179,7 +179,6 @@ def test_apply_network_error_unlocks_form_and_keeps_edits(
 
 def test_restart_waits_for_a_new_running_server(page: Page, admin_base_url: str):
     pending: list[Route] = []
-    page.route("**/admin/api/status", lambda route: pending.append(route))
     page.route(
         "**/admin/api/config/apply",
         lambda route: route.fulfill(
@@ -198,6 +197,8 @@ def test_restart_waits_for_a_new_running_server(page: Page, admin_base_url: str)
     )
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
+    page.wait_for_function("!state.startupRequest && !state.startupTimer")
+    page.route("**/admin/api/status", lambda route: pending.append(route))
     page.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
     with page.expect_request("**/admin/api/status"):
         page.get_by_role("button", name="Apply", exact=True).click()

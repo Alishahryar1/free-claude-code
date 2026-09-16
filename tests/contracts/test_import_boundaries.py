@@ -17,8 +17,8 @@ ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
     "messaging": {"core"},
     "providers": {"application", "config", "core"},
     "api": {"application", "config", "core"},
-    "harnesses": {"config", "core"},
-    "cli": {"config", "core", "harnesses"},
+    "harnesses": {"application", "config", "core"},
+    "cli": {"application", "config", "core", "harnesses"},
     "runtime": {
         "api",
         "application",
@@ -141,6 +141,34 @@ def test_api_configuration_access_goes_through_runtime() -> None:
     )
 
 
+def test_request_recovery_policy_has_no_client_or_transport_binding() -> None:
+    owners = {
+        f"{_PACKAGE_NAME}.providers.request_recovery",
+        f"{_PACKAGE_NAME}.providers.endpoint",
+    }
+    forbidden = (
+        "openai",
+        "httpx",
+        "httpx2",
+        f"{_PACKAGE_NAME}.providers.openai_client",
+        f"{_PACKAGE_NAME}.providers.openai_chat",
+        f"{_PACKAGE_NAME}.providers.openai_responses",
+        f"{_PACKAGE_NAME}.providers.anthropic_messages",
+    )
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if record.importer in owners
+        and any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in forbidden
+        )
+    ]
+    assert not offenders, (
+        "Request recovery policy depends on an adapter:\n" + "\n".join(offenders)
+    )
+
+
 def test_shared_harness_setup_has_no_terminal_owner() -> None:
     former_paths = {
         "cli/environment.py",
@@ -172,6 +200,26 @@ def test_shared_harness_setup_has_no_terminal_owner() -> None:
     ]
     remaining = sorted(path for path in former_paths if (_PACKAGE_ROOT / path).exists())
     assert not offenders and not remaining, "\n".join(offenders + remaining)
+
+
+def test_native_model_catalog_has_no_http_formatter_or_decoder_dependency() -> None:
+    callers = {
+        f"{_PACKAGE_NAME}.runtime.codex_app_server",
+        f"{_PACKAGE_NAME}.runtime.codex_catalog",
+        f"{_PACKAGE_NAME}.harnesses.codex_model_catalog",
+    }
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if record.importer in callers
+        and record.imported.startswith(
+            (f"{_PACKAGE_NAME}.api.", f"{_PACKAGE_NAME}.cli.launchers.")
+        )
+    ]
+    assert not offenders, (
+        "Native catalog policy belongs outside HTTP adapters:\n" + "\n".join(offenders)
+    )
+    assert not (_PACKAGE_ROOT / "harnesses/model_catalog.py").exists()
 
 
 def test_package_dependencies_follow_declarative_policy() -> None:
@@ -563,6 +611,25 @@ def test_core_does_not_import_provider_transport_sdks() -> None:
     ]
 
     assert sorted(offenders) == []
+
+
+def test_web_tool_workflow_has_no_http_adapter_owner() -> None:
+    former_owner = "free_claude_code.api.web_tools"
+    application_owner = "free_claude_code.application.web_tools"
+    forbidden_clients = {"aiohttp", "httpx", "requests", "socket"}
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if record.imported.startswith(former_owner)
+        or (
+            record.importer.startswith(application_owner)
+            and record.imported.split(".", 1)[0] in forbidden_clients
+        )
+    ]
+    remaining = list((_PACKAGE_ROOT / "api" / "web_tools").glob("*.py"))
+    assert not offenders and not remaining, "\n".join(
+        [*offenders, *(str(path.relative_to(_REPO_ROOT)) for path in remaining)]
+    )
 
 
 def test_providers_do_not_own_wire_error_type_literals() -> None:

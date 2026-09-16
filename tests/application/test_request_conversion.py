@@ -1,7 +1,7 @@
 """Request startup retains the conversion it validates before generation."""
 
 from dataclasses import replace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx2
 import pytest
@@ -56,7 +56,9 @@ async def test_executor_converts_chat_request_once(wire):
             admission=immediate_admission(),
             client=client,
         )
-        executor = ProviderExecutor(lambda _: provider, progress_timeout_seconds=60)
+        executor = ProviderExecutor(
+            AsyncMock(side_effect=lambda _: provider), progress_timeout_seconds=60
+        )
         builder_name = (
             "_build_request_body"
             if wire == "messages"
@@ -100,7 +102,9 @@ async def test_executor_converts_selected_opencode_route_once(wire, egress, warm
         if warm:
             await provider.list_model_infos()
         with patch.object(transport, name, wraps=getattr(transport, name)) as build:
-            executor = ProviderExecutor(lambda _: provider, progress_timeout_seconds=60)
+            executor = ProviderExecutor(
+                AsyncMock(side_effect=lambda _: provider), progress_timeout_seconds=60
+            )
             stream = getattr(executor, f"stream_{wire}")(
                 routed, raw_log_payload={}, request_id="opencode-conversion-once"
             )
@@ -137,7 +141,9 @@ async def test_executor_converts_subscription_request_once(wire):
         with patch.object(
             provider._responses, name, wraps=getattr(provider._responses, name)
         ) as build:
-            executor = ProviderExecutor(lambda _: provider, progress_timeout_seconds=60)
+            executor = ProviderExecutor(
+                AsyncMock(side_effect=lambda _: provider), progress_timeout_seconds=60
+            )
             stream = getattr(executor, f"stream_{wire}")(
                 routed, raw_log_payload={}, request_id="subscription-conversion-once"
             )

@@ -292,8 +292,8 @@ def test_pi_extension_projects_known_capabilities_and_preserves_unknown_defaults
                 "contextWindow": 65536,
             },
             {
-                "id": "provider/unknown",
-                "provider_model_ref": "provider/unknown",
+                "id": "provider/unknown ",
+                "provider_model_ref": "provider/unknown ",
             },
         ],
     }
@@ -323,6 +323,12 @@ console.log(JSON.stringify(projectFccModels(payload)));
 
     assert result.returncode == 0, result.stderr
     projected = json.loads(result.stdout)
+    assert [model["id"] for model in projected] == [
+        "provider/vision-reasoning",
+        "claude-3-freecc-no-thinking/provider/text-only",
+        "provider/unknown ",
+    ]
+    assert projected[-1]["name"] == "provider/unknown "
     assert [(model["reasoning"], model["input"]) for model in projected] == [
         (True, ["text", "image"]),
         (False, ["text"]),

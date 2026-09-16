@@ -11,6 +11,7 @@ from free_claude_code.application.connected_accounts import (
 )
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.application.ports import RequestRuntimePort, TaskController
+from free_claude_code.application.web_tools.ports import WebToolsPort
 from free_claude_code.config.admin.state import ConfigInputValue, ValueState
 from free_claude_code.core.json_types import JsonObject
 
@@ -72,4 +73,5 @@ class ApiServices:
     requests: RequestRuntimePort
     admin: AdminRuntimePort
     tasks: TaskController
+    web_tools: WebToolsPort
     code: CodeApplicationPort | None = None

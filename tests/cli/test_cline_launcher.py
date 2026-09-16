@@ -6,18 +6,18 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.cli.launchers.cline_config import (
     CLINE_PROVIDER_ID,
     build_cline_config,
 )
 from free_claude_code.core.model_capabilities import ModelInputModality
-from free_claude_code.harnesses.model_catalog import ClientModel
 
 
 def test_cline_config_uses_responses_and_only_known_metadata() -> None:
     config = build_cline_config(
         (
-            ClientModel(
+            CatalogModel(
                 wire_slug="nvidia_nim/vendor/model",
                 provider_model_ref="nvidia_nim/vendor/model",
                 display_name="Nested model",
@@ -28,7 +28,7 @@ def test_cline_config_uses_responses_and_only_known_metadata() -> None:
                 context_window_tokens=131072,
                 max_output_tokens=8192,
             ),
-            ClientModel(
+            CatalogModel(
                 wire_slug="claude-3-freecc-no-thinking/open_router/plain-model",
                 provider_model_ref="open_router/plain-model",
                 display_name="No-thinking model",
@@ -36,13 +36,14 @@ def test_cline_config_uses_responses_and_only_known_metadata() -> None:
                 input_modalities=frozenset({ModelInputModality.TEXT}),
                 context_window_tokens=65536,
             ),
-            ClientModel(
+            CatalogModel(
                 wire_slug="future_provider/unknown-model",
                 provider_model_ref="future_provider/unknown-model",
                 display_name="Unknown model",
                 supports_reasoning=None,
             ),
         ),
+        default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191/",
         auth_token="proxy-token",
         launch_id="launch-a",
@@ -127,6 +128,7 @@ def test_cline_config_rejects_empty_model_catalog() -> None:
     with pytest.raises(ValueError, match="at least one"):
         build_cline_config(
             (),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
             auth_token="proxy-token",
             launch_id="launch-a",

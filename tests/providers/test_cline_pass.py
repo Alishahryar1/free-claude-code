@@ -26,6 +26,7 @@ from tests.providers.support import (
     REASONING_DEFAULT,
     REASONING_OFF,
     REASONING_ON,
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -82,13 +83,11 @@ def _request(**overrides: JsonValue) -> MessagesRequest:
     return MessagesRequest.model_validate(payload)
 
 
-class AsyncStream:
+class AsyncStream(SDKStreamDouble):
     def __init__(self, chunks: list[SimpleNamespace]) -> None:
         self._chunks = chunks
         self.closed = False
-
-    def __aiter__(self) -> AsyncIterator[SimpleNamespace]:
-        return self._iter()
+        super().__init__(self._iter(), close=self.aclose)
 
     async def _iter(self) -> AsyncIterator[SimpleNamespace]:
         for chunk in self._chunks:

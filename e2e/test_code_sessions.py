@@ -14,6 +14,49 @@ from free_claude_code.runtime.codex_protocol import CodexProtocol
 from tests.code_sessions_support import CodexPackets
 
 
+def test_model_picker_uses_application_order_and_keeps_configured_selection(
+    page,
+    admin_base_url,
+    tmp_path,
+    code_control,
+    monkeypatch,
+):
+    from free_claude_code.application.model_metadata import ProviderModelInfo
+    from free_claude_code.config.settings import Settings
+    from free_claude_code.runtime.codex_app_server import CodexHarnessFactory
+    from tests.runtime.test_codex_catalog import FakeRequestRuntime
+
+    refs = (
+        "deepseek/other",
+        "open_router/Apple",
+        "open_router/apple",
+        "open_router/Zulu",
+    )
+    code_control.harness.model = refs[-1]
+    code_control.harness.configurations = dict.fromkeys(refs, "capabilities")
+    runtime = FakeRequestRuntime(
+        settings=Settings().model_copy(update={"model": refs[-1]}),
+        cached_infos=tuple(ProviderModelInfo(ref) for ref in reversed(refs)),
+    )
+    factory = CodexHarnessFactory(runtime, binary="codex")
+    monkeypatch.setattr(code_control.harness, "catalog", factory.catalog)
+    create_session(page, admin_base_url, tmp_path)
+    expect(page.locator("#codeProvider")).to_have_value("open_router")
+    expect(page.locator("#codeModel")).to_have_value("Zulu")
+    assert page.locator("#codeProvider option").evaluate_all(
+        "options => options.map(option => option.value)"
+    ) == ["deepseek", "open_router"]
+    page.locator("#codeComposer").fill("Keep this draft")
+    page.locator("#codeModel").fill("")
+    expect(page.locator("#codeModel").locator("..").get_by_role("option")).to_have_text(
+        ["Apple", "apple", "Zulu"]
+    )
+    page.locator("#codeModel").press("Escape")
+    page.evaluate("window.CodeSessions.refresh()")
+    expect(page.locator("#codeModel")).to_have_value("Zulu")
+    expect(page.locator("#codeComposer")).to_have_value("Keep this draft")
+
+
 @pytest.mark.parametrize("width", [1440, 900, 390])
 def test_five_header_controls_fit_without_hiding_composer(
     page, admin_base_url, tmp_path, code_control, width
@@ -1978,6 +2021,7 @@ def test_model_effort_picker_syncs_tabs_and_keeps_missing_selection(
         page.locator("#codeReasoning").select_option("medium")
         expect(second.locator("#codeReasoning")).to_have_value("medium")
         page.get_by_role("textbox", name="Message", exact=True).fill("Preserve me")
+        page.wait_for_function("!state.startupRequest && !state.startupTimer")
         code_control.harness.configurations.pop("provider/other")
         if refresh_first:
             page.evaluate("window.CodeSessions.refresh()")

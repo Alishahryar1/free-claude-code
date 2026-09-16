@@ -8,7 +8,7 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.providers.anthropic_messages.request_policy import (
     MessagesModelCapabilities,
 )
-from free_claude_code.providers.endpoint import HttpEndpoint
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 
 
 class CopilotUnavailable(RuntimeError):

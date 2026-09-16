@@ -13,8 +13,13 @@ from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.groq.tpm import correct_tpm_completion_budget
+from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    SDKStreamDouble,
+    immediate_admission,
+    make_provider_config,
+)
 
 _MODEL = "openai/gpt-oss-120b"
 _LIMIT = 8_000
@@ -222,7 +227,9 @@ def test_non_authoritative_tpm_rejection_is_not_corrected(
 async def test_tpm_correction_emits_one_downstream_lifecycle() -> None:
     provider = _provider()
     request = make_messages_request(_MODEL, max_tokens=_ORIGINAL_MAX)
-    create = AsyncMock(side_effect=[_status_error(), _successful_stream()])
+    create = AsyncMock(
+        side_effect=[_status_error(), SDKStreamDouble(_successful_stream())]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
         raw = "".join(
@@ -256,7 +263,7 @@ async def test_tpm_correction_is_one_shot_per_stream_creation() -> None:
     ):
         await provider._chat._create_stream(
             _body(),
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 
@@ -274,7 +281,7 @@ async def test_tpm_correction_respects_physical_attempt_ceiling() -> None:
     ):
         await provider._chat._create_stream(
             _body(),
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 
@@ -315,7 +322,7 @@ async def test_tpm_and_reasoning_corrections_compose(
             _sent_body,
         ) = await provider._chat._create_stream(
             body,
-            execution,
+            RequestRecovery(execution),
             ProviderOperationKind.GENERATION,
         )
         await attempt.aclose()
@@ -343,7 +350,7 @@ async def test_distinct_bodies_get_independent_tpm_corrections() -> None:
             _sent_body,
         ) = await provider._chat._create_stream(
             _body(),
-            execution,
+            RequestRecovery(execution),
             ProviderOperationKind.CONTINUATION,
         )
         await first_attempt.accept()
@@ -355,7 +362,7 @@ async def test_distinct_bodies_get_independent_tpm_corrections() -> None:
             _sent_body,
         ) = await provider._chat._create_stream(
             _body(20_000),
-            execution,
+            RequestRecovery(execution),
             ProviderOperationKind.TOOL_REPAIR,
         )
         await second_attempt.aclose()

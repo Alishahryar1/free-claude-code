@@ -415,7 +415,7 @@ async def test_runtime_warm_caches_all_referenced_provider_models() -> None:
         },
     )
 
-    result = await runtime.warm_referenced_model_cache()
+    result = await runtime.refresh_model_list_cache()
 
     assert result.refreshed_provider_ids == ("nvidia_nim", "open_router")
     assert result.failed_provider_ids == ()
@@ -438,7 +438,7 @@ async def test_runtime_warm_treats_model_lists_as_discovery_metadata() -> None:
         {"nvidia_nim": FakeProvider(_infos("different-model"))},
     )
 
-    result = await runtime.warm_referenced_model_cache()
+    result = await runtime.refresh_model_list_cache()
 
     assert result.refreshed_provider_ids == ("nvidia_nim",)
     assert result.failed_provider_ids == ()
@@ -462,10 +462,8 @@ async def test_runtime_warm_reports_query_failures_without_blocking() -> None:
         },
     )
 
-    with patch(
-        "free_claude_code.providers.runtime.discovery.logger.warning"
-    ) as warning:
-        result = await runtime.warm_referenced_model_cache()
+    with patch("free_claude_code.runtime.provider_manager.logger.warning") as warning:
+        result = await runtime.refresh_model_list_cache()
 
     assert result.refreshed_provider_ids == ("nvidia_nim",)
     assert result.failed_provider_ids == ("open_router",)
@@ -496,7 +494,7 @@ async def test_runtime_warm_queries_referenced_providers_concurrently() -> None:
         },
     )
 
-    await asyncio.wait_for(runtime.warm_referenced_model_cache(), timeout=1.0)
+    await asyncio.wait_for(runtime.refresh_model_list_cache(), timeout=1.0)
 
 
 @pytest.mark.asyncio
@@ -512,9 +510,9 @@ async def test_startup_discovery_queries_each_successful_provider_once() -> None
         {"nvidia_nim": nim, "open_router": router},
     )
 
-    await runtime.warm_referenced_model_cache()
+    await runtime.refresh_model_list_cache()
     runtime.start_model_list_refresh()
-    refresh_task = runtime._refresh_task
+    refresh_task = runtime._current.refresh_task
     assert refresh_task is not None
     await refresh_task
 
@@ -527,16 +525,13 @@ async def test_startup_discovery_queries_each_successful_provider_once() -> None
 
 
 @pytest.mark.asyncio
-async def test_failed_startup_warm_remains_eligible_for_background_refresh() -> None:
+async def test_failed_startup_discovery_remains_eligible_for_explicit_refresh() -> None:
     settings = _settings(nvidia_nim_api_key="nim-key")
     nim = FakeProvider(error=RuntimeError("upstream unavailable"))
     runtime = _manager(settings, {"nvidia_nim": nim})
 
-    warm_result = await runtime.warm_referenced_model_cache()
-    runtime.start_model_list_refresh()
-    refresh_task = runtime._refresh_task
-    assert refresh_task is not None
-    await refresh_task
+    warm_result = await runtime.refresh_model_list_cache()
+    await runtime.refresh_model_list_cache()
 
     assert warm_result.failed_provider_ids == ("nvidia_nim",)
     assert nim.model_list_calls == 2
@@ -566,7 +561,7 @@ async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_
         "open_router": frozenset({"anthropic/claude-sonnet"}),
         "lmstudio": frozenset({"local-qwen"}),
     }
-    assert result.refreshed_provider_ids == ("open_router", "lmstudio")
+    assert result.refreshed_provider_ids == ("lmstudio", "open_router")
     assert result.failed_provider_ids == ()
 
 
@@ -589,7 +584,7 @@ async def test_runtime_refresh_model_list_cache_treats_vertex_project_as_configu
         "vertex": frozenset({"google/gemini-3.5-flash"})
     }
     assert result.refreshed_provider_ids == ("vertex",)
-    assert result.failed_provider_ids == ()
+    assert result.failed_provider_ids == ("nvidia_nim",)
 
 
 @pytest.mark.asyncio

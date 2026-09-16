@@ -4,7 +4,6 @@ import asyncio
 import socket
 import threading
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -44,9 +43,6 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
         # Only provider discovery is external; retain the real Code, HTTP,
         # runtime cleanup, and supervisor lifecycle under investigation.
         monkeypatch.setattr(
-            app.runtime.provider_manager, "warm_referenced_model_cache", AsyncMock()
-        )
-        monkeypatch.setattr(
             app.runtime.provider_manager, "start_model_list_refresh", lambda: None
         )
         apps.append(app)
@@ -57,7 +53,7 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
         "free_claude_code.runtime.bootstrap.configure_logging",
         lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(commands, "build_asgi_app", create_app)
+    monkeypatch.setattr("free_claude_code.runtime.bootstrap.build_asgi_app", create_app)
     monkeypatch.setattr(commands, "kill_all_best_effort", lambda: None)
     monkeypatch.setattr(commands, "SERVER_GRACEFUL_SHUTDOWN_SECONDS", 0.2)
     supervisor = commands.ServerSupervisor(console_logging=False)

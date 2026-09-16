@@ -18,11 +18,12 @@ from .runner import HarnessSpec, LaunchContext, launch_harness
 def _configure(
     ctx: LaunchContext, args: list[str], files: LaunchResources
 ) -> PreparedLaunch:
+    catalog = ctx.require_catalog()
     return prepare_codex_launch(
         binary_path=ctx.binary_path,
         proxy_root_url=ctx.proxy_root_url,
         model=ctx.settings.model,
-        models=ctx.models,
+        models=catalog.models,
         base_env=ctx.base_env,
         args=args,
         files=files,

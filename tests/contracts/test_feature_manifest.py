@@ -18,7 +18,7 @@ from free_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
     OpenAIChatProvider,
 )
-from free_claude_code.providers.openai_codex import OpenAICodexProvider
+from free_claude_code.providers.openai_codex.provider import OpenAICodexProvider
 from free_claude_code.providers.opencode import OpenCodeProvider
 from free_claude_code.providers.vertex import VertexProvider
 from smoke.features import FEATURE_INVENTORY

@@ -9,6 +9,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.config.provider_catalog import COHERE_DEFAULT_BASE
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -205,7 +206,7 @@ async def test_stream_messages_text(cohere_provider):
     with patch.object(
         cohere_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in cohere_provider.stream_messages(make_request())
@@ -240,7 +241,7 @@ async def test_stream_messages_tool_call(cohere_provider):
     with patch.object(
         cohere_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in cohere_provider.stream_messages(make_request())
@@ -275,7 +276,7 @@ async def test_stream_messages_reasoning_content(cohere_provider):
     with patch.object(
         cohere_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in cohere_provider.stream_messages(make_request())

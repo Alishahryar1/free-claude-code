@@ -13,6 +13,7 @@ from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -262,7 +263,7 @@ async def test_stream_messages_text(huggingface_provider):
     with patch.object(
         huggingface_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event
@@ -296,7 +297,7 @@ async def test_stream_messages_reasoning_content(huggingface_provider):
     with patch.object(
         huggingface_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event

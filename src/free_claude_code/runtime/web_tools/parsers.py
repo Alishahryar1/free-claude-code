@@ -1,9 +1,10 @@
 """HTML parsing for web_search / web_fetch."""
 
 import html
-import re
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, unquote, urlparse
+
+from free_claude_code.core.web_tools import WebSearchResult
 
 
 class SearchResultParser(HTMLParser):
@@ -11,7 +12,7 @@ class SearchResultParser(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__()
-        self.results: list[dict[str, str]] = []
+        self.results: list[WebSearchResult] = []
         self._href: str | None = None
         self._title_parts: list[str] = []
 
@@ -37,8 +38,10 @@ class SearchResultParser(HTMLParser):
         if tag != "a" or self._href is None:
             return
         title = " ".join("".join(self._title_parts).split())
-        if title and not any(result["url"] == self._href for result in self.results):
-            self.results.append({"title": html.unescape(title), "url": self._href})
+        if title and not any(result.url == self._href for result in self.results):
+            self.results.append(
+                WebSearchResult(title=html.unescape(title), url=self._href)
+            )
         self._href = None
         self._title_parts = []
 
@@ -73,29 +76,3 @@ class HTMLTextParser(HTMLParser):
             self.title = f"{self.title} {text}".strip()
         elif not self._skip_depth:
             self.text_parts.append(text)
-
-
-def content_text(content: object) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict):
-                parts.append(str(item.get("text", "")))
-            else:
-                parts.append(str(getattr(item, "text", "")))
-        return "\n".join(part for part in parts if part)
-    return str(content)
-
-
-def extract_query(text: str) -> str:
-    match = re.search(r"query:\s*(.+)", text, flags=re.IGNORECASE | re.DOTALL)
-    if match:
-        return match.group(1).strip().strip("\"'")
-    return text.strip()
-
-
-def extract_url(text: str) -> str:
-    match = re.search(r"https?://\S+", text)
-    return match.group(0).rstrip(").,]") if match else text.strip()

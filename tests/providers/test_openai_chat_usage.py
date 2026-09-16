@@ -31,8 +31,10 @@ from free_claude_code.providers.openai_chat.usage import (
     request_stream_usage,
     usage_int,
 )
+from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
 )
@@ -370,12 +372,14 @@ async def test_openai_chat_stream_requests_usage_and_uses_provider_prompt_tokens
         ),
     )
     create = AsyncMock(
-        return_value=_stream(
-            [
-                _chunk(content="hello"),
-                _chunk(finish_reason="stop"),
-                _chunk(usage=usage),
-            ]
+        return_value=SDKStreamDouble(
+            _stream(
+                [
+                    _chunk(content="hello"),
+                    _chunk(finish_reason="stop"),
+                    _chunk(usage=usage),
+                ]
+            )
         )
     )
 
@@ -422,12 +426,14 @@ async def test_openai_chat_nonstream_message_uses_final_cache_partition():
         ),
     )
     create = AsyncMock(
-        return_value=_stream(
-            [
-                _chunk(content="hello"),
-                _chunk(finish_reason="stop"),
-                _chunk(usage=usage),
-            ]
+        return_value=SDKStreamDouble(
+            _stream(
+                [
+                    _chunk(content="hello"),
+                    _chunk(finish_reason="stop"),
+                    _chunk(usage=usage),
+                ]
+            )
         )
     )
 
@@ -459,12 +465,14 @@ async def test_openai_chat_responses_stream_preserves_cache_write_usage():
         ),
     )
     create = AsyncMock(
-        return_value=_stream(
-            [
-                _chunk(content="hello"),
-                _chunk(finish_reason="stop"),
-                _chunk(usage=usage),
-            ]
+        return_value=SDKStreamDouble(
+            _stream(
+                [
+                    _chunk(content="hello"),
+                    _chunk(finish_reason="stop"),
+                    _chunk(usage=usage),
+                ]
+            )
         )
     )
 
@@ -495,11 +503,13 @@ async def test_openai_chat_stream_keeps_response_model_separate_from_upstream_mo
     provider = _UsageTestProvider()
     request = make_messages_request(model="upstream/model")
     create = AsyncMock(
-        return_value=_stream(
-            [
-                _chunk(content="hello"),
-                _chunk(finish_reason="stop"),
-            ]
+        return_value=SDKStreamDouble(
+            _stream(
+                [
+                    _chunk(content="hello"),
+                    _chunk(finish_reason="stop"),
+                ]
+            )
         )
     )
 
@@ -545,7 +555,7 @@ async def test_openai_chat_stream_retries_without_usage_when_option_is_rejected(
             _sent_body,
         ) = await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
         await attempt.aclose()

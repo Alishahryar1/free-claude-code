@@ -275,7 +275,9 @@ textarea:focus-visible,
   padding: 6px 14px;
   font-size: 13px;
 }
-.integration-card > button[aria-busy="true"]::before {
+.integration-card > button[aria-busy="true"]::before,
+button.startup-busy::before,
+.startup-spinner::before {
   content: "";
   width: 12px;
   height: 12px;
@@ -969,4 +971,13 @@ textarea:focus-visible,
 
 #messageArea {
   white-space: pre-line;
+}
+
+.page-heading { display: flex; align-items: center; gap: 12px; }
+.startup-message { font-size: 13px; color: var(--muted); }
+.startup-message.error { color: var(--error); }
+button.startup-busy, .startup-spinner { display: inline-flex; align-items: center; gap: 8px; }
+.startup-spinner[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  button.startup-busy::before, .startup-spinner::before { animation: none; }
 }

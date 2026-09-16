@@ -33,11 +33,15 @@ def _overlay_loaded(output: str, expected_provider: str) -> bool:
 def _configure(
     ctx: LaunchContext, args: list[str], files: LaunchResources
 ) -> PreparedLaunch:
+    catalog = ctx.require_catalog()
     require_unset_environment(ctx.base_env, ("HERMES_MANAGED_DIR",))
     if os.name != "nt" and Path("/etc/hermes").exists():
         raise ValueError("An existing Hermes managed policy cannot be replaced by FCC.")
     managed = build_hermes_managed_config(
-        ctx.models, proxy_root_url=ctx.proxy_root_url, nonce=ctx.launch_id
+        catalog.models,
+        default_model_id=catalog.default_model_id,
+        proxy_root_url=ctx.proxy_root_url,
+        nonce=ctx.launch_id,
     )
     path = files.write_json("config.yaml", managed.config)
     env = client_environment(
