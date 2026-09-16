@@ -598,16 +598,6 @@ Run `fcc-server --version` to check the installed version without starting FCC.
 
 Re-run the matching command from [Install Or Update](#install).
 
-### Muse Code on native Windows
-
-FCC delegates a missing Muse Code installation to Meta's official installer. To install or refresh Muse Code directly:
-
-```powershell
-& ([scriptblock]::Create((irm "https://dev.meta.ai/install.ps1")))
-```
-
-FCC's ordinary uninstaller below leaves Muse Code and its data installed.
-
 ### Uninstall
 
 Stop every running FCC command before uninstalling.
