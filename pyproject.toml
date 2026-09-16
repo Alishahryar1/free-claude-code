@@ -4,23 +4,23 @@ build-backend = "hatchling.build"
 
 [project]
 name = "free-claude-code"
-version = "6.2.32"
+version = "6.2.33"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 requires-python = ">=3.14.0"
 dependencies = [
-    "anyio>=4.12.1",
+    "anyio>=4.15.1",
     "fastapi[standard]>=0.141.1",
     "uvicorn>=0.52.1",
     "httpx[socks]>=0.28.1",
     "httpx2[socks]>=2.7.0,<3",
     "markdown-it-py>=4.2.0",
-    "pydantic>=2.13.4",
+    "pydantic>=2.13.5",
     "python-dotenv>=1.2.2",
     "tiktoken>=0.13.0",
     "python-telegram-bot>=22.8",
     "discord.py>=2.7.1",
-    "openai>=3.2.0",
+    "openai>=3.14.0",
     "loguru>=0.7.0",
     "aiohttp>=3.14.3",
     "jsonschema>=4.25.0",
@@ -52,14 +52,14 @@ fcc-desktop = "free_claude_code.cli.desktop_entrypoint:launch"
 
 [project.optional-dependencies]
 voice = [
-    "grpcio>=1.83.0",
+    "grpcio>=1.83.1",
     "grpcio-tools>=1.81.1",
     "nvidia-riva-client>=2.26.0",
 ]
 voice_local = [
-    "torch>=2.13.0",
-    "transformers>=5.15.0",
-    "accelerate>=1.14.0",
+    "torch>=2.14.0",
+    "transformers>=5.17.0",
+    "accelerate>=1.15.0",
     "librosa>=1.0.0",
 ]
 
@@ -82,8 +82,8 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ty>=0.0.70",
-    "ruff>=0.16.2",
+    "ty>=0.0.80",
+    "ruff>=0.16.7",
     "pytest-xdist>=3.8.0",
     "pytest-playwright>=0.9.0",
 ]
@@ -123,7 +123,11 @@ skip-magic-trailing-comma = false
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 addopts = "-n auto"
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # Starlette's test client uses this deprecated alias, including in 1.6.0.
+    'ignore:^The anyio\.abc\.BlockingPortal alias is deprecated, use anyio\.from_thread\.BlockingPortal instead\.$:DeprecationWarning:^starlette\.testclient$',
+]
 testpaths = ["tests"]
 markers = [
     "live: opt-in local smoke tests that can touch real services",
