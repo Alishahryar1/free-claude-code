@@ -1,5 +1,6 @@
 """NVIDIA NIM request option injection."""
 
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -13,6 +14,8 @@ from free_claude_code.providers.openai_chat import (
 )
 
 from .tool_schema import sanitize_nim_tool_schemas
+
+_MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024
 
 NIM_REQUEST_POLICY = OpenAIChatRequestPolicy(
     provider_name="NIM",
@@ -128,6 +131,8 @@ def apply_nim_request_options(
     if extra_body:
         body["extra_body"] = extra_body
 
+    _trim_data_images(body)
+
 
 def _set_extra(
     extra_body: dict[str, Any], key: str, value: Any, ignore_value: Any = None
@@ -139,3 +144,40 @@ def _set_extra(
     if ignore_value is not None and value == ignore_value:
         return
     extra_body[key] = value
+
+
+def _trim_data_images(body: dict[str, Any]) -> None:
+    """Drop oldest inline images when the NIM request exceeds its body limit."""
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+
+    image_parts: list[tuple[list[Any], int]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for index, part in enumerate(content):
+            if (
+                isinstance(part, dict)
+                and part.get("type") == "image_url"
+                and isinstance(part.get("image_url"), dict)
+                and isinstance(part["image_url"].get("url"), str)
+                and part["image_url"]["url"].startswith("data:")
+            ):
+                image_parts.append((content, index))
+
+    while image_parts and _request_body_size(body) > _MAX_REQUEST_BODY_BYTES:
+        content, index = image_parts.pop(0)
+        content[index] = {
+            "type": "text",
+            "text": "[Earlier image omitted to fit request limit.]",
+        }
+
+
+def _request_body_size(body: dict[str, Any]) -> int:
+    return len(
+        json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
