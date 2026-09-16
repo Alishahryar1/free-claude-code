@@ -4,21 +4,15 @@ import json
 import re
 from collections.abc import Sequence
 
-from free_claude_code.cli.environment import (
+from free_claude_code.harnesses.environment import (
     client_environment,
     require_unset_environment,
 )
+from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
+from free_claude_code.harnesses.resources import LaunchResources
 
 from .opencode_config import OPENCODE_API_KEY_ENV, build_opencode_config
-from .resources import LaunchResources
-from .runner import (
-    HarnessSpec,
-    LaunchContext,
-    NativeCheck,
-    PreparedLaunch,
-    launch_harness,
-    version_at_least,
-)
+from .runner import HarnessSpec, LaunchContext, launch_harness, version_at_least
 
 _VERSION_PATTERN = re.compile(
     r"(?m)^\s*(?:(?:opencode(?:\s+version)?\s+)|v)?"
@@ -30,8 +24,13 @@ _PROCESS_CONFIG_KEYS = ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT")
 def _configure(
     ctx: LaunchContext, args: list[str], files: LaunchResources
 ) -> PreparedLaunch:
+    catalog = ctx.require_catalog()
     require_unset_environment(ctx.base_env, _PROCESS_CONFIG_KEYS)
-    config = build_opencode_config(ctx.models, proxy_root_url=ctx.proxy_root_url)
+    config = build_opencode_config(
+        catalog.models,
+        default_model_id=catalog.default_model_id,
+        proxy_root_url=ctx.proxy_root_url,
+    )
     path = files.write_json("opencode.json", config.file)
     return PreparedLaunch(
         [ctx.binary_path, *args],

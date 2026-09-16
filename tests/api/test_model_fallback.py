@@ -144,7 +144,7 @@ def test_final_failure_uses_last_candidate_typed_error(
         ("/v1/responses", responses_payload()),
     ),
 )
-def test_lazy_fallback_preflight_error_remains_ordinary(
+def test_lazy_fallback_validation_error_remains_ordinary(
     path: str,
     payload: dict[str, object],
 ) -> None:
@@ -152,7 +152,7 @@ def test_lazy_fallback_preflight_error_remains_ordinary(
         failure=execution_failure("primary overloaded")
     )
     fallback = ControlledFallbackProvider(
-        preflight_error=InvalidRequestError("fallback configuration is invalid")
+        validation_error=InvalidRequestError("fallback configuration is invalid")
     )
 
     with fallback_client(primary, fallback) as client:
@@ -183,7 +183,6 @@ def test_postframe_failure_never_opens_fallback_for_streaming_messages() -> None
     assert response.status_code == 200
     events = parse_sse_text(response.text)
     assert [event.event for event in events] == ["message_start", "error"]
-    assert fallback.preflight_models == []
     assert fallback.stream_models == []
 
 
@@ -204,7 +203,6 @@ def test_postframe_failure_never_opens_fallback_for_responses() -> None:
         "response.created",
         "response.failed",
     ]
-    assert fallback.preflight_models == []
     assert fallback.stream_models == []
 
 

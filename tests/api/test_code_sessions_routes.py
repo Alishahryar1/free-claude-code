@@ -130,6 +130,36 @@ async def test_code_library_has_one_harness_and_no_native_work_on_open(code_api)
 
 
 @pytest.mark.asyncio
+async def test_context_usage_and_raw_provider_capacity_are_public_session_state(
+    code_api,
+):
+    client, code, harness, _, _ = code_api
+    harness.context_windows[harness.model] = 100_000
+    harness.configurations["unknown/model"] = "unknown"
+    bootstrap = (await client.get("/admin/api/code/bootstrap")).json()
+    models = {model["id"]: model for model in bootstrap["models"]}
+    assert models[harness.model]["context_window_tokens"] == 100_000
+    assert models["unknown/model"]["context_window_tokens"] is None
+
+    session = await create_session(code_api)
+    assert session["context_used_tokens"] is None
+    await code.send(
+        session["id"],
+        str(uuid.uuid4()),
+        session["revision"],
+        "hello",
+        expected_epoch=code.epoch,
+    )
+    await harness.started.wait()
+    await harness.connections[0].context_usage("turn-1", 12_438)
+
+    detail = (await client.get(f"/admin/api/code/sessions/{session['id']}")).json()
+    assert detail["session"]["context_used_tokens"] == 12_438
+    library = (await client.get("/admin/api/code/sessions")).json()
+    assert library["sessions"][0]["context_used_tokens"] == 12_438
+
+
+@pytest.mark.asyncio
 async def test_http_send_competition_and_safe_item_projection(code_api):
     client, code, harness, _, _ = code_api
     session = await create_session(code_api)

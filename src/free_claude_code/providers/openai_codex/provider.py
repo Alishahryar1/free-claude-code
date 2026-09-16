@@ -20,13 +20,16 @@ from free_claude_code.providers.admission import (
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint import RequestEndpoint
+from free_claude_code.providers.failure_policy import provider_authentication_status
 from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.model_listing import (
     optional_input_modalities,
     optional_positive_int,
     reasoning_capability_from_options,
 )
+from free_claude_code.providers.openai_client import OpenAIRequestClient
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
+from free_claude_code.providers.request_recovery import RequestRecovery
 
 from .auth import OpenAIAuthManager
 from .endpoint import CodexEndpointContext
@@ -92,25 +95,6 @@ class OpenAICodexProvider(BaseProvider):
             session_id=session_id,
         )
 
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        self._responses.preflight_messages(
-            request, reasoning=reasoning, model_info=model_info
-        )
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        self._responses.preflight_responses(request, reasoning=reasoning)
-
     async def cleanup(self) -> None:
         await self._client.close()
 
@@ -121,12 +105,16 @@ class OpenAICodexProvider(BaseProvider):
     async def _list_models_payload(self) -> Any:
         """Admit each catalog GET while borrowing request-scoped SDK credentials."""
         execution = self._admission.start_execution()
-        endpoint = RequestEndpoint(self._endpoint(), self._pool)
+        endpoint = RequestEndpoint(self._endpoint())
+        request_client = OpenAIRequestClient(self._pool)
+        recovery = RequestRecovery(execution, endpoint=endpoint)
         try:
             while execution.can_attempt:
                 scope: ProviderAttemptScope | None = None
                 try:
-                    client = await endpoint.openai_client(self._client)
+                    client = request_client.for_endpoint(
+                        self._client, await endpoint.resolve()
+                    )
                     attempt = await execution.open_attempt(
                         ProviderOperationKind.MODEL_DISCOVERY
                     )
@@ -147,8 +135,8 @@ class OpenAICodexProvider(BaseProvider):
                     raise
                 except Exception as error:
                     if scope is not None:
-                        if await endpoint.retry_authentication(
-                            error, scope.attempt, execution
+                        if await recovery.retry_authentication(
+                            error, provider_authentication_status(error), scope.attempt
                         ):
                             continue
                         if not scope.attempt.accepted:
@@ -165,7 +153,7 @@ class OpenAICodexProvider(BaseProvider):
             raise RuntimeError("OpenAI model discovery ended without an outcome.")
         finally:
             try:
-                await endpoint.aclose()
+                await request_client.aclose()
             finally:
                 execution.abandon()
 

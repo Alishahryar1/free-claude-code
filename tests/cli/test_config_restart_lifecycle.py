@@ -4,7 +4,6 @@ import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -18,6 +17,7 @@ from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.asgi import RuntimeASGIApp
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.web_tools_support import StubWebToolsClient
 
 
 @pytest.mark.parametrize("stop_during_commit", [False, True])
@@ -37,9 +37,8 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
         manager = ProviderRuntimeManager(
             settings, runtime_factory=lambda snapshot: ProviderRuntime(snapshot, {})
         )
-        monkeypatch.setattr(manager, "warm_referenced_model_cache", AsyncMock())
         monkeypatch.setattr(manager, "start_model_list_refresh", lambda: None)
-        monkeypatch.setattr(manager, "_refresh_generation_in_background", AsyncMock())
+        monkeypatch.setattr(manager, "_start_pass", lambda *args, **kwargs: None)
         runtime = ApplicationRuntime(
             manager,
             configuration=ConfigurationService(ManagedConfigStore()),
@@ -48,11 +47,18 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
         )
         runtimes.append(runtime)
         return RuntimeASGIApp(
-            create_app(ApiServices(requests=manager, admin=runtime, tasks=runtime)),
+            create_app(
+                ApiServices(
+                    requests=manager,
+                    admin=runtime,
+                    tasks=runtime,
+                    web_tools=StubWebToolsClient(),
+                )
+            ),
             runtime,
         )
 
-    monkeypatch.setattr(commands, "build_asgi_app", build)
+    monkeypatch.setattr("free_claude_code.runtime.bootstrap.build_asgi_app", build)
     monkeypatch.setattr(commands, "kill_all_best_effort", lambda: None)
     supervisor = commands.ServerSupervisor(console_logging=False)
     errors = []

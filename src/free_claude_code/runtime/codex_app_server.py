@@ -10,7 +10,7 @@ import subprocess
 import uuid
 from collections.abc import Mapping
 from contextlib import ExitStack, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from free_claude_code.application.code_sessions.models import (
     CodeCatalog,
@@ -24,22 +24,24 @@ from free_claude_code.application.code_sessions.models import (
     NativeThread,
 )
 from free_claude_code.application.code_sessions.ports import EventSink, HarnessSelection
+from free_claude_code.application.model_catalog import CatalogModel, read_model_catalog
 from free_claude_code.application.ports import RequestRuntimePort
-from free_claude_code.cli.launchers.codex import SPEC, prepare_codex_launch
-from free_claude_code.cli.launchers.codex_model_catalog import build_codex_model_catalog
-from free_claude_code.cli.launchers.resources import LaunchResources
-from free_claude_code.cli.launchers.runner import LaunchContext
 from free_claude_code.cli.process_registry import register_pid, unregister_pid
 from free_claude_code.config.model_refs import split_provider_model_ref
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.version import package_version
+from free_claude_code.harnesses.codex import CODEX_INSTALL_HINT, prepare_codex_launch
+from free_claude_code.harnesses.codex_model_catalog import (
+    CodexModel,
+    codex_model_entry,
+    project_codex_models,
+)
+from free_claude_code.harnesses.resources import LaunchResources
 
-from .codex_catalog import current_codex_models
 from .codex_protocol import (
     CodexProtocol,
     NativePrompt,
-    array_value,
     object_value,
     string_value,
 )
@@ -575,7 +577,10 @@ class CodexAppServer:
 
 @dataclass(frozen=True, slots=True)
 class _CodexSelection:
-    context: LaunchContext
+    binary_path: str
+    proxy_root_url: str
+    base_env: Mapping[str, str] = field(repr=False)
+    models: tuple[CatalogModel, ...]
     model: str
     configuration_key: str
     fingerprints: dict[str, str]
@@ -586,15 +591,19 @@ class _CodexSelection:
         resources = ExitStack()
         try:
             prepared = prepare_codex_launch(
-                self.context,
-                [
+                binary_path=self.binary_path,
+                proxy_root_url=self.proxy_root_url,
+                model=self.model,
+                models=self.models,
+                base_env=self.base_env,
+                args=[
                     "-c",
                     "features.default_mode_request_user_input=true",
                     "-c",
                     "tools.experimental_request_user_input.enabled=true",
                     "app-server",
                 ],
-                LaunchResources(resources),
+                files=LaunchResources(resources),
             )
             connection = CodexAppServer(
                 prepared.command,
@@ -602,13 +611,12 @@ class _CodexSelection:
                 cwd,
                 sink,
                 model_slugs={
-                    model.provider_model_ref: model.wire_slug
-                    for model in self.context.models
+                    model.provider_model_ref: model.wire_slug for model in self.models
                 },
                 fingerprints=self.fingerprints,
                 reasoning={
                     model.provider_model_ref: model.supports_reasoning is not False
-                    for model in self.context.models
+                    for model in self.models
                 },
                 resources=resources,
             )
@@ -632,33 +640,33 @@ class CodexHarnessFactory:
     def availability(self) -> tuple[bool, str | None]:
         if self._binary or shutil.which("codex"):
             return True, None
-        return False, "Codex is not installed. " + SPEC.install_hint
+        return False, "Codex is not installed. " + CODEX_INSTALL_HINT
 
     def catalog(self) -> CodeCatalog:
         settings = self._runtime.current_settings()
-        models = current_codex_models(self._runtime, settings)
-        entries = array_value(build_codex_model_catalog(models).get("models"))
+        catalog = read_model_catalog(self._runtime, settings)
         return CodeCatalog(
             settings.model,
             tuple(
-                _model_option(model.provider_model_ref, object_value(entry))
-                for model, entry in zip(models, entries, strict=True)
+                _model_option(model) for model in project_codex_models(catalog.models)
             ),
         )
 
-    def prepare(
+    async def prepare(
         self, model: str, reasoning_effort: str | None, mode: CodeMode
     ) -> _CodexSelection:
         binary = self._binary or shutil.which("codex")
         if binary is None:
-            raise CodeUnavailableError("Codex is not installed. " + SPEC.install_hint)
-        settings = self._runtime.current_settings()
-        models = current_codex_models(self._runtime, settings)
+            raise CodeUnavailableError("Codex is not installed. " + CODEX_INSTALL_HINT)
+        snapshot = await self._runtime.wait_for_catalog()
+        settings = snapshot.settings
+        models = read_model_catalog(snapshot, settings).models
+        projected = project_codex_models(models)
         selected = next(
             (
                 candidate
-                for candidate in models
-                if candidate.provider_model_ref == model
+                for candidate in projected
+                if candidate.model.provider_model_ref == model
             ),
             None,
         )
@@ -666,13 +674,7 @@ class CodexHarnessFactory:
             raise CodeValidationError(
                 "This model is unavailable. Choose another model."
             )
-        catalog = build_codex_model_catalog(models)
-        entries = {
-            string_value(entry.get("slug")): entry
-            for value in array_value(catalog.get("models"))
-            if (entry := object_value(value))
-        }
-        option = _model_option(model, entries[selected.wire_slug])
+        option = _model_option(selected)
         if (
             reasoning_effort is not None
             and reasoning_effort not in option.reasoning_efforts
@@ -682,19 +684,19 @@ class CodexHarnessFactory:
             )
         effort = reasoning_effort or option.default_reasoning_effort
         fingerprints = {
-            model.provider_model_ref: _fingerprint(entries[model.wire_slug])
-            for model in models
+            entry.model.provider_model_ref: _fingerprint(codex_model_entry(entry))
+            for entry in projected
         }
-        context = LaunchContext(
-            binary,
-            settings.model_copy(update={"model": model}),
-            local_proxy_root_url(settings),
-            settings.proxy_auth_token,
-            dict(self._env if self._env is not None else os.environ),
-            models,
-        )
         return _CodexSelection(
-            context, model, fingerprints[model], fingerprints, effort, mode
+            binary_path=binary,
+            proxy_root_url=local_proxy_root_url(settings),
+            base_env=dict(self._env if self._env is not None else os.environ),
+            models=models,
+            model=model,
+            configuration_key=fingerprints[model],
+            fingerprints=fingerprints,
+            reasoning_effort=effort,
+            mode=mode,
         )
 
     async def open_history(self, cwd: str, sink: EventSink) -> CodexAppServer:
@@ -702,7 +704,7 @@ class CodexHarnessFactory:
         if binary is None:
             raise CodeUnavailableError(
                 "Codex is needed to remove its native conversation. "
-                + SPEC.install_hint
+                + CODEX_INSTALL_HINT
             )
         connection = CodexAppServer(
             [binary, "app-server"],
@@ -714,23 +716,20 @@ class CodexHarnessFactory:
         return connection
 
 
-def _model_option(model: str, entry: JsonObject) -> CodeModel:
-    provider_id, model_name = split_provider_model_ref(model)
-    efforts = tuple(
-        string_value(object_value(level).get("effort"))
-        for level in array_value(entry.get("supported_reasoning_levels"))
-    )
+def _model_option(entry: CodexModel) -> CodeModel:
+    model = entry.model
+    provider_id, model_name = split_provider_model_ref(model.provider_model_ref)
     return CodeModel(
-        id=model,
-        display_name=string_value(entry.get("display_name")) or model,
+        id=model.provider_model_ref,
+        display_name=model.display_name,
         provider_id=provider_id,
         model_name=model_name,
         reasoning_efforts=tuple(
-            "off" if effort == "none" else effort for effort in efforts
+            "off" if effort == "none" else effort for effort in entry.reasoning_levels
         )
         or ("off",),
-        default_reasoning_effort=string_value(entry.get("default_reasoning_level"))
-        or "off",
+        default_reasoning_effort=entry.default_reasoning_level or "off",
+        context_window_tokens=model.context_window_tokens,
     )
 
 

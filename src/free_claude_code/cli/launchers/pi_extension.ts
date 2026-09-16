@@ -2,7 +2,7 @@ import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-codin
 
 const API_KEY_ENV = "FCC_PI_API_KEY";
 const BASE_URL_ENV = "FCC_PI_BASE_URL";
-const CATALOG_TIMEOUT_MS = 3000;
+const CATALOG_TIMEOUT_MS = 35000;
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 16384;
 
@@ -75,9 +75,9 @@ export function projectFccModels(payload: unknown): ProviderModelConfig[] {
 	const seen = new Set<string>();
 	for (const entry of payload.data) {
 		if (!isRecord(entry) || typeof entry.id !== "string" || typeof entry.provider_model_ref !== "string") continue;
-		const id = entry.id.trim();
-		const providerModel = entry.provider_model_ref.trim();
-		if (!id || !providerModel.includes("/") || seen.has(id)) continue;
+		const id = entry.id;
+		const providerModel = entry.provider_model_ref;
+		if (!id.trim() || !providerModel.includes("/") || seen.has(id)) continue;
 		seen.add(id);
 		models.push(
 			modelDefinition(

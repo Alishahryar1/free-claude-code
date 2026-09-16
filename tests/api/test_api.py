@@ -211,7 +211,7 @@ def test_create_message_ingress_error_has_request_id_without_terminal_header(
 
 def test_create_message_rejects_unportable_image_as_invalid_request() -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         return_value=MagicMock(),
     ):
         provider = OpenAIChatProvider(

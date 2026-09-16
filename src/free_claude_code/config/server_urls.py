@@ -46,3 +46,10 @@ def same_proxy_url(value: object, expected: str) -> bool:
         return normalized(value) == normalized(expected)
     except ValueError:
         return False
+
+
+def proxy_v1_url(proxy_root_url: str) -> str:
+    """Return the canonical local proxy API root for client launchers."""
+
+    stripped = proxy_root_url.rstrip("/")
+    return stripped if stripped.endswith("/v1") else f"{stripped}/v1"

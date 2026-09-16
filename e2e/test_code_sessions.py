@@ -5,12 +5,57 @@ import uuid
 import pytest
 from playwright.sync_api import expect
 
+from e2e.form_support import assert_autofill_opt_out
+from e2e.provider_support import open_provider
 from free_claude_code.application.code_sessions.models import (
     HarnessEvent,
     PromptRequest,
 )
 from free_claude_code.runtime.codex_protocol import CodexProtocol
 from tests.code_sessions_support import CodexPackets
+
+
+def test_model_picker_uses_application_order_and_keeps_configured_selection(
+    page,
+    admin_base_url,
+    tmp_path,
+    code_control,
+    monkeypatch,
+):
+    from free_claude_code.application.model_metadata import ProviderModelInfo
+    from free_claude_code.config.settings import Settings
+    from free_claude_code.runtime.codex_app_server import CodexHarnessFactory
+    from tests.runtime.test_codex_catalog import FakeRequestRuntime
+
+    refs = (
+        "deepseek/other",
+        "open_router/Apple",
+        "open_router/apple",
+        "open_router/Zulu",
+    )
+    code_control.harness.model = refs[-1]
+    code_control.harness.configurations = dict.fromkeys(refs, "capabilities")
+    runtime = FakeRequestRuntime(
+        settings=Settings().model_copy(update={"model": refs[-1]}),
+        cached_infos=tuple(ProviderModelInfo(ref) for ref in reversed(refs)),
+    )
+    factory = CodexHarnessFactory(runtime, binary="codex")
+    monkeypatch.setattr(code_control.harness, "catalog", factory.catalog)
+    create_session(page, admin_base_url, tmp_path)
+    expect(page.locator("#codeProvider")).to_have_value("open_router")
+    expect(page.locator("#codeModel")).to_have_value("Zulu")
+    assert page.locator("#codeProvider option").evaluate_all(
+        "options => options.map(option => option.value)"
+    ) == ["deepseek", "open_router"]
+    page.locator("#codeComposer").fill("Keep this draft")
+    page.locator("#codeModel").fill("")
+    expect(page.locator("#codeModel").locator("..").get_by_role("option")).to_have_text(
+        ["Apple", "apple", "Zulu"]
+    )
+    page.locator("#codeModel").press("Escape")
+    page.evaluate("window.CodeSessions.refresh()")
+    expect(page.locator("#codeModel")).to_have_value("Zulu")
+    expect(page.locator("#codeComposer")).to_have_value("Keep this draft")
 
 
 @pytest.mark.parametrize("width", [1440, 900, 390])
@@ -35,6 +80,92 @@ def test_five_header_controls_fit_without_hiding_composer(
     assert composer["y"] >= controls["y"] + controls["height"]
     assert composer["y"] + composer["height"] <= 900
     page.screenshot(path=str(tmp_path / f"code-modes-{width}.png"))
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_context_usage_is_live_persistent_and_uses_only_raw_provider_capacity(
+    page, admin_base_url, tmp_path, code_control, width
+):
+    code_control.harness.context_windows["provider/model"] = 100_000
+    code_control.harness.configurations["provider/unknown"] = "unknown"
+    page.set_viewport_size({"width": width, "height": 900})
+    create_session(page, admin_base_url, tmp_path)
+    usage = page.locator("#codeContextUsage")
+    expect(usage).to_be_hidden()
+
+    send(page, "Measure the active context")
+    connection = code_control.connection()
+    code_control.run(connection.context_usage("turn-1", 90_000))
+    expect(usage).to_have_text("90K / 100K (90%)")
+    code_control.run(connection.context_usage("turn-1", 12_438))
+    expect(usage).to_have_text("12.4K / 100K (12%)")
+    expect(usage).to_have_attribute(
+        "title", "Context used: 12,438 of 100,000 tokens (12%)"
+    )
+    expect(usage).to_have_accessible_name(
+        "Context used: 12,438 of 100,000 tokens (12%)"
+    )
+    usage_box = usage.bounding_box()
+    stop_box = page.locator("#codeStop").bounding_box()
+    assert usage_box["x"] + usage_box["width"] <= stop_box["x"]
+    assert stop_box["x"] + stop_box["width"] <= width
+
+    page.reload()
+    expect(usage).to_have_text("12.4K / 100K (12%)")
+    code_control.run(connection.context_usage("turn-1", 104_000))
+    expect(usage).to_have_text("104K / 100K (104%)")
+    code_control.run(connection.finish("turn-1"))
+
+    page.locator("#codeModel").fill("unknown")
+    page.get_by_role("option", name="unknown", exact=True).click()
+    expect(usage).to_have_text("104K")
+    expect(usage).to_have_accessible_name("Context used: 104,000 tokens")
+    send(page, "Use the model without capacity metadata")
+    code_control.run(code_control.harness.wait_inputs(2))
+    code_control.run(connection.context_usage("turn-2", 12_438))
+    expect(usage).to_have_text("12.4K")
+    expect(usage).to_have_attribute("title", "Context used: 12,438 tokens")
+    expect(usage).to_have_accessible_name("Context used: 12,438 tokens")
+    code_control.run(connection.finish("turn-2"))
+
+
+def test_delayed_settings_response_cannot_replace_newer_context_usage(
+    page, admin_base_url, tmp_path, code_control
+):
+    code_control.harness.context_windows["provider/model"] = 100_000
+    create_session(page, admin_base_url, tmp_path)
+    send(page, "Start")
+    connection = code_control.connection()
+    code_control.run(connection.context_usage("turn-1", 10_000))
+    code_control.run(connection.finish("turn-1"))
+    usage = page.locator("#codeContextUsage")
+    expect(usage).to_have_text("10K / 100K (10%)")
+
+    page.evaluate(
+        """
+        () => {
+          const originalFetch = window.fetch;
+          window.fetch = async (...args) => {
+            const response = await originalFetch(...args);
+            const options = args[1] || {};
+            if (options.method === "PATCH" && String(args[0]).includes("/sessions/")) {
+              await new Promise((resolve) => { window.releaseCodeSettings = resolve; });
+            }
+            return response;
+          };
+        }
+        """
+    )
+    title = page.get_by_role("textbox", name="Code title", exact=True)
+    title.fill("Renamed while usage changes")
+    title.press("Tab")
+    page.wait_for_function("() => typeof window.releaseCodeSettings === 'function'")
+
+    code_control.run(connection.context_usage("turn-1", 20_000))
+    expect(usage).to_have_text("20K / 100K (20%)")
+    page.evaluate("window.releaseCodeSettings()")
+    expect(title).to_be_enabled()
+    expect(usage).to_have_text("20K / 100K (20%)")
 
 
 def test_header_provider_draft_and_mode_sync(
@@ -475,9 +606,9 @@ def test_settings_apply_preserves_open_creation_and_picker(
     page.route("**/admin/api/config/apply", lambda route: pending.append(route))
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
-    page.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
+    page.locator("#field-PORT").fill("8081")
     page.get_by_role("button", name="Apply", exact=True).click()
-    expect(page.locator("#messageArea")).to_have_text("Checking API keys…")
+    expect(page.locator("#messageArea")).to_have_text("Applying…")
     assert len(pending) == 1
     page.get_by_role("button", name="Code sessions", exact=True).click()
     page.get_by_role("button", name="New code session", exact=True).click()
@@ -738,6 +869,230 @@ def test_existing_session_keeps_streaming_while_folder_picker_is_open(
         expect(form.get_by_role("textbox", name="Folder", exact=True)).to_be_enabled()
     finally:
         observer.close()
+
+
+@pytest.mark.parametrize("terminal", ["completed", "failed", "interrupted"])
+def test_thinking_fills_quiet_gaps_without_changing_transcript(
+    page, admin_base_url, tmp_path, code_control, terminal
+):
+    create_session(page, admin_base_url, tmp_path)
+    page.clock.install(time=1000)
+    page.clock.pause_at(1000)
+    send(page, "Inspect this project")
+    connection = code_control.connection()
+    expect(page.locator("#codeStop")).to_be_visible()
+    activity = page.locator("#codeActivity")
+    expect(activity).to_have_count(1)
+    expect(page.locator("#codeComposerStatus")).to_have_count(0)
+    page.clock.run_for(499)
+    expect(activity).to_be_hidden()
+    page.clock.run_for(1)
+    expect(activity).to_have_text("Thinking…")
+    expect(activity).to_be_visible()
+    for chunk in ("A", "AB", "ABC"):
+        code_control.run(connection.text("turn-1", "text", chunk))
+        expect(page.locator('.code-item[data-kind="text"] .code-prose')).to_have_text(
+            chunk
+        )
+        page.clock.run_for(400)
+        expect(activity).to_be_hidden()
+    for kind in ("text", "reasoning", "tool"):
+        for complete, text in ((False, "Streaming"), (True, "Finished")):
+            code_control.run(
+                connection.text("turn-1", kind, text, complete=complete, kind=kind)
+            )
+            item = page.locator(f'.code-item[data-kind="{kind}"]')
+            expect(item.locator(".code-prose")).to_have_text(text)
+            expect(activity).to_be_hidden()
+            page.clock.run_for(499)
+            expect(activity).to_be_hidden()
+            page.clock.run_for(1)
+            expect(activity).to_be_visible()
+    # A duplicate update and an unrelated composer render are not streaming.
+    code_control.run(
+        connection.text("turn-1", "tool", "Finished", complete=True, kind="tool")
+    )
+    page.locator("#codeComposer").fill("Next question")
+    expect(activity).to_be_visible()
+    assert page.locator(".code-items #codeActivity").count() == 0
+    assert (
+        activity.evaluate("node => node.previousElementSibling.className")
+        == "code-items"
+    )
+    code_control.run(connection.finish("turn-1", status=terminal))
+    expect(page.locator("#codeSend")).to_be_visible()
+    expect(activity).to_be_hidden()
+    page.clock.run_for(1000)
+    expect(activity).to_be_hidden()
+    expect(page.locator(".code-item")).to_have_count(4)
+
+
+@pytest.mark.parametrize("quiet_elapsed", [200, 500])
+@pytest.mark.parametrize("recovered_item", ["reply", "new-reply"])
+def test_recovered_output_restarts_thinking_quiet_interval(
+    page, admin_base_url, tmp_path, code_control, quiet_elapsed, recovered_item
+):
+    control_feed(page)
+    create_session(page, admin_base_url, tmp_path)
+    page.clock.install(time=1000)
+    page.clock.pause_at(1000)
+    send(page, "Inspect")
+    connection = code_control.connection()
+    code_control.run(
+        connection.text("turn-1", "reply", "Before disconnect", complete=True)
+    )
+    expect(page.get_by_text("Before disconnect", exact=True)).to_be_visible()
+    page.clock.run_for(quiet_elapsed)
+    activity = page.locator("#codeActivity")
+    if quiet_elapsed == 500:
+        expect(activity).to_be_visible()
+    else:
+        expect(activity).to_be_hidden()
+
+    page.evaluate("window.dropCodeEvents = ['item.updated']")
+    code_control.run(
+        connection.text("turn-1", recovered_item, "Recovered output", complete=True)
+    )
+    expect(page.get_by_text("Recovered output", exact=True)).to_have_count(0)
+    page.evaluate("window.replayCodeReady()")
+    expect(page.get_by_text("Recovered output", exact=True)).to_be_visible()
+    expect(activity).to_be_hidden()
+    page.clock.run_for(499)
+    expect(activity).to_be_hidden()
+    page.clock.run_for(1)
+    expect(activity).to_be_visible()
+
+
+def test_thinking_respects_prompts_refresh_navigation_and_stop(
+    page, admin_base_url, tmp_path, code_control
+):
+    control_feed(page)
+    url = create_session(page, admin_base_url, tmp_path)
+    page.clock.install(time=1000)
+    page.clock.pause_at(1000)
+    send(page, "Inspect")
+    connection = code_control.connection()
+    code_control.run(connection.prompt(0))
+    expect(page.get_by_role("button", name="Allow", exact=True)).to_be_visible()
+    page.clock.run_for(1000)
+    expect(page.locator("#codeActivity")).to_be_hidden()
+    page.get_by_role("button", name="Allow", exact=True).click()
+    expect(page.locator(".code-prompt-state")).to_have_text("Resolved")
+    page.clock.run_for(499)
+    expect(page.locator("#codeActivity")).to_be_hidden()
+    page.clock.run_for(1)
+    expect(page.locator("#codeActivity")).to_be_visible()
+    code_control.run(
+        connection.sink(
+            HarnessEvent(
+                connection.generation,
+                connection.thread_id,
+                "error",
+                turn_id="turn-1",
+                message="Upstream paused",
+                will_retry=True,
+            )
+        )
+    )
+    notice = page.locator('.code-item[data-kind="notice"] .code-prose')
+    expect(notice).to_have_text("Retrying… Upstream paused")
+    expect(page.locator("#codeActivity")).to_be_hidden()
+    page.reload()
+    expect(notice).to_have_text("Retrying… Upstream paused")
+    expect(page.locator(".code-prompt-state")).to_have_text("Resolved")
+    page.clock.run_for(500)
+    expect(page.locator("#codeActivity")).to_be_visible()
+    # Replaying the connection snapshot does not count as fresh output.
+    page.evaluate("window.replayCodeReady()")
+    expect(page.locator("#codeStop")).to_be_enabled()
+    expect(page.locator("#codeActivity")).to_be_visible()
+    page.get_by_role("button", name="Providers", exact=True).click()
+    page.clock.run_for(1000)
+    assert page.locator("#codeActivity").evaluate("node => node.hidden")
+    page.get_by_role("button", name="Code sessions", exact=True).click()
+    # Return through the library if the main tab opens the library route.
+    if page.url != url:
+        page.locator(".session-card").first.click()
+    expect(page.locator("#codeStop")).to_be_enabled()
+    page.clock.run_for(499)
+    expect(page.locator("#codeActivity")).to_be_hidden()
+    page.clock.run_for(1)
+    expect(page.locator("#codeActivity")).to_be_visible()
+    code_control.harness.interrupt_gate.clear()
+    page.locator("#codeStop").click()
+    expect(page.locator("#codeStop")).to_be_disabled()
+    page.clock.run_for(500)
+    expect(page.locator("#codeActivity")).to_be_visible()
+    code_control.run(release_interrupt(code_control))
+    expect(page.locator(".code-outcome")).to_contain_text("Turn stopped.")
+    page.clock.run_for(1000)
+    expect(page.locator("#codeActivity")).to_be_hidden()
+
+
+async def release_interrupt(code_control):
+    code_control.harness.interrupt_gate.set()
+
+
+def test_thinking_preserves_expanded_items_and_scroll_position(
+    page, admin_base_url, tmp_path, code_control
+):
+    create_session(page, admin_base_url, tmp_path)
+    page.clock.install(time=1000)
+    page.clock.pause_at(1000)
+    send(page, "Inspect")
+    connection = code_control.connection()
+    code_control.run(connection.text("turn-1", "reason", "Reading", kind="reasoning"))
+    reason = page.locator(".session-thinking")
+    expect(reason).to_have_count(1)
+    reason.locator("summary").click()
+    page.evaluate("window.savedReason = document.querySelector('.session-thinking')")
+    code_control.run(connection.text("turn-1", "text", "Paragraph\n\n" * 100))
+    expect(page.locator('.code-item[data-kind="text"] .code-prose')).to_contain_text(
+        "Paragraph"
+    )
+    transcript = page.locator("#codeTranscript")
+    transcript.evaluate("node => node.scrollTop = 0")
+    page.clock.run_for(500)
+    expect(page.locator("#codeActivity")).to_be_visible()
+    assert transcript.evaluate("node => node.scrollTop") == 0
+    assert reason.evaluate("node => node === window.savedReason && node.open")
+    transcript.evaluate("node => node.scrollTop = node.scrollHeight")
+    code_control.run(
+        connection.text("turn-1", "reason", "Reading more", kind="reasoning")
+    )
+    expect(reason.locator(".code-prose")).to_have_text("Reading more")
+    page.clock.run_for(500)
+    assert (
+        transcript.evaluate(
+            "node => node.scrollHeight - node.scrollTop - node.clientHeight"
+        )
+        < 2
+    )
+    assert reason.evaluate("node => node === window.savedReason && node.open")
+
+
+def test_deletion_error_stays_beside_delete_and_survives_refresh(
+    page, admin_base_url, tmp_path, code_control
+):
+    create_session(page, admin_base_url, tmp_path)
+    send(page, "Inspect")
+    connection = code_control.connection()
+    code_control.run(connection.finish("turn-1"))
+    code_control.harness.delete_error = RuntimeError("Delete failed")
+    page.locator("#codeDelete").click()
+    page.get_by_role("button", name="Delete session", exact=True).click()
+    error = page.locator("#codeDeletionError")
+    expect(error).to_contain_text("You can retry deletion")
+    page.reload()
+    expect(error).to_contain_text("You can retry deletion")
+    expect(page.locator("#codeDelete")).to_have_attribute(
+        "aria-describedby", "codeDeletionError"
+    )
+    expect(page.locator("#codeComposerStatus")).to_have_count(0)
+    code_control.harness.delete_error = None
+    page.locator("#codeDelete").click()
+    page.get_by_role("button", name="Delete session", exact=True).click()
+    expect(page).to_have_url(f"{admin_base_url}/admin/code")
 
 
 def test_code_streams_survive_refresh_and_all_viewers_leaving(
@@ -1038,6 +1393,7 @@ def test_question_input_survives_streaming_and_secret_answer_is_not_stored(
     create_session(page, admin_base_url, tmp_path)
     send(page, "Ask me a question")
     connection = code_control.connection()
+    assert_autofill_opt_out(page)
     prompt = PromptRequest(
         7,
         "questions",
@@ -1079,6 +1435,7 @@ def test_question_input_survives_streaming_and_secret_answer_is_not_stored(
     secret = page.get_by_label("Your answer", exact=True)
     secret.fill("private-answer")
     expect(secret).to_have_attribute("type", "password")
+    assert_autofill_opt_out(page)
     secret.focus()
     secret.evaluate(
         "input => { window.savedPromptInput = input; input.setSelectionRange(2, 6); }"
@@ -1158,6 +1515,7 @@ def test_hidden_code_removal_preserves_providers_and_deleted_history(
     page.get_by_role("button", name="Providers", exact=True).click()
     providers_url = f"{admin_base_url}/admin"
     expect(page).to_have_url(providers_url)
+    open_provider(page, "mistral")
     field = page.locator("#field-MISTRAL_API_KEY")
     field.fill("Keep this provider edit")
     field.evaluate("input => input.setSelectionRange(2, 7)")
@@ -1369,7 +1727,7 @@ def test_off_clears_effort_when_reasoning_becomes_unavailable(
     code_control.harness.efforts = ("off",)
     code_control.harness.default_effort = "off"
     page.evaluate("window.CodeSessions.refresh()")
-    expect(page.locator("#codeComposerStatus")).to_contain_text("unavailable")
+    expect(page.locator("#codeSelectionError")).to_contain_text("unavailable")
     expect(effort).to_have_value("high")
     expect(effort.locator("option:checked")).to_have_text("high")
     expect(effort.locator("option:disabled")).to_have_text(
@@ -1394,7 +1752,7 @@ def test_off_clears_effort_when_reasoning_becomes_unavailable(
         effort.select_option("off")
     assert reset.value.json()["reasoning_effort"] == "off"
     assert len(patches) == 1 and patches[0]["reasoning_effort"] == "off"
-    expect(page.locator("#codeComposerStatus")).not_to_contain_text("unavailable")
+    expect(page.locator("#codeSelectionError")).to_be_hidden()
     expect(page.locator("#codeSend")).to_be_enabled()
     page.reload()
     expect(effort).to_have_value("off")
@@ -1628,7 +1986,7 @@ def test_failed_reply_stays_after_its_output_once_and_not_in_composer(
     expect(
         page.locator(".code-outcome").filter(has_text="Provider refused the request")
     ).to_have_count(1)
-    expect(page.locator("#codeComposerStatus")).not_to_contain_text("Provider refused")
+    expect(page.locator("#codeComposerStatus")).to_have_count(0)
     expect(page.locator("#codeNotice")).to_be_hidden()
     send(page, "Second")
     code_control.run(connection.finish("turn-2"))
@@ -1665,6 +2023,7 @@ def test_model_effort_picker_syncs_tabs_and_keeps_missing_selection(
         page.locator("#codeReasoning").select_option("medium")
         expect(second.locator("#codeReasoning")).to_have_value("medium")
         page.get_by_role("textbox", name="Message", exact=True).fill("Preserve me")
+        page.wait_for_function("!state.startupRequest && !state.startupTimer")
         code_control.harness.configurations.pop("provider/other")
         if refresh_first:
             page.evaluate("window.CodeSessions.refresh()")
@@ -1674,7 +2033,7 @@ def test_model_effort_picker_syncs_tabs_and_keeps_missing_selection(
         expect(page.locator("#codeModel")).to_have_value("other")
         expect(page.locator("#codeSend")).to_be_disabled()
         expect(page.locator("#codeComposer")).to_have_value("Preserve me")
-        expect(page.locator("#codeComposerStatus")).to_contain_text("unavailable")
+        expect(page.locator("#codeSelectionError")).to_contain_text("unavailable")
     finally:
         second.close()
 

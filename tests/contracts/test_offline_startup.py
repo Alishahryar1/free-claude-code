@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 
-def test_api_import_survives_unavailable_tiktoken_encoding() -> None:
+def test_api_import_does_not_acquire_tiktoken_encoding() -> None:
     script = """
 import os
 import tempfile
@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory() as cache_dir:
     requests.get = fail
     import free_claude_code.api.app
 
-assert len(calls) == 1, calls
+assert calls == [], calls
 """
 
     completed = subprocess.run(
@@ -37,5 +37,5 @@ assert len(calls) == 1, calls
     )
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
-    assert "ProxyError" in completed.stderr
+    assert "ProxyError" not in completed.stderr
     assert "Bearer secret" not in completed.stderr

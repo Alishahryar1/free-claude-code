@@ -35,6 +35,7 @@ class CodeSession(Record):
     native_thread_id: str | None = None
     native_permission_defaults: JsonObject | None = None
     native_may_have_input: bool = False
+    context_used_tokens: int | None = Field(default=None, ge=0)
     revision: int = 1
     status: Literal["ready", "deleting", "delete_uncertain"] = "ready"
     error: str | None = None
@@ -121,6 +122,7 @@ class CodeModel(Record):
     model_name: str
     reasoning_efforts: tuple[str, ...] = ()
     default_reasoning_effort: str | None = None
+    context_window_tokens: int | None = Field(default=None, gt=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,9 +172,11 @@ class HarnessEvent:
         "resolved",
         "error",
         "notice",
+        "context_usage",
         "closed",
     ]
     turn_id: str | None = None
+    context_used_tokens: int | None = None
     item: ItemUpdate | None = None
     prompt: PromptRequest | None = None
     request_id: str | int | None = None

@@ -16,7 +16,6 @@ from typing import Any
 import httpx
 import pytest
 
-from free_claude_code.cli.claude_env import build_claude_proxy_env
 from free_claude_code.config.provider_catalog import SUPPORTED_PROVIDER_IDS
 from free_claude_code.core.anthropic.stream_contracts import (
     SSEEvent,
@@ -26,6 +25,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_lines,
     text_content,
 )
+from free_claude_code.harnesses.claude import build_claude_proxy_env
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
 from free_claude_code.messaging.session import SessionStore
 from free_claude_code.messaging.voice import VoiceCancellationResult

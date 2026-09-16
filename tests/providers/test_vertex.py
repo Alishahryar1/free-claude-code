@@ -226,7 +226,7 @@ def test_vertex_provider_supplies_renewable_token_callback_to_openai() -> None:
     token_provider = _token_provider()
     with (
         patch(
-            "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+            "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
         ) as openai_client,
         patch("free_claude_code.providers.vertex.client.httpx.AsyncClient"),
     ):
@@ -247,7 +247,7 @@ def test_vertex_request_uses_google_thinking_budget_without_named_effort() -> No
         thinking={"type": "enabled", "budget_tokens": 2048},
     )
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
     assert body["model"] == "google/gemini-3.5-flash"
     assert "reasoning_effort" not in body
@@ -264,7 +264,7 @@ def test_vertex_request_maps_reasoning_off_to_zero_budget() -> None:
         thinking={"type": "disabled"},
     )
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
     assert body["extra_body"]["extra_body"]["google"]["thinking_config"] == {
         "thinking_budget": 0,
@@ -301,7 +301,7 @@ def test_vertex_reasoning_has_one_google_wire_owner(
 ) -> None:
     provider = _provider()
 
-    body = provider._build_request_body(
+    body = provider._chat._build_request_body(
         make_messages_request("google/gemini", thinking=None),
         reasoning=reasoning,
     )
@@ -328,7 +328,7 @@ def test_vertex_preserves_caller_thinking_config_only_for_provider_default() -> 
         },
     )
 
-    body = provider._build_request_body(
+    body = provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -351,7 +351,7 @@ def test_vertex_rejects_caller_thinking_config_with_fcc_reasoning_control() -> N
     )
 
     with pytest.raises(InvalidRequestError, match="thinking_config"):
-        provider._build_request_body(
+        provider._chat._build_request_body(
             request,
             reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
         )

@@ -315,6 +315,11 @@ def _credential_field_specs() -> tuple[ConfigFieldSpec, ...]:
                     section_id="providers",
                     field_type="secret",
                     settings_attr=descriptor.credential_attr,
+                    provider_ids=tuple(
+                        provider.provider_id
+                        for provider in PROVIDER_CATALOG.values()
+                        if provider.credential_env == descriptor.credential_env
+                    ),
                     secret=True,
                 )
             )
@@ -335,6 +340,7 @@ def _base_url_field_specs() -> tuple[ConfigFieldSpec, ...]:
                     label=f"{descriptor.display_name} Base URL",
                     section_id="providers",
                     settings_attr=descriptor.base_url_attr,
+                    provider_ids=(descriptor.provider_id,),
                 )
             )
         )
@@ -348,6 +354,7 @@ def _cloudflare_account_field_specs() -> tuple[ConfigFieldSpec, ...]:
             label="Cloudflare Account ID",
             section_id="providers",
             settings_attr="cloudflare_account_id",
+            provider_ids=("cloudflare",),
             description=(
                 "Cloudflare account ID used to build the /accounts/{id}/ai/v1 endpoint."
             ),
@@ -362,6 +369,7 @@ def _vertex_field_specs() -> tuple[ConfigFieldSpec, ...]:
             label="Google Cloud Project ID",
             section_id="providers",
             settings_attr="vertex_project_id",
+            provider_ids=("vertex",),
             description=(
                 "Google Cloud project used for Vertex AI. Authentication uses "
                 "Application Default Credentials (ADC)."
@@ -372,6 +380,7 @@ def _vertex_field_specs() -> tuple[ConfigFieldSpec, ...]:
             label="Vertex AI Location",
             section_id="providers",
             settings_attr="vertex_location",
+            provider_ids=("vertex",),
             description=(
                 "Use global for the global Vertex AI endpoint or a region such as "
                 "us-central1."
@@ -393,6 +402,7 @@ def _proxy_field_specs() -> tuple[ConfigFieldSpec, ...]:
                     section_id="providers",
                     field_type="secret",
                     settings_attr=descriptor.proxy_attr,
+                    provider_ids=(descriptor.provider_id,),
                     secret=True,
                     advanced=True,
                 )

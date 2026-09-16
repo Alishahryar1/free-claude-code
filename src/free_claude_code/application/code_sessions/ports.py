@@ -20,6 +20,7 @@ from .models import (
     NativeThread,
 )
 
+# Harness connections must await each call and preserve native wire order.
 type EventSink = Callable[[HarnessEvent], Awaitable[None]]
 
 
@@ -77,7 +78,7 @@ class HarnessFactory(Protocol):
 
     def catalog(self) -> CodeCatalog: ...
 
-    def prepare(
+    async def prepare(
         self, model: str, reasoning_effort: str | None, mode: CodeMode
     ) -> HarnessSelection: ...
 
@@ -148,6 +149,8 @@ class CodeApplicationPort(Protocol):
 
     @property
     def cursor(self) -> int: ...
+
+    def storage_status(self) -> JsonObject: ...
 
     def availability(self) -> tuple[bool, str | None]: ...
 

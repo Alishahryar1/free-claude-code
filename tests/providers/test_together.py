@@ -82,7 +82,7 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
         }
     )
 
-    body = together_provider._build_request_body(
+    body = together_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -112,7 +112,7 @@ def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
         }
     )
 
-    body = together_provider._build_request_body(request, reasoning=reasoning)
+    body = together_provider._chat._build_request_body(request, reasoning=reasoning)
     extra_body = body.get("extra_body", {})
 
     for field in ("reasoning", "reasoning_effort", "chat_template_kwargs"):
@@ -140,7 +140,7 @@ def test_build_request_body_replays_documented_reasoning_field(
         }
     )
 
-    body = together_provider._build_request_body(
+    body = together_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )

@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.cli.launchers.dsh_config import build_dsh_launch_config
-from free_claude_code.cli.launchers.model_catalog import ClientModel
 from free_claude_code.core.model_capabilities import ModelInputModality
 
 
-def _models() -> tuple[ClientModel, ...]:
+def _models() -> tuple[CatalogModel, ...]:
     return (
-        ClientModel(
+        CatalogModel(
             wire_slug="nvidia_nim/vendor/model",
             provider_model_ref="nvidia_nim/vendor/model",
             display_name="Nested model",
@@ -24,7 +24,7 @@ def _models() -> tuple[ClientModel, ...]:
             context_window_tokens=131072,
             max_output_tokens=8192,
         ),
-        ClientModel(
+        CatalogModel(
             wire_slug="claude-3-freecc-no-thinking/open_router/plain-model",
             provider_model_ref="open_router/plain-model",
             display_name="No-thinking model",
@@ -32,7 +32,7 @@ def _models() -> tuple[ClientModel, ...]:
             input_modalities=frozenset({ModelInputModality.TEXT}),
             max_output_tokens=4096,
         ),
-        ClientModel(
+        CatalogModel(
             wire_slug="future_provider/unknown-model",
             provider_model_ref="future_provider/unknown-model",
             display_name="Unknown model",
@@ -52,6 +52,7 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
     credentials_path = tmp_path / ".credentials.yaml"
     launch = build_dsh_launch_config(
         _models(),
+        default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191/",
         settings_path=settings_path,
         credentials_path=credentials_path,
@@ -149,6 +150,7 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
 def test_dsh_config_rounds_fractional_progress_timeout_up() -> None:
     launch = build_dsh_launch_config(
         _models(),
+        default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191",
         settings_path=Path("settings.yaml"),
         credentials_path=Path("credentials.yaml"),
@@ -165,6 +167,7 @@ def test_dsh_config_rejects_empty_catalog() -> None:
     with pytest.raises(ValueError, match="at least one"):
         build_dsh_launch_config(
             (),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
             settings_path=Path("settings.yaml"),
             credentials_path=Path("credentials.yaml"),
@@ -177,6 +180,7 @@ def test_dsh_config_rejects_invalid_progress_timeout(timeout: float) -> None:
     with pytest.raises(ValueError, match="positive finite"):
         build_dsh_launch_config(
             _models(),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
             settings_path=Path("settings.yaml"),
             credentials_path=Path("credentials.yaml"),
@@ -188,6 +192,7 @@ def test_dsh_config_rejects_timeout_beyond_node_timer_limit() -> None:
     with pytest.raises(ValueError, match="too large"):
         build_dsh_launch_config(
             _models(),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
             settings_path=Path("settings.yaml"),
             credentials_path=Path("credentials.yaml"),

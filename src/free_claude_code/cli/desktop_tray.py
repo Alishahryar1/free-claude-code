@@ -1,5 +1,6 @@
 """pystray adapter for the Windows tray and macOS menu bar."""
 
+from collections.abc import Callable
 from io import BytesIO
 
 from PIL import Image
@@ -27,8 +28,12 @@ class PystrayDesktopTray:
             ),
         )
 
-    def run(self) -> None:
-        self._icon.run()
+    def run(self, setup: Callable[[], None]) -> None:
+        def ready(icon: Icon) -> None:
+            icon.visible = True
+            setup()
+
+        self._icon.run(setup=ready)
 
     def stop(self) -> None:
         self._icon.stop()

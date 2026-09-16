@@ -26,6 +26,7 @@ from tests.providers.support import (
     REASONING_DEFAULT,
     REASONING_OFF,
     REASONING_ON,
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -58,7 +59,7 @@ def _provider_with_transport(
         http_client=httpx2.AsyncClient(transport=transport),
     )
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         return_value=client,
     ):
         return profiled_provider(
@@ -82,13 +83,11 @@ def _request(**overrides: JsonValue) -> MessagesRequest:
     return MessagesRequest.model_validate(payload)
 
 
-class AsyncStream:
+class AsyncStream(SDKStreamDouble):
     def __init__(self, chunks: list[SimpleNamespace]) -> None:
         self._chunks = chunks
         self.closed = False
-
-    def __aiter__(self) -> AsyncIterator[SimpleNamespace]:
-        return self._iter()
+        super().__init__(self._iter(), close=self.aclose)
 
     async def _iter(self) -> AsyncIterator[SimpleNamespace]:
         for chunk in self._chunks:
@@ -181,7 +180,7 @@ def test_build_request_body_preserves_nested_model_images_tools_and_results(
         extra_body={"provider_option": "must-not-pass-through"},
     )
 
-    body = cline_pass_provider._build_request_body(
+    body = cline_pass_provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.on(),
     )
@@ -228,7 +227,7 @@ def test_build_request_body_adds_no_undocumented_reasoning_control_or_default_ca
     cline_pass_provider: OpenAIChatProvider,
     reasoning: ReasoningPolicy,
 ) -> None:
-    body = cline_pass_provider._build_request_body(
+    body = cline_pass_provider._chat._build_request_body(
         _request(),
         reasoning=reasoning,
     )
@@ -271,7 +270,7 @@ def test_build_request_body_replays_only_opaque_reasoning_details(
         ]
     )
 
-    body = cline_pass_provider._build_request_body(
+    body = cline_pass_provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.on(),
     )

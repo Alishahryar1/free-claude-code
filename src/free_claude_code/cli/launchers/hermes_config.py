@@ -2,11 +2,10 @@
 
 from dataclasses import dataclass, field
 
+from free_claude_code.application.model_catalog import CatalogModel
+from free_claude_code.config.server_urls import proxy_v1_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
-
-from .common import proxy_v1_url
-from .model_catalog import ClientModel
 
 HERMES_PROVIDER_PREFIX = "fcc-"
 HERMES_KEY_ENV_PREFIX = "FCC_HERMES_"
@@ -44,8 +43,9 @@ class HermesManagedConfig:
 
 
 def build_hermes_managed_config(
-    models: tuple[ClientModel, ...],
+    models: tuple[CatalogModel, ...],
     *,
+    default_model_id: str,
     proxy_root_url: str,
     nonce: str,
 ) -> HermesManagedConfig:
@@ -57,7 +57,6 @@ def build_hermes_managed_config(
         raise ValueError("Hermes configuration nonce must be alphanumeric")
 
     wire_slugs = tuple(model.wire_slug for model in models)
-    active_model = wire_slugs[0]
 
     provider_key = f"{HERMES_PROVIDER_PREFIX}{nonce.lower()}"
     provider_ref = f"custom:{provider_key}"
@@ -81,14 +80,14 @@ def build_hermes_managed_config(
                     "Authorization": f"Bearer ${{{key_env}}}",
                 },
                 "transport": "codex_responses",
-                "default_model": active_model,
+                "default_model": default_model_id,
                 "models": {wire_slug: {} for wire_slug in wire_slugs},
                 "discover_models": False,
             }
         },
         "model": {
             "provider": provider_ref,
-            "default": active_model,
+            "default": default_model_id,
             "base_url": "",
             "api_key": "",
             "api_mode": "codex_responses",
@@ -104,7 +103,7 @@ def build_hermes_managed_config(
         config=config,
         provider_ref=provider_ref,
         key_env=key_env,
-        default_model=active_model,
+        default_model=default_model_id,
     )
 
 
@@ -122,7 +121,7 @@ def _auxiliary_task_config(task: str, *, provider_ref: str) -> JsonObject:
     return config
 
 
-def _model_override(model: ClientModel) -> JsonObject:
+def _model_override(model: CatalogModel) -> JsonObject:
     override: JsonObject = {}
     if model.supports_reasoning is not None:
         override["supports_reasoning"] = model.supports_reasoning

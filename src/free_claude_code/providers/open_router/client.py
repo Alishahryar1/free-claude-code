@@ -11,6 +11,7 @@ from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.model_listing import extract_tool_capable_model_infos
 from free_claude_code.providers.openai_chat import (
+    OpenAIChatBehavior,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
@@ -30,19 +31,10 @@ _REQUEST_POLICY = OpenAIChatRequestPolicy(
 )
 
 
-class OpenRouterProvider(OpenAIChatProvider):
-    """OpenRouter provider using the OpenAI-compatible Chat Completions API."""
+class OpenRouterChatBehavior(OpenAIChatBehavior):
+    """OpenRouter Chat adaptation without HTTP ownership."""
 
-    def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
-    ):
-        super().__init__(
-            config,
-            profile=_PROFILE,
-            admission=admission,
-        )
-
-    def _reasoning_disable_rejected(self, error: Exception) -> bool:
+    def reasoning_disable_rejected(self, error: Exception) -> bool:
         detail = extract_upstream_error_detail(error)
         if detail.status_code not in {None, 200}:
             return False
@@ -60,6 +52,19 @@ class OpenRouterProvider(OpenAIChatProvider):
             isinstance(code, int)
             and code == 400
             and reasoning_control_rejected(error_body, ("reasoning",))
+        )
+
+
+class OpenRouterProvider(OpenAIChatProvider):
+    """OpenRouter provider using the OpenAI-compatible Chat Completions API."""
+
+    def __init__(
+        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+    ):
+        super().__init__(
+            config,
+            behavior=OpenRouterChatBehavior(_PROFILE),
+            admission=admission,
         )
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:

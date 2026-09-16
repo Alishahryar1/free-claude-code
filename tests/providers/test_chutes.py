@@ -66,7 +66,7 @@ def test_preserves_upstream_reasoning_default(
         }
     )
 
-    body = chutes_provider._build_request_body(request, reasoning=reasoning)
+    body = chutes_provider._chat._build_request_body(request, reasoning=reasoning)
 
     assert "reasoning_effort" not in body
     assert "reasoning" not in body
@@ -108,7 +108,7 @@ def test_does_not_replay_reasoning_but_preserves_tool_history(
         }
     )
 
-    body = chutes_provider._build_request_body(
+    body = chutes_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )

@@ -10,7 +10,7 @@ import pytest
 from copilot import CopilotClient, CopilotSession
 from copilot.rpc import Model, PermissionDecisionReject, ProviderEndpoint
 
-from free_claude_code.providers.github_copilot import sdk
+from free_claude_code.providers.github_copilot import native_cli, sdk
 from free_claude_code.providers.github_copilot.types import (
     CopilotEgress,
     CopilotUnavailable,
@@ -46,7 +46,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 def test_profile_environment_uses_native_account_without_token_or_byok_overrides() -> (
     None
 ):
-    assert sdk.profile_environment(
+    assert native_cli.profile_environment(
         {
             "Path": "bin",
             "HOME": "home",
@@ -690,10 +690,10 @@ async def test_cli_version_accepts_actual_pinned_cli_output(
     )
     launch = AsyncMock(return_value=process)
     locate = MagicMock(return_value="verified-copilot")
-    monkeypatch.setattr(sdk.shutil, "which", locate)
+    monkeypatch.setattr(native_cli.shutil, "which", locate)
     monkeypatch.setattr(sdk.asyncio, "create_subprocess_exec", launch)
     env = {"PATH": "native-path"}
-    assert await sdk.verified_cli_path(env) == "verified-copilot"
+    assert await native_cli.verified_cli_path(env) == "verified-copilot"
     locate.assert_called_once_with("copilot", path="native-path")
     assert launch.call_args.args == ("verified-copilot", "--version")
     assert launch.call_args.kwargs["env"] == env
@@ -719,14 +719,14 @@ async def test_cli_version_rejects_unpinned_or_failed_cli_output(
     process.communicate = AsyncMock(
         return_value=(output.encode(), b"private diagnostic")
     )
-    monkeypatch.setattr(sdk.shutil, "which", MagicMock(return_value="copilot"))
+    monkeypatch.setattr(native_cli.shutil, "which", MagicMock(return_value="copilot"))
     monkeypatch.setattr(
         sdk.asyncio, "create_subprocess_exec", AsyncMock(return_value=process)
     )
     with pytest.raises(
         CopilotUnavailable, match="requires GitHub Copilot CLI"
     ) as error:
-        await sdk.verified_cli_path({})
+        await native_cli.verified_cli_path({})
     assert "private diagnostic" not in str(error.value)
 
 
@@ -735,10 +735,10 @@ async def test_missing_cli_does_not_spawn_process(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     launch = AsyncMock()
-    monkeypatch.setattr(sdk.shutil, "which", MagicMock(return_value=None))
+    monkeypatch.setattr(native_cli.shutil, "which", MagicMock(return_value=None))
     monkeypatch.setattr(sdk.asyncio, "create_subprocess_exec", launch)
     with pytest.raises(CopilotUnavailable, match="Install GitHub Copilot CLI"):
-        await sdk.verified_cli_path({})
+        await native_cli.verified_cli_path({})
     launch.assert_not_awaited()
 
 
@@ -760,11 +760,11 @@ async def test_cancelled_cli_version_probe_drains_process_under_repeated_cancell
         return b"", b""
 
     process.communicate = AsyncMock(side_effect=communicate)
-    monkeypatch.setattr(sdk.shutil, "which", MagicMock(return_value="copilot"))
+    monkeypatch.setattr(native_cli.shutil, "which", MagicMock(return_value="copilot"))
     monkeypatch.setattr(
         sdk.asyncio, "create_subprocess_exec", AsyncMock(return_value=process)
     )
-    task = asyncio.create_task(sdk.verified_cli_path({}))
+    task = asyncio.create_task(native_cli.verified_cli_path({}))
     await started.wait()
     task.cancel()
     await reaping.wait()

@@ -270,7 +270,7 @@ async def test_chat_upstream_accepts_both_ingress_protocols_directly() -> None:
         base_url="https://provider.invalid/v1",
     )
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         return_value=client,
     ):
         provider = OpenAIChatProvider(
@@ -411,7 +411,7 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
         base_url="https://provider.invalid/v1",
     )
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         return_value=chat_client,
     ):
         chat_provider = OpenAIChatProvider(

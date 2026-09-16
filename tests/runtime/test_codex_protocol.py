@@ -77,6 +77,49 @@ def notification(protocol, method, **extra):
     )
 
 
+def test_context_usage_projects_the_latest_active_context_not_cumulative_usage():
+    event = notification(
+        CodexProtocol("generation"),
+        "thread/tokenUsage/updated",
+        tokenUsage={
+            "total": {"totalTokens": 98_765},
+            "last": {"totalTokens": 12_438},
+            "modelContextWindow": 95_000,
+        },
+    )
+
+    assert event is not None
+    assert event.kind == "context_usage"
+    assert event.context_used_tokens == 12_438
+    assert event.turn_id == "turn"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, True, False, -1, 1.5, "12", [], {}],
+)
+def test_context_usage_ignores_invalid_active_context_totals(value):
+    assert (
+        notification(
+            CodexProtocol("generation"),
+            "thread/tokenUsage/updated",
+            tokenUsage={"total": {"totalTokens": 20}, "last": {"totalTokens": value}},
+        )
+        is None
+    )
+
+
+def test_context_usage_accepts_an_empty_active_context():
+    event = notification(
+        CodexProtocol("generation"),
+        "thread/tokenUsage/updated",
+        tokenUsage={"total": {"totalTokens": 0}, "last": {"totalTokens": 0}},
+    )
+
+    assert event is not None
+    assert event.context_used_tokens == 0
+
+
 def test_reasoning_keeps_summary_and_content_indices_and_original_completion():
     protocol = CodexProtocol("generation")
     notification(

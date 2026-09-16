@@ -101,6 +101,8 @@ class ProviderDescriptor:
 
     provider_id: str
     display_name: str
+    website_url: str
+    logo_filename: str
     auth_kind: ProviderAuthKind = ProviderAuthKind.CONFIGURATION
     local: bool = False
     credential_env: str | None = None
@@ -127,6 +129,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "nvidia_nim": ProviderDescriptor(
         provider_id="nvidia_nim",
         display_name="NVIDIA NIM",
+        website_url="https://build.nvidia.com/",
+        logo_filename="nvidia-color.svg",
         credential_env="NVIDIA_NIM_API_KEY",
         credential_url="https://build.nvidia.com/settings/api-keys",
         credential_attr="nvidia_nim_api_key",
@@ -136,6 +140,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "open_router": ProviderDescriptor(
         provider_id="open_router",
         display_name="OpenRouter",
+        website_url="https://openrouter.ai/",
+        logo_filename="openrouter.svg",
         credential_env="OPENROUTER_API_KEY",
         credential_url="https://openrouter.ai/keys",
         credential_attr="open_router_api_key",
@@ -145,6 +151,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "groq": ProviderDescriptor(
         provider_id="groq",
         display_name="Groq",
+        website_url="https://groq.com/",
+        logo_filename="groq.svg",
         credential_env="GROQ_API_KEY",
         credential_url="https://console.groq.com/keys",
         credential_attr="groq_api_key",
@@ -154,6 +162,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "cline_pass": ProviderDescriptor(
         provider_id="cline_pass",
         display_name="ClinePass",
+        website_url="https://cline.bot/",
+        logo_filename="cline.svg",
         credential_env="CLINE_API_KEY",
         credential_url="https://app.cline.bot",
         credential_attr="cline_api_key",
@@ -163,6 +173,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "openai": ProviderDescriptor(
         provider_id="openai",
         display_name="OpenAI / ChatGPT",
+        website_url="https://openai.com/",
+        logo_filename="openai.svg",
         auth_kind=ProviderAuthKind.CONNECTED_ACCOUNT,
         default_base_url=OPENAI_CODEX_DEFAULT_BASE,
         proxy_attr="openai_proxy",
@@ -170,12 +182,16 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "github_copilot": ProviderDescriptor(
         provider_id="github_copilot",
         display_name="GitHub Copilot",
+        website_url="https://github.com/features/copilot",
+        logo_filename="githubcopilot.svg",
         auth_kind=ProviderAuthKind.CONNECTED_ACCOUNT,
         default_base_url="https://api.githubcopilot.com",
     ),
     "xai": ProviderDescriptor(
         provider_id="xai",
         display_name="xAI (Grok)",
+        website_url="https://x.ai/",
+        logo_filename="xai.svg",
         credential_env="XAI_API_KEY",
         credential_url="https://console.x.ai/team/default/api-keys",
         credential_attr="xai_api_key",
@@ -185,6 +201,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "qwencloud": ProviderDescriptor(
         provider_id="qwencloud",
         display_name="QwenCloud Token Plan",
+        website_url="https://qwencloud.com/",
+        logo_filename="qwen-color.svg",
         credential_env="QWENCLOUD_API_KEY",
         credential_url="https://home.qwencloud.com/api-keys",
         credential_attr="qwencloud_api_key",
@@ -194,6 +212,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "qwencloud_coding": ProviderDescriptor(
         provider_id="qwencloud_coding",
         display_name="QwenCloud Coding Plan",
+        website_url="https://qwencloud.com/",
+        logo_filename="qwen-color.svg",
         credential_env="QWENCLOUD_CODING_API_KEY",
         credential_url="https://home.qwencloud.com/api-keys",
         credential_attr="qwencloud_coding_api_key",
@@ -203,6 +223,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "together": ProviderDescriptor(
         provider_id="together",
         display_name="Together AI",
+        website_url="https://www.together.ai/",
+        logo_filename="together-color.svg",
         credential_env="TOGETHER_API_KEY",
         credential_url="https://api.together.ai/settings/api-keys",
         credential_attr="together_api_key",
@@ -212,6 +234,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "deepinfra": ProviderDescriptor(
         provider_id="deepinfra",
         display_name="DeepInfra",
+        website_url="https://deepinfra.com/",
+        logo_filename="deepinfra-color.svg",
         credential_env="DEEPINFRA_API_KEY",
         credential_url="https://deepinfra.com/dash/api_keys",
         credential_attr="deepinfra_api_key",
@@ -221,6 +245,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "siliconflow": ProviderDescriptor(
         provider_id="siliconflow",
         display_name="SiliconFlow",
+        website_url="https://siliconflow.com/",
+        logo_filename="siliconcloud-color.svg",
         credential_env="SILICONFLOW_API_KEY",
         credential_url="https://cloud.siliconflow.com/account/ak",
         credential_attr="siliconflow_api_key",
@@ -230,6 +256,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "nebius": ProviderDescriptor(
         provider_id="nebius",
         display_name="Nebius Token Factory",
+        website_url="https://tokenfactory.nebius.com/",
+        logo_filename="nebius.svg",
         credential_env="NEBIUS_API_KEY",
         credential_url="https://tokenfactory.nebius.com/project/api-keys",
         credential_attr="nebius_api_key",
@@ -239,6 +267,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "chutes": ProviderDescriptor(
         provider_id="chutes",
         display_name="Chutes",
+        website_url="https://chutes.ai/",
+        logo_filename="chutes.png",
         credential_env="CHUTES_API_KEY",
         credential_url="https://chutes.ai/docs/getting-started/authentication",
         credential_attr="chutes_api_key",
@@ -248,6 +278,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "featherless": ProviderDescriptor(
         provider_id="featherless",
         display_name="Featherless AI",
+        website_url="https://featherless.ai/",
+        logo_filename="featherless-color.svg",
         credential_env="FEATHERLESS_API_KEY",
         credential_url="https://featherless.ai/account/api-keys",
         credential_attr="featherless_api_key",
@@ -257,6 +289,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "agnes": ProviderDescriptor(
         provider_id="agnes",
         display_name="Agnes AI",
+        website_url="https://agnes-ai.com/",
+        logo_filename="agnesai.svg",
         credential_env="AGNES_API_KEY",
         credential_url="https://agnes-ai.com/",
         credential_attr="agnes_api_key",
@@ -266,6 +300,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "zenmux": ProviderDescriptor(
         provider_id="zenmux",
         display_name="ZenMux",
+        website_url="https://zenmux.ai/",
+        logo_filename="zenmux.svg",
         credential_env="ZENMUX_API_KEY",
         credential_url="https://zenmux.ai/platform/pay-as-you-go",
         credential_attr="zenmux_api_key",
@@ -275,6 +311,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "wandb": ProviderDescriptor(
         provider_id="wandb",
         display_name="W&B Inference",
+        website_url="https://wandb.ai/site/inference/",
+        logo_filename="wandb.png",
         credential_env="WANDB_API_KEY",
         credential_url="https://wandb.ai/settings",
         credential_attr="wandb_api_key",
@@ -284,6 +322,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "azure_openai": ProviderDescriptor(
         provider_id="azure_openai",
         display_name="Azure OpenAI",
+        website_url="https://azure.microsoft.com/en-us/products/ai-services/openai-service/",
+        logo_filename="azure-color.svg",
         credential_env="AZURE_OPENAI_API_KEY",
         credential_url="https://ai.azure.com/",
         credential_attr="azure_openai_api_key",
@@ -297,6 +337,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "gemini": ProviderDescriptor(
         provider_id="gemini",
         display_name="Gemini",
+        website_url="https://ai.google.dev/",
+        logo_filename="gemini-color.svg",
         credential_env="GEMINI_API_KEY",
         credential_url="https://aistudio.google.com/apikey",
         credential_attr="gemini_api_key",
@@ -306,6 +348,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "vertex": ProviderDescriptor(
         provider_id="vertex",
         display_name="Google Vertex AI",
+        website_url="https://cloud.google.com/vertex-ai",
+        logo_filename="vertexai-color.svg",
         credential_url=(
             "https://cloud.google.com/docs/authentication/"
             "set-up-adc-local-dev-environment"
@@ -317,6 +361,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "deepseek": ProviderDescriptor(
         provider_id="deepseek",
         display_name="DeepSeek",
+        website_url="https://www.deepseek.com/",
+        logo_filename="deepseek-color.svg",
         credential_env="DEEPSEEK_API_KEY",
         credential_url="https://platform.deepseek.com/api_keys",
         credential_attr="deepseek_api_key",
@@ -325,6 +371,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "mistral": ProviderDescriptor(
         provider_id="mistral",
         display_name="Mistral",
+        website_url="https://mistral.ai/",
+        logo_filename="mistral-color.svg",
         credential_env="MISTRAL_API_KEY",
         credential_url="https://console.mistral.ai/",
         credential_attr="mistral_api_key",
@@ -334,6 +382,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "mistral_codestral": ProviderDescriptor(
         provider_id="mistral_codestral",
         display_name="Mistral Codestral",
+        website_url="https://mistral.ai/",
+        logo_filename="mistral-color.svg",
         credential_env="CODESTRAL_API_KEY",
         credential_url="https://console.mistral.ai/",
         credential_attr="codestral_api_key",
@@ -343,6 +393,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "opencode_zen": ProviderDescriptor(
         provider_id="opencode_zen",
         display_name="OpenCode Zen",
+        website_url="https://opencode.ai/zen",
+        logo_filename="opencode.svg",
         credential_env="OPENCODE_API_KEY",
         credential_url="https://opencode.ai/auth",
         credential_attr="opencode_api_key",
@@ -352,6 +404,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "opencode_go": ProviderDescriptor(
         provider_id="opencode_go",
         display_name="OpenCode Go",
+        website_url="https://opencode.ai/go",
+        logo_filename="opencode.svg",
         credential_env="OPENCODE_API_KEY",
         credential_url="https://opencode.ai/auth",
         credential_attr="opencode_api_key",
@@ -361,6 +415,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "vercel": ProviderDescriptor(
         provider_id="vercel",
         display_name="Vercel AI Gateway",
+        website_url="https://vercel.com/ai-gateway",
+        logo_filename="vercel.svg",
         credential_env="AI_GATEWAY_API_KEY",
         credential_url="https://vercel.com/docs/ai-gateway",
         credential_attr="vercel_ai_gateway_api_key",
@@ -370,6 +426,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "bedrock": ProviderDescriptor(
         provider_id="bedrock",
         display_name="Amazon Bedrock",
+        website_url="https://aws.amazon.com/bedrock/",
+        logo_filename="bedrock-color.svg",
         credential_env="AWS_BEARER_TOKEN_BEDROCK",
         credential_url="https://console.aws.amazon.com/bedrock/",
         credential_attr="bedrock_api_key",
@@ -380,6 +438,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "huggingface": ProviderDescriptor(
         provider_id="huggingface",
         display_name="Hugging Face",
+        website_url="https://huggingface.co/",
+        logo_filename="huggingface-color.svg",
         credential_env="HUGGINGFACE_API_KEY",
         credential_url="https://huggingface.co/settings/tokens",
         credential_attr="huggingface_api_key",
@@ -389,6 +449,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "cohere": ProviderDescriptor(
         provider_id="cohere",
         display_name="Cohere",
+        website_url="https://cohere.com/",
+        logo_filename="cohere-color.svg",
         credential_env="COHERE_API_KEY",
         credential_url="https://dashboard.cohere.com/api-keys",
         credential_attr="cohere_api_key",
@@ -398,6 +460,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "wafer": ProviderDescriptor(
         provider_id="wafer",
         display_name="Wafer",
+        website_url="https://www.wafer.ai/",
+        logo_filename="wafer.png",
         credential_env="WAFER_API_KEY",
         credential_url="https://www.wafer.ai/pass",
         credential_attr="wafer_api_key",
@@ -407,6 +471,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "kimi": ProviderDescriptor(
         provider_id="kimi",
         display_name="Kimi",
+        website_url="https://www.kimi.com/",
+        logo_filename="kimi-color.svg",
         credential_env="KIMI_API_KEY",
         credential_url="https://platform.moonshot.cn/console/api-keys",
         credential_attr="kimi_api_key",
@@ -416,6 +482,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "kimi_code": ProviderDescriptor(
         provider_id="kimi_code",
         display_name="Kimi Code",
+        website_url="https://www.kimi.com/code",
+        logo_filename="kimi-color.svg",
         credential_env="KIMI_CODE_API_KEY",
         credential_url="https://www.kimi.com/code/console",
         credential_attr="kimi_code_api_key",
@@ -425,6 +493,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "kilo": ProviderDescriptor(
         provider_id="kilo",
         display_name="Kilo.ai",
+        website_url="https://kilo.ai/",
+        logo_filename="kilocode.svg",
         credential_env="KILO_API_KEY",
         credential_url="https://app.kilo.ai",
         credential_attr="kilo_api_key",
@@ -434,6 +504,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "minimax": ProviderDescriptor(
         provider_id="minimax",
         display_name="MiniMax",
+        website_url="https://www.minimax.io/",
+        logo_filename="minimax-color.svg",
         credential_env="MINIMAX_API_KEY",
         credential_url="https://platform.minimax.io/user-center/basic-information/interface-key",
         credential_attr="minimax_api_key",
@@ -443,6 +515,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "cerebras": ProviderDescriptor(
         provider_id="cerebras",
         display_name="Cerebras",
+        website_url="https://www.cerebras.ai/",
+        logo_filename="cerebras-color.svg",
         credential_env="CEREBRAS_API_KEY",
         credential_url="https://cloud.cerebras.ai",
         credential_attr="cerebras_api_key",
@@ -452,6 +526,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "sambanova": ProviderDescriptor(
         provider_id="sambanova",
         display_name="SambaNova",
+        website_url="https://sambanova.ai/",
+        logo_filename="sambanova-color.svg",
         credential_env="SAMBANOVA_API_KEY",
         credential_url="https://cloud.sambanova.ai/apis",
         credential_attr="sambanova_api_key",
@@ -461,6 +537,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "fireworks": ProviderDescriptor(
         provider_id="fireworks",
         display_name="Fireworks",
+        website_url="https://fireworks.ai/",
+        logo_filename="fireworks-color.svg",
         credential_env="FIREWORKS_API_KEY",
         credential_url="https://fireworks.ai/account/api-keys",
         credential_attr="fireworks_api_key",
@@ -470,6 +548,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "novita": ProviderDescriptor(
         provider_id="novita",
         display_name="Novita AI",
+        website_url="https://novita.ai/",
+        logo_filename="novita-color.svg",
         credential_env="NOVITA_API_KEY",
         credential_url="https://novita.ai/settings/key-management",
         credential_attr="novita_api_key",
@@ -479,6 +559,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "cloudflare": ProviderDescriptor(
         provider_id="cloudflare",
         display_name="Cloudflare",
+        website_url="https://www.cloudflare.com/developer-platform/products/workers-ai/",
+        logo_filename="cloudflare-color.svg",
         credential_env="CLOUDFLARE_API_TOKEN",
         credential_url="https://dash.cloudflare.com/profile/api-tokens",
         credential_attr="cloudflare_api_token",
@@ -492,6 +574,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "zai": ProviderDescriptor(
         provider_id="zai",
         display_name="Z.ai Coding Plan",
+        website_url="https://z.ai/",
+        logo_filename="zai.svg",
         credential_env="ZAI_API_KEY",
         credential_url="https://z.ai/manage-apikey/apikey-list",
         credential_attr="zai_api_key",
@@ -501,6 +585,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "zai_api": ProviderDescriptor(
         provider_id="zai_api",
         display_name="Z.ai API",
+        website_url="https://z.ai/",
+        logo_filename="zai.svg",
         credential_env="ZAI_API_KEY",
         credential_url="https://z.ai/manage-apikey/apikey-list",
         credential_attr="zai_api_key",
@@ -510,6 +596,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "tokenrouter": ProviderDescriptor(
         provider_id="tokenrouter",
         display_name="TokenRouter",
+        website_url="https://www.tokenrouter.com/",
+        logo_filename="tokenrouter.png",
         credential_env="TOKENROUTER_API_KEY",
         credential_url="https://www.tokenrouter.com/",
         credential_attr="tokenrouter_api_key",
@@ -520,6 +608,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "nararoute": ProviderDescriptor(
         provider_id="nararoute",
         display_name="NaraRoute",
+        website_url="https://router.bynara.id/",
+        logo_filename="nararoute.png",
         credential_env="NARAROUTE_API_KEY",
         credential_url="https://router.bynara.id/keys",
         credential_attr="nararoute_api_key",
@@ -530,6 +620,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "poolside": ProviderDescriptor(
         provider_id="poolside",
         display_name="Poolside AI",
+        website_url="https://poolside.ai/",
+        logo_filename="poolside-color.svg",
         credential_env="POOLSIDE_API_KEY",
         credential_url="https://platform.poolside.ai/",
         credential_attr="poolside_api_key",
@@ -539,6 +631,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "llm7": ProviderDescriptor(
         provider_id="llm7",
         display_name="LLM7.io",
+        website_url="https://llm7.io/",
+        logo_filename="llm7.png",
         credential_env="LLM7_API_KEY",
         credential_url="https://dash.llm7.io/",
         credential_attr="llm7_api_key",
@@ -548,6 +642,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",
         display_name="Ollama Cloud",
+        website_url="https://ollama.com/",
+        logo_filename="ollama.svg",
         credential_env="OLLAMA_API_KEY",
         credential_url="https://ollama.com/settings/keys",
         credential_attr="ollama_api_key",
@@ -557,6 +653,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "lmstudio": ProviderDescriptor(
         provider_id="lmstudio",
         display_name="LM Studio",
+        website_url="https://lmstudio.ai/",
+        logo_filename="lmstudio.svg",
         static_credential="lm-studio",
         default_base_url=LMSTUDIO_DEFAULT_BASE,
         base_url_attr="lm_studio_base_url",
@@ -565,7 +663,9 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "llamacpp": ProviderDescriptor(
         provider_id="llamacpp",
-        display_name="llama.cpp",
+        display_name="LLaMA.cpp",
+        website_url="https://github.com/ggml-org/llama.cpp",
+        logo_filename="llamacpp.svg",
         static_credential="llamacpp",
         default_base_url=LLAMACPP_DEFAULT_BASE,
         base_url_attr="llamacpp_base_url",
@@ -575,6 +675,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "ollama": ProviderDescriptor(
         provider_id="ollama",
         display_name="Ollama",
+        website_url="https://ollama.com/",
+        logo_filename="ollama.svg",
         static_credential="ollama",
         default_base_url=OLLAMA_DEFAULT_BASE,
         base_url_attr="ollama_base_url",

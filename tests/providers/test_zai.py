@@ -60,7 +60,9 @@ def test_build_request_body_openai_chat(zai_provider):
         }
     )
 
-    body = zai_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = zai_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body["model"] == "glm-5.2"
     assert body["max_tokens"] == 100
@@ -77,7 +79,9 @@ def test_build_request_body_default_max_tokens(zai_provider):
         messages=[Message(role="user", content="x")],
     )
 
-    body = zai_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = zai_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
@@ -92,7 +96,9 @@ def test_build_request_body_rejects_caller_extra_body(zai_provider):
     )
 
     with pytest.raises(InvalidRequestError, match=r"Z\.ai Chat Completions"):
-        zai_provider._build_request_body(request, reasoning=reasoning_for(request))
+        zai_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
 
 
 def test_build_request_body_disables_zai_thinking(zai_provider):
@@ -104,7 +110,9 @@ def test_build_request_body_disables_zai_thinking(zai_provider):
         }
     )
 
-    body = zai_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = zai_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body["extra_body"]["thinking"] == {"type": "disabled"}
 
@@ -123,7 +131,9 @@ def test_build_request_body_replays_prior_reasoning_content(zai_provider):
         }
     )
 
-    body = zai_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = zai_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body["messages"][0]["reasoning_content"] == "prior"
     assert "extra_body" not in body

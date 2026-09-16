@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from copy import deepcopy
 
 import httpx
 import httpx2
@@ -13,10 +14,11 @@ from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
-from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
-from free_claude_code.providers.endpoint import HttpEndpoint
+from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
+    NamedEffortReasoning,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
@@ -351,3 +353,78 @@ async def test_stream_authentication_refreshes_before_commit(
             )
         )
     assert calls == 2 and context.calls == [False, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("correction", ["history", "reasoning"])
+async def test_stream_authentication_precedes_overlapping_request_correction(
+    correction: str,
+) -> None:
+    bodies = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        if len(bodies) > 1:
+            return _response(request)
+        failure = {
+            "type": "authentication_error"
+            if correction == "history"
+            else "invalid_request_error",
+            "code": "invalid_api_key",
+            "message": "invalid signature in thinking block"
+            if correction == "history"
+            else "reasoning_effort is unsupported",
+        }
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps({'error': failure})}\n\n",
+        )
+
+    request = MessagesRequest.model_validate(
+        {
+            "model": "upstream",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "redacted_thinking", "data": "opaque-original"},
+                        {"type": "text", "text": "17"},
+                    ],
+                },
+                {"role": "user", "content": "continue"},
+            ],
+        }
+    )
+    original = deepcopy(request.model_dump())
+    pool = httpx2.MockTransport(handler)
+    async with AsyncOpenAI(
+        api_key="base", http_client=httpx2.AsyncClient(transport=pool), max_retries=0
+    ) as client:
+        provider = OpenAIChatProvider(
+            make_provider_config(None, "https://original.invalid"),
+            profile=OpenAIChatProfile(
+                OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.REASONING_CONTENT),
+                NamedEffortReasoning((), disabled_value="none"),
+                structured_reasoning_details=True,
+            ),
+            admission=immediate_admission(max_attempts=3),
+            client=client,
+            endpoint_transport=pool,
+        )
+        context = Context("a")
+        try:
+            await _consume(
+                provider.stream_messages(
+                    request,
+                    endpoint_context=context,
+                    reasoning=ReasoningPolicy.prefer_off(),
+                )
+            )
+        finally:
+            await provider.cleanup()
+    assert context.calls == [False, True]
+    assert len(bodies) == 2 and bodies[1] == bodies[0]
+    assert "opaque-original" in json.dumps(bodies[0])
+    assert bodies[0]["reasoning_effort"] == "none"
+    assert request.model_dump() == original

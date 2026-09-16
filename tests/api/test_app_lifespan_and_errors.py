@@ -53,11 +53,6 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner():
 
     with (
         patch("builtins.print") as printed,
-        patch.object(
-            manager,
-            "warm_referenced_model_cache",
-            new=AsyncMock(),
-        ) as warm_cache,
         patch.object(manager, "start_model_list_refresh") as start_refresh,
         patch.object(manager, "close", new=AsyncMock()),
         patch(
@@ -67,10 +62,11 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner():
         patch.object(logging, "getLogger", return_value=uvicorn_logger) as get_logger,
     ):
         await runtime.start()
+        uvicorn_logger.info.assert_not_called()
+        runtime.http_started()
         await runtime.close()
 
     printed.assert_not_called()
-    warm_cache.assert_awaited_once()
     start_refresh.assert_called_once()
     get_logger.assert_any_call("uvicorn.error")
     uvicorn_logger.info.assert_called_once_with(
@@ -151,7 +147,7 @@ def test_general_exception_default_log_excludes_exception_message():
 
 
 @pytest.mark.asyncio
-async def test_runtime_startup_warms_catalog_before_background_refresh():
+async def test_runtime_startup_schedules_catalog_without_a_network_barrier():
     settings = _settings(messaging_platform="none")
     manager = ProviderRuntimeManager(settings)
     runtime = ApplicationRuntime(
@@ -159,18 +155,10 @@ async def test_runtime_startup_warms_catalog_before_background_refresh():
     )
     events: list[str] = []
 
-    async def warm_cache() -> None:
-        events.append("warm")
-
     def start_refresh() -> None:
         events.append("background")
 
     with (
-        patch.object(
-            manager,
-            "warm_referenced_model_cache",
-            side_effect=warm_cache,
-        ) as warm,
         patch.object(
             manager,
             "start_model_list_refresh",
@@ -185,9 +173,8 @@ async def test_runtime_startup_warms_catalog_before_background_refresh():
         await runtime.start()
         await runtime.close()
 
-    warm.assert_awaited_once()
     refresh.assert_called_once()
-    assert events == ["warm", "background"]
+    assert events == ["background"]
 
 
 def test_startup_failure_message_preserves_existing_concise_contract():
@@ -347,7 +334,8 @@ def test_bootstrap_wires_the_codex_catalog_publisher() -> None:
     )
 
     publisher_type.assert_called_once_with()
-    publisher.publish.assert_called_once_with(manager)
+    publisher.publish.assert_not_called()
+    assert manager._model_catalog_publisher is publisher
 
 
 def test_bootstrap_honors_process_log_file_override(monkeypatch, tmp_path):
@@ -360,11 +348,12 @@ def test_bootstrap_honors_process_log_file_override(monkeypatch, tmp_path):
     assert configure.call_args.args[0] == log_path
 
 
-def test_bootstrap_constructs_fresh_runtime_owned_transcribers() -> None:
+@pytest.mark.asyncio
+async def test_bootstrap_constructs_fresh_runtime_owned_transcribers() -> None:
     settings = _settings(voice_note_enabled=True, whisper_device="cpu")
 
-    first = _create_transcriber(settings)
-    second = _create_transcriber(settings)
+    first = await _create_transcriber(settings)
+    second = await _create_transcriber(settings)
 
     assert isinstance(first, TranscriptionService)
     assert isinstance(second, TranscriptionService)
@@ -372,7 +361,9 @@ def test_bootstrap_constructs_fresh_runtime_owned_transcribers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_constructs_isolated_runtime_resource_graphs() -> None:
+async def test_bootstrap_constructs_isolated_runtime_resource_graphs(
+    monkeypatch,
+) -> None:
     settings = _settings(
         model="nvidia_nim/test-model",
         nvidia_nim_api_key="test-key",
@@ -384,16 +375,27 @@ async def test_bootstrap_constructs_isolated_runtime_resource_graphs() -> None:
         first = build_asgi_app(settings)
         second = build_asgi_app(settings)
 
+    monkeypatch.setattr(
+        NvidiaNimProvider, "list_model_infos", AsyncMock(return_value=frozenset())
+    )
     first_lease = await first.runtime.provider_manager.acquire()
     second_lease = await second.runtime.provider_manager.acquire()
     try:
-        first_provider = first_lease.resolve_provider("nvidia_nim")
-        second_provider = second_lease.resolve_provider("nvidia_nim")
+        first_provider = await first_lease.resolve_provider("nvidia_nim")
+        second_provider = await second_lease.resolve_provider("nvidia_nim")
 
         assert isinstance(first_provider, NvidiaNimProvider)
         assert isinstance(second_provider, NvidiaNimProvider)
         assert first_provider._admission is not second_provider._admission
-        assert first.runtime._transcriber is not second.runtime._transcriber
+        assert first.runtime._transcriber is second.runtime._transcriber is None
+        assert first.runtime._transcriber_factory is not None
+        assert second.runtime._transcriber_factory is not None
+        first_voice = await first.runtime._transcriber_factory(settings)
+        second_voice = await second.runtime._transcriber_factory(settings)
+        assert first_voice is not None and second_voice is not None
+        assert first_voice is not second_voice
+        await first_voice.close()
+        await second_voice.close()
     finally:
         await first_lease.release()
         await second_lease.release()
@@ -401,7 +403,8 @@ async def test_bootstrap_constructs_isolated_runtime_resource_graphs() -> None:
         await second.runtime.close()
 
 
-def test_bootstrap_selects_nvidia_transcriber_without_loading_riva() -> None:
+@pytest.mark.asyncio
+async def test_bootstrap_selects_nvidia_transcriber_without_loading_riva() -> None:
     settings = _settings(
         voice_note_enabled=True,
         whisper_device="nvidia_nim",
@@ -409,8 +412,9 @@ def test_bootstrap_selects_nvidia_transcriber_without_loading_riva() -> None:
         nvidia_nim_api_key="nvapi-test",
     )
 
-    assert isinstance(_create_transcriber(settings), NvidiaNimTranscriber)
+    assert isinstance((await _create_transcriber(settings)), NvidiaNimTranscriber)
 
 
-def test_bootstrap_disables_transcription_as_one_owned_resource() -> None:
-    assert _create_transcriber(_settings(voice_note_enabled=False)) is None
+@pytest.mark.asyncio
+async def test_bootstrap_disables_transcription_as_one_owned_resource() -> None:
+    assert (await _create_transcriber(_settings(voice_note_enabled=False))) is None

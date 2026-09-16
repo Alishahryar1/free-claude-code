@@ -126,6 +126,7 @@ class FakeHarness:
             "activePermissionProfile": {"id": ":workspace"},
         }
         self.configurations = {self.model: "capabilities-1"}
+        self.context_windows: dict[str, int | None] = {self.model: None}
         self.efforts = ("off", "low", "medium", "high", "xhigh", "max")
         self.default_effort = "medium"
         self.creation_gate = asyncio.Event()
@@ -165,12 +166,13 @@ class FakeHarness:
                     model_name=split_provider_model_ref(model)[1],
                     reasoning_efforts=self.efforts,
                     default_reasoning_effort=self.default_effort,
+                    context_window_tokens=self.context_windows.get(model),
                 )
                 for model in self.configurations
             ),
         )
 
-    def prepare(self, model, reasoning_effort, mode):
+    async def prepare(self, model, reasoning_effort, mode):
         if model not in self.configurations:
             raise CodeValidationError("This model is unavailable.")
         if reasoning_effort is not None and reasoning_effort not in self.efforts:
@@ -185,7 +187,7 @@ class FakeHarness:
         )
 
     async def open_history(self, cwd: str, sink: EventSink):
-        return await self.prepare(self.model, None, "config").open(cwd, sink)
+        return await (await self.prepare(self.model, None, "config")).open(cwd, sink)
 
     async def wait_inputs(self, count: int):
         while sum(len(connection.inputs) for connection in self.connections) < count:
@@ -326,6 +328,24 @@ class FakeConnection:
         await self.sink(
             HarnessEvent(
                 self.generation, self.thread_id, "item", turn_id=turn_id, item=item
+            )
+        )
+
+    async def context_usage(
+        self,
+        turn_id: str,
+        used_tokens: int,
+        *,
+        thread_id: str | None = None,
+        generation: str | None = None,
+    ):
+        await self.sink(
+            HarnessEvent(
+                generation or self.generation,
+                self.thread_id if thread_id is None else thread_id,
+                "context_usage",
+                turn_id=turn_id,
+                context_used_tokens=used_tokens,
             )
         )
 

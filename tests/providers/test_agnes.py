@@ -88,7 +88,7 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
         ],
     )
 
-    body = agnes_provider._build_request_body(
+    body = agnes_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -117,7 +117,7 @@ def test_build_request_body_encodes_documented_thinking_control(
 ) -> None:
     request = _request()
 
-    body = agnes_provider._build_request_body(request, reasoning=reasoning)
+    body = agnes_provider._chat._build_request_body(request, reasoning=reasoning)
 
     assert body["extra_body"] == {"chat_template_kwargs": {"enable_thinking": enabled}}
 
@@ -127,7 +127,7 @@ def test_build_request_body_omits_thinking_control_for_provider_default(
 ) -> None:
     request = _request()
 
-    body = agnes_provider._build_request_body(
+    body = agnes_provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -152,7 +152,7 @@ def test_build_request_body_replays_reasoning_in_content_not_undocumented_field(
         ]
     )
 
-    body = agnes_provider._build_request_body(
+    body = agnes_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -172,7 +172,7 @@ def test_build_request_body_rejects_caller_reasoning_override(
     request = _request(extra_body={field: "caller-owned"})
 
     with pytest.raises(InvalidRequestError, match="must not override reasoning"):
-        agnes_provider._build_request_body(request, reasoning=REASONING_ON)
+        agnes_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
 
 @pytest.mark.asyncio
@@ -203,7 +203,7 @@ async def test_model_catalog_uses_documented_endpoint_and_auth() -> None:
         return AsyncOpenAI(*args, **kwargs)
 
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         side_effect=build_client,
     ):
         provider = profiled_provider(

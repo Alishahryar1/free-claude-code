@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from collections.abc import Callable, Mapping
 
 import httpx2
@@ -169,9 +170,11 @@ def _sse(*events: Mapping[str, object]) -> str:
 
 def _client(
     handler: Callable[[httpx2.Request], httpx2.Response],
+    *,
+    api_key: str = "test-key",
 ) -> AsyncOpenAI:
     return AsyncOpenAI(
-        api_key="test-key",
+        api_key=api_key,
         base_url="https://provider.invalid/v1",
         max_retries=0,
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
@@ -1138,13 +1141,64 @@ async def test_cancellation_closes_the_sdk_stream() -> None:
 
 
 @pytest.mark.asyncio
-async def test_preflight_rejects_fields_responses_cannot_represent() -> None:
+async def test_startup_rejects_fields_responses_cannot_represent() -> None:
     client = _client(lambda _request: httpx2.Response(500))
     transport = _transport(client)
     request = _request(stop_sequences=["done"])
 
     try:
         with pytest.raises(InvalidRequestError, match="stop_sequences"):
-            transport.preflight_messages(request, reasoning=REASONING_ON)
+            transport.stream_messages(
+                request,
+                input_tokens=0,
+                request_id=None,
+                response_model=request.model,
+                reasoning=REASONING_ON,
+            )
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_claude_artifact_pattern_is_portable_on_the_sdk_wire():
+    captured = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        captured.append(body)
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_sse(_text_delta("ok"), _completed_event()),
+        )
+
+    pattern = r"^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]{1,200}$"
+    request = _request(
+        tools=[
+            {
+                "name": "Artifact",
+                "description": "Test artifact",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "pattern": pattern},
+                        "slug": {"type": "string", "pattern": "^[a-z]+$"},
+                    },
+                },
+            }
+        ]
+    )
+    client = _client(handler)
+    try:
+        await _collect(_transport(client), request)
+    finally:
+        await client.close()
+    assert len(captured) == 1
+    properties = captured[0]["tools"][0]["parameters"]["properties"]
+    assert properties["slug"]["pattern"] == "^[a-z]+$"
+    regex = re.compile(properties["name"]["pattern"])
+    assert regex.fullmatch("demo")
+    assert not regex.fullmatch("bad\U000e0001name")
+    assert request.tools is not None
+    assert request.tools[0].input_schema is not None
+    assert request.tools[0].input_schema["properties"]["name"]["pattern"] == pattern

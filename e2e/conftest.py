@@ -16,7 +16,6 @@ from e2e.code_support import CodeControl
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.cli import codex_integration, vscode
 from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.env_migrations import recognized_env_keys
 from free_claude_code.config.loader import (
@@ -27,6 +26,7 @@ from free_claude_code.config.loader import (
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.harnesses import claude_integration, codex_integration
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
@@ -34,6 +34,7 @@ from free_claude_code.runtime.asgi import RuntimeASGIApp
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.folder_picker import NativeFolderPicker
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.web_tools_support import StubWebToolsClient
 
 
 class _ModelListingProvider(BaseProvider):
@@ -132,9 +133,13 @@ def admin_base_url(
     monkeypatch.setattr(
         codex_integration, "config_path", lambda: tmp_path / ".codex" / "config.toml"
     )
-    monkeypatch.setattr(vscode, "claude_state_path", lambda: tmp_path / ".claude.json")
     monkeypatch.setattr(
-        vscode, "settings_path", lambda: tmp_path / "vscode" / "settings.json"
+        claude_integration, "claude_state_path", lambda: tmp_path / ".claude.json"
+    )
+    monkeypatch.setattr(
+        claude_integration,
+        "settings_path",
+        lambda: tmp_path / "vscode" / "settings.json",
     )
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -208,6 +213,7 @@ def admin_base_url(
                 requests=manager,
                 admin=runtime,
                 tasks=runtime,
+                web_tools=StubWebToolsClient(),
                 code=code_control.service,
             )
         ),

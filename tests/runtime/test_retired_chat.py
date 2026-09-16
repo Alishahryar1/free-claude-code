@@ -4,7 +4,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
 from loguru import logger
@@ -21,9 +20,6 @@ from free_claude_code.runtime.retired_chat import remove_retired_chat_history
 
 @pytest.fixture(autouse=True)
 def _offline_discovery(monkeypatch):
-    monkeypatch.setattr(
-        ProviderRuntimeManager, "warm_referenced_model_cache", AsyncMock()
-    )
     monkeypatch.setattr(
         ProviderRuntimeManager, "start_model_list_refresh", lambda _: None
     )
@@ -55,6 +51,7 @@ async def _start_and_close(runtime=None):
     runtime = runtime or _runtime()
     try:
         await runtime.start()
+        await asyncio.gather(*runtime._startup_tasks)
     finally:
         assert await runtime.close()
 
@@ -270,21 +267,22 @@ async def test_startup_cancellation_waits_for_cleanup_and_lock_release(monkeypat
         return unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", held_unlink)
-    startup = asyncio.create_task(runtime.start())
+    await runtime.start()
+    shutdown = None
     probe = InterprocessFileLock(directory / "chat.lock")
     try:
         assert await asyncio.to_thread(entered.wait, 5)
-        startup.cancel()
+        shutdown = asyncio.create_task(runtime.close())
         await asyncio.sleep(0)
-        assert not startup.done()
+        assert not shutdown.done()
         assert not runtime.is_closed
         assert not probe.acquire()
     finally:
         release.set()
-        await asyncio.gather(startup, return_exceptions=True)
+        await asyncio.gather(*([shutdown] if shutdown else []), return_exceptions=True)
         probe.release()
         await runtime.close()
-    assert startup.cancelled()
+    assert shutdown is not None and shutdown.result() is True
     assert runtime.is_closed
     assert not [path for path in owned if path.exists()]
     try:

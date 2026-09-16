@@ -154,7 +154,7 @@ async def test_cancellation_at_finalization_handoff_prevents_persistence(
         patch(
             "free_claude_code.runtime.application.check_credentials", check_credentials
         ),
-        patch.object(manager, "_refresh_generation_in_background", AsyncMock()),
+        patch.object(manager, "_start_pass"),
         patch.object(store, "commit", wraps=store.commit) as commit,
     ):
         apply = asyncio.create_task(run_apply())

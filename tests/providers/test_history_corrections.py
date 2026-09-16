@@ -6,7 +6,7 @@ import httpx2
 import pytest
 from openai import BadRequestError
 
-from free_claude_code.providers.endpoint import HttpEndpoint
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.history_replay import history_retry_body, replay_origin
 
 

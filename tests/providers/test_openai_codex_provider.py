@@ -440,17 +440,14 @@ async def test_provider_accepts_claude_client_controls_before_upstream_io() -> N
     original_request = request.model_dump()
     reasoning = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
 
-    provider.preflight_messages(request, reasoning=reasoning)
-    assert requests == []
-
-    body = await _collect(
-        provider.stream_messages(
-            request,
-            request_id="req_client_controls",
-            response_model="claude-opus-4",
-            reasoning=reasoning,
-        )
+    stream = provider.stream_messages(
+        request,
+        request_id="req_client_controls",
+        response_model="claude-opus-4",
+        reasoning=reasoning,
     )
+    assert requests == []
+    body = await _collect(stream)
 
     assert len(requests) == 1
     upstream = requests[0]
@@ -487,15 +484,13 @@ async def test_provider_relays_native_responses_with_private_field_policy() -> N
     request = _responses_request()
     original = request.model_dump()
 
-    provider.preflight_responses(request)
-    assert requests == []
-    body = await _collect(
-        provider.stream_responses(
-            request,
-            request_id="req_native_responses",
-            response_model="openai/gpt-test",
-        )
+    stream = provider.stream_responses(
+        request,
+        request_id="req_native_responses",
+        response_model="openai/gpt-test",
     )
+    assert requests == []
+    body = await _collect(stream)
 
     assert len(requests) == 1
     upstream = json.loads(requests[0].content)
@@ -545,7 +540,7 @@ async def test_provider_relays_native_responses_with_private_field_policy() -> N
         ),
     ],
 )
-async def test_provider_preflight_rejects_unrepresentable_client_controls(
+async def test_provider_validation_rejects_unrepresentable_client_controls(
     field: str,
     value: object,
     error_path: str,
@@ -567,7 +562,7 @@ async def test_provider_preflight_rejects_unrepresentable_client_controls(
     }
 
     with pytest.raises(InvalidRequestError, match=error_path):
-        provider.preflight_messages(MessagesRequest.model_validate(payload))
+        provider.stream_messages(MessagesRequest.model_validate(payload))
 
     assert requests == []
     await provider.cleanup()

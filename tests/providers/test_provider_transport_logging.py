@@ -34,7 +34,7 @@ async def test_stream_failure_default_logs_exclude_exception_text(caplog) -> Non
     provider = _provider()
     with (
         patch.object(
-            provider,
+            provider._chat,
             "_create_stream",
             new_callable=AsyncMock,
             side_effect=RuntimeError("SECRET_OPENAI_COMPAT"),
@@ -58,7 +58,7 @@ async def test_stream_failure_default_logs_cause_types_only(caplog) -> None:
     error.__cause__ = httpx2.ConnectError("SECRET_CAUSE_DETAIL")
     with (
         patch.object(
-            provider,
+            provider._chat,
             "_create_stream",
             new_callable=AsyncMock,
             side_effect=error,
@@ -79,7 +79,7 @@ async def test_stream_failure_verbose_traceback_redacts_credentials(caplog) -> N
     provider = _provider(verbose=True)
     with (
         patch.object(
-            provider,
+            provider._chat,
             "_create_stream",
             new_callable=AsyncMock,
             side_effect=RuntimeError(

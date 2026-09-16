@@ -3,6 +3,8 @@
 import pytest
 from playwright.sync_api import Page, expect
 
+from e2e.provider_support import close_provider, open_provider
+
 
 def _open_models(page: Page, admin_base_url: str) -> None:
     page.emulate_media(reduced_motion="reduce")
@@ -14,8 +16,10 @@ def _open_models(page: Page, admin_base_url: str) -> None:
 def _refresh_openrouter_models(page: Page) -> None:
     page.get_by_role("button", name="Providers", exact=True).click()
     card = page.locator('[data-provider="open_router"]')
-    card.get_by_role("button", name="Refresh models", exact=True).click()
+    dialog = open_provider(page, "open_router")
+    dialog.get_by_role("button", name="Refresh models", exact=True).click()
     expect(card.locator(".provider-check-result")).to_have_text("3 models available")
+    close_provider(page)
     page.get_by_role("button", name="Model Config", exact=True).click()
 
 
@@ -130,3 +134,67 @@ def test_fallback_editor_remains_usable_at_narrow_viewport(
     assert page.evaluate(
         "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
     )
+
+
+def test_model_suggestions_keep_server_order_after_provider_check_and_late_response(
+    page: Page,
+    admin_base_url: str,
+) -> None:
+    models = [
+        "alpha/Apple",
+        "alpha/apple",
+        "alpha/ss",
+        "alpha/ß",
+        "alpha/z",
+        "alpha-2/model",
+    ]
+    page.route(
+        "**/admin/api/models",
+        lambda route: route.fulfill(json={"models": models, "failed_providers": []}),
+    )
+    _open_models(page, admin_base_url)
+    page.wait_for_function("!state.startupRequest && !state.startupTimer")
+    field = page.locator('.field[data-key="MODEL_SONNET"]')
+    field.locator("input").fill("")
+    expect(field.get_by_role("option")).to_have_text(["None", *models])
+    field.locator("input").fill("open_router/custom-unsaved")
+    field.locator("input").press("Tab")
+
+    models.append("open_router/new-model")
+    page.route(
+        "**/admin/api/providers/open_router/test",
+        lambda route: route.fulfill(json={"ok": True, "models": ["new-model"]}),
+    )
+    page.get_by_role("button", name="Providers", exact=True).click()
+    dialog = open_provider(page, "open_router")
+    with page.expect_request("**/admin/api/models"):
+        dialog.get_by_role("button", name="Refresh models", exact=True).click()
+    close_provider(page)
+    page.get_by_role("button", name="Model Config", exact=True).click()
+    expect(field.locator("input")).to_have_value("open_router/custom-unsaved")
+    field.locator("input").fill("")
+    expect(field.get_by_role("option")).to_have_text(["None", *models])
+    field.locator("input").press("Escape")
+    optional = page.locator('.field[data-key="MODEL_OPUS"]')
+    optional.locator("input").fill("")
+    expect(optional.get_by_role("option")).to_have_text(["None", *models])
+
+    page.wait_for_function("!state.startupRequest && !state.startupTimer")
+    page.unroute("**/admin/api/models")
+    pending = []
+
+    def hold_catalog(route):
+        pending.append(route)
+        page.evaluate("count => { window.heldCatalogLoads = count; }", len(pending))
+
+    page.route("**/admin/api/models", hold_catalog)
+    for _ in range(2):
+        with page.expect_request("**/admin/api/models"):
+            page.evaluate("void hydrateModelOptions()")
+    page.wait_for_function("window.heldCatalogLoads === 2")
+    with page.expect_response("**/admin/api/models"):
+        pending[1].fulfill(json={"models": models, "failed_providers": []})
+    with page.expect_response("**/admin/api/models") as stale:
+        pending[0].fulfill(json={"models": ["old/stale"], "failed_providers": []})
+    stale.value.finished()
+    expect(optional.get_by_role("option")).to_have_text(["None", *models])

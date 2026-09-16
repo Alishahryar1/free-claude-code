@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -25,26 +25,8 @@ from free_claude_code.core.reasoning import ReasoningCapability, ReasoningPolicy
 
 class FakeProvider:
     def __init__(self) -> None:
-        self.preflight_calls: list[tuple[MessagesRequest, ReasoningPolicy]] = []
         self.stream_calls: list[dict[str, object]] = []
         self.stream_close_calls = 0
-
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        self.preflight_calls.append((request, reasoning))
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        raise AssertionError("Messages test provider received a Responses request")
 
     async def stream_messages(
         self,
@@ -104,26 +86,8 @@ class FakeProvider:
 
 class ResponsesFakeProvider:
     def __init__(self) -> None:
-        self.preflight_calls: list[tuple[OpenAIResponsesRequest, ReasoningPolicy]] = []
         self.stream_calls: list[dict[str, object]] = []
         self.stream_close_calls = 0
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        self.preflight_calls.append((request, reasoning))
-
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        raise AssertionError("Responses test provider received a Messages request")
 
     async def stream_messages(
         self,
@@ -226,46 +190,34 @@ class ControlledProvider(FakeProvider):
             self.stream_close_calls += 1
 
 
-class FailingPreflightProvider(FakeProvider):
-    def preflight_messages(
+class FailingValidationProvider(FakeProvider):
+    def stream_messages(
         self,
         request: MessagesRequest,
+        input_tokens: int = 0,
         *,
         reasoning: ReasoningPolicy,
         model_info: ProviderModelInfo | None = None,
-    ) -> None:
+        **kwargs: object,
+    ) -> AsyncIterator[str]:
         raise ValueError("invalid provider request")
 
 
-class ApplicationErrorPreflightProvider(FakeProvider):
+class ApplicationErrorValidationProvider(FakeProvider):
     def __init__(self, error: InvalidRequestError) -> None:
         super().__init__()
         self._error = error
 
-    def preflight_messages(
+    def stream_messages(
         self,
         request: MessagesRequest,
+        input_tokens: int = 0,
         *,
         reasoning: ReasoningPolicy,
         model_info: ProviderModelInfo | None = None,
-    ) -> None:
+        **kwargs: object,
+    ) -> AsyncIterator[str]:
         raise self._error
-
-
-class ExecutionFailurePreflightProvider(FakeProvider):
-    def __init__(self, failure: ExecutionFailure) -> None:
-        super().__init__()
-        self._failure = failure
-
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        super().preflight_messages(request, reasoning=reasoning)
-        raise self._failure
 
 
 class FailingStreamConstructionProvider(FakeProvider):
@@ -382,13 +334,10 @@ def _routed_request(
 
 
 @pytest.mark.asyncio
-async def test_fallback_receives_its_own_cached_capability_in_preflight_and_stream():
+async def test_fallback_receives_its_own_cached_capability_in_stream():
     seen = []
 
     class MetadataProvider(ControlledProvider):
-        def preflight_messages(self, request, **kwargs):
-            seen.append(("preflight", request.model, kwargs["model_info"]))
-
         async def stream_messages(self, request, input_tokens=0, **kwargs):
             seen.append(("stream", request.model, kwargs["model_info"]))
             async for event in super().stream_messages(request, input_tokens, **kwargs):
@@ -406,9 +355,16 @@ async def test_fallback_receives_its_own_cached_capability_in_preflight_and_stre
     fallback = MetadataProvider(["verdict"])
     providers = {"provider": primary, "fallback": fallback}
     executor = ProviderExecutor(
-        lambda name: providers[name],
+        AsyncMock(side_effect=lambda name: providers[name]),
         progress_timeout_seconds=10,
-        model_infos=(primary_info, fallback_info),
+        model_info_lookup=lambda provider_id, model_id: next(
+            (
+                info
+                for info in (primary_info, fallback_info)
+                if info.model_id == f"{provider_id}/{model_id}"
+            ),
+            None,
+        ),
     )
     output = [
         event
@@ -420,9 +376,7 @@ async def test_fallback_receives_its_own_cached_capability_in_preflight_and_stre
     ]
     assert output == ["verdict"]
     assert seen == [
-        ("preflight", "provider-model", primary_info),
         ("stream", "provider-model", primary_info),
-        ("preflight", "fallback-model", fallback_info),
         ("stream", "fallback-model", fallback_info),
     ]
 
@@ -454,7 +408,7 @@ def _executor_stream(
     request_id: str,
 ) -> AsyncIterator[str]:
     executor = ProviderExecutor(
-        lambda _provider_id: provider,
+        AsyncMock(side_effect=lambda _provider_id: provider),
         token_counter=lambda _messages, _system, _tools: 17,
         progress_timeout_seconds=timeout_seconds,
     )
@@ -471,7 +425,7 @@ async def test_executor_routes_native_responses_without_messages_conversion() ->
     routed = _routed_responses_request()
     request = routed.request
     executor = ProviderExecutor(
-        lambda _provider_id: provider,
+        AsyncMock(side_effect=lambda _provider_id: provider),
         progress_timeout_seconds=60.0,
         responses_token_counter=lambda _request: 23,
     )
@@ -482,7 +436,7 @@ async def test_executor_routes_native_responses_without_messages_conversion() ->
         request_id="req_responses_application",
     )
 
-    assert provider.preflight_calls == [(request, ReasoningPolicy.on())]
+    assert provider.stream_calls == []
     assert [chunk async for chunk in stream] == [
         "event: response.completed\ndata: {}\n\n"
     ]
@@ -499,12 +453,14 @@ async def test_executor_routes_native_responses_without_messages_conversion() ->
 
 
 @pytest.mark.asyncio
-async def test_executor_uses_structural_provider_port_and_preflights_eagerly() -> None:
+async def test_executor_uses_structural_provider_port_and_defers_stream_startup() -> (
+    None
+):
     provider = FakeProvider()
     routed = _routed_request()
     request = routed.request
     executor = ProviderExecutor(
-        lambda _provider_id: provider,
+        AsyncMock(side_effect=lambda _provider_id: provider),
         progress_timeout_seconds=60.0,
         token_counter=lambda _messages, _system, _tools: 17,
     )
@@ -515,7 +471,7 @@ async def test_executor_uses_structural_provider_port_and_preflights_eagerly() -
         request_id="req_application",
     )
 
-    assert provider.preflight_calls == [(request, ReasoningPolicy.on())]
+    assert provider.stream_calls == []
     assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
     assert provider.stream_calls == [
         {
@@ -548,7 +504,7 @@ async def test_primary_success_never_resolves_fallback() -> None:
     fallback = FakeProvider()
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return {"provider": primary, "fallback": fallback}[provider_id]
 
@@ -561,7 +517,6 @@ async def test_primary_success_never_resolves_fallback() -> None:
 
     assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
     assert resolved_ids == ["provider"]
-    assert fallback.preflight_calls == []
     assert fallback.stream_calls == []
 
 
@@ -573,7 +528,7 @@ async def test_retryable_preframe_failure_selects_fallback_after_closing_primary
     primary = ControlledProvider([_execution_failure("primary overloaded")])
     fallback = ControlledProvider(["fallback-frame"])
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         if provider_id == "fallback":
             assert primary.stream_close_calls == 1
             order.append("fallback-resolved")
@@ -601,9 +556,11 @@ async def test_retryable_preframe_failure_selects_fallback_after_closing_primary
     assert order == ["fallback-resolved"]
     assert primary.stream_close_calls == 1
     assert fallback.stream_close_calls == 1
-    assert fallback.preflight_calls[0][0].model == "fallback-model"
+    fallback_request = fallback.stream_calls[0]["request"]
+    assert isinstance(fallback_request, MessagesRequest)
+    assert fallback_request.model == "fallback-model"
     assert fallback.stream_calls[0] == {
-        "request": fallback.preflight_calls[0][0],
+        "request": fallback_request,
         "input_tokens": 17,
         "request_id": "req_fallback",
         "response_model": "gateway-model",
@@ -648,7 +605,7 @@ async def test_fallback_chain_preserves_exact_last_failure() -> None:
         "second": ControlledProvider([second]),
     }
     executor = ProviderExecutor(
-        providers.__getitem__,
+        AsyncMock(side_effect=providers.__getitem__),
         progress_timeout_seconds=60.0,
     )
     stream = executor.stream_messages(
@@ -673,7 +630,7 @@ async def test_multiple_retryable_failures_walk_fallbacks_in_order() -> None:
     }
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return providers[provider_id]
 
@@ -698,7 +655,7 @@ async def test_empty_primary_completion_does_not_select_fallback() -> None:
     fallback = FakeProvider()
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return {"provider": primary, "fallback": fallback}[provider_id]
 
@@ -720,7 +677,7 @@ async def test_unexpected_primary_failure_does_not_select_fallback() -> None:
     fallback = FakeProvider()
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return {"provider": primary, "fallback": fallback}[provider_id]
 
@@ -744,7 +701,7 @@ async def test_invalid_none_stream_remains_terminal() -> None:
     fallback = FakeProvider()
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return {"provider": primary, "fallback": fallback}[provider_id]
 
@@ -777,7 +734,7 @@ async def test_nonretryable_provider_failure_selects_fallback_before_first_frame
     fallback = ControlledProvider(["fallback-frame"])
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return {"provider": primary, "fallback": fallback}[provider_id]
 
@@ -803,30 +760,32 @@ async def test_nonretryable_provider_failure_selects_fallback_before_first_frame
 
 
 @pytest.mark.asyncio
-async def test_primary_canonical_preflight_failure_selects_fallback() -> None:
+async def test_primary_canonical_startup_failure_selects_fallback() -> None:
     primary_failure = ExecutionFailure(
         kind=FailureKind.CONTEXT_WINDOW_EXCEEDED,
         status_code=400,
         message="primary context exceeded",
         retryable=False,
     )
-    primary = ExecutionFailurePreflightProvider(primary_failure)
+    primary = ExecutionFailureStreamConstructionProvider(primary_failure)
     fallback = ControlledProvider(["fallback-frame"])
     providers = {"provider": primary, "fallback": fallback}
     executor = ProviderExecutor(
-        providers.__getitem__,
+        AsyncMock(side_effect=providers.__getitem__),
         progress_timeout_seconds=60.0,
     )
 
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "fallback-model")),
         raw_log_payload={},
-        request_id="req_preflight_fallback",
+        request_id="req_startup_fallback",
     )
 
     assert [chunk async for chunk in stream] == ["fallback-frame"]
     assert primary.stream_calls == []
-    assert fallback.preflight_calls[0][0].model == "fallback-model"
+    fallback_request = fallback.stream_calls[0]["request"]
+    assert isinstance(fallback_request, MessagesRequest)
+    assert fallback_request.model == "fallback-model"
 
 
 @pytest.mark.asyncio
@@ -841,7 +800,7 @@ async def test_nonretryable_stream_construction_failure_selects_fallback() -> No
     fallback = ControlledProvider(["fallback-frame"])
     providers = {"provider": primary, "fallback": fallback}
     executor = ProviderExecutor(
-        providers.__getitem__,
+        AsyncMock(side_effect=providers.__getitem__),
         progress_timeout_seconds=60.0,
     )
     stream = executor.stream_messages(
@@ -861,7 +820,7 @@ async def test_failure_after_first_frame_never_selects_fallback() -> None:
     fallback = FakeProvider()
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return {"provider": primary, "fallback": fallback}[provider_id]
 
@@ -881,25 +840,25 @@ async def test_failure_after_first_frame_never_selects_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lazy_fallback_preflight_application_error_stops_unchanged() -> None:
+async def test_lazy_fallback_startup_application_error_stops_unchanged() -> None:
     primary = ControlledProvider([_execution_failure("primary")])
-    preflight_error = InvalidRequestError("fallback is misconfigured")
-    fallback = ApplicationErrorPreflightProvider(preflight_error)
+    startup_error = InvalidRequestError("fallback is misconfigured")
+    fallback = ApplicationErrorValidationProvider(startup_error)
     providers = {"provider": primary, "fallback": fallback}
     executor = ProviderExecutor(
-        providers.__getitem__,
+        AsyncMock(side_effect=providers.__getitem__),
         progress_timeout_seconds=60.0,
     )
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
         raw_log_payload={},
-        request_id="req_preflight",
+        request_id="req_startup",
     )
 
     with pytest.raises(InvalidRequestError) as exc_info:
         await anext(stream)
 
-    assert exc_info.value is preflight_error
+    assert exc_info.value is startup_error
     assert primary.stream_close_calls == 1
     assert fallback.stream_calls == []
 
@@ -933,7 +892,7 @@ async def test_candidate_requests_are_isolated_from_provider_mutation() -> None:
     providers = {"provider": primary, "fallback": fallback}
     routed = _routed_request(_target("fallback", "model"))
     executor = ProviderExecutor(
-        providers.__getitem__,
+        AsyncMock(side_effect=providers.__getitem__),
         progress_timeout_seconds=60.0,
     )
 
@@ -956,7 +915,7 @@ async def test_closing_executor_stream_closes_provider_stream_once() -> None:
     provider = FakeProvider()
     routed = _routed_request()
     executor = ProviderExecutor(
-        lambda _provider_id: provider,
+        AsyncMock(side_effect=lambda _provider_id: provider),
         progress_timeout_seconds=60.0,
         token_counter=lambda _messages, _system, _tools: 17,
     )
@@ -979,7 +938,7 @@ async def test_stream_construction_failure_remains_deferred_to_iteration() -> No
     fallback = FakeProvider()
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return {"provider": provider, "fallback": fallback}[provider_id]
 
@@ -1001,23 +960,24 @@ async def test_stream_construction_failure_remains_deferred_to_iteration() -> No
     assert resolved_ids == ["provider"]
 
 
-def test_executor_preflight_failure_stays_before_token_count_and_stream() -> None:
-    provider = FailingPreflightProvider()
+@pytest.mark.asyncio
+async def test_executor_validation_is_deferred_until_iteration() -> None:
+    provider = FailingValidationProvider()
     token_counter = MagicMock(return_value=17)
     executor = ProviderExecutor(
-        lambda _provider_id: provider,
+        AsyncMock(side_effect=lambda _provider_id: provider),
         progress_timeout_seconds=60.0,
         token_counter=token_counter,
     )
 
+    stream = executor.stream_messages(
+        _routed_request(),
+        raw_log_payload={},
+        request_id="req_application",
+    )
+    token_counter.assert_called_once()
     with pytest.raises(ValueError, match="invalid provider request"):
-        executor.stream_messages(
-            _routed_request(),
-            raw_log_payload={},
-            request_id="req_application",
-        )
-
-    token_counter.assert_not_called()
+        await anext(stream)
     assert provider.stream_calls == []
 
 
@@ -1028,7 +988,7 @@ def test_executor_preflight_failure_stays_before_token_count_and_stream() -> Non
 def test_executor_rejects_invalid_progress_timeout(timeout_seconds: float) -> None:
     with pytest.raises(ValueError, match="finite and positive"):
         ProviderExecutor(
-            lambda _provider_id: FakeProvider(),
+            AsyncMock(side_effect=lambda _provider_id: FakeProvider()),
             progress_timeout_seconds=timeout_seconds,
         )
 
@@ -1081,7 +1041,7 @@ async def test_application_progress_timeout_never_resolves_fallback() -> None:
     fallback = FakeProvider()
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return {"provider": primary, "fallback": fallback}[provider_id]
 
@@ -1112,7 +1072,7 @@ async def test_provider_cleanup_cannot_delay_fallback_past_progress_deadline() -
     fallback = FakeProvider()
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return {"provider": primary, "fallback": fallback}[provider_id]
 
@@ -1219,7 +1179,7 @@ async def test_fallback_transition_does_not_reset_shared_progress_deadline() -> 
     fallback = ControlledProvider([fallback_wait])
     providers = {"provider": primary, "fallback": fallback}
     executor = ProviderExecutor(
-        providers.__getitem__,
+        AsyncMock(side_effect=providers.__getitem__),
         progress_timeout_seconds=60,
     )
     stream = executor.stream_messages(
@@ -1237,6 +1197,9 @@ async def test_fallback_transition_does_not_reset_shared_progress_deadline() -> 
         return timeout
 
     with (
+        patch(
+            "free_claude_code.application.execution.monotonic", side_effect=[0, 1, 2, 4]
+        ),
         patch("free_claude_code.application.execution.trace_event") as trace_mock,
         patch(
             "free_claude_code.application.execution.asyncio.timeout_at",
@@ -1255,7 +1218,8 @@ async def test_fallback_transition_does_not_reset_shared_progress_deadline() -> 
 
     read_deadlines = [deadline for deadline in deadlines if deadline is not None]
     assert len(read_deadlines) >= 3
-    assert len(set(read_deadlines)) == 1
+    assert read_deadlines[0] == read_deadlines[1]
+    assert read_deadlines[-1] == read_deadlines[0] + 2
     assert exc_info.value.kind == FailureKind.TIMEOUT
     assert primary.stream_close_calls == fallback.stream_close_calls == 1
     timeout_trace = next(
@@ -1288,7 +1252,7 @@ async def test_cancelling_progress_wait_remains_cancellation() -> None:
     fallback = FakeProvider()
     resolved_ids: list[str] = []
 
-    def resolve(provider_id: str) -> FakeProvider:
+    async def resolve(provider_id: str) -> FakeProvider:
         resolved_ids.append(provider_id)
         return {"provider": provider, "fallback": fallback}[provider_id]
 

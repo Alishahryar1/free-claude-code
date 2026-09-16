@@ -10,27 +10,15 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import Literal
 
+from free_claude_code.application.model_catalog import ModelCatalog
 from free_claude_code.config.loader import get_settings
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.config.settings import Settings
+from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
+from free_claude_code.harnesses.resources import LaunchResources
 
+from .catalog_http import fetch_proxy_model_catalog
 from .common import preflight_proxy, resolve_client_binary, run_client_process
-from .model_catalog import (
-    ClientModel,
-    client_models_from_response,
-    fetch_proxy_models_response,
-)
-from .resources import LaunchResources
-
-
-@dataclass(frozen=True, slots=True)
-class NativeCheck:
-    """A fixed native probe; its adapter owns output interpretation."""
-
-    args: tuple[str, ...]
-    accepts: Callable[[str], bool]
-    failure_message: str
-    timeout_seconds: float = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,15 +28,13 @@ class LaunchContext:
     proxy_root_url: str
     auth_token: str = field(repr=False)
     base_env: Mapping[str, str] = field(repr=False)
-    models: tuple[ClientModel, ...]
+    catalog: ModelCatalog | None
     launch_id: str = field(default_factory=lambda: secrets.token_hex(16))
 
-
-@dataclass(frozen=True, slots=True)
-class PreparedLaunch:
-    command: list[str] = field(repr=False)
-    env: Mapping[str, str] = field(repr=False)
-    activation_check: NativeCheck | None = None
+    def require_catalog(self) -> ModelCatalog:
+        if self.catalog is None:
+            raise ValueError("harness configuration requires a model catalog")
+        return self.catalog
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,18 +119,14 @@ def launch_harness(spec: HarnessSpec, argv: Sequence[str] | None = None) -> None
                 f"Free Claude Code proxy is not reachable at {proxy_root_url}: {error}\n"
                 "Start it in another terminal with: fcc-server"
             )
-        models: tuple[ClientModel, ...] = ()
+        catalog = None
         if spec.catalog_view is not None:
             stage = "prepare model catalog"
-            models = client_models_from_response(
-                fetch_proxy_models_response(
-                    proxy_root_url, auth_token, view=spec.catalog_view
-                )
+            catalog = fetch_proxy_model_catalog(
+                proxy_root_url, auth_token, view=spec.catalog_view
             )
-            if not models:
-                raise ValueError("model catalog contains no routable models")
         context = LaunchContext(
-            binary_path, settings, proxy_root_url, auth_token, base_env, models
+            binary_path, settings, proxy_root_url, auth_token, base_env, catalog
         )
         with ExitStack() as stack:
             stage = "prepare configuration"

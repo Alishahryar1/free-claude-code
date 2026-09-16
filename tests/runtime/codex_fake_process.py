@@ -28,7 +28,12 @@ for line in sys.stdin.buffer:
     method = request.get("method")
     request_id = request.get("id")
     if method == "initialize":
-        emit({"id": request_id, "result": {"userAgent": "codex/0.153.0"}})
+        if mode == "factory-wait":
+            continue
+        if mode == "factory-fail":
+            emit({"id": request_id, "error": {"message": "Initialization rejected"}})
+        else:
+            emit({"id": request_id, "result": {"userAgent": "codex/0.153.0"}})
     elif method == "initialized":
         pass
     elif method in {"thread/start", "thread/resume"}:
@@ -63,7 +68,27 @@ for line in sys.stdin.buffer:
                 },
             }
         )
-        if mode in {"prompt", "child-prompt"}:
+        if mode == "ordered-usage":
+            emit(
+                {
+                    "method": "thread/tokenUsage/updated",
+                    "params": {
+                        "threadId": "native-1",
+                        "turnId": turn,
+                        "tokenUsage": {"last": {"totalTokens": 12_438}},
+                    },
+                }
+            )
+            emit(
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "native-1",
+                        "turn": {"id": turn, "status": "completed"},
+                    },
+                }
+            )
+        elif mode in {"prompt", "child-prompt"}:
             if mode == "child-prompt":
                 emit(
                     {
@@ -174,6 +199,11 @@ for line in sys.stdin.buffer:
         sys.stdout.buffer.flush()
     else:
         emit({"id": request_id, "result": {}})
+
+if mode.startswith("factory-"):
+    # The catalog must still be readable when the native process exits.
+    catalog = json.loads(Path(sys.argv[2]).read_text()) if sys.argv[2] else None
+    Path(sys.argv[3]).write_text(json.dumps(catalog))
 
 if mode == "child-warning-on-close":
     emit(

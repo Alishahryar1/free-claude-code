@@ -47,7 +47,7 @@ def test_init_uses_bearer_key_and_normalizes_regional_openai_base(
     configured: str, expected: str
 ) -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = _provider(configured)
 
@@ -75,7 +75,7 @@ def test_request_uses_portable_chat_fields_without_invented_reasoning() -> None:
         ],
     )
 
-    body = _provider()._build_request_body(request)
+    body = _provider()._chat._build_request_body(request)
 
     assert body["model"] == BEDROCK_MODEL
     assert body["messages"][0] == {"role": "system", "content": "System prompt"}
@@ -116,7 +116,7 @@ def test_reasoning_history_replays_as_portable_think_tags() -> None:
         ],
     )
 
-    body = _provider()._build_request_body(request)
+    body = _provider()._chat._build_request_body(request)
     assistant = next(
         message for message in body["messages"] if message["role"] == "assistant"
     )

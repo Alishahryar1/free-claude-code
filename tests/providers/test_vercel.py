@@ -11,6 +11,7 @@ from free_claude_code.config.provider_catalog import VERCEL_AI_GATEWAY_DEFAULT_B
 from free_claude_code.core.model_capabilities import ModelInputModality
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -46,7 +47,7 @@ def test_default_base_url_constant():
 
 def test_init_uses_default_base_url_and_api_key(vercel_config):
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = profiled_provider(
             "vercel",
@@ -62,7 +63,7 @@ def test_init_uses_default_base_url_and_api_key(vercel_config):
 def test_init_strips_trailing_slash(vercel_config):
     config = replace(vercel_config, base_url=f"{VERCEL_AI_GATEWAY_DEFAULT_BASE}/")
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = profiled_provider(
             "vercel",
             config,
@@ -127,7 +128,7 @@ def test_build_request_body_keeps_max_tokens(vercel_provider):
             "max_tokens": 42,
         }
 
-        body = vercel_provider._build_request_body(make_request())
+        body = vercel_provider._chat._build_request_body(make_request())
 
     assert body["messages"][0].get("name") == "alice"
     assert body["max_tokens"] == 42
@@ -137,7 +138,7 @@ def test_build_request_body_keeps_max_tokens(vercel_provider):
 def test_build_request_body_preserves_caller_extra_body(vercel_provider):
     req = make_request(extra_body={"providerOptions": {"openai": {"reasoning": "low"}}})
 
-    body = vercel_provider._build_request_body(req)
+    body = vercel_provider._chat._build_request_body(req)
 
     assert body["extra_body"] == {"providerOptions": {"openai": {"reasoning": "low"}}}
 
@@ -163,7 +164,7 @@ async def test_stream_messages_text(vercel_provider):
     with patch.object(
         vercel_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in vercel_provider.stream_messages(make_request())
@@ -195,7 +196,7 @@ async def test_stream_messages_reasoning_content(vercel_provider):
     with patch.object(
         vercel_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in vercel_provider.stream_messages(make_request())

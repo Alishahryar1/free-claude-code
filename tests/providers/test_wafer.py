@@ -66,7 +66,9 @@ def test_build_request_body_openai_shape_and_defaults(wafer_provider):
         }
     )
 
-    body = wafer_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = wafer_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body["model"] == "DeepSeek-V4-Pro"
     assert body["messages"][0] == {"role": "user", "content": "Hello"}
@@ -83,7 +85,7 @@ def test_build_request_body_honors_effective_no_thinking(wafer_provider):
         }
     )
 
-    body = wafer_provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = wafer_provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
     assert body["reasoning_effort"] == "none"
 
@@ -97,7 +99,9 @@ def test_build_request_body_preserves_request_disabled_thinking(wafer_provider):
         }
     )
 
-    body = wafer_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = wafer_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body["reasoning_effort"] == "none"
 
@@ -112,7 +116,7 @@ def test_build_request_body_uses_resolved_policy_without_inspecting_model(
         }
     )
 
-    body = wafer_provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = wafer_provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
     assert body["reasoning_effort"] == "none"
 

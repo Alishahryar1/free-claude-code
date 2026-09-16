@@ -9,6 +9,7 @@ from free_claude_code.config.provider_catalog import CODESTRAL_DEFAULT_BASE
 from free_claude_code.core.model_capabilities import ModelInputModality
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -39,7 +40,7 @@ def codestral_provider(codestral_config):
 def test_init(codestral_config):
     """Test provider initialization."""
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = profiled_provider(
             "mistral_codestral",
@@ -58,7 +59,7 @@ def test_default_base_url():
 def test_build_request_body_basic(codestral_provider):
     """Basic request body conversion works for Codestral."""
     req = make_request()
-    body = codestral_provider._build_request_body(req)
+    body = codestral_provider._chat._build_request_body(req)
 
     assert body["model"] == "devstral-small-latest"
     assert body["messages"][0]["role"] == "system"
@@ -77,7 +78,7 @@ def test_build_request_body_global_disable_blocks_reasoning_mapping():
         admission=immediate_admission(),
     )
     req = make_request()
-    body = provider._build_request_body(req)
+    body = provider._chat._build_request_body(req)
 
     roles = [m.get("role") for m in body.get("messages", [])]
     assert "assistant_reasoning_content" not in roles
@@ -170,7 +171,7 @@ async def test_stream_messages_text(codestral_provider):
     with patch.object(
         codestral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in codestral_provider.stream_messages(req)]
 
@@ -203,7 +204,7 @@ async def test_stream_messages_reasoning_content(codestral_provider):
     with patch.object(
         codestral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [event async for event in codestral_provider.stream_messages(req)]
 

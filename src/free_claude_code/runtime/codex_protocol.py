@@ -54,6 +54,25 @@ class CodexProtocol:
         turn_id = (
             string_value(params.get("turnId")) or string_value(turn.get("id")) or None
         )
+        if method == "thread/tokenUsage/updated":
+            used = object_value(object_value(params.get("tokenUsage")).get("last")).get(
+                "totalTokens"
+            )
+            if (
+                not thread_id
+                or not turn_id
+                or not isinstance(used, int)
+                or isinstance(used, bool)
+                or used < 0
+            ):
+                return None
+            return HarnessEvent(
+                self.generation,
+                thread_id,
+                "context_usage",
+                turn_id=turn_id,
+                context_used_tokens=used,
+            )
         if method in {"turn/started", "turn/completed"}:
             status: RunStatus = "completed"
             if turn.get("status") == "interrupted":

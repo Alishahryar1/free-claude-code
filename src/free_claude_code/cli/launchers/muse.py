@@ -3,18 +3,12 @@
 import re
 from collections.abc import Sequence
 
-from free_claude_code.cli.environment import client_environment
+from free_claude_code.config.server_urls import proxy_v1_url
+from free_claude_code.harnesses.environment import client_environment
+from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
+from free_claude_code.harnesses.resources import LaunchResources
 
-from .common import proxy_v1_url
-from .resources import LaunchResources
-from .runner import (
-    HarnessSpec,
-    LaunchContext,
-    NativeCheck,
-    PreparedLaunch,
-    launch_harness,
-    version_at_least,
-)
+from .runner import HarnessSpec, LaunchContext, launch_harness, version_at_least
 
 _INSTALL_HINT = (
     "Install Muse Code on native Windows with "
@@ -35,6 +29,7 @@ _ROUTING_ENV_KEYS = frozenset(
 def _configure(
     ctx: LaunchContext, args: list[str], _files: LaunchResources
 ) -> PreparedLaunch:
+    catalog = ctx.require_catalog()
     connection = ["--provider", "meta", "--base-url", proxy_v1_url(ctx.proxy_root_url)]
     if args and args[0] in {"exec", "resume"}:
         command = [ctx.binary_path, args[0], *connection, *args[1:]]
@@ -49,7 +44,7 @@ def _configure(
             remove_prefixes=("FCC_MUSE_",),
             updates={
                 "META_API_KEY": ctx.auth_token,
-                "MUSE_MODEL": ctx.models[0].wire_slug,
+                "MUSE_MODEL": catalog.default_model_id,
             },
         ),
     )

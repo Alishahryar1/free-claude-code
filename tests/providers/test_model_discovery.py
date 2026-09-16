@@ -24,7 +24,6 @@ from free_claude_code.providers.open_router import OpenRouterProvider
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.providers.runtime.discovery import (
-    ProviderModelDiscovery,
     model_list_provider_ids_for_settings,
 )
 from free_claude_code.providers.runtime.model_cache import ProviderModelCache
@@ -93,7 +92,7 @@ def test_provider_catalog_contract_is_metadata_only() -> None:
 @pytest.mark.asyncio
 async def test_nim_lists_openai_compatible_model_infos() -> None:
     config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = NvidiaNimProvider(
             config, nim_settings=NimSettings(), admission=immediate_admission()
         )
@@ -358,23 +357,6 @@ class FakeProvider(BaseProvider):
         self.cleaned = False
         self.model_list_calls = 0
 
-    def preflight_messages(
-        self,
-        request: Any,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-    ) -> None:
-        return None
-
-    def preflight_responses(
-        self,
-        request: Any,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        return None
-
     async def cleanup(self) -> None:
         self.cleaned = True
 
@@ -436,7 +418,7 @@ async def test_runtime_warm_caches_all_referenced_provider_models() -> None:
         },
     )
 
-    result = await runtime.warm_referenced_model_cache()
+    result = await runtime.refresh_model_list_cache()
 
     assert result.refreshed_provider_ids == ("nvidia_nim", "open_router")
     assert result.failed_provider_ids == ()
@@ -459,7 +441,7 @@ async def test_runtime_warm_treats_model_lists_as_discovery_metadata() -> None:
         {"nvidia_nim": FakeProvider(_infos("different-model"))},
     )
 
-    result = await runtime.warm_referenced_model_cache()
+    result = await runtime.refresh_model_list_cache()
 
     assert result.refreshed_provider_ids == ("nvidia_nim",)
     assert result.failed_provider_ids == ()
@@ -483,10 +465,8 @@ async def test_runtime_warm_reports_query_failures_without_blocking() -> None:
         },
     )
 
-    with patch(
-        "free_claude_code.providers.runtime.discovery.logger.warning"
-    ) as warning:
-        result = await runtime.warm_referenced_model_cache()
+    with patch("free_claude_code.runtime.provider_manager.logger.warning") as warning:
+        result = await runtime.refresh_model_list_cache()
 
     assert result.refreshed_provider_ids == ("nvidia_nim",)
     assert result.failed_provider_ids == ("open_router",)
@@ -517,7 +497,7 @@ async def test_runtime_warm_queries_referenced_providers_concurrently() -> None:
         },
     )
 
-    await asyncio.wait_for(runtime.warm_referenced_model_cache(), timeout=1.0)
+    await asyncio.wait_for(runtime.refresh_model_list_cache(), timeout=1.0)
 
 
 @pytest.mark.asyncio
@@ -533,9 +513,9 @@ async def test_startup_discovery_queries_each_successful_provider_once() -> None
         {"nvidia_nim": nim, "open_router": router},
     )
 
-    await runtime.warm_referenced_model_cache()
+    await runtime.refresh_model_list_cache()
     runtime.start_model_list_refresh()
-    refresh_task = runtime._refresh_task
+    refresh_task = runtime._current.refresh_task
     assert refresh_task is not None
     await refresh_task
 
@@ -548,16 +528,13 @@ async def test_startup_discovery_queries_each_successful_provider_once() -> None
 
 
 @pytest.mark.asyncio
-async def test_failed_startup_warm_remains_eligible_for_background_refresh() -> None:
+async def test_failed_startup_discovery_remains_eligible_for_explicit_refresh() -> None:
     settings = _settings(nvidia_nim_api_key="nim-key")
     nim = FakeProvider(error=RuntimeError("upstream unavailable"))
     runtime = _manager(settings, {"nvidia_nim": nim})
 
-    warm_result = await runtime.warm_referenced_model_cache()
-    runtime.start_model_list_refresh()
-    refresh_task = runtime._refresh_task
-    assert refresh_task is not None
-    await refresh_task
+    warm_result = await runtime.refresh_model_list_cache()
+    await runtime.refresh_model_list_cache()
 
     assert warm_result.failed_provider_ids == ("nvidia_nim",)
     assert nim.model_list_calls == 2
@@ -591,8 +568,8 @@ async def test_runtime_refresh_model_list_cache_includes_self_sufficient_locals(
         "ollama": frozenset({"llama3.1"}),
     }
     assert result.refreshed_provider_ids == (
-        "open_router",
         "lmstudio",
+        "open_router",
         "llamacpp",
         "ollama",
     )
@@ -631,7 +608,7 @@ async def test_runtime_refresh_model_list_cache_treats_vertex_project_as_configu
         "llamacpp",
         "ollama",
     )
-    assert result.failed_provider_ids == ()
+    assert result.failed_provider_ids == ("nvidia_nim",)
 
 
 @pytest.mark.asyncio
@@ -738,34 +715,36 @@ def test_discovery_eligibility_admits_self_sufficient_locals_without_settings() 
 async def test_local_discovery_failure_cooldown_skips_then_recovers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    attempts: dict[str, int] = {}
+    offline_locals = {
+        provider_id: FakeProvider(error=RuntimeError("local server offline"))
+        for provider_id in ("lmstudio", "llamacpp", "ollama")
+    }
+    runtime = _manager(
+        _settings(model="lmstudio/local-qwen"),
+        dict(offline_locals),
+    )
 
-    def _offline_resolver(provider_id: str) -> BaseProvider:
-        attempts[provider_id] = attempts.get(provider_id, 0) + 1
-        return FakeProvider(error=RuntimeError("local server offline"))
+    def _attempts() -> dict[str, int]:
+        return {
+            provider_id: fake.model_list_calls
+            for provider_id, fake in offline_locals.items()
+        }
 
-    settings = _settings()
-    cache = ProviderModelCache()
-    discovery = ProviderModelDiscovery(settings, _offline_resolver, cache)
-
-    first = await discovery.refresh_model_list_cache(only_missing=True)
+    first = await runtime.refresh_model_list_cache()
     assert first.failed_provider_ids == ("lmstudio", "llamacpp", "ollama")
-    assert attempts == {"lmstudio": 1, "llamacpp": 1, "ollama": 1}
+    assert _attempts() == {"lmstudio": 1, "llamacpp": 1, "ollama": 1}
 
-    assert cache.discovery_in_cooldown("ollama") is True
-
-    second = await discovery.refresh_model_list_cache(only_missing=True)
-    assert second.refreshed_provider_ids == ()
-    assert second.failed_provider_ids == ()
-    assert attempts == {"lmstudio": 1, "llamacpp": 1, "ollama": 1}
+    second = await runtime.refresh_model_list_cache()
+    assert second.failed_provider_ids == ("lmstudio", "llamacpp", "ollama")
+    assert _attempts() == {"lmstudio": 1, "llamacpp": 1, "ollama": 1}
 
     monkeypatch.setattr(
         "free_claude_code.providers.runtime.model_cache.LOCAL_DISCOVERY_RETRY_COOLDOWN_S",
         0.0,
     )
-    third = await discovery.refresh_model_list_cache(only_missing=True)
+    third = await runtime.refresh_model_list_cache()
     assert third.failed_provider_ids == ("lmstudio", "llamacpp", "ollama")
-    assert attempts["ollama"] == 2
+    assert _attempts() == {"lmstudio": 2, "llamacpp": 2, "ollama": 2}
 
 
 def test_cache_discovery_failure_cooldown_clears_on_success() -> None:

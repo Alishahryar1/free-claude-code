@@ -29,10 +29,6 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
-from free_claude_code.providers.openai_chat.provider import (
-    _OpenAIChatStreamRunner,
-    _reserved_anthropic_tool_ids,
-)
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
 )
@@ -41,10 +37,16 @@ from free_claude_code.providers.openai_chat.tool_calls import (
     OpenAIToolCallCollector,
     iter_heuristic_tool_use_events,
 )
+from free_claude_code.providers.openai_chat.transport import (
+    _OpenAIChatStreamRunner,
+    _reserved_anthropic_tool_ids,
+)
+from free_claude_code.providers.request_recovery import RequestRecovery
 from free_claude_code.providers.stream_recovery import TruncatedProviderStreamError
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -57,15 +59,13 @@ from tests.providers.test_nvidia_nim import (
 )
 
 
-class AsyncStreamMock:
+class AsyncStreamMock(SDKStreamDouble):
     """Async iterable mock that yields chunks then optionally raises."""
 
     def __init__(self, chunks, error=None):
         self._chunks = chunks
         self._error = error
-
-    def __aiter__(self):
-        return self._aiter()
+        super().__init__(self._aiter())
 
     async def _aiter(self):
         for chunk in self._chunks:
@@ -97,17 +97,19 @@ class ClosableAsyncStreamMock(AsyncStreamMock):
         if self._close_error is not None:
             raise self._close_error
 
+    async def close(self):
+        await super().close()
+        await self.aclose()
 
-class BlockingClosableAsyncStreamMock:
+
+class BlockingClosableAsyncStreamMock(SDKStreamDouble):
     """Async stream that blocks until its consumer is cancelled."""
 
     def __init__(self, *, close_error=None):
         self.entered = asyncio.Event()
         self.close_calls = 0
         self._close_error = close_error
-
-    def __aiter__(self):
-        return self._aiter()
+        super().__init__(self._aiter(), close=self.aclose)
 
     async def _aiter(self):
         self.entered.set()
@@ -141,7 +143,7 @@ def _make_tool_assembler(
     concrete_request = request or _make_request()
     return OpenAIToolCallAssembler(
         reserved_tool_ids=_reserved_anthropic_tool_ids(concrete_request),
-        record_extra_content=provider._record_tool_call_extra_content,
+        record_extra_content=provider._behavior.record_tool_call_extra_content,
     )
 
 
@@ -178,8 +180,8 @@ def _make_stream_runner(
 ) -> _OpenAIChatStreamRunner:
     concrete_request = request or _make_request()
     return _OpenAIChatStreamRunner(
-        provider,
-        body=provider._build_request_body(concrete_request),
+        provider._chat,
+        body=provider._chat._build_request_body(concrete_request),
         tool_names=OpenAIToolNameCodec.from_request(concrete_request),
         tool_schemas=tool_schemas_by_name(concrete_request),
         reserved_tool_ids=_reserved_anthropic_tool_ids(concrete_request),
@@ -338,15 +340,15 @@ class TestStreamingExceptionHandling:
                 return_value=stream,
             ),
             patch.object(
-                provider,
-                "_normalize_stream",
+                provider._behavior,
+                "normalize_stream",
                 side_effect=ValueError("invalid stream wrapper"),
             ),
             pytest.raises(ValueError, match="invalid stream wrapper"),
         ):
-            await provider._create_stream(
+            await provider._chat._create_stream(
                 {"model": "test-model", "messages": []},
-                execution,
+                RequestRecovery(execution),
                 ProviderOperationKind.GENERATION,
             )
 
@@ -1311,7 +1313,7 @@ class TestStreamingExceptionHandling:
                 },
             ]
         )
-        body = provider._build_request_body(
+        body = provider._chat._build_request_body(
             replay,
             reasoning=DEFAULT_REASONING_POLICY,
         )
@@ -1658,14 +1660,14 @@ class TestStreamingExceptionHandling:
         """A truncated text stream is continued and duplicate overlap is trimmed."""
         provider = _make_provider()
         request = _make_request()
-        stream_mock = AsyncStreamMock([_make_chunk(content="hello wor")])
-
         with (
             patch.object(
                 provider._client.chat.completions,
                 "create",
                 new_callable=AsyncMock,
-                return_value=stream_mock,
+                side_effect=lambda **kwargs: AsyncStreamMock(
+                    [_make_chunk(content="hello wor")]
+                ),
             ),
             patch.object(
                 _OpenAIChatStreamRunner,
@@ -1753,7 +1755,7 @@ class TestStreamingExceptionHandling:
             await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -1786,7 +1788,7 @@ class TestStreamingExceptionHandling:
             await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -1823,10 +1825,10 @@ class TestStreamingExceptionHandling:
 
         with (
             patch.object(
-                provider,
+                provider._chat,
                 "_create_stream",
                 new_callable=AsyncMock,
-                wraps=provider._create_stream,
+                wraps=provider._chat._create_stream,
             ) as create_stream,
             patch.object(
                 provider._client.chat.completions,
@@ -1838,7 +1840,7 @@ class TestStreamingExceptionHandling:
             recovered = await runner._collect_recovery_output(
                 body,
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -1850,8 +1852,8 @@ class TestStreamingExceptionHandling:
         assert "stream_options" not in create.await_args_list[2].kwargs
         assert create_stream.await_count == 2
         assert (
-            create_stream.await_args_list[0].kwargs["used_retry_kinds"]
-            is create_stream.await_args_list[1].kwargs["used_retry_kinds"]
+            create_stream.await_args_list[0].kwargs["corrections"]
+            is create_stream.await_args_list[1].kwargs["corrections"]
         )
         assert recovered.text == "visible"
         assert failed_stream.closed
@@ -1887,7 +1889,7 @@ class TestStreamingExceptionHandling:
                 )
             )
         )
-        body = provider._build_request_body(request)
+        body = provider._chat._build_request_body(request)
         body["stream_options"] = {"include_usage": True}
         response = httpx2.Response(
             status_code=400,
@@ -1908,10 +1910,10 @@ class TestStreamingExceptionHandling:
 
         with (
             patch.object(
-                provider,
+                provider._chat,
                 "_create_stream",
                 new_callable=AsyncMock,
-                wraps=provider._create_stream,
+                wraps=provider._chat._create_stream,
             ) as create_stream,
             patch.object(
                 provider._client.chat.completions,
@@ -1924,7 +1926,7 @@ class TestStreamingExceptionHandling:
                 body=body,
                 output=assembler.output,
                 tool_argument_alias_buffers=assembler.tool_argument_alias_buffers,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
             )
 
         assert events is not None
@@ -1936,8 +1938,8 @@ class TestStreamingExceptionHandling:
         assert "stream_options" not in create.await_args_list[2].kwargs
         assert create_stream.await_count == 2
         assert (
-            create_stream.await_args_list[0].kwargs["used_retry_kinds"]
-            is create_stream.await_args_list[1].kwargs["used_retry_kinds"]
+            create_stream.await_args_list[0].kwargs["corrections"]
+            is create_stream.await_args_list[1].kwargs["corrections"]
         )
         assert invalid_repair.closed
         assert valid_repair.closed
@@ -1964,7 +1966,7 @@ class TestStreamingExceptionHandling:
             result = await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -2064,10 +2066,10 @@ class TestStreamingExceptionHandling:
 
         with (
             patch.object(
-                provider,
+                provider._chat,
                 "_create_stream",
                 new_callable=AsyncMock,
-                wraps=provider._create_stream,
+                wraps=provider._chat._create_stream,
             ) as create_stream,
             patch.object(
                 provider._client.chat.completions,
@@ -2115,7 +2117,7 @@ class TestStreamingExceptionHandling:
             result = await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -2151,7 +2153,7 @@ class TestStreamingExceptionHandling:
             result = await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -2184,7 +2186,7 @@ class TestStreamingExceptionHandling:
             await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -2210,7 +2212,7 @@ class TestStreamingExceptionHandling:
                 runner._collect_recovery_output(
                     {"model": "test-model", "messages": []},
                     include_reasoning=True,
-                    execution=execution,
+                    request_recovery=RequestRecovery(execution),
                     operation_kind=ProviderOperationKind.CONTINUATION,
                 )
             )
@@ -2259,7 +2261,7 @@ class TestStreamingExceptionHandling:
             result = await runner._collect_recovery_output(
                 {"model": "test-model", "messages": []},
                 include_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
                 operation_kind=ProviderOperationKind.CONTINUATION,
             )
 
@@ -2334,14 +2336,14 @@ class TestStreamingExceptionHandling:
                 thinking="hidden reasoning more",
             ),
         ) as mock_collect:
-            execution = runner._provider._admission.start_execution()
+            execution = runner._transport._admission.start_execution()
             events = await runner._recovery_events(
                 body={"messages": [{"role": "user", "content": "hello"}]},
                 assembler=assembler,
                 error=TimeoutError("cutoff"),
                 tool_argument_alias_buffers={},
                 output_reasoning=True,
-                execution=execution,
+                request_recovery=RequestRecovery(execution),
             )
 
         assert events is not None
@@ -2435,14 +2437,12 @@ class TestStreamingExceptionHandling:
         tool_chunk = _make_tool_calls_chunk(
             name="echo_smoke", arguments='{"message":', tool_id="call_repair"
         )
-        stream_mock = AsyncStreamMock([tool_chunk])
-
         with (
             patch.object(
                 provider._client.chat.completions,
                 "create",
                 new_callable=AsyncMock,
-                return_value=stream_mock,
+                side_effect=lambda **kwargs: AsyncStreamMock([tool_chunk]),
             ),
             patch.object(
                 _OpenAIChatStreamRunner,
@@ -3190,7 +3190,6 @@ async def test_openai_compat_stream_ends_with_contract_when_tool_name_never_arri
 @pytest.mark.asyncio
 @pytest.mark.parametrize("collector", [False, True])
 async def test_tool_argument_mapping_survives_correction_then_stream_reopen(collector):
-    provider = _alias_provider()
     request = _alias_request()
 
     def responder(bodies):
@@ -3212,7 +3211,11 @@ async def test_tool_argument_mapping_survives_correction_then_stream_reopen(coll
             ]
         return 200, _alias_events()
 
-    async with _harness("chat", responder, chat_provider=provider) as (_, bodies):
+    async with _harness("chat", responder, chat_provider_factory=_alias_provider) as (
+        _,
+        bodies,
+        provider,
+    ):
         if collector:
             runner = _make_stream_runner(provider, request=request)
             execution = provider._admission.start_execution()
@@ -3220,7 +3223,7 @@ async def test_tool_argument_mapping_survives_correction_then_stream_reopen(coll
                 recovered = await runner._collect_recovery_output(
                     runner._body,
                     include_reasoning=False,
-                    execution=execution,
+                    request_recovery=RequestRecovery(execution),
                     operation_kind=ProviderOperationKind.CONTINUATION,
                 )
                 arguments = json.loads(recovered.tool_calls[0]["function"]["arguments"])

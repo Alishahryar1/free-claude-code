@@ -12,6 +12,7 @@ from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
+    OpenAIChatBehavior,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
@@ -45,23 +46,14 @@ _PROFILE = OpenAIChatProfile(
 )
 
 
-class MistralProvider(OpenAIChatProvider):
-    """Mistral API using ``https://api.mistral.ai/v1/chat/completions``."""
+class MistralChatBehavior(OpenAIChatBehavior):
+    """Mistral Chat adaptation without HTTP ownership."""
 
     @property
-    def _reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:
+    def reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:
         return (("reasoning_effort",),)
 
-    def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
-    ):
-        super().__init__(
-            config,
-            profile=_PROFILE,
-            admission=admission,
-        )
-
-    def _finalize_chat_body(
+    def finalize_chat_body(
         self,
         body: dict[str, Any],
         *,
@@ -70,7 +62,7 @@ class MistralProvider(OpenAIChatProvider):
         apply_mistral_reasoning_request_shape(body, reasoning=reasoning)
         return body
 
-    def _get_retry_request_body(self, error: Exception, body: dict) -> dict | None:
+    def retry_request_body(self, error: Exception, body: dict) -> dict | None:
         """Retry once without Mistral reasoning fields when a model rejects them."""
         if not is_mistral_reasoning_rejection(error):
             return None
@@ -82,5 +74,18 @@ class MistralProvider(OpenAIChatProvider):
         )
         return retry_body
 
-    def _normalize_stream(self, stream: Any, _body: Mapping[str, Any]) -> Any:
+    def normalize_stream(self, stream: Any, _body: Mapping[str, Any]) -> Any:
         return normalize_mistral_stream(stream)
+
+
+class MistralProvider(OpenAIChatProvider):
+    """Mistral API using ``https://api.mistral.ai/v1/chat/completions``."""
+
+    def __init__(
+        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+    ):
+        super().__init__(
+            config,
+            behavior=MistralChatBehavior(_PROFILE),
+            admission=admission,
+        )

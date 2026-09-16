@@ -7,7 +7,7 @@ import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -105,36 +105,17 @@ def test_non_version_entrypoint_delegates_to_server_command() -> None:
     command.assert_called_once_with()
 
 
-def test_schedule_open_admin_browser_opens_when_health_ready() -> None:
-    """Opening /admin runs after /health preflight succeeds."""
-    from free_claude_code.cli import commands
-    from free_claude_code.config.server_urls import local_admin_url
+def test_explicit_open_admin_waits_for_owned_http_ready():
+    from free_claude_code.cli.commands import ServerSupervisor
 
-    settings = _launcher_settings(port=31337)
-    opened_urls: list[str] = []
-
-    class ImmediateThread:
-        def __init__(self, target=None, args=(), **_kwargs: object) -> None:
-            self._target = target
-            self._args = args
-
-        def start(self) -> None:
-            assert self._target is not None
-            self._target(*self._args)
-
-    with (
-        patch.object(commands.threading, "Thread", ImmediateThread),
-        patch.object(commands, "preflight_proxy", return_value=None),
-        patch.object(
-            commands.webbrowser,
-            "open",
-            side_effect=lambda url: opened_urls.append(url),
-        ),
-        patch.object(commands.time, "sleep"),
-    ):
-        commands.schedule_open_admin_browser(settings)
-
-    assert opened_urls == [local_admin_url(settings)]
+    supervisor = ServerSupervisor()
+    with patch.object(supervisor, "_open_admin") as open_admin:
+        supervisor.request_open_admin()
+        open_admin.assert_not_called()
+        settings = _launcher_settings()
+        supervisor._ready_settings = settings
+        supervisor.request_open_admin()
+        open_admin.assert_called_once_with(settings, 0)
 
 
 @pytest.mark.parametrize("open_admin_browser", (False, True))
@@ -312,18 +293,26 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
     def build_asgi_app(_settings: Settings, restart_callback: Callable[[], None]):
         restart_callbacks.append(restart_callback)
         app = SimpleNamespace(
-            runtime=SimpleNamespace(is_closed=False, begin_shutdown=lambda: None)
+            runtime=SimpleNamespace(
+                is_closed=False,
+                begin_shutdown=lambda: None,
+                http_started=lambda: None,
+                close=AsyncMock(return_value=True),
+            )
         )
         apps.append(app)
         return app
 
     class FakeServer:
-        def __init__(self, config, *, begin_shutdown):
+        def __init__(self, config, *, begin_shutdown, on_started, close_runtime):
             self.config = config
+            self.on_started = on_started
+            self.started = True
             self.should_exit = False
             servers.append(self)
 
-        def run(self):
+        def run(self, sockets=None):
+            self.on_started()
             if len(servers) == 1:
                 restart_callbacks[-1]()
                 assert self.should_exit is True
@@ -334,17 +323,22 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
 
     with (
         patch.object(commands, "get_settings", get_settings),
-        patch.object(commands.uvicorn, "Config", side_effect=fake_config),
-        patch.object(commands, "RuntimeServer", side_effect=FakeServer),
-        patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
-        patch.object(commands, "schedule_open_admin_browser") as schedule_open_admin,
+        patch("uvicorn.Config", side_effect=fake_config),
+        patch(
+            "free_claude_code.cli.uvicorn_server.RuntimeServer", side_effect=FakeServer
+        ),
+        patch(
+            "free_claude_code.runtime.bootstrap.build_asgi_app",
+            side_effect=build_asgi_app,
+        ),
+        patch.object(commands.ServerSupervisor, "_open_admin") as open_admin,
         patch.object(commands, "clear_settings_cache") as clear_settings_cache,
         patch.object(commands, "kill_all_best_effort") as kill_all,
     ):
         commands.serve()
 
     assert len(servers) == 2
-    schedule_open_admin.assert_called_once_with(settings)
+    open_admin.assert_called_once_with(settings, 0)
     clear_settings_cache.assert_called_once()
     kill_all.assert_called_once()
 
@@ -360,16 +354,24 @@ def test_serve_supervisor_refuses_restart_after_incomplete_shutdown() -> None:
     def build_asgi_app(_settings: Settings, restart_callback: Callable[[], None]):
         restart_callbacks.append(restart_callback)
         return SimpleNamespace(
-            runtime=SimpleNamespace(is_closed=False, begin_shutdown=lambda: None)
+            runtime=SimpleNamespace(
+                is_closed=False,
+                begin_shutdown=lambda: None,
+                http_started=lambda: None,
+                close=AsyncMock(return_value=True),
+            )
         )
 
     class FakeServer:
-        def __init__(self, config, *, begin_shutdown):
+        def __init__(self, config, *, begin_shutdown, on_started, close_runtime):
             self.config = config
+            self.on_started = on_started
+            self.started = True
             self.should_exit = False
             servers.append(self)
 
-        def run(self):
+        def run(self, sockets=None):
+            self.on_started()
             restart_callbacks[-1]()
             assert self.should_exit is True
 
@@ -378,10 +380,15 @@ def test_serve_supervisor_refuses_restart_after_incomplete_shutdown() -> None:
 
     with (
         patch.object(commands, "get_settings", get_settings),
-        patch.object(commands.uvicorn, "Config", side_effect=fake_config),
-        patch.object(commands, "RuntimeServer", side_effect=FakeServer),
-        patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
-        patch.object(commands, "schedule_open_admin_browser"),
+        patch("uvicorn.Config", side_effect=fake_config),
+        patch(
+            "free_claude_code.cli.uvicorn_server.RuntimeServer", side_effect=FakeServer
+        ),
+        patch(
+            "free_claude_code.runtime.bootstrap.build_asgi_app",
+            side_effect=build_asgi_app,
+        ),
+        patch.object(commands.ServerSupervisor, "_open_admin"),
         patch.object(commands, "clear_settings_cache") as clear_settings_cache,
         patch.object(commands, "kill_all_best_effort") as kill_all,
     ):
@@ -411,11 +418,11 @@ def test_serve_handles_keyboard_interrupt_without_traceback() -> None:
         commands.serve()
 
     clear_settings_cache.assert_not_called()
-    kill_all.assert_called_once()
+    kill_all.assert_not_called()
 
 
 def test_claude_child_env_targets_current_proxy_config() -> None:
-    from free_claude_code.cli.claude_env import build_claude_proxy_env
+    from free_claude_code.harnesses.claude import build_claude_proxy_env
 
     env = build_claude_proxy_env(
         proxy_root_url="http://127.0.0.1:9090",

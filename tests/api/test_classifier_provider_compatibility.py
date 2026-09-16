@@ -21,16 +21,22 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.reasoning import ReasoningCapability
 from free_claude_code.providers.open_router import OpenRouterProvider
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    SDKStreamDouble,
+    immediate_admission,
+    make_provider_config,
+)
+from tests.web_tools_support import StubWebToolsClient
 
 
-class ClassifierStream:
+class ClassifierStream(SDKStreamDouble):
     def __init__(self, *, starved: bool = False, error: Exception | None = None):
         self.starved = starved
         self.error = error
         self.closed = False
+        super().__init__(self._iterate(), close=self.aclose)
 
-    async def __aiter__(self):
+    async def _iterate(self):
         if self.error is not None:
             raise self.error
         for text, reasoning, finish in (
@@ -130,21 +136,25 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
             text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n",
         )
 
-    provider = OpenRouterProvider(
-        make_provider_config("test", "https://provider.invalid/v1"),
-        admission=immediate_admission(),
-    )
-    try:
-        async with AsyncOpenAI(
+    with patch(
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
+        return_value=AsyncOpenAI(
             api_key="test",
             base_url="https://provider.invalid/v1",
             max_retries=0,
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
-        ) as client:
-            with patch.object(provider, "_client", client):
-                response = await MessagesHandler(
-                    Settings(), provider_resolver=lambda _: provider
-                ).create(classifier_request())
+        ),
+    ):
+        provider = OpenRouterProvider(
+            make_provider_config("test", "https://provider.invalid/v1"),
+            admission=immediate_admission(),
+        )
+    try:
+        response = await MessagesHandler(
+            Settings(),
+            provider_resolver=AsyncMock(side_effect=lambda _: provider),
+            web_tools=StubWebToolsClient(),
+        ).create(classifier_request())
         assert isinstance(response, JSONResponse)
         assert len(bodies) == (2 if corrects else 1)
         if corrects:
@@ -216,7 +226,11 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(reject_off, 
         return result
 
     try:
-        handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+        handler = MessagesHandler(
+            Settings(),
+            provider_resolver=AsyncMock(side_effect=lambda _: provider),
+            web_tools=StubWebToolsClient(),
+        )
         with patch.object(
             provider._client.chat.completions,
             "create",
@@ -274,13 +288,21 @@ async def test_handler_uses_cached_capabilities_for_the_selected_provider(
     try:
         handler = MessagesHandler(
             Settings(),
-            provider_resolver=lambda _: provider,
-            model_infos=(
-                ProviderModelInfo(
-                    "open_router/dynamic-route",
-                    reasoning_capability=ReasoningCapability(capability),
+            provider_resolver=AsyncMock(side_effect=lambda _: provider),
+            model_info_lookup=lambda provider_id, model_id: next(
+                (
+                    info
+                    for info in (
+                        ProviderModelInfo(
+                            "open_router/dynamic-route",
+                            reasoning_capability=ReasoningCapability(capability),
+                        ),
+                    )
+                    if info.model_id == f"{provider_id}/{model_id}"
                 ),
+                None,
             ),
+            web_tools=StubWebToolsClient(),
         )
         with patch.object(
             provider._client.chat.completions,

@@ -1,4 +1,4 @@
-"""Ordinary ingress, routing, readiness, and preflight error contracts."""
+"""Ordinary ingress, routing, readiness, and validation error contracts."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,7 +13,9 @@ from free_claude_code.application.errors import (
     UnknownProviderError,
 )
 from free_claude_code.config.settings import Settings
+from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.support import create_test_app
+from tests.providers.support import immediate_admission, make_provider_config
 
 _PRODUCT_REQUESTS = (
     (
@@ -44,6 +46,48 @@ def _settings(**updates: object) -> Settings:
             **updates,
         }
     )
+
+
+@pytest.mark.parametrize("mode", ["messages_stream", "messages_nonstream", "responses"])
+def test_conversion_error_returns_http_400_without_generation(mode):
+    payload = {"model": "open_router/test-model"}
+    if mode == "responses":
+        payload["input"] = [
+            {"type": "reasoning", "encrypted_content": "fcc:history:v2:unsupported"}
+        ]
+        path = "/v1/responses"
+    else:
+        payload["stream"] = mode == "messages_stream"
+        payload["messages"] = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": "fcc:history:v2:unsupported"}
+                ],
+            }
+        ]
+        path = "/v1/messages"
+    sdk = MagicMock()
+    with patch(
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI", return_value=sdk
+    ):
+        provider = OpenRouterProvider(
+            make_provider_config(
+                api_key="test", base_url="https://provider.invalid/v1"
+            ),
+            admission=immediate_admission(),
+        )
+    with (
+        patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
+        TestClient(create_test_app(_settings())) as client,
+    ):
+        response = client.post(path, json=payload)
+    assert response.status_code == 400
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert "replay" in response.json()["error"]["message"]
+    assert "x-should-retry" not in response.headers
+    sdk.chat.completions.create.assert_not_called()
 
 
 def _assert_ordinary_protocol_error(
@@ -189,19 +233,19 @@ def test_unknown_provider_is_protocol_specific_400_without_terminal_header(
     _PRODUCT_REQUESTS,
     ids=("messages", "responses"),
 )
-def test_preflight_rejection_is_protocol_specific_400_without_terminal_header(
+def test_startup_rejection_is_protocol_specific_400_without_terminal_header(
     wire_api: str,
     path: str,
     payload: dict[str, object],
 ) -> None:
     message = "bad tool shape"
     provider = MagicMock()
-    preflight = (
-        provider.preflight_responses
+    stream = (
+        provider.stream_responses
         if wire_api == "responses"
-        else provider.preflight_messages
+        else provider.stream_messages
     )
-    preflight.side_effect = InvalidRequestError(message)
+    stream.side_effect = InvalidRequestError(message)
     app = create_test_app(_settings())
 
     with (
@@ -218,7 +262,7 @@ def test_preflight_rejection_is_protocol_specific_400_without_terminal_header(
         if wire_api == "responses"
         else provider.stream_messages
     )
-    stream.assert_not_called()
+    stream.assert_called_once()
     _assert_ordinary_protocol_error(
         response,
         wire_api=wire_api,

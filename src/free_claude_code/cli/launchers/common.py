@@ -3,6 +3,7 @@
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
@@ -18,33 +19,34 @@ PROXY_PREFLIGHT_PATH = "/health"
 PROXY_PREFLIGHT_TIMEOUT_SECONDS = 1.5
 
 
-def proxy_v1_url(proxy_root_url: str) -> str:
-    """Return the canonical local proxy API root for client launchers."""
-
-    stripped = proxy_root_url.rstrip("/")
-    return stripped if stripped.endswith("/v1") else f"{stripped}/v1"
-
-
 def preflight_proxy(proxy_root_url: str) -> str | None:
     """Return an error message when the local proxy health check is unreachable."""
 
     url = f"{proxy_root_url.rstrip('/')}{PROXY_PREFLIGHT_PATH}"
     request = Request(url, method="GET")
-    try:
-        with open_local_request(
-            request, timeout=PROXY_PREFLIGHT_TIMEOUT_SECONDS
-        ) as response:
-            status_code = response.status
-    except HTTPError as exc:
-        return f"returned HTTP {exc.code}"
-    except URLError as exc:
-        return str(exc.reason)
-    except OSError as exc:
-        return str(exc)
-
-    if not 200 <= status_code < 300:
-        return f"returned HTTP {status_code}"
-    return None
+    deadline = time.monotonic() + 30.0
+    while True:
+        try:
+            with open_local_request(
+                request,
+                timeout=min(
+                    PROXY_PREFLIGHT_TIMEOUT_SECONDS,
+                    max(0.001, deadline - time.monotonic()),
+                ),
+            ) as response:
+                status_code = response.status
+        except HTTPError as exc:
+            return f"returned HTTP {exc.code}"
+        except (URLError, OSError) as exc:
+            reason = exc.reason if isinstance(exc, URLError) else exc
+            # A reserved listener can accept TCP while the HTTP app is loading.
+            # Refusals and other failures still return the normal launch hint.
+            if isinstance(reason, TimeoutError) and time.monotonic() < deadline:
+                continue
+            return str(reason)
+        if not 200 <= status_code < 300:
+            return f"returned HTTP {status_code}"
+        return None
 
 
 def resolve_client_binary(

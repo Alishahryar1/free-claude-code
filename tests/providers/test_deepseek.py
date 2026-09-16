@@ -1,10 +1,13 @@
 """Tests for DeepSeek OpenAI-compatible Chat Completions provider."""
 
+import json
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx2
 import pytest
+from openai import BadRequestError
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
@@ -17,11 +20,14 @@ from free_claude_code.core.anthropic.models import (
     Tool,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.openai_chat import is_synthetic_chat_tool_turn_boundary
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from tests.providers.support import (
     REASONING_OFF,
     REASONING_ON,
+    SDKStreamDouble,
     capture_openai_chat_wire_body,
     immediate_admission,
     make_provider_config,
@@ -50,7 +56,7 @@ def test_default_base_url_alias():
 
 def test_init(deepseek_config):
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_client:
         provider = DeepSeekProvider(deepseek_config, admission=immediate_admission())
     assert provider._api_key == "test_deepseek_key"
@@ -90,7 +96,7 @@ def test_responses_request_uses_deepseek_chat_policy(deepseek_provider):
         }
     )
 
-    translated = deepseek_provider._build_responses_request_body(
+    translated = deepseek_provider._chat._build_responses_request_body(
         request, reasoning=REASONING_ON
     )
 
@@ -125,7 +131,7 @@ def test_responses_tool_history_keeps_deepseek_replayable_reasoning(
         }
     )
 
-    translated = deepseek_provider._build_responses_request_body(
+    translated = deepseek_provider._chat._build_responses_request_body(
         request, reasoning=REASONING_ON
     )
 
@@ -237,8 +243,10 @@ def test_responses_tool_history_keeps_deepseek_replayable_reasoning(
 def test_maps_only_complete_consistent_cache_usage(
     deepseek_provider, usage, anthropic_expected, responses_cached
 ) -> None:
-    assert deepseek_provider._anthropic_usage_fields(usage) == anthropic_expected
-    assert deepseek_provider._cached_input_tokens(usage) == responses_cached
+    assert (
+        deepseek_provider._behavior.anthropic_usage_fields(usage) == anthropic_expected
+    )
+    assert deepseek_provider._behavior.cached_input_tokens(usage) == responses_cached
 
 
 def test_build_request_body_openai_chat_shape(deepseek_provider):
@@ -248,7 +256,7 @@ def test_build_request_body_openai_chat_shape(deepseek_provider):
         messages=[Message(role="user", content="Hello")],
         system="S",
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["model"] == "deepseek-v4-pro"
@@ -265,7 +273,7 @@ def test_build_request_body_default_max_tokens(deepseek_provider):
         model="m",
         messages=[Message(role="user", content="x")],
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
@@ -279,7 +287,7 @@ def test_build_request_body_thinking_enabled(deepseek_provider):
             "thinking": {"type": "enabled", "budget_tokens": 2000},
         }
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["extra_body"]["thinking"] == {"type": "enabled"}
@@ -301,7 +309,7 @@ def test_build_request_body_tool_list_keeps_thinking(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -319,7 +327,7 @@ def test_build_request_body_tool_choice_keeps_thinking(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -346,7 +354,7 @@ def test_build_request_body_forced_tool_choice_downgrades_to_auto(
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -371,7 +379,7 @@ def test_build_request_body_encodes_reasoning_off():
             "thinking": {"type": "enabled", "budget_tokens": 1},
         }
     )
-    body = provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
     assert body["extra_body"]["thinking"] == {"type": "disabled"}
     assert "stream_options" not in body
 
@@ -395,7 +403,7 @@ def test_non_tool_thinking_survives_conversion(deepseek_provider):
             ],
         }
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["messages"][0] == {
@@ -420,7 +428,7 @@ def test_redacted_thinking_is_kept_until_destination_preparation(deepseek_provid
             ],
         }
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["messages"][0]["reasoning_details"] == [
@@ -470,7 +478,7 @@ def test_tool_history_with_replayable_thinking_preserves_thinking(deepseek_provi
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -521,7 +529,7 @@ def test_tool_history_with_unsigned_thinking_preserves_thinking(deepseek_provide
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -576,7 +584,7 @@ def test_tool_history_without_thinking_keeps_selected_effort(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -623,7 +631,7 @@ def test_tool_history_with_empty_thinking_preserves_reasoning_state(deepseek_pro
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -666,7 +674,7 @@ def test_tool_history_with_empty_top_level_reasoning_preserves_reasoning_state(
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -699,7 +707,7 @@ def test_thinking_off_preserves_historical_reasoning():
             ],
         }
     )
-    body = provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
     assert body["extra_body"]["thinking"] == {"type": "disabled"}
     assert body["messages"][0]["reasoning_content"] == "sec"
 
@@ -744,7 +752,7 @@ def test_thinking_off_still_replays_required_tool_reasoning():
         }
     )
 
-    body = provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
     assert body["extra_body"]["thinking"] == {"type": "disabled"}
     assert body["messages"][0]["reasoning_content"] == "required"
@@ -779,98 +787,58 @@ def test_passthrough_tool_use_and_result(deepseek_provider):
             ],
         }
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "n"
     assert body["messages"][1]["role"] == "tool"
 
 
-def test_preflight_strips_user_image():
-    """Image blocks are silently stripped (DeepSeek lacks vision); request must not fail."""
+@pytest.mark.parametrize(
+    "model",
+    [
+        "deepseek-flash",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-v4-flash",
+        "deepseek-chat",
+        "gateway/future-model",
+    ],
+)
+@pytest.mark.parametrize(
+    ("source", "expected_url"),
+    [
+        (
+            {"type": "base64", "media_type": "image/png", "data": "YQ=="},
+            "data:image/png;base64,YQ==",
+        ),
+        (
+            {"type": "url", "url": "https://images.example.test/shot.png"},
+            "https://images.example.test/shot.png",
+        ),
+    ],
+)
+def test_forwards_user_image_for_any_model(
+    deepseek_provider, model, source, expected_url
+):
     request = MessagesRequest(
-        model="m",
+        model=model,
         messages=[
             Message(
                 role="user",
-                content=[
-                    ContentBlockImage(
-                        type="image",
-                        source={
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": "YQ==",
-                        },
-                    )
-                ],
+                content=[ContentBlockImage(type="image", source=source)],
             )
         ],
     )
-    provider = DeepSeekProvider(
-        make_provider_config(
-            api_key="k",
-            base_url=DEEPSEEK_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
-        ),
-        admission=immediate_admission(),
+    body = deepseek_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
     )
-    # Should not raise; image is stripped.
-    provider.preflight_messages(request, reasoning=REASONING_ON)
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
-    content = body["messages"][0]["content"]
-    assert "attachment omitted" in content.lower()
-    assert "image or document inputs" in content.lower()
-
-
-def test_vision_model_forwards_user_image():
-    """Vision-capable DeepSeek models receive image blocks as OpenAI image_url parts."""
-    request = MessagesRequest(
-        model="deepseek-v4-flash-vision-exp",
-        messages=[
-            Message(
-                role="user",
-                content=[
-                    ContentBlockImage(
-                        type="image",
-                        source={
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": "YQ==",
-                        },
-                    ),
-                    {"type": "text", "text": "Describe this image"},
-                ],
-            )
-        ],
-    )
-    provider = DeepSeekProvider(
-        make_provider_config(
-            api_key="k",
-            base_url=DEEPSEEK_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
-        ),
-        admission=immediate_admission(),
-    )
-    # Must not raise on preflight (no InvalidRequestError for image blocks).
-    provider.preflight_messages(request, reasoning=REASONING_ON)
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
-    content = body["messages"][0]["content"]
-    assert isinstance(content, list)
-    image_parts = [
-        part
-        for part in content
-        if isinstance(part, dict) and part.get("type") == "image_url"
+    assert body["model"] == model
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": expected_url}}],
+        }
     ]
-    assert len(image_parts) == 1
-    assert image_parts[0]["image_url"]["url"] == "data:image/png;base64,YQ=="
-    text_parts = [
-        part
-        for part in content
-        if isinstance(part, dict) and part.get("type") == "text"
-    ]
-    assert text_parts[0]["text"] == "Describe this image"
 
 
 def test_vision_model_strips_user_document():
@@ -902,8 +870,8 @@ def test_vision_model_strips_user_document():
         ),
         admission=immediate_admission(),
     )
-    provider.preflight_messages(request, reasoning=REASONING_ON)
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    provider.stream_messages(request, reasoning=REASONING_ON)
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
     content = body["messages"][0]["content"]
     assert content
     if isinstance(content, str):
@@ -920,10 +888,11 @@ def test_vision_model_strips_user_document():
             for part in content
         )
     assert "attachment omitted" in lowered
-    assert "image or document inputs" in lowered
+    assert "document inputs" in lowered
+    assert "image" not in lowered
 
 
-def test_preflight_rejects_mcp_servers():
+def test_startup_rejects_mcp_servers():
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -939,10 +908,10 @@ def test_preflight_rejects_mcp_servers():
         admission=immediate_admission(),
     )
     with pytest.raises(InvalidRequestError, match="mcp_servers"):
-        provider.preflight_messages(request)
+        provider.stream_messages(request)
 
 
-def test_preflight_rejects_listed_server_tools_in_tools_list():
+def test_startup_rejects_listed_server_tools_in_tools_list():
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -958,10 +927,10 @@ def test_preflight_rejects_listed_server_tools_in_tools_list():
         admission=immediate_admission(),
     )
     with pytest.raises(InvalidRequestError, match="web_search"):
-        provider.preflight_messages(request)
+        provider.stream_messages(request)
 
 
-def test_preflight_preserves_completed_server_tool_history():
+def test_startup_preserves_completed_server_tool_history():
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -994,8 +963,8 @@ def test_preflight_preserves_completed_server_tool_history():
         ),
         admission=immediate_admission(),
     )
-    provider.preflight_messages(request)
-    body = provider._build_request_body(request)
+    provider.stream_messages(request)
+    body = provider._chat._build_request_body(request)
     assert "[Earlier tool record]" in body["messages"][0]["content"]
 
 
@@ -1010,7 +979,7 @@ def test_non_tool_top_level_reasoning_survives_conversion(deepseek_provider):
             )
         ],
     )
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assert body["messages"][0] == {
@@ -1051,7 +1020,7 @@ def test_tool_call_top_level_reasoning_is_replayed(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1129,7 +1098,7 @@ async def test_wire_messages_keep_prefix_and_effort_when_old_reasoning_is_absent
                 "thinking": {"type": "enabled"},
             }
         )
-        return deepseek_provider._build_request_body(
+        return deepseek_provider._chat._build_request_body(
             request, reasoning=reasoning_for(request)
         )
 
@@ -1188,7 +1157,7 @@ async def test_stream_uses_chat_completions_and_maps_cache_usage(deepseek_provid
             ),
         )
 
-    create = AsyncMock(return_value=fake_stream())
+    create = AsyncMock(return_value=SDKStreamDouble(fake_stream()))
     with patch.object(deepseek_provider._client.chat.completions, "create", create):
         chunks = [
             chunk
@@ -1254,7 +1223,7 @@ async def test_responses_stream_maps_deepseek_cache_usage(deepseek_provider):
             ),
         )
 
-    create = AsyncMock(return_value=fake_stream())
+    create = AsyncMock(return_value=SDKStreamDouble(fake_stream()))
     with patch.object(deepseek_provider._client.chat.completions, "create", create):
         chunks = [
             chunk
@@ -1286,7 +1255,7 @@ def test_preserves_extra_body_for_openai_chat_request(deepseek_provider):
         "extra_body": {"note": 1},
     }
     r = MessagesRequest.model_validate(raw)
-    body = deepseek_provider._build_request_body(r, reasoning=reasoning_for(r))
+    body = deepseek_provider._chat._build_request_body(r, reasoning=reasoning_for(r))
     assert body["extra_body"] == {"note": 1}
 
 
@@ -1324,7 +1293,7 @@ def test_normalizes_tool_result_content_array_to_string(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1360,7 +1329,7 @@ def test_strips_document_blocks_for_deepseek(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1371,8 +1340,7 @@ def test_strips_document_blocks_for_deepseek(deepseek_provider):
     }
 
 
-def test_strips_image_blocks_for_deepseek(deepseek_provider):
-    """Image blocks are stripped for DeepSeek since it doesn't support vision."""
+def test_preserves_user_image_and_text_order(deepseek_provider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1386,20 +1354,33 @@ def test_strips_image_blocks_for_deepseek(deepseek_provider):
                             "source": {
                                 "type": "base64",
                                 "media_type": "image/png",
-                                "data": "abc",
+                                "data": "YQ==",
                             },
                         },
+                        {"type": "text", "text": "then explain"},
                     ],
                 },
             ],
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["messages"][0] == {"role": "user", "content": "describe this"}
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,YQ=="},
+                },
+                {"type": "text", "text": "then explain"},
+            ],
+        }
+    ]
 
 
 def test_normalizes_tool_result_content_dict_to_string(deepseek_provider):
@@ -1433,7 +1414,7 @@ def test_normalizes_tool_result_content_dict_to_string(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1444,11 +1425,11 @@ def test_normalizes_tool_result_content_dict_to_string(deepseek_provider):
     assert "success" in tool_result["content"]
 
 
-def test_strips_image_block_inside_tool_result(deepseek_provider):
-    """Image blocks nested inside tool_result.content are stripped, not rejected."""
+@pytest.mark.parametrize("model", ["deepseek-flash", "deepseek-v4-flash-vision-exp"])
+def test_preserves_image_and_text_inside_tool_result(deepseek_provider, model):
     request = MessagesRequest.model_validate(
         {
-            "model": "m",
+            "model": model,
             "messages": [
                 {
                     "role": "assistant",
@@ -1474,9 +1455,10 @@ def test_strips_image_block_inside_tool_result(deepseek_provider):
                                     "source": {
                                         "type": "base64",
                                         "media_type": "image/png",
-                                        "data": "abc",
+                                        "data": "YQ==",
                                     },
                                 },
+                                {"type": "text", "text": "inspect the screenshot"},
                             ],
                         }
                     ],
@@ -1485,21 +1467,31 @@ def test_strips_image_block_inside_tool_result(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
-    tool_result = body["messages"][1]
-    assert tool_result["role"] == "tool"
-    # After stripping + string-normalization, no base64/image marker survives.
-    assert isinstance(tool_result["content"], str)
-    assert "screenshot saved" in tool_result["content"]
-    assert "base64" not in tool_result["content"]
-    assert "abc" not in tool_result["content"]
+    assert [message["role"] for message in body["messages"]] == [
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    assert body["messages"][1] == {
+        "role": "tool",
+        "tool_call_id": "t1",
+        "content": "[Image-bearing tool output follows in user content.]",
+    }
+    assert is_synthetic_chat_tool_turn_boundary(body["messages"][2])
+    assert body["messages"][3]["content"] == [
+        {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
+        {"type": "text", "text": "screenshot saved"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}},
+        {"type": "text", "text": "inspect the screenshot"},
+    ]
 
 
-def test_image_only_tool_result_replaced_with_placeholder(deepseek_provider):
-    """A tool_result whose only inner block is an image becomes a placeholder string."""
+def test_image_only_tool_result_reaches_user_content(deepseek_provider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1525,9 +1517,8 @@ def test_image_only_tool_result_replaced_with_placeholder(deepseek_provider):
                                 {
                                     "type": "image",
                                     "source": {
-                                        "type": "base64",
-                                        "media_type": "image/png",
-                                        "data": "abc",
+                                        "type": "url",
+                                        "url": "https://images.example.test/shot.png",
                                     },
                                 },
                             ],
@@ -1538,22 +1529,43 @@ def test_image_only_tool_result_replaced_with_placeholder(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
-    tool_result = body["messages"][1]
-    assert tool_result["role"] == "tool"
-    assert isinstance(tool_result["content"], str)
-    assert tool_result["content"] != ""
-    assert "attachment omitted" in tool_result["content"].lower()
-    assert "image or document inputs" in tool_result["content"].lower()
+    assert [message["role"] for message in body["messages"]] == [
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    assert body["messages"][1] == {
+        "role": "tool",
+        "tool_call_id": "t1",
+        "content": "[Image-bearing tool output follows in user content.]",
+    }
+    assert is_synthetic_chat_tool_turn_boundary(body["messages"][2])
+    assert body["messages"][3]["content"] == [
+        {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
+        {
+            "type": "image_url",
+            "image_url": {"url": "https://images.example.test/shot.png"},
+        },
+    ]
 
 
-def test_document_only_tool_result_replaced_with_generic_placeholder(
+@pytest.mark.parametrize(
+    "tool_content",
+    [
+        [],
+        [{"type": "document", "source": {"type": "file", "file_id": "file_pdf"}}],
+    ],
+)
+def test_document_or_empty_tool_result_keeps_placeholder(
     deepseek_provider,
+    tool_content,
 ):
-    """A document-only tool_result uses the generic attachment placeholder."""
+    """Document-only and empty tool results retain their omission marker."""
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1575,15 +1587,7 @@ def test_document_only_tool_result_replaced_with_generic_placeholder(
                         {
                             "type": "tool_result",
                             "tool_use_id": "t1",
-                            "content": [
-                                {
-                                    "type": "document",
-                                    "source": {
-                                        "type": "file",
-                                        "file_id": "file_pdf",
-                                    },
-                                },
-                            ],
+                            "content": tool_content,
                         }
                     ],
                 },
@@ -1591,7 +1595,7 @@ def test_document_only_tool_result_replaced_with_generic_placeholder(
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1601,38 +1605,6 @@ def test_document_only_tool_result_replaced_with_generic_placeholder(
     assert "attachment omitted" in tool_result["content"].lower()
     assert "document inputs" in tool_result["content"].lower()
     assert "image omitted" not in tool_result["content"].lower()
-
-
-def test_image_only_message_replaced_with_placeholder(deepseek_provider):
-    """A top-level image-only message remains non-empty after stripping."""
-    request = MessagesRequest.model_validate(
-        {
-            "model": "m",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": "abc",
-                            },
-                        },
-                    ],
-                },
-            ],
-        }
-    )
-
-    body = deepseek_provider._build_request_body(
-        request, reasoning=reasoning_for(request)
-    )
-
-    content = body["messages"][0]["content"]
-    assert "attachment omitted" in content.lower()
-    assert "image or document inputs" in content.lower()
 
 
 def test_document_only_message_replaced_with_placeholder(deepseek_provider):
@@ -1654,7 +1626,7 @@ def test_document_only_message_replaced_with_placeholder(deepseek_provider):
         }
     )
 
-    body = deepseek_provider._build_request_body(
+    body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -1663,8 +1635,8 @@ def test_document_only_message_replaced_with_placeholder(deepseek_provider):
     assert "document inputs" in content.lower()
 
 
-def test_warns_when_stripping_attachment_blocks(deepseek_provider, caplog):
-    """A warning is emitted when image/document blocks are dropped so users notice."""
+def test_warns_when_stripping_document_blocks(deepseek_provider, caplog):
+    """A warning identifies documents omitted from user and tool content."""
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1674,10 +1646,10 @@ def test_warns_when_stripping_attachment_blocks(deepseek_provider, caplog):
                     "content": [
                         {"type": "text", "text": "look"},
                         {
-                            "type": "image",
+                            "type": "document",
                             "source": {
                                 "type": "base64",
-                                "media_type": "image/png",
+                                "media_type": "application/pdf",
                                 "data": "abc",
                             },
                         },
@@ -1702,10 +1674,10 @@ def test_warns_when_stripping_attachment_blocks(deepseek_provider, caplog):
                             "tool_use_id": "t1",
                             "content": [
                                 {
-                                    "type": "image",
+                                    "type": "document",
                                     "source": {
                                         "type": "base64",
-                                        "media_type": "image/png",
+                                        "media_type": "application/pdf",
                                         "data": "abc",
                                     },
                                 },
@@ -1718,26 +1690,297 @@ def test_warns_when_stripping_attachment_blocks(deepseek_provider, caplog):
     )
 
     with caplog.at_level(logging.WARNING):
-        deepseek_provider._build_request_body(request, reasoning=reasoning_for(request))
+        deepseek_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
 
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("stripped unsupported attachment blocks" in r.message for r in warnings)
+    assert any("stripped unsupported document blocks" in r.message for r in warnings)
+    assert not any("no vision" in r.message for r in warnings)
 
 
-def test_no_warning_when_no_attachments(deepseek_provider, caplog):
-    """No warning is emitted on plain text-only requests."""
+@pytest.mark.parametrize(
+    "content",
+    [
+        "hello",
+        [
+            {
+                "type": "image",
+                "source": {
+                    "type": "url",
+                    "url": "https://images.example.test/shot.png",
+                },
+            }
+        ],
+    ],
+)
+def test_no_warning_when_no_documents(deepseek_provider, caplog, content):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
-            "messages": [{"role": "user", "content": "hello"}],
+            "messages": [{"role": "user", "content": content}],
         }
     )
 
     with caplog.at_level(logging.WARNING):
-        deepseek_provider._build_request_body(request, reasoning=reasoning_for(request))
+        deepseek_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
 
-    assert not any(
-        "stripped unsupported attachment blocks" in r.message
-        for r in caplog.records
-        if r.levelno == logging.WARNING
+    assert not any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_parallel_tool_results_close_before_image_content(deepseek_provider):
+    request = MessagesRequest.model_validate(
+        {
+            "model": "deepseek-flash",
+            "tools": [{"name": "Read", "input_schema": {"type": "object"}}],
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+                        {"type": "tool_use", "id": "t2", "name": "Read", "input": {}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t2",
+                            "content": "text result",
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t1",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": "YQ==",
+                                    },
+                                }
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }
     )
+
+    body = deepseek_provider._chat._build_request_body(request, reasoning=REASONING_ON)
+
+    messages = body["messages"]
+    assert [message["role"] for message in messages] == [
+        "assistant",
+        "tool",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    assert [message["tool_call_id"] for message in messages[1:3]] == ["t1", "t2"]
+    assert (
+        messages[1]["content"] == "[Image-bearing tool output follows in user content.]"
+    )
+    assert messages[2]["content"] == "text result"
+    assert is_synthetic_chat_tool_turn_boundary(messages[3])
+    assert messages[3]["reasoning_content"] == ""
+    assert messages[4]["content"] == [
+        {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}},
+    ]
+
+
+@pytest.mark.parametrize("inside_tool_result", [False, True])
+def test_mixed_attachment_content_omits_only_document(
+    deepseek_provider, inside_tool_result
+):
+    content = [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "YQ=="},
+        },
+        {"type": "document", "source": {"type": "file", "file_id": "private_pdf"}},
+    ]
+    messages = [{"role": "user", "content": content}]
+    if inside_tool_result:
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "Read", "input": {}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": content}
+                ],
+            },
+        ]
+    request = MessagesRequest.model_validate(
+        {"model": "deepseek-flash", "messages": messages}
+    )
+    original = request.model_dump()
+
+    body = deepseek_provider._chat._build_request_body(request, reasoning=REASONING_OFF)
+
+    images = [
+        part
+        for message in body["messages"]
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+        if part.get("type") == "image_url"
+    ]
+    assert images == [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}}
+    ]
+    assert "private_pdf" not in json.dumps(body["messages"])
+    assert request.model_dump() == original
+
+
+@pytest.mark.parametrize(
+    ("source", "error"),
+    [
+        (
+            {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "private_invalid_base64",
+            },
+            "Image data is not valid base64",
+        ),
+        (
+            {"type": "file", "file_id": "private_file"},
+            "cannot cross this protocol boundary",
+        ),
+        ({"type": "url", "url": ""}, "Image URL must be a non-empty string"),
+    ],
+)
+def test_rejects_unportable_image_without_exposing_source(
+    deepseek_provider, source, error
+):
+    request = MessagesRequest(
+        model="deepseek-flash",
+        messages=[
+            Message(
+                role="user", content=[ContentBlockImage(type="image", source=source)]
+            )
+        ],
+    )
+
+    with pytest.raises(InvalidRequestError, match=error) as exc_info:
+        deepseek_provider._chat._build_request_body(request, reasoning=REASONING_OFF)
+
+    assert "private_" not in str(exc_info.value)
+
+
+def test_shared_conversion_rejects_assistant_image(deepseek_provider):
+    image = {
+        "type": "image",
+        "source": {"type": "url", "url": "https://images.example.test/shot.png"},
+    }
+    request = MessagesRequest.model_validate(
+        {
+            "model": "deepseek-flash",
+            "messages": [{"role": "assistant", "content": [image]}],
+        }
+    )
+
+    with pytest.raises(InvalidRequestError, match="Assistant image blocks"):
+        deepseek_provider._chat._build_request_body(request, reasoning=REASONING_OFF)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire_api", ["messages", "responses"])
+async def test_upstream_image_rejection_preserves_image_and_fails_once(
+    deepseek_provider, wire_api
+):
+    if wire_api == "messages":
+        request = MessagesRequest(
+            model="deepseek-flash",
+            messages=[
+                Message(
+                    role="user",
+                    content=[
+                        ContentBlockImage(
+                            type="image",
+                            source={
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "YQ==",
+                            },
+                        )
+                    ],
+                )
+            ],
+        )
+        stream = deepseek_provider.stream_messages(request, reasoning=REASONING_OFF)
+    else:
+        responses_request = OpenAIResponsesRequest.model_validate(
+            {
+                "model": "deepseek-flash",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/png;base64,YQ==",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        stream = deepseek_provider.stream_responses(
+            responses_request, reasoning=REASONING_OFF
+        )
+    error = BadRequestError(
+        "This model does not support image inputs",
+        response=httpx2.Response(
+            400,
+            request=httpx2.Request("POST", "https://provider.invalid/chat/completions"),
+        ),
+        body={
+            "error": {
+                "type": "invalid_request_error",
+                "message": "This model does not support image inputs",
+            }
+        },
+    )
+
+    try:
+        with (
+            patch.object(
+                deepseek_provider._client.chat.completions,
+                "create",
+                new_callable=AsyncMock,
+                side_effect=error,
+            ) as create,
+            pytest.raises(ExecutionFailure) as exc_info,
+        ):
+            async for _ in stream:
+                pass
+
+        assert create.call_count == 1
+        assert create.call_args.kwargs["messages"] == [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,YQ=="},
+                    }
+                ],
+            }
+        ]
+        assert exc_info.value.kind is FailureKind.INVALID_REQUEST
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.retryable is False
+        assert "does not support image inputs" in exc_info.value.message
+    finally:
+        await deepseek_provider.cleanup()

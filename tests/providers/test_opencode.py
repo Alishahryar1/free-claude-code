@@ -262,7 +262,7 @@ def _provider_with_wire_transports(
         ),
     )
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         return_value=generation_client,
     ):
         provider = create_opencode_provider(
@@ -313,7 +313,7 @@ def test_client_identifies_as_first_party_opencode_user_agent(
 ) -> None:
     with (
         patch(
-            "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+            "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
         ) as mock_openai,
         patch("httpx.AsyncClient"),
     ):
@@ -722,7 +722,6 @@ async def test_responses_tool_search_accepts_optional_codex_arguments() -> None:
     )
     try:
         await provider.list_model_infos()
-        provider.preflight_responses(request)
         body = "".join([chunk async for chunk in provider.stream_responses(request)])
     finally:
         await provider.cleanup()
@@ -1098,7 +1097,7 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
         reasoning_preference=ReasoningPreference.INHERIT,
     )
     executor = ProviderExecutor(
-        lambda _provider_id: provider,
+        AsyncMock(side_effect=lambda _provider_id: provider),
         progress_timeout_seconds=60.0,
     )
 
@@ -1216,18 +1215,16 @@ async def test_cold_route_specific_conversion_failure_precedes_generation() -> N
 
 
 @pytest.mark.asyncio
-async def test_warm_preflight_rejects_unknown_and_route_specific_fields() -> None:
+async def test_warm_startup_rejects_unknown_and_route_specific_fields() -> None:
     provider, generation_requests, _catalog_requests = _provider_with_wire_transports(
         _catalog_payload()
     )
     try:
         await provider.list_model_infos()
         with pytest.raises(InvalidRequestError, match="does not advertise"):
-            provider.preflight_messages(_request("missing"))
+            await _collect(provider, "missing")
         with pytest.raises(InvalidRequestError, match="stop_sequences"):
-            provider.preflight_messages(
-                _request("responses-selector", stop_sequences=["done"])
-            )
+            await _collect(provider, "responses-selector", stop_sequences=["done"])
     finally:
         await provider.cleanup()
 
@@ -1258,7 +1255,7 @@ def test_build_request_body_replays_tool_reasoning_natively(
     provider_id: str,
 ) -> None:
     with (
-        patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"),
+        patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"),
         patch("httpx.AsyncClient"),
     ):
         provider = create_opencode_provider(
@@ -1301,7 +1298,7 @@ def test_build_request_body_replays_tool_reasoning_natively(
         }
     )
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
     assistant = body["messages"][0]
     assert assistant["content"] == ""
@@ -1321,7 +1318,7 @@ async def test_tool_only_history_sends_empty_reasoning_content_on_wire(
     provider_id: str,
 ) -> None:
     with (
-        patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"),
+        patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"),
         patch("httpx.AsyncClient"),
     ):
         provider = create_opencode_provider(
@@ -1358,7 +1355,7 @@ async def test_tool_only_history_sends_empty_reasoning_content_on_wire(
         }
     )
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
     wire = await capture_openai_chat_wire_body(body)
 
     assistant = wire["messages"][0]

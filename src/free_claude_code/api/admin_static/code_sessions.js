@@ -11,6 +11,10 @@
     harnesses = [],
     catalog = [],
     catalogLoaded = false,
+    catalogPhase = "starting",
+    catalogVersion = null,
+    catalogInstance = null,
+    catalogRequest = 0,
     settingsPending = false;
   let visibleIds = [],
     query = "",
@@ -41,12 +45,15 @@
     notice = "",
     available = false;
   let activeDialog = null;
+  let viewActive = false,
+    activityKey = null,
+    activityTimer = null;
 
   function element(tag, text, className) {
     const node = document.createElement(tag);
     if (text !== undefined) node.textContent = text;
     if (className) node.className = className;
-    return node;
+    return window.FccFormControls.configure(node);
   }
   function button(text, action, className = "secondary-button") {
     const node = element("button", text, className);
@@ -98,6 +105,49 @@
   function ready(record) {
     return synchronized && record?.loaded && record.session?.status === "ready";
   }
+  function compactTokens(tokens) {
+    let value = tokens;
+    let unit = 0;
+    const units = ["", "K", "M", "B"];
+    while (value >= 1000 && unit < units.length - 1) {
+      value /= 1000;
+      unit += 1;
+    }
+    let rounded = Math.round(value * 10) / 10;
+    if (rounded >= 1000 && unit < units.length - 1) {
+      rounded /= 1000;
+      unit += 1;
+    }
+    return `${rounded}${units[unit]}`;
+  }
+  function renderContextUsage(record) {
+    const node = root.querySelector("#codeContextUsage"),
+      used = record?.session?.context_used_tokens;
+    if (!node || !Number.isInteger(used) || used < 0) {
+      if (node) {
+        node.hidden = true;
+        node.textContent = "";
+        node.removeAttribute("title");
+        node.removeAttribute("aria-label");
+      }
+      return;
+    }
+    const maximum = catalog.find(
+        (model) => model.id === record.session.model,
+      )?.context_window_tokens,
+      knownMaximum = Number.isInteger(maximum) && maximum > 0,
+      percentage = knownMaximum ? Math.round((used / maximum) * 100) : null,
+      exactUsed = used.toLocaleString("en-US");
+    node.textContent = knownMaximum
+      ? `${compactTokens(used)} / ${compactTokens(maximum)} (${percentage}%)`
+      : compactTokens(used);
+    const description = knownMaximum
+      ? `Context used: ${exactUsed} of ${maximum.toLocaleString("en-US")} tokens (${percentage}%)`
+      : `Context used: ${exactUsed} tokens`;
+    node.title = description;
+    node.setAttribute("aria-label", description);
+    node.hidden = false;
+  }
   function mergeEntries(target, entries, version) {
     for (const value of entries || []) {
       if ((target.get(value.id)?.version ?? -1) <= version)
@@ -113,11 +163,6 @@
     if (version >= record.version) {
       if (!record.session || data.session.revision >= record.session.revision)
         record.session = data.session;
-      if (
-        record.run?.id !== data.run?.id ||
-        !activeStatuses.has(data.run?.status)
-      )
-        record.runNotice = "";
       record.run = data.run;
       if (data.active_review_ids)
         record.activeReviewIds = new Set(data.active_review_ids);
@@ -130,7 +175,20 @@
       [...(data.runs || []), ...(data.run ? [data.run] : [])],
       version,
     );
-    mergeEntries(record.items, data.item ? [data.item] : data.items, version);
+    const items = data.item ? [data.item] : data.items || [],
+      outputChanged =
+        id === selected &&
+        items.some((item) => {
+          const previous = record.items.get(item.id);
+          return (
+            item.run_id === record.run?.id &&
+            version > (previous?.version ?? -1) &&
+            ["kind", "title", "text", "html", "detail", "complete"].some(
+              (key) => previous?.value[key] !== item[key],
+            )
+          );
+        });
+    mergeEntries(record.items, items, version);
     const prompts = data.prompt ? [data.prompt] : data.prompts || [];
     mergeEntries(record.prompts, prompts, version);
     for (const prompt of prompts) {
@@ -153,25 +211,20 @@
           });
       }
     }
+    return outputChanged;
   }
 
   function receive(type, event) {
     const data = JSON.parse(event.data);
     if (data.epoch !== epoch) return;
     const previousRevision = records.get(data.session_id)?.session?.revision;
+    let outputChanged = false;
     if (type === "session.deleted") {
       removeDeletedSession(data.session_id, "Session deleted.");
     } else {
-      merge(data);
+      outputChanged = merge(data) && type === "item.updated";
       if (type === "session.notice" && data.session_id === selected)
         notice = data.message;
-      if (type === "run.notice") {
-        const record = records.get(data.session_id);
-        if (record && busy(record) && data.version >= record.version)
-          record.runNotice = data.will_retry
-            ? `Retrying… ${data.message}`
-            : data.message;
-      }
     }
     if (
       !selected &&
@@ -179,7 +232,41 @@
         data.session?.revision !== previousRevision)
     )
       void refreshLibrary();
-    render();
+    render(outputChanged);
+  }
+
+  function clearActivity() {
+    clearTimeout(activityTimer);
+    activityTimer = null;
+    activityKey = null;
+    const node = root?.querySelector("#codeActivity");
+    if (node) node.hidden = true;
+  }
+
+  function renderActivity(outputChanged) {
+    const record = records.get(selected),
+      node = root?.querySelector("#codeActivity");
+    if (!viewActive || !node || !busy(record) || pending(record)) {
+      clearActivity();
+      return;
+    }
+    const key = `${selected}:${record.run.id}`;
+    if (activityKey === key && !outputChanged) return;
+    clearActivity();
+    activityKey = key;
+    activityTimer = setTimeout(() => {
+      activityTimer = null;
+      if (activityKey !== key) return;
+      const current = records.get(selected);
+      if (!viewActive || !busy(current) || pending(current)) {
+        clearActivity();
+        return;
+      }
+      const transcript = root.querySelector("#codeTranscript"),
+        bottom = UI.nearBottom(transcript);
+      node.hidden = false;
+      if (bottom) transcript.scrollTop = transcript.scrollHeight;
+    }, 500);
   }
 
   async function list(cursor = null) {
@@ -270,24 +357,37 @@
       deleted.has(id)
     )
       return;
-    merge(data);
+    const outputChanged = merge(data);
     const record = get(id);
     record.loaded = true;
     record.nextBefore = data.next_before;
-    render();
+    render(!before && outputChanged);
+  }
+  function olderCatalog(candidate) {
+    return candidate && catalogVersion && (candidate.generation_id < catalogVersion.generation_id ||
+      (candidate.generation_id === catalogVersion.generation_id && candidate.catalog_revision < catalogVersion.catalog_revision));
   }
   async function bootstrap() {
     const token = syncToken;
+    const request = ++catalogRequest;
     try {
       const data = await api(`${base}/bootstrap`);
-      if (token !== syncToken || (epoch && data.epoch !== epoch)) return;
+      if (request !== catalogRequest || token !== syncToken || (epoch && data.epoch !== epoch) || olderCatalog(data.startup)) return false;
+      if (data.startup) catalogVersion = data.startup;
       available = data.available;
-      catalog = data.models;
-      harnesses = data.harnesses;
-      catalogLoaded = true;
+      catalogPhase = data.startup?.catalog || "ready";
+      if (catalogPhase === "ready" || !catalogLoaded) {
+        catalog = data.models;
+        harnesses = data.harnesses;
+      }
+      if (catalogPhase === "ready") catalogLoaded = true;
       availabilityNotice = data.message || "";
+      return true;
     } catch (error) {
-      if (token === syncToken) catalogLoaded = false;
+      if (request === catalogRequest && token === syncToken) {
+        availabilityNotice = error.message;
+        if (!catalogLoaded) catalogPhase = "failed";
+      }
       throw error;
     }
   }
@@ -299,6 +399,11 @@
     clearTimeout(retryTimer);
     retryTimer = null;
     if (epoch !== readyData.epoch) {
+      if (epoch) {
+        catalogVersion = null;
+        catalogLoaded = false;
+        catalogPhase = "starting";
+      }
       epoch = readyData.epoch;
       records.clear();
       providerDraft = null;
@@ -316,7 +421,6 @@
       ) {
         // The run is no longer active; detail supplies its actual outcome.
         record.run = null;
-        record.runNotice = "";
         record.loaded = false;
         record.cursor = readyData.cursor;
       }
@@ -324,11 +428,11 @@
     for (const summary of readyData.sessions)
       merge({ ...summary, cursor: readyData.cursor });
     render();
+    void bootstrap().then(() => render()).catch(() => render());
     try {
       const results = await Promise.allSettled([
         list(),
         selected ? detail(selected) : Promise.resolve(),
-        bootstrap(),
       ]);
       if (token !== syncToken || !connected) return;
       for (const result of results)
@@ -370,7 +474,6 @@
       "item.updated",
       "prompt.updated",
       "session.notice",
-      "run.notice",
     ])
       source.addEventListener(type, (event) => {
         if (feed === source) receive(type, event);
@@ -418,6 +521,7 @@
     activate(path);
   }
   function activate(path) {
+    viewActive = true;
     if (path !== desiredPath) dismissDialog();
     desiredPath = path;
     if (!api) return;
@@ -449,6 +553,7 @@
       render();
     }
     connect();
+    render();
   }
 
   function accepted(id, operationId) {
@@ -707,7 +812,7 @@
       });
       if (
         !deleted.has(id) &&
-        session.revision >= (records.get(id)?.session?.revision || 0)
+        session.revision > (records.get(id)?.session?.revision || 0)
       )
         get(id).session = session;
     } catch (error) {
@@ -729,7 +834,7 @@
   function selectionError(record) {
     if (!record?.session) return "";
     if (providerDraft) return "Choose a model for the selected provider.";
-    if (!catalogLoaded) return "Model list unavailable. Reconnecting…";
+    if (!catalogLoaded) return catalogPhase === "starting" ? "Models are loading…" : "Model list unavailable.";
     const model = catalog.find((model) => model.id === record.session.model);
     if (!model) return "Selected model is unavailable. Choose another model.";
     if (
@@ -778,6 +883,7 @@
     return node;
   }
   function shell() {
+    clearActivity();
     dismissDialog();
     root.replaceChildren();
     modelComboboxes.clear();
@@ -880,8 +986,30 @@
         harnessControl.group,
         modeControl.group,
       );
+      const selectionMessage = element(
+        "div",
+        "",
+        "code-control-error code-selection-error",
+      );
+      selectionMessage.id = "codeSelectionError";
+      selectionMessage.setAttribute("role", "status");
+      selectionMessage.hidden = true;
+      controls.append(selectionMessage);
+      for (const control of [
+        providerControl.select,
+        modelControl.input,
+        reasoningControl.select,
+      ])
+        control.setAttribute("aria-describedby", selectionMessage.id);
       const deletion = button("Delete", remove, "danger-button");
       deletion.id = "codeDelete";
+      const deletionMessage = element("div", "", "code-control-error");
+      deletionMessage.id = "codeDeletionError";
+      deletionMessage.setAttribute("role", "status");
+      deletionMessage.hidden = true;
+      deletion.setAttribute("aria-describedby", deletionMessage.id);
+      const deletionGroup = element("div");
+      deletionGroup.append(deletion, deletionMessage);
       const header = UI.header(
         "← Code sessions",
         () => navigate(null),
@@ -894,7 +1022,7 @@
           )
             void updateSettings({ title: title.value });
         },
-        [deletion],
+        [deletionGroup],
         controls,
       );
       header.append(element("p", "", "code-folder"));
@@ -920,7 +1048,11 @@
         "secondary-button session-older",
       );
       older.id = "codeOlder";
-      transcript.append(older, element("div", undefined, "code-items"));
+      const activity = element("div", "Thinking…", "code-activity");
+      activity.id = "codeActivity";
+      activity.setAttribute("role", "status");
+      activity.hidden = true;
+      transcript.append(older, element("div", undefined, "code-items"), activity);
       const composer = UI.composer(
         "code",
         saved(id).draft || "",
@@ -934,6 +1066,11 @@
           void stop();
         },
       );
+      const contextUsage = element("span", "", "code-context-usage");
+      contextUsage.id = "codeContextUsage";
+      contextUsage.setAttribute("role", "status");
+      contextUsage.hidden = true;
+      composer.querySelector(".session-composer-actions").prepend(contextUsage);
       root.append(UI.shell(header, message, transcript, composer));
       UI.resizeComposer(composer.querySelector("textarea"));
     } else {
@@ -977,7 +1114,7 @@
     rendered = selected || "library";
   }
 
-  function render() {
+  function render(outputChanged = false) {
     if (!root) return;
     if (rendered !== (selected || "library")) shell();
     const message = root.querySelector("#codeNotice");
@@ -1075,6 +1212,7 @@
         run.error ||
         (run.status === "interrupted" ? "Turn stopped." : "This turn failed.");
     }
+    renderActivity(outputChanged);
     if (bottom) transcript.scrollTop = transcript.scrollHeight;
     root.querySelector("#codeOlder").hidden = !record?.nextBefore;
     renderControls();
@@ -1085,6 +1223,7 @@
     const record = records.get(selected),
       isBusy = busy(record),
       input = root.querySelector("#codeComposer");
+    renderContextUsage(record);
     if (
       providerDraft &&
       (providerDraft.id !== selected ||
@@ -1101,9 +1240,12 @@
     stop.hidden = !isBusy;
     stop.disabled = !connected || record?.run?.stop_requested;
     send.textContent = saved(selected).pending ? "Retry Send" : "Send";
+    send.classList.toggle("startup-busy", !catalogLoaded && catalogPhase === "starting");
+    send.setAttribute("aria-busy", String(!catalogLoaded && catalogPhase === "starting"));
     send.disabled =
       !ready(record) ||
       !available ||
+      !catalogLoaded ||
       pending(record) ||
       sends.has(selected) ||
       settingsPending ||
@@ -1116,7 +1258,9 @@
     deletion.textContent =
       record?.session?.status === "delete_uncertain"
         ? "Check deletion"
-        : "Delete";
+        : record?.session?.status === "deleting"
+          ? "Deleting…"
+          : "Delete";
     deletion.disabled =
       !synchronized ||
       !record?.loaded ||
@@ -1166,18 +1310,12 @@
     for (const option of reasoningControl.select.options)
       option.disabled = !model?.reasoning_efforts.includes(option.value);
     reasoningControl.select.disabled = disabled || !model;
-    root.querySelector("#codeComposerStatus").textContent =
-      record?.session?.error ||
-      selectionError(record) ||
-      (record?.session?.status !== "ready"
-        ? "Deleting…"
-        : record.run?.stop_requested && isBusy
-          ? "Stopping…"
-          : pending(record)
-            ? "Waiting for input"
-            : isBusy
-              ? record.runNotice || "Working…"
-              : "Codex");
+    const selectionMessage = root.querySelector("#codeSelectionError"),
+      deletionMessage = root.querySelector("#codeDeletionError");
+    selectionMessage.textContent = selectionError(record);
+    selectionMessage.hidden = !selectionMessage.textContent;
+    deletionMessage.textContent = record?.session?.error || "";
+    deletionMessage.hidden = !deletionMessage.textContent;
     for (const node of root.querySelectorAll(".code-prompt")) {
       const prompt = record?.prompts.get(node.dataset.id)?.value;
       for (const control of node.querySelectorAll("input, select, button"))
@@ -1516,7 +1654,12 @@
     }
     form.append(actions);
   }
-  window.addEventListener("pagehide", dismissDialog);
+  function deactivate() {
+    viewActive = false;
+    clearActivity();
+    dismissDialog();
+  }
+  window.addEventListener("pagehide", deactivate);
   window.CodeSessions = {
     initialize(client) {
       api = client;
@@ -1524,14 +1667,21 @@
       if (desiredPath) activate(desiredPath);
     },
     activate,
-    deactivate: dismissDialog,
-    async refresh() {
-      if (!api || !epoch) return;
+    deactivate,
+    async refresh(status) {
+      if (!api) return false;
+      if (status?.startup) {
+        if (catalogInstance !== status.instance_id) catalogVersion = null;
+        catalogInstance = status.instance_id;
+        if (!olderCatalog(status.startup)) catalogVersion = status.startup;
+      }
       try {
-        await bootstrap();
+        const refreshed = await bootstrap();
         render();
-      } catch (error) {
-        restart(error.message);
+        return refreshed;
+      } catch {
+        render();
+        return false;
       }
     },
   };

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from free_claude_code.cli.launchers.model_catalog import ClientModel
+from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.cli.launchers.opencode_config import build_opencode_config
 from free_claude_code.core.model_capabilities import ModelInputModality
 
@@ -13,7 +13,7 @@ from free_claude_code.core.model_capabilities import ModelInputModality
 def test_opencode_config_uses_responses_sdk_and_only_known_metadata() -> None:
     config = build_opencode_config(
         (
-            ClientModel(
+            CatalogModel(
                 wire_slug="nvidia_nim/vendor/model",
                 provider_model_ref="nvidia_nim/vendor/model",
                 display_name="Nested model",
@@ -24,7 +24,7 @@ def test_opencode_config_uses_responses_sdk_and_only_known_metadata() -> None:
                 context_window_tokens=131072,
                 max_output_tokens=8192,
             ),
-            ClientModel(
+            CatalogModel(
                 wire_slug="claude-3-freecc-no-thinking/open_router/plain-model",
                 provider_model_ref="open_router/plain-model",
                 display_name="No-thinking model",
@@ -32,13 +32,13 @@ def test_opencode_config_uses_responses_sdk_and_only_known_metadata() -> None:
                 input_modalities=frozenset({ModelInputModality.TEXT}),
                 context_window_tokens=65536,
             ),
-            ClientModel(
+            CatalogModel(
                 wire_slug="future_provider/unknown-model",
                 provider_model_ref="future_provider/unknown-model",
                 display_name="Unknown model",
                 supports_reasoning=None,
             ),
-            ClientModel(
+            CatalogModel(
                 wire_slug="future_provider/output-only",
                 provider_model_ref="future_provider/output-only",
                 display_name="Output-only model",
@@ -46,6 +46,7 @@ def test_opencode_config_uses_responses_sdk_and_only_known_metadata() -> None:
                 max_output_tokens=4096,
             ),
         ),
+        default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191",
     )
 
@@ -104,7 +105,11 @@ def test_opencode_config_uses_responses_sdk_and_only_known_metadata() -> None:
 
 def test_opencode_config_rejects_empty_model_catalog() -> None:
     with pytest.raises(ValueError, match="at least one"):
-        build_opencode_config((), proxy_root_url="http://127.0.0.1:9191")
+        build_opencode_config(
+            (),
+            default_model_id="nvidia_nim/vendor/model",
+            proxy_root_url="http://127.0.0.1:9191",
+        )
 
 
 def test_opencode_child_receives_private_catalog_and_overlay(launch_capture) -> None:
