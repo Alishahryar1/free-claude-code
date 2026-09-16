@@ -74,6 +74,37 @@ def test_telemetry_tracker_extracts_anthropic_sse_tokens():
     assert record.is_estimated is False
 
 
+def test_telemetry_tracker_sums_cache_token_partitions():
+    target = ProviderModelTarget(
+        provider_id="anthropic",
+        provider_model="claude-3-5-sonnet-20241022",
+        provider_model_ref="anthropic:claude-3-5-sonnet-20241022",
+    )
+    tracker = StreamTelemetryTracker(
+        request_id="req-cache-sum",
+        wire_api="messages",
+        gateway_model="claude-3-5-sonnet",
+        target=target,
+        is_primary=True,
+    )
+
+    start_payload = {
+        "type": "message_start",
+        "message": {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 1,
+                "cache_read_input_tokens": 17,
+                "cache_creation_input_tokens": 29,
+            }
+        },
+    }
+    tracker.on_chunk(f"event: message_start\ndata: {json.dumps(start_payload)}\n\n")
+
+    record = tracker.on_success()
+    assert record.cached_tokens == 46  # 17 + 29
+
+
 def test_telemetry_tracker_fallback_estimation_when_tokens_missing():
     target = ProviderModelTarget(
         provider_id="ollama",

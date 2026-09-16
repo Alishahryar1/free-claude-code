@@ -21,6 +21,16 @@
     return document.getElementById(id);
   }
 
+  function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
   function formatNumber(num) {
     if (num === null || num === undefined) return "0";
     return Number(num).toLocaleString();
@@ -496,7 +506,7 @@
                 <div class="usage-progress-track">
                   <div class="usage-progress-fill ${statusClass}" style="width: ${pct}%"></div>
                 </div>
-                ${q.requests_reset ? `<div class="usage-quota-reset">Reset: ${q.requests_reset}</div>` : ""}
+                ${q.requests_reset ? `<div class="usage-quota-reset">Reset: ${escapeHtml(q.requests_reset)}</div>` : ""}
               </div>`;
           }
 
@@ -515,7 +525,7 @@
                 <div class="usage-progress-track">
                   <div class="usage-progress-fill ${statusClass}" style="width: ${pct}%"></div>
                 </div>
-                ${q.tokens_reset ? `<div class="usage-quota-reset">Reset: ${q.tokens_reset}</div>` : ""}
+                ${q.tokens_reset ? `<div class="usage-quota-reset">Reset: ${escapeHtml(q.tokens_reset)}</div>` : ""}
               </div>`;
           }
 
@@ -523,7 +533,7 @@
             <div class="usage-provider-quota-box">
               ${reqBar}
               ${tokBar}
-              ${!reqBar && !tokBar ? `<div class="usage-no-quota">${q.status_label || "Quota active"}</div>` : ""}
+              ${!reqBar && !tokBar ? `<div class="usage-no-quota">${escapeHtml(q.status_label || "Quota active")}</div>` : ""}
             </div>`;
         }
 
@@ -535,8 +545,8 @@
           <div class="usage-provider-card">
             <div class="usage-provider-head">
               <div>
-                <div class="usage-provider-name">${p.display_name || p.provider_id}</div>
-                <div style="font-size:11px; color:var(--muted);">${p.provider_id}</div>
+                <div class="usage-provider-name">${escapeHtml(p.display_name || p.provider_id)}</div>
+                <div style="font-size:11px; color:var(--muted);">${escapeHtml(p.provider_id)}</div>
               </div>
               <span class="usage-badge ${p.is_local ? "info" : "success"}">${p.is_local ? "Local" : "Cloud"}</span>
             </div>

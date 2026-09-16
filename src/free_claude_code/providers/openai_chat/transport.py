@@ -551,8 +551,11 @@ class OpenAIChatTransport:
             from free_claude_code.application.usage import get_usage_service
 
             svc = get_usage_service()
+            canonical_name = self._provider_name.lower()
+            if canonical_name == "nim":
+                canonical_name = "nvidia_nim"
             asyncio.create_task(
-                svc.update_provider_headers(self._provider_name.lower(), dict(headers))
+                svc.update_provider_headers(canonical_name, dict(headers))
             )
         except Exception:
             pass
@@ -716,16 +719,12 @@ class OpenAIChatTransport:
                         structured_details=self._profile.structured_reasoning_details,
                     ),
                 )
-                raw_response = None
                 with_raw = getattr(client.chat.completions, "with_raw_response", None)
                 if with_raw is not None and hasattr(with_raw, "create"):
-                    try:
-                        raw_response = await with_raw.create(**create_body, stream=True)
-                        self._record_headers(getattr(raw_response, "headers", None))
-                        response_stream = raw_response.parse()
-                    except Exception:
-                        raw_response = None
-                if raw_response is None:
+                    raw_response = await with_raw.create(**create_body, stream=True)
+                    self._record_headers(getattr(raw_response, "headers", None))
+                    response_stream = raw_response.parse()
+                else:
                     response_stream = await client.chat.completions.create(
                         **create_body,
                         stream=True,

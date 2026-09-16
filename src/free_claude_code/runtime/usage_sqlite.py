@@ -88,6 +88,9 @@ class UsageSqliteStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_usage_status ON usage_records(status);"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_usage_req_id ON usage_records(request_id);"
+            )
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS provider_quotas (
@@ -255,9 +258,11 @@ class UsageSqliteStore:
             cursor = conn.execute(
                 f"""
                 SELECT
-                    COUNT(*) as total,
-                    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successes,
-                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failures,
+                    COUNT(DISTINCT request_id) as total,
+                    COUNT(DISTINCT CASE WHEN status = 'success' THEN request_id END) as successes,
+                    COUNT(DISTINCT CASE WHEN status = 'failed' AND request_id NOT IN (
+                        SELECT request_id FROM usage_records WHERE status = 'success'
+                    ) THEN request_id END) as failures,
                     COALESCE(SUM(input_tokens), 0) as in_tok,
                     COALESCE(SUM(output_tokens), 0) as out_tok,
                     COALESCE(SUM(total_tokens), 0) as tot_tok,

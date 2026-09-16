@@ -444,10 +444,16 @@ class ProviderExecutor:
                         except TimeoutError as exc:
                             if not cleanup_timeout.expired():
                                 raise
-                            raise self._progress_timeout_failure(
+                            timeout_failure = self._progress_timeout_failure(
                                 request_id=request_id,
                                 provider_id=target.provider_id,
-                            ) from exc
+                            )
+                            if self._usage_service is not None:
+                                record = telemetry.on_failure(timeout_failure)
+                                asyncio.create_task(
+                                    self._usage_service.record_usage(record)
+                                )
+                            raise timeout_failure from exc
 
                 if candidate_failure is None:
                     if self._usage_service is not None:

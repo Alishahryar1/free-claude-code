@@ -55,15 +55,26 @@ class UsageService:
 
     def __init__(self, store: UsageSqliteStore | None = None) -> None:
         self._store = store or UsageSqliteStore(usage_database_path())
+        self._last_retention_purge: float = 0.0
 
     @property
     def store(self) -> UsageSqliteStore:
         return self._store
 
+    async def _maybe_purge_retention(self) -> None:
+        now = time.time()
+        if now - self._last_retention_purge > 3600.0:
+            self._last_retention_purge = now
+            try:
+                await self._store.purge_retention(30)
+            except Exception as exc:
+                logger.debug("USAGE_SERVICE: retention purge failed: {}", exc)
+
     async def record_usage(self, record: UsageRecord) -> None:
         """Asynchronously persist one completed or failed request attempt."""
         try:
             await self._store.insert_record(record)
+            await self._maybe_purge_retention()
         except Exception as exc:
             logger.warning(
                 "USAGE_SERVICE: could not record usage for request_id={} exc={}",
@@ -100,6 +111,7 @@ class UsageService:
         model: str | None = None,
         status: str | None = None,
     ) -> UsageSummary:
+        await self._maybe_purge_retention()
         now = time.time()
         delta = _range_to_seconds(time_range)
         since = 0.0 if time_range == "all" else max(0.0, now - delta)

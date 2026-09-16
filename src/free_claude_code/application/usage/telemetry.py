@@ -90,10 +90,8 @@ class StreamTelemetryTracker:
                             self._input_tokens = int(usage["input_tokens"])
                             self._has_exact_usage = True
                         self._cached_tokens = int(
-                            usage.get("cache_read_input_tokens")
-                            or usage.get("cache_creation_input_tokens")
-                            or 0
-                        )
+                            usage.get("cache_read_input_tokens") or 0
+                        ) + int(usage.get("cache_creation_input_tokens") or 0)
 
             # Anthropic message_delta
             elif payload.get("type") == "message_delta":

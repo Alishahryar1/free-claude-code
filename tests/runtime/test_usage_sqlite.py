@@ -223,3 +223,87 @@ async def test_sqlite_usage_store_prune_and_clear(store):
     await store.clear_all()
     summary_after_clear = await store.query_summary(since=0, time_range_label="all")
     assert summary_after_clear.total_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_logical_requests_vs_attempts_in_summary(store):
+    now = time.time()
+    # Request 1: primary failed, fallback succeeded
+    await store.insert_record(
+        UsageRecord(
+            request_id="req-multi-1",
+            timestamp=now - 20,
+            wire_api="messages",
+            gateway_model="claude-3-5-sonnet",
+            provider_id="groq",
+            provider_model="llama",
+            provider_model_ref="groq:llama",
+            is_primary=True,
+            status="failed",
+            http_status=429,
+        )
+    )
+    await store.insert_record(
+        UsageRecord(
+            request_id="req-multi-1",
+            timestamp=now - 15,
+            wire_api="messages",
+            gateway_model="claude-3-5-sonnet",
+            provider_id="ollama",
+            provider_model="qwen",
+            provider_model_ref="ollama:qwen",
+            is_primary=False,
+            status="success",
+            http_status=200,
+        )
+    )
+    # Request 2: primary failed, fallback failed
+    await store.insert_record(
+        UsageRecord(
+            request_id="req-multi-2",
+            timestamp=now - 10,
+            wire_api="messages",
+            gateway_model="claude-3-5-sonnet",
+            provider_id="groq",
+            provider_model="llama",
+            provider_model_ref="groq:llama",
+            is_primary=True,
+            status="failed",
+            http_status=500,
+        )
+    )
+
+    summary = await store.query_summary(since=0, time_range_label="all")
+    # There are 3 database attempt rows across 2 unique logical requests
+    assert summary.total_requests == 2
+    assert summary.successful_requests == 1
+    assert summary.failed_requests == 1
+    assert summary.fallback_count == 1
+
+
+@pytest.mark.asyncio
+async def test_usage_service_automatic_retention_purge(store):
+    from free_claude_code.application.usage.service import UsageService
+
+    service = UsageService(store=store)
+    now = time.time()
+    old_time = now - (35 * 86400)  # 35 days ago
+
+    # Insert old record directly
+    await store.insert_record(
+        UsageRecord(
+            request_id="very-old-req",
+            timestamp=old_time,
+            wire_api="messages",
+            gateway_model="claude",
+            provider_id="groq",
+            provider_model="llama",
+            provider_model_ref="groq:llama",
+            is_primary=True,
+            status="success",
+        )
+    )
+
+    # Calling get_summary triggers retention purge
+    summary = await service.get_summary(time_range="all")
+    assert summary.total_requests == 0
