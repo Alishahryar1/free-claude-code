@@ -106,6 +106,7 @@ def test_configured_provider_check_keeps_readiness_and_adds_models(
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
     card = page.locator('[data-provider="open_router"]')
 
+    expect(card.locator(".provider-check-result")).to_have_text("3 models available")
     expect(card.get_by_role("button", name="Edit", exact=True)).to_have_class(
         "secondary-button"
     )
@@ -138,6 +139,96 @@ def test_configured_provider_check_keeps_readiness_and_adds_models(
     ).to_be_visible()
 
 
+@pytest.mark.parametrize("models", [[], ["only-model"]])
+def test_startup_model_count_handles_empty_and_single_model_catalogs(
+    page: Page, admin_base_url: str, models: list[str]
+) -> None:
+    def status(route: Route) -> None:
+        data = route.fetch().json()
+        data["startup"]["providers"]["open_router"] = "ready"
+        data["cached_models"]["open_router"] = models
+        route.fulfill(json=data)
+
+    page.route("**/admin/api/status", status)
+    _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
+    expect(page.locator('[data-provider-check-result="open_router"]')).to_have_text(
+        "1 model available" if models else "0 models available"
+    )
+    expect(page.locator('[data-provider-check-result="nvidia_nim"]')).to_be_hidden()
+
+
+@pytest.mark.parametrize("manual_result", ["pending", "success", "failure"])
+def test_delayed_startup_status_does_not_replace_a_manual_provider_check(
+    page: Page, admin_base_url: str, manual_result: str
+) -> None:
+    _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
+    page.wait_for_function("!state.startupRequest && !state.startupTimer")
+    snapshot = page.request.get(f"{admin_base_url}/admin/api/status").json()
+    startup: list[Route] = []
+    manual: list[Route] = []
+    page.route("**/admin/api/status", lambda route: startup.append(route))
+    page.route(
+        "**/admin/api/providers/open_router/test", lambda route: manual.append(route)
+    )
+    with page.expect_request("**/admin/api/status"):
+        page.evaluate("void refreshStartup()")
+    dialog = open_provider(page, "open_router")
+    with page.expect_request("**/admin/api/providers/open_router/test"):
+        dialog.get_by_role("button", name="Refresh models", exact=True).click()
+    expected = "Checking..."
+    if manual_result != "pending":
+        manual.pop().fulfill(
+            json={
+                "ok": manual_result == "success",
+                "models": ["one", "two"],
+                "message": "Could not refresh this provider's models.",
+            }
+        )
+        expected = (
+            "2 models available"
+            if manual_result == "success"
+            else "Unavailable: Could not refresh this provider's models."
+        )
+    result = page.locator('[data-provider-check-result="open_router"]')
+    expect(result).to_have_text(expected)
+    with page.expect_response("**/admin/api/status") as response:
+        startup.pop(0).fulfill(json=snapshot)
+    response.value.finished()
+    page.wait_for_function("!state.startupRequest")
+    expect(result).to_have_text(expected)
+    expect(dialog.locator("#providerDialogCheck")).to_have_text(expected)
+    if manual_result == "pending":
+        manual.pop().fulfill(json={"ok": True, "models": ["one", "two"]})
+        expect(result).to_have_text("2 models available")
+
+
+@pytest.mark.parametrize("availability_first", [False, True])
+def test_local_model_discovery_takes_precedence_over_reachability(
+    page: Page, admin_base_url: str, availability_first: bool
+) -> None:
+    startup: list[Route] = []
+    availability: list[Route] = []
+    page.route("**/admin/api/status", lambda route: startup.append(route))
+    page.route(
+        "**/admin/api/providers/local-status", lambda route: availability.append(route)
+    )
+    _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
+    page.wait_for_function("!!state.startupRequest && !!state.localStatusRequest")
+    snapshot = page.request.get(f"{admin_base_url}/admin/api/status").json()
+    snapshot["startup"]["providers"]["lmstudio"] = "ready"
+    snapshot["cached_models"]["lmstudio"] = ["local-model"]
+    result = page.locator('[data-provider-check-result="lmstudio"]')
+    if availability_first:
+        availability.pop().continue_()
+        expect(result).to_have_text("Reachable: http://localhost:1234/v1")
+    startup.pop(0).fulfill(json=snapshot)
+    expect(result).to_have_text("1 model available")
+    if not availability_first:
+        availability.pop().continue_()
+        page.wait_for_function("!state.localStatusRequest")
+        expect(result).to_have_text("1 model available")
+
+
 def test_provider_check_failure_is_separate_and_never_exposes_exception_text(
     page: Page,
     admin_base_url: str,
@@ -150,6 +241,9 @@ def test_provider_check_failure_is_separate_and_never_exposes_exception_text(
     page.on("console", record_console)
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
     card = page.locator('[data-provider="groq"]')
+    expect(card.locator(".provider-check-result")).to_have_text(
+        "Could not load models. Check the provider's settings and retry."
+    )
     card.locator("[data-provider-settings]").click()
     page.locator("#providerDialog").get_by_role(
         "button", name="Refresh models", exact=True
@@ -257,7 +351,9 @@ def test_local_availability_failure_does_not_fail_admin_loading(
         dialog = open_provider(page, provider_id)
         expect(dialog.get_by_role("button", name="Test", exact=True)).to_be_enabled()
         close_provider(page)
-    expect(page.locator('[data-provider-check-result="open_router"]')).to_be_hidden()
+    expect(page.locator('[data-provider-check-result="open_router"]')).to_have_text(
+        "3 models available"
+    )
     expect(page.locator("#messageArea")).to_have_text("")
     assert "private-diagnostic-marker" not in page.locator("body").inner_text()
     assert errors == []
@@ -313,5 +409,5 @@ def test_manual_provider_test_takes_precedence_over_automatic_availability(
         manual.pop().fulfill(
             json={"provider_id": "lmstudio", "ok": True, "models": ["local-model"]}
         )
-        expect(result).to_have_text("1 models available")
+        expect(result).to_have_text("1 model available")
     expect(dialog.get_by_role("button", name="Test", exact=True)).to_be_enabled()

@@ -6,6 +6,15 @@ from e2e.test_code_sessions import create_session
 
 def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url):
     starting = True
+    provider_tests = []
+    page.on(
+        "request",
+        lambda request: (
+            provider_tests.append(request.url)
+            if request.url.endswith("/test")
+            else None
+        ),
+    )
 
     def status(route):
         data = route.fetch().json()
@@ -21,6 +30,10 @@ def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url)
     test = dialog.get_by_role("button", name="Refresh models", exact=True)
     expect(test).to_be_disabled()
     expect(test).to_have_attribute("aria-busy", "true")
+    expect(page.locator('[data-provider-check-result="open_router"]')).to_have_text(
+        "Checking models…"
+    )
+    expect(dialog.locator("#providerDialogCheck")).to_have_text("Checking models…")
     close_provider(page)
     page.get_by_role("button", name="Messaging", exact=True).click()
     expect(page.locator("#startupMessage")).to_be_visible()
@@ -39,9 +52,14 @@ def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url)
     expect(
         dialog.get_by_role("button", name="Refresh models", exact=True)
     ).to_be_enabled()
+    expect(page.locator('[data-provider-check-result="open_router"]')).to_have_text(
+        "3 models available"
+    )
+    expect(dialog.locator("#providerDialogCheck")).to_have_text("3 models available")
     close_provider(page)
     page.get_by_role("button", name="Messaging", exact=True).click()
     expect(page.locator("#startupMessage")).to_be_hidden()
+    assert provider_tests == []
 
 
 def test_codex_connect_waits_for_catalog_and_recovers_from_publication_error(

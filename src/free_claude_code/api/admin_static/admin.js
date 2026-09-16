@@ -133,6 +133,9 @@ function renderStartup() {
   document.querySelectorAll("[data-startup-catalog]").forEach((button) => {
     startupButton(button, Object.values(startup.providers || {}).includes("starting"));
   });
+  state.config.provider_status.forEach((provider) => {
+    if (provider.kind !== "connected_account") renderProviderCheckResult(provider.provider_id);
+  });
   renderCodexIntegration();
 }
 
@@ -197,6 +200,7 @@ async function load({ providersOnly = false } = {}) {
   showMessage("Loading admin config");
   const config = await api("/admin/api/config");
   state.config = config;
+  state.startup = null;
   state.fields = new Map(config.fields.map((field) => [field.key, field]));
   if (!providersOnly) renderNav();
   state.providerChecks.clear();
@@ -372,8 +376,7 @@ function updateProviderCard(provider) {
     const buttons = [...actions.querySelectorAll("button:not(:disabled)")];
     (buttons.find((button) => button.textContent === focusedLabel) || buttons[0])?.focus({ preventScroll: true });
   }
-  const check = state.providerChecks.get(provider.provider_id);
-  if (check) updateProviderCheckResult(provider.provider_id, check.status, check.message);
+  if (!oauth) renderProviderCheckResult(provider.provider_id);
 }
 
 function openProviderDialog(providerId) {
@@ -420,7 +423,7 @@ function renderProviderDialogActions(provider) {
     }
     actions.appendChild(button);
   }
-  const check = state.providerChecks.get(provider.provider_id);
+  const check = oauth ? null : providerCheckResult(provider.provider_id);
   const result = byId("providerDialogCheck");
   result.className = `provider-check-result ${check?.status || ""}`;
   result.textContent = check?.message || "";
@@ -651,8 +654,32 @@ async function copyDeviceCode(code) {
   }
 }
 
-function updateProviderCheckResult(providerId, status, message) {
-  state.providerChecks.set(providerId, { status, message });
+function modelCountMessage(count) {
+  return `${count} model${count === 1 ? "" : "s"} available`;
+}
+
+function providerCheckResult(providerId) {
+  const check = state.providerChecks.get(providerId);
+  // An explicit check takes precedence over background discovery and reachability.
+  if (check?.source === "manual") return check;
+  const discovery = state.startup?.startup?.providers?.[providerId];
+  if (discovery === "starting") return { status: "checking", message: "Checking models…" };
+  if (discovery === "failed") {
+    return { status: "error", message: "Could not load models. Check the provider's settings and retry." };
+  }
+  if (discovery === "ready") {
+    return { status: "ok", message: modelCountMessage(state.startup.cached_models[providerId]?.length || 0) };
+  }
+  return check;
+}
+
+function updateProviderCheckResult(providerId, status, message, source = "manual") {
+  state.providerChecks.set(providerId, { status, message, source });
+  renderProviderCheckResult(providerId);
+}
+
+function renderProviderCheckResult(providerId) {
+  const { status = "", message = "" } = providerCheckResult(providerId) || {};
   const card = document.querySelector(`[data-provider="${providerId}"]`);
   if (!card) return;
   const result = card.querySelector(".provider-check-result");
@@ -1248,6 +1275,7 @@ async function refreshLocalStatus(config) {
           provider.provider_id,
           "ok",
           `Reachable: ${provider.base_url}`,
+          "availability",
         );
         return;
       }
@@ -1260,6 +1288,7 @@ async function refreshLocalStatus(config) {
         provider.provider_id,
         "error",
         `Unavailable: ${detail}`,
+        "availability",
       );
     });
   } catch {
@@ -1269,6 +1298,7 @@ async function refreshLocalStatus(config) {
         providerId,
         "error",
         "Availability check failed. Use Test to retry.",
+        "availability",
       );
     });
   } finally {
@@ -1294,7 +1324,7 @@ async function testProvider(providerId, button) {
       updateProviderCheckResult(
         providerId,
         "ok",
-        `${result.models.length} models available`,
+        modelCountMessage(result.models.length),
       );
       await hydrateModelOptions();
     } else {
