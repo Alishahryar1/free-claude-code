@@ -70,6 +70,8 @@ SILICONFLOW_DEFAULT_BASE = "https://api.siliconflow.com/v1"
 NEBIUS_DEFAULT_BASE = "https://api.tokenfactory.nebius.com/v1"
 # Scaleway Generative APIs OpenAI-compatible Chat Completions API.
 SCALEWAY_DEFAULT_BASE = "https://api.scaleway.ai/v1"
+# ainetcafe OpenAI-compatible Chat Completions API (Kimi K3).
+AINETCAFE_DEFAULT_BASE = "https://microquickjs.com/v1"
 # Chutes OpenAI-compatible Chat Completions API.
 CHUTES_DEFAULT_BASE = "https://llm.chutes.ai/v1"
 # Featherless AI OpenAI-compatible Chat Completions API.
@@ -655,6 +657,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="scw_secret_key",
         default_base_url=SCALEWAY_DEFAULT_BASE,
         proxy_attr="scw_proxy",
+    ),
+    "ainetcafe": ProviderDescriptor(
+        provider_id="ainetcafe",
+        display_name="ainetcafe",
+        website_url="https://ainetcafe.com/k3/",
+        logo_filename="ainetcafe.svg",
+        credential_env="AINETCAFE_API_KEY",
+        credential_url="https://microquickjs.com/console/token",
+        credential_attr="ainetcafe_api_key",
+        default_base_url=AINETCAFE_DEFAULT_BASE,
+        proxy_attr="ainetcafe_proxy",
     ),
     "lightning": ProviderDescriptor(
         provider_id="lightning",

@@ -13,6 +13,7 @@ from free_claude_code.application.errors import (
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
     AGNES_DEFAULT_BASE,
+    AINETCAFE_DEFAULT_BASE,
     BEDROCK_DEFAULT_BASE,
     CHUTES_DEFAULT_BASE,
     CLINE_DEFAULT_BASE,
@@ -88,6 +89,7 @@ def _make_settings(**overrides):
     mock.siliconflow_api_key = "test_siliconflow_key"
     mock.nebius_api_key = "test_nebius_key"
     mock.scw_secret_key = "test_scw_key"
+    mock.ainetcafe_api_key = "test_ainetcafe_key"
     mock.chutes_api_key = "test_chutes_key"
     mock.featherless_api_key = "test_featherless_key"
     mock.mistral_api_key = "test_mistral_key"
@@ -178,6 +180,7 @@ def _make_settings(**overrides):
     mock.siliconflow_proxy = None
     mock.nebius_proxy = None
     mock.scw_proxy = None
+    mock.ainetcafe_proxy = None
     mock.chutes_proxy = None
     mock.featherless_proxy = None
     mock.azure_openai_proxy = None
@@ -515,6 +518,28 @@ async def test_scaleway_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.base_url_attr is None
     assert config.api_key == "scw-token"
     assert config.base_url == SCALEWAY_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
+async def test_ainetcafe_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["ainetcafe"]
+    settings = _make_settings(
+        ainetcafe_api_key="ainetcafe-token",
+        ainetcafe_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider("ainetcafe", settings)
+
+    assert descriptor.display_name == "ainetcafe"
+    assert descriptor.credential_env == "AINETCAFE_API_KEY"
+    assert descriptor.credential_url == "https://microquickjs.com/console/token"
+    assert descriptor.base_url_attr is None
+    assert config.api_key == "ainetcafe-token"
+    assert config.base_url == AINETCAFE_DEFAULT_BASE
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
@@ -943,6 +968,7 @@ async def test_create_provider_instantiates_each_builtin():
         "siliconflow": OpenAIChatProvider,
         "nebius": OpenAIChatProvider,
         "scaleway": OpenAIChatProvider,
+        "ainetcafe": OpenAIChatProvider,
         "chutes": OpenAIChatProvider,
         "featherless": OpenAIChatProvider,
         "azure_openai": OpenAIChatProvider,

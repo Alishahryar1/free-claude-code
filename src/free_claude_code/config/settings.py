@@ -321,6 +321,11 @@ class Settings(BaseModel):
         default=None, validation_alias="SCW_SECRET_KEY"
     )
 
+    # ==================== ainetcafe (OpenAI-compatible) ====================
+    ainetcafe_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="AINETCAFE_API_KEY"
+    )
+
     # ==================== Ollama Cloud ====================
     ollama_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="OLLAMA_API_KEY"
@@ -536,6 +541,9 @@ class Settings(BaseModel):
     )
     scw_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="SCW_PROXY"
+    )
+    ainetcafe_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="AINETCAFE_PROXY"
     )
     ollama_cloud_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OLLAMA_CLOUD_PROXY"
