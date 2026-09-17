@@ -11,6 +11,9 @@ from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
 from free_claude_code.harnesses import vscode_chat_integration as vscode
 from free_claude_code.providers.base import BaseProvider
+from free_claude_code.providers.runtime.discovery import (
+    self_sufficient_local_provider_ids,
+)
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
@@ -73,7 +76,12 @@ async def test_catalog_updates_connected_file_and_disconnect_stays_removed(runti
     await asyncio.gather(*runtime.provider_manager._publications)
     await settle(runtime)
     models = json.loads(path.read_text())[0]["models"]
-    assert {m["id"] for m in models} == {"nvidia_nim/one", "nvidia_nim/two"}
+    local_ids = {
+        f"{provider_id}/one" for provider_id in self_sufficient_local_provider_ids()
+    }
+    assert {m["id"] for m in models} == (
+        {"nvidia_nim/one", "nvidia_nim/two"} | local_ids
+    )
     assert (await runtime.vscode_chat_status())["connected"]
     await runtime.disconnect_vscode_chat()
     runtime._integrations.catalog_changed()
