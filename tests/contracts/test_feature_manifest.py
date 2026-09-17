@@ -5,6 +5,7 @@ from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.messaging.platforms.factory import create_messaging_components
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.cloudflare import CloudflareProvider
+from free_claude_code.providers.codebuddy.provider import CodeBuddyProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.github_copilot.provider import GitHubCopilotProvider
@@ -67,6 +68,7 @@ def test_provider_and_platform_registries_include_builtins() -> None:
     specialized_provider_classes = {
         "openai": OpenAICodexProvider,
         "github_copilot": GitHubCopilotProvider,
+        "codebuddy": CodeBuddyProvider,
         "opencode_zen": OpenCodeProvider,
         "opencode_go": OpenCodeProvider,
         "nvidia_nim": NvidiaNimProvider,

@@ -13,6 +13,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `cerebras-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cerebras-color.svg |
 | `chutes.png` | https://chutes.ai/favicon.png |
 | `cline.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cline.svg |
+| `codebuddy.svg` | Placeholder mark created for this project (brand mark belongs to Tencent) |
 | `cloudflare-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cloudflare-color.svg |
 | `cohere-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cohere-color.svg |
 | `deepinfra-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/deepinfra-color.svg |

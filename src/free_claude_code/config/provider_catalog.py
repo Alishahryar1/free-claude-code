@@ -52,6 +52,8 @@ SAMBANOVA_DEFAULT_BASE = "https://api.sambanova.ai/v1"
 # Kilo.ai gateway OpenAI-compatible Chat Completions API.
 KILO_DEFAULT_BASE = "https://api.kilo.ai/api/gateway"
 OPENAI_CODEX_DEFAULT_BASE = "https://chatgpt.com/backend-api/codex"
+# Tencent CodeBuddy / WorkBuddy intl-cli OpenAI-compatible API root (/v2).
+CODEBUDDY_DEFAULT_BASE = "https://www.codebuddy.ai"
 # xAI OpenAI-compatible Chat Completions API.
 XAI_DEFAULT_BASE = "https://api.x.ai/v1"
 # QwenCloud Token Plan OpenAI-compatible Chat Completions API.
@@ -121,11 +123,17 @@ class ProviderDescriptor:
     required_settings_attrs: tuple[str, ...] = ()
 
     def configuration_attrs(self) -> tuple[str, ...]:
-        """Return settings fields whose non-empty values configure this provider."""
+        """Return settings fields whose non-empty values configure this provider.
+
+        A connected account is configured by its stored credentials, so its
+        base URL is an endpoint override rather than a configuring field.
+        """
         if self.required_settings_attrs:
             return self.required_settings_attrs
         if self.credential_attr is not None:
             return (self.credential_attr,)
+        if self.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT:
+            return ()
         if self.base_url_attr is not None:
             return (self.base_url_attr,)
         return ()
@@ -192,6 +200,15 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         logo_filename="githubcopilot.svg",
         auth_kind=ProviderAuthKind.CONNECTED_ACCOUNT,
         default_base_url="https://api.githubcopilot.com",
+    ),
+    "codebuddy": ProviderDescriptor(
+        provider_id="codebuddy",
+        display_name="CodeBuddy",
+        website_url="https://www.codebuddy.ai/",
+        logo_filename="codebuddy.svg",
+        auth_kind=ProviderAuthKind.CONNECTED_ACCOUNT,
+        default_base_url=CODEBUDDY_DEFAULT_BASE,
+        base_url_attr="codebuddy_base_url",
     ),
     "xai": ProviderDescriptor(
         provider_id="xai",
