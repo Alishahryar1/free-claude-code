@@ -4,7 +4,6 @@ from typing import Any, cast
 import pytest
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
@@ -15,6 +14,7 @@ from free_claude_code.core.openai_responses import (
     ResponsesToolPolicy,
     build_responses_chat_request,
 )
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.openai_responses.presentation import (
     NativeResponsesPresenter,
 )

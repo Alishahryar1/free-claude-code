@@ -25,7 +25,6 @@ from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
-    parse_sse_text,
     text_content,
 )
 from free_claude_code.core.failures import ExecutionFailure
@@ -35,6 +34,7 @@ from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningCapability,
 )
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.opencode import (
     OpenCodeProvider,
@@ -288,6 +288,58 @@ async def _collect(provider: OpenCodeProvider, model: str, **overrides: object) 
             )
         ]
     )
+
+
+@pytest.mark.asyncio
+async def test_bound_responses_pins_catalog_route_for_every_internal_turn():
+    provider, generations, _ = _provider_with_wire_transports(_catalog_payload())
+    first = parse_open_code_catalog(
+        _catalog_payload(), provider_key="opencode", provider_name="OPENCODE"
+    )
+    updated = parse_open_code_catalog(
+        _catalog_payload(
+            {
+                "chat-selector": {
+                    "id": "new-upstream",
+                    "provider": {"npm": "@ai-sdk/openai"},
+                }
+            }
+        ),
+        provider_key="opencode",
+        provider_name="OPENCODE",
+    )
+    request = _responses_request("chat-selector")
+    try:
+        with patch.object(
+            provider._catalog, "snapshot", new=AsyncMock(side_effect=[first, updated])
+        ) as snapshots:
+            async with provider.bind_responses(
+                request,
+                request_id="bound",
+                response_model="public",
+                reasoning=DEFAULT_REASONING_POLICY,
+            ) as binding:
+                assert binding.egress == "chat"
+                for text in ("First turn", "Tool result continuation"):
+                    turn = request.model_copy(update={"input": text})
+                    assert "chat-ok" in "".join(
+                        [chunk async for chunk in binding.stream(turn, input_tokens=2)]
+                    )
+                assert snapshots.await_count == 1
+            async with provider.bind_responses(
+                request,
+                request_id="next-request",
+                response_model="public",
+                reasoning=DEFAULT_REASONING_POLICY,
+            ) as binding:
+                assert binding.egress == "responses"
+            assert snapshots.await_count == 2
+        assert [json.loads(item.content)["model"] for item in generations] == [
+            "chat-upstream",
+            "chat-upstream",
+        ]
+    finally:
+        await provider.cleanup()
 
 
 async def _collect_responses(

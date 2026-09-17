@@ -3,7 +3,7 @@
 import asyncio
 import sys
 from collections.abc import AsyncIterator, Mapping
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 
 import httpx
 import httpx2
@@ -11,6 +11,9 @@ from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.responses_execution import (
+    ResponsesBinding,
+)
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -28,7 +31,7 @@ from free_claude_code.providers.openai_chat import (
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 
-from .auth import CopilotAuthManager
+from .auth import AuthenticatedLease, CopilotAuthManager
 from .lifecycle import drain_owned
 from .request_policy import (
     PROVIDER_NAME,
@@ -182,21 +185,22 @@ class GitHubCopilotProvider(BaseProvider):
             return transport
         return cached[1]
 
-    async def _dispatch(
+    @asynccontextmanager
+    async def _bind_model(
         self,
-        request: MessagesRequest | OpenAIResponsesRequest,
-        input_tokens: int,
+        model: str,
         request_id: str | None,
-        response_model: str,
-        reasoning: ReasoningPolicy,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[
+        tuple[AuthenticatedLease, AnthropicMessagesTransport | None, EndpointContext]
+    ]:
         async with self._condition:
-            self._check_model(request.model)
+            self._check_model(model)
             self._active += 1
         try:
-            async with self._auth.lease(request.model) as lease:
-                selected: AsyncIterator[str] | None = None
+            async with self._auth.lease(model) as lease:
                 http: httpx.AsyncClient | None = None
+                native: AnthropicMessagesTransport | None = None
+                endpoint: EndpointContext = lease
                 try:
                     if lease.egress is CopilotEgress.MESSAGES:
                         http = httpx.AsyncClient(
@@ -217,75 +221,12 @@ class GitHubCopilotProvider(BaseProvider):
                             capabilities=lease.model.messages,
                         )
                         endpoint = _MessagesEndpoint(lease, http)
-                        if isinstance(request, MessagesRequest):
-                            selected = native.stream_messages(
-                                request,
-                                endpoint_context=endpoint,
-                                request_id=request_id,
-                                response_model=response_model,
-                                reasoning=reasoning,
-                                model_info=lease.model.info,
-                            )
-                        else:
-                            selected = native.stream_responses(
-                                request,
-                                endpoint_context=endpoint,
-                                request_id=request_id,
-                                response_model=response_model,
-                                reasoning=reasoning,
-                            )
-                    else:
-                        resolved = non_messages_reasoning(
-                            request, reasoning, lease.model
-                        )
-                        transport = (
-                            self._responses
-                            if lease.egress is CopilotEgress.RESPONSES
-                            else self._chat(lease.model)
-                        )
-                        if isinstance(request, MessagesRequest):
-                            if lease.egress is CopilotEgress.RESPONSES:
-                                selected = self._responses.stream_messages(
-                                    request,
-                                    input_tokens=input_tokens,
-                                    request_id=request_id,
-                                    response_model=response_model,
-                                    reasoning=resolved,
-                                    endpoint_context=lease,
-                                    model_info=lease.model.info,
-                                    can_disable_reasoning="none"
-                                    in (lease.model.supported_efforts or ()),
-                                )
-                            else:
-                                selected = self._chat(lease.model).stream_messages(
-                                    request,
-                                    input_tokens=input_tokens,
-                                    request_id=request_id,
-                                    response_model=response_model,
-                                    reasoning=resolved,
-                                    endpoint_context=lease,
-                                    model_info=lease.model.info,
-                                )
-                        else:
-                            selected = transport.stream_responses(
-                                request,
-                                input_tokens=input_tokens,
-                                request_id=request_id,
-                                response_model=response_model,
-                                reasoning=resolved,
-                                endpoint_context=lease,
-                            )
-                    while True:
-                        try:
-                            event = await _next_event(selected)
-                        except StopAsyncIteration:
-                            break
-                        yield event
+                    yield lease, native, endpoint
                 finally:
                     await drain_owned(
                         asyncio.create_task(
                             _close_request(
-                                selected,
+                                None,
                                 http,
                                 active_error=sys.exception(),
                                 request_id=request_id,
@@ -296,6 +237,144 @@ class GitHubCopilotProvider(BaseProvider):
             async with self._condition:
                 self._active -= 1
                 self._condition.notify_all()
+
+    def _selected_stream(
+        self,
+        request: MessagesRequest | OpenAIResponsesRequest,
+        lease: AuthenticatedLease,
+        native: AnthropicMessagesTransport | None,
+        endpoint: EndpointContext,
+        *,
+        input_tokens: int,
+        request_id: str | None,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        if native is not None:
+            if isinstance(request, MessagesRequest):
+                return native.stream_messages(
+                    request,
+                    endpoint_context=endpoint,
+                    request_id=request_id,
+                    response_model=response_model,
+                    reasoning=reasoning,
+                    model_info=lease.model.info,
+                )
+            return native.stream_responses(
+                request,
+                endpoint_context=endpoint,
+                request_id=request_id,
+                response_model=response_model,
+                reasoning=reasoning,
+            )
+        resolved = non_messages_reasoning(request, reasoning, lease.model)
+        if isinstance(request, MessagesRequest):
+            if lease.egress is CopilotEgress.RESPONSES:
+                return self._responses.stream_messages(
+                    request,
+                    input_tokens=input_tokens,
+                    request_id=request_id,
+                    response_model=response_model,
+                    reasoning=resolved,
+                    endpoint_context=lease,
+                    model_info=lease.model.info,
+                    can_disable_reasoning="none"
+                    in (lease.model.supported_efforts or ()),
+                )
+            return self._chat(lease.model).stream_messages(
+                request,
+                input_tokens=input_tokens,
+                request_id=request_id,
+                response_model=response_model,
+                reasoning=resolved,
+                endpoint_context=lease,
+                model_info=lease.model.info,
+            )
+        transport = (
+            self._responses
+            if lease.egress is CopilotEgress.RESPONSES
+            else self._chat(lease.model)
+        )
+        return transport.stream_responses(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=resolved,
+            endpoint_context=lease,
+        )
+
+    @asynccontextmanager
+    async def bind_responses(
+        self,
+        request: OpenAIResponsesRequest,
+        *,
+        request_id: str,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[ResponsesBinding]:
+        async with self._bind_model(request.model, request_id) as (
+            lease,
+            native,
+            endpoint,
+        ):
+
+            def stream(
+                turn: OpenAIResponsesRequest, *, input_tokens: int
+            ) -> AsyncIterator[str]:
+                return _consume_selected(
+                    self._selected_stream(
+                        turn,
+                        lease,
+                        native,
+                        endpoint,
+                        input_tokens=input_tokens,
+                        request_id=request_id,
+                        response_model=response_model,
+                        reasoning=reasoning,
+                    ),
+                    request_id,
+                )
+
+            yield ResponsesBinding(lease.egress.value, stream)
+
+    async def _dispatch(
+        self,
+        request: MessagesRequest | OpenAIResponsesRequest,
+        input_tokens: int,
+        request_id: str | None,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        async with self._bind_model(request.model, request_id) as (
+            lease,
+            native,
+            endpoint,
+        ):
+            stream = _consume_selected(
+                self._selected_stream(
+                    request,
+                    lease,
+                    native,
+                    endpoint,
+                    input_tokens=input_tokens,
+                    request_id=request_id,
+                    response_model=response_model,
+                    reasoning=reasoning,
+                ),
+                request_id,
+            )
+            try:
+                async for event in stream:
+                    yield event
+            finally:
+                await close_provider_stream(
+                    stream,
+                    active_error=sys.exception(),
+                    provider_name=PROVIDER_NAME,
+                    request_id=request_id,
+                )
 
     async def cleanup(self) -> None:
         if self._closed:
@@ -365,3 +444,23 @@ async def _next_event(stream: AsyncIterator[str]) -> str:
         with suppress(Exception, asyncio.CancelledError):
             await drain_owned(task)
         raise
+
+
+async def _consume_selected(
+    stream: AsyncIterator[str], request_id: str | None
+) -> AsyncIterator[str]:
+    try:
+        while True:
+            try:
+                event = await _next_event(stream)
+            except StopAsyncIteration:
+                break
+            yield event
+    finally:
+        await drain_owned(
+            asyncio.create_task(
+                _close_request(
+                    stream, None, active_error=sys.exception(), request_id=request_id
+                )
+            )
+        )

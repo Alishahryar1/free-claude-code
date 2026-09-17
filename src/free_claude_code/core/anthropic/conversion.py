@@ -18,7 +18,7 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_chat import (
     IMAGE_TOOL_RESULT_MARKER,
-    ChatToolResultImages,
+    ChatToolResultContext,
     close_chat_tool_result_turns,
     image_tool_result_label,
 )
@@ -273,7 +273,7 @@ def _openai_chat_tool_result(block: Any) -> _OpenAIChatToolResult:
             "tool_call_id": tool_id,
             "content": IMAGE_TOOL_RESULT_MARKER,
         },
-        rich_user_message=ChatToolResultImages(role="user", content=rich_parts),
+        rich_user_message=ChatToolResultContext(role="user", content=rich_parts),
     )
 
 

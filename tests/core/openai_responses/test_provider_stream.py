@@ -2,7 +2,6 @@ import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
-    parse_sse_text,
     thinking_content,
 )
 from free_claude_code.core.openai_responses.provider_stream import (
@@ -10,6 +9,7 @@ from free_claude_code.core.openai_responses.provider_stream import (
     ResponsesStreamFailure,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
+from free_claude_code.core.sse import parse_sse_text
 
 
 def _terminal_usage(usage: dict[str, object]) -> dict[str, object]:

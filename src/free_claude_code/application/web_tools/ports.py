@@ -12,6 +12,7 @@ class WebFetchEgressPolicy:
 
     allow_private_network_targets: bool
     allowed_schemes: frozenset[str]
+    allowed_domains: tuple[str, ...] = ()
 
 
 class WebFetchEgressViolation(ValueError):

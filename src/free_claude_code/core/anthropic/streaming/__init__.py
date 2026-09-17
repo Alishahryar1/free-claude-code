@@ -1,6 +1,7 @@
 """Shared Anthropic streaming engine."""
 
-from .decoder import AnthropicSSEDecoder
+from free_claude_code.core.sse import SSEDecoder
+
 from .emitter import (
     ANTHROPIC_SSE_RESPONSE_HEADERS,
     AnthropicSseEmitter,
@@ -23,9 +24,9 @@ from .recovery import (
 
 __all__ = [
     "ANTHROPIC_SSE_RESPONSE_HEADERS",
-    "AnthropicSSEDecoder",
     "AnthropicSseEmitter",
     "AnthropicStreamLedger",
+    "SSEDecoder",
     "StreamBlockLedger",
     "ToolBlockState",
     "ToolSchema",

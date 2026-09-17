@@ -4,7 +4,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_lines
+from free_claude_code.core.sse import parse_sse_lines
 from smoke.lib.config import SmokeConfig, auth_headers
 from smoke.lib.e2e import ConversationDriver, SmokeServerDriver, assert_product_stream
 

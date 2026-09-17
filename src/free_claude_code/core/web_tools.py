@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class WebSearchResult:
     title: str
     url: str
+    snippet: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,3 +16,4 @@ class WebFetchResult:
     title: str
     media_type: str
     data: str
+    truncated: bool = False

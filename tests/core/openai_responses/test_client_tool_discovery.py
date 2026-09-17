@@ -10,7 +10,6 @@ from openai.types.responses import ResponseStreamEvent
 from pydantic import TypeAdapter
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -20,6 +19,7 @@ from free_claude_code.core.openai_responses import (
     build_responses_chat_request,
 )
 from free_claude_code.core.openai_tool_names import encode_openai_chat_tool_names
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
     ResponsesChatStreamOutput,

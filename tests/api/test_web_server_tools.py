@@ -42,13 +42,13 @@ from free_claude_code.core.anthropic.models import (
 )
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
-    parse_sse_text,
     text_content,
 )
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.core.version import package_version
 from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
 from free_claude_code.messaging.event_parser import parse_cli_event
@@ -952,7 +952,7 @@ def _aiohttp_response(
     if location is not None:
         hdrs["location"] = location
     r.headers = hdrs
-    r.get_encoding = MagicMock(return_value="utf-8")
+    r.charset = "utf-8"
     r.raise_for_status = MagicMock()
     r.request_info = MagicMock()
     r.history = ()

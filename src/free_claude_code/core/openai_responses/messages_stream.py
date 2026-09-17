@@ -3,7 +3,7 @@
 import json
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from typing import cast
 
@@ -113,6 +113,8 @@ class AnthropicToResponsesStream:
         public_model: str,
         tool_identities: Mapping[str, ResponsesToolIdentity],
         replay_origin: ReplayOrigin,
+        event_transform: Callable[[str, JsonObject], Iterable[tuple[str, JsonObject]]]
+        | None = None,
     ) -> None:
         self._request = request
         self._public_model = public_model
@@ -122,7 +124,7 @@ class AnthropicToResponsesStream:
         self._created_at = int(time.time())
         self._native = NativeMessagesStreamState()
         self._ledger = ResponsesOutputLedger()
-        self._events = ResponseEventBuilder()
+        self._events = ResponseEventBuilder(transform=event_transform)
         self._usage = _NativeUsage()
         self._terminal = False
         self._started = False

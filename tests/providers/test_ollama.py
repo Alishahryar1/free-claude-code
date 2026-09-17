@@ -8,10 +8,8 @@ from free_claude_code.config.provider_catalog import (
     OLLAMA_CLOUD_DEFAULT_BASE,
     OLLAMA_DEFAULT_BASE,
 )
-from free_claude_code.core.anthropic.stream_contracts import (
-    parse_sse_text,
-    thinking_content,
-)
+from free_claude_code.core.anthropic.stream_contracts import thinking_content
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (

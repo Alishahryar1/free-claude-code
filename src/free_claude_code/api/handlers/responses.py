@@ -19,6 +19,12 @@ from free_claude_code.application.errors import ApplicationError, InvalidRequest
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.application.ports import ProviderResolver
 from free_claude_code.application.routing import ModelRouter
+from free_claude_code.application.web_tools.ports import (
+    WebFetchEgressPolicy,
+    WebToolsPort,
+    web_fetch_allowed_scheme_set,
+)
+from free_claude_code.application.web_tools.responses import ResponsesWebTools
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.diagnostics import safe_exception_message
 from free_claude_code.core.failures import ExecutionFailure, find_execution_failure
@@ -43,6 +49,7 @@ class ResponsesHandler:
         provider_executor: ProviderExecutor | None = None,
         generation_id: int | None = None,
         request_headers: Mapping[str, str] | None = None,
+        web_tools: WebToolsPort | None = None,
     ) -> None:
         self._settings = settings
         self._model_router = model_router or ModelRouter(settings)
@@ -52,6 +59,14 @@ class ResponsesHandler:
             generation_id=generation_id,
             log_raw_payloads=settings.log_raw_api_payloads,
             request_headers=request_headers,
+            responses_web_tools=ResponsesWebTools(
+                web_tools,
+                enabled=settings.enable_web_server_tools,
+                egress=WebFetchEgressPolicy(
+                    settings.web_fetch_allow_private_networks,
+                    web_fetch_allowed_scheme_set(settings.web_fetch_allowed_schemes),
+                ),
+            ),
         )
 
     async def create(

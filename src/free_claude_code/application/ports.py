@@ -1,6 +1,7 @@
 """Typed capabilities consumed by application use cases."""
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -11,6 +12,7 @@ from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 
 from .model_metadata import ProviderModelInfo
+from .responses_execution import ResponsesBinding
 
 
 class ProviderPort(Protocol):
@@ -28,16 +30,15 @@ class ProviderPort(Protocol):
         model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]: ...
 
-    def stream_responses(
+    def bind_responses(
         self,
         request: OpenAIResponsesRequest,
         *,
-        input_tokens: int,
         request_id: str,
         response_model: str,
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AsyncIterator[str]: ...
+    ) -> AbstractAsyncContextManager[ResponsesBinding]: ...
 
 
 ProviderResolver = Callable[[str], Awaitable[ProviderPort]]

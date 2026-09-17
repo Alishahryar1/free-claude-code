@@ -21,8 +21,8 @@ from free_claude_code.core.anthropic import (
     anthropic_error_payload,
     anthropic_failure_payload,
 )
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.sse import parse_sse_text
 
 
 async def _body_chunks(chunks: list[str]) -> AsyncGenerator[str]:

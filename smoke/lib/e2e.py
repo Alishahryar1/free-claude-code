@@ -18,13 +18,12 @@ import pytest
 
 from free_claude_code.config.provider_catalog import SUPPORTED_PROVIDER_IDS
 from free_claude_code.core.anthropic.stream_contracts import (
-    SSEEvent,
     assert_anthropic_stream_contract,
     event_index,
     has_tool_use,
-    parse_sse_lines,
     text_content,
 )
+from free_claude_code.core.sse import SSEEvent, parse_sse_lines
 from free_claude_code.harnesses.claude import build_claude_proxy_env
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
 from free_claude_code.messaging.session import SessionStore

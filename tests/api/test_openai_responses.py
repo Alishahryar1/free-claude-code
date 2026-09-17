@@ -1,15 +1,17 @@
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from functools import partial
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.responses_execution import ResponsesBinding
 from free_claude_code.config.constants import DEFAULT_MODEL
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import ReasoningReplayMode
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -18,6 +20,7 @@ from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatProfile,
@@ -33,6 +36,10 @@ _RESPONSE_ID = "resp_test"
 
 
 class FakeProvider:
+    @asynccontextmanager
+    async def bind_responses(self, request, **kwargs):
+        yield ResponsesBinding("responses", partial(self.stream_responses, **kwargs))
+
     def __init__(self, chunks: list[str]) -> None:
         self.chunks = chunks
         self.startup_error: InvalidRequestError | None = None

@@ -3,7 +3,8 @@
 import httpx
 import pytest
 
-from free_claude_code.core.anthropic.stream_contracts import SSEEvent, text_content
+from free_claude_code.core.anthropic.stream_contracts import text_content
+from free_claude_code.core.sse import SSEEvent
 from smoke.lib.outcomes import is_upstream_unavailable_text
 
 

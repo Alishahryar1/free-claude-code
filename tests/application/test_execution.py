@@ -2,6 +2,8 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.responses_execution import ResponsesBinding
 from free_claude_code.application.routing import (
     ProviderModelTarget,
     ResolvedModelRoute,
@@ -24,6 +27,10 @@ from free_claude_code.core.reasoning import ReasoningCapability, ReasoningPolicy
 
 
 class FakeProvider:
+    @asynccontextmanager
+    async def bind_responses(self, request, **kwargs):
+        yield ResponsesBinding("responses", partial(self.stream_responses, **kwargs))
+
     def __init__(self) -> None:
         self.stream_calls: list[dict[str, object]] = []
         self.stream_close_calls = 0
@@ -85,6 +92,10 @@ class FakeProvider:
 
 
 class ResponsesFakeProvider:
+    @asynccontextmanager
+    async def bind_responses(self, request, **kwargs):
+        yield ResponsesBinding("responses", partial(self.stream_responses, **kwargs))
+
     def __init__(self) -> None:
         self.stream_calls: list[dict[str, object]] = []
         self.stream_close_calls = 0

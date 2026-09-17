@@ -45,6 +45,14 @@ from .tools import (
     ResponsesToolIdentity,
     flatten_responses_tool_name,
 )
+from .web_history import encoded_records, prepare_web_history, replay_item
+from .web_request import (
+    WebSearchSpec,
+    prepare_web_request,
+    public_action,
+    validate_action,
+)
+from .web_stream import WebResponsePresenter
 
 __all__ = [
     "OPENAI_RESPONSES_SSE_HEADERS",
@@ -66,11 +74,14 @@ __all__ = [
     "ResponsesToolPolicy",
     "TextBlockState",
     "ToolBlockState",
+    "WebResponsePresenter",
+    "WebSearchSpec",
     "build_native_responses_request",
     "build_responses_chat_request",
     "build_responses_messages_request",
     "build_responses_provider_request",
     "committed_response_failure_frame",
+    "encoded_records",
     "estimate_responses_input_tokens",
     "flatten_responses_tool_name",
     "new_call_id",
@@ -81,10 +92,15 @@ __all__ = [
     "openai_error_payload",
     "openai_error_type_for_failure",
     "openai_failure_payload",
+    "prepare_web_history",
+    "prepare_web_request",
+    "public_action",
     "reasoning_output_item",
+    "replay_item",
     "replay_unsafe_function_call_error",
     "responses_reasoning_config",
     "responses_reasoning_policy",
     "responses_stream_failure_from_event",
     "tool_item",
+    "validate_action",
 ]

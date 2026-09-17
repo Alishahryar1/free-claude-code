@@ -30,12 +30,14 @@ from free_claude_code.core.trace import (
 )
 
 from .ports import ModelInfoLookup, ProviderResolver
+from .responses_execution import ExecutionChunk, ExecutionProgress
 from .routing import (
     ProviderModelTarget,
     ResolvedModelRoute,
     RoutedMessagesRequest,
     RoutedResponsesRequest,
 )
+from .web_tools.responses import ResponsesWebTools
 
 TokenCounter = Callable[
     [list[Message], str | list[SystemContent] | None, list[Tool] | None],
@@ -44,7 +46,7 @@ TokenCounter = Callable[
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
 WireApi = Literal["messages", "responses"]
 CandidateStreamOpener = Callable[
-    [int, ProviderModelTarget], Awaitable[AsyncIterator[str]]
+    [int, ProviderModelTarget], Awaitable[AsyncIterator[ExecutionChunk]]
 ]
 
 
@@ -62,10 +64,12 @@ class ProviderExecutor:
         log_raw_payloads: bool = False,
         request_headers: Mapping[str, str] | None = None,
         model_info_lookup: ModelInfoLookup | None = None,
+        responses_web_tools: ResponsesWebTools | None = None,
     ) -> None:
         if not math.isfinite(progress_timeout_seconds) or progress_timeout_seconds <= 0:
             raise ValueError("progress_timeout_seconds must be finite and positive")
         self._provider_resolver = provider_resolver
+        self._responses_web_tools = responses_web_tools or ResponsesWebTools()
         self._model_info_lookup = model_info_lookup or (lambda _provider, _model: None)
         self._token_counter = token_counter
         self._responses_token_counter = responses_token_counter
@@ -226,29 +230,43 @@ class ProviderExecutor:
         """Execute one native OpenAI Responses request."""
 
         primary_request = routed.request.model_copy(deep=True)
-        input_tokens = self._responses_token_counter(routed.request)
 
         async def open_candidate(
             index: int,
             target: ProviderModelTarget,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[ExecutionChunk]:
             provider = await self._provider_resolver(target.provider_id)
             request = (
                 primary_request
                 if index == 0
                 else routed.request.model_copy(
-                    update={"model": target.provider_model},
-                    deep=True,
+                    update={"model": target.provider_model}, deep=True
                 )
             )
-            return provider.stream_responses(
-                request,
-                input_tokens=input_tokens,
-                request_id=request_id,
-                response_model=routed.resolved.original_model,
-                reasoning=routed.reasoning,
-                request_headers=self._request_headers,
-            )
+
+            async def candidate() -> AsyncIterator[ExecutionChunk]:
+                async with provider.bind_responses(
+                    request,
+                    request_id=request_id,
+                    response_model=routed.resolved.original_model,
+                    reasoning=routed.reasoning,
+                    request_headers=self._request_headers,
+                ) as bound:
+                    operation = self._responses_web_tools.stream(
+                        bound, request, token_counter=self._responses_token_counter
+                    )
+                    try:
+                        async for event in operation:
+                            yield event
+                    finally:
+                        await close_stream_input(
+                            operation,
+                            owner="responses_candidate",
+                            source="application",
+                            preserved_error=sys.exception(),
+                        )
+
+            return candidate()
 
         raw_input = routed.request.input
         input_item_count = (
@@ -338,8 +356,9 @@ class ProviderExecutor:
             loop = asyncio.get_running_loop()
             progress_deadline = loop.time() + self._progress_timeout_seconds
             for index, target in enumerate(candidates):
-                provider_stream: AsyncIterator[str] | None = None
+                provider_stream: AsyncIterator[ExecutionChunk] | None = None
                 candidate_committed = False
+                provider_waiting = True
                 candidate_failure: ExecutionFailure | None = None
                 try:
                     opening_started = monotonic()
@@ -357,12 +376,14 @@ class ProviderExecutor:
                             "provider stream method must return an async iterator"
                         )
                     while provider_stream is not None:
-                        if loop.time() >= progress_deadline:
+                        if provider_waiting and loop.time() >= progress_deadline:
                             raise self._progress_timeout_failure(
                                 request_id=request_id,
                                 provider_id=target.provider_id,
                             )
-                        progress_timeout = asyncio.timeout_at(progress_deadline)
+                        progress_timeout = asyncio.timeout_at(
+                            progress_deadline if provider_waiting else None
+                        )
                         read_failure: ExecutionFailure | None = None
                         try:
                             async with progress_timeout:
@@ -387,6 +408,12 @@ class ProviderExecutor:
                         if read_failure is not None:
                             candidate_failure = read_failure
                             break
+                        if isinstance(chunk, ExecutionProgress):
+                            provider_waiting = chunk.phase == "provider"
+                            progress_deadline = (
+                                loop.time() + self._progress_timeout_seconds
+                            )
+                            continue
                         if not chunk:
                             await asyncio.sleep(0)
                             continue

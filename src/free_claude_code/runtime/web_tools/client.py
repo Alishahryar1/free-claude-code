@@ -1,6 +1,7 @@
 """Outbound HTTP for web_search / web_fetch with operation-scoped resources."""
 
 import asyncio
+import codecs
 import socket
 from collections.abc import AsyncIterator
 from urllib.parse import urljoin, urlparse
@@ -213,7 +214,12 @@ class HTTPWebToolsClient:
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "text/plain")
                     final_url = str(response.url)
-                    encoding = response.get_encoding() or "utf-8"
+                    # The capped stream reader deliberately does not populate
+                    # aiohttp's full-body cache, which get_encoding requires.
+                    try:
+                        encoding = codecs.lookup(response.charset or "utf-8").name
+                    except LookupError:
+                        encoding = "utf-8"
                     body_bytes = await _read_aiohttp_body_capped(
                         response, constants._MAX_WEB_FETCH_RESPONSE_BYTES
                     )
@@ -235,4 +241,5 @@ class HTTPWebToolsClient:
             title=title,
             media_type="text/plain",
             data=data[:_MAX_FETCH_CHARS],
+            truncated=len(data) > _MAX_FETCH_CHARS,
         )

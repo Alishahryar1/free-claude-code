@@ -8,8 +8,8 @@ import openai
 import pytest
 
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.groq.tpm import correct_tpm_completion_budget

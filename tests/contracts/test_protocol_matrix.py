@@ -11,11 +11,11 @@ from openai import AsyncOpenAI
 from free_claude_code.core.anthropic import MessagesRequest, ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
-    parse_sse_text,
     text_content,
 )
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatProfile,

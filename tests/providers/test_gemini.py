@@ -6,8 +6,8 @@ import pytest
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.google_openai import (
     GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR,

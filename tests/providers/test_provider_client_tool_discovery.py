@@ -7,8 +7,8 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from free_claude_code.providers.runtime.runtime import create_provider
 from tests.core.openai_responses.test_client_tool_discovery import AGENTS, SEARCH

@@ -9,7 +9,6 @@ from free_claude_code.core.anthropic.native import (
     NativeMessagesError,
     NativeMessagesOptions,
 )
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_lines
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
@@ -21,6 +20,7 @@ from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     build_responses_messages_request,
 )
+from free_claude_code.core.sse import parse_sse_lines
 
 _SCOPE = "github_copilot/anthropic_messages"
 

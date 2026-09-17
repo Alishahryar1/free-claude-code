@@ -14,9 +14,9 @@ from openai import AsyncOpenAI
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,

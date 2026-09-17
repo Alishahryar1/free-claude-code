@@ -14,6 +14,7 @@ from .events import format_response_sse_event
 from .ids import tool_item_id_for_kind
 from .models import OpenAIResponsesRequest
 from .reasoning import responses_reasoning_config, responses_reasoning_policy
+from .web_history import native_tool_contexts
 
 _TERMINAL_EVENT_TYPES = frozenset(
     {"response.completed", "response.incomplete", "response.failed"}
@@ -48,6 +49,8 @@ def build_native_responses_request(
                 del item["id"]
     body["model"] = model
     body["stream"] = True
+    if "input" in body:
+        body["input"] = native_tool_contexts(body["input"])
     body["store"] = False
     body.pop("previous_response_id", None)
     if reasoning != responses_reasoning_policy(request.reasoning):

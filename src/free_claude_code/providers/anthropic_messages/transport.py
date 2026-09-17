@@ -19,7 +19,6 @@ from free_claude_code.core.anthropic.native import (
     build_native_messages_request,
 )
 from free_claude_code.core.anthropic.native_stream import NativeMessagesRelay
-from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.diagnostics import (
     ERROR_DETAIL_DISPLAY_CAP_BYTES,
     attach_upstream_error_body,
@@ -33,6 +32,8 @@ from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesConversionError,
     ResponsesMessagesRequest,
+    ResponsesToolAdapter,
+    ResponsesToolPolicy,
     build_responses_messages_request,
 )
 from free_claude_code.core.reasoning import (
@@ -40,6 +41,7 @@ from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningPolicy,
 )
+from free_claude_code.core.sse import SSEDecoder
 from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -199,18 +201,32 @@ class AnthropicMessagesTransport:
         response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> AsyncIterator[str]:
-        prepared = self._responses_body(request, reasoning)
+        adapter = ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(
+                custom_tools_as_functions=True,
+                flatten_namespaces=True,
+                client_tool_search=True,
+            ),
+        )
+        prepared = self._responses_body(adapter.request, reasoning)
+
+        def presenter(origin: ReplayOrigin) -> AnthropicToResponsesStream:
+            inverse = adapter.event_adapter()
+            return AnthropicToResponsesStream(
+                request,
+                public_model=response_model or request.model,
+                tool_identities=prepared.tool_identities,
+                replay_origin=origin,
+                event_transform=inverse.feed if inverse is not None else None,
+            )
+
         return self._stream(
             prepared.body,
             betas=(),
             endpoint_context=endpoint_context,
             request_id=request_id,
-            presenter_factory=lambda origin: AnthropicToResponsesStream(
-                request,
-                public_model=response_model or request.model,
-                tool_identities=prepared.tool_identities,
-                replay_origin=origin,
-            ),
+            presenter_factory=presenter,
         )
 
     async def _stream(
@@ -421,7 +437,7 @@ class AnthropicMessagesTransport:
 
 
 async def _events(response: httpx.Response) -> AsyncIterator[tuple[str, JsonObject]]:
-    decoder = AnthropicSSEDecoder()
+    decoder = SSEDecoder()
     async for chunk in response.aiter_text():
         for event in decoder.feed(chunk):
             payload = cast(JsonObject, event.data)

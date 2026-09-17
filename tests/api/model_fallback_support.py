@@ -2,13 +2,15 @@
 
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
+from functools import partial
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.responses_execution import ResponsesBinding
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.streaming import format_sse_event
@@ -183,6 +185,10 @@ def _responses_payload(
 
 
 class ControlledFallbackProvider:
+    @asynccontextmanager
+    async def bind_responses(self, request, **kwargs):
+        yield ResponsesBinding("responses", partial(self.stream_responses, **kwargs))
+
     def __init__(
         self,
         *,

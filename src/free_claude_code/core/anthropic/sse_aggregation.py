@@ -12,8 +12,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-from .stream_contracts import SSEEvent
-from .streaming.decoder import AnthropicSSEDecoder
+from free_claude_code.core.sse import SSEDecoder, SSEEvent
 
 __all__ = ["aggregate_anthropic_sse_to_message"]
 
@@ -27,7 +26,7 @@ async def aggregate_anthropic_sse_to_message(
     of a top-level ``event: error`` if one arrived and ``complete`` records
     whether the stream emitted ``message_stop``.
     """
-    decoder = AnthropicSSEDecoder()
+    decoder = SSEDecoder()
     message: dict[str, Any] = {}
     blocks: dict[int, dict[str, Any]] = {}
     parts: dict[int, list[str]] = {}

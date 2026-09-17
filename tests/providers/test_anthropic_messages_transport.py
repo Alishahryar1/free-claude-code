@@ -9,11 +9,11 @@ import pytest
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,

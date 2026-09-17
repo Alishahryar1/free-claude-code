@@ -9,6 +9,48 @@ from free_claude_code.core.web_tools import WebSearchResult
 from free_claude_code.runtime.web_tools import client as web_client
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content_type", "body"),
+    [
+        ("text/html", "<title>Café</title><p>Text to find.</p>".encode()),
+        (
+            "text/html; charset=not-a-codec",
+            "<title>Café</title><p>Text to find.</p>".encode(),
+        ),
+        (
+            "text/html; charset=iso-8859-1",
+            "<title>Café</title><p>Text to find.</p>".encode("iso-8859-1"),
+        ),
+    ],
+)
+async def test_fetch_decodes_capped_stream_with_optional_charset(content_type, body):
+    from aiohttp import web
+
+    from free_claude_code.application.web_tools.ports import WebFetchEgressPolicy
+
+    async def page(request):
+        return web.Response(body=body, headers={"content-type": content_type})
+
+    app = web.Application()
+    app.router.add_get("/", page)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    try:
+        await web.TCPSite(runner, "127.0.0.1", 0).start()
+        address = runner.addresses[0]
+        assert isinstance(address, tuple)
+        result = await web_client.HTTPWebToolsClient().fetch(
+            f"http://127.0.0.1:{address[1]}/",
+            egress=WebFetchEgressPolicy(True, frozenset({"http"})),
+        )
+        assert result.title == "Café"
+        assert "Text to find." in result.data
+        assert not result.truncated
+    finally:
+        await runner.cleanup()
+
+
 def _httpx_clients(monkeypatch, handler):
     original_client = httpx.AsyncClient
     clients = []
@@ -116,7 +158,7 @@ async def test_fetch_cancellation_closes_response_session_and_connector(monkeypa
                 status=200,
                 url=url,
                 headers={},
-                get_encoding=lambda: "utf-8",
+                charset="utf-8",
                 raise_for_status=lambda: None,
                 content=SimpleNamespace(iter_chunked=chunks),
             )

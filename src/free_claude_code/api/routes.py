@@ -93,6 +93,7 @@ async def _create_responses_response(
         await lease.wait_for_token_estimation()
         handler = ResponsesHandler(
             lease.settings,
+            web_tools=services.web_tools,
             provider_resolver=_provider_resolver(lease),
             generation_id=lease.generation_id,
             request_headers=request_headers,

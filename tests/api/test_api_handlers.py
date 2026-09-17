@@ -1,5 +1,7 @@
 import json
 from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from functools import partial
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,6 +15,7 @@ from free_claude_code.api.handlers import (
 )
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.responses_execution import ResponsesBinding
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import (
     Message,
@@ -39,6 +42,10 @@ _CLASSIFIER_USER = (
 
 
 class FakeProvider:
+    @asynccontextmanager
+    async def bind_responses(self, request, **kwargs):
+        yield ResponsesBinding("responses", partial(self.stream_responses, **kwargs))
+
     def __init__(self, events: list[str] | None = None) -> None:
         self.requests: list[MessagesRequest] = []
         self.responses_requests: list[OpenAIResponsesRequest] = []

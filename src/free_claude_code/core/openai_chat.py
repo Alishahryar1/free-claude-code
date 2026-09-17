@@ -7,7 +7,7 @@ from free_claude_code.core.json_types import JsonObject, JsonValue
 IMAGE_TOOL_RESULT_MARKER = "[Image-bearing tool output follows in user content.]"
 
 
-class ChatToolResultImages(dict[str, JsonValue]):
+class ChatToolResultContext(dict[str, JsonValue]):
     """Relocated tool output, retaining turn ownership until serialization."""
 
     __slots__ = ()

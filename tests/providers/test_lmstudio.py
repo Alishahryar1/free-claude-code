@@ -380,6 +380,40 @@ async def test_context_rejection_never_starts_admission_or_generation(
 
 
 @pytest.mark.asyncio
+async def test_bound_response_continuations_validate_enlarged_context():
+    from tests.api.test_responses_web_tools import chat_wire
+
+    generations = []
+
+    def handler(request):
+        if request.url.path == "/api/v0/models":
+            return metadata_response(context=1000)
+        generations.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=chat_wire({"role": "assistant", "content": "ok"}, "stop"),
+        )
+
+    async with provider_with_http(handler) as provider:
+        request = OpenAIResponsesRequest(model="model", input="hello")
+        async with provider.bind_responses(
+            request,
+            request_id="bound",
+            response_model="public",
+            reasoning=REASONING_OFF,
+        ) as binding:
+            assert "ok" in "".join(
+                [chunk async for chunk in binding.stream(request, input_tokens=1)]
+            )
+            enlarged = request.model_copy(update={"input": "web result " * 10000})
+            with pytest.raises(ExecutionFailure) as error:
+                await anext(binding.stream(enlarged, input_tokens=1))
+            assert error.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
+        assert len(generations) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_primary_context_validation_counts_toward_progress_timeout(
     wire,

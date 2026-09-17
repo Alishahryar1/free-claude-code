@@ -10,10 +10,10 @@ from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKEN
 from free_claude_code.config.provider_catalog import MINIMAX_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import Message, MessagesRequest, Tool
 from free_claude_code.core.anthropic.stream_contracts import (
-    parse_sse_text,
     text_content,
     thinking_content,
 )
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.support import (
     REASONING_OFF,

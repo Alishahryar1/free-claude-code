@@ -16,7 +16,6 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
-    parse_sse_text,
     text_content,
 )
 from free_claude_code.core.failures import ExecutionFailure
@@ -35,6 +34,7 @@ from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.anthropic_messages.request_policy import (
     MessagesModelCapabilities,
 )
@@ -106,6 +106,33 @@ async def test_conversion_runs_once_under_current_account_lease(
         assert harness.provider._active == 0
     finally:
         await harness.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("egress", list(CopilotEgress))
+async def test_bound_responses_keeps_one_account_lease_across_turns(tmp_path, egress):
+    harness = Harness(tmp_path, egress)
+    request = OpenAIResponsesRequest(model=harness.runtime.name, input="First turn")
+    try:
+        async with harness.provider.bind_responses(
+            request,
+            request_id="bound",
+            response_model="public",
+            reasoning=DEFAULT_REASONING_POLICY,
+        ) as binding:
+            assert binding.egress == egress.value
+            for text in ("First turn", "Tool result continuation"):
+                turn = request.model_copy(update={"input": text})
+                assert "ok" in await collect(binding.stream(turn, input_tokens=2))
+                assert harness.runtime.session_calls == 1
+                assert harness.provider._active == 1
+                assert not harness.runtime.sessions[0].closed
+            assert len(harness.seen) == 2
+        assert harness.provider._active == 0
+        assert all(wire.closed for wire in harness.wires)
+    finally:
+        await harness.close()
+    assert all(session.closed for session in harness.runtime.sessions)
 
 
 class Wire(httpx.AsyncByteStream, httpx2.AsyncByteStream):

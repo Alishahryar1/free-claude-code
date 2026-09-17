@@ -3,15 +3,14 @@
 import sys
 from collections.abc import AsyncIterator
 
-from free_claude_code.core.anthropic.stream_contracts import SSEEvent
 from free_claude_code.core.anthropic.streaming import format_sse_event
-from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
+from free_claude_code.core.sse import SSEDecoder, SSEEvent
 from free_claude_code.core.trace import close_stream_input
 
 
 async def classifier_response(source: AsyncIterator[str]) -> AsyncIterator[str]:
     """Project block lifecycles without interpreting any classifier text."""
-    decoder = AnthropicSSEDecoder()
+    decoder = SSEDecoder()
     indices: dict[int, int | None] = {}
     next_index = 0
 

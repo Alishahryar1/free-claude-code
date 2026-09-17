@@ -15,11 +15,11 @@ from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKEN
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
-    parse_sse_text,
     text_content,
     thinking_content,
 )
 from free_claude_code.core.reasoning import ReasoningCapability
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.providers.support import (
     SDKStreamDouble,

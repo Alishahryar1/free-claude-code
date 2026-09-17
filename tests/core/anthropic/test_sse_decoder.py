@@ -1,4 +1,4 @@
-from free_claude_code.core.anthropic.streaming import AnthropicSSEDecoder
+from free_claude_code.core.anthropic.streaming import SSEDecoder
 
 
 def test_decoder_handles_every_split_and_crlf_boundaries():
@@ -8,14 +8,14 @@ def test_decoder_handles_every_split_and_crlf_boundaries():
     )
 
     for split in range(len(wire) + 1):
-        decoder = AnthropicSSEDecoder()
+        decoder = SSEDecoder()
         events = (*decoder.feed(wire[:split]), *decoder.feed(wire[split:]))
         assert [event.event for event in events] == ["first", "second"]
         assert decoder.finish() == ()
 
 
 def test_decoder_returns_one_unterminated_final_event():
-    decoder = AnthropicSSEDecoder()
+    decoder = SSEDecoder()
 
     assert decoder.feed('event: final\ndata: {"value": 1}') == ()
     events = decoder.finish()
@@ -30,7 +30,7 @@ def test_decoder_handles_many_tiny_fragments_without_losing_frames():
     wire = "".join(
         f'event: delta\ndata: {{"index":{index}}}\n\n' for index in range(250)
     )
-    decoder = AnthropicSSEDecoder()
+    decoder = SSEDecoder()
 
     events = tuple(event for character in wire for event in decoder.feed(character))
 

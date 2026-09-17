@@ -1,13 +1,16 @@
 """Provider identity, HTTP resource ownership, and model discovery."""
 
 from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import replace
+from functools import partial
 from typing import Any
 
 import httpx2
 from openai import AsyncOpenAI
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.responses_execution import ResponsesBinding
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -221,6 +224,27 @@ class OpenAIChatProvider(BaseProvider):
             reasoning=reasoning,
             endpoint_context=endpoint_context,
             model_info=model_info,
+        )
+
+    @asynccontextmanager
+    async def bind_responses(
+        self,
+        request: OpenAIResponsesRequest,
+        *,
+        request_id: str,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[ResponsesBinding]:
+        yield ResponsesBinding(
+            "chat",
+            partial(
+                self.stream_responses,
+                request_id=request_id,
+                response_model=response_model,
+                reasoning=reasoning,
+                request_headers=request_headers,
+            ),
         )
 
     def stream_responses(

@@ -13,8 +13,8 @@ from free_claude_code.core.anthropic.native_stream import (
 from free_claude_code.core.anthropic.sse_aggregation import (
     aggregate_anthropic_sse_to_message,
 )
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_lines
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.sse import parse_sse_lines
 
 _START: JsonObject = {
     "type": "message_start",

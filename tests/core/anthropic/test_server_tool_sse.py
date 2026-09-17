@@ -10,7 +10,7 @@ from free_claude_code.core.anthropic.server_tool_sse import (
     web_search_result_block,
     web_tool_error_block,
 )
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
 
 

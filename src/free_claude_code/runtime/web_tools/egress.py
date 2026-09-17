@@ -8,6 +8,7 @@ from free_claude_code.application.web_tools.ports import (
     WebFetchEgressPolicy,
     WebFetchEgressViolation,
 )
+from free_claude_code.core.web_domains import domain_matches
 
 
 def _port_for_url(parsed) -> int:
@@ -46,6 +47,11 @@ def get_validated_stream_addrinfos_for_egress(
     host = parsed.hostname
     if host is None or host == "":
         raise WebFetchEgressViolation("web_fetch URL must include a host")
+
+    if policy.allowed_domains and not any(
+        domain_matches(host, domain) for domain in policy.allowed_domains
+    ):
+        raise WebFetchEgressViolation("web_fetch URL is outside the allowed domains")
 
     port = _port_for_url(parsed)
 

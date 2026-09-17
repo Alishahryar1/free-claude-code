@@ -4,8 +4,7 @@ import json
 
 import pytest
 
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
+from free_claude_code.core.sse import SSEDecoder, parse_sse_text
 
 
 @pytest.mark.parametrize("newline", ["\r", "\n", "\r\n"])
@@ -17,7 +16,7 @@ def test_incremental_sse_terminators_preserve_unicode_text(
     frame = f"event: content_block_delta{newline}data: {json.dumps(payload, ensure_ascii=False)}{newline}{newline}"
     raw = frame * 2
     assert [event.data for event in parse_sse_text(raw)] == [payload, payload]
-    decoder = AnthropicSSEDecoder()
+    decoder = SSEDecoder()
     events = []
     for start in range(0, len(raw), width):
         events.extend(decoder.feed(raw[start : start + width]))

@@ -31,6 +31,7 @@ from .tools import (
     custom_tool_input_schema,
     flatten_responses_tool_name,
 )
+from .web_history import TOOL_CONTEXT_TYPE
 
 _REQUEST_FIELDS = {
     "model",
@@ -50,6 +51,8 @@ _REQUEST_FIELDS = {
     "text",
     "include",
     "truncation",
+    "prompt_cache_key",
+    "client_metadata",
 }
 
 
@@ -322,7 +325,18 @@ def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[Jso
         kind = item.get("type")
         if kind in ("input_text", "output_text", "text"):
             _fields(item, {"type", "text", "annotations", "logprobs"}, "Text block")
-            if item.get("annotations") or item.get("logprobs"):
+            annotations = item.get("annotations")
+            if item.get("logprobs") or (
+                annotations
+                and (
+                    not isinstance(annotations, list)
+                    or any(
+                        not isinstance(annotation, dict)
+                        or annotation.get("type") != "url_citation"
+                        for annotation in annotations
+                    )
+                )
+            ):
                 raise ResponsesConversionError(
                     "Messages history cannot represent text annotations or logprobs."
                 )
@@ -382,6 +396,9 @@ class _MessagesInput:
                 "Responses input items must be text or objects."
             )
         kind = value.get("type")
+        if kind == TOOL_CONTEXT_TYPE:
+            self._append("user", [{"type": "text", "text": value.get("content")}])
+            return
         if kind is None or kind == "message":
             _fields(value, {"type", "role", "content", "id", "status"}, "Message")
             role = value.get("role", "user")

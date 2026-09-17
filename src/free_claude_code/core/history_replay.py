@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Literal, cast
 
 from .json_types import JsonObject, JsonValue
-from .openai_chat import ChatToolResultImages
+from .openai_chat import ChatToolResultContext
 
 type HistoryProtocol = Literal["responses", "messages", "chat"]
 _PREFIX = "fcc:history:v1:"
@@ -435,7 +435,7 @@ def prepare_history(
 
 
 def _tool_result_message(message: JsonObject) -> bool:
-    if isinstance(message, ChatToolResultImages):
+    if isinstance(message, ChatToolResultContext):
         return True
     content = message.get("content")
     return (

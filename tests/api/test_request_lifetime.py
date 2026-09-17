@@ -3,6 +3,8 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
+from functools import partial
 from typing import cast
 
 import pytest
@@ -20,6 +22,7 @@ from free_claude_code.application.ports import (
     RequestRuntimePort,
     TaskController,
 )
+from free_claude_code.application.responses_execution import ResponsesBinding
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.streaming import format_sse_event
@@ -394,6 +397,10 @@ async def test_outer_cancellation_drains_both_owned_tasks() -> None:
 
 
 class _ControlledProvider:
+    @asynccontextmanager
+    async def bind_responses(self, request, **kwargs):
+        yield ResponsesBinding("responses", partial(self.stream_responses, **kwargs))
+
     def __init__(self, chunks: tuple[str, ...]) -> None:
         self._chunks = chunks
         self.blocked = asyncio.Event()

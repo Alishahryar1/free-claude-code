@@ -25,6 +25,10 @@ class ResponseEventBuilder:
             {"type": "response.created", "response": response},
         )
 
+    def emit(self, event_type: str, payload: JsonObject) -> str:
+        """Serialize a projected event in this response's sequence."""
+        return self._format(event_type, {**payload, "type": event_type})
+
     def response_completed(self, response: dict[str, Any]) -> str:
         return self._format(
             "response.completed",

@@ -1,0 +1,424 @@
+"""Codex web actions execute through the real translated transports."""
+
+import asyncio
+import json
+from contextlib import asynccontextmanager
+from copy import deepcopy
+from functools import partial
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import httpx
+import httpx2
+import pytest
+from fastapi.testclient import TestClient
+from openai import AsyncOpenAI
+
+from free_claude_code.application.responses_execution import ResponsesBinding
+from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.sse import parse_sse_text
+from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
+from free_claude_code.providers.openai_chat import (
+    NO_REASONING,
+    OpenAIChatProfile,
+    OpenAIChatProvider,
+    OpenAIChatRequestPolicy,
+)
+from tests.api.support import create_test_app
+from tests.core.openai_responses.test_client_tool_discovery import SEARCH
+from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.test_anthropic_messages_transport import (
+    Endpoint,
+    Wire,
+    _events,
+    _sse,
+    _transport,
+)
+
+
+class MessagesProvider:
+    def __init__(self, transport):
+        self.transport = transport
+
+    @asynccontextmanager
+    async def bind_responses(self, request, **kwargs):
+        yield ResponsesBinding("messages", partial(self.stream_responses, **kwargs))
+
+    def stream_responses(self, request, **kwargs):
+        kwargs.pop("input_tokens", None)
+        kwargs.pop("request_headers", None)
+        return self.transport.stream_responses(
+            request, endpoint_context=Endpoint(), **kwargs
+        )
+
+
+def chat_wire(message, finish):
+    chunks = [
+        {
+            "id": "chat_test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "test",
+            "choices": [{"index": 0, "delta": message, "finish_reason": None}],
+        },
+        {
+            "id": "chat_test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "test",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+        },
+    ]
+    return (
+        "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+        + "data: [DONE]\n\n"
+    )
+
+
+@pytest.mark.parametrize("egress", ["chat", "messages"])
+@pytest.mark.parametrize("full", [False, True])
+def test_codex_search_reaches_model_and_returns_one_response(egress, full):
+    bodies = []
+    actions = [{"action": "search", "query": "python docs"}]
+    if full:
+        actions += [
+            {"action": "open_page", "url": "https://docs.python.org/3/"},
+            {
+                "action": "find_in_page",
+                "url": "https://docs.python.org/3/",
+                "pattern": "needle",
+            },
+        ]
+
+    def handler(request):
+        body = json.loads(request.content)
+        bodies.append(body)
+        assert "client_metadata" not in body
+        declarations = [tool.get("function", tool) for tool in body.get("tools", [])]
+        web = next(
+            (
+                tool
+                for tool in declarations
+                if tool.get("name", "").startswith("fcc_web")
+            ),
+            None,
+        )
+        if web is not None and len(bodies) <= len(actions):
+            if egress == "chat":
+                data = chat_wire(
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_web",
+                                "type": "function",
+                                "function": {
+                                    "name": web["name"],
+                                    "arguments": json.dumps(actions[len(bodies) - 1]),
+                                },
+                            }
+                        ],
+                    },
+                    "tool_calls",
+                )
+            else:
+                events = _events()
+                events[1] = {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "call_web",
+                        "name": web["name"],
+                        "input": {},
+                    },
+                }
+                events[2] = {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": json.dumps(actions[len(bodies) - 1]),
+                    },
+                }
+                events[-2] = {**events[-2], "delta": {"stop_reason": "tool_use"}}
+                data = _sse(*events)
+        else:
+            answer = "Read [Python docs](https://docs.python.org/3/)."
+            data = (
+                chat_wire({"role": "assistant", "content": answer}, "stop")
+                if egress == "chat"
+                else _sse(*_events(answer))
+            )
+        if egress == "chat":
+            assert isinstance(data, str)
+            return httpx2.Response(
+                200, headers={"content-type": "text/event-stream"}, text=data
+            )
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=Wire([data])
+        )
+
+    if egress == "chat":
+        client = AsyncOpenAI(
+            api_key="test",
+            base_url="https://chat.invalid/v1",
+            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+        )
+        provider = OpenAIChatProvider(
+            make_provider_config("test", "https://chat.invalid/v1"),
+            profile=OpenAIChatProfile(
+                OpenAIChatRequestPolicy(
+                    provider_name="TEST",
+                    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
+                ),
+                NO_REASONING,
+            ),
+            admission=immediate_admission(),
+            client=client,
+        )
+    else:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        provider = MessagesProvider(_transport(client))
+    app = create_test_app()
+    search = AsyncMock(
+        return_value=[WebSearchResult("Python docs", "https://docs.python.org/3/")]
+    )
+    fetch = AsyncMock(
+        return_value=WebFetchResult(
+            "https://docs.python.org/3/",
+            "Python docs",
+            "text/plain",
+            "A page with needle.",
+        )
+    )
+    try:
+        with (
+            patch(
+                "free_claude_code.api.routes.resolve_provider", return_value=provider
+            ),
+            patch.object(app.state.services.web_tools, "search", search),
+            patch.object(app.state.services.web_tools, "fetch", fetch),
+            TestClient(app) as api,
+        ):
+            response = api.post(
+                "/v1/responses",
+                json={
+                    "model": "nvidia_nim/test",
+                    "input": "Find Python docs",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "read_file",
+                            "parameters": {"type": "object"},
+                        },
+                        {
+                            "type": "web_search",
+                            "external_web_access": full,
+                            "search_content_types": ["text", "image"],
+                        },
+                    ],
+                    "tool_choice": "auto",
+                    "include": ["reasoning.encrypted_content"],
+                    "client_metadata": {
+                        "session_id": "native-session",
+                        "x-codex-turn-metadata": '{"turn_id":"test"}',
+                    },
+                },
+            )
+        assert response.status_code == 200, response.text
+        search.assert_awaited_once_with("python docs")
+        assert len(bodies) == len(actions) + 1, response.text[-3000:]
+        assert "https://docs.python.org/3/" in json.dumps(bodies[1])
+        events = parse_sse_text(response.text)
+        assert sum(event.event == "response.created" for event in events) == 1
+        assert sum(event.event == "response.completed" for event in events) == 1
+        result = events[-1].data["response"]
+        assert any(item["type"] == "web_search_call" for item in result["output"])
+        assert "fcc_web" not in response.text
+        assert any(item["type"] == "message" for item in result["output"])
+        assert [
+            item["action"]["type"]
+            for item in result["output"]
+            if item["type"] == "web_search_call"
+        ] == [item["action"] for item in actions]
+        assert fetch.await_count == int(full)
+        if full:
+            assert "needle" in json.dumps(bodies[-1])
+    finally:
+        asyncio.run(
+            client.close() if isinstance(client, AsyncOpenAI) else client.aclose()
+        )
+
+
+def test_messages_web_search_hands_custom_and_discovery_tools_back_to_codex():
+    bodies = []
+    patch_text = "*** Begin Patch\n*** End Patch"
+
+    def handler(request):
+        body = json.loads(request.content)
+        bodies.append(body)
+        if len(bodies) == 1:
+            definitions = body["tools"]
+            web_name = next(
+                tool["name"]
+                for tool in definitions
+                if "Search the web" in tool.get("description", "")
+            )
+            patch_name = next(
+                tool["name"]
+                for tool in definitions
+                if "input" in tool["input_schema"].get("properties", {})
+            )
+            search_name = next(
+                tool["name"]
+                for tool in definitions
+                if tool.get("description") == SEARCH["description"]
+            )
+            calls = [
+                (web_name, {"action": "search", "query": "python docs"}),
+                (patch_name, {"input": patch_text}),
+                (search_name, {"query": "read file"}),
+            ]
+            events = _events()[:1]
+            for index, (name, args) in enumerate(calls):
+                events += [
+                    {
+                        "type": "content_block_start",
+                        "index": index,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": f"call_{index}",
+                            "name": name,
+                            "input": {},
+                        },
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": json.dumps(args),
+                        },
+                    },
+                    {"type": "content_block_stop", "index": index},
+                ]
+            events += [
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {"output_tokens": 10},
+                },
+                {"type": "message_stop"},
+            ]
+        else:
+            text = json.dumps(body)
+            assert "https://docs.python.org/3/" in text
+            assert "Patch applied" in text
+            assert any(tool["name"] == "fcc_web" for tool in body["tools"])
+            assert any(tool["name"] == "fcc_web_1" for tool in body["tools"])
+            results = body["messages"][-1]["content"]
+            assert [part["type"] for part in results] == [
+                "tool_result",
+                "tool_result",
+                "text",
+            ]
+            events = _events("Done.")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=Wire([_sse(*events)]),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = MessagesProvider(_transport(client))
+    app = create_test_app()
+    search = AsyncMock(
+        return_value=[WebSearchResult("Python docs", "https://docs.python.org/3/")]
+    )
+    payload: dict[str, Any] = {
+        "model": "nvidia_nim/test",
+        "input": [{"role": "user", "content": "Research and edit"}],
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "editor",
+                "tools": [
+                    {
+                        "type": "custom",
+                        "name": "patch",
+                        "format": {
+                            "type": "grammar",
+                            "syntax": "lark",
+                            "definition": "start: /.+/",
+                        },
+                    }
+                ],
+            },
+            SEARCH,
+            {"type": "web_search", "external_web_access": False},
+        ],
+        "tool_choice": "auto",
+        "include": ["reasoning.encrypted_content"],
+        "prompt_cache_key": "test-session",
+    }
+    try:
+        with (
+            patch(
+                "free_claude_code.api.routes.resolve_provider", return_value=provider
+            ),
+            patch.object(app.state.services.web_tools, "search", search),
+            TestClient(app) as api,
+        ):
+            first = api.post("/v1/responses", json=payload)
+            assert first.status_code == 200
+            response = parse_sse_text(first.text)[-1].data["response"]
+            assert response["status"] == "completed", response
+            assert len(bodies) == 1
+            retained = deepcopy(response["output"])
+            custom = next(
+                item for item in retained if item["type"] == "custom_tool_call"
+            )
+            discovery = next(
+                item for item in retained if item["type"] == "tool_search_call"
+            )
+            assert (custom["name"], custom["namespace"], custom["input"]) == (
+                "patch",
+                "editor",
+                patch_text,
+            )
+            assert discovery["arguments"] == {"query": "read file"}
+            # Codex retains typed action fields and the opaque carrier, not sources.
+            for item in retained:
+                if item["type"] == "web_search_call":
+                    item["action"].pop("sources", None)
+            payload["input"] = [
+                *payload["input"],
+                *retained,
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": custom["call_id"],
+                    "output": "Patch applied",
+                },
+                {
+                    "type": "tool_search_output",
+                    "call_id": discovery["call_id"],
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "fcc_web",
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                },
+            ]
+            second = api.post("/v1/responses", json=payload)
+            assert second.status_code == 200
+            final = parse_sse_text(second.text)[-1].data["response"]
+            assert final["status"] == "completed", final
+            assert len(bodies) == 2
+            search.assert_awaited_once_with("python docs")
+    finally:
+        asyncio.run(client.aclose())

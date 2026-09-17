@@ -6,9 +6,9 @@ from fastapi.testclient import TestClient
 
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
-    parse_sse_text,
     text_content,
 )
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.openai_codex.auth import (
     OpenAIAccess,

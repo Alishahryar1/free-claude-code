@@ -1,6 +1,7 @@
 """HTML parsing for web_search / web_fetch."""
 
 import html
+from dataclasses import replace
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -15,8 +16,14 @@ class SearchResultParser(HTMLParser):
         self.results: list[WebSearchResult] = []
         self._href: str | None = None
         self._title_parts: list[str] = []
+        self._in_snippet = False
+        self._snippet_parts: list[str] = []
+        self._snippet_target: int | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "td" and "result-snippet" in (dict(attrs).get("class") or "").split():
+            self._in_snippet = True
+            self._snippet_parts = []
         if tag != "a":
             return
         href = dict(attrs).get("href")
@@ -31,10 +38,19 @@ class SearchResultParser(HTMLParser):
         self._title_parts = []
 
     def handle_data(self, data: str) -> None:
+        if self._in_snippet:
+            self._snippet_parts.append(data)
         if self._href is not None:
             self._title_parts.append(data)
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "td" and self._in_snippet:
+            self._in_snippet = False
+            if self._snippet_target is not None:
+                self.results[self._snippet_target] = replace(
+                    self.results[self._snippet_target],
+                    snippet=" ".join("".join(self._snippet_parts).split()),
+                )
         if tag != "a" or self._href is None:
             return
         title = " ".join("".join(self._title_parts).split())
@@ -42,6 +58,14 @@ class SearchResultParser(HTMLParser):
             self.results.append(
                 WebSearchResult(title=html.unescape(title), url=self._href)
             )
+        self._snippet_target = next(
+            (
+                index
+                for index, result in enumerate(self.results)
+                if result.url == self._href
+            ),
+            None,
+        )
         self._href = None
         self._title_parts = []
 

@@ -3,6 +3,8 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from functools import partial
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -10,9 +12,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.responses_execution import ResponsesBinding
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
@@ -21,12 +23,17 @@ from free_claude_code.core.openai_responses import (
     openai_error_from_failure,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.sse import parse_sse_text
 from tests.api.support import create_test_app
 
 _PARTIAL_CONTENT = "PARTIAL_ASSISTANT_CONTENT"
 
 
 class CanonicalFailureProvider:
+    @asynccontextmanager
+    async def bind_responses(self, request, **kwargs):
+        yield ResponsesBinding("responses", partial(self.stream_responses, **kwargs))
+
     """Provider double that raises one request-correlated canonical failure."""
 
     def __init__(
@@ -94,6 +101,10 @@ class CanonicalFailureProvider:
 
 
 class StalledProvider:
+    @asynccontextmanager
+    async def bind_responses(self, request, **kwargs):
+        yield ResponsesBinding("responses", partial(self.stream_responses, **kwargs))
+
     """Provider double that makes no protocol-visible progress."""
 
     def __init__(self, *, responses_chunks: tuple[str, ...] = ()) -> None:

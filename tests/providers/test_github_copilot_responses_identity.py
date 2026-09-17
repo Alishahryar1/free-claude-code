@@ -16,12 +16,12 @@ import pytest
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
-    parse_sse_text,
 )
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.github_copilot.types import CopilotEgress
 from tests.providers.test_github_copilot_provider import Harness, collect, responses_sse
 from tests.providers.test_openai_responses_transport import (

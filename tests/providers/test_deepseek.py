@@ -19,10 +19,10 @@ from free_claude_code.core.anthropic.models import (
     MessagesRequest,
     Tool,
 )
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_chat import is_synthetic_chat_tool_turn_boundary
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from tests.providers.support import (
     REASONING_OFF,

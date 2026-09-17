@@ -2,12 +2,14 @@
 
 import sys
 from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import httpx
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.responses_execution import ResponsesBinding
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import (
@@ -259,6 +261,45 @@ class OpenCodeProvider(BaseProvider):
             request_headers=request_headers,
         )
 
+    @asynccontextmanager
+    async def bind_responses(
+        self,
+        request: OpenAIResponsesRequest,
+        *,
+        request_id: str | None,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        endpoint_context: EndpointContext | None = None,
+    ) -> AsyncIterator[ResponsesBinding]:
+        snapshot = await self._catalog.snapshot(request_id=request_id)
+        route = self._require_route(snapshot, request.model)
+        transport = (
+            self._responses
+            if route.transport is OpenCodeUpstreamTransport.RESPONSES
+            else self._chat
+        )
+
+        def stream(
+            turn: OpenAIResponsesRequest, *, input_tokens: int
+        ) -> AsyncIterator[str]:
+            return transport.stream_responses(
+                _routed_responses_request(turn, route),
+                input_tokens=input_tokens,
+                request_id=request_id,
+                response_model=response_model,
+                reasoning=reasoning,
+                endpoint_context=endpoint_context,
+                extra_headers=self._upstream_headers(request_headers or {}),
+            )
+
+        yield ResponsesBinding(
+            "responses"
+            if route.transport is OpenCodeUpstreamTransport.RESPONSES
+            else "chat",
+            stream,
+        )
+
     async def _dispatch_responses_stream(
         self,
         request: OpenAIResponsesRequest,
@@ -270,37 +311,21 @@ class OpenCodeProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[str]:
-        snapshot = await self._catalog.snapshot(request_id=request_id)
-        route = self._require_route(snapshot, request.model)
-        routed = _routed_responses_request(request, route)
-        selected_stream: AsyncIterator[str] | None = None
-        try:
-            if route.transport is OpenCodeUpstreamTransport.RESPONSES:
-                selected_stream = self._responses.stream_responses(
-                    routed,
-                    input_tokens=input_tokens,
-                    request_id=request_id,
-                    response_model=response_model,
-                    reasoning=reasoning,
-                    endpoint_context=endpoint_context,
-                    extra_headers=self._upstream_headers(request_headers or {}),
-                )
-            else:
-                selected_stream = self._chat.stream_responses(
-                    routed,
-                    input_tokens=input_tokens,
-                    request_id=request_id,
-                    response_model=response_model,
-                    reasoning=reasoning,
-                    endpoint_context=endpoint_context,
-                    extra_headers=self._upstream_headers(request_headers or {}),
-                )
-            async for event in selected_stream:
-                yield event
-        finally:
-            if selected_stream is not None:
+        async with self.bind_responses(
+            request,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            request_headers=request_headers,
+            endpoint_context=endpoint_context,
+        ) as bound:
+            selected = bound.stream(request, input_tokens=input_tokens)
+            try:
+                async for event in selected:
+                    yield event
+            finally:
                 await close_provider_stream(
-                    selected_stream,
+                    selected,
                     active_error=sys.exception(),
                     provider_name=self._opencode_profile.provider_name,
                     request_id=request_id,

@@ -3,11 +3,7 @@
 Used by default CI contract tests and by opt-in live smoke scenarios.
 """
 
-import json
-import re
-from collections.abc import Iterable
-from dataclasses import dataclass
-from typing import Any
+from free_claude_code.core.sse import SSEEvent
 
 from .server_tool_types import (
     SERVER_TOOL_USE,
@@ -38,60 +34,6 @@ _ALLOWED_BLOCK_START_TYPES = frozenset(
         WEB_FETCH_TOOL_RESULT,
     }
 )
-
-
-@dataclass(frozen=True, slots=True)
-class SSEEvent:
-    event: str
-    data: dict[str, Any]
-    raw: str
-
-
-def parse_sse_lines(lines: Iterable[str]) -> list[SSEEvent]:
-    events: list[SSEEvent] = []
-    current_event = ""
-    data_parts: list[str] = []
-    raw_parts: list[str] = []
-
-    for line in lines:
-        stripped = line.rstrip("\r\n")
-        if stripped == "":
-            _append_event(events, current_event, data_parts, raw_parts)
-            current_event = ""
-            data_parts = []
-            raw_parts = []
-            continue
-        raw_parts.append(stripped)
-        if stripped.startswith("event:"):
-            current_event = stripped.split(":", 1)[1].strip()
-        elif stripped.startswith("data:"):
-            data_parts.append(stripped.split(":", 1)[1].strip())
-
-    _append_event(events, current_event, data_parts, raw_parts)
-    return events
-
-
-def parse_sse_text(text: str) -> list[SSEEvent]:
-    # SSE uses CR/LF framing; Unicode line separators can occur inside JSON text.
-    return parse_sse_lines(re.split(r"\r\n|\r|\n", text))
-
-
-def _append_event(
-    events: list[SSEEvent],
-    current_event: str,
-    data_parts: list[str],
-    raw_parts: list[str],
-) -> None:
-    if not current_event and not data_parts:
-        return
-    data_text = "\n".join(data_parts)
-    data: dict[str, Any]
-    try:
-        parsed = json.loads(data_text) if data_text else {}
-        data = parsed if isinstance(parsed, dict) else {"value": parsed}
-    except json.JSONDecodeError:
-        data = {"raw": data_text}
-    events.append(SSEEvent(current_event, data, "\n".join(raw_parts)))
 
 
 def assert_anthropic_stream_contract(

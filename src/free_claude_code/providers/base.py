@@ -2,9 +2,11 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.responses_execution import ResponsesBinding
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
@@ -71,3 +73,15 @@ class BaseProvider(ABC):
         request_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[str]:
         """Validate the request before yielding OpenAI Responses SSE events."""
+
+    def bind_responses(
+        self,
+        request: OpenAIResponsesRequest,
+        *,
+        request_id: str,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> AbstractAsyncContextManager[ResponsesBinding]:
+        """Retain the actual model route for one complete Responses workflow."""
+        raise NotImplementedError("Provider must bind its Responses execution route.")

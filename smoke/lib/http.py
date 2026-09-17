@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_lines
+from free_claude_code.core.sse import SSEEvent, parse_sse_lines
 
 from .config import SmokeConfig, auth_headers, redacted
 from .server import RunningServer

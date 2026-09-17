@@ -241,9 +241,7 @@ def test_startup_rejection_is_protocol_specific_400_without_terminal_header(
     message = "bad tool shape"
     provider = MagicMock()
     stream = (
-        provider.stream_responses
-        if wire_api == "responses"
-        else provider.stream_messages
+        provider.bind_responses if wire_api == "responses" else provider.stream_messages
     )
     stream.side_effect = InvalidRequestError(message)
     app = create_test_app(_settings())
@@ -258,9 +256,7 @@ def test_startup_rejection_is_protocol_specific_400_without_terminal_header(
         response = client.post(path, json=payload)
 
     stream = (
-        provider.stream_responses
-        if wire_api == "responses"
-        else provider.stream_messages
+        provider.bind_responses if wire_api == "responses" else provider.stream_messages
     )
     stream.assert_called_once()
     _assert_ordinary_protocol_error(

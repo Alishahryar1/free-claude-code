@@ -16,7 +16,6 @@ from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
-    parse_sse_text,
     text_content,
     thinking_content,
 )
@@ -28,6 +27,7 @@ from free_claude_code.core.openai_responses import (
     build_responses_chat_request,
 )
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
     ResponsesChatStreamOutput,

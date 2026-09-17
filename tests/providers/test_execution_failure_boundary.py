@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from free_claude_code.config.nim import NimSettings
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.http import (
     ProviderAttemptScope,

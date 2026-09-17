@@ -17,7 +17,7 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_chat import (
     IMAGE_TOOL_RESULT_MARKER,
-    ChatToolResultImages,
+    ChatToolResultContext,
     close_chat_tool_result_turns,
     computer_screenshot_label,
     image_tool_result_label,
@@ -38,6 +38,7 @@ from .tools import (
     parse_arguments,
     required_str,
 )
+from .web_history import TOOL_CONTEXT_TYPE
 
 _CHAT_OPTION_FIELDS = (
     "frequency_penalty",
@@ -121,6 +122,16 @@ class _ResponsesChatInputBuilder:
             return
 
         item_type = item.get("type")
+        if item_type == TOOL_CONTEXT_TYPE:
+            self._flush_rich_outputs()
+            self._flush_reasoning()
+            self.messages.append(
+                cast(
+                    dict[str, object],
+                    ChatToolResultContext(role="user", content=item.get("content")),
+                )
+            )
+            return
         if item_type not in {
             "function_call_output",
             "custom_tool_call_output",
@@ -319,7 +330,7 @@ class _ResponsesChatInputBuilder:
         self.messages.append(
             cast(
                 dict[str, object],
-                ChatToolResultImages(
+                ChatToolResultContext(
                     role="user",
                     content=cast(
                         list[JsonValue], list(self._pending_rich_output_parts)
