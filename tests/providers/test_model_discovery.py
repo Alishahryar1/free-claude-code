@@ -24,7 +24,7 @@ from free_claude_code.providers.open_router import OpenRouterProvider
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.providers.runtime.discovery import (
-    model_list_provider_ids_for_settings,
+    self_sufficient_local_provider_ids,
 )
 from free_claude_code.providers.runtime.model_cache import ProviderModelCache
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
@@ -410,21 +410,31 @@ async def test_runtime_warm_caches_all_referenced_provider_models() -> None:
     )
     nim = FakeProvider(_infos("nim-model"))
     router = FakeProvider(_infos("anthropic/claude-opus"))
+    local_providers = {
+        provider_id: FakeProvider(_infos(f"{provider_id}-model"))
+        for provider_id in ("lmstudio", "llamacpp", "ollama")
+    }
     runtime = _manager(
         settings,
-        {
-            "nvidia_nim": nim,
-            "open_router": router,
-        },
+        {"nvidia_nim": nim, "open_router": router, **local_providers},
     )
 
     result = await runtime.refresh_model_list_cache()
 
-    assert result.refreshed_provider_ids == ("nvidia_nim", "open_router")
+    assert result.refreshed_provider_ids == (
+        "nvidia_nim",
+        "open_router",
+        "lmstudio",
+        "llamacpp",
+        "ollama",
+    )
     assert result.failed_provider_ids == ()
     assert runtime.cached_model_ids() == {
         "nvidia_nim": frozenset({"nim-model"}),
         "open_router": frozenset({"anthropic/claude-opus"}),
+        "lmstudio": frozenset({"lmstudio-model"}),
+        "llamacpp": frozenset({"llamacpp-model"}),
+        "ollama": frozenset({"ollama-model"}),
     }
     assert nim.model_list_calls == 1
     assert router.model_list_calls == 1
@@ -436,16 +446,30 @@ async def test_runtime_warm_treats_model_lists_as_discovery_metadata() -> None:
         model_sonnet="nvidia_nim/nim-model",
         nvidia_nim_api_key="nim-key",
     )
+    local_providers = {
+        provider_id: FakeProvider(_infos(f"{provider_id}-model"))
+        for provider_id in ("lmstudio", "llamacpp", "ollama")
+    }
     runtime = _manager(
         settings,
-        {"nvidia_nim": FakeProvider(_infos("different-model"))},
+        {"nvidia_nim": FakeProvider(_infos("different-model")), **local_providers},
     )
 
     result = await runtime.refresh_model_list_cache()
 
-    assert result.refreshed_provider_ids == ("nvidia_nim",)
+    assert result.refreshed_provider_ids == (
+        "nvidia_nim",
+        "lmstudio",
+        "llamacpp",
+        "ollama",
+    )
     assert result.failed_provider_ids == ()
-    assert runtime.cached_model_ids() == {"nvidia_nim": frozenset({"different-model"})}
+    assert runtime.cached_model_ids() == {
+        "nvidia_nim": frozenset({"different-model"}),
+        "lmstudio": frozenset({"lmstudio-model"}),
+        "llamacpp": frozenset({"llamacpp-model"}),
+        "ollama": frozenset({"ollama-model"}),
+    }
 
 
 @pytest.mark.asyncio
@@ -455,6 +479,10 @@ async def test_runtime_warm_reports_query_failures_without_blocking() -> None:
         nvidia_nim_api_key="nim-key",
         open_router_api_key="open-router-key",
     )
+    local_providers = {
+        provider_id: FakeProvider(_infos(f"{provider_id}-model"))
+        for provider_id in ("lmstudio", "llamacpp", "ollama")
+    }
     runtime = _manager(
         settings,
         {
@@ -462,15 +490,26 @@ async def test_runtime_warm_reports_query_failures_without_blocking() -> None:
             "open_router": FakeProvider(
                 error=ModelListResponseError("bad model-list shape")
             ),
+            **local_providers,
         },
     )
 
     with patch("free_claude_code.runtime.provider_manager.logger.warning") as warning:
         result = await runtime.refresh_model_list_cache()
 
-    assert result.refreshed_provider_ids == ("nvidia_nim",)
+    assert result.refreshed_provider_ids == (
+        "nvidia_nim",
+        "lmstudio",
+        "llamacpp",
+        "ollama",
+    )
     assert result.failed_provider_ids == ("open_router",)
-    assert runtime.cached_model_ids() == {"nvidia_nim": frozenset({"nim-model"})}
+    assert runtime.cached_model_ids() == {
+        "nvidia_nim": frozenset({"nim-model"}),
+        "lmstudio": frozenset({"lmstudio-model"}),
+        "llamacpp": frozenset({"llamacpp-model"}),
+        "ollama": frozenset({"ollama-model"}),
+    }
     logged = " ".join(str(arg) for call in warning.call_args_list for arg in call.args)
     assert "open_router" in logged
     assert "malformed model-list response: bad model-list shape" in logged
@@ -494,6 +533,9 @@ async def test_runtime_warm_queries_referenced_providers_concurrently() -> None:
                 started=router_started,
                 peer_started=nim_started,
             ),
+            "lmstudio": FakeProvider(_infos("lmstudio-model")),
+            "llamacpp": FakeProvider(_infos("llamacpp-model")),
+            "ollama": FakeProvider(_infos("ollama-model")),
         },
     )
 
@@ -508,9 +550,13 @@ async def test_startup_discovery_queries_each_successful_provider_once() -> None
     )
     nim = FakeProvider(_infos("nim-model"))
     router = FakeProvider(_infos("anthropic/claude-sonnet"))
+    local_providers = {
+        provider_id: FakeProvider(_infos(f"{provider_id}-model"))
+        for provider_id in ("lmstudio", "llamacpp", "ollama")
+    }
     runtime = _manager(
         settings,
-        {"nvidia_nim": nim, "open_router": router},
+        {"nvidia_nim": nim, "open_router": router, **local_providers},
     )
 
     await runtime.refresh_model_list_cache()
@@ -521,9 +567,13 @@ async def test_startup_discovery_queries_each_successful_provider_once() -> None
 
     assert nim.model_list_calls == 1
     assert router.model_list_calls == 1
+    assert all(fake.model_list_calls == 1 for fake in local_providers.values())
     assert runtime.cached_model_ids() == {
         "nvidia_nim": frozenset({"nim-model"}),
         "open_router": frozenset({"anthropic/claude-sonnet"}),
+        "lmstudio": frozenset({"lmstudio-model"}),
+        "llamacpp": frozenset({"llamacpp-model"}),
+        "ollama": frozenset({"ollama-model"}),
     }
 
 
@@ -531,14 +581,22 @@ async def test_startup_discovery_queries_each_successful_provider_once() -> None
 async def test_failed_startup_discovery_remains_eligible_for_explicit_refresh() -> None:
     settings = _settings(nvidia_nim_api_key="nim-key")
     nim = FakeProvider(error=RuntimeError("upstream unavailable"))
-    runtime = _manager(settings, {"nvidia_nim": nim})
+    local_providers = {
+        provider_id: FakeProvider(_infos(f"{provider_id}-model"))
+        for provider_id in ("lmstudio", "llamacpp", "ollama")
+    }
+    runtime = _manager(settings, {"nvidia_nim": nim, **local_providers})
 
     warm_result = await runtime.refresh_model_list_cache()
     await runtime.refresh_model_list_cache()
 
     assert warm_result.failed_provider_ids == ("nvidia_nim",)
     assert nim.model_list_calls == 2
-    assert runtime.cached_model_ids() == {}
+    assert runtime.cached_model_ids() == {
+        "lmstudio": frozenset({"lmstudio-model"}),
+        "llamacpp": frozenset({"llamacpp-model"}),
+        "ollama": frozenset({"ollama-model"}),
+    }
 
 
 @pytest.mark.asyncio
@@ -617,9 +675,16 @@ async def test_runtime_refresh_model_list_cache_keeps_prior_cache_on_failure() -
         model="nvidia_nim/cached-model",
         nvidia_nim_api_key="nim-key",
     )
+    local_providers = {
+        provider_id: FakeProvider(error=RuntimeError("local server offline"))
+        for provider_id in ("lmstudio", "llamacpp", "ollama")
+    }
     runtime = _manager(
         settings,
-        {"nvidia_nim": FakeProvider(error=RuntimeError("upstream down"))},
+        {
+            "nvidia_nim": FakeProvider(error=RuntimeError("upstream down")),
+            **local_providers,
+        },
     )
     runtime.cache_model_infos(
         "nvidia_nim",
@@ -704,11 +769,7 @@ def test_runtime_cached_prefixed_model_infos_are_deterministic() -> None:
 
 
 def test_discovery_eligibility_admits_self_sufficient_locals_without_settings() -> None:
-    assert model_list_provider_ids_for_settings(_settings()) == (
-        "lmstudio",
-        "llamacpp",
-        "ollama",
-    )
+    assert self_sufficient_local_provider_ids() == ("lmstudio", "llamacpp", "ollama")
 
 
 @pytest.mark.asyncio
@@ -719,10 +780,7 @@ async def test_local_discovery_failure_cooldown_skips_then_recovers(
         provider_id: FakeProvider(error=RuntimeError("local server offline"))
         for provider_id in ("lmstudio", "llamacpp", "ollama")
     }
-    runtime = _manager(
-        _settings(model="lmstudio/local-qwen"),
-        dict(offline_locals),
-    )
+    runtime = _manager(_settings(), dict(offline_locals))
 
     def _attempts() -> dict[str, int]:
         return {
@@ -730,20 +788,27 @@ async def test_local_discovery_failure_cooldown_skips_then_recovers(
             for provider_id, fake in offline_locals.items()
         }
 
-    first = await runtime.refresh_model_list_cache()
-    assert first.failed_provider_ids == ("lmstudio", "llamacpp", "ollama")
+    async def _background_pass() -> None:
+        runtime.start_model_list_refresh()
+        generation = runtime._current
+        refresh_task = generation.refresh_task
+        assert refresh_task is not None
+        await refresh_task
+        await asyncio.gather(
+            *(generation.catalog_tasks[provider_id] for provider_id in offline_locals)
+        )
+
+    await _background_pass()
     assert _attempts() == {"lmstudio": 1, "llamacpp": 1, "ollama": 1}
 
-    second = await runtime.refresh_model_list_cache()
-    assert second.failed_provider_ids == ("lmstudio", "llamacpp", "ollama")
+    await _background_pass()
     assert _attempts() == {"lmstudio": 1, "llamacpp": 1, "ollama": 1}
 
     monkeypatch.setattr(
         "free_claude_code.providers.runtime.model_cache.LOCAL_DISCOVERY_RETRY_COOLDOWN_S",
         0.0,
     )
-    third = await runtime.refresh_model_list_cache()
-    assert third.failed_provider_ids == ("lmstudio", "llamacpp", "ollama")
+    await _background_pass()
     assert _attempts() == {"lmstudio": 2, "llamacpp": 2, "ollama": 2}
 
 

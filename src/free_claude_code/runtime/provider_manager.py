@@ -27,6 +27,7 @@ from free_claude_code.providers.runtime.discovery import (
     model_cache_provider_ids_for_settings,
     model_list_provider_ids_for_settings,
     referenced_provider_ids,
+    self_sufficient_local_provider_ids,
 )
 from free_claude_code.providers.runtime.model_cache import ProviderModelCache
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
@@ -40,6 +41,25 @@ class ModelCatalogPublisher(Protocol):
     """Publish a frozen model inventory without reading loop-owned mutable state."""
 
     def publish(self, runtime: ModelCatalogPort) -> None: ...
+
+
+def _merge_refresh_results(
+    result: ProviderModelRefreshResult,
+    local_results: Iterable[ProviderModelRefreshResult | BaseException],
+) -> ProviderModelRefreshResult:
+    """Append best-effort local probe outcomes to a completed discovery pass."""
+    refreshed = list(result.refreshed_provider_ids)
+    failed = list(result.failed_provider_ids)
+    for local_result in local_results:
+        if isinstance(local_result, asyncio.CancelledError):
+            raise local_result
+        if isinstance(local_result, ProviderModelRefreshResult):
+            refreshed.extend(local_result.refreshed_provider_ids)
+            failed.extend(local_result.failed_provider_ids)
+    return ProviderModelRefreshResult(
+        refreshed_provider_ids=tuple(refreshed),
+        failed_provider_ids=tuple(failed),
+    )
 
 
 @dataclass(slots=True, eq=False)
@@ -252,11 +272,7 @@ class ProviderRuntimeManager:
         refresh: bool = False,
     ) -> asyncio.Task[ProviderModelRefreshResult]:
         task = generation.catalog_tasks.get(provider_id)
-        if task is None or (
-            refresh
-            and task.done()
-            and not generation.cache.discovery_in_cooldown(provider_id)
-        ):
+        if task is None or (refresh and task.done()):
             task = asyncio.create_task(self._discover_provider(generation, provider_id))
             generation.catalog_tasks[provider_id] = task
         return task
@@ -295,6 +311,28 @@ class ProviderRuntimeManager:
         descriptor = PROVIDER_CATALOG.get(provider_id)
         if descriptor is not None and descriptor.local:
             generation.cache.mark_discovery_failure(provider_id)
+
+    def _schedule_local_probes(
+        self, generation: _ProviderGeneration, *, only_missing: bool
+    ) -> tuple[asyncio.Task[ProviderModelRefreshResult], ...]:
+        """Best-effort model-list probes for keyless locals (Ollama et al.).
+
+        Referenced or connected locals already belong to the blocking pass;
+        the rest are probed opportunistically: once per generation unless a
+        probe is requested again, with cached servers skipped and recently
+        failed ones paced by the discovery cooldown.
+        """
+        tasks: list[asyncio.Task[ProviderModelRefreshResult]] = []
+        for provider_id in self_sufficient_local_provider_ids():
+            if provider_id in generation.initial_ids:
+                continue
+            if only_missing and (
+                generation.cache.has_provider(provider_id)
+                or generation.cache.discovery_in_cooldown(provider_id)
+            ):
+                continue
+            tasks.append(self._catalog_task(generation, provider_id, refresh=True))
+        return tuple(tasks)
 
     def _start_pass(
         self, generation: _ProviderGeneration, *, refresh: bool = False
@@ -361,12 +399,16 @@ class ProviderRuntimeManager:
         self._ensure_open()
         self._ensure_encoder()
         self._start_pass(self._current)
+        self._schedule_local_probes(self._current, only_missing=True)
 
     async def refresh_model_list_cache(self) -> ProviderModelRefreshResult:
         self._ensure_open()
         async with self._replace_lock:
             task = self._start_pass(self._current, refresh=True)
-        return await asyncio.shield(task)
+            local_tasks = self._schedule_local_probes(self._current, only_missing=False)
+        result = await asyncio.shield(task)
+        local_results = await asyncio.gather(*local_tasks, return_exceptions=True)
+        return _merge_refresh_results(result, local_results)
 
     async def refresh_provider(self, provider_id: str) -> ProviderModelRefreshResult:
         self._ensure_open()

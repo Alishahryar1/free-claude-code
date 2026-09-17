@@ -6,7 +6,6 @@ from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.config.model_refs import configured_chat_model_refs
 from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
-    SUPPORTED_PROVIDER_IDS,
     ProviderDescriptor,
 )
 from free_claude_code.config.settings import Settings
@@ -66,22 +65,25 @@ def _self_sufficient_local(descriptor: ProviderDescriptor) -> bool:
     )
 
 
+def self_sufficient_local_provider_ids() -> tuple[str, ...]:
+    """Return keyless locals that can be probed without any configuration."""
+    return tuple(
+        provider_id
+        for provider_id, descriptor in PROVIDER_CATALOG.items()
+        if _self_sufficient_local(descriptor)
+    )
+
+
 def model_list_provider_ids_for_settings(
     settings: Settings,
     connected_provider_ids: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Return providers worth discovering for this process configuration."""
     referenced_ids = referenced_provider_ids(settings)
-    included = set(
-        model_cache_provider_ids_for_settings(settings, connected_provider_ids)
-    )
-    for provider_id, descriptor in PROVIDER_CATALOG.items():
-        if (
-            descriptor.local
-            and provider_id not in included
-            and (provider_id in referenced_ids or _self_sufficient_local(descriptor))
-        ):
-            included.add(provider_id)
     return tuple(
-        provider_id for provider_id in SUPPORTED_PROVIDER_IDS if provider_id in included
+        provider_id
+        for provider_id in model_cache_provider_ids_for_settings(
+            settings, connected_provider_ids
+        )
+        if not PROVIDER_CATALOG[provider_id].local or provider_id in referenced_ids
     )
