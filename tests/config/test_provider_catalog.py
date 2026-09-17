@@ -83,3 +83,11 @@ def test_copilot_is_connected_without_credential_configuration() -> None:
     assert descriptor.credential_env is None
     assert descriptor.configuration_attrs() == ()
     assert descriptor.default_base_url == "https://api.githubcopilot.com"
+
+
+def test_codebuddy_is_connected_without_credential_configuration() -> None:
+    descriptor = PROVIDER_CATALOG["codebuddy"]
+    assert descriptor.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT
+    assert descriptor.credential_env is None
+    assert descriptor.configuration_attrs() == ()
+    assert descriptor.default_base_url == "https://www.codebuddy.ai"

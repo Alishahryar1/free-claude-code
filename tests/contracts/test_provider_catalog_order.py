@@ -12,6 +12,7 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "cline_pass",
     "openai",
     "github_copilot",
+    "codebuddy",
     "xai",
     "qwencloud",
     "qwencloud_coding",

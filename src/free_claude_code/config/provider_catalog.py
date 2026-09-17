@@ -52,6 +52,8 @@ SAMBANOVA_DEFAULT_BASE = "https://api.sambanova.ai/v1"
 # Kilo.ai gateway OpenAI-compatible Chat Completions API.
 KILO_DEFAULT_BASE = "https://api.kilo.ai/api/gateway"
 OPENAI_CODEX_DEFAULT_BASE = "https://chatgpt.com/backend-api/codex"
+# Tencent CodeBuddy / WorkBuddy intl-cli OpenAI-compatible API root (/v2).
+CODEBUDDY_DEFAULT_BASE = "https://www.codebuddy.ai"
 # xAI OpenAI-compatible Chat Completions API.
 XAI_DEFAULT_BASE = "https://api.x.ai/v1"
 # QwenCloud Token Plan OpenAI-compatible Chat Completions API.
@@ -192,6 +194,14 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         logo_filename="githubcopilot.svg",
         auth_kind=ProviderAuthKind.CONNECTED_ACCOUNT,
         default_base_url="https://api.githubcopilot.com",
+    ),
+    "codebuddy": ProviderDescriptor(
+        provider_id="codebuddy",
+        display_name="CodeBuddy",
+        website_url="https://www.codebuddy.ai/",
+        logo_filename="codebuddy.svg",
+        auth_kind=ProviderAuthKind.CONNECTED_ACCOUNT,
+        default_base_url=CODEBUDDY_DEFAULT_BASE,
     ),
     "xai": ProviderDescriptor(
         provider_id="xai",
