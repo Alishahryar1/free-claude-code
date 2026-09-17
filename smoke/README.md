@@ -177,9 +177,8 @@ for restricted modes and never set up the sandbox or change your Codex config.
 - `FCC_SMOKE_TARGETS`: comma-separated targets, or `all`.
 - `FCC_SMOKE_PROVIDER_MATRIX`: comma-separated provider prefixes to require.
 - `FCC_SMOKE_MODEL_<PROVIDER>`: optional per-provider smoke model override.
-  Use the uppercase provider ID, such as `FCC_SMOKE_MODEL_KILO`; the complete
-  variable inventory is in [.env.example](../.env.example). Values may include
-  the provider prefix or just the model name for that provider.
+  Use the uppercase provider ID, such as `FCC_SMOKE_MODEL_KILO`. Values may
+  include the provider prefix or just the model name for that provider.
 - `FCC_SMOKE_MODEL_NVIDIA_NIM_VISION`: required explicit NIM vision model for
   the opt-in `nvidia_nim_vision` target; it never falls back to the text model.
 - `FCC_SMOKE_MODEL_MISTRAL_REASONING`: optional override for the dedicated
