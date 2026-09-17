@@ -797,6 +797,20 @@ async def test_poll_device_tokens_reports_a_terminal_client_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [408, 425, 429])
+async def test_poll_device_tokens_keeps_polling_when_throttled(status_code):
+    client = httpx2.AsyncClient(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(status_code, text="rate limited")
+        )
+    )
+    try:
+        assert await poll_device_tokens(client, _authorization(), _SITE) is None
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_poll_device_tokens_keeps_polling_through_server_errors():
     client = httpx2.AsyncClient(
         transport=httpx2.MockTransport(

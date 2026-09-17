@@ -106,9 +106,19 @@ async def start_device_authorization(
     )
 
 
-def _is_terminal_poll_status(status_code: int) -> bool:
-    """Return whether one device-poll status is a terminal client rejection."""
+_TRANSIENT_POLL_STATUSES = frozenset({408, 425, 429})
 
+
+def _is_terminal_poll_status(status_code: int) -> bool:
+    """Return whether one device-poll status is a terminal client rejection.
+
+    Throttling and timeout statuses stay pending: the browser step can still
+    complete, so the poller must keep waiting instead of ending a valid
+    authorization.
+    """
+
+    if status_code in _TRANSIENT_POLL_STATUSES:
+        return False
     return 400 <= status_code < 500
 
 
