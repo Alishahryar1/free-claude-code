@@ -33,6 +33,7 @@ from .reasoning import (
     ReasoningEncoder,
     ReasoningObject,
     ThinkingObjectReasoning,
+    XKiroReasoning,
 )
 from .request_policy import OpenAIChatPostprocessor, OpenAIChatRequestPolicy
 
@@ -668,17 +669,19 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "XKIRO",
             ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
-        # xKiro translates reasoning_effort per vendor: every model declares the
-        # levels it accepts (reasoning_efforts in GET /v1/models) and unsupported
-        # values are adjusted downward, never rejected. Omitting the field is
-        # not disabling — most models default to reasoning on — so explicit
-        # effort keeps client intent and cost control intact.
-        NamedEffortReasoning(
-            _ALL_EFFORTS,
-            disabled_value="none",
-            enabled_value="high",
+        XKiroReasoning(),
+        model_listing=OpenAIModelListing(
+            thinking_boolean_path=("capabilities", "reasoning"),
+            fixed_input_modalities=_TEXT_INPUT_MODALITIES,
+            input_modality_boolean_paths=(
+                (ModelInputModality.IMAGE, ("capabilities", "vision")),
+            ),
+            context_window_tokens_path=("context_length",),
+            max_output_tokens_path=("max_output_tokens",),
         ),
     ),
     "poolside": OpenAIChatProfile(

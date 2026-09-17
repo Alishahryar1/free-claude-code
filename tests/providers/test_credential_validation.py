@@ -63,6 +63,18 @@ CASES = [
     ("nararoute", "https://router.bynara.id/v1/models", {"data": []}, 401),
     ("experiential", "https://api.experientiallabs.ai/v1/models", {"data": []}, 401),
     (
+        "xkiro",
+        "https://api.xkiro.com/v1/usage",
+        {
+            "object": "usage",
+            "plan": "ultra",
+            "windows": [],
+            "free_tokens": {},
+            "wallet": None,
+        },
+        401,
+    ),
+    (
         "deepinfra",
         "https://api.deepinfra.com/v1/me",
         {"uid": "id", "email": None},
@@ -198,11 +210,11 @@ async def test_unsupported_shared_credentials_never_send_http(monkeypatch):
     supported = {PROVIDER_CATALOG[row[0]].credential_env for row in CASES}
     all_keys = {d.credential_env for d in PROVIDER_CATALOG.values() if d.credential_env}
     keys = tuple(all_keys - supported)
-    assert len(keys) == 22
+    assert len(keys) == 21
     result = await validation.check_credentials(
         Settings.model_construct(), (*keys, "OPENCODE_API_KEY", "MODEL")
     )
-    assert len(result) == 22
+    assert len(result) == 21
     assert all(
         check.status == validation.CredentialStatus.UNVERIFIED for check in result
     )
