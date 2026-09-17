@@ -694,6 +694,35 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             context_window_tokens_path=("context_window", "tokens"),
         ),
     ),
+    "lightning": OpenAIChatProfile(
+        _policy(
+            "LIGHTNING",
+            ReasoningReplayMode.DISABLED,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(
+            _LOW_MEDIUM_HIGH,
+            disabled_value="none",
+            enabled_value="medium",
+        ),
+        model_listing=OpenAIModelListing(
+            context_window_tokens_path=("context_length",),
+            max_output_tokens_path=("max_tokens",),
+            input_modalities_path=("architecture", "input_modalities"),
+        ),
+    ),
+    "experiential": OpenAIChatProfile(
+        _policy(
+            "EXPERIENTIAL",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(
+            _LOW_MEDIUM_HIGH,
+            enabled_value="medium",
+        ),
+        model_listing=OpenAIModelListing(path="/models"),
+    ),
     "ollama_cloud": OpenAIChatProfile(
         _policy(
             "OLLAMA_CLOUD",
@@ -736,5 +765,14 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         normalize_base_url=True,
         reasoning_delta_field="reasoning",
+    ),
+    "scaleway": OpenAIChatProfile(
+        _policy(
+            "SCALEWAY",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NO_REASONING,
+        model_listing=OpenAIModelListing(path="/models"),
     ),
 }

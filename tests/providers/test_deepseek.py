@@ -323,6 +323,7 @@ def test_build_request_body_tool_choice_keeps_thinking(deepseek_provider):
             "model": "m",
             "messages": [{"role": "user", "content": "x"}],
             "tool_choice": {"type": "auto"},
+            "tools": [{"name": "Read", "input_schema": {"type": "object"}}],
             "thinking": {"type": "enabled", "budget_tokens": 2000},
         }
     )

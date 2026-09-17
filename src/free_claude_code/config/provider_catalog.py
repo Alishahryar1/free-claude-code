@@ -68,6 +68,8 @@ DEEPINFRA_DEFAULT_BASE = "https://api.deepinfra.com/v1/openai"
 SILICONFLOW_DEFAULT_BASE = "https://api.siliconflow.com/v1"
 # Nebius Token Factory OpenAI-compatible Chat Completions API.
 NEBIUS_DEFAULT_BASE = "https://api.tokenfactory.nebius.com/v1"
+# Scaleway Generative APIs OpenAI-compatible Chat Completions API.
+SCALEWAY_DEFAULT_BASE = "https://api.scaleway.ai/v1"
 # Chutes OpenAI-compatible Chat Completions API.
 CHUTES_DEFAULT_BASE = "https://llm.chutes.ai/v1"
 # Featherless AI OpenAI-compatible Chat Completions API.
@@ -80,6 +82,10 @@ NARAROUTE_DEFAULT_BASE = "https://router.bynara.id/v1"
 POOLSIDE_DEFAULT_BASE = "https://inference.poolside.ai/v1"
 # LLM7.io OpenAI-compatible Chat Completions API.
 LLM7_DEFAULT_BASE = "https://api.llm7.io/v1"
+# Lightning AI Model APIs OpenAI-compatible Chat Completions gateway.
+LIGHTNING_DEFAULT_BASE = "https://lightning.ai/api/v1"
+# Experiential Labs OpenAI-compatible Chat Completions gateway.
+EXPERIENTIAL_DEFAULT_BASE = "https://api.experientiallabs.ai/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -638,6 +644,41 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="llm7_api_key",
         default_base_url=LLM7_DEFAULT_BASE,
         proxy_attr="llm7_proxy",
+    ),
+    "scaleway": ProviderDescriptor(
+        provider_id="scaleway",
+        display_name="Scaleway",
+        website_url="https://www.scaleway.com/",
+        logo_filename="scaleway.svg",
+        credential_env="SCW_SECRET_KEY",
+        credential_url="https://console.scaleway.com/iam/api-keys",
+        credential_attr="scw_secret_key",
+        default_base_url=SCALEWAY_DEFAULT_BASE,
+        proxy_attr="scw_proxy",
+    ),
+    "lightning": ProviderDescriptor(
+        provider_id="lightning",
+        display_name="Lightning AI",
+        website_url="https://lightning.ai/",
+        logo_filename="lightning.png",
+        credential_env="LIGHTNING_API_KEY",
+        credential_url="https://lightning.ai/lightning-ai/model-apis/models",
+        credential_attr="lightning_api_key",
+        default_base_url=LIGHTNING_DEFAULT_BASE,
+        base_url_attr="lightning_base_url",
+        proxy_attr="lightning_proxy",
+    ),
+    "experiential": ProviderDescriptor(
+        provider_id="experiential",
+        display_name="Experiential Labs",
+        website_url="https://www.experientiallabs.ai/",
+        logo_filename="experiential.svg",
+        credential_env="EXPLABS_API_KEY",
+        credential_url="https://platform.experientiallabs.ai/settings/api-keys",
+        credential_attr="experiential_api_key",
+        default_base_url=EXPERIENTIAL_DEFAULT_BASE,
+        base_url_attr="experiential_base_url",
+        proxy_attr="experiential_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",

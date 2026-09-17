@@ -67,12 +67,14 @@ _MODELS = _list_field("data")
 # https://docs.siliconflow.com/cn/api-reference/userinfo/get-user-info
 # https://ai.google.dev/gemini-api/docs/generate-content/api-errors
 # https://github.com/nebius/nebius-physical-ai/blob/main/docs/workbench/token-factory.md
+# https://www.scaleway.com/en/docs/generative-apis/
 # https://vercel.com/docs/ai-gateway/sdks-and-apis/rest-api
 # https://github.com/huggingface/huggingface_hub/blob/main/src/huggingface_hub/hf_api.py
 # https://docs.cohere.com/reference/list-models
 # https://docs.wafer.ai/serverless/usage-api
 # https://platform.kimi.ai/docs/api/errors
 # https://router.bynara.id/id/docs
+# https://platform.experientiallabs.ai/docs/authentication
 _PROBES = (
     _Probe(
         "open_router",
@@ -108,6 +110,7 @@ _PROBES = (
         _list_field("models"),
     ),
     _Probe("nebius", "/models", _MODELS, _AUTH_401),
+    _Probe("scaleway", "/models", _MODELS, _AUTH_401),
     _Probe(
         "vercel",
         "/credits",
@@ -141,6 +144,7 @@ _PROBES = (
         _AUTH_401,
     ),
     _Probe("nararoute", "/models", _MODELS, _AUTH_401),
+    _Probe("experiential", "/models", _MODELS, _AUTH_401),
     # Positive evidence only: these errors can also reflect permissions, budget,
     # token type, or an undocumented response contract. Never reject on failure.
     # https://docs.deepinfra.com/api-reference/account/me
