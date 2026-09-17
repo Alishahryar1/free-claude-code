@@ -69,6 +69,7 @@ def _settings(**overrides):
         "poolside_api_key": "",
         "llm7_api_key": "",
         "lightning_api_key": "",
+        "experiential_api_key": "",
         "fireworks_api_key": "",
         "novita_api_key": "",
         "cloudflare_api_token": "",
@@ -281,6 +282,58 @@ def test_lightning_is_not_enabled_without_explicit_credential(monkeypatch) -> No
     )
 
     assert not config.has_provider_configuration("lightning")
+    assert config.provider_smoke_models() == []
+
+
+def test_experiential_provider_configuration_uses_documented_free_model(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_EXPERIENTIAL", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            experiential_api_key="experiential-key",
+        )
+    )
+
+    assert config.has_provider_configuration("experiential")
+    models = config.provider_smoke_models()
+    assert [model.provider for model in models] == ["experiential"]
+    assert models[0].full_model == "experiential/union-alpha"
+    assert models[0].source == "provider_default"
+
+
+def test_experiential_smoke_override_accepts_model_with_or_without_prefix(
+    monkeypatch,
+) -> None:
+    settings = _settings(
+        model="ollama/llama3.1",
+        ollama_base_url="",
+        experiential_api_key="experiential-key",
+    )
+    for override in (
+        "deepseek-v4-flash",
+        "experiential/deepseek-v4-flash",
+    ):
+        monkeypatch.setenv("FCC_SMOKE_MODEL_EXPERIENTIAL", override)
+        models = _smoke_config(settings=settings).provider_smoke_models()
+
+        assert [model.provider for model in models] == ["experiential"]
+        assert models[0].full_model == "experiential/deepseek-v4-flash"
+        assert models[0].source == "FCC_SMOKE_MODEL_EXPERIENTIAL"
+
+
+def test_experiential_is_not_enabled_without_explicit_credential(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_EXPERIENTIAL", raising=False)
+    config = _smoke_config(
+        provider_matrix=frozenset({"experiential"}),
+        settings=_settings(ollama_base_url="", experiential_api_key=""),
+    )
+
+    assert not config.has_provider_configuration("experiential")
     assert config.provider_smoke_models() == []
 
 

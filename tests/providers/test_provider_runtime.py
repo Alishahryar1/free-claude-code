@@ -18,6 +18,7 @@ from free_claude_code.config.provider_catalog import (
     CLINE_DEFAULT_BASE,
     COHERE_DEFAULT_BASE,
     DEEPINFRA_DEFAULT_BASE,
+    EXPERIENTIAL_DEFAULT_BASE,
     FEATHERLESS_DEFAULT_BASE,
     HUGGINGFACE_DEFAULT_BASE,
     KIMI_CODE_DEFAULT_BASE,
@@ -116,6 +117,8 @@ def _make_settings(**overrides):
     mock.llm7_api_key = "test_llm7_key"
     mock.lightning_api_key = "test_lightning_key"
     mock.lightning_base_url = LIGHTNING_DEFAULT_BASE
+    mock.experiential_api_key = "test_experiential_key"
+    mock.experiential_base_url = EXPERIENTIAL_DEFAULT_BASE
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -163,6 +166,7 @@ def _make_settings(**overrides):
     mock.poolside_proxy = None
     mock.llm7_proxy = None
     mock.lightning_proxy = None
+    mock.experiential_proxy = None
     mock.kilo_api_key = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
@@ -291,6 +295,35 @@ async def test_llm7_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.proxy_attr == "llm7_proxy"
     assert config.api_key == "llm7-token"
     assert config.base_url == LLM7_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
+async def test_experiential_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["experiential"]
+    settings = _make_settings(
+        experiential_api_key="experiential-token",
+        experiential_base_url="https://custom.experientiallabs.example/v1",
+        experiential_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider("experiential", settings)
+
+    assert descriptor.display_name == "Experiential Labs"
+    assert descriptor.credential_env == "EXPLABS_API_KEY"
+    assert descriptor.credential_attr == "experiential_api_key"
+    assert (
+        descriptor.credential_url
+        == "https://platform.experientiallabs.ai/settings/api-keys"
+    )
+    assert descriptor.default_base_url == EXPERIENTIAL_DEFAULT_BASE
+    assert descriptor.base_url_attr == "experiential_base_url"
+    assert descriptor.proxy_attr == "experiential_proxy"
+    assert config.api_key == "experiential-token"
+    assert config.base_url == "https://custom.experientiallabs.example/v1"
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
@@ -932,6 +965,7 @@ async def test_create_provider_instantiates_each_builtin():
         "poolside": OpenAIChatProvider,
         "llm7": OpenAIChatProvider,
         "lightning": OpenAIChatProvider,
+        "experiential": OpenAIChatProvider,
         "opencode_go": OpenCodeProvider,
         "vercel": OpenAIChatProvider,
         "bedrock": OpenAIChatProvider,

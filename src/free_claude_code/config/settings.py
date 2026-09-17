@@ -17,6 +17,7 @@ from .model_refs import parse_model_fallbacks
 from .nim import NimSettings
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
+    EXPERIENTIAL_DEFAULT_BASE,
     LIGHTNING_DEFAULT_BASE,
     NARAROUTE_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
@@ -198,6 +199,15 @@ class Settings(BaseModel):
     lightning_base_url: NonEmptyString = Field(
         default=LIGHTNING_DEFAULT_BASE,
         validation_alias="LIGHTNING_BASE_URL",
+    )
+
+    # ==================== Experiential Labs (OpenAI-compatible) ====================
+    experiential_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="EXPLABS_API_KEY"
+    )
+    experiential_base_url: NonEmptyString = Field(
+        default=EXPERIENTIAL_DEFAULT_BASE,
+        validation_alias="EXPLABS_BASE_URL",
     )
 
     # ==================== Fireworks AI Config ====================
@@ -496,6 +506,9 @@ class Settings(BaseModel):
     )
     lightning_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="LIGHTNING_PROXY"
+    )
+    experiential_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="EXPLABS_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"

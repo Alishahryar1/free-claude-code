@@ -74,6 +74,7 @@ _MODELS = _list_field("data")
 # https://docs.wafer.ai/serverless/usage-api
 # https://platform.kimi.ai/docs/api/errors
 # https://router.bynara.id/id/docs
+# https://platform.experientiallabs.ai/docs/authentication
 _PROBES = (
     _Probe(
         "open_router",
@@ -143,6 +144,7 @@ _PROBES = (
         _AUTH_401,
     ),
     _Probe("nararoute", "/models", _MODELS, _AUTH_401),
+    _Probe("experiential", "/models", _MODELS, _AUTH_401),
     # Positive evidence only: these errors can also reflect permissions, budget,
     # token type, or an undocumented response contract. Never reject on failure.
     # https://docs.deepinfra.com/api-reference/account/me
