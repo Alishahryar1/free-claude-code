@@ -153,18 +153,19 @@ async def test_catalog_publication_tracks_warm_refresh_and_direct_cache() -> Non
     )
 
     await asyncio.gather(*manager._publications)
-    assert publisher.events == ["publish", "publish", "publish"]
+    warm_catalog = (
+        "nvidia_nim/warm-model",
+        "lmstudio/warm-model",
+        "llamacpp/warm-model",
+        "ollama/warm-model",
+    )
+    assert publisher.events == ["publish"] * 6
     assert publisher.snapshots == [
         ("nvidia_nim/one", ("nvidia_nim/warm-model",)),
-        (
-            "nvidia_nim/one",
-            (
-                "nvidia_nim/warm-model",
-                "lmstudio/warm-model",
-                "llamacpp/warm-model",
-                "ollama/warm-model",
-            ),
-        ),
+        ("nvidia_nim/one", warm_catalog),
+        ("nvidia_nim/one", warm_catalog),
+        ("nvidia_nim/one", warm_catalog),
+        ("nvidia_nim/one", warm_catalog),
         (
             "nvidia_nim/one",
             (
@@ -177,7 +178,7 @@ async def test_catalog_publication_tracks_warm_refresh_and_direct_cache() -> Non
     ]
 
     await manager.close()
-    assert publisher.events == ["publish", "publish", "publish"]
+    assert publisher.events == ["publish"] * 6
 
 
 @pytest.mark.asyncio
@@ -195,7 +196,12 @@ async def test_failed_startup_discovery_still_ensures_a_fresh_catalog() -> None:
 
     result = await manager.refresh_model_list_cache()
 
-    assert result.failed_provider_ids == ("nvidia_nim",)
+    assert result.failed_provider_ids == (
+        "nvidia_nim",
+        "lmstudio",
+        "llamacpp",
+        "ollama",
+    )
     assert publisher.events == ["publish"]
     assert publisher.snapshots == [("nvidia_nim/configured", ())]
     await manager.close()
