@@ -55,6 +55,11 @@ def code_lock_path() -> Path:
     return config_dir_path() / CODE_STATE_DIRNAME / CODE_LOCK_FILENAME
 
 
+def usage_database_path() -> Path:
+    """Return the managed usage and observability database path."""
+    return config_dir_path() / "usage" / "usage.db"
+
+
 def legacy_env_paths() -> tuple[Path, ...]:
     """Return legacy user env paths that can be migrated to ~/.fcc/.env."""
 

@@ -38,6 +38,7 @@ from .request_ids import (
 )
 from .request_lifetime import ClientRequestLifetimeMiddleware
 from .routes import router
+from .usage_routes import router as usage_router
 from .validation_log import summarize_request_validation_body
 
 
@@ -51,6 +52,7 @@ def create_app(services: ApiServices) -> FastAPI:
 
     app.include_router(admin_router)
     app.include_router(code_router)
+    app.include_router(usage_router)
     app.include_router(router)
 
     @app.exception_handler(CodeError)

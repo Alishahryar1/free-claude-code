@@ -85,12 +85,15 @@ def build_asgi_app(
         restart_callback=restart_callback,
         connected_accounts={"openai": openai_auth, "github_copilot": copilot_auth},
     )
+    from free_claude_code.application.usage import get_usage_service
+
     services = ApiServices(
         requests=provider_manager,
         admin=runtime,
         tasks=runtime,
         web_tools=HTTPWebToolsClient(),
         code=code_service,
+        usage=get_usage_service(),
     )
     return RuntimeASGIApp(create_app(services), runtime)
 

@@ -10,6 +10,8 @@ from typing import Literal
 
 from loguru import logger
 
+from free_claude_code.application.usage import UsageService, get_usage_service
+from free_claude_code.application.usage.telemetry import StreamTelemetryTracker
 from free_claude_code.core.anthropic import (
     Message,
     SystemContent,
@@ -62,6 +64,7 @@ class ProviderExecutor:
         log_raw_payloads: bool = False,
         request_headers: Mapping[str, str] | None = None,
         model_info_lookup: ModelInfoLookup | None = None,
+        usage_service: UsageService | None = None,
     ) -> None:
         if not math.isfinite(progress_timeout_seconds) or progress_timeout_seconds <= 0:
             raise ValueError("progress_timeout_seconds must be finite and positive")
@@ -73,6 +76,9 @@ class ProviderExecutor:
         self._log_raw_payloads = log_raw_payloads
         self._request_headers = MappingProxyType(dict(request_headers or {}))
         self._progress_timeout_seconds = float(progress_timeout_seconds)
+        self._usage_service = (
+            usage_service if usage_service is not None else get_usage_service()
+        )
 
     def _progress_timeout_failure(
         self,
@@ -214,6 +220,7 @@ class ProviderExecutor:
             ingress_count=len(routed.request.messages),
             request_id=request_id,
             open_candidate=open_candidate,
+            estimated_input_tokens=input_tokens,
         )
 
     def stream_responses(
@@ -271,6 +278,7 @@ class ProviderExecutor:
             ingress_count=input_item_count,
             request_id=request_id,
             open_candidate=open_candidate,
+            estimated_input_tokens=input_tokens,
         )
 
     def _stream_candidates(
@@ -286,6 +294,7 @@ class ProviderExecutor:
         ingress_count: int,
         request_id: str,
         open_candidate: CandidateStreamOpener,
+        estimated_input_tokens: int = 0,
     ) -> AsyncIterator[str]:
         """Start and consume candidates through one protocol-blind lifecycle."""
 
@@ -337,10 +346,24 @@ class ProviderExecutor:
         async def provider_body() -> AsyncIterator[str]:
             loop = asyncio.get_running_loop()
             progress_deadline = loop.time() + self._progress_timeout_seconds
+            fallback_from_ref: str | None = None
+            fallback_reason: str | None = None
+
             for index, target in enumerate(candidates):
                 provider_stream: AsyncIterator[str] | None = None
                 candidate_committed = False
                 candidate_failure: ExecutionFailure | None = None
+                telemetry = StreamTelemetryTracker(
+                    request_id=request_id,
+                    wire_api=wire_api,
+                    gateway_model=gateway_model,
+                    target=target,
+                    is_primary=(index == 0),
+                    fallback_index=index,
+                    fallback_from_ref=fallback_from_ref,
+                    fallback_reason=fallback_reason,
+                    estimated_input_tokens=estimated_input_tokens,
+                )
                 try:
                     opening_started = monotonic()
                     try:
@@ -390,6 +413,7 @@ class ProviderExecutor:
                         if not chunk:
                             await asyncio.sleep(0)
                             continue
+                        telemetry.on_chunk(chunk)
                         if not candidate_committed:
                             candidate_committed = True
                             if index > 0:
@@ -420,13 +444,27 @@ class ProviderExecutor:
                         except TimeoutError as exc:
                             if not cleanup_timeout.expired():
                                 raise
-                            raise self._progress_timeout_failure(
+                            timeout_failure = self._progress_timeout_failure(
                                 request_id=request_id,
                                 provider_id=target.provider_id,
-                            ) from exc
+                            )
+                            if self._usage_service is not None:
+                                record = telemetry.on_failure(timeout_failure)
+                                asyncio.create_task(
+                                    self._usage_service.record_usage(record)
+                                )
+                            raise timeout_failure from exc
 
                 if candidate_failure is None:
+                    if self._usage_service is not None:
+                        record = telemetry.on_success()
+                        asyncio.create_task(self._usage_service.record_usage(record))
                     return
+
+                if self._usage_service is not None:
+                    record = telemetry.on_failure(candidate_failure)
+                    asyncio.create_task(self._usage_service.record_usage(record))
+
                 if candidate_committed or index + 1 >= len(candidates):
                     raise candidate_failure
                 next_target = candidates[index + 1]
@@ -438,6 +476,10 @@ class ProviderExecutor:
                     failure=candidate_failure,
                     candidate_index=index + 2,
                     candidate_count=len(candidates),
+                )
+                fallback_from_ref = target.provider_model_ref
+                fallback_reason = getattr(candidate_failure, "message", None) or str(
+                    candidate_failure
                 )
 
         stream_trace: dict[str, object] = {
