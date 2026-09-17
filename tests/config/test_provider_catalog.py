@@ -7,6 +7,8 @@ from free_claude_code.config.provider_catalog import (
     ProviderAuthKind,
     ProviderDescriptor,
 )
+from free_claude_code.config.settings import Settings
+from free_claude_code.providers.runtime.config import has_provider_configuration
 
 
 def test_provider_descriptors_are_immutable_values() -> None:
@@ -91,3 +93,10 @@ def test_codebuddy_is_connected_without_credential_configuration() -> None:
     assert descriptor.credential_env is None
     assert descriptor.configuration_attrs() == ()
     assert descriptor.default_base_url == "https://www.codebuddy.ai"
+
+
+def test_connected_account_base_url_is_an_override_not_configuration() -> None:
+    descriptor = PROVIDER_CATALOG["codebuddy"]
+    assert descriptor.base_url_attr == "codebuddy_base_url"
+    assert descriptor.configuration_attrs() == ()
+    assert not has_provider_configuration(descriptor, Settings())

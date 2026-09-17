@@ -123,11 +123,17 @@ class ProviderDescriptor:
     required_settings_attrs: tuple[str, ...] = ()
 
     def configuration_attrs(self) -> tuple[str, ...]:
-        """Return settings fields whose non-empty values configure this provider."""
+        """Return settings fields whose non-empty values configure this provider.
+
+        A connected account is configured by its stored credentials, so its
+        base URL is an endpoint override rather than a configuring field.
+        """
         if self.required_settings_attrs:
             return self.required_settings_attrs
         if self.credential_attr is not None:
             return (self.credential_attr,)
+        if self.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT:
+            return ()
         if self.base_url_attr is not None:
             return (self.base_url_attr,)
         return ()
@@ -202,6 +208,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         logo_filename="codebuddy.svg",
         auth_kind=ProviderAuthKind.CONNECTED_ACCOUNT,
         default_base_url=CODEBUDDY_DEFAULT_BASE,
+        base_url_attr="codebuddy_base_url",
     ),
     "xai": ProviderDescriptor(
         provider_id="xai",

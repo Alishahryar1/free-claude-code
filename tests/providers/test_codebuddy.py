@@ -12,6 +12,8 @@ import pytest
 from free_claude_code.application.connected_accounts import ConnectedAccountLoginMode
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
@@ -33,6 +35,7 @@ from free_claude_code.providers.codebuddy.sanitize import (
     sanitize_tool_parameters,
 )
 from free_claude_code.providers.codebuddy.site import default_site
+from free_claude_code.providers.runtime.config import build_provider_config
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_DEFAULT,
@@ -838,3 +841,25 @@ async def test_login_surfaces_the_terminal_poll_reason(tmp_path):
 
     assert message is not None
     assert "state expired" in message
+
+
+def test_codebuddy_descriptor_exposes_a_configurable_base_url():
+    descriptor = PROVIDER_CATALOG["codebuddy"]
+
+    assert descriptor.base_url_attr == "codebuddy_base_url"
+    assert descriptor.default_base_url == _SITE.api_base
+    assert build_provider_config(descriptor, Settings()).base_url == _SITE.api_base
+
+
+def test_codebuddy_base_url_setting_reaches_the_provider_site(tmp_path):
+    settings = Settings(CODEBUDDY_BASE_URL="https://codebuddy.internal")
+    config = build_provider_config(PROVIDER_CATALOG["codebuddy"], settings)
+
+    provider = CodeBuddyProvider(
+        config,
+        auth=_auth_manager(tmp_path),
+        admission=immediate_admission(provider_name="CODEBUDDY"),
+    )
+
+    assert provider._site.api_base == "https://codebuddy.internal"
+    assert provider._site.chat_base_url == "https://codebuddy.internal/v2"
