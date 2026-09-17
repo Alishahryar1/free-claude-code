@@ -296,6 +296,11 @@ class Settings(BaseModel):
         default=None, validation_alias="CEREBRAS_API_KEY"
     )
 
+    # ==================== Scaleway (OpenAI-compatible) ====================
+    scw_secret_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="SCW_SECRET_KEY"
+    )
+
     # ==================== Ollama Cloud ====================
     ollama_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="OLLAMA_API_KEY"
@@ -502,6 +507,9 @@ class Settings(BaseModel):
     )
     cerebras_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="CEREBRAS_PROXY"
+    )
+    scw_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="SCW_PROXY"
     )
     ollama_cloud_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OLLAMA_CLOUD_PROXY"
