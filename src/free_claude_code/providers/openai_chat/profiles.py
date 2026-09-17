@@ -70,6 +70,9 @@ _KIMI_CODE_EFFORTS = (
     (ReasoningEffort.MAX, "max"),
 )
 _TEXT_INPUT_MODALITIES = frozenset({ModelInputModality.TEXT})
+_TEXT_IMAGE_INPUT_MODALITIES = frozenset(
+    {ModelInputModality.TEXT, ModelInputModality.IMAGE}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -774,5 +777,25 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         NO_REASONING,
         model_listing=OpenAIModelListing(path="/models"),
+    ),
+    # ainetcafe serves Kimi K3 at native MXFP4 precision. K3 takes
+    # ``reasoning_effort`` low/high/max, and ``none`` switches thinking off;
+    # thinking is replayed through ``reasoning_content``.
+    "ainetcafe": OpenAIChatProfile(
+        _policy(
+            "AINETCAFE",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(
+            _KIMI_CODE_EFFORTS,
+            disabled_value="none",
+            enabled_value="high",
+        ),
+        model_listing=OpenAIModelListing(
+            path="/models",
+            required_path_values=((("id",), ("Kimi-K3",)),),
+            fixed_input_modalities=_TEXT_IMAGE_INPUT_MODALITIES,
+        ),
     ),
 }
