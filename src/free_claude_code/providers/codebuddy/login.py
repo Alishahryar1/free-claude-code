@@ -106,12 +106,40 @@ async def start_device_authorization(
     )
 
 
+def _is_terminal_poll_status(status_code: int) -> bool:
+    """Return whether one device-poll status is a terminal client rejection."""
+
+    return 400 <= status_code < 500
+
+
+def _poll_rejection(status_code: int, payload: Any) -> str:
+    """Build the customer-facing reason one device poll was rejected."""
+
+    detail = None
+    if isinstance(payload, dict):
+        for key in ("msg", "message", "error"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                detail = value.strip()
+                break
+    if detail is None:
+        return f"CodeBuddy sign-in was rejected (HTTP {status_code})."
+    return f"CodeBuddy sign-in was rejected: {detail}"
+
+
 async def poll_device_tokens(
     client: httpx2.AsyncClient,
     authorization: DeviceAuthorization,
     site: CodeBuddySite | None = None,
 ) -> DeviceTokens | None:
-    """Poll once; return None while the customer has not finished in the browser."""
+    """Poll once; return None while the customer has not finished in the browser.
+
+    Pending is the upstream's ``code`` 0 envelope without token material.
+    A client error or a nonzero envelope is terminal (expired or unknown
+    device state) and raises so the flow stops instead of waiting out the
+    authorization deadline. Server errors and unreadable bodies stay
+    pending, because the browser step can still complete.
+    """
 
     site = site or default_site()
     response = await client.get(
@@ -122,13 +150,17 @@ async def poll_device_tokens(
     try:
         payload = response.json()
     except ValueError:
+        if _is_terminal_poll_status(response.status_code):
+            raise CodeBuddyLoginError(
+                f"CodeBuddy sign-in was rejected (HTTP {response.status_code})."
+            ) from None
         return None
-    if (
-        response.status_code >= 400
-        or not isinstance(payload, dict)
-        or payload.get("code") != 0
-    ):
+    if _is_terminal_poll_status(response.status_code):
+        raise CodeBuddyLoginError(_poll_rejection(response.status_code, payload))
+    if response.status_code >= 400 or not isinstance(payload, dict):
         return None
+    if payload.get("code") != 0:
+        raise CodeBuddyLoginError(_poll_rejection(response.status_code, payload))
     data = payload.get("data")
     if not isinstance(data, dict):
         return None

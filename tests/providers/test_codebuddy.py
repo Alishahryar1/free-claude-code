@@ -1,5 +1,6 @@
 """Tests for the CodeBuddy connected-account provider."""
 
+import asyncio
 import base64
 import json
 import time
@@ -20,6 +21,11 @@ from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.codebuddy.auth import CodeBuddyAuthManager
+from free_claude_code.providers.codebuddy.login import (
+    CodeBuddyLoginError,
+    DeviceAuthorization,
+    poll_device_tokens,
+)
 from free_claude_code.providers.codebuddy.provider import CodeBuddyProvider
 from free_claude_code.providers.codebuddy.sanitize import (
     NEUTRAL_SYSTEM_PROMPT,
@@ -301,6 +307,24 @@ def test_sanitize_tool_parameters_keeps_plain_schemas():
     assert sanitize_tool_parameters(schema) == schema
 
 
+def test_sanitize_tool_parameters_drops_refs_past_the_depth_limit():
+    schema = {
+        "$defs": {
+            "Node": {
+                "type": "object",
+                "properties": {"child": {"$ref": "#/$defs/Node"}},
+            }
+        },
+        "type": "object",
+        "properties": {"root": {"$ref": "#/$defs/Node"}},
+    }
+
+    sanitized = sanitize_tool_parameters(schema)
+
+    assert "$ref" not in json.dumps(sanitized)
+    assert "$defs" not in json.dumps(sanitized)
+
+
 @pytest.mark.asyncio
 async def test_stream_messages_sends_upstream_shape_and_streams_text(tmp_path):
     requests: list[httpx2.Request] = []
@@ -548,7 +572,7 @@ async def test_list_model_infos_refreshes_and_retries_once_after_401(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_list_model_infos_retries_401_only_once(tmp_path):
+async def test_list_model_infos_raises_after_unrecoverable_401(tmp_path):
     catalog_calls: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -574,10 +598,41 @@ async def test_list_model_infos_retries_401_only_once(tmp_path):
     )
     provider = _provider(auth, endpoint_transport=httpx2.MockTransport(handler))
 
-    infos = await provider.list_model_infos()
+    with pytest.raises(httpx2.HTTPStatusError) as failure:
+        await provider.list_model_infos()
 
+    assert failure.value.response.status_code == 401
     assert len(catalog_calls) == 2
-    assert {info.model_id for info in infos} >= {"auto", "kimi-k3"}
+
+
+@pytest.mark.asyncio
+async def test_list_model_infos_raises_on_forbidden_catalog(tmp_path):
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/v2/plugin/auth/token/refresh":
+            return httpx2.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "accessToken": "new-token",
+                        "refreshToken": "new-refresh",
+                        "expiresIn": 7200,
+                    },
+                },
+            )
+        return httpx2.Response(403, json={"code": 403, "msg": "forbidden"})
+
+    auth = _auth_manager(
+        tmp_path,
+        expires_at=int(time.time()) + 3600,
+        client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+    )
+    provider = _provider(auth, endpoint_transport=httpx2.MockTransport(handler))
+
+    with pytest.raises(httpx2.HTTPStatusError) as failure:
+        await provider.list_model_infos()
+
+    assert failure.value.response.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -685,3 +740,101 @@ async def test_start_login_rejects_non_device_mode(tmp_path):
     status = manager.status()
     assert status.attempt_id is None
     assert status.connected is True
+
+
+def _authorization() -> DeviceAuthorization:
+    return DeviceAuthorization(
+        state="device-state",
+        verification_url="https://www.codebuddy.ai/login",
+        expires_at=int(time.time()) + 600,
+    )
+
+
+@pytest.mark.asyncio
+async def test_poll_device_tokens_stays_pending_until_the_browser_finishes():
+    client = httpx2.AsyncClient(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(200, json={"code": 0, "data": {}})
+        )
+    )
+    try:
+        assert await poll_device_tokens(client, _authorization(), _SITE) is None
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_poll_device_tokens_reports_a_terminal_error_envelope():
+    client = httpx2.AsyncClient(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(
+                200, json={"code": 40001, "msg": "state expired"}
+            )
+        )
+    )
+    try:
+        with pytest.raises(CodeBuddyLoginError, match="state expired"):
+            await poll_device_tokens(client, _authorization(), _SITE)
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_poll_device_tokens_reports_a_terminal_client_error():
+    client = httpx2.AsyncClient(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(400, text="<html>bad request</html>")
+        )
+    )
+    try:
+        with pytest.raises(CodeBuddyLoginError, match="HTTP 400"):
+            await poll_device_tokens(client, _authorization(), _SITE)
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_poll_device_tokens_keeps_polling_through_server_errors():
+    client = httpx2.AsyncClient(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(500, text="<html>boom</html>")
+        )
+    )
+    try:
+        assert await poll_device_tokens(client, _authorization(), _SITE) is None
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_login_surfaces_the_terminal_poll_reason(tmp_path):
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/v2/plugin/auth/state":
+            return httpx2.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "state": "device-state",
+                        "authUrl": "https://www.codebuddy.ai/login",
+                    },
+                },
+            )
+        return httpx2.Response(200, json={"code": 40001, "msg": "state expired"})
+
+    manager = _auth_manager(
+        tmp_path,
+        client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+    )
+    try:
+        await manager.start_login(ConnectedAccountLoginMode.DEVICE)
+        for _ in range(500):
+            message = manager.status().message
+            if message is not None:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await manager.close()
+
+    assert message is not None
+    assert "state expired" in message

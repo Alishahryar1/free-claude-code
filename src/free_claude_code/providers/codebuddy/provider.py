@@ -125,14 +125,18 @@ class CodeBuddyProvider(BaseProvider):
         """Discover models visible to the connected CodeBuddy account.
 
         The live console catalog is authoritative; when it cannot be read
-        (offline upstream, expired session), fall back to the static
-        known-good id list so routing keeps working.
+        (offline upstream, transient upstream failure), fall back to the
+        static known-good id list so routing keeps working. Authentication
+        and permission failures are raised instead, because a disconnected
+        or unauthorized account must not be offered models it cannot serve.
         """
 
         try:
             payload = await self._fetch_catalog_payload()
             infos = _catalog_infos(payload)
         except Exception as error:
+            if provider_authentication_status(error) is not None:
+                raise
             logger.warning(
                 "CODEBUDDY model catalog unavailable, using static list: {}",
                 error,

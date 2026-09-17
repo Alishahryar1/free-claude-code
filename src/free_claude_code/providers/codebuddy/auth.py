@@ -382,10 +382,15 @@ class CodeBuddyAuthManager:
                 raise CodeBuddyLoginError("CodeBuddy device sign-in timed out.")
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
+            reason = (
+                str(error).strip() if isinstance(error, CodeBuddyLoginError) else ""
+            )
             async with self._state_lock:
                 self._last_error = (
-                    "CodeBuddy sign-in failed or timed out. Retry Connect."
+                    f"{reason} Retry Connect."
+                    if reason
+                    else "CodeBuddy sign-in failed or timed out. Retry Connect."
                 )
         else:
             async with self._state_lock:

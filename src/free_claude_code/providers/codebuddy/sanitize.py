@@ -48,7 +48,12 @@ _SCHEMA_MAX_DEPTH = 25
 
 
 def sanitize_tool_parameters(parameters: Any) -> Any:
-    """Inline local ``#/$defs/...`` refs, flatten ``allOf``, drop 2020-12 keys."""
+    """Inline local ``#/$defs/...`` refs, flatten ``allOf``, drop 2020-12 keys.
+
+    Recursive schemas that cross ``_SCHEMA_MAX_DEPTH`` collapse to the
+    permissive empty schema: the root ``$defs`` is dropped, so keeping the
+    deep node verbatim would ship a dangling ``$ref`` upstream rejects.
+    """
 
     if not isinstance(parameters, dict):
         return parameters
@@ -60,8 +65,10 @@ def sanitize_tool_parameters(parameters: Any) -> Any:
 def _sanitize_schema_node(node: Any, defs: dict[str, Any] | None, depth: int) -> Any:
     if isinstance(node, list):
         return [_sanitize_schema_node(item, defs, depth + 1) for item in node]
-    if not isinstance(node, dict) or depth > _SCHEMA_MAX_DEPTH:
+    if not isinstance(node, dict):
         return node
+    if depth > _SCHEMA_MAX_DEPTH:
+        return {}
     out: dict[str, Any] = {}
     for key, value in node.items():
         if key in _SCHEMA_DROP_KEYS:
