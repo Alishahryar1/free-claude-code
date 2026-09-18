@@ -1,7 +1,7 @@
 """A web response survives the executor's timeout and resource-release boundaries."""
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 
 import pytest
 from starlette.requests import ClientDisconnect
@@ -191,6 +191,102 @@ async def test_binding_cleanup_cannot_append_a_second_terminal():
         in ("response.completed", "response.failed", "response.incomplete")
     ] == ["response.completed"]
     assert scenario.closed == [1, 2, "binding"]
+
+
+@pytest.mark.asyncio
+async def test_provider_cleanup_failure_preserves_final_answer_and_web_replay():
+    class FailedRelease(SearchThenFinish):
+        async def stream(self, turn, *, input_tokens):
+            async for frame in super().stream(turn, input_tokens=input_tokens):
+                yield frame
+            if self.turns == 2:
+                raise RuntimeError("provider release failed")
+
+    scenario = FailedRelease("complete")
+    events = await _consume(await scenario.response())
+    assert [
+        event.event
+        for event in events
+        if event.event
+        in ("response.completed", "response.failed", "response.incomplete")
+    ] == ["response.completed"]
+    final = events[-1].data["response"]
+    assert final["output"][0]["status"] == "completed"
+    assert final["output"][1]["content"][0]["text"] == "Done."
+    assert len(prepare_web_history(request(input=final["output"])).records) == 1
+    assert [
+        event.data["item"]
+        for event in events
+        if event.event == "response.output_item.done"
+    ] == final["output"]
+    assert scenario.client.searches == ["docs"]
+    assert scenario.selected == ["provider"]
+    assert scenario.closed == [1, 2, "binding"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_terminal_cannot_publish_a_successful_response():
+    class InvalidTerminal(SearchThenFinish):
+        async def stream(self, turn, *, input_tokens):
+            async with aclosing(
+                super().stream(turn, input_tokens=input_tokens)
+            ) as source:
+                async for frame in source:
+                    if self.turns == 2 and "event: response.completed\n" in frame:
+                        # The provider's final snapshot omits its completed answer.
+                        frame = list(wire([], number=2))[-1]
+                    yield frame
+
+    scenario = InvalidTerminal("complete")
+    events = await _consume(await scenario.response())
+    _assert_retained_failure(events, scenario)
+    assert "disagrees" in events[-1].data["response"]["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_provider_cleanup_timeout_does_not_complete_pending_web_work(monkeypatch):
+    timeouts = []
+    releasing = asyncio.Event()
+
+    def controlled_timeout(deadline):
+        timeout = asyncio.timeout(None)
+        timeouts.append(timeout)
+        return timeout
+
+    monkeypatch.setattr(
+        "free_claude_code.application.execution.asyncio.timeout_at", controlled_timeout
+    )
+
+    class StalledRelease(SearchThenFinish):
+        async def stream(self, turn, *, input_tokens):
+            async for frame in super().stream(turn, input_tokens=input_tokens):
+                yield frame
+            releasing.set()
+            await asyncio.Event().wait()
+
+    scenario = StalledRelease("complete")
+    consuming = asyncio.create_task(_consume(await scenario.response()))
+    try:
+        await asyncio.wait_for(releasing.wait(), 5)
+        timeouts[-1].reschedule(asyncio.get_running_loop().time())
+        events = await asyncio.wait_for(consuming, 5)
+        assert [
+            event.event
+            for event in events
+            if event.event
+            in ("response.completed", "response.failed", "response.incomplete")
+        ] == ["response.failed"]
+        final = events[-1].data["response"]
+        assert final["error"]["type"] == "timeout_error"
+        assert final["output"][0]["type"] == "web_search_call"
+        assert final["output"][0]["status"] == "incomplete"
+        assert not scenario.client.searches
+        assert scenario.turns == 1
+        assert scenario.closed == [1, "binding"]
+        assert scenario.selected == ["provider"]
+    finally:
+        consuming.cancel()
+        await asyncio.gather(consuming, return_exceptions=True)
 
 
 @pytest.mark.asyncio

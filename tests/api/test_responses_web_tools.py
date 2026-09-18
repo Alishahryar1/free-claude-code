@@ -45,7 +45,7 @@ from tests.providers.test_anthropic_messages_transport import (
 )
 
 
-async def _web_failure_events(provider):
+async def _web_events(provider, web):
     async def resolve(_):
         return provider
 
@@ -55,7 +55,6 @@ async def _web_failure_events(provider):
             {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
         ]
     )
-    web = WebClient()
     executor = ProviderExecutor(
         resolve,
         progress_timeout_seconds=60,
@@ -76,6 +75,12 @@ async def _web_failure_events(provider):
     finally:
         assert isinstance(stream, AsyncCloseable)
         await stream.aclose()
+    return events
+
+
+async def _web_failure_events(provider):
+    web = WebClient()
+    events = await _web_events(provider, web)
     assert events[-1].event == "response.failed"
     assert not web.searches
     done = [
@@ -85,6 +90,95 @@ async def _web_failure_events(provider):
     ]
     assert done == events[-1].data["response"]["output"]
     return events
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["completed", "incomplete", "failed"])
+async def test_real_messages_terminal_survives_timeout_closing_provider_stream(
+    monkeypatch, outcome
+):
+    timeouts = []
+    releasing = asyncio.Event()
+    closes = []
+
+    def controlled_timeout(deadline):
+        timeout = asyncio.timeout(None)
+        timeouts.append(timeout)
+        return timeout
+
+    monkeypatch.setattr(
+        "free_claude_code.application.execution.asyncio.timeout_at", controlled_timeout
+    )
+
+    class StalledClose(Wire):
+        async def aclose(self):
+            closes.append("body")
+            releasing.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await super().aclose()
+
+    text = "x" * 70_000 if outcome == "failed" else "Finished answer"
+    chunks: list[bytes | Exception]
+    if outcome == "failed":
+        chunks = [
+            _sse(*_events(text)[:3]),
+            httpx.RemoteProtocolError("original provider failure"),
+        ]
+    else:
+        chunks = [
+            _sse(
+                *_events(text, "max_tokens" if outcome == "incomplete" else "end_turn")
+            )
+        ]
+    body = StalledClose(chunks)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=body
+        )
+
+    web = WebClient()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        consuming = asyncio.create_task(
+            _web_events(MessagesProvider(_transport(client)), web)
+        )
+        try:
+            await asyncio.wait_for(releasing.wait(), 5)
+            timeouts[-1].reschedule(asyncio.get_running_loop().time())
+            events = await asyncio.wait_for(consuming, 5)
+        finally:
+            consuming.cancel()
+            await asyncio.gather(consuming, return_exceptions=True)
+    terminals = [
+        event
+        for event in events
+        if event.event
+        in ("response.completed", "response.failed", "response.incomplete")
+    ]
+    assert [event.event for event in terminals] == [f"response.{outcome}"]
+    final = terminals[0].data["response"]
+    assert final["output"][0]["content"][0]["text"] == text
+    assert [
+        event.data["item"]
+        for event in events
+        if event.event == "response.output_item.done"
+    ] == final["output"]
+    if outcome == "failed":
+        assert final["error"]["type"] == "api_error"
+        assert "original provider failure" in final["error"]["message"]
+        assert final["usage"] is None
+    else:
+        assert final["usage"]["input_tokens"] == 3
+        assert final["usage"]["output_tokens"] == 2
+        if outcome == "incomplete":
+            assert final["incomplete_details"] == {"reason": "max_output_tokens"}
+    assert not web.searches
+    assert len(calls) == 1
+    assert body.closed and closes == ["body"]
 
 
 @pytest.mark.asyncio

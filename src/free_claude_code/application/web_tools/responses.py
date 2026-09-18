@@ -32,7 +32,7 @@ from free_claude_code.core.openai_responses import (
     replay_item,
     validate_action,
 )
-from free_claude_code.core.sse import SSEDecoder
+from free_claude_code.core.sse import SSEDecoder, SSEEvent
 from free_claude_code.core.token_estimation import estimate_text_tokens
 from free_claude_code.core.trace import close_stream_input
 from free_claude_code.core.web_domains import domain_matches
@@ -126,10 +126,10 @@ class ResponsesWebOperation:
                         if chunk:
                             yield ExecutionProgress()
                         for event in decoder.feed(chunk):
-                            for frame in presenter.feed(event):
+                            for frame in self._feed(event):
                                 yield frame
                     for event in decoder.finish():
-                        for frame in presenter.feed(event):
+                        for frame in self._feed(event):
                             yield frame
                 finally:
                     await close_stream_input(
@@ -138,14 +138,12 @@ class ResponsesWebOperation:
                         source="application",
                         preserved_error=sys.exception(),
                     )
+                if presenter.finished:
+                    return
                 if presenter.terminal is None:
                     raise ResponsesConversionError(
                         "Provider ended without a terminal response."
                     )
-                if presenter.terminal.get("status") != "completed":
-                    for frame in self._finish():
-                        yield frame
-                    return
                 private = presenter.private_output()
                 if remaining is not None:
                     usage = presenter.terminal.get("usage")
@@ -275,6 +273,20 @@ class ResponsesWebOperation:
             if self._presenter is None or self._presenter.response is None:
                 raise InvalidRequestError(str(exc)) from exc
             raise
+
+    def _feed(self, event: SSEEvent) -> list[str]:
+        presenter = self._presenter
+        assert presenter is not None
+        frames = presenter.feed(event)
+        if presenter.terminal is not None:
+            if presenter.terminal.get("status") == "completed":
+                if presenter.web_slots():
+                    return frames
+                presenter.private_output()
+            # Publish a settled outcome before draining the iterator, which may
+            # await provider cleanup. Web actions still pending are not settled.
+            frames.extend(self._finish())
+        return frames
 
     def finalize_failure(self, exc: Exception) -> list[str] | None:
         """Return an owned failure tail, or decline an unowned public stream."""
