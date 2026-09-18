@@ -35,6 +35,7 @@ from free_claude_code.core.openai_responses import (
     new_message_item_id,
     new_reasoning_item_id,
     new_response_id,
+    new_tool_item_id,
     openai_error_from_failure,
     reasoning_output_item,
     replay_unsafe_function_call_error,
@@ -654,7 +655,7 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         output_state = ToolBlockState(
             index=output_index,
             output_index=output_index,
-            item_id=f"fc_{uuid.uuid4().hex[:24]}",
+            item_id=new_tool_item_id("function"),
             call_id=state.tool_id or new_call_id(),
             kind="function",
             name=state.name,
