@@ -4,6 +4,8 @@ import asyncio
 import math
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from time import monotonic
 from types import MappingProxyType
 from typing import Literal
@@ -45,9 +47,15 @@ TokenCounter = Callable[
 ]
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
 WireApi = Literal["messages", "responses"]
-CandidateStreamOpener = Callable[
-    [int, ProviderModelTarget], Awaitable[AsyncIterator[ExecutionChunk]]
-]
+
+
+@dataclass(frozen=True, slots=True)
+class _Candidate:
+    stream: AsyncIterator[ExecutionChunk]
+    finalize_failure: Callable[[Exception], list[str] | None] | None = None
+
+
+CandidateStreamOpener = Callable[[int, ProviderModelTarget], Awaitable[_Candidate]]
 
 
 class ProviderExecutor:
@@ -185,7 +193,7 @@ class ProviderExecutor:
         async def open_candidate(
             index: int,
             target: ProviderModelTarget,
-        ) -> AsyncIterator[str]:
+        ) -> _Candidate:
             provider = await self._provider_resolver(target.provider_id)
             request = (
                 primary_request
@@ -195,16 +203,18 @@ class ProviderExecutor:
                     deep=True,
                 )
             )
-            return provider.stream_messages(
-                request,
-                input_tokens=input_tokens,
-                request_id=request_id,
-                response_model=routed.resolved.original_model,
-                reasoning=routed.reasoning,
-                model_info=self._model_info_lookup(
-                    target.provider_id, target.provider_model
-                ),
-                request_headers=self._request_headers,
+            return _Candidate(
+                provider.stream_messages(
+                    request,
+                    input_tokens=input_tokens,
+                    request_id=request_id,
+                    response_model=routed.resolved.original_model,
+                    reasoning=routed.reasoning,
+                    model_info=self._model_info_lookup(
+                        target.provider_id, target.provider_model
+                    ),
+                    request_headers=self._request_headers,
+                )
             )
 
         return self._stream_candidates(
@@ -234,7 +244,7 @@ class ProviderExecutor:
         async def open_candidate(
             index: int,
             target: ProviderModelTarget,
-        ) -> AsyncIterator[ExecutionChunk]:
+        ) -> _Candidate:
             provider = await self._provider_resolver(target.provider_id)
             request = (
                 primary_request
@@ -244,29 +254,42 @@ class ProviderExecutor:
                 )
             )
 
+            operation = self._responses_web_tools.operation(
+                request, token_counter=self._responses_token_counter
+            )
+
             async def candidate() -> AsyncIterator[ExecutionChunk]:
-                async with provider.bind_responses(
-                    request,
-                    request_id=request_id,
-                    response_model=routed.resolved.original_model,
-                    reasoning=routed.reasoning,
-                    request_headers=self._request_headers,
-                ) as bound:
-                    operation = self._responses_web_tools.stream(
-                        bound, request, token_counter=self._responses_token_counter
+                binding = AsyncExitStack()
+                try:
+                    bound = await binding.enter_async_context(
+                        provider.bind_responses(
+                            request,
+                            request_id=request_id,
+                            response_model=routed.resolved.original_model,
+                            reasoning=routed.reasoning,
+                            request_headers=self._request_headers,
+                        )
                     )
+                    stream = operation.stream(bound)
                     try:
-                        async for event in operation:
+                        async for event in stream:
                             yield event
                     finally:
                         await close_stream_input(
-                            operation,
+                            stream,
                             owner="responses_candidate",
                             source="application",
                             preserved_error=sys.exception(),
                         )
+                finally:
+                    await close_stream_input(
+                        binding,
+                        owner="responses_candidate_binding",
+                        source="application",
+                        preserved_error=sys.exception(),
+                    )
 
-            return candidate()
+            return _Candidate(candidate(), operation.finalize_failure)
 
         raw_input = routed.request.input
         input_item_count = (
@@ -356,101 +379,120 @@ class ProviderExecutor:
             loop = asyncio.get_running_loop()
             progress_deadline = loop.time() + self._progress_timeout_seconds
             for index, target in enumerate(candidates):
+                candidate: _Candidate | None = None
                 provider_stream: AsyncIterator[ExecutionChunk] | None = None
                 candidate_committed = False
                 provider_waiting = True
                 candidate_failure: ExecutionFailure | None = None
                 try:
-                    opening_started = monotonic()
                     try:
-                        provider_stream = await open_candidate(index, target)
-                    except ExecutionFailure as failure:
-                        candidate_failure = failure
-                    finally:
-                        # Initialization has its own request budget. Upstream progress
-                        # time is not spent waiting for a provider's startup task.
-                        progress_deadline += monotonic() - opening_started
-
-                    if provider_stream is None and candidate_failure is None:
-                        raise TypeError(
-                            "provider stream method must return an async iterator"
-                        )
-                    while provider_stream is not None:
-                        if provider_waiting and loop.time() >= progress_deadline:
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            )
-                        progress_timeout = asyncio.timeout_at(
-                            progress_deadline if provider_waiting else None
-                        )
-                        read_failure: ExecutionFailure | None = None
+                        opening_started = monotonic()
                         try:
-                            async with progress_timeout:
-                                try:
-                                    chunk = await anext(provider_stream)
-                                except ExecutionFailure as failure:
-                                    read_failure = failure
-                        except StopAsyncIteration:
-                            break
-                        except TimeoutError as exc:
-                            if not progress_timeout.expired():
-                                raise
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            ) from exc
-                        if progress_timeout.expired():
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
+                            candidate = await open_candidate(index, target)
+                            provider_stream = candidate.stream
+                        except ExecutionFailure as failure:
+                            candidate_failure = failure
+                        finally:
+                            # Initialization has its own request budget. Upstream progress
+                            # time is not spent waiting for a provider's startup task.
+                            progress_deadline += monotonic() - opening_started
+
+                        if provider_stream is None and candidate_failure is None:
+                            raise TypeError(
+                                "provider stream method must return an async iterator"
                             )
-                        if read_failure is not None:
-                            candidate_failure = read_failure
-                            break
-                        if isinstance(chunk, ExecutionProgress):
-                            provider_waiting = chunk.phase == "provider"
+                        while provider_stream is not None:
+                            if provider_waiting and loop.time() >= progress_deadline:
+                                raise self._progress_timeout_failure(
+                                    request_id=request_id,
+                                    provider_id=target.provider_id,
+                                )
+                            progress_timeout = asyncio.timeout_at(
+                                progress_deadline if provider_waiting else None
+                            )
+                            read_failure: ExecutionFailure | None = None
+                            try:
+                                async with progress_timeout:
+                                    try:
+                                        chunk = await anext(provider_stream)
+                                    except ExecutionFailure as failure:
+                                        read_failure = failure
+                            except StopAsyncIteration:
+                                break
+                            except TimeoutError as exc:
+                                if not progress_timeout.expired():
+                                    raise
+                                raise self._progress_timeout_failure(
+                                    request_id=request_id,
+                                    provider_id=target.provider_id,
+                                ) from exc
+                            if progress_timeout.expired():
+                                raise self._progress_timeout_failure(
+                                    request_id=request_id,
+                                    provider_id=target.provider_id,
+                                )
+                            if read_failure is not None:
+                                candidate_failure = read_failure
+                                break
+                            if isinstance(chunk, ExecutionProgress):
+                                provider_waiting = chunk.phase == "provider"
+                                progress_deadline = (
+                                    loop.time() + self._progress_timeout_seconds
+                                )
+                                continue
+                            if not chunk:
+                                await asyncio.sleep(0)
+                                continue
+                            if not candidate_committed:
+                                candidate_committed = True
+                                if index > 0:
+                                    self._trace_fallback_selected(
+                                        request_id=request_id,
+                                        wire_api=wire_api,
+                                        selected=target,
+                                        candidate_index=index + 1,
+                                        candidate_count=len(candidates),
+                                    )
+                            yield chunk
                             progress_deadline = (
                                 loop.time() + self._progress_timeout_seconds
                             )
-                            continue
-                        if not chunk:
-                            await asyncio.sleep(0)
-                            continue
-                        if not candidate_committed:
-                            candidate_committed = True
-                            if index > 0:
-                                self._trace_fallback_selected(
+                    finally:
+                        if provider_stream is not None:
+                            active_error = sys.exception()
+                            preserved_error = active_error or candidate_failure
+                            cleanup_timeout = asyncio.timeout_at(
+                                progress_deadline if active_error is None else None
+                            )
+                            try:
+                                async with cleanup_timeout:
+                                    await close_stream_input(
+                                        provider_stream,
+                                        owner="provider_executor",
+                                        source="api",
+                                        preserved_error=preserved_error,
+                                    )
+                            except TimeoutError as exc:
+                                if not cleanup_timeout.expired():
+                                    raise
+                                raise self._progress_timeout_failure(
                                     request_id=request_id,
-                                    wire_api=wire_api,
-                                    selected=target,
-                                    candidate_index=index + 1,
-                                    candidate_count=len(candidates),
-                                )
-                        yield chunk
-                        progress_deadline = loop.time() + self._progress_timeout_seconds
-                finally:
-                    if provider_stream is not None:
-                        active_error = sys.exception()
-                        preserved_error = active_error or candidate_failure
-                        cleanup_timeout = asyncio.timeout_at(
-                            progress_deadline if active_error is None else None
-                        )
-                        try:
-                            async with cleanup_timeout:
-                                await close_stream_input(
-                                    provider_stream,
-                                    owner="provider_executor",
-                                    source="api",
-                                    preserved_error=preserved_error,
-                                )
-                        except TimeoutError as exc:
-                            if not cleanup_timeout.expired():
-                                raise
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            ) from exc
+                                    provider_id=target.provider_id,
+                                ) from exc
+                    if candidate_failure is not None and candidate_committed:
+                        raise candidate_failure
+                except Exception as exc:
+                    if (
+                        candidate_committed
+                        and candidate is not None
+                        and candidate.finalize_failure is not None
+                    ):
+                        frames = candidate.finalize_failure(exc)
+                        if frames is not None:
+                            for frame in frames:
+                                yield frame
+                            return
+                    raise
 
                 if candidate_failure is None:
                     return

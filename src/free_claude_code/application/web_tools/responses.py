@@ -13,7 +13,12 @@ from free_claude_code.application.responses_execution import (
     ExecutionProgress,
     ResponsesBinding,
 )
-from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.diagnostics import safe_exception_message
+from free_claude_code.core.failures import (
+    ExecutionFailure,
+    FailureKind,
+    find_execution_failure,
+)
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -51,15 +56,33 @@ class ResponsesWebTools:
         self._enabled = enabled
         self._egress = egress
 
-    async def stream(
+    def operation(
         self,
-        bound: ResponsesBinding,
         request: OpenAIResponsesRequest,
         *,
         token_counter: Callable[[OpenAIResponsesRequest], int],
-    ) -> AsyncIterator[ExecutionChunk]:
-        presenter: WebResponsePresenter | None = None
-        records: list[JsonObject] = []
+    ) -> ResponsesWebOperation:
+        return ResponsesWebOperation(self, request, token_counter)
+
+
+class ResponsesWebOperation:
+    """Retain one candidate's public response after its driver is closed."""
+
+    def __init__(
+        self,
+        tools: ResponsesWebTools,
+        request: OpenAIResponsesRequest,
+        token_counter: Callable[[OpenAIResponsesRequest], int],
+    ) -> None:
+        self._tools = tools
+        self._request = request
+        self._token_counter = token_counter
+        self._presenter: WebResponsePresenter | None = None
+        self._records: list[JsonObject] = []
+
+    async def stream(self, bound: ResponsesBinding) -> AsyncIterator[ExecutionChunk]:
+        request, token_counter = self._request, self._token_counter
+        records = self._records
         try:
             history = prepare_web_history(request)
             working = history.request
@@ -79,13 +102,13 @@ class ResponsesWebTools:
                         preserved_error=sys.exception(),
                     )
                 return
-            if working.tool_choice != "none" and (
-                not self._enabled or self._client is None
+            if spec.allowed and (
+                not self._tools._enabled or self._tools._client is None
             ):
                 raise InvalidRequestError(
                     "Local web search is disabled or unavailable. Enable local web tools or disable Codex web search."
                 )
-            presenter = WebResponsePresenter(request, spec)
+            presenter = self._presenter = WebResponsePresenter(request, spec)
             pages = _retained_pages(history.records)
             for record in history.records:
                 _remember_sources(presenter.sources, record["result"])
@@ -120,15 +143,8 @@ class ResponsesWebTools:
                         "Provider ended without a terminal response."
                     )
                 if presenter.terminal.get("status") != "completed":
-                    for slot in presenter.web_slots():
-                        for frame in presenter.complete_web(
-                            slot, {}, status="incomplete"
-                        ):
-                            yield frame
-                    if records:
-                        for frame in presenter.append_replay(replay_item(records)):
-                            yield frame
-                    yield presenter.finish()
+                    for frame in self._finish():
+                        yield frame
                     return
                 private = presenter.private_output()
                 if remaining is not None:
@@ -231,12 +247,10 @@ class ResponsesWebTools:
                     for frame in presenter.complete_web(slot, result):
                         yield frame
                 if not slots or ordinary or remaining == 0:
-                    if records:
-                        for frame in presenter.append_replay(replay_item(records)):
-                            yield frame
-                    yield presenter.finish(
+                    for frame in self._finish(
                         incomplete=remaining == 0 and bool(slots) and not ordinary
-                    )
+                    ):
+                        yield frame
                     return
                 previous = (
                     working.input
@@ -257,22 +271,37 @@ class ResponsesWebTools:
                         for tool in working.tools or []
                         if tool.get("name") != spec.name
                     ]
-        except (ResponsesConversionError, ExecutionFailure, InvalidRequestError) as exc:
-            if presenter is None or presenter.response is None:
-                if isinstance(exc, ResponsesConversionError):
-                    raise InvalidRequestError(str(exc)) from exc
-                raise
-            failure = (
-                exc
-                if isinstance(exc, ExecutionFailure)
-                else ExecutionFailure(FailureKind.UPSTREAM, 502, str(exc), False)
-            )
-            for frame in presenter.fail(failure):
-                yield frame
-            if records:
-                for frame in presenter.append_replay(replay_item(records)):
-                    yield frame
-            yield presenter.finish()
+        except ResponsesConversionError as exc:
+            if self._presenter is None or self._presenter.response is None:
+                raise InvalidRequestError(str(exc)) from exc
+            raise
+
+    def finalize_failure(self, exc: Exception) -> list[str] | None:
+        """Return an owned failure tail, or decline an unowned public stream."""
+        if self._presenter is None or self._presenter.response is None:
+            return None
+        if self._presenter.finished:
+            return []
+        failure = find_execution_failure(exc) or ExecutionFailure(
+            FailureKind.UPSTREAM,
+            502 if isinstance(exc, ResponsesConversionError) else 500,
+            safe_exception_message(exc),
+            False,
+        )
+        return self._finish(failure=failure)
+
+    def _finish(
+        self, *, failure: ExecutionFailure | None = None, incomplete: bool = False
+    ) -> list[str]:
+        presenter = self._presenter
+        assert presenter is not None
+        if presenter.finished:
+            return []
+        frames = presenter.fail(failure) if failure else presenter.close_unfinished()
+        if self._records:
+            frames.extend(presenter.append_replay(replay_item(self._records)))
+        frames.append(presenter.finish(incomplete=incomplete))
+        return frames
 
     async def _action(
         self,
@@ -280,10 +309,11 @@ class ResponsesWebTools:
         spec: WebSearchSpec,
         pages: dict[str, JsonObject],
     ) -> tuple[JsonObject, JsonObject | None]:
-        if self._client is None:
+        client = self._tools._client
+        if client is None:
             raise RuntimeError("No web client")
         if action["action"] == "search":
-            found = await self._client.search(str(action["query"]))
+            found = await client.search(str(action["query"]))
             sources: list[JsonValue] = []
             allowance = spec.context_chars
             for result in found[:10]:
@@ -316,8 +346,8 @@ class ResponsesWebTools:
                     "cached_page_unavailable",
                     "Only index snippets are available for this URL; fresh page access is disabled.",
                 ), None
-            fetched = await self._client.fetch(
-                url, egress=replace(self._egress, allowed_domains=spec.domains)
+            fetched = await client.fetch(
+                url, egress=replace(self._tools._egress, allowed_domains=spec.domains)
             )
             page = {
                 "url": fetched.url,

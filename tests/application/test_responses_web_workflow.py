@@ -4,9 +4,11 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
+from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.application.responses_execution import ResponsesBinding
 from free_claude_code.application.web_tools.responses import ResponsesWebTools
@@ -24,6 +26,7 @@ from free_claude_code.core.openai_responses.web_history import (
 from free_claude_code.core.sse import parse_sse_text
 from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
 from tests.application.test_execution import _routed_responses_request, _target
+from tests.core.openai_responses.test_client_tool_discovery import SEARCH
 
 URL = "https://docs.example.org/page"
 
@@ -128,14 +131,26 @@ async def run(service, original, choose, *, egress="chat"):
         for chunk in wire(output, number=len(requests)):
             yield chunk
 
+    class Provider:
+        @asynccontextmanager
+        async def bind_responses(self, turn, **kwargs):
+            yield ResponsesBinding(egress, stream)
+
+    async def resolve(_):
+        return Provider()
+
+    executor = ProviderExecutor(
+        resolve,
+        progress_timeout_seconds=60,
+        responses_web_tools=service,
+        responses_token_counter=lambda turn: len(json.dumps(turn.model_dump())),
+    )
+    routed = replace(_routed_responses_request(), request=original)
     chunks = [
         chunk
-        async for chunk in service.stream(
-            ResponsesBinding(egress, stream),
-            original,
-            token_counter=lambda turn: len(json.dumps(turn.model_dump())),
+        async for chunk in executor.stream_responses(
+            routed, raw_log_payload={}, request_id="workflow-test"
         )
-        if isinstance(chunk, str)
     ]
     return parse_sse_text("".join(chunks)), requests
 
@@ -305,6 +320,151 @@ async def test_provider_failure_after_search_retains_completed_actions():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_forced_ordinary_tool_does_not_require_local_web(enabled):
+    ordinary = {
+        "type": "function",
+        "name": "read_file",
+        "parameters": {"type": "object"},
+    }
+    original = request(
+        tools=[{"type": "web_search"}, ordinary],
+        tool_choice={"type": "function", "name": "read_file"},
+    )
+
+    def choose(turn, number):
+        assert turn.tool_choice == {"type": "function", "name": "read_file"}
+        return [
+            {
+                "type": "function_call",
+                "id": "fc_read",
+                "call_id": "client_call",
+                "name": "read_file",
+                "arguments": "{}",
+                "status": "completed",
+            }
+        ]
+
+    events, turns = await run(ResponsesWebTools(enabled=enabled), original, choose)
+    assert len(turns) == 1
+    assert events[-1].data["response"]["output"][0]["call_id"] == "client_call"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice", ["auto", "required", {"type": "web_search"}])
+async def test_selectable_web_still_requires_local_service(choice):
+    with pytest.raises(InvalidRequestError, match="disabled or unavailable"):
+        await run(ResponsesWebTools(), request(tool_choice=choice), lambda *_: [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool,choice",
+    [
+        ({"type": "custom", "name": "edit"}, {"type": "custom", "name": "edit"}),
+        (
+            {
+                "type": "namespace",
+                "name": "editor",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "read",
+                        "parameters": {"type": "object"},
+                    }
+                ],
+            },
+            {"type": "function", "namespace": "editor", "name": "read"},
+        ),
+        (SEARCH, {"type": "tool_search", "execution": "client"}),
+        (
+            {"type": "function", "name": "read", "parameters": {"type": "object"}},
+            "none",
+        ),
+    ],
+)
+async def test_unavailable_web_does_not_override_other_tool_choices(tool, choice):
+    original = request(tools=[{"type": "web_search"}, tool], tool_choice=choice)
+
+    def choose(turn, number):
+        assert turn.tool_choice == choice
+        return [
+            message_item("msg_no_web", "Ordinary tool request accepted.", "completed")
+        ]
+
+    events, turns = await run(ResponsesWebTools(enabled=False), original, choose)
+    assert len(turns) == 1
+    assert events[-1].event == "response.completed"
+
+
+@pytest.mark.asyncio
+async def test_provider_cannot_execute_web_against_forced_ordinary_choice():
+    client = WebClient()
+    original = request(
+        tools=[
+            {"type": "web_search"},
+            {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
+        ],
+        tool_choice={"type": "function", "name": "read_file"},
+    )
+    events, turns = await run(
+        ResponsesWebTools(client, enabled=False),
+        original,
+        lambda turn, _: [
+            web_call(turn.tools[-1]["name"], {"action": "search", "query": "forbidden"})
+        ],
+    )
+    assert len(turns) == 1 and client.searches == []
+    assert events[-1].event == "response.failed"
+    assert events[-1].data["response"]["output"][0]["status"] == "incomplete"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("truncated", [False, True])
+async def test_negative_find_preserves_page_completeness_through_replay(truncated):
+    class PageClient(WebClient):
+        async def fetch(self, url, *, egress):
+            self.fetches.append(url)
+            return WebFetchResult(
+                url, "Page", "text/plain", "Start", truncated=truncated
+            )
+
+    client = PageClient()
+
+    def open_page(turn, number):
+        if number == 1:
+            return [
+                web_call(turn.tools[0]["name"], {"action": "open_page", "url": URL})
+            ]
+        return [message_item("msg_open", "Read page.", "completed")]
+
+    first, _ = await run(ResponsesWebTools(client), request(), open_page)
+
+    def find_page(turn, number):
+        if number == 1:
+            return [
+                web_call(
+                    turn.tools[0]["name"],
+                    {"action": "find_in_page", "url": URL, "pattern": "needle"},
+                )
+            ]
+        result = json.loads(turn.input[-1]["output"])
+        assert result["matches"] == []
+        assert result["searched_complete_page"] is not truncated
+        return [message_item("msg_find", "No match.", "completed")]
+
+    await run(
+        ResponsesWebTools(client),
+        request(
+            input=first[-1].data["response"]["output"],
+            tools=[{"type": "web_search", "external_web_access": False}],
+        ),
+        find_page,
+    )
+    assert client.fetches == [URL]
+
+
+@pytest.mark.asyncio
 async def test_action_budget_finishes_without_resetting_forced_choice():
     client = WebClient()
 
@@ -425,9 +585,21 @@ async def test_malformed_search_url_does_not_discard_valid_results():
 
 
 @pytest.mark.asyncio
-async def test_executor_private_progress_keeps_timeout_alive_without_committing_fallback():
+async def test_executor_private_progress_keeps_timeout_alive_without_committing_fallback(
+    monkeypatch,
+):
     selected = []
     closed = []
+    deadlines = []
+    heartbeats = []
+
+    def controlled_timeout(deadline):
+        deadlines.append(deadline)
+        return asyncio.timeout(None)
+
+    monkeypatch.setattr(
+        "free_claude_code.application.execution.asyncio.timeout_at", controlled_timeout
+    )
 
     class Provider:
         @asynccontextmanager
@@ -436,7 +608,7 @@ async def test_executor_private_progress_keeps_timeout_alive_without_committing_
                 try:
                     if turn.model == "provider-model":
                         for _ in range(4):
-                            await asyncio.sleep(0.06)
+                            heartbeats.append(asyncio.get_running_loop().time())
                             yield ": private heartbeat\n\n"
                         raise ExecutionFailure(
                             FailureKind.OVERLOADED, 529, "busy", True
@@ -458,7 +630,8 @@ async def test_executor_private_progress_keeps_timeout_alive_without_committing_
     routed.request.tools = [{"type": "web_search"}]
     executor = ProviderExecutor(
         resolve,
-        progress_timeout_seconds=0.2,
+        progress_timeout_seconds=60,
+        responses_token_counter=lambda _: 1,
         responses_web_tools=ResponsesWebTools(WebClient()),
     )
     result = "".join(
@@ -471,6 +644,10 @@ async def test_executor_private_progress_keeps_timeout_alive_without_committing_
     )
     assert "Fallback answer" in result and "private heartbeat" not in result
     assert selected == ["provider", "fallback"]
+    assert all(
+        deadline >= issued + 60
+        for deadline, issued in zip(deadlines[1:5], heartbeats, strict=True)
+    )
     assert closed == ["provider-model", "fallback-model"]
     assert (
         sum(event.event == "response.created" for event in parse_sse_text(result)) == 1
@@ -478,10 +655,20 @@ async def test_executor_private_progress_keeps_timeout_alive_without_committing_
 
 
 @pytest.mark.asyncio
-async def test_executor_does_not_spend_provider_timeout_on_local_web_work():
+async def test_executor_does_not_spend_provider_timeout_on_local_web_work(monkeypatch):
+    deadlines = []
+
+    def controlled_timeout(deadline):
+        deadlines.append(deadline)
+        return asyncio.timeout(None)
+
+    monkeypatch.setattr(
+        "free_claude_code.application.execution.asyncio.timeout_at", controlled_timeout
+    )
+
     class SlowWeb(WebClient):
         async def search(self, query):
-            await asyncio.sleep(0.3)
+            assert deadlines[-1] is None
             return await super().search(query)
 
     turns = []
@@ -516,7 +703,8 @@ async def test_executor_does_not_spend_provider_timeout_on_local_web_work():
     routed.request.tools = [{"type": "web_search"}]
     executor = ProviderExecutor(
         resolve,
-        progress_timeout_seconds=0.15,
+        progress_timeout_seconds=60,
+        responses_token_counter=lambda _: 1,
         responses_web_tools=ResponsesWebTools(SlowWeb()),
     )
     result = "".join(
@@ -572,9 +760,9 @@ async def test_unsuccessful_model_turn_never_executes_its_web_calls(status):
 
     chunks = [
         chunk
-        async for chunk in ResponsesWebTools(client).stream(
-            ResponsesBinding("chat", stream), request(), token_counter=lambda turn: 1
-        )
+        async for chunk in ResponsesWebTools(client)
+        .operation(request(), token_counter=lambda turn: 1)
+        .stream(ResponsesBinding("chat", stream))
         if isinstance(chunk, str)
     ]
     result = parse_sse_text("".join(chunks))

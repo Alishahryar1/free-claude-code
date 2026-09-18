@@ -20,10 +20,12 @@ _TERMINALS = {"response.completed", "response.failed", "response.incomplete"}
 
 @dataclass(slots=True)
 class WebOutputSlot:
-    index: int
     identity: str
     web: bool | None
     item: JsonObject
+    source_id: str | None = None
+    index: int | None = None
+    done_emitted: bool = False
     private: JsonObject = field(default_factory=dict)
     buffered: list[SSEEvent] = field(default_factory=list)
     annotations: set[int] = field(default_factory=set)
@@ -38,11 +40,14 @@ class WebResponsePresenter:
         self.current: dict[int, WebOutputSlot] = {}
         self.response: JsonObject | None = None
         self.terminal: JsonObject | None = None
+        self.finished = False
         self.sources: dict[str, str] = {}
         self._usage: dict[str, Any] = {}
         self._usage_complete = True
 
     def begin_turn(self) -> None:
+        if self.finished:
+            raise ResponsesConversionError("The public response is already finished.")
         self.current = {}
         self.terminal = None
 
@@ -51,7 +56,7 @@ class WebResponsePresenter:
             event.event or str(event.data.get("type", "")),
             deepcopy(event.data),
         )
-        if self.terminal is not None:
+        if self.finished or self.terminal is not None:
             raise ResponsesConversionError(
                 "Provider emitted data after its terminal response."
             )
@@ -79,7 +84,11 @@ class WebResponsePresenter:
                 _sum_usage(self._usage, usage)
             else:
                 self._usage_complete = False
-            return []
+            return (
+                self._reconcile_terminal()
+                if response.get("status") != "completed"
+                else []
+            )
         if kind == "error":
             raise ResponsesConversionError(
                 "Provider returned a stream error during web execution."
@@ -95,6 +104,13 @@ class WebResponsePresenter:
                     "Duplicate or malformed provider output item."
                 )
             item = data["item"]
+            source_id = item.get("id")
+            if not isinstance(source_id, str) or any(
+                slot.source_id == source_id for slot in self.current.values()
+            ):
+                raise ResponsesConversionError(
+                    "Missing or duplicate provider item identity."
+                )
             name = item.get("name")
             web = (
                 (name == self.spec.name and not item.get("namespace"))
@@ -111,10 +127,9 @@ class WebResponsePresenter:
                 )
             )
             slot = WebOutputSlot(
-                len(self.slots), f"{prefix}_{uuid.uuid4().hex}", web, deepcopy(item)
+                f"{prefix}_{uuid.uuid4().hex}", web, deepcopy(item), source_id=source_id
             )
             self.current[index] = slot
-            self.slots.append(slot)
             if web is None:
                 slot.buffered.append(event)
                 return []
@@ -123,6 +138,10 @@ class WebResponsePresenter:
         if slot is None:
             raise ResponsesConversionError(
                 "Provider event references an unknown output slot."
+            )
+        if slot.done_emitted or slot.private:
+            raise ResponsesConversionError(
+                "Provider emitted data after completing an output item."
             )
         if slot.web is None:
             slot.buffered.append(event)
@@ -148,6 +167,10 @@ class WebResponsePresenter:
                 raise ResponsesConversionError(
                     "Provider completed a malformed output item."
                 )
+            if item.get("id") != slot.source_id:
+                raise ResponsesConversionError(
+                    "Provider changed an output item identity."
+                )
             slot.private = deepcopy(item)
             if slot.web:
                 try:
@@ -157,9 +180,7 @@ class WebResponsePresenter:
                     pass  # The application returns a bounded argument error as the tool result.
                 return []
             slot.item = {**item, "id": slot.identity}
-            output = self._annotate_item(slot)
-            output.append(self.events.output_item_done(slot.index, slot.item))
-            return output
+            return self._done(slot)
         if slot.web:
             return []
         self._capture_delta(slot, kind, data)
@@ -218,20 +239,75 @@ class WebResponsePresenter:
                 part["text"] = str(part.get("text", "")) + delta
 
     def fail(self, failure: ExecutionFailure) -> list[str]:
-        frames = []
+        if self.finished:
+            return []
         self._usage_complete = False
-        for slot in self.slots:
-            if slot.item.get("status") not in ("completed", "failed", "incomplete"):
-                slot.item["status"] = "incomplete"
-                frames.extend(self._annotate_item(slot))
-                frames.append(self.events.output_item_done(slot.index, slot.item))
         self.terminal = {
             "status": "failed",
             "error": openai_error_from_failure(failure),
         }
+        return self.close_unfinished()
+
+    def _reconcile_terminal(self) -> list[str]:
+        assert self.terminal is not None
+        snapshots: dict[str, JsonObject] = {}
+        output = self.terminal["output"]
+        assert isinstance(output, list)
+        for item in output:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                raise ResponsesConversionError("Malformed terminal output item.")
+            identity = cast(str, item["id"])
+            if identity in snapshots:
+                raise ResponsesConversionError("Duplicate terminal output identity.")
+            snapshots[identity] = item
+        pending: list[tuple[WebOutputSlot, JsonObject]] = []
+        for slot in self.current.values():
+            if slot.index is None or slot.done_emitted:
+                continue
+            snapshot = (
+                snapshots.get(slot.source_id) if slot.source_id is not None else None
+            )
+            item = deepcopy(slot.item)
+            if not slot.web and snapshot is not None:
+                if snapshot.get("type") != slot.item.get("type"):
+                    raise ResponsesConversionError(
+                        "Provider changed an output item type."
+                    )
+                item = {**deepcopy(snapshot), "id": slot.identity}
+            if slot.web or item.get("status") not in (
+                "completed",
+                "failed",
+                "incomplete",
+            ):
+                item["status"] = "incomplete"
+            pending.append((slot, item))
+        frames = []
+        for slot, item in pending:
+            slot.item = item
+            frames.extend(self._done(slot))
+        return frames
+
+    def close_unfinished(self) -> list[str]:
+        frames = []
+        for slot in self.slots:
+            if not slot.done_emitted:
+                slot.item["status"] = "incomplete"
+                frames.extend(self._done(slot))
+        return frames
+
+    def _done(self, slot: WebOutputSlot) -> list[str]:
+        if slot.done_emitted or slot.index is None:
+            return []
+        frames = self._annotate_item(slot)
+        frames.append(self.events.output_item_done(slot.index, slot.item))
+        slot.done_emitted = True
         return frames
 
     def _added(self, slot: WebOutputSlot) -> list[str]:
+        if slot.index is not None:
+            raise ResponsesConversionError("Output item was already announced.")
+        slot.index = len(self.slots)
+        self.slots.append(slot)
         if slot.web:
             slot.item = {
                 "id": slot.identity,
@@ -280,10 +356,10 @@ class WebResponsePresenter:
             {"item_id": slot.identity, "output_index": slot.index},
         )
 
-    def complete_web(
-        self, slot: WebOutputSlot, result: JsonObject, *, status: str | None = None
-    ) -> list[str]:
-        slot.item["status"] = status or ("failed" if "error" in result else "completed")
+    def complete_web(self, slot: WebOutputSlot, result: JsonObject) -> list[str]:
+        if slot.done_emitted:
+            return []
+        slot.item["status"] = "failed" if "error" in result else "completed"
         sources = result.get("sources")
         if isinstance(sources, list):
             for source in sources:
@@ -306,16 +382,12 @@ class WebResponsePresenter:
                     {"item_id": slot.identity, "output_index": slot.index},
                 )
             )
-        output.append(self.events.output_item_done(slot.index, slot.item))
+        output.extend(self._done(slot))
         return output
 
     def append_replay(self, item: JsonObject) -> list[str]:
-        slot = WebOutputSlot(len(self.slots), str(item["id"]), False, item)
-        self.slots.append(slot)
-        return [
-            self.events.output_item_added(slot.index, item),
-            self.events.output_item_done(slot.index, item),
-        ]
+        slot = WebOutputSlot(str(item["id"]), False, item)
+        return [*self._added(slot), *self._done(slot)]
 
     def _annotate_part(
         self, slot: WebOutputSlot, part: JsonObject, index: int
@@ -386,6 +458,8 @@ class WebResponsePresenter:
         return result
 
     def finish(self, *, incomplete: bool = False) -> str:
+        if self.finished:
+            raise ResponsesConversionError("The public response is already finished.")
         status = (
             "incomplete"
             if incomplete
@@ -396,7 +470,9 @@ class WebResponsePresenter:
         payload = self.payload(status)
         if incomplete:
             payload["incomplete_details"] = {"reason": "max_output_tokens"}
-        return self.events.emit(f"response.{status}", {"response": payload})
+        frame = self.events.emit(f"response.{status}", {"response": payload})
+        self.finished = True
+        return frame
 
 
 def _sum_usage(target: dict[str, Any], source: dict[str, Any]) -> None:

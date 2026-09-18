@@ -960,6 +960,15 @@ def _aiohttp_response(
     async def iter_chunked(_n: int) -> Any:
         yield body
 
+    offset = 0
+
+    async def read(n: int) -> bytes:
+        nonlocal offset
+        part = body[offset : offset + n]
+        offset += len(part)
+        return part
+
+    r.content.read = AsyncMock(side_effect=read)
     r.content.iter_chunked = MagicMock(side_effect=iter_chunked)
     return r
 

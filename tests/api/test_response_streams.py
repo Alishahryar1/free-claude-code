@@ -58,6 +58,32 @@ def _json_error(exc: BaseException) -> JSONResponse:
     )
 
 
+@pytest.mark.asyncio
+async def test_pre_start_mixed_cancellation_group_closes_body_and_propagates():
+    error = BaseExceptionGroup(
+        "cancelled",
+        [
+            asyncio.CancelledError(),
+            ExecutionFailure(FailureKind.UPSTREAM, 502, "failed", False),
+        ],
+    )
+    closed = []
+
+    async def body():
+        try:
+            raise error
+            yield "unreachable"
+        finally:
+            closed.append(True)
+
+    with pytest.raises(BaseExceptionGroup) as caught:
+        await anthropic_sse_streaming_response(
+            body(), pre_start_error_response=_json_error, request_id="cancelled-group"
+        )
+    assert caught.value is error
+    assert closed == [True]
+
+
 async def _drain(response: StreamingResponse) -> str:
     parts = [
         chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)

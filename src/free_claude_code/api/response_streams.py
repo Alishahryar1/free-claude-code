@@ -237,12 +237,12 @@ async def _first_chunk_streaming_response(
     except asyncio.CancelledError as exc:
         await _close_pre_start_body(body, preserved_error=exc)
         raise
-    except BaseExceptionGroup as exc:
-        await _close_pre_start_body(body, preserved_error=exc)
-        return pre_start_error_response(exc)
     except Exception as exc:
         await _close_pre_start_body(body, preserved_error=exc)
         return pre_start_error_response(exc)
+    except BaseExceptionGroup as exc:
+        await _close_pre_start_body(body, preserved_error=exc)
+        raise
 
     return ManagedStreamingResponse(
         _PrefetchedStream(
@@ -310,10 +310,8 @@ class _PrefetchedStream(AsyncIterator[str]):
         except StopAsyncIteration:
             self._done = True
             raise
-        except BaseExceptionGroup as exc:
-            return self._terminal_chunk(find_execution_failure(exc) or exc)
         except Exception as exc:
-            return self._terminal_chunk(exc)
+            return self._terminal_chunk(find_execution_failure(exc) or exc)
 
     async def aclose(self) -> None:
         if self._closed:

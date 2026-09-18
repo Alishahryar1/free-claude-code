@@ -11,6 +11,58 @@ from free_claude_code.runtime.web_tools import client as web_client
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "body,cap,truncated,expected",
+    [
+        (b"short", 8, False, "short"),
+        (b"12345678", 8, False, "12345678"),
+        (b"123456789", 8, True, "12345678"),
+        (
+            b"<p>Start</p><script>" + b"x" * 200 + b"</script><p>needle</p>",
+            100,
+            True,
+            "Start",
+        ),
+        (b"x" * 24001, 30000, True, "x" * 24000),
+    ],
+    ids=["below-cap", "exact-cap", "over-cap", "hidden-html", "visible-text"],
+)
+async def test_fetch_completeness_includes_raw_body_cap(
+    monkeypatch, body, cap, truncated, expected
+):
+    from aiohttp import web
+
+    from free_claude_code.application.web_tools.ports import WebFetchEgressPolicy
+
+    monkeypatch.setattr(web_client.constants, "_MAX_WEB_FETCH_RESPONSE_BYTES", cap)
+
+    async def page(request):
+        response = web.StreamResponse(headers={"Content-Type": "text/html"})
+        await response.prepare(request)
+        for part in (body[:3], body[3:7], body[7:]):
+            await response.write(part)
+        await response.write_eof()
+        return response
+
+    app = web.Application()
+    app.router.add_get("/", page)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    try:
+        await web.TCPSite(runner, "127.0.0.1", 0).start()
+        address = runner.addresses[0]
+        assert isinstance(address, tuple)
+        result = await web_client.HTTPWebToolsClient().fetch(
+            f"http://127.0.0.1:{address[1]}/",
+            egress=WebFetchEgressPolicy(True, frozenset({"http"})),
+        )
+        assert result.truncated is truncated
+        assert result.data == expected
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("content_type", "body"),
     [
         ("text/html", "<title>Café</title><p>Text to find.</p>".encode()),
@@ -144,10 +196,10 @@ async def test_fetch_cancellation_closes_response_session_and_connector(monkeypa
         connectors.append(value)
         return value
 
-    async def chunks(_size):
+    async def read(_size):
         entered.set()
         await asyncio.Event().wait()
-        yield b""
+        return b""
 
     @asynccontextmanager
     async def response(url, *, allow_redirects):
@@ -160,7 +212,7 @@ async def test_fetch_cancellation_closes_response_session_and_connector(monkeypa
                 headers={},
                 charset="utf-8",
                 raise_for_status=lambda: None,
-                content=SimpleNamespace(iter_chunked=chunks),
+                content=SimpleNamespace(read=read),
             )
         finally:
             response_closed.append(True)

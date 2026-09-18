@@ -115,20 +115,16 @@ class _PinnedEgressStaticResolver(AbstractResolver):
 
 async def _read_aiohttp_body_capped(
     response: aiohttp.ClientResponse, max_bytes: int
-) -> bytes:
-    received = 0
+) -> tuple[bytes, bool]:
+    remaining = max_bytes
     parts: list[bytes] = []
-    async for chunk in response.content.iter_chunked(65_536):
-        if received >= max_bytes:
-            break
-        remaining = max_bytes - received
-        if len(chunk) <= remaining:
-            received += len(chunk)
-            parts.append(chunk)
-        else:
+    while chunk := await response.content.read(min(65_536, remaining + 1)):
+        if len(chunk) > remaining:
             parts.append(chunk[:remaining])
-            break
-    return b"".join(parts)
+            return b"".join(parts), True
+        parts.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(parts), False
 
 
 async def _drain_aiohttp_body_capped(
@@ -220,7 +216,7 @@ class HTTPWebToolsClient:
                         encoding = codecs.lookup(response.charset or "utf-8").name
                     except LookupError:
                         encoding = "utf-8"
-                    body_bytes = await _read_aiohttp_body_capped(
+                    body_bytes, body_truncated = await _read_aiohttp_body_capped(
                         response, constants._MAX_WEB_FETCH_RESPONSE_BYTES
                     )
             finally:
@@ -241,5 +237,5 @@ class HTTPWebToolsClient:
             title=title,
             media_type="text/plain",
             data=data[:_MAX_FETCH_CHARS],
-            truncated=len(data) > _MAX_FETCH_CHARS,
+            truncated=body_truncated or len(data) > _MAX_FETCH_CHARS,
         )
