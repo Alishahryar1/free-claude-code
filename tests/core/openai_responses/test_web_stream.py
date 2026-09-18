@@ -77,7 +77,7 @@ def _started():
         },
     ],
 )
-def test_terminal_only_incomplete_snapshot_closes_announced_item(item, status):
+def test_terminal_incomplete_snapshot_preserves_item_without_executing_it(item, status):
     presenter = _started()
     initial = {**item, "id": "source_item", "status": "in_progress"}
     if "content" in initial:
@@ -101,7 +101,7 @@ def test_terminal_only_incomplete_snapshot_closes_announced_item(item, status):
         event.data["item"]
         for event in events
         if event.event == "response.output_item.done"
-    ] == [expected]
+    ] == ([expected] if item["type"] in {"message", "reasoning"} else [])
     assert all("arguments.done" not in event.event for event in events)
     assert not presenter.current[0].private
 
@@ -149,7 +149,7 @@ def test_failed_snapshot_omitting_malformed_call_preserves_other_done_items():
         event.data["output_index"]
         for event in events
         if event.event == "response.output_item.done"
-    ] == [1]
+    ] == []
 
 
 def test_unannounced_function_is_omitted_without_a_public_index_hole():

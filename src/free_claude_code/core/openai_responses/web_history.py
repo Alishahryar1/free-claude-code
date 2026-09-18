@@ -125,7 +125,7 @@ def prepare_web_history(request: OpenAIResponsesRequest) -> WebHistory:
             continue
         else:
             projected.append(deepcopy(item))
-            if isinstance(item, dict):
+            if isinstance(item, dict) and index not in search.omitted_items:
                 kind, call_id = item.get("type"), item.get("call_id")
                 is_search = index in search.client_items
                 expected = pairs.get(str(kind))

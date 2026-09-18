@@ -78,7 +78,7 @@ async def _web_events(provider, web):
     return events
 
 
-async def _web_failure_events(provider):
+async def _web_failure_events(provider, *, unfinished_client=False):
     web = WebClient()
     events = await _web_events(provider, web)
     assert events[-1].event == "response.failed"
@@ -88,7 +88,8 @@ async def _web_failure_events(provider):
         for event in events
         if event.event == "response.output_item.done"
     ]
-    assert done == events[-1].data["response"]["output"]
+    output = events[-1].data["response"]["output"]
+    assert done == (output[:-1] if unfinished_client else output)
     return events
 
 
@@ -221,7 +222,10 @@ async def test_real_messages_failure_preserves_and_closes_partial_output(partial
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        public = await _web_failure_events(MessagesProvider(_transport(client)))
+        public = await _web_failure_events(
+            MessagesProvider(_transport(client)),
+            unfinished_client=partial == "ordinary-tool",
+        )
     assert body.closed and len(calls) == 1
     final = public[-1].data["response"]
     assert final["usage"] is None
@@ -275,7 +279,7 @@ async def test_real_chat_failure_closes_call_omitted_from_terminal_snapshot():
             admission=immediate_admission(),
             client=client,
         )
-        events = await _web_failure_events(provider)
+        events = await _web_failure_events(provider, unfinished_client=True)
     final = events[-1].data["response"]
     assert len(final["output"]) == 1
     assert final["output"][0]["status"] == "incomplete"

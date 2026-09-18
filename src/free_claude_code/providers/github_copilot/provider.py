@@ -417,7 +417,12 @@ async def _close_request(
             )
     finally:
         if client is not None:
-            await client.aclose()
+            await close_provider_stream(
+                client,
+                active_error=active_error,
+                provider_name=PROVIDER_NAME,
+                request_id=request_id,
+            )
 
 
 async def _endpoint_required() -> str:

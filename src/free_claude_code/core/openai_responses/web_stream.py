@@ -13,6 +13,7 @@ from free_claude_code.core.sse import SSEEvent
 from .errors import ResponsesConversionError, openai_error_from_failure
 from .models import OpenAIResponsesRequest
 from .streaming.event_builders import ResponseEventBuilder
+from .tools import is_unfinished_client_call
 from .web_request import WebSearchSpec, public_action, validate_action
 
 _TERMINALS = {"response.completed", "response.failed", "response.incomplete"}
@@ -171,7 +172,8 @@ class WebResponsePresenter:
                 raise ResponsesConversionError(
                     "Provider changed an output item identity."
                 )
-            slot.private = deepcopy(item)
+            if not is_unfinished_client_call(item):
+                slot.private = deepcopy(item)
             if slot.web:
                 try:
                     args = validate_action(json.loads(str(item.get("arguments", ""))))
@@ -296,7 +298,11 @@ class WebResponsePresenter:
         return frames
 
     def _done(self, slot: WebOutputSlot) -> list[str]:
-        if slot.done_emitted or slot.index is None:
+        if (
+            slot.done_emitted
+            or slot.index is None
+            or is_unfinished_client_call(slot.item)
+        ):
             return []
         frames = self._annotate_item(slot)
         frames.append(self.events.output_item_done(slot.index, slot.item))

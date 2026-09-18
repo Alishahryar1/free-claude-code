@@ -153,10 +153,7 @@ async def test_noncanonical_failure_after_search_retains_completed_work(grouped)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cleanup_error", [False, True])
-async def test_executor_timeout_after_search_retains_completed_work(
-    monkeypatch, cleanup_error
-):
+async def test_executor_timeout_after_search_retains_completed_work(monkeypatch):
     timeouts = []
 
     def controlled_timeout(deadline):
@@ -167,7 +164,7 @@ async def test_executor_timeout_after_search_retains_completed_work(
     monkeypatch.setattr(
         "free_claude_code.application.execution.asyncio.timeout_at", controlled_timeout
     )
-    scenario = SearchThenFinish("wait", cleanup_error=cleanup_error)
+    scenario = SearchThenFinish("wait")
     response = await scenario.response()
     consuming = asyncio.create_task(_consume(response))
     try:
@@ -337,8 +334,8 @@ async def test_timeout_releasing_a_completed_response_cannot_change_its_outcome(
 
 
 @pytest.mark.asyncio
-async def test_binding_cleanup_cannot_replace_external_cancellation():
-    scenario = SearchThenFinish("wait", cleanup_error=True)
+async def test_external_cancellation_releases_web_binding():
+    scenario = SearchThenFinish("wait")
     response = await scenario.response()
     consuming = asyncio.create_task(_consume(response))
     try:

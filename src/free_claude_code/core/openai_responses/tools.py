@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .errors import ResponsesConversionError
 from .ids import new_call_id
@@ -22,6 +22,16 @@ class ResponsesToolIdentity:
     kind: Literal["function", "custom"]
     name: str
     namespace: str | None = None
+
+
+def is_unfinished_client_call(item: Mapping[str, JsonValue]) -> bool:
+    """An explicit unfinished state is not an executable client invocation."""
+    return item.get("status") not in (None, "completed") and (
+        item.get("type") in ("function_call", "custom_tool_call")
+        or (
+            item.get("type") == "tool_search_call" and item.get("execution") == "client"
+        )
+    )
 
 
 def flatten_responses_tool_name(name: str, *, namespace: str | None = None) -> str:

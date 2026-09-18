@@ -30,6 +30,7 @@ from .tools import (
     custom_tool_input_text,
     custom_tool_input_text_from_arguments,
     flatten_responses_tool_name,
+    is_unfinished_client_call,
     optional_str,
     required_str,
 )
@@ -675,6 +676,12 @@ class ResponsesToolEventAdapter:
         original_item = data.get("item")
         item = self._tools.restore_item(original_item)
         if isinstance(item, dict):
+            if (
+                event_type == "response.output_item.done"
+                and item.get("type") in {"function_call", "custom_tool_call"}
+                and is_unfinished_client_call(item)
+            ):
+                return
             data["item"] = item
             if item.get("type") == "function_call" and (
                 self._tools._policy.client_tool_search

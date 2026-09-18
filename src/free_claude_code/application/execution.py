@@ -4,7 +4,6 @@ import asyncio
 import math
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from time import monotonic
 from types import MappingProxyType
@@ -259,17 +258,13 @@ class ProviderExecutor:
             )
 
             async def candidate() -> AsyncIterator[ExecutionChunk]:
-                binding = AsyncExitStack()
-                try:
-                    bound = await binding.enter_async_context(
-                        provider.bind_responses(
-                            request,
-                            request_id=request_id,
-                            response_model=routed.resolved.original_model,
-                            reasoning=routed.reasoning,
-                            request_headers=self._request_headers,
-                        )
-                    )
+                async with provider.bind_responses(
+                    request,
+                    request_id=request_id,
+                    response_model=routed.resolved.original_model,
+                    reasoning=routed.reasoning,
+                    request_headers=self._request_headers,
+                ) as bound:
                     stream = operation.stream(bound)
                     try:
                         async for event in stream:
@@ -281,13 +276,6 @@ class ProviderExecutor:
                             source="application",
                             preserved_error=sys.exception(),
                         )
-                finally:
-                    await close_stream_input(
-                        binding,
-                        owner="responses_candidate_binding",
-                        source="application",
-                        preserved_error=sys.exception(),
-                    )
 
             return _Candidate(candidate(), operation.finalize_failure)
 

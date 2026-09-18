@@ -431,6 +431,43 @@ def _executor_stream(
 
 
 @pytest.mark.asyncio
+async def test_responses_binding_receives_body_failure_and_can_translate_it():
+    original = ValueError("provider operation failed")
+    translated = ExecutionFailure(
+        FailureKind.UNAVAILABLE, 503, "policy translation", False
+    )
+    observed = []
+
+    class Provider:
+        @asynccontextmanager
+        async def bind_responses(self, request, **kwargs):
+            try:
+                yield ResponsesBinding("responses", self.stream)
+            except ValueError as error:
+                observed.append(error)
+                assert error.__traceback__ is not None
+                raise translated from error
+
+        async def stream(self, request, **kwargs):
+            raise original
+            yield ""
+
+    executor = ProviderExecutor(
+        AsyncMock(return_value=Provider()), progress_timeout_seconds=60
+    )
+    with pytest.raises(ExecutionFailure) as raised:
+        _ = [
+            frame
+            async for frame in executor.stream_responses(
+                _routed_responses_request(), raw_log_payload={}, request_id="translated"
+            )
+        ]
+    assert observed == [original]
+    assert raised.value is translated
+    assert raised.value.__cause__ is original
+
+
+@pytest.mark.asyncio
 async def test_executor_routes_native_responses_without_messages_conversion() -> None:
     provider = ResponsesFakeProvider()
     routed = _routed_responses_request()

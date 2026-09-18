@@ -109,7 +109,9 @@ def test_nested_tool_namespace_precedence_during_discovery(
     if container:
         tool = {"type": "namespace", "name": container, "tools": [tool]}
     original = deepcopy(tool)
-    resolved = active_client_tools([tool], ClientSearchHistory(frozenset(), {}))
+    resolved = active_client_tools(
+        [tool], ClientSearchHistory(frozenset(), {}, frozenset())
+    )
     assert resolved == [
         {
             "type": "namespace",
