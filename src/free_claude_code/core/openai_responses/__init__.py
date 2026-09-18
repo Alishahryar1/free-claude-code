@@ -14,6 +14,7 @@ from .ids import (
     new_message_item_id,
     new_reasoning_item_id,
     new_response_id,
+    new_tool_item_id,
 )
 from .messages_request import ResponsesMessagesRequest, build_responses_messages_request
 from .messages_stream import AnthropicToResponsesStream
@@ -77,6 +78,7 @@ __all__ = [
     "new_message_item_id",
     "new_reasoning_item_id",
     "new_response_id",
+    "new_tool_item_id",
     "openai_error_from_failure",
     "openai_error_payload",
     "openai_error_type_for_failure",
