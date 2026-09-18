@@ -15,6 +15,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `cline.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cline.svg |
 | `cloudflare-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cloudflare-color.svg |
 | `cohere-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cohere-color.svg |
+| `custom.svg` | Project-authored neutral glyph (not a brand mark) |
 | `deepinfra-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/deepinfra-color.svg |
 | `deepseek-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/deepseek-color.svg |
 | `experiential.svg` | https://www.experientiallabs.ai/icon.svg?d749d3cd48f6539d |

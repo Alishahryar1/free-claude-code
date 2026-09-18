@@ -317,6 +317,20 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Defaults to https://api.experientiallabs.ai/v1."
         ),
     },
+    "CUSTOM_BASE_URL": {
+        "label": "Custom Provider Base URL",
+        "description": (
+            "Base URL for a generic OpenAI-compatible Chat Completions endpoint "
+            "(for example https://your-host/v1). Required to enable the custom provider."
+        ),
+    },
+    "CUSTOM_API_KEY": {
+        "label": "Custom Provider API Key",
+        "description": (
+            "Optional API key for the custom OpenAI-compatible endpoint. "
+            "Leave blank if the endpoint does not require one."
+        ),
+    },
 }
 
 
@@ -325,10 +339,28 @@ def provider_field_specs() -> tuple[ConfigFieldSpec, ...]:
 
     return (
         *_credential_field_specs(),
+        *_custom_credential_field_specs(),
         *_cloudflare_account_field_specs(),
         *_vertex_field_specs(),
         *_base_url_field_specs(),
         *_proxy_field_specs(),
+    )
+
+
+def _custom_credential_field_specs() -> tuple[ConfigFieldSpec, ...]:
+    """Custom provider API key (optional; not tied to credential_env)."""
+    return (
+        _with_override(
+            ConfigFieldSpec(
+                key="CUSTOM_API_KEY",
+                label="Custom Provider API Key",
+                section_id="providers",
+                field_type="secret",
+                settings_attr="custom_api_key",
+                provider_ids=("custom",),
+                secret=True,
+            )
+        ),
     )
 
 

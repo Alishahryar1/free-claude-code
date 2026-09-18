@@ -1,9 +1,9 @@
 """OpenAI-compatible provider family."""
 
+from free_claude_code.core.openai_base_url import openai_v1_base_url
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 
-from .base_url import openai_v1_base_url
 from .behavior import OpenAIChatBehavior
 from .client import OpenAIAsyncCredentialProvider, create_chat_client
 from .extra_body import (
