@@ -20,6 +20,7 @@ from free_claude_code.core.anthropic import (
     ContentType,
     FunctionTagToolParser,
     HeuristicToolParser,
+    TerminalJsonToolParser,
     ThinkTagParser,
 )
 from free_claude_code.core.anthropic.models import MessagesRequest
@@ -244,6 +245,13 @@ class _OpenAIChatStreamAssembler:
             },
             enabled=tool_choice_enabled,
         )
+        self._terminal_json_parser = TerminalJsonToolParser.from_schemas(
+            tool_names=tool_names,
+            schemas={
+                name: schema.input_schema for name, schema in tool_schemas.items()
+            },
+            enabled=tool_choice_enabled,
+        )
         self._heuristic_parser = HeuristicToolParser()
         self._structured_reasoning = (
             StructuredReasoningStream()
@@ -371,6 +379,9 @@ class _OpenAIChatStreamAssembler:
             released_text = self._function_tag_parser.disable()
             if released_text:
                 yield from _iter_visible_text_events(self._output, released_text)
+            released_text = self._terminal_json_parser.disable()
+            if released_text:
+                yield from _iter_visible_text_events(self._output, released_text)
 
         if delta.content:
             for part in self._think_parser.feed(delta.content):
@@ -382,6 +393,7 @@ class _OpenAIChatStreamAssembler:
                 else:
                     safe_text = self._function_tag_parser.feed(part.content)
                     if safe_text:
+                        safe_text = self._terminal_json_parser.feed(safe_text)
                         yield from _iter_text_parser_events(
                             self._output,
                             self._heuristic_parser,
@@ -438,6 +450,7 @@ class _OpenAIChatStreamAssembler:
             else:
                 safe_text = self._function_tag_parser.feed(remaining.content)
                 if safe_text:
+                    safe_text = self._terminal_json_parser.feed(safe_text)
                     yield from _iter_text_parser_events(
                         self._output,
                         self._heuristic_parser,
@@ -451,6 +464,21 @@ class _OpenAIChatStreamAssembler:
         yield from _iter_text_tool_use_events(
             self._output,
             function_tag_tools,
+            tool_names=self._tool_names,
+        )
+        terminal_fallback_text, terminal_json_tools = (
+            self._terminal_json_parser.finish()
+        )
+        if terminal_fallback_text:
+            yield from _iter_text_parser_events(
+                self._output,
+                self._heuristic_parser,
+                terminal_fallback_text,
+                tool_names=self._tool_names,
+            )
+        yield from _iter_text_tool_use_events(
+            self._output,
+            terminal_json_tools,
             tool_names=self._tool_names,
         )
         yield from _iter_text_tool_use_events(
