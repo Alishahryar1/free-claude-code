@@ -15,7 +15,7 @@ from .opencode_config import OPENCODE_API_KEY_ENV, build_opencode_config
 from .runner import HarnessSpec, LaunchContext, launch_harness, version_at_least
 
 _VERSION_PATTERN = re.compile(
-    r"(?m)^\s*(?:(?:opencode(?:\s+version)?\s+)|v)?"
+    r"(?m)^\s*(?:opencode(?:\s+version)?\s+)?v?"
     r"(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z.-]+)?\s*$"
 )
 _PROCESS_CONFIG_KEYS = ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT")
