@@ -707,7 +707,11 @@ class ResponsesToolEventAdapter:
             if item.get("type") == "tool_search_call":
                 if isinstance(item_id := item.get("id"), str):
                     self._search_items.add(item_id)
-                if event_type == "response.output_item.added":
+                if (
+                    event_type == "response.output_item.added"
+                    and isinstance(original_item, dict)
+                    and original_item.get("type") == "function_call"
+                ):
                     item["arguments"] = {}
             if (
                 isinstance(original_item, dict)

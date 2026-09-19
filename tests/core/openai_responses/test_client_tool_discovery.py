@@ -215,6 +215,54 @@ def test_native_rejects_ambiguous_bare_names() -> None:
         )
 
 
+@pytest.mark.parametrize("execution", ["server", "client"])
+@pytest.mark.parametrize(
+    "policy",
+    [
+        ResponsesToolPolicy(flatten_namespaces=True),
+        ResponsesToolPolicy(
+            custom_tools_as_functions=True,
+            explicit_search_parameters=True,
+            text_only_web_search=True,
+            client_tool_search=True,
+            flatten_namespaces=True,
+        ),
+    ],
+    ids=["namespaces", "opencode"],
+)
+def test_native_search_preserves_added_arguments(
+    execution: str, policy: ResponsesToolPolicy
+) -> None:
+    adapter = ResponsesToolAdapter(
+        OpenAIResponsesRequest(
+            model="example",
+            input="Find tools",
+            tools=[{**SEARCH, "execution": execution}],
+        ),
+        policy,
+    )
+    events = adapter.event_adapter()
+    assert events is not None
+    payload: JsonObject = {
+        "type": "response.output_item.added",
+        "sequence_number": 0,
+        "output_index": 0,
+        "item": {
+            "type": "tool_search_call",
+            "id": "search_native",
+            "call_id": "search",
+            "execution": execution,
+            "status": "in_progress",
+            "arguments": {"query": "Find deployment tools"},
+        },
+    }
+    original = deepcopy(payload)
+    assert list(events.feed("response.output_item.added", payload)) == [
+        ("response.output_item.added", original)
+    ]
+    assert payload == original
+
+
 def test_native_search_buffers_partial_added_arguments() -> None:
     adapter = _native_adapter([SEARCH])
     events = adapter.event_adapter()
