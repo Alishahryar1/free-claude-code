@@ -11,6 +11,7 @@ from free_claude_code.core.reasoning import ReasoningPolicy
 
 from .errors import openai_error_from_failure
 from .events import format_response_sse_event
+from .ids import tool_item_id_for_kind
 from .models import OpenAIResponsesRequest
 from .reasoning import responses_reasoning_config, responses_reasoning_policy
 
@@ -31,6 +32,20 @@ def build_native_responses_request(
         JsonObject,
         request.model_dump(mode="json", exclude_none=True),
     )
+    if isinstance(items := body.get("input"), list):
+        for item in items:
+            if not isinstance(item, dict) or item.get("type") not in (
+                "function_call",
+                "custom_tool_call",
+            ):
+                continue
+            item_id = item.get("id")
+            if isinstance(item_id, str) and item_id != tool_item_id_for_kind(
+                item_id,
+                kind="custom" if item["type"] == "custom_tool_call" else "function",
+            ):
+                # Full calls replay by call_id; incompatible item IDs are optional.
+                del item["id"]
     body["model"] = model
     body["stream"] = True
     body["store"] = False

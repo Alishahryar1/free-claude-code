@@ -133,6 +133,7 @@ def test_hosted_discovery_restores_definitions_and_replays_flat_names(
     assert public[1]["name"] == "lookup"
     assert public[1]["namespace"] == "crm"
     assert public[1]["type"] == ("custom_tool_call" if custom else "function_call")
+    assert public[1]["id"] == ("ctc_lookup" if custom else "fc_lookup")
     assert replay[0]["type"] == "tool_search_output"
     assert replay[0]["tools"] == [wire_definition]
     assert replay[1]["name"] == "crm__lookup"
@@ -281,6 +282,58 @@ def test_image_only_web_search_is_not_silently_replaced_with_text_search() -> No
     )
     with pytest.raises(ResponsesConversionError, match="text web search only"):
         _adapter(request)
+
+
+@pytest.mark.parametrize("status", ["completed", "incomplete", "failed"])
+@pytest.mark.parametrize("namespaced", [False, True])
+def test_terminal_snapshot_restores_custom_item_id_without_prior_events(
+    status: str, namespaced: bool
+) -> None:
+    tool: JsonObject = {"type": "custom", "name": "edit"}
+    adapter = ResponsesToolAdapter(
+        OpenAIResponsesRequest(
+            model="example",
+            input="edit",
+            tools=[{"type": "namespace", "name": "editor", "tools": [tool]}]
+            if namespaced
+            else [tool],
+        ),
+        ResponsesToolPolicy(custom_tools_as_functions=True, flatten_namespaces=True),
+    )
+    item: JsonObject = {
+        "type": "function_call",
+        "id": "fc_snapshot",
+        "call_id": "call_snapshot",
+        "name": "editor__edit" if namespaced else "edit",
+        "arguments": '{"input":"patch"}',
+        "status": "completed" if status == "completed" else "incomplete",
+        "provider_extension": {"id": "fc_untouched"},
+    }
+    payload: JsonObject = {
+        "type": f"response.{status}",
+        "response": {
+            "id": "resp_snapshot",
+            "model": "example",
+            "status": status,
+            "output": [item],
+        },
+    }
+    original = deepcopy(payload)
+    events = parse_sse_text(
+        "".join(_presenter(adapter).feed(f"response.{status}", payload))
+    )
+    restored = events[0].data["response"]["output"][0]
+    assert restored == {
+        "type": "custom_tool_call",
+        "id": "ctc_snapshot",
+        "call_id": "call_snapshot",
+        "name": "edit",
+        "input": "patch",
+        "status": item["status"],
+        "provider_extension": {"id": "fc_untouched"},
+        **({"namespace": "editor"} if namespaced else {}),
+    }
+    assert payload == original
 
 
 def test_custom_and_function_names_cannot_collide_after_conversion() -> None:
@@ -552,7 +605,7 @@ def test_separate_attempts_do_not_share_custom_item_ids_or_sequences() -> None:
                 "sequence_number": 100,
                 "item": {
                     "type": "function_call",
-                    "id": "reused",
+                    "id": "fc_reused",
                     "name": "edit",
                     "call_id": "first",
                     "arguments": "",
@@ -560,7 +613,7 @@ def test_separate_attempts_do_not_share_custom_item_ids_or_sequences() -> None:
             },
         )
     )
-    ordinary: JsonObject = {"sequence_number": 0, "item_id": "reused", "delta": "{}"}
+    ordinary: JsonObject = {"sequence_number": 0, "item_id": "fc_reused", "delta": "{}"}
     result = list(second.feed("response.function_call_arguments.delta", ordinary))
     assert result == [
         (

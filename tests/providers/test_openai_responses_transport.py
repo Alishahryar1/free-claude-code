@@ -10,6 +10,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
@@ -21,8 +22,13 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesToolPolicy,
+    build_responses_chat_request,
 )
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.providers.openai_chat.stream_output import (
+    ChatStreamUsage,
+    ResponsesChatStreamOutput,
+)
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from tests.providers.support import REASONING_ON, immediate_admission
 
@@ -337,7 +343,7 @@ async def test_concurrent_requests_do_not_share_tool_identities() -> None:
         body = json.loads(request.content)
         call = {
             "type": "function_call",
-            "id": "same_item",
+            "id": "fc_same_item",
             "call_id": "same_call",
             "name": "edit",
             "arguments": '{"input":"patch"}',
@@ -358,17 +364,24 @@ async def test_concurrent_requests_do_not_share_tool_identities() -> None:
             {
                 "type": "response.function_call_arguments.delta",
                 "sequence_number": 1,
-                "item_id": "same_item",
+                "item_id": "fc_same_item",
                 "output_index": 0,
                 "delta": call["arguments"],
             },
             {
-                "type": "response.output_item.done",
+                "type": "response.function_call_arguments.done",
                 "sequence_number": 2,
+                "item_id": "fc_same_item",
+                "output_index": 0,
+                "arguments": call["arguments"],
+            },
+            {
+                "type": "response.output_item.done",
+                "sequence_number": 3,
                 "output_index": 0,
                 "item": call,
             },
-            {"type": "response.completed", "sequence_number": 3, "response": response},
+            {"type": "response.completed", "sequence_number": 4, "response": response},
         )
         return httpx2.Response(
             200,
@@ -401,14 +414,129 @@ async def test_concurrent_requests_do_not_share_tool_identities() -> None:
     ]
     assert custom_events[-1].data["response"]["output"][0]["type"] == "custom_tool_call"
     assert function_events[-1].data["response"]["output"][0]["type"] == "function_call"
+    for events, item_id in (
+        (custom_events, "ctc_same_item"),
+        (function_events, "fc_same_item"),
+    ):
+        assert events[-1].data["response"]["output"][0]["id"] == item_id
+        assert [
+            event.data["item"]["id"] for event in events if "item" in event.data
+        ] == [
+            item_id,
+            item_id,
+        ]
+        assert [
+            event.data["item_id"] for event in events if "item_id" in event.data
+        ] == [
+            item_id,
+            item_id,
+        ]
     assert not any(
-        event.event == "response.function_call_arguments.delta"
+        event.event
+        in {
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+        }
         for event in custom_events
     )
     assert any(
         event.event == "response.function_call_arguments.delta"
         for event in function_events
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("legacy", "adapt_custom", "expected_type", "keep_id"),
+    [
+        (False, False, "custom_tool_call", True),
+        (True, False, "custom_tool_call", False),
+        (False, True, "function_call", False),
+        (True, True, "function_call", True),
+    ],
+)
+async def test_chat_custom_history_replays_with_native_wire_compatible_ids(
+    legacy: bool, adapt_custom: bool, expected_type: str, keep_id: bool
+) -> None:
+    request = OpenAIResponsesRequest(
+        model="example", input="edit", tools=[{"type": "custom", "name": "edit"}]
+    )
+    prepared = build_responses_chat_request(
+        request, reasoning_replay=ReasoningReplayMode.DISABLED
+    )
+    writer = ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
+    frames = writer.start_events()
+    frames.append(writer.start_tool_block(0, "call_edit", "edit"))
+    frames.append(writer.emit_tool_delta(0, '{"input":"patch"}'))
+    frames.extend(
+        writer.finish_success(
+            stop_reason="tool_calls",
+            usage=ChatStreamUsage(input_tokens=3, output_tokens=2),
+        )
+    )
+    item = parse_sse_text("".join(frames))[-1].data["response"]["output"][0]
+    if legacy:
+        item["id"] = "fc_legacy"
+    continuation = OpenAIResponsesRequest(
+        model="example",
+        tools=request.tools,
+        input=[
+            item,
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call_edit",
+                "output": "done",
+            },
+        ],
+    )
+    original = continuation.model_dump()
+    captured: list[dict[str, object]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_sse(_completed_event()),
+        )
+
+    client = _client(handler)
+    try:
+        await _collect_native(
+            _transport(
+                client,
+                tool_policy=ResponsesToolPolicy(custom_tools_as_functions=adapt_custom),
+            ),
+            continuation,
+        )
+    finally:
+        await client.close()
+    assert len(captured) == 1
+    history = captured[0]["input"]
+    assert isinstance(history, list)
+    call, result = history
+    assert call["type"] == expected_type
+    assert call["call_id"] == "call_edit"
+    assert call["name"] == "edit"
+    if keep_id:
+        assert call["id"] == item["id"]
+    else:
+        assert "id" not in call
+    if adapt_custom:
+        assert json.loads(call["arguments"]) == {"input": "patch"}
+        assert result == {
+            "type": "function_call_output",
+            "call_id": "call_edit",
+            "output": "done",
+        }
+    else:
+        assert call["input"] == "patch"
+        assert result == {
+            "type": "custom_tool_call_output",
+            "call_id": "call_edit",
+            "output": "done",
+        }
+    assert continuation.model_dump() == original
 
 
 @pytest.mark.asyncio
