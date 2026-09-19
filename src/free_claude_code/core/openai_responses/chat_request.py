@@ -370,8 +370,10 @@ def build_responses_chat_request(
     if request.instructions:
         builder.system_parts.append(request.instructions)
     original_items = _input_items(adapter.original.input)
-    for index, item in enumerate(_input_items(request.input)):
-        source = original_items[index]
+    for source_index, item in zip(
+        adapter.input_source_indices, _input_items(request.input), strict=True
+    ):
+        source = original_items[source_index]
         builder.add(
             item,
             source_type=optional_str(source.get("type"))
