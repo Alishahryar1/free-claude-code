@@ -46,6 +46,7 @@ from free_claude_code.config.provider_catalog import (
 )
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.cloudflare import CloudflareProvider
+from free_claude_code.providers.codebuddy.provider import CodeBuddyProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.github_copilot.provider import GitHubCopilotProvider
@@ -934,6 +935,7 @@ async def test_create_provider_instantiates_each_builtin():
         "nvidia_nim": NvidiaNimProvider,
         "openai": OpenAICodexProvider,
         "github_copilot": GitHubCopilotProvider,
+        "codebuddy": CodeBuddyProvider,
         "cline_pass": OpenAIChatProvider,
         "xai": OpenAIChatProvider,
         "qwencloud": OpenAIChatProvider,
@@ -998,12 +1000,18 @@ async def test_create_provider_instantiates_each_builtin():
             auth=auth,
             admission=admission,
         ),
+        "codebuddy": lambda config, _settings, admission: CodeBuddyProvider(
+            config,
+            auth=auth,
+            admission=admission,
+        ),
     }
 
     with (
         patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"),
         patch("free_claude_code.providers.github_copilot.provider.AsyncOpenAI"),
         patch("free_claude_code.providers.openai_codex.provider.AsyncOpenAI"),
+        patch("free_claude_code.providers.codebuddy.provider.AsyncOpenAI"),
         patch("httpx.AsyncClient"),
         patch(
             "free_claude_code.providers.runtime.factory.ProviderAdmissionController",

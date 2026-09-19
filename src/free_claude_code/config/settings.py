@@ -17,6 +17,7 @@ from .model_refs import parse_model_fallbacks
 from .nim import NimSettings
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
+    CODEBUDDY_DEFAULT_BASE,
     EXPERIENTIAL_DEFAULT_BASE,
     LIGHTNING_DEFAULT_BASE,
     NARAROUTE_DEFAULT_BASE,
@@ -387,6 +388,12 @@ class Settings(BaseModel):
     model_fallbacks: OptionalModelFallbacks = Field(
         default=None,
         validation_alias="MODEL_FALLBACKS",
+    )
+
+    # ==================== CodeBuddy Config ====================
+    codebuddy_base_url: NonEmptyString = Field(
+        default=CODEBUDDY_DEFAULT_BASE,
+        validation_alias="CODEBUDDY_BASE_URL",
     )
 
     # ==================== Per-Provider Proxy ====================

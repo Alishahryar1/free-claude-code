@@ -13,6 +13,8 @@ CODEX_MODEL_CATALOG_FILENAME = "codex-model-catalog.json"
 AUTH_DIRNAME = "auth"
 OPENAI_AUTH_FILENAME = "openai.json"
 OPENAI_AUTH_LOCK_FILENAME = "openai.lock"
+CODEBUDDY_AUTH_FILENAME = "codebuddy.json"
+CODEBUDDY_AUTH_LOCK_FILENAME = "codebuddy.lock"
 CONFIG_LOCK_FILENAME = "config.lock"
 FCC_TEMP_DIRNAME = "tmp"
 LAUNCHER_TEMP_DIRNAME = "launchers"
@@ -93,6 +95,18 @@ def openai_auth_lock_path() -> Path:
     """Return the cross-process lock path for ChatGPT credentials."""
 
     return config_dir_path() / AUTH_DIRNAME / OPENAI_AUTH_LOCK_FILENAME
+
+
+def codebuddy_auth_path() -> Path:
+    """Return FCC's private CodeBuddy credential file path."""
+
+    return config_dir_path() / AUTH_DIRNAME / CODEBUDDY_AUTH_FILENAME
+
+
+def codebuddy_auth_lock_path() -> Path:
+    """Return the cross-process lock path for CodeBuddy credentials."""
+
+    return config_dir_path() / AUTH_DIRNAME / CODEBUDDY_AUTH_LOCK_FILENAME
 
 
 def github_copilot_auth_path() -> Path:
