@@ -18,6 +18,7 @@ from tests.cli.test_launcher_workflow import HARNESSES, launch
         ("opencode", "1.18.18", True),
         ("opencode", "opencode version 1.19.0+build", True),
         ("opencode", "opencode v2.0.9", True),
+        ("opencode", "opencode version v2.0.9", False),
         ("opencode", "1.18.17", False),
         ("opencode", "1.18.18-beta.1", False),
         ("cline", "cline 3.0.55", True),
