@@ -86,6 +86,9 @@ LLM7_DEFAULT_BASE = "https://api.llm7.io/v1"
 LIGHTNING_DEFAULT_BASE = "https://lightning.ai/api/v1"
 # Experiential Labs OpenAI-compatible Chat Completions gateway.
 EXPERIENTIAL_DEFAULT_BASE = "https://api.experientiallabs.ai/v1"
+# Poe OpenAI-compatible Chat Completions API (https://creator.poe.com/docs/
+# external-applications/openai-compatible-api).
+POE_DEFAULT_BASE = "https://api.poe.com/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -667,6 +670,18 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=LIGHTNING_DEFAULT_BASE,
         base_url_attr="lightning_base_url",
         proxy_attr="lightning_proxy",
+    ),
+    "poe": ProviderDescriptor(
+        provider_id="poe",
+        display_name="Poe",
+        website_url="https://poe.com/",
+        logo_filename="poe.svg",
+        credential_env="POE_API_KEY",
+        credential_url="https://poe.com/api/keys",
+        credential_attr="poe_api_key",
+        default_base_url=POE_DEFAULT_BASE,
+        base_url_attr="poe_base_url",
+        proxy_attr="poe_proxy",
     ),
     "experiential": ProviderDescriptor(
         provider_id="experiential",

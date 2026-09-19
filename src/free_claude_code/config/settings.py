@@ -20,6 +20,7 @@ from .provider_catalog import (
     EXPERIENTIAL_DEFAULT_BASE,
     LIGHTNING_DEFAULT_BASE,
     NARAROUTE_DEFAULT_BASE,
+    POE_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
     TOKENROUTER_DEFAULT_BASE,
 )
@@ -208,6 +209,15 @@ class Settings(BaseModel):
     experiential_base_url: NonEmptyString = Field(
         default=EXPERIENTIAL_DEFAULT_BASE,
         validation_alias="EXPLABS_BASE_URL",
+    )
+
+    # ==================== Poe (OpenAI-compatible) ====================
+    poe_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="POE_API_KEY"
+    )
+    poe_base_url: NonEmptyString = Field(
+        default=POE_DEFAULT_BASE,
+        validation_alias="POE_BASE_URL",
     )
 
     # ==================== Fireworks AI Config ====================
@@ -509,6 +519,9 @@ class Settings(BaseModel):
     )
     experiential_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="EXPLABS_PROXY"
+    )
+    poe_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="POE_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"
