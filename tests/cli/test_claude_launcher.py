@@ -27,3 +27,4 @@ def test_claude_owns_permission_selection(
     assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8182"
     assert env["ANTHROPIC_AUTH_TOKEN"] == "launcher-test-token"
     assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+    assert env["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"

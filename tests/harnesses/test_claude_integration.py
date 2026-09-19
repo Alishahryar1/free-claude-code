@@ -142,6 +142,7 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
       "claudeCode.environmentVariables": [
         {"name": "KEEP", "value": "yes"},
         {"name": "ANTHROPIC_AUTH_TOKEN", "value": "old", "extra": "keep"},
+        {"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "value": "0"},
       ],
     }""",
         encoding="utf-8",
@@ -155,6 +156,7 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_AUTH_TOKEN",
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
         "DISABLE_AUTOUPDATER",
         "DISABLE_FEEDBACK_COMMAND",
@@ -166,6 +168,7 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
         "extra": "keep",
     }
     assert entries["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]["value"] == "190000"
+    assert entries["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"]["value"] == "1"
     assert "//" not in path.read_text().replace("http://", "")
     assert operate(path, False) == {"connected": False}
     assert json.loads(path.read_text()) == {
@@ -250,6 +253,11 @@ def test_manual_setup_only_requires_connection_fields(tmp_path, url):
         )
     )
     assert operate(path) == {"connected": True}
+    assert operate(path, True) == {"connected": True}
+    entries = {
+        entry["name"]: entry["value"] for entry in json.loads(path.read_text())[ENV]
+    }
+    assert entries["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
 
 
 @pytest.mark.parametrize(
