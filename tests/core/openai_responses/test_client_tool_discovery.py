@@ -11,7 +11,7 @@ from pydantic import TypeAdapter
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesConversionError,
@@ -19,6 +19,7 @@ from free_claude_code.core.openai_responses import (
     ResponsesToolPolicy,
     build_responses_chat_request,
 )
+from free_claude_code.core.openai_tool_names import encode_openai_chat_tool_names
 from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
     ResponsesChatStreamOutput,
@@ -214,6 +215,54 @@ def test_native_rejects_ambiguous_bare_names() -> None:
         )
 
 
+@pytest.mark.parametrize("execution", ["server", "client"])
+@pytest.mark.parametrize(
+    "policy",
+    [
+        ResponsesToolPolicy(flatten_namespaces=True),
+        ResponsesToolPolicy(
+            custom_tools_as_functions=True,
+            explicit_search_parameters=True,
+            text_only_web_search=True,
+            client_tool_search=True,
+            flatten_namespaces=True,
+        ),
+    ],
+    ids=["namespaces", "opencode"],
+)
+def test_native_search_preserves_added_arguments(
+    execution: str, policy: ResponsesToolPolicy
+) -> None:
+    adapter = ResponsesToolAdapter(
+        OpenAIResponsesRequest(
+            model="example",
+            input="Find tools",
+            tools=[{**SEARCH, "execution": execution}],
+        ),
+        policy,
+    )
+    events = adapter.event_adapter()
+    assert events is not None
+    payload: JsonObject = {
+        "type": "response.output_item.added",
+        "sequence_number": 0,
+        "output_index": 0,
+        "item": {
+            "type": "tool_search_call",
+            "id": "search_native",
+            "call_id": "search",
+            "execution": execution,
+            "status": "in_progress",
+            "arguments": {"query": "Find deployment tools"},
+        },
+    }
+    original = deepcopy(payload)
+    assert list(events.feed("response.output_item.added", payload)) == [
+        ("response.output_item.added", original)
+    ]
+    assert payload == original
+
+
 def test_native_search_buffers_partial_added_arguments() -> None:
     adapter = _native_adapter([SEARCH])
     events = adapter.event_adapter()
@@ -275,6 +324,468 @@ def test_native_does_not_publish_empty_completed_arguments_as_success() -> None:
                 "arguments": "",
             }
         )
+
+
+@pytest.mark.parametrize("terminal", ["failed", "incomplete"])
+@pytest.mark.parametrize("arguments", ['{"query":', None, {"query": "agent"}])
+def test_interrupted_discovery_preserves_terminal_failure(
+    terminal: str, arguments: JsonValue
+) -> None:
+    adapter = _native_adapter([SEARCH])
+    presenter = NativeResponsesPresenter(
+        public_model="example", tool_events=adapter.event_adapter()
+    )
+    item: JsonObject = {
+        "type": "function_call",
+        "id": "fc_search",
+        "call_id": "search",
+        "name": "fcc_tool_search",
+        "status": "incomplete",
+        "arguments": arguments,
+    }
+    sibling: JsonObject = {
+        "type": "message",
+        "id": "msg_saved",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "Saved work", "annotations": []}],
+    }
+    response = parse_sse_text(_responses_event_stream(""))[-1].data["response"]
+    response["usage"]["input_tokens_details"]["cache_write_tokens"] = 0
+    response.update(
+        status=terminal,
+        output=[sibling, item],
+        error={"code": "server_error", "message": "Original upstream timeout"}
+        if terminal == "failed"
+        else None,
+        incomplete_details={"reason": "max_output_tokens"}
+        if terminal == "incomplete"
+        else None,
+    )
+    original = deepcopy(response)
+    chunks = list(
+        presenter.feed(
+            "response.output_item.added",
+            {"output_index": 1, "item": {**item, "status": "in_progress"}},
+        )
+    )
+    chunks.extend(
+        presenter.feed(
+            "response.function_call_arguments.delta",
+            {"output_index": 1, "item_id": "fc_search", "delta": '"agent"}'},
+        )
+    )
+    chunks.extend(
+        presenter.feed("response.output_item.done", {"output_index": 1, "item": item})
+    )
+    chunks.extend(presenter.feed(f"response.{terminal}", {"response": response}))
+    events = parse_sse_text("".join(chunks))
+    assert [event.event for event in events] == [
+        "response.output_item.added",
+        "response.output_item.done",
+        f"response.{terminal}",
+    ]
+    assert events[0].data["item"]["arguments"] == {}
+    restored = {key: value for key, value in item.items() if key != "name"}
+    restored.update(type="tool_search_call", execution="client")
+    assert events[1].data["item"] == restored
+    actual = events[-1].data["response"]
+    assert actual["output"] == [sibling, restored]
+    assert actual["error"] == original["error"]
+    assert actual["incomplete_details"] == original["incomplete_details"]
+    assert response == original
+    parser: TypeAdapter[ResponseStreamEvent] = TypeAdapter(ResponseStreamEvent)
+    for event in events:
+        parser.validate_python(event.data)
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize(
+    ("status", "argument_fields", "implicit_execution"),
+    [
+        ("incomplete", {"arguments": '{"query":'}, None),
+        ("in_progress", {"arguments": {"query": "agent"}}, None),
+        ("failed", {"arguments": {}}, None),
+        ("incomplete", {}, "call"),
+        ("incomplete", {"arguments": None}, "output"),
+        ("incomplete", {"arguments": "{}"}, None),
+        ("incomplete", {"arguments": []}, None),
+    ],
+)
+def test_interrupted_discovery_is_excluded_before_tool_activation(
+    native: bool,
+    status: str,
+    argument_fields: JsonObject,
+    implicit_execution: str | None,
+) -> None:
+    call: JsonObject = {
+        "type": "tool_search_call",
+        "call_id": "search",
+        "execution": "client",
+        "status": status,
+        **argument_fields,
+    }
+    result: JsonObject = {
+        "type": "tool_search_output",
+        "call_id": "search",
+        "execution": "client",
+        "status": "completed",
+        # Discarded definitions must not reach validation or name registration.
+        "tools": [{"type": "namespace", "tools": "invalid"}]
+        if status == "failed"
+        else [AGENTS],
+    }
+    if implicit_execution == "call":
+        call.pop("execution")
+    elif implicit_execution == "output":
+        result["execution"] = None
+    user: JsonObject = {"role": "user", "content": "Find a tool"}
+    retry: JsonObject = {"role": "user", "content": "Continue"}
+    request = OpenAIResponsesRequest(
+        model="example", input=[user, call, result, retry], tools=[SEARCH]
+    )
+    original = request.model_dump()
+    if native:
+        prepared = ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(client_tool_search=True, flatten_namespaces=True),
+        ).request
+        assert prepared.input == [user, retry]
+        assert [tool["name"] for tool in prepared.tools or []] == ["fcc_tool_search"]
+    else:
+        body = build_responses_chat_request(
+            request, reasoning_replay=ReasoningReplayMode.DISABLED
+        ).body
+        assert body["messages"] == [user, retry]
+        assert [
+            tool["function"]["name"] for tool in cast(list[Any], body["tools"])
+        ] == ["fcc_tool_search"]
+    assert request.model_dump() == original
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_interrupted_discovery_keeps_completed_occurrences_of_reused_id(
+    native: bool,
+) -> None:
+    history: list[JsonValue] = [{"role": "user", "content": "Find tools"}]
+    for status, name in [
+        ("completed", "first"),
+        ("incomplete", "discarded"),
+        ("completed", "last"),
+    ]:
+        history.extend(
+            [
+                {
+                    "type": "tool_search_call",
+                    "execution": "client",
+                    "call_id": "reused",
+                    "status": status,
+                    "arguments": {"query": name},
+                },
+                {
+                    "type": "tool_search_output",
+                    "execution": "client",
+                    "call_id": "reused",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": name,
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                },
+            ]
+        )
+    request = OpenAIResponsesRequest(model="example", input=history, tools=[SEARCH])
+    original = request.model_dump()
+    if native:
+        prepared = ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(client_tool_search=True, flatten_namespaces=True),
+        ).request
+        items = cast(list[dict[str, Any]], prepared.input)
+        calls = [
+            item["arguments"] for item in items if item.get("type") == "function_call"
+        ]
+        results = [
+            json.loads(item["output"])
+            for item in items
+            if item.get("type") == "function_call_output"
+        ]
+        names = [tool["name"] for tool in prepared.tools or []]
+    else:
+        body = build_responses_chat_request(
+            request, reasoning_replay=ReasoningReplayMode.DISABLED
+        ).body
+        messages = cast(list[dict[str, Any]], body["messages"])
+        calls = [
+            call["function"]["arguments"]
+            for message in messages
+            for call in message.get("tool_calls", [])
+        ]
+        results = [
+            json.loads(message["content"])
+            for message in messages
+            if message["role"] == "tool"
+        ]
+        names = [tool["function"]["name"] for tool in cast(list[Any], body["tools"])]
+    assert [json.loads(arguments) for arguments in calls] == [
+        {"query": "first"},
+        {"query": "last"},
+    ]
+    assert [tools[0]["name"] for tools in results] == ["first", "last"]
+    assert set(names) == {"first", "last", "fcc_tool_search"}
+    assert request.model_dump() == original
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_interrupted_discovery_keeps_custom_output_source_and_later_discovery(
+    native: bool,
+) -> None:
+    custom_output: JsonValue = [
+        {"type": "input_image", "image_url": "data:image/png;base64,cG5n"}
+    ]
+    history: list[JsonValue] = [
+        {"role": "user", "content": "Edit and then find a tool"},
+        {
+            "type": "reasoning",
+            "content": [{"type": "reasoning_text", "text": "Saved reasoning"}],
+        },
+        {
+            "type": "custom_tool_call",
+            "call_id": "edit",
+            "name": "edit",
+            "input": "patch",
+        },
+        {
+            "type": "tool_search_call",
+            "call_id": "aborted",
+            "execution": "client",
+            "status": "incomplete",
+            "arguments": {},
+        },
+        {
+            "type": "tool_search_output",
+            "call_id": "aborted",
+            "execution": "client",
+            "tools": [],
+        },
+        {"type": "custom_tool_call_output", "call_id": "edit", "output": custom_output},
+        {
+            "type": "tool_search_call",
+            "call_id": "found",
+            "execution": "client",
+            "arguments": {"query": "lookup"},
+        },
+        {
+            "type": "tool_search_output",
+            "call_id": "found",
+            "execution": "client",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup files",
+                    "parameters": {"type": "object"},
+                }
+            ],
+        },
+        {
+            "type": "function_call",
+            "call_id": "lookup",
+            "name": "lookup files",
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "lookup", "output": "Found files"},
+    ]
+    request = OpenAIResponsesRequest(
+        model="example",
+        input=history,
+        tools=[SEARCH, {"type": "custom", "name": "edit", "format": {"type": "text"}}],
+    )
+    original = request.model_dump()
+    if native:
+        prepared = ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(
+                custom_tools_as_functions=True,
+                client_tool_search=True,
+                flatten_namespaces=True,
+            ),
+        ).request
+        items = cast(list[dict[str, Any]], prepared.input)
+        assert [item.get("call_id") for item in items] == [
+            None,
+            None,
+            "edit",
+            "edit",
+            "found",
+            "found",
+            "lookup",
+            "lookup",
+        ]
+        assert items[1] == history[1]
+        assert items[3]["output"] == custom_output
+        assert items[-1]["output"] == "Found files"
+        assert json.loads(items[5]["output"])[0]["name"] == "lookup files"
+    else:
+        translated = build_responses_chat_request(
+            request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
+        )
+        body = translated.body
+        encode_openai_chat_tool_names(body, translated.tool_names)
+        messages = cast(list[dict[str, Any]], body["messages"])
+        assert [
+            item.get("tool_call_id") for item in messages if item["role"] == "tool"
+        ] == ["edit", "found", "lookup"]
+        assert messages[1]["reasoning_content"] == "Saved reasoning"
+        assert json.loads(messages[2]["content"]) == custom_output
+        found = next(item for item in messages if item.get("tool_call_id") == "found")
+        wire_name = json.loads(found["content"])[0]["name"]
+        assert " " not in wire_name
+        assert any(
+            tool["function"]["name"] == wire_name
+            for tool in cast(list[Any], body["tools"])
+        )
+        assert messages[-2]["tool_calls"][0]["function"]["name"] == wire_name
+        assert messages[-1]["content"] == "Found files"
+    assert request.model_dump() == original
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_interrupted_discovery_cannot_leave_empty_provider_input(native: bool) -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        tools=[SEARCH],
+        input=[
+            {
+                "type": "tool_search_call",
+                "execution": "client",
+                "call_id": "search",
+                "status": "incomplete",
+                "arguments": {},
+            }
+        ],
+    )
+    with pytest.raises(ResponsesConversionError, match="usable input"):
+        if native:
+            ResponsesToolAdapter(request, ResponsesToolPolicy(client_tool_search=True))
+        else:
+            build_responses_chat_request(
+                request, reasoning_replay=ReasoningReplayMode.DISABLED
+            )
+
+
+@pytest.mark.parametrize("status", ["omitted", None, "completed"])
+@pytest.mark.parametrize("arguments", [None, '{"query":'])
+def test_completed_discovery_history_still_requires_object_arguments(
+    status: str | None, arguments: JsonValue
+) -> None:
+    call: JsonObject = {
+        "type": "tool_search_call",
+        "execution": "client",
+        "call_id": "search",
+        "arguments": arguments,
+    }
+    if status != "omitted":
+        call["status"] = status
+    with pytest.raises(ResponsesConversionError, match="arguments must be an object"):
+        ResponsesToolAdapter(
+            OpenAIResponsesRequest(model="example", input=[call], tools=[SEARCH]),
+            ResponsesToolPolicy(client_tool_search=True),
+        )
+
+
+@pytest.mark.parametrize(
+    ("enabled", "execution"), [(False, "client"), (True, "server"), (True, None)]
+)
+def test_interrupted_discovery_filter_respects_execution_policy(
+    enabled: bool, execution: str | None
+) -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        input=[
+            {
+                "type": "tool_search_call",
+                "execution": execution,
+                "call_id": "search",
+                "status": "incomplete",
+                "arguments": '{"query":',
+            },
+            {
+                "type": "tool_search_output",
+                "execution": execution,
+                "call_id": "search",
+                "tools": [],
+            },
+        ],
+    )
+    original = request.model_dump()
+    adapter = ResponsesToolAdapter(
+        request, ResponsesToolPolicy(client_tool_search=enabled)
+    )
+    assert adapter.request.model_dump() == original
+    assert request.model_dump() == original
+
+
+def test_interrupted_discovery_alone_does_not_enable_search() -> None:
+    user: JsonObject = {"role": "user", "content": "Continue"}
+    request = OpenAIResponsesRequest(
+        model="example",
+        input=[
+            user,
+            {
+                "type": "tool_search_call",
+                "execution": "client",
+                "call_id": "search",
+                "status": "incomplete",
+                "arguments": None,
+            },
+        ],
+    )
+    prepared = ResponsesToolAdapter(
+        request, ResponsesToolPolicy(client_tool_search=True)
+    ).request
+    assert prepared.input == [user]
+    assert prepared.tools is None
+
+
+def test_interrupted_discovery_snapshot_can_be_followed_by_completed_call() -> None:
+    request = OpenAIResponsesRequest(
+        model="example",
+        tools=[SEARCH],
+        input=[
+            {"role": "user", "content": "Find a tool"},
+            {
+                "type": "tool_search_call",
+                "execution": "client",
+                "call_id": "search",
+                "status": "in_progress",
+                "arguments": None,
+            },
+            {
+                "type": "tool_search_call",
+                "execution": "client",
+                "call_id": "search",
+                "status": "completed",
+                "arguments": {"query": "agent"},
+            },
+            {
+                "type": "tool_search_output",
+                "execution": "client",
+                "call_id": "search",
+                "tools": [AGENTS],
+            },
+        ],
+    )
+    prepared = ResponsesToolAdapter(
+        request, ResponsesToolPolicy(client_tool_search=True, flatten_namespaces=True)
+    ).request
+    items = cast(list[dict[str, Any]], prepared.input)
+    assert len(items) == 3
+    assert items[1]["status"] == "completed"
+    assert json.loads(items[1]["arguments"]) == {"query": "agent"}
+    assert json.loads(items[2]["output"])[0]["name"] == "agents__spawn_agent"
+    assert "agents__spawn_agent" in [tool["name"] for tool in prepared.tools or []]
 
 
 def test_search_lowering_does_not_shadow_a_real_function() -> None:

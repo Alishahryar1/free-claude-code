@@ -249,6 +249,19 @@ def test_parallel_tools_preserve_call_ids_namespace_and_emit_arguments_once() ->
     assert output[0]["name"] == "lookup" and output[0]["arguments"] == '{"q":"ok"}'
     assert output[1]["call_id"] == "call-b" and output[1]["input"] == "pwd"
     assert output[0]["id"] != output[0]["call_id"]
+    for index, prefix in ((0, "fc_"), (1, "ctc_")):
+        item_id = output[index]["id"]
+        assert isinstance(item_id, str) and item_id.startswith(prefix)
+        coordinates = [event for event in events if event.get("output_index") == index]
+        assert [
+            cast(JsonObject, event["item"])["id"]
+            for event in coordinates
+            if "item" in event
+        ] == [item_id, item_id]
+        assert [event["item_id"] for event in coordinates if "item_id" in event] == [
+            item_id,
+            item_id,
+        ]
     assert [
         event["delta"]
         for event in events

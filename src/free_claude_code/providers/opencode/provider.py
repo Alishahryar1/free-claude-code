@@ -146,6 +146,10 @@ class OpenCodeProvider(BaseProvider):
         self, request_headers: Mapping[str, str]
     ) -> Mapping[str, str]:
         headers = {name.lower(): value for name, value in request_headers.items()}
+        upstream_headers = {}
+        user_agent = headers.get("user-agent")
+        if user_agent and user_agent.isascii() and user_agent.strip():
+            upstream_headers["User-Agent"] = user_agent
         for name in (
             "x-opencode-session",
             "session-id",
@@ -159,8 +163,9 @@ class OpenCodeProvider(BaseProvider):
         ):
             session_id = headers.get(name)
             if session_id and session_id.strip():
-                return {"x-opencode-session": session_id}
-        return {}
+                upstream_headers["x-opencode-session"] = session_id
+                break
+        return upstream_headers
 
     def stream_messages(
         self,
