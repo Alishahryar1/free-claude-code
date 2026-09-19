@@ -249,6 +249,8 @@ def test_parallel_tools_preserve_call_ids_namespace_and_emit_arguments_once() ->
     assert output[0]["name"] == "lookup" and output[0]["arguments"] == '{"q":"ok"}'
     assert output[1]["call_id"] == "call-b" and output[1]["input"] == "pwd"
     assert output[0]["id"] != output[0]["call_id"]
+    assert output[0]["id"].startswith("fc_"), f"function_call item ID should start with fc_, got {output[0]['id']}"
+    assert output[1]["id"].startswith("ctc_"), f"custom_tool_call item ID should start with ctc_, got {output[1]['id']}"
     assert [
         event["delta"]
         for event in events
