@@ -1,8 +1,10 @@
 import json
+from copy import deepcopy
 
 import pytest
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.openai_responses.native import (
     NativeResponsesRelay,
@@ -100,6 +102,81 @@ def test_native_request_preserves_complete_multimodal_input_tree() -> None:
     )
 
     assert body["input"] == input_tree
+
+
+def test_native_request_recovers_mistyped_tool_ids_without_mutating_history() -> None:
+    custom: JsonObject = {
+        "type": "custom_tool_call",
+        "name": "edit",
+        "call_id": "call_edit",
+        "input": "patch",
+        "provider_extension": {"id": "fc_nested"},
+    }
+    function: JsonObject = {
+        "type": "function_call",
+        "name": "lookup",
+        "call_id": "call_lookup",
+        "arguments": "{}",
+    }
+    remaining: list[JsonValue] = [
+        {**custom, "id": "ctc_shared", "call_id": "call_other"},
+        {"type": "custom_tool_call_output", "call_id": "call_edit", "output": "done"},
+        {"type": "function_call_output", "call_id": "call_lookup", "output": "found"},
+        {"type": "item_reference", "id": "fc_shared"},
+    ]
+    request = OpenAIResponsesRequest(
+        model="example",
+        input=[
+            {**custom, "id": "fc_shared"},
+            {**function, "id": "ctc_lookup"},
+            *remaining,
+        ],
+        metadata={"id": "fc_metadata"},
+    )
+    original = deepcopy(request.model_dump())
+    body = build_native_responses_request(
+        request, model="example", reasoning=ReasoningPolicy()
+    )
+    assert body["input"] == [custom, function, *remaining]
+    assert body["metadata"] == {"id": "fc_metadata"}
+    assert request.model_dump() == original
+    assert (
+        build_native_responses_request(
+            OpenAIResponsesRequest.model_validate(body),
+            model="example",
+            reasoning=ReasoningPolicy(),
+        )
+        == body
+    )
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"type": "custom_tool_call", "id": "ctc_valid"},
+        {"type": "function_call", "id": "fc_valid"},
+        {"type": "custom_tool_call"},
+        {"type": "function_call"},
+        {"type": "custom_tool_call", "id": "opaque"},
+        {"type": "function_call", "id": "opaque"},
+        {"type": "custom_tool_call", "id": None},
+        {"type": "function_call", "id": 42},
+        {"type": "custom_tool_call_output", "id": "fc_result"},
+        {"type": "function_call_output", "id": "ctc_result"},
+        {"type": "message", "id": "ctc_message"},
+        {"type": "reasoning", "id": "fc_reasoning"},
+        {"type": "item_reference", "id": "fc_reference"},
+        {"type": "tool_search_call", "id": "fc_search"},
+    ],
+)
+def test_native_request_preserves_ids_outside_known_call_mismatches(
+    item: JsonObject,
+) -> None:
+    request = OpenAIResponsesRequest(model="example", input=[item])
+    body = build_native_responses_request(
+        request, model="example", reasoning=ReasoningPolicy()
+    )
+    assert body["input"] == [item]
 
 
 def test_native_request_preserves_reasoning_when_fcc_did_not_override_it() -> None:

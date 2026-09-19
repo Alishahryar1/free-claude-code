@@ -348,9 +348,26 @@ def test_responses_chat_output_preserves_custom_tool_free_form_input() -> None:
     final = _object_dict(events[-1][1]["response"])
     final_output = final["output"]
     assert isinstance(final_output, list)
+    item_id = _object_dict(final_output[0])["id"]
+    assert isinstance(item_id, str) and item_id.startswith("ctc_")
+    assert [kind for kind, _ in events] == [
+        "response.created",
+        "response.output_item.added",
+        "response.custom_tool_call_input.delta",
+        "response.custom_tool_call_input.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert [event["item_id"] for _, event in events if "item_id" in event] == [
+        item_id,
+        item_id,
+    ]
+    assert [
+        _object_dict(event["item"])["id"] for _, event in events if "item" in event
+    ] == [item_id, item_id]
     assert final_output == [
         {
-            "id": _object_dict(final_output[0])["id"],
+            "id": item_id,
             "type": "custom_tool_call",
             "status": "completed",
             "call_id": "call_patch",

@@ -12,6 +12,7 @@ import simplejson
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .errors import ResponsesConversionError
+from .ids import tool_item_id_for_kind
 from .models import OpenAIResponsesRequest
 from .tool_search import (
     ClientSearchHistory,
@@ -505,6 +506,8 @@ class ResponsesToolAdapter:
         }
         if identity.namespace is not None:
             item["namespace"] = identity.namespace
+        if isinstance(item_id := item.get("id"), str):
+            item["id"] = tool_item_id_for_kind(item_id, kind="custom")
         return item
 
     def restore_tools(
@@ -696,7 +699,7 @@ class ResponsesToolEventAdapter:
                 and original_item.get("type") == "function_call"
                 and item.get("type") == "custom_tool_call"
             ):
-                if isinstance(item_id := item.get("id"), str):
+                if isinstance(item_id := original_item.get("id"), str):
                     self._custom_items.add(item_id)
                 if event_type == "response.output_item.added":
                     item["input"] = ""
