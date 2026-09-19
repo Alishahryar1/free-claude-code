@@ -121,11 +121,17 @@ def code_control(tmp_path):
 
 
 @pytest.fixture
+def admin_client_files():
+    """Allow integration tests to seed client files before server startup."""
+
+
+@pytest.fixture
 def admin_base_url(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     code_control: CodeControl,
+    admin_client_files,
 ) -> Iterator[str]:
     """Serve one fully isolated Admin application on an OS-assigned port."""
 

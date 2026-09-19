@@ -8,11 +8,10 @@ import os
 import traceback
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from anyio import to_thread
 from loguru import logger
 
 from free_claude_code.application.code_sessions import CodeService
@@ -22,6 +21,7 @@ from free_claude_code.application.connected_accounts import (
     ConnectedAccountStatus,
 )
 from free_claude_code.application.errors import (
+    ApplicationError,
     ApplicationUnavailableError,
     InvalidRequestError,
 )
@@ -67,6 +67,24 @@ from .provider_manager import ProviderRuntimeManager
 from .retired_chat import remove_retired_chat_history
 
 RestartCallback = Callable[[], None]
+IntegrationAction = Literal["status", "connect", "disconnect", "refresh"]
+
+
+@dataclass
+class _IntegrationUpdate:
+    state: Literal["starting", "ready", "failed"] = "ready"
+    changed: bool = False
+    message: str | None = None
+    task: asyncio.Task[None] | None = None
+
+    def snapshot(self) -> JsonObject:
+        return {"state": self.state, "changed": self.changed, "message": self.message}
+
+    def complete(self, changed: bool = False) -> None:
+        self.state = "ready"
+        self.changed = changed
+        self.message = None
+
 
 _PROVIDER_CHECK_FAILURE_MESSAGE = (
     "Could not refresh this provider's models. Verify its configuration and access."
@@ -189,6 +207,8 @@ class ApplicationRuntime:
         self._connected_accounts_closed = False
         self._lifecycle_lock = asyncio.Lock()
         self._startup_tasks: list[asyncio.Task[None]] = []
+        self._claude_update = _IntegrationUpdate()
+        self._codex_update = _IntegrationUpdate()
         self._http_ready = asyncio.Event()
         self._messaging_state = (
             "disabled" if self.settings.messaging_platform == "none" else "starting"
@@ -222,6 +242,8 @@ class ApplicationRuntime:
                         "Application runtime is shutting down."
                     )
                 self.provider_manager.start_model_list_refresh()
+                await self.refresh_claude_vscode()
+                await self.refresh_codex_integration()
                 self._startup_tasks.append(
                     asyncio.create_task(
                         run_sync_owned(remove_retired_chat_history),
@@ -395,34 +417,94 @@ class ApplicationRuntime:
         return await self._configuration.admin_values()
 
     async def claude_vscode_status(self) -> JsonObject:
-        return await self._claude_vscode(None)
+        return await self._claude_vscode("status")
 
     async def connect_claude_vscode(self) -> JsonObject:
-        return await self._claude_vscode(True)
+        return await self._claude_vscode("connect")
 
     async def disconnect_claude_vscode(self) -> JsonObject:
-        return await self._claude_vscode(False)
+        return await self._claude_vscode("disconnect")
 
-    async def _claude_vscode(self, connected: bool | None) -> JsonObject:
+    def _check_integration_available(self) -> None:
+        if self._draining or self._pending_fields:
+            raise ApplicationUnavailableError(
+                "Wait for FCC to restart before changing the integration."
+            )
+
+    def _start_integration_update(
+        self,
+        update: _IntegrationUpdate,
+        operation: Callable[[], Awaitable[JsonObject]],
+    ) -> JsonObject:
+        self._check_integration_available()
+        if update.task is None or update.task.done():
+            update.state, update.changed, update.message = "starting", False, None
+
+            async def run() -> None:
+                try:
+                    result = await operation()
+                    update.complete(result.get("changed") is True)
+                except ApplicationError as exc:
+                    update.state, update.message = "failed", exc.message
+                except Exception as exc:
+                    update.state = "failed"
+                    update.message = (
+                        "Could not update integration settings. Retry shortly."
+                    )
+                    logger.warning(
+                        "Integration update failed: exc_type={}", type(exc).__name__
+                    )
+
+            update.task = asyncio.create_task(run(), name="fcc-integration-update")
+            self._startup_tasks.append(update.task)
+            update.task.add_done_callback(self._startup_tasks.remove)
+        return {"update": update.snapshot()}
+
+    async def refresh_claude_vscode(self) -> JsonObject:
+        return self._start_integration_update(
+            self._claude_update, partial(self._claude_vscode, "refresh")
+        )
+
+    async def refresh_codex_integration(self) -> JsonObject:
+        return self._start_integration_update(
+            self._codex_update, partial(self._codex_integration, "refresh")
+        )
+
+    async def _claude_vscode(self, action: IntegrationAction) -> JsonObject:
         async with self._config_lock:
-            if self._draining or self._pending_fields:
-                raise ApplicationUnavailableError(
-                    "Wait for FCC to restart before changing the integration."
-                )
+            self._check_integration_available()
             settings = self.settings
-            try:
-                return await _await_owned_task(
-                    asyncio.create_task(
-                        to_thread.run_sync(
-                            claude_integration.configure,
-                            claude_integration.settings_path(),
-                            claude_integration.claude_state_path(),
+
+            def operate() -> JsonObject:
+                path = claude_integration.settings_path()
+                state_path = claude_integration.claude_state_path()
+                if action == "status" and self._claude_update.state != "ready":
+                    return {
+                        "connected": None,
+                        "paths": {
+                            "vscode_settings": str(path.resolve()),
+                            "claude_state": str(state_path.resolve()),
+                        },
+                    }
+                if action == "refresh":
+                    return {
+                        "changed": claude_integration.refresh_connected(
+                            path,
+                            state_path,
                             local_proxy_root_url(settings),
                             settings.proxy_auth_token,
-                            connected,
                         )
-                    )
+                    }
+                return claude_integration.configure(
+                    path,
+                    state_path,
+                    local_proxy_root_url(settings),
+                    settings.proxy_auth_token,
+                    None if action == "status" else action == "connect",
                 )
+
+            try:
+                result = await run_sync_owned(operate)
             except ValueError, UnicodeError:
                 raise InvalidRequestError(
                     "Could not read Claude integration settings. Check the JSON in VS Code settings.json and .claude.json."
@@ -431,55 +513,84 @@ class ApplicationRuntime:
                 raise ApplicationUnavailableError(
                     "Could not access VS Code settings.json or .claude.json. Check file permissions and try again."
                 ) from None
+            if action in {"connect", "disconnect"}:
+                self._claude_update.complete()
+            if action == "status":
+                result["update"] = self._claude_update.snapshot()
+            return result
 
     async def codex_integration_status(self) -> JsonObject:
-        return await self._codex_integration(None)
+        return await self._codex_integration("status")
 
     async def connect_codex(self) -> JsonObject:
-        return await self._codex_integration(True)
+        return await self._codex_integration("connect")
 
     async def disconnect_codex(self) -> JsonObject:
-        return await self._codex_integration(False)
+        return await self._codex_integration("disconnect")
 
-    async def _codex_integration(self, connected: bool | None) -> JsonObject:
-        wait = InitializationWait()
-        while True:
-            generation_id = (
-                await self.provider_manager.wait_for_catalog_file(wait)
-                if connected is True
-                else None
-            )
-            async with self._config_lock:
-                if connected is True and (
-                    generation_id != self.provider_manager.current_generation_id
-                    or self.provider_manager.catalog_status()["catalog"] != "ready"
-                ):
-                    continue
-                if self._draining or self._pending_fields:
-                    raise ApplicationUnavailableError(
-                        "Wait for FCC to restart before changing the integration."
-                    )
-                settings = self.settings
-                try:
-                    return await _await_owned_task(
-                        asyncio.create_task(
-                            to_thread.run_sync(
-                                codex_integration.configure,
-                                codex_integration.config_path(),
-                                codex_model_catalog_path(),
-                                local_proxy_root_url(settings),
-                                connected,
-                            )
+    async def _codex_integration(self, action: IntegrationAction) -> JsonObject:
+        wait = InitializationWait(None) if action == "refresh" else InitializationWait()
+        needs_catalog = action in {"connect", "refresh"}
+        try:
+            if action == "refresh":
+                async with self._config_lock:
+                    self._check_integration_available()
+                    url = local_proxy_root_url(self.settings)
+                    if not await run_sync_owned(
+                        lambda: codex_integration.recognizes_connection(
+                            codex_integration.config_path(), url
                         )
-                    )
-                except ValueError, UnicodeError:
-                    raise InvalidRequestError(
-                        "Could not read Codex settings. Check the TOML in config.toml."
-                    ) from None
-                except OSError:
-                    raise ApplicationUnavailableError(
-                        "Could not access Codex config.toml. Check file permissions and try again."
-                    ) from None
+                    ):
+                        return {"changed": False}
+            while True:
+                generation_id = (
+                    await self.provider_manager.wait_for_catalog_file(wait)
+                    if needs_catalog
+                    else None
+                )
+                async with self._config_lock:
+                    self._check_integration_available()
+                    if needs_catalog and (
+                        generation_id != self.provider_manager.current_generation_id
+                        or self.provider_manager.catalog_status()["catalog"] != "ready"
+                    ):
+                        continue
+                    url = local_proxy_root_url(self.settings)
+
+                    def operate(url: str = url) -> JsonObject:
+                        path = codex_integration.config_path()
+                        if action == "status" and self._codex_update.state != "ready":
+                            return {
+                                "connected": None,
+                                "paths": {"codex_config": str(path.resolve())},
+                            }
+                        if action == "refresh":
+                            return {
+                                "changed": codex_integration.refresh_connected(
+                                    path, codex_model_catalog_path(), url
+                                )
+                            }
+                        return codex_integration.configure(
+                            path,
+                            codex_model_catalog_path(),
+                            url,
+                            None if action == "status" else action == "connect",
+                        )
+
+                    result = await run_sync_owned(operate)
+                    if action in {"connect", "disconnect"}:
+                        self._codex_update.complete()
+                    if action == "status":
+                        result["update"] = self._codex_update.snapshot()
+                    return result
+        except ValueError, UnicodeError:
+            raise InvalidRequestError(
+                "Could not read Codex settings. Check the TOML in config.toml."
+            ) from None
+        except OSError:
+            raise ApplicationUnavailableError(
+                "Could not access Codex config.toml. Check file permissions and try again."
+            ) from None
 
     async def admin_status(self) -> JsonObject:
         values = await self.admin_values()
@@ -495,6 +606,10 @@ class ApplicationRuntime:
                 "messaging": {
                     "state": self._messaging_state,
                     "message": self._messaging_error,
+                },
+                "integrations": {
+                    "claude-vscode": self._claude_update.snapshot(),
+                    "codex": self._codex_update.snapshot(),
                 },
             },
             "host": settings.host,

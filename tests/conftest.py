@@ -9,6 +9,7 @@ import pytest
 
 from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.loader import clear_settings_cache
+from free_claude_code.harnesses import claude_integration, codex_integration
 from tests.providers.support import (
     immediate_admission,
     make_provider_config,
@@ -30,6 +31,15 @@ def _isolate_managed_config(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "config_dir_path", lambda: config_dir)
     monkeypatch.setattr(env_migrations, "legacy_env_paths", lambda: ())
     monkeypatch.setattr(env_migrations, "verified_checkout_env_path", lambda: None)
+    monkeypatch.setattr(
+        claude_integration, "settings_path", lambda: tmp_path / "vscode/settings.json"
+    )
+    monkeypatch.setattr(
+        claude_integration, "claude_state_path", lambda: tmp_path / ".claude.json"
+    )
+    monkeypatch.setattr(
+        codex_integration, "config_path", lambda: tmp_path / ".codex/config.toml"
+    )
     clear_settings_cache()
     yield
     clear_settings_cache()

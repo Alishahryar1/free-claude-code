@@ -138,6 +138,7 @@ function renderStartup() {
   state.config.provider_status.forEach((provider) => {
     renderProviderCheckResult(provider.provider_id);
   });
+  renderClaudeIntegration();
   renderCodexIntegration();
 }
 
@@ -162,12 +163,14 @@ async function refreshStartup() {
     )) return;
     state.startup = result;
     renderStartup();
+    refreshIntegrationUpdates(previous?.startup?.integrations, current.integrations);
     const changed = !previous || previous.instance_id !== result.instance_id ||
       JSON.stringify(previous.startup) !== JSON.stringify(current);
     if (changed) void hydrateModelOptions();
     if (changed || state.codeCatalogRetry) state.codeCatalogRetry = await window.CodeSessions?.refresh(result) === false;
     pending = state.codeCatalogRetry || current.catalog === "starting" || current.catalog_file === "starting" ||
       current.code?.state === "starting" || current.messaging?.state === "starting" ||
+      Object.values(current.integrations || {}).some((update) => update.state === "starting") ||
       Object.values(current.providers || {}).includes("starting");
   } catch (error) {
     if (error.name !== "AbortError") pending = true;
@@ -1474,7 +1477,7 @@ try {
 }
 
 const claudeIntegrationDialog = byId("claudeIntegrationDialog");
-const claudeIntegration = { connected: null, busy: false, paths: null };
+const claudeIntegration = { connected: null, busy: false, paths: null, update: null };
 const claudeIntegrationPath = "/admin/api/integrations/claude-vscode";
 
 function integrationMessage(id, message, error = false) {
@@ -1484,8 +1487,27 @@ function integrationMessage(id, message, error = false) {
   element.classList.toggle("error", error);
 }
 
+function integrationUpdating(integration, id) {
+  return integration.update?.state === "starting" ||
+    state.startup?.startup?.integrations?.[id]?.state === "starting";
+}
+
+function refreshIntegrationUpdates(previous, current) {
+  if (state.activeView !== "integrations") return;
+  for (const [id, integration, refresh] of [
+    ["claude-vscode", claudeIntegration, refreshClaudeIntegration],
+    ["codex", codexIntegration, refreshCodexIntegration],
+  ]) {
+    const phase = current?.[id]?.state;
+    if (phase && phase !== "starting" && (
+      previous?.[id]?.state === "starting" || integration.update?.state === "starting"
+    )) void refresh();
+  }
+}
+
 function renderClaudeIntegration() {
-  const { connected, busy, paths } = claudeIntegration;
+  const { connected, paths } = claudeIntegration;
+  const busy = claudeIntegration.busy || integrationUpdating(claudeIntegration, "claude-vscode");
   const action = connected ? "Disconnect" : "Connect";
   byId("openClaudeIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
   byId("openClaudeIntegration").disabled = busy;
@@ -1511,34 +1533,40 @@ function renderClaudeIntegration() {
   }
 }
 
-async function refreshClaudeIntegration() {
+async function refreshClaudeIntegration(retry = false) {
   if (claudeIntegration.busy) return;
   claudeIntegration.busy = true;
   renderClaudeIntegration();
   integrationMessage("claudeIntegrationMessage", "");
   try {
+    if (retry) await api(`${claudeIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(claudeIntegrationPath);
     claudeIntegration.connected = result.connected;
     claudeIntegration.paths = result.paths;
+    claudeIntegration.update = result.update;
+    if (result.update?.state === "failed") integrationMessage("claudeIntegrationMessage", result.update.message, true);
+    else if (result.update?.changed) integrationMessage("claudeIntegrationMessage", "Settings updated. Reload VS Code.");
   } catch (error) {
     claudeIntegration.connected = null;
+    claudeIntegration.update = null;
     integrationMessage("claudeIntegrationMessage", error.message, true);
   } finally {
     claudeIntegration.busy = false;
     renderClaudeIntegration();
+    if (claudeIntegration.update?.state === "starting") void refreshStartup();
   }
 }
 
 byId("openClaudeIntegration").addEventListener("click", () => {
   if (claudeIntegration.connected === null) {
-    refreshClaudeIntegration();
+    refreshClaudeIntegration(claudeIntegration.update?.state === "failed");
     return;
   }
   integrationMessage("claudeIntegrationDialogMessage", "");
   claudeIntegrationDialog.showModal();
 });
 byId("confirmClaudeIntegration").addEventListener("click", async () => {
-  if (claudeIntegration.busy || claudeIntegration.connected === null) return;
+  if (byId("confirmClaudeIntegration").disabled) return;
   const disconnect = claudeIntegration.connected;
   claudeIntegration.busy = true;
   renderClaudeIntegration();
@@ -1547,6 +1575,7 @@ byId("confirmClaudeIntegration").addEventListener("click", async () => {
   try {
     const result = await api(`${claudeIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
     claudeIntegration.connected = result.connected;
+    claudeIntegration.update = null;
     claudeIntegrationDialog.close();
     integrationMessage("claudeIntegrationMessage", disconnect
       ? "Settings removed. Reload VS Code to disconnect."
@@ -1569,14 +1598,14 @@ claudeIntegrationDialog.addEventListener("click", (event) => {
 });
 
 const codexIntegrationDialog = byId("codexIntegrationDialog");
-const codexIntegration = { connected: null, busy: false, paths: null };
+const codexIntegration = { connected: null, busy: false, paths: null, update: null };
 const codexIntegrationPath = "/admin/api/integrations/codex";
 
 function renderCodexIntegration() {
   const { connected, paths } = codexIntegration;
   const initializing = connected === false && state.startup?.startup?.catalog_file === "starting";
   const unavailable = connected === false && state.startup?.startup?.catalog_file === "failed";
-  const busy = codexIntegration.busy || initializing;
+  const busy = codexIntegration.busy || initializing || integrationUpdating(codexIntegration, "codex");
   const catalogError = "Could not prepare the Codex model catalog. Refresh models to retry.";
   if (unavailable) integrationMessage("codexIntegrationMessage", catalogError, true);
   else if (byId("codexIntegrationMessage").textContent === catalogError) integrationMessage("codexIntegrationMessage", "");
@@ -1605,34 +1634,40 @@ function renderCodexIntegration() {
   }
 }
 
-async function refreshCodexIntegration() {
+async function refreshCodexIntegration(retry = false) {
   if (codexIntegration.busy) return;
   codexIntegration.busy = true;
   renderCodexIntegration();
   integrationMessage("codexIntegrationMessage", "");
   try {
+    if (retry) await api(`${codexIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(codexIntegrationPath);
     codexIntegration.connected = result.connected;
     codexIntegration.paths = result.paths;
+    codexIntegration.update = result.update;
+    if (result.update?.state === "failed") integrationMessage("codexIntegrationMessage", result.update.message, true);
+    else if (result.update?.changed) integrationMessage("codexIntegrationMessage", "Settings updated. Restart Codex.");
   } catch (error) {
     codexIntegration.connected = null;
+    codexIntegration.update = null;
     integrationMessage("codexIntegrationMessage", error.message, true);
   } finally {
     codexIntegration.busy = false;
     renderCodexIntegration();
+    if (codexIntegration.update?.state === "starting") void refreshStartup();
   }
 }
 
 byId("openCodexIntegration").addEventListener("click", () => {
   if (codexIntegration.connected === null) {
-    refreshCodexIntegration();
+    refreshCodexIntegration(codexIntegration.update?.state === "failed");
     return;
   }
   integrationMessage("codexIntegrationDialogMessage", "");
   codexIntegrationDialog.showModal();
 });
 byId("confirmCodexIntegration").addEventListener("click", async () => {
-  if (codexIntegration.busy || codexIntegration.connected === null) return;
+  if (byId("confirmCodexIntegration").disabled) return;
   const disconnect = codexIntegration.connected;
   codexIntegration.busy = true;
   renderCodexIntegration();
@@ -1642,6 +1677,7 @@ byId("confirmCodexIntegration").addEventListener("click", async () => {
     const result = await api(`${codexIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
     codexIntegration.connected = result.connected;
     codexIntegration.paths = result.paths;
+    codexIntegration.update = null;
     codexIntegrationDialog.close();
     integrationMessage("codexIntegrationMessage", disconnect
       ? "Settings removed. Restart Codex to disconnect."

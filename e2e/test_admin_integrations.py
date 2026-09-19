@@ -397,3 +397,116 @@ def test_codex_save_pending_and_failure_stay_in_modal(page, admin_base_url, tmp_
         "Could not save settings."
     )
     assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
+@pytest.mark.parametrize(
+    "integration,prefix", [("claude-vscode", "Claude"), ("codex", "Codex")]
+)
+def test_background_update_spinner_failure_retry_and_completion(
+    page, admin_base_url, integration, prefix
+):
+    progress = {"state": "starting", "changed": False, "message": None}
+    retries = []
+
+    def startup(route):
+        response = route.fetch()
+        payload = response.json()
+        payload["startup"]["integrations"][integration] = dict(progress)
+        route.fulfill(response=response, json=payload)
+
+    def status(route):
+        route.fulfill(
+            json={
+                "connected": True if progress["state"] == "ready" else None,
+                "paths": None,
+                "update": dict(progress),
+            }
+        )
+
+    def retry(route):
+        retries.append(route.request.method)
+        progress.update(state="starting", changed=False, message=None)
+        route.fulfill(json={"update": dict(progress)})
+
+    page.route("**/admin/api/status", startup)
+    page.route(f"**/admin/api/integrations/{integration}", status)
+    page.route(f"**/admin/api/integrations/{integration}/refresh", retry)
+    page.goto(f"{admin_base_url}/admin/integrations")
+    button = page.locator(f"#open{prefix}Integration")
+    confirm = page.locator(f"#confirm{prefix}Integration")
+    message = page.locator(f"#{prefix.lower()}IntegrationMessage")
+    expect(button).to_be_disabled()
+    expect(confirm).to_be_disabled()
+    expect(button).to_have_attribute("aria-busy", "true")
+    progress.update(
+        state="failed", message="Could not update settings. Check permissions."
+    )
+    expect(button).to_have_text("Retry")
+    expect(button).to_be_enabled()
+    expect(message).to_have_text(progress["message"])
+    button.click()
+    expect(button).to_be_disabled()
+    assert retries == ["POST"]
+    progress.update(state="ready", changed=True)
+    expect(button).to_have_text("Disconnect")
+    expect(button).to_be_enabled()
+    expect(button).to_have_css("color", "rgb(239, 68, 68)")
+    expect(message).to_have_text(
+        "Settings updated. Reload VS Code."
+        if prefix == "Claude"
+        else "Settings updated. Restart Codex."
+    )
+
+
+@pytest.fixture
+def admin_client_files(request, tmp_path):
+    if not getattr(request, "param", False):
+        return None
+    path = tmp_path / "vscode/settings.json"
+    path.parent.mkdir()
+    path.write_text(
+        json.dumps(
+            {
+                "editor.fontSize": 15,
+                "claudeCode.disableLoginPrompt": True,
+                "claudeCode.environmentVariables": [
+                    {"name": "ANTHROPIC_BASE_URL", "value": "http://localhost:8082"},
+                    {"name": "ANTHROPIC_AUTH_TOKEN", "value": "e2e-proxy-token"},
+                    {
+                        "name": "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+                        "value": "1",
+                    },
+                ],
+            }
+        )
+    )
+    return path
+
+
+@pytest.mark.parametrize("admin_client_files", [True], indirect=True)
+def test_startup_updates_before_opening_integrations(
+    admin_client_files, admin_base_url, page, tmp_path
+):
+    page.goto(f"{admin_base_url}/admin/integrations")
+    button = page.locator("#openClaudeIntegration")
+    expect(button).to_have_text("Disconnect")
+    expect(page.locator("#claudeIntegrationMessage")).to_have_text(
+        "Settings updated. Reload VS Code."
+    )
+    saved = json.loads(admin_client_files.read_text())
+    assert saved["editor.fontSize"] == 15
+    assert any(
+        entry == {"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "value": "1"}
+        for entry in saved["claudeCode.environmentVariables"]
+    )
+    assert (
+        json.loads((tmp_path / ".claude.json").read_text())["hasCompletedOnboarding"]
+        is True
+    )
+    page.screenshot(path=str(tmp_path / "integration-updated.png"), full_page=True)
+    button.click()
+    page.locator("#confirmClaudeIntegration").click()
+    expect(button).to_have_text("Connect")
+    page.reload()
+    expect(button).to_have_text("Connect")
+    expect(page.locator("#claudeIntegrationMessage")).to_be_hidden()
