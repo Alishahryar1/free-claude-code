@@ -33,6 +33,7 @@ from .reasoning import (
     ReasoningEncoder,
     ReasoningObject,
     ThinkingObjectReasoning,
+    XKiroReasoning,
 )
 from .request_policy import OpenAIChatPostprocessor, OpenAIChatRequestPolicy
 
@@ -662,6 +663,25 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         model_listing=OpenAIModelListing(
             thinking_boolean_path=("reasoning",),
+        ),
+    ),
+    "xkiro": OpenAIChatProfile(
+        _policy(
+            "XKIRO",
+            ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        XKiroReasoning(),
+        model_listing=OpenAIModelListing(
+            thinking_boolean_path=("capabilities", "reasoning"),
+            fixed_input_modalities=_TEXT_INPUT_MODALITIES,
+            input_modality_boolean_paths=(
+                (ModelInputModality.IMAGE, ("capabilities", "vision")),
+            ),
+            context_window_tokens_path=("context_length",),
+            max_output_tokens_path=("max_output_tokens",),
         ),
     ),
     "poolside": OpenAIChatProfile(

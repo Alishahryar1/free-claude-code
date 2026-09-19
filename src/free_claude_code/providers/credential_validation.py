@@ -75,6 +75,7 @@ _MODELS = _list_field("data")
 # https://platform.kimi.ai/docs/api/errors
 # https://router.bynara.id/id/docs
 # https://platform.experientiallabs.ai/docs/authentication
+# https://docs.xkiro.com/api/usage/
 _PROBES = (
     _Probe(
         "open_router",
@@ -145,6 +146,14 @@ _PROBES = (
     ),
     _Probe("nararoute", "/models", _MODELS, _AUTH_401),
     _Probe("experiential", "/models", _MODELS, _AUTH_401),
+    _Probe(
+        "xkiro",
+        "/usage",
+        lambda p: (
+            _field(p, "object") == "usage" and isinstance(_field(p, "windows"), list)
+        ),
+        _AUTH_401,
+    ),
     # Positive evidence only: these errors can also reflect permissions, budget,
     # token type, or an undocumented response contract. Never reject on failure.
     # https://docs.deepinfra.com/api-reference/account/me

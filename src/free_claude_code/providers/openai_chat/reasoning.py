@@ -69,6 +69,34 @@ class NamedEffortReasoning:
 
 
 @dataclass(frozen=True, slots=True)
+class XKiroReasoning:
+    """Preserve xKiro intent; let the gateway translate budgets per model."""
+
+    off_field = ("reasoning_effort",)
+
+    def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
+        if policy.control is ReasoningControl.OFF:
+            body["reasoning_effort"] = "none"
+            return
+
+        # As with the other budget-capable encoders, an explicit budget wins
+        # over a named effort. Never substitute FCC's synthetic effort budgets.
+        if policy.budget_tokens is not None:
+            _extra_body(body)["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": policy.budget_tokens,
+            }
+            return
+
+        if policy.effort is not None:
+            body["reasoning_effort"] = policy.effort.value
+            return
+
+        if policy.control is ReasoningControl.ON:
+            _extra_body(body)["thinking"] = {"type": "adaptive"}
+
+
+@dataclass(frozen=True, slots=True)
 class ReasoningObject:
     """Encode gateways that accept a top-level ``reasoning`` object."""
 
