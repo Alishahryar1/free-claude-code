@@ -19,10 +19,15 @@ def is_client_search(value: Mapping[str, JsonValue]) -> bool:
     }
 
 
+def is_unfinished_search_call(value: Mapping[str, JsonValue]) -> bool:
+    return value.get("status") in ("in_progress", "incomplete", "failed")
+
+
 @dataclass(frozen=True, slots=True)
 class ClientSearchHistory:
     client_items: frozenset[int]
     output_tools: dict[int, list[JsonObject]]
+    omitted_items: frozenset[int] = frozenset()
 
 
 def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
@@ -51,12 +56,24 @@ def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
         executions[call_id] = cast(str, execution)
     client_items: set[int] = set()
     outputs: dict[int, list[JsonObject]] = {}
+    omitted_items: set[int] = set()
+    latest_calls: dict[str, int] = {}
     for index, item in searches.items():
         execution = item.get("execution")
         call_id = item.get("call_id")
         if execution is None and isinstance(call_id, str) and call_id:
             execution = executions.get(call_id)
         if execution != "client":
+            continue
+        if item.get("type") == "tool_search_call":
+            if isinstance(call_id, str) and call_id:
+                latest_calls[call_id] = index
+            if is_unfinished_search_call(item):
+                omitted_items.add(index)
+                continue
+        elif isinstance(call_id, str) and latest_calls.get(call_id) in omitted_items:
+            # Bind each result to its preceding occurrence, not every reused ID.
+            omitted_items.add(index)
             continue
         client_items.add(index)
         if item.get("type") == "tool_search_output":
@@ -72,7 +89,9 @@ def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
                     [],
                 ]
             )
-    return ClientSearchHistory(frozenset(client_items), outputs)
+    return ClientSearchHistory(
+        frozenset(client_items), outputs, frozenset(omitted_items)
+    )
 
 
 def active_client_tools(
