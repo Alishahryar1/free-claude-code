@@ -18,7 +18,12 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .errors import ResponsesConversionError, openai_error_from_failure
-from .ids import new_message_item_id, new_reasoning_item_id, new_response_id
+from .ids import (
+    new_message_item_id,
+    new_reasoning_item_id,
+    new_response_id,
+    tool_item_id_prefix,
+)
 from .items import message_item, reasoning_item
 from .models import OpenAIResponsesRequest
 from .streaming.blocks import ReasoningBlockState, TextBlockState, ToolBlockState
@@ -296,7 +301,7 @@ class AnthropicToResponsesStream:
         tool = ToolBlockState(
             index,
             slot,
-            f"fc_{uuid.uuid4().hex}",
+            f"{tool_item_id_prefix(identity.kind)}{uuid.uuid4().hex}",
             call_id,
             identity.kind,
             identity.name,
