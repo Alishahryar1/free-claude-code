@@ -31,6 +31,80 @@ def _presenter(adapter: ResponsesToolAdapter) -> NativeResponsesPresenter:
 
 
 @pytest.mark.parametrize("custom", [False, True])
+@pytest.mark.parametrize("discovered", [False, True])
+def test_flattening_preserves_namespace_instructions_and_restores_descriptions(
+    custom: bool, discovered: bool
+) -> None:
+    definition: JsonObject = {
+        "type": "custom" if custom else "function",
+        "name": "read",
+        "description": "Read one file.",
+        **(
+            {"format": {"type": "text"}}
+            if custom
+            else {"parameters": {"type": "object"}}
+        ),
+    }
+    namespace: JsonObject = {
+        "type": "namespace",
+        "name": "files",
+        "description": "Only inspect tracked files.",
+        "tools": [definition],
+    }
+    request = OpenAIResponsesRequest(
+        model="example", input="Read a file", tools=[namespace]
+    )
+    if discovered:
+        request.tools = []
+        request.input = [
+            {"role": "user", "content": "Find file tools"},
+            {
+                "type": "tool_search_call",
+                "call_id": "search",
+                "execution": "client",
+                "arguments": {},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": "search",
+                "tools": [namespace],
+            },
+        ]
+    original = request.model_dump()
+    adapter = ResponsesToolAdapter(
+        request,
+        ResponsesToolPolicy(
+            custom_tools_as_functions=True,
+            flatten_namespaces=True,
+            client_tool_search=True,
+        ),
+    )
+    wire_definition = next(
+        tool
+        for tool in adapter.request.tools or []
+        if tool.get("name") == "files__read"
+    )
+    expected = "Namespace files: Only inspect tracked files.\n\nRead one file."
+    if custom:
+        expected += "\n\nCustom tool input format: unconstrained text."
+    assert wire_definition["description"] == expected
+    assert adapter.restore_tools([wire_definition]) == [namespace]
+    chat = build_responses_chat_request(
+        request, reasoning_replay=ReasoningReplayMode.DISABLED
+    )
+    functions = cast(list[dict[str, Any]], chat.body["tools"])
+    assert (
+        next(
+            tool["function"]
+            for tool in functions
+            if tool["function"]["name"] == "files__read"
+        )["description"]
+        == expected
+    )
+    assert request.model_dump() == original
+
+
+@pytest.mark.parametrize("custom", [False, True])
 @pytest.mark.parametrize("wrapped", [False, True])
 def test_hosted_discovery_restores_definitions_and_replays_flat_names(
     custom: bool, wrapped: bool

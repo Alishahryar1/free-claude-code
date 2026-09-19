@@ -275,6 +275,71 @@ def _stream(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("discovered", [False, True])
+async def test_responses_namespace_instructions_reach_messages_http(
+    discovered: bool,
+) -> None:
+    bodies: list[JsonObject] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_sse(*_events())
+        )
+
+    namespace: JsonObject = {
+        "type": "namespace",
+        "name": "files",
+        "description": "Only inspect tracked files.",
+        "tools": [
+            {
+                "type": "function",
+                "name": "read",
+                "description": "Read one file.",
+                "parameters": {"type": "object"},
+            }
+        ],
+    }
+    request = OpenAIResponsesRequest(
+        model="native", input="Read a file", tools=[namespace]
+    )
+    if discovered:
+        request.tools = []
+        request.input = [
+            {"role": "user", "content": "Find file tools"},
+            {
+                "type": "tool_search_call",
+                "call_id": "search",
+                "execution": "client",
+                "arguments": {},
+            },
+            {"type": "tool_search_output", "call_id": "search", "tools": [namespace]},
+        ]
+    original = request.model_dump()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        output = parse_sse_text(
+            "".join(
+                [
+                    event
+                    async for event in _transport(client).stream_responses(
+                        request, endpoint_context=Endpoint()
+                    )
+                ]
+            )
+        )
+    assert output[-1].event == "response.completed"
+    assert len(bodies) == 1
+    assert bodies[0]["tools"] == [
+        {
+            "name": "files__read",
+            "description": "Namespace files: Only inspect tracked files.\n\nRead one file.",
+            "input_schema": {"type": "object"},
+        }
+    ]
+    assert request.model_dump() == original
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("responses", [False, True])
 @pytest.mark.parametrize("versioned_base", [False, True])
 async def test_fragmented_messages_http_keeps_native_path_and_public_identity(

@@ -8,7 +8,40 @@ from free_claude_code.core.openai_responses.tool_search import (
     ClientSearchHistory,
     active_client_tools,
     normalize_tool_search,
+    resolve_client_search_history,
 )
+
+
+@pytest.mark.parametrize("description", ["Current instructions", None, ""])
+def test_namespace_headers_follow_discovery_and_explicit_tool_precedence(description):
+    namespace: JsonObject = {
+        "type": "namespace",
+        "name": "files",
+        "description": "Old instructions",
+        "tools": [
+            {"type": "function", "name": "read", "parameters": {"type": "object"}}
+        ],
+    }
+    latest = {**namespace, "description": "Latest instructions"}
+    items: list[JsonValue] = [
+        {
+            "type": "tool_search_output",
+            "call_id": str(index),
+            "execution": "client",
+            "tools": [tool],
+        }
+        for index, tool in enumerate([namespace, latest])
+    ]
+    original = deepcopy(items)
+    history = resolve_client_search_history(items)
+    assert history.output_tools[0] == [namespace]
+    assert history.output_tools[1] == [latest]
+    assert active_client_tools([], history) == [latest]
+    current = {**namespace, "description": description}
+    if description is None:
+        current.pop("description")
+    assert active_client_tools([current], history) == [current]
+    assert items == original
 
 
 def test_nested_search_arguments_keep_constraints_and_literal_data() -> None:

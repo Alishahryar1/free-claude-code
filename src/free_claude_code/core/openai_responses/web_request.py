@@ -97,7 +97,9 @@ def prepare_web_request(
         )
     except ValueError as exc:
         raise ResponsesConversionError(str(exc)) from exc
-    limit = (request.model_extra or {}).get("max_tool_calls", MAX_WEB_ACTIONS)
+    limit = (request.model_extra or {}).get("max_tool_calls")
+    if limit is None:
+        limit = MAX_WEB_ACTIONS
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ResponsesConversionError("max_tool_calls must be a positive integer.")
     if isinstance(choice, dict):
@@ -127,7 +129,9 @@ def prepare_web_request(
     while name in names:
         suffix += 1
         name = f"fcc_web_{suffix}"
-    include = (request.model_extra or {}).get("include", [])
+    include = (request.model_extra or {}).get("include")
+    if include is None:
+        include = []
     if not isinstance(include, list) or any(
         not isinstance(field, str) for field in include
     ):

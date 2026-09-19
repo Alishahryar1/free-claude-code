@@ -30,6 +30,36 @@ def test_normal_codex_text_declarations(types):
 @pytest.mark.parametrize(
     "extra",
     [
+        {"max_tool_calls": None},
+        {"include": None},
+        {"max_tool_calls": None, "include": None},
+    ],
+)
+def test_null_web_options_use_the_omitted_defaults(extra):
+    original = request({"type": "web_search"}, **extra)
+    snapshot = original.model_dump()
+    prepared, spec = prepare_web_request(original)
+    _, defaults = prepare_web_request(request({"type": "web_search"}))
+    assert spec == defaults
+    assert prepared.tools is not None and prepared.tools[0]["type"] == "function"
+    assert original.model_dump() == snapshot
+
+
+@pytest.mark.parametrize("limit", [False, 0, -1, 1.5, "2"])
+def test_non_null_invalid_web_limits_remain_errors(limit):
+    with pytest.raises(ResponsesConversionError, match="max_tool_calls"):
+        prepare_web_request(request({"type": "web_search"}, max_tool_calls=limit))
+
+
+@pytest.mark.parametrize("include", [False, "", {}, [None]])
+def test_non_null_invalid_web_include_remains_an_error(include):
+    with pytest.raises(ResponsesConversionError, match="include"):
+        prepare_web_request(request({"type": "web_search"}, include=include))
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
         {"search_content_types": ["image"]},
         {"search_content_types": []},
         {"external_web_access": "false"},

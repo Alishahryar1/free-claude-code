@@ -259,6 +259,17 @@ class ResponsesToolAdapter:
                     tool["description"] = description
         if self._policy.flatten_namespaces:
             tool.pop("namespace", None)
+            if namespace is not None and kind in {"function", "custom"}:
+                header = self._namespace_headers[(scope, namespace)]
+                if description := optional_str(header.get("description")):
+                    own = tool.get("description")
+                    if own is not None and not isinstance(own, str):
+                        raise ResponsesConversionError(
+                            "Tool description must be a string."
+                        )
+                    tool["description"] = (
+                        f"Namespace {namespace}: {description}\n\n{own or ''}".rstrip()
+                    )
         if self._policy.explicit_search_parameters:
             tool = normalize_tool_search(tool)
         if self._policy.text_only_web_search and kind in {

@@ -103,6 +103,7 @@ def active_client_tools(
 
 def _merge_tool_groups(groups: list[list[JsonObject]]) -> list[JsonObject]:
     active: dict[tuple[str, str | None, str], JsonObject] = {}
+    headers: dict[str, JsonObject] = {}
     hosted: list[JsonObject] = []
     for group in groups:
         declarations: dict[tuple[str, str | None, str], JsonObject] = {}
@@ -111,6 +112,11 @@ def _merge_tool_groups(groups: list[list[JsonObject]]) -> list[JsonObject]:
             children = [tool]
             if tool.get("type") == "namespace":
                 namespace = required_str(tool.get("name"), "tool.namespace.name")
+                headers[namespace] = {
+                    key: deepcopy(value)
+                    for key, value in tool.items()
+                    if key != "tools"
+                }
                 value = tool.get("tools")
                 if not isinstance(value, list):
                     raise ResponsesConversionError("Namespace tools must be a list.")
@@ -145,7 +151,10 @@ def _merge_tool_groups(groups: list[list[JsonObject]]) -> list[JsonObject]:
             result.append(definition)
         else:
             if ns not in namespaces:
-                namespaces[ns] = {"type": "namespace", "name": ns, "tools": []}
+                namespaces[ns] = {
+                    **headers.get(ns, {"type": "namespace", "name": ns}),
+                    "tools": [],
+                }
                 result.append(namespaces[ns])
             definition.pop("namespace", None)
             cast(list[JsonValue], namespaces[ns]["tools"]).append(definition)
