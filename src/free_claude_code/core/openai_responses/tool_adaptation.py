@@ -18,6 +18,7 @@ from .tool_search import (
     ClientSearchHistory,
     active_client_tools,
     is_client_search,
+    is_unfinished_search_call,
     normalize_tool_search,
     resolve_client_search_history,
     search_function_name,
@@ -71,6 +72,23 @@ class ResponsesToolAdapter:
             if policy.client_tool_search
             else ClientSearchHistory(frozenset(), {})
         )
+        input_items = (
+            self.request.input
+            if isinstance(self.request.input, list)
+            else []
+            if self.request.input is None
+            else [self.request.input]
+        )
+        retained_input = [
+            (index, item)
+            for index, item in enumerate(input_items)
+            if index not in self._search_history.omitted_items
+        ]
+        self.input_source_indices = tuple(index for index, _ in retained_input)
+        if self._search_history.omitted_items and not retained_input:
+            raise ResponsesConversionError(
+                "Responses request must contain usable input."
+            )
         if policy == ResponsesToolPolicy():
             return
         client_search = policy.client_tool_search and (
@@ -88,7 +106,7 @@ class ResponsesToolAdapter:
         ):
             self._register_tools(self.request.tools)
             if isinstance(self.request.input, list):
-                for index, item in enumerate(self.request.input):
+                for index, item in retained_input:
                     if isinstance(item, dict) and item.get("type") in (
                         "function_call",
                         "custom_tool_call",
@@ -109,8 +127,7 @@ class ResponsesToolAdapter:
             self.request.tools = cast(list[JsonObject], self._tools(self.request.tools))
         if isinstance(self.request.input, list):
             self.request.input = [
-                self._input(item, index)
-                for index, item in enumerate(self.request.input)
+                self._input(item, index) for index, item in retained_input
             ]
         if (
             policy.custom_tools_as_functions
@@ -452,29 +469,26 @@ class ResponsesToolAdapter:
                 ),
             }
         if self._is_search(value):
-            raw = value.get("arguments")
-            try:
-                arguments = (
-                    {}
-                    if value.get("status") == "in_progress"
-                    else json.loads(
-                        raw,
-                        parse_float=_canonical_number,
-                        parse_constant=_reject_json_constant,
+            arguments = value.get("arguments")
+            if not is_unfinished_search_call(value):
+                try:
+                    arguments = (
+                        json.loads(
+                            arguments,
+                            parse_float=_canonical_number,
+                            parse_constant=_reject_json_constant,
+                        )
+                        if isinstance(arguments, str) and arguments
+                        else None
                     )
-                    if isinstance(raw, str) and raw
-                    else None
-                )
-            except ValueError as exc:
-                raise ResponsesConversionError(
-                    "Invalid client search arguments."
-                ) from exc
-            if not isinstance(arguments, dict) or (
-                not raw and value.get("status") != "in_progress"
-            ):
-                raise ResponsesConversionError(
-                    "Client search arguments must be a JSON object."
-                )
+                except ValueError as exc:
+                    raise ResponsesConversionError(
+                        "Invalid client search arguments."
+                    ) from exc
+                if not isinstance(arguments, dict):
+                    raise ResponsesConversionError(
+                        "Client search arguments must be a JSON object."
+                    )
             return {
                 **{
                     key: child
@@ -690,10 +704,15 @@ class ResponsesToolEventAdapter:
                         "response.function_call_arguments.done",
                         {**coordinates, **identity, "arguments": arguments},
                     )
-            if item.get("type") == "tool_search_call" and isinstance(
-                item_id := item.get("id"), str
-            ):
-                self._search_items.add(item_id)
+            if item.get("type") == "tool_search_call":
+                if isinstance(item_id := item.get("id"), str):
+                    self._search_items.add(item_id)
+                if (
+                    event_type == "response.output_item.added"
+                    and isinstance(original_item, dict)
+                    and original_item.get("type") == "function_call"
+                ):
+                    item["arguments"] = {}
             if (
                 isinstance(original_item, dict)
                 and original_item.get("type") == "function_call"
