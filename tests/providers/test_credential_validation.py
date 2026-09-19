@@ -41,6 +41,12 @@ CASES = [
     ("nebius", "https://api.tokenfactory.nebius.com/v1/models", {"data": []}, 401),
     ("scaleway", "https://api.scaleway.ai/v1/models", {"data": []}, 401),
     (
+        "poe",
+        "https://api.poe.com/usage/current_balance",
+        {"current_point_balance": 300},
+        401,
+    ),
+    (
         "vercel",
         "https://ai-gateway.vercel.sh/v1/credits",
         {"balance": "0", "total_used": "1"},

@@ -317,6 +317,19 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Defaults to https://api.experientiallabs.ai/v1."
         ),
     },
+    "POE_API_KEY": {
+        "label": "Poe API Key",
+        "description": (
+            "Poe API key for OpenAI-compatible access to hundreds of bots with "
+            "your subscription points. Create one at poe.com/api/keys."
+        ),
+    },
+    "POE_BASE_URL": {
+        "description": (
+            "Poe OpenAI-compatible Chat Completions base URL. "
+            "Defaults to https://api.poe.com/v1."
+        ),
+    },
 }
 
 

@@ -68,6 +68,7 @@ _MODELS = _list_field("data")
 # https://ai.google.dev/gemini-api/docs/generate-content/api-errors
 # https://github.com/nebius/nebius-physical-ai/blob/main/docs/workbench/token-factory.md
 # https://www.scaleway.com/en/docs/generative-apis/
+# https://creator.poe.com/api-reference/getCurrentBalance
 # https://vercel.com/docs/ai-gateway/sdks-and-apis/rest-api
 # https://github.com/huggingface/huggingface_hub/blob/main/src/huggingface_hub/hf_api.py
 # https://docs.cohere.com/reference/list-models
@@ -111,6 +112,14 @@ _PROBES = (
     ),
     _Probe("nebius", "/models", _MODELS, _AUTH_401),
     _Probe("scaleway", "/models", _MODELS, _AUTH_401),
+    # Poe's /v1/models is public (200 without auth), so key validation uses
+    # the documented authenticated balance endpoint outside /v1 instead.
+    _Probe(
+        "poe",
+        "https://api.poe.com/usage/current_balance",
+        lambda p: isinstance(_field(p, "current_point_balance"), int),
+        _AUTH_401,
+    ),
     _Probe(
         "vercel",
         "/credits",
