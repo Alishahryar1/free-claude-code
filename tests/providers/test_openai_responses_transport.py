@@ -4,6 +4,8 @@ import asyncio
 import json
 import re
 from collections.abc import Callable, Mapping
+from copy import deepcopy
+from typing import Any
 
 import httpx2
 import pytest
@@ -19,6 +21,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     thinking_content,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesToolPolicy,
@@ -30,6 +33,7 @@ from free_claude_code.providers.openai_chat.stream_output import (
     ResponsesChatStreamOutput,
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
+from tests.core.openai_responses.test_client_tool_discovery import AGENTS, SEARCH
 from tests.providers.support import REASONING_ON, immediate_admission
 
 
@@ -844,6 +848,177 @@ async def test_native_committed_truncation_emits_one_failed_terminal() -> None:
     assert events[-1].data["response"]["id"] == "resp_test"
     assert events[-1].data["response"]["model"] == "public-model"
     assert events[-1].data["response"]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_interrupted_discovery_can_continue_through_native_transport() -> None:
+    bodies: list[dict[str, Any]] = []
+    saved_text = "Saved work" * 7_000
+    user: JsonObject = {"role": "user", "content": "Find an agent"}
+    retry: JsonObject = {"role": "user", "content": "Continue"}
+    sibling: JsonObject = {
+        "id": "item_text",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": saved_text, "annotations": []}],
+    }
+    error = {"code": "server_error", "message": "Original upstream timeout"}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        created = {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+                **_completed_response(),
+                "status": "in_progress",
+                "usage": None,
+            },
+        }
+        call = {
+            "type": "function_call",
+            "id": "fc_search",
+            "call_id": "search",
+            "name": "fcc_tool_search",
+            "status": "incomplete",
+            "arguments": '{"query":',
+        }
+        if len(bodies) == 1:
+            events = [
+                created,
+                # Commit the attempt before its failure, using the existing buffer limit.
+                _text_delta(saved_text, sequence=1),
+                {
+                    "type": "response.output_item.done",
+                    "sequence_number": 2,
+                    "output_index": 0,
+                    "item": sibling,
+                },
+                {
+                    "type": "response.output_item.added",
+                    "sequence_number": 3,
+                    "output_index": 1,
+                    "item": {**call, "status": "in_progress"},
+                },
+                {
+                    "type": "response.failed",
+                    "sequence_number": 4,
+                    "response": {
+                        **_completed_response(),
+                        "status": "failed",
+                        "error": error,
+                        "output": [sibling, call],
+                    },
+                },
+            ]
+        elif len(bodies) == 2:
+            assert body["input"] == [user, sibling, retry]
+            complete = {
+                **call,
+                "call_id": "retry_search",
+                "status": "completed",
+                "arguments": '{"query":"agent"}',
+            }
+            events = [
+                created,
+                {
+                    "type": "response.output_item.added",
+                    "sequence_number": 1,
+                    "output_index": 0,
+                    "item": {**complete, "status": "in_progress", "arguments": ""},
+                },
+                {
+                    "type": "response.output_item.done",
+                    "sequence_number": 2,
+                    "output_index": 0,
+                    "item": complete,
+                },
+                {
+                    "type": "response.completed",
+                    "sequence_number": 3,
+                    "response": {**_completed_response(), "output": [complete]},
+                },
+            ]
+        else:
+            assert len(bodies) == 3
+            assert body["input"][-2]["type"] == "function_call"
+            assert body["input"][-2]["call_id"] == "retry_search"
+            result = body["input"][-1]
+            assert result["type"] == "function_call_output"
+            assert result["call_id"] == "retry_search"
+            assert json.loads(result["output"])[0]["name"] == "agents__spawn_agent"
+            assert "agents__spawn_agent" in [tool["name"] for tool in body["tools"]]
+            events = [created, _completed_event()]
+        return httpx2.Response(
+            200, headers={"content-type": "text/event-stream"}, text=_sse(*events)
+        )
+
+    client = _client(handler)
+    transport = _transport(
+        client,
+        max_attempts=2,
+        tool_policy=ResponsesToolPolicy(
+            client_tool_search=True, flatten_namespaces=True
+        ),
+    )
+    history: list[JsonObject] = [user]
+    try:
+        first = OpenAIResponsesRequest(model="example", input=history, tools=[SEARCH])
+        original = first.model_dump()
+        events = parse_sse_text("".join(await _collect_native(transport, first)))
+        assert first.model_dump() == original
+        failed = events[-1].data["response"]
+        assert events[-1].event == "response.failed"
+        assert failed["error"] == error
+        assert failed["output"][0] == sibling
+        partial = failed["output"][1]
+        assert partial["type"] == "tool_search_call"
+        assert partial["arguments"] == '{"query":'
+        assert partial["status"] == "incomplete"
+        assert len(bodies) == 1
+        history.extend([*failed["output"], retry])
+        second = OpenAIResponsesRequest(model="example", input=history, tools=[SEARCH])
+        original = deepcopy(history)
+        events = parse_sse_text("".join(await _collect_native(transport, second)))
+        assert history == original
+        assert events[-1].event == "response.completed"
+        complete = events[-1].data["response"]["output"][0]
+        assert complete["type"] == "tool_search_call"
+        assert complete["arguments"] == {"query": "agent"}
+        history.extend(
+            [
+                complete,
+                {
+                    "type": "tool_search_output",
+                    "execution": "client",
+                    "call_id": "retry_search",
+                    "tools": [AGENTS],
+                },
+            ]
+        )
+        events = parse_sse_text(
+            "".join(
+                await _collect_native(
+                    transport,
+                    OpenAIResponsesRequest(
+                        model="example", input=history, tools=[SEARCH]
+                    ),
+                )
+            )
+        )
+        assert events[-1].event == "response.completed"
+        with pytest.raises(InvalidRequestError, match="usable input"):
+            await _collect_native(
+                transport,
+                OpenAIResponsesRequest(
+                    model="example", input=[partial], tools=[SEARCH]
+                ),
+            )
+        assert len(bodies) == 3
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
