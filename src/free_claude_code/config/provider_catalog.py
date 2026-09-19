@@ -97,6 +97,9 @@ ATLASCLOUD_DEFAULT_BASE = "https://api.atlascloud.ai/v1"
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Opper OpenAI-compatible Chat Completions gateway.
 OPPER_DEFAULT_BASE = "https://api.opper.ai/v3/compat"
+# Poe OpenAI-compatible Chat Completions API (https://creator.poe.com/docs/
+# external-applications/openai-compatible-api).
+POE_DEFAULT_BASE = "https://api.poe.com/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -711,6 +714,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="lightning_api_key",
         default_base_url=LIGHTNING_DEFAULT_BASE,
         proxy_attr="lightning_proxy",
+    ),
+    "poe": ProviderDescriptor(
+        provider_id="poe",
+        display_name="Poe",
+        website_url="https://poe.com/",
+        logo_filename="poe.svg",
+        credential_env="POE_API_KEY",
+        credential_url="https://poe.com/api/keys",
+        credential_attr="poe_api_key",
+        default_base_url=POE_DEFAULT_BASE,
+        proxy_attr="poe_proxy",
     ),
     "experiential": ProviderDescriptor(
         provider_id="experiential",

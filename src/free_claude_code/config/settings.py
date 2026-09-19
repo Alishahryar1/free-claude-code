@@ -259,6 +259,11 @@ class Settings(BaseModel):
         default=None, validation_alias="OPPER_API_KEY"
     )
 
+    # ==================== Poe (OpenAI-compatible) ====================
+    poe_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="POE_API_KEY"
+    )
+
     # ==================== Fireworks AI Config ====================
     fireworks_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_API_KEY"
@@ -596,6 +601,9 @@ class Settings(BaseModel):
     )
     opper_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OPPER_PROXY"
+    )
+    poe_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="POE_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"
