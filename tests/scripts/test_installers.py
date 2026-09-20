@@ -628,24 +628,29 @@ printf '%s  %s\n' "$checksum" "$1"
     return PosixHarness(tmp_path, bin_dir, fixtures, tool_bin, log, env)
 
 
-@pytest.mark.parametrize("rtk", (False, True))
+@pytest.mark.parametrize("rtk", (False, True, None))
 def test_install_sh_auto_selects_installed_harnesses(
-    posix_harness: PosixHarness, rtk: bool
+    posix_harness: PosixHarness, rtk: bool | None
 ) -> None:
-    posix_harness.add_rtk()
+    if rtk is not None:
+        posix_harness.add_rtk()
     for command in CODING_AGENTS:
         posix_harness.add_client(command)
 
     result = posix_harness.run_interactive(
-        "" if rtk else "\n", *(("--rtk",) if rtk else ())
+        "\n" if rtk is None else "", *(("--rtk",) if rtk else ())
     )
 
     assert result.returncode == 0, result.stdout
     assert "Install or verify" not in result.stdout
     assert "for fcc-" not in result.stdout
-    assert ("Enable RTK token optimization" in result.stdout) is not rtk
+    assert ("Enable RTK token optimization" in result.stdout) is (rtk is None)
     for command in CODING_AGENTS:
         assert f"{command}:--version" in posix_harness.calls()
+    assert ("rtk:--version:telemetry=1" in posix_harness.calls()) is (rtk is not None)
+    assert ("rtk:init --global --codex:telemetry=1" in posix_harness.calls()) is (
+        rtk is not None
+    )
 
 
 @pytest.mark.parametrize("install_codex", (False, True))
@@ -1060,17 +1065,21 @@ def test_install_sh_installs_selected_dsh_at_exact_preview(
     assert not any(call.startswith("rtk:init") for call in calls)
 
 
+@pytest.mark.parametrize("interactive", (False, True))
 def test_install_sh_replaces_mismatched_dsh_preview(
     posix_harness: PosixHarness,
+    interactive: bool,
 ) -> None:
     _write_executable(
         posix_harness.bin_dir / "dsh",
         _posix_command("dsh").replace("0.1.0-rc.8", "0.1.0-rc.7"),
     )
 
-    result = posix_harness.run()
+    result = (
+        posix_harness.run_interactive("n\n" * 9) if interactive else posix_harness.run()
+    )
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
     assert "does not match 0.1.0-rc.8" in result.stdout
     assert "npm:install -g @deepseek-ai/dsh@0.1.0-rc.8" in posix_harness.calls()
 
@@ -1408,19 +1417,26 @@ def test_install_sh_preserves_valid_existing_tools(
     assert "leaving it unchanged" in result.stdout
 
 
+@pytest.mark.parametrize("interactive", (False, True))
 def test_install_sh_replaces_unrelated_pi_command(
     posix_harness: PosixHarness,
+    interactive: bool,
 ) -> None:
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_unrelated_pi()
     posix_harness.add_uv("0.12.13")
 
-    result = posix_harness.run()
+    result = (
+        posix_harness.run_interactive("y\n" + "n\n" * 7)
+        if interactive
+        else posix_harness.run()
+    )
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
     assert "is not Pi Coding Agent; installing Pi" in result.stdout
     assert "pi-install" in posix_harness.calls()
+    assert "pi:--version" in posix_harness.calls()
 
 
 def test_install_sh_discovers_custom_pi_npm_prefix(
@@ -2500,26 +2516,33 @@ $installer = [scriptblock]::Create($installerSource)
     )
 
 
-@pytest.mark.parametrize("rtk", (False, True))
+@pytest.mark.parametrize("rtk", (False, True, None))
 def test_install_ps1_auto_selects_installed_harnesses(
     powershell_harness: PowerShellHarness,
-    rtk: bool,
+    rtk: bool | None,
 ) -> None:
-    powershell_harness.add_rtk()
+    if rtk is not None:
+        powershell_harness.add_rtk()
     for command in CODING_AGENTS:
         powershell_harness.add_client(command)
 
     result = powershell_harness.run_interactive(
-        [] if rtk else [""], *(("-Rtk",) if rtk else ())
+        [""] if rtk is None else [], *(("-Rtk",) if rtk else ())
     )
 
     assert result.returncode == 0, result.stderr
     assert "Install or verify" not in result.stdout
     assert "for fcc-" not in result.stdout
-    assert ("Enable RTK token optimization" in result.stdout) is not rtk
+    assert ("Enable RTK token optimization" in result.stdout) is (rtk is None)
     for command in CODING_AGENTS:
         assert f"{command}:--version" in powershell_harness.calls()
     assert "muse-install:external" in powershell_harness.calls()
+    assert ("rtk:--version:telemetry=1" in powershell_harness.calls()) is (
+        rtk is not None
+    )
+    assert ("rtk:init --global --codex:telemetry=1" in powershell_harness.calls()) is (
+        rtk is not None
+    )
 
 
 @pytest.mark.parametrize("install_codex", (False, True))
@@ -2574,6 +2597,76 @@ def test_install_ps1_discovers_installed_npm_harnesses_before_questions(
     assert not any(call.startswith("npm:install") for call in calls)
     for command in ("pi", "cline", "dsh"):
         assert f"{command}:--version" in calls
+
+
+def _prepare_discovery_collision(
+    harness: PosixHarness | PowerShellHarness, discovery: str, command: str
+) -> str:
+    windows = isinstance(harness, PowerShellHarness)
+    suffix = ".cmd" if windows else ""
+    make_command = _batch_client if windows else _posix_command
+    home = Path(harness.env["USERPROFILE" if windows else "HOME"])
+    harness.add_uv("0.12.13")
+    for name in ("claude", "codex"):
+        _write_executable(
+            home / ".local" / "bin" / f"{name}{suffix}", make_command(name)
+        )
+    extra_bin = harness.root / "extra bin"
+    if discovery == "npm":
+        harness.add_npm_prefix(extra_bin)
+        if not windows:
+            extra_bin /= "bin"
+        candidate = "cline"
+    else:
+        harness.env["UV_TOOL_BIN_DIR"] = str(extra_bin)
+        candidate = "aider"
+    _write_executable(extra_bin / f"{candidate}{suffix}", make_command(candidate))
+    _write_executable(
+        extra_bin / f"{command}{suffix}", make_command(f"stale-{command}")
+    )
+    return candidate
+
+
+@pytest.mark.parametrize("discovery", ("npm", "uv"))
+@pytest.mark.parametrize("command", ("claude", "codex"))
+def test_install_sh_discovery_preserves_existing_command_priority(
+    posix_harness: PosixHarness, discovery: str, command: str
+) -> None:
+    candidate = _prepare_discovery_collision(posix_harness, discovery, command)
+
+    result = posix_harness.run_interactive(
+        "n\n" * 7, fail_step=f"stale-{command}-verify"
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert f"for fcc-{candidate}?" not in result.stdout
+    calls = posix_harness.calls()
+    assert "claude:--version" in calls
+    assert "codex:--version" in calls
+    assert f"{candidate}:--version" in calls
+    assert "uv-install" not in calls
+    assert not any(call.startswith(f"stale-{command}:") for call in calls)
+
+
+@pytest.mark.parametrize("discovery", ("npm", "uv"))
+@pytest.mark.parametrize("command", ("claude", "codex"))
+def test_install_ps1_discovery_preserves_existing_command_priority(
+    powershell_harness: PowerShellHarness, discovery: str, command: str
+) -> None:
+    candidate = _prepare_discovery_collision(powershell_harness, discovery, command)
+
+    result = powershell_harness.run_interactive(
+        ["n"] * 7, fail_step=f"stale-{command}-verify"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"for fcc-{candidate}?" not in result.stdout
+    calls = powershell_harness.calls()
+    assert "claude:--version" in calls
+    assert "codex:--version" in calls
+    assert f"{candidate}:--version" in calls
+    assert "uv-install" not in calls
+    assert not any(call.startswith(f"stale-{command}:") for call in calls)
 
 
 def _aider_discovery_location(root: Path, env: dict[str, str], location: str) -> Path:
@@ -2952,17 +3045,23 @@ def test_install_ps1_preserves_exact_dsh_preview(
     )
 
 
+@pytest.mark.parametrize("interactive", (False, True))
 def test_install_ps1_replaces_mismatched_dsh_preview(
     powershell_harness: PowerShellHarness,
+    interactive: bool,
 ) -> None:
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
         _batch_client("dsh").replace("0.1.0-rc.8", "0.1.0-rc.7"),
         encoding="utf-8",
     )
 
-    result = powershell_harness.run()
+    result = (
+        powershell_harness.run_interactive(["n"] * 9)
+        if interactive
+        else powershell_harness.run()
+    )
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
     assert "does not match 0.1.0-rc.8" in result.stdout
     assert "npm:install -g @deepseek-ai/dsh@0.1.0-rc.8" in (powershell_harness.calls())
 
@@ -3263,19 +3362,26 @@ def test_install_ps1_preserves_valid_existing_tools(
     assert "leaving it unchanged" in result.stdout
 
 
+@pytest.mark.parametrize("interactive", (False, True))
 def test_install_ps1_replaces_unrelated_pi_command(
     powershell_harness: PowerShellHarness,
+    interactive: bool,
 ) -> None:
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_unrelated_pi()
     powershell_harness.add_uv("0.12.13")
 
-    result = powershell_harness.run()
+    result = (
+        powershell_harness.run_interactive(["y"] + ["n"] * 7)
+        if interactive
+        else powershell_harness.run()
+    )
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
     assert "is not Pi Coding Agent; installing Pi" in result.stdout
     assert "pi-install" in powershell_harness.calls()
+    assert "pi:--version" in powershell_harness.calls()
 
 
 def test_install_ps1_discovers_custom_pi_npm_prefix(

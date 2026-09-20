@@ -163,9 +163,15 @@ function Select-CodingAgents {
     }
 
     if (-not $script:EnableRtk) {
-        $script:EnableRtk = Read-YesNo `
-            -Prompt "Enable RTK token optimization globally for the selected coding agents?" `
-            -DefaultYes $false
+        if (Get-ApplicationCommand "rtk") {
+            Write-Host "RTK already installed; will verify."
+            $script:EnableRtk = $true
+        }
+        else {
+            $script:EnableRtk = Read-YesNo `
+                -Prompt "Enable RTK token optimization globally for the selected coding agents?" `
+                -DefaultYes $false
+        }
     }
 }
 
@@ -268,7 +274,7 @@ function Get-PowerShellExecutable {
 }
 
 function Add-PathEntry {
-    param([string] $PathEntry)
+    param([string] $PathEntry, [switch] $Append)
 
     if ([string]::IsNullOrWhiteSpace($PathEntry)) {
         return
@@ -281,7 +287,12 @@ function Add-PathEntry {
     }
 
     if ($entries -notcontains $PathEntry) {
-        $env:Path = "$PathEntry$separator$env:Path"
+        if ($Append) {
+            $env:Path = "$env:Path$separator$PathEntry"
+        }
+        else {
+            $env:Path = "$PathEntry$separator$env:Path"
+        }
     }
 }
 
@@ -321,6 +332,8 @@ function Add-KnownBinDirectories {
 }
 
 function Add-NpmBinDirectories {
+    param([switch] $Append, [switch] $Prioritize)
+
     if ($DryRun) {
         return
     }
@@ -336,7 +349,12 @@ function Add-NpmBinDirectories {
         $prefix = (& $npm.Source config get prefix 2>$null | Out-String).Trim()
     }
     if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($prefix)) {
-        Add-PathEntry $prefix
+        if ($Prioritize) {
+            Prioritize-PathEntry $prefix
+        }
+        else {
+            Add-PathEntry $prefix -Append:$Append
+        }
     }
 }
 
@@ -344,23 +362,24 @@ function Initialize-CodingAgentDiscovery {
     param([string] $UserPath = [Environment]::GetEnvironmentVariable("Path", "User"))
 
     try {
-        Add-NpmBinDirectories
+        # Discovery must not replace commands that are already available.
+        Add-NpmBinDirectories -Append
     }
     catch {
         # A failed optional npm lookup must not prevent choosing other harnesses.
     }
     # uv need not be installed yet to locate its tool executables.
     if ($env:UV_TOOL_BIN_DIR) {
-        Add-PathEntry $env:UV_TOOL_BIN_DIR
+        Add-PathEntry $env:UV_TOOL_BIN_DIR -Append
     }
     elseif ($env:XDG_BIN_HOME) {
-        Add-PathEntry $env:XDG_BIN_HOME
+        Add-PathEntry $env:XDG_BIN_HOME -Append
     }
     elseif ($env:XDG_DATA_HOME) {
-        Add-PathEntry (Join-Path $env:XDG_DATA_HOME "..\bin")
+        Add-PathEntry (Join-Path $env:XDG_DATA_HOME "..\bin") -Append
     }
     elseif ($env:USERPROFILE) {
-        Add-PathEntry (Join-Path $env:USERPROFILE ".local\bin")
+        Add-PathEntry (Join-Path $env:USERPROFILE ".local\bin") -Append
     }
 
     if ((-not (Get-ApplicationCommand "muse")) -and (-not [string]::IsNullOrWhiteSpace($UserPath))) {
@@ -373,8 +392,7 @@ function Initialize-CodingAgentDiscovery {
             $env:Path = $originalPath
         }
         if ($muse) {
-            $museBin = Split-Path -LiteralPath $muse.Source
-            $env:Path = "$originalPath$([IO.Path]::PathSeparator)$museBin"
+            Add-PathEntry (Split-Path -LiteralPath $muse.Source) -Append
         }
     }
 }
@@ -701,7 +719,7 @@ function Ensure-Pi {
             Write-Host "The existing 'pi' command at '$($existingPi.Source)' is not Pi Coding Agent; installing Pi."
         }
         Invoke-DownloadedPowerShellInstaller -Url $PiInstallUrl -Name "Pi"
-        Add-NpmBinDirectories
+        Add-NpmBinDirectories -Prioritize
 
         if (-not $DryRun) {
             $currentPi = Get-ApplicationCommand "pi"
@@ -1179,7 +1197,7 @@ function Confirm-DshApplication {
 function Install-Dsh {
     $npmPath = Confirm-DshToolchain
     Invoke-NativeCommand -FilePath $npmPath -Arguments @("install", "-g", $DshPackage)
-    Add-NpmBinDirectories
+    Add-NpmBinDirectories -Prioritize
 }
 
 function Ensure-Dsh {

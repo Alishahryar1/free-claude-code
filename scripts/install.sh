@@ -208,9 +208,13 @@ choose_coding_agents() {
         printf 'Select at least one coding agent.\n\n' >&4
     done
 
-    if [ "$enable_rtk" -eq 0 ] &&
-        prompt_yes_no "Enable RTK token optimization globally for the selected coding agents?" no; then
-        enable_rtk=1
+    if [ "$enable_rtk" -eq 0 ]; then
+        if command -v rtk >/dev/null 2>&1; then
+            printf 'RTK already installed; will verify.\n' >&4
+            enable_rtk=1
+        elif prompt_yes_no "Enable RTK token optimization globally for the selected coding agents?" no; then
+            enable_rtk=1
+        fi
     fi
 
     exec 3<&-
@@ -274,7 +278,13 @@ add_path_entry() {
     [ -n "$1" ] || return 0
     case ":$PATH:" in
         *":$1:"*) ;;
-        *) PATH="$1:$PATH" ;;
+        *)
+            if [ "${2:-prepend}" = append ]; then
+                PATH="$PATH:$1"
+            else
+                PATH="$1:$PATH"
+            fi
+            ;;
     esac
 }
 
@@ -328,7 +338,11 @@ add_npm_bin_directories() {
     if command -v npm >/dev/null 2>&1; then
         pi_npm_prefix=$(npm prefix -g 2>/dev/null || npm config get prefix 2>/dev/null || true)
         if [ -n "$pi_npm_prefix" ]; then
-            add_path_entry "$pi_npm_prefix/bin"
+            if [ "${1:-}" = prioritize ]; then
+                prioritize_path_entry "$pi_npm_prefix/bin"
+            else
+                add_path_entry "$pi_npm_prefix/bin" "${1:-prepend}"
+            fi
             export PATH
             hash -r 2>/dev/null || true
         fi
@@ -336,16 +350,17 @@ add_npm_bin_directories() {
 }
 
 prepare_coding_agent_discovery() {
-    add_npm_bin_directories
+    # Discovery must not replace commands that are already available.
+    add_npm_bin_directories append
     # uv need not be installed yet to locate its tool executables.
     if [ -n "${UV_TOOL_BIN_DIR:-}" ]; then
-        add_path_entry "$UV_TOOL_BIN_DIR"
+        add_path_entry "$UV_TOOL_BIN_DIR" append
     elif [ -n "${XDG_BIN_HOME:-}" ]; then
-        add_path_entry "$XDG_BIN_HOME"
+        add_path_entry "$XDG_BIN_HOME" append
     elif [ -n "${XDG_DATA_HOME:-}" ]; then
-        add_path_entry "$XDG_DATA_HOME/../bin"
+        add_path_entry "$XDG_DATA_HOME/../bin" append
     elif [ -n "${HOME:-}" ]; then
-        add_path_entry "$HOME/.local/bin"
+        add_path_entry "$HOME/.local/bin" append
     fi
     export PATH
     hash -r 2>/dev/null || true
@@ -708,7 +723,7 @@ ensure_pi() {
             printf "The existing 'pi' command at %s is not Pi Coding Agent; installing Pi.\n" "$existing_pi_path"
         fi
         download_and_run "$PI_INSTALL_URL" sh "Pi"
-        add_npm_bin_directories
+        add_npm_bin_directories prioritize
 
         if [ "$dry_run" -eq 0 ]; then
             current_pi_path=$(command -v pi 2>/dev/null || true)
@@ -963,7 +978,7 @@ verify_dsh_command() {
 install_dsh_package() {
     require_dsh_toolchain
     run npm install -g "$DSH_PACKAGE"
-    add_npm_bin_directories
+    add_npm_bin_directories prioritize
 }
 
 ensure_dsh() {
