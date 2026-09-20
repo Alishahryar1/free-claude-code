@@ -125,11 +125,24 @@ Pi:
 fcc-pi
 ```
 
-OpenCode:
+OpenCode 2:
 
 ```bash
 fcc-opencode
 ```
+
+To upgrade from OpenCode 1, rerun the FCC installer with OpenCode selected. It
+upgrades the native installation in `~/.opencode/bin`; for npm or other package
+managers, follow [OpenCode's migration instructions](https://opencode.ai/v2/docs/migrate-v1/)
+first. For npm v1, run `npm uninstall -g opencode-ai`, then rerun the FCC installer.
+Close OpenCode before upgrading. OpenCode manages its own data upgrades.
+
+RTK integration is temporarily unavailable for OpenCode 2. The installer saves
+the recognized old RTK plugin outside the plugin directory; customized plugins
+need manual migration. RTK continues to work with the other supported agents.
+
+Use `fcc-opencode` for coding and sessions. Use plain `opencode` for commands
+such as upgrades, service management, ACP, and MCP setup.
 
 Cline:
 
@@ -347,150 +360,21 @@ For terminal use, start `fcc-server`, then run `fcc-claude`, `fcc-codex`,
 `fcc-pi`, `fcc-opencode`, `fcc-cline`, `fcc-hermes`, `fcc-dsh`, `fcc-grok`,
 `fcc-muse`, or `fcc-aider`.
 
-Use the guides below for editor integrations.
+For editor and app integrations, install the client, start FCC, then open
+**Admin UI → Integrations** and click **Connect** on its card.
 
-<details>
-<summary><strong>Claude Code in VS Code</strong></summary>
+- **Claude Code in VS Code** — install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code).
+- **Claude Desktop** — install [Claude Desktop](https://claude.ai/download). Fully quit it before connecting or disconnecting, then reopen it. Disconnect returns to normal Claude sign-in.
+- **Codex in VS Code and App** — install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt) or Codex App.
+- **Claude Code in JetBrains ACP** — install the Claude Code agent in your JetBrains IDE.
 
-Install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code). Open VS Code's user settings as JSON and add:
+Reload VS Code or restart the app/IDE after connecting. In Codex and Claude Desktop, select an FCC
+model from the model picker. FCC keeps connected integrations up to date when it
+starts; reload or restart the client when FCC reports updated settings. Use
+**Disconnect** on the same card to remove the integration.
 
-```json
-"claudeCode.disableLoginPrompt": true,
-"claudeCode.environmentVariables": [
-  { "name": "ANTHROPIC_BASE_URL", "value": "http://localhost:8082" },
-  { "name": "ANTHROPIC_AUTH_TOKEN", "value": "freecc" },
-  { "name": "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "value": "1" },
-  { "name": "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "value": "190000" },
-  { "name": "DISABLE_AUTOUPDATER", "value": "1" },
-  { "name": "DISABLE_FEEDBACK_COMMAND", "value": "1" },
-  { "name": "DISABLE_ERROR_REPORTING", "value": "1" }
-]
-```
-
-Match the port and authentication token to the Admin UI, then reload the extension.
-
-</details>
-
-<details>
-<summary><strong>Codex App</strong></summary>
-
-Start FCC, then edit your Codex configuration:
-
-- Windows: `%USERPROFILE%\.codex\config.toml`
-- macOS: `~/.codex/config.toml`
-
-Add the matching model-catalog path and replace `YOUR_USERNAME`.
-
-Windows:
-
-```toml
-model_catalog_json = "C:/Users/YOUR_USERNAME/.fcc/codex-model-catalog.json"
-```
-
-macOS:
-
-```toml
-model_catalog_json = "/Users/YOUR_USERNAME/.fcc/codex-model-catalog.json"
-```
-
-Then add the shared FCC settings:
-
-```toml
-model_provider = "fcc"
-model = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
-
-[model_providers.fcc]
-name = "Free Claude Code"
-base_url = "http://127.0.0.1:8082/v1"
-wire_api = "responses"
-
-[model_providers.fcc.auth]
-command = "fcc-codex"
-args = ["--print-proxy-auth-token"]
-```
-
-Match the model and port to the Admin UI. The auth command reads FCC's current
-proxy token automatically. Restart the Codex App after setup or model changes,
-then select an FCC model from its model picker.
-
-</details>
-
-<details>
-<summary><strong>Codex in VS Code</strong></summary>
-
-Install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt). Create or edit `~/.codex/config.toml` (`%USERPROFILE%\.codex\config.toml` on Windows):
-
-```toml
-model_provider = "fcc"
-model = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
-
-[model_providers.fcc]
-name = "Free Claude Code"
-base_url = "http://127.0.0.1:8082/v1"
-wire_api = "responses"
-
-[model_providers.fcc.auth]
-command = "fcc-codex"
-args = ["--print-proxy-auth-token"]
-```
-
-Match `model` and the port to the Admin UI. The auth command reads FCC's current
-proxy token automatically. Restart VS Code after setup or model changes. For
-WSL-backed Codex, edit the file inside WSL.
-
-</details>
-
-<details>
-<summary><strong>Claude Code in JetBrains ACP</strong></summary>
-
-Edit the installed Claude ACP configuration:
-
-- Windows: `C:\Users\%USERNAME%\AppData\Roaming\JetBrains\acp-agents\installed.json`
-- Linux/macOS: `~/.jetbrains/acp.json`
-
-Set the environment for `acp.registry.claude-acp`:
-
-```json
-"env": {
-  "ANTHROPIC_BASE_URL": "http://localhost:8082",
-  "ANTHROPIC_AUTH_TOKEN": "freecc",
-  "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-  "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
-  "DISABLE_AUTOUPDATER": "1",
-  "DISABLE_FEEDBACK_COMMAND": "1",
-  "DISABLE_ERROR_REPORTING": "1"
-}
-```
-
-Match the port and token to the Admin UI, then restart the IDE.
-
-</details>
-
-<details>
-<summary><strong>Claude Code still asks you to log in</strong></summary>
-
-If Claude Code asks you to log in after you configure the FCC URL and token, open its state file:
-
-- Windows: `%USERPROFILE%\.claude.json`
-- macOS/Linux/WSL: `~/.claude.json`
-
-Merge this property into the existing JSON without removing its other fields:
-
-```json
-"hasCompletedOnboarding": true
-```
-
-If the file does not exist, create it with a complete JSON object:
-
-```json
-{
-  "hasCompletedOnboarding": true
-}
-```
-
-Restart Claude Code or the IDE after saving the file.
-
-</details>
+Run FCC on the same computer and in the same user environment as the client you
+are configuring.
 
 <a id="optional-integrations"></a>
 

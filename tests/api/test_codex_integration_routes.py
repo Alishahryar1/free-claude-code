@@ -30,6 +30,7 @@ def test_routes_inspect_connect_and_disconnect(integration):
     assert response.json() == {
         "connected": False,
         "paths": {"codex_config": str(path.resolve())},
+        "update": {"state": "ready", "changed": False, "message": None},
     }
     assert response.headers["cache-control"] == "no-store"
     assert not path.exists()
@@ -63,7 +64,7 @@ def test_invalid_file_returns_safe_uncached_error(integration, action):
     assert path.read_text() == source
 
 
-@pytest.mark.parametrize("action", ["", "/connect", "/disconnect"])
+@pytest.mark.parametrize("action", ["", "/connect", "/disconnect", "/refresh"])
 @pytest.mark.parametrize(
     "headers", [{"Host": "evil.test"}, {"Origin": "https://evil.test"}]
 )
@@ -102,7 +103,9 @@ def test_pending_restart_and_shutdown_do_not_write(integration):
     client, path, runtime = integration
     runtime._pending_fields = ["PORT"]
     assert client.post(f"{ROOT}/connect").status_code == 503
+    assert client.post(f"{ROOT}/refresh").status_code == 503
     runtime._pending_fields = []
     runtime.begin_shutdown()
     assert client.post(f"{ROOT}/connect").status_code == 503
+    assert client.post(f"{ROOT}/refresh").status_code == 503
     assert not path.exists()

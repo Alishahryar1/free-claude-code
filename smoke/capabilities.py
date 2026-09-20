@@ -588,7 +588,7 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
         "opencode_cli_integration",
         "opencode_cli_integration",
         "free_claude_code.cli.launchers.opencode",
-        "OpenCode V1 binary, live FCC model catalog, and child-process config",
+        "OpenCode 2 binary, live FCC model catalog, and child-process config",
         "Responses provider scoped to FCC with bearer authentication",
         "version, proxy, config conflict, or catalog failure exits without fallback",
         (

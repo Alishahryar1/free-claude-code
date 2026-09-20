@@ -78,7 +78,7 @@ def test_launch_default_is_server_selection_not_first_row_or_local_settings(
             config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
             assert (
                 config["model"]
-                == config["small_model"]
+                == config["agents"]["title"]["model"]
                 == f"free-claude-code/{selected}"
             )
         elif name == "cline":
@@ -109,7 +109,10 @@ def test_help_receives_normal_fcc_setup(
 ) -> None:
     launch(name, ["--help"])
     assert launch_capture.requests[0].full_url == "http://127.0.0.1:8182/health"
-    assert launch_capture.commands[0][-1] == "--help"
+    if name == "opencode":
+        assert launch_capture.commands[0][-2:] == ["--help", "--standalone"]
+    else:
+        assert launch_capture.commands[0][-1] == "--help"
     if name in {"claude", "pi"}:
         assert len(launch_capture.requests) == 1
     else:
@@ -145,7 +148,10 @@ def test_native_inputs_are_forwarded_without_fcc_model_or_command_policy(
         "literal text",
     ]
     launch(name, args)
-    assert launch_capture.commands[0][-len(args) :] == args
+    command = launch_capture.commands[0]
+    if name == "opencode":
+        command = [arg for arg in command if arg != "--standalone"]
+    assert command[-len(args) :] == args
 
 
 @pytest.mark.parametrize(
