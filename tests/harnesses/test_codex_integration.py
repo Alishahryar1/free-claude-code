@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.harnesses import codex_integration
+from free_claude_code.harnesses.codex_integration import config_path
 
 URL = "http://127.0.0.1:8082"
 
@@ -204,6 +205,6 @@ def test_symlink_unicode_and_path_display(tmp_path):
 def test_native_config_path_honors_codex_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("CODEX_HOME", raising=False)
-    assert codex_integration.config_path() == tmp_path / ".codex/config.toml"
+    assert config_path() == tmp_path / ".codex/config.toml"
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "custom"))
-    assert codex_integration.config_path() == tmp_path / "custom/config.toml"
+    assert config_path() == tmp_path / "custom/config.toml"

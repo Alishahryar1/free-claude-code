@@ -10,6 +10,7 @@ from free_claude_code.application.model_catalog import ModelCatalog, read_model_
 from free_claude_code.application.ports import ModelCatalogPort
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import (
+    desktop_model_id,
     gateway_model_id,
     no_thinking_gateway_model_id,
 )
@@ -24,6 +25,7 @@ class ModelCatalogView(StrEnum):
     """Client-specific projections of the application model inventory."""
 
     CLAUDE = "claude"
+    CLAUDE_DESKTOP = "claude-desktop"
     MESSAGES = "messages"
     RESPONSES = "responses"
 
@@ -146,8 +148,10 @@ def build_models_list_response(
 ) -> ModelsListResponse:
     """Return the application model inventory in the requested client view."""
     catalog = read_model_catalog(runtime, settings)
-    if view is ModelCatalogView.CLAUDE:
-        return _build_claude_models_response(catalog)
+    if view in {ModelCatalogView.CLAUDE, ModelCatalogView.CLAUDE_DESKTOP}:
+        return _build_claude_models_response(
+            catalog, desktop=view is ModelCatalogView.CLAUDE_DESKTOP
+        )
     return _build_direct_models_response(settings, catalog, view=view)
 
 
@@ -178,18 +182,25 @@ def build_muse_models_list_response(
     return catalog
 
 
-def _build_claude_models_response(catalog: ModelCatalog) -> ModelsListResponse:
+def _build_claude_models_response(
+    catalog: ModelCatalog, *, desktop: bool = False
+) -> ModelsListResponse:
     """Keep shortcuts first and provider variants together in catalog order."""
     models = list(SUPPORTED_CLAUDE_MODELS)
     for model in catalog.models:
         ref = model.provider_model_ref
         if model.supports_reasoning is not False:
             models.append(
-                _discovered_model_response(gateway_model_id(ref), display_name=ref)
+                _discovered_model_response(
+                    desktop_model_id(ref) if desktop else gateway_model_id(ref),
+                    display_name=ref,
+                )
             )
         models.append(
             _discovered_model_response(
-                no_thinking_gateway_model_id(ref),
+                desktop_model_id(ref, no_thinking=True)
+                if desktop
+                else no_thinking_gateway_model_id(ref),
                 display_name=f"{ref} (no thinking)",
             )
         )

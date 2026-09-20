@@ -334,14 +334,6 @@ button.startup-busy::before,
   color: var(--text);
   font: inherit;
   text-align: left;
-  transition: all var(--transition-normal);
-}
-
-.provider-card:hover {
-  border-color: var(--line-strong);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-sm);
-  background: var(--card-hover);
 }
 
 .provider-card > .provider-actions { margin-top: auto; }

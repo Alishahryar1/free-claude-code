@@ -26,7 +26,11 @@ from free_claude_code.config.loader import (
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
-from free_claude_code.harnesses import claude_integration, codex_integration
+from free_claude_code.harnesses import (
+    claude_desktop_integration,
+    claude_integration,
+    codex_integration,
+)
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
@@ -121,15 +125,30 @@ def code_control(tmp_path):
 
 
 @pytest.fixture
+def admin_client_files():
+    """Allow integration tests to seed client files before server startup."""
+
+
+@pytest.fixture
 def admin_base_url(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     code_control: CodeControl,
+    admin_client_files,
 ) -> Iterator[str]:
     """Serve one fully isolated Admin application on an OS-assigned port."""
 
     config_dir = tmp_path / ".fcc"
+    monkeypatch.setattr(
+        claude_desktop_integration, "config_root", lambda: tmp_path / "Claude-3p"
+    )
+    monkeypatch.setattr(claude_desktop_integration, "check_unmanaged", lambda: None)
+    monkeypatch.setattr(
+        claude_desktop_integration,
+        "legacy_windows_root",
+        lambda: tmp_path / "LegacyClaude-3p",
+    )
     monkeypatch.setattr(
         codex_integration, "config_path", lambda: tmp_path / ".codex" / "config.toml"
     )

@@ -47,7 +47,7 @@ class LaunchCapture:
     versions: dict[str, str] = field(
         default_factory=lambda: {
             "pi": "0.80.4",
-            "opencode": "1.18.18",
+            "opencode": "opencode v2.0.10",
             "cline": "3.0.55",
             "hermes": "Hermes Agent 0.20.4",
             "dsh": "0.1.0-rc.8",
