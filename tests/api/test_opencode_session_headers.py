@@ -21,7 +21,7 @@ from tests.providers.test_opencode import (
 
 pytestmark = pytest.mark.asyncio
 
-OPENCODE_USER_AGENT = "opencode/1.18.25 ai-sdk/provider-utils/4.0.38 runtime/bun/1.3.14"
+OPENCODE_USER_AGENT = "opencode/latest/2.0.10/cli"
 
 
 def successful_response(request):

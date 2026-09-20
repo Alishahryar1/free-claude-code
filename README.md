@@ -125,11 +125,24 @@ Pi:
 fcc-pi
 ```
 
-OpenCode:
+OpenCode 2:
 
 ```bash
 fcc-opencode
 ```
+
+To upgrade from OpenCode 1, rerun the FCC installer with OpenCode selected. It
+upgrades the native installation in `~/.opencode/bin`; for npm or other package
+managers, follow [OpenCode's migration instructions](https://opencode.ai/v2/docs/migrate-v1/)
+first. For npm v1, run `npm uninstall -g opencode-ai`, then rerun the FCC installer.
+Close OpenCode before upgrading. OpenCode manages its own data upgrades.
+
+RTK integration is temporarily unavailable for OpenCode 2. The installer saves
+the recognized old RTK plugin outside the plugin directory; customized plugins
+need manual migration. RTK continues to work with the other supported agents.
+
+Use `fcc-opencode` for coding and sessions. Use plain `opencode` for commands
+such as upgrades, service management, ACP, and MCP setup.
 
 Cline:
 

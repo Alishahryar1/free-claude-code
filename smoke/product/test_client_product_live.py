@@ -15,8 +15,10 @@ from pathlib import Path
 import httpx
 import pytest
 
+from free_claude_code.config.paths import managed_env_path
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from smoke.lib.child_process import cmd_python_c
 from smoke.lib.claude_cli_matrix import run_claude_cli
 from smoke.lib.config import SmokeConfig
 from smoke.lib.e2e import (
@@ -144,20 +146,30 @@ def test_pi_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
 def test_opencode_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
     if not shutil.which("opencode"):
         pytest.skip("missing_env: OpenCode CLI not found")
-    uv_bin = shutil.which("uv")
-    if not uv_bin:
-        pytest.skip("missing_env: uv not found")
     provider_model = ProviderMatrixDriver(smoke_config).first_model()
     auth_token = smoke_config.settings.proxy_auth_token
     isolated_home = tmp_path / "opencode-home"
     isolated_config = tmp_path / "opencode-config"
     for path in (isolated_home, isolated_config):
         path.mkdir()
+    isolated_fcc = isolated_home / ".fcc"
+    isolated_fcc.mkdir(mode=0o700)
+    shutil.copyfile(managed_env_path(), isolated_fcc / ".env")
+    isolated_env = {
+        "HOME": str(isolated_home),
+        "USERPROFILE": str(isolated_home),
+        "XDG_CONFIG_HOME": str(isolated_home / "config"),
+        "XDG_DATA_HOME": str(isolated_home / "data"),
+        "XDG_CACHE_HOME": str(isolated_home / "cache"),
+        "XDG_STATE_HOME": str(isolated_home / "state"),
+        "OPENCODE_CONFIG_DIR": str(isolated_config),
+    }
 
     with SmokeServerDriver(
         smoke_config,
         name="product-opencode-cli",
         env_overrides={
+            **isolated_env,
             "MODEL": provider_model.full_model,
             "ANTHROPIC_AUTH_TOKEN": auth_token,
             "MESSAGING_PLATFORM": "none",
@@ -170,45 +182,70 @@ def test_opencode_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> N
                 "PORT": str(server.port),
                 "FCC_OPEN_BROWSER": "0",
                 "ANTHROPIC_AUTH_TOKEN": auth_token,
-                "HOME": str(isolated_home),
-                "USERPROFILE": str(isolated_home),
-                "XDG_CONFIG_HOME": str(isolated_home / "config"),
-                "XDG_DATA_HOME": str(isolated_home / "data"),
-                "XDG_CACHE_HOME": str(isolated_home / "cache"),
-                "XDG_STATE_HOME": str(isolated_home / "state"),
-                "OPENCODE_CONFIG_DIR": str(isolated_config),
+                **isolated_env,
             }
         )
         env.pop("OPENCODE_CONFIG", None)
         env.pop("OPENCODE_CONFIG_CONTENT", None)
-        result = subprocess.run(
-            [
-                uv_bin,
-                "run",
-                "--project",
-                str(smoke_config.root),
-                "--no-sync",
-                "fcc-opencode",
-                "run",
-                "--format",
-                "json",
-                "--model",
-                f"free-claude-code/{provider_model.full_model}",
-                "Reply with exactly FCC_SMOKE_OPENCODE",
-            ],
-            cwd=tmp_path,
-            env=env,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=smoke_config.timeout_s + 15,
+        command = cmd_python_c(
+            "from free_claude_code.cli.launchers.opencode import launch; launch()"
         )
+
+        def run(*args: str) -> str:
+            process = _start_attached_process([*command, *args], cwd=tmp_path, env=env)
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=smoke_config.timeout_s + 15
+                )
+                assert process.returncode == 0, stderr or stdout
+                assert stdout.strip(), stderr or "OpenCode returned no output"
+                return stdout
+            finally:
+                _stop_attached_process(process)
+
+        marker = f"FCC_SMOKE_OPENCODE_{uuid.uuid4().hex}"
+        (tmp_path / "fcc-smoke-marker.txt").write_text(marker, encoding="utf-8")
+        output = run(
+            "run",
+            "--format",
+            "json",
+            "--model",
+            f"free-claude-code/{provider_model.full_model}",
+            "--auto",
+            "Use the file-reading tool to read fcc-smoke-marker.txt. "
+            "Reply with exactly its contents. Do not modify any files.",
+        )
+        events = _json_object_lines(output)
+        assert any(
+            event.get("type") == "text"
+            and isinstance(part := event.get("part"), dict)
+            and marker in str(part.get("text", ""))
+            for event in events
+        ), output
+        assert any(
+            event.get("type") == "tool_use"
+            and isinstance(part := event.get("part"), dict)
+            and isinstance(state := part.get("state"), dict)
+            and state.get("status") == "completed"
+            and marker in str(state.get("output", ""))
+            for event in events
+        ), output
+        session_id = events[0]["sessionID"]
+        assert isinstance(session_id, str) and session_id
+        resumed = run(
+            "run",
+            "--format",
+            "json",
+            "--session",
+            session_id,
+            "Reply with that marker again from our conversation. Do not use tools.",
+        )
+        assert marker in resumed
         server_log = server.log_path.read_text(encoding="utf-8", errors="replace")
 
-    assert result.returncode == 0, result.stderr or result.stdout
-    assert "FCC_SMOKE_OPENCODE" in result.stdout
     assert "POST /v1/responses" in server_log
     assert "POST /v1/chat/completions" not in server_log
+    assert not list((isolated_fcc / "tmp" / "launchers").iterdir())
 
 
 @pytest.mark.smoke_target("clients")

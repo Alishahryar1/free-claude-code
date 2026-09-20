@@ -7,7 +7,7 @@ MIN_UV_VERSION="0.12.13"
 CLAUDE_INSTALL_URL="https://claude.ai/install.sh"
 CODEX_INSTALL_URL="https://chatgpt.com/codex/install.sh"
 PI_INSTALL_URL="https://pi.dev/install.sh"
-OPENCODE_INSTALL_URL="https://opencode.ai/install"
+OPENCODE_INSTALL_URL="https://opencode.ai/v2/install"
 HERMES_INSTALL_URL="https://hermes-agent.nousresearch.com/install.sh"
 DSH_VERSION="0.1.0-rc.8"
 DSH_PACKAGE="@deepseek-ai/dsh@$DSH_VERSION"
@@ -640,9 +640,6 @@ configure_rtk_for_selected_agents() {
     if [ "$install_pi" -eq 1 ] && [ "$pi_available" -eq 1 ]; then
         run_rtk_init init --global --agent pi
     fi
-    if [ "$install_opencode" -eq 1 ]; then
-        run_rtk_init init --global --opencode
-    fi
     if [ "$install_cline" -eq 1 ]; then
         printf 'Optional for each project: cd <project> && RTK_TELEMETRY_DISABLED=1 rtk init --agent cline\n'
     fi
@@ -702,15 +699,112 @@ ensure_pi() {
     pi_available=1
 }
 
-ensure_opencode() {
-    if command -v opencode >/dev/null 2>&1; then
-        printf 'OpenCode already found on PATH; verifying it.\n'
+opencode_version() {
+    opencode_output=$("$1" --version) || return 1
+    printf '%s\n' "$opencode_output" | sed -nE 's/^[[:space:]]*(opencode([[:space:]]+version)?[[:space:]]+)?v?([0-9]+\.[0-9]+\.[0-9]+)(\+[0-9A-Za-z.-]+)?[[:space:]]*$/\3\4/p'
+}
+
+opencode_rtk_plugin() {
+    opencode_plugin_path="$HOME/.config/opencode/plugins/rtk.ts"
+    if [ ! -e "$opencode_plugin_path" ] && [ ! -L "$opencode_plugin_path" ]; then
+        return 0
+    fi
+    [ -f "$opencode_plugin_path" ] && [ ! -L "$opencode_plugin_path" ] ||
+        fail "Disable or migrate the RTK plugin at $opencode_plugin_path manually, then rerun the installer."
+    # The backup lives in .config/opencode; check its parents as well as the
+    # plugin directory so a linked parent cannot redirect either mutation.
+    for opencode_parent in "$HOME/.config" "$HOME/.config/opencode" "$HOME/.config/opencode/plugins"; do
+        [ ! -L "$opencode_parent" ] ||
+            fail "The RTK plugin directory is linked: $opencode_parent. Disable or migrate it manually, then rerun the installer."
+    done
+    if command -v sha256sum >/dev/null 2>&1; then
+        opencode_plugin_hash=$(sha256sum "$opencode_plugin_path") || return 1
+    elif command -v shasum >/dev/null 2>&1; then
+        opencode_plugin_hash=$(shasum -a 256 "$opencode_plugin_path") || return 1
     else
-        download_and_run "$OPENCODE_INSTALL_URL" bash "OpenCode"
-        add_known_bin_directories
+        fail "Checking the old OpenCode RTK plugin requires sha256sum or shasum."
+    fi
+    [ "${opencode_plugin_hash%% *}" = "6530c131946c84892f9522abd68d4e513e1e658d8ddbad1f59388c86ebbcb6bb" ] ||
+        fail "The RTK plugin at $opencode_plugin_path was modified or is unrecognized. Disable or migrate it manually, then rerun the installer."
+    printf '%s\n' "$opencode_plugin_path"
+}
+
+assert_no_opencode_processes_running() {
+    [ -z "$(fcc_process_ids opencode)$(fcc_process_ids opencode2)" ] ||
+        fail "Close OpenCode before replacing its executable or RTK plugin, then rerun the installer."
+}
+
+run_opencode_installer() {
+    # Recheck after the script download. Upstream owns the actual installation.
+    assert_no_opencode_processes_running
+    VERSION= bash "$@"
+}
+
+ensure_opencode() {
+    [ -n "${HOME:-}" ] || fail "HOME is required to install OpenCode."
+    opencode_native="$HOME/.opencode/bin/opencode"
+    opencode_path=${original_opencode_path:-$(command -v opencode || true)}
+    if [ "$dry_run" -eq 1 ]; then
+        print_command opencode --version
+        printf 'Install stable OpenCode 2 if absent, or migrate v1 at %s; external v1 requires manual upgrade.\n' "$opencode_native"
+        printf 'Check and back up the recognized old OpenCode RTK plugin if present.\n'
+        if [ -z "$opencode_path" ]; then
+            download_and_run "$OPENCODE_INSTALL_URL" bash "OpenCode"
+        fi
+        return 0
     fi
 
-    verify_command opencode "OpenCode"
+    opencode_install=1
+    if [ -n "$opencode_path" ]; then
+        opencode_current=$(opencode_version "$opencode_path") ||
+            fail "Could not read OpenCode version at $opencode_path. Correct that installation, then rerun the installer."
+        case "$opencode_current" in
+            2.*) opencode_install=0 ;;
+            1.*)
+                [ "$opencode_path" = "$opencode_native" ] ||
+                    fail "OpenCode 1 at $opencode_path requires manual migration. Remove it with its package manager (npm: npm uninstall -g opencode-ai), then rerun this installer. See https://opencode.ai/v2/docs/migrate-v1/"
+                ;;
+            *) fail "OpenCode at $opencode_path is not a recognized stable v1 or v2. Correct that installation, then rerun the installer. See https://opencode.ai/v2/docs/migrate-v1/" ;;
+        esac
+    fi
+    opencode_plugin=$(opencode_rtk_plugin) || return $?
+    if [ "$opencode_install" -eq 1 ] || [ -n "$opencode_plugin" ]; then
+        assert_no_opencode_processes_running
+    fi
+    if [ "$opencode_install" -eq 1 ]; then
+        for opencode_target in "$HOME/.opencode" "$HOME/.opencode/bin" "$opencode_native"; do
+            [ ! -L "$opencode_target" ] || fail "OpenCode installation path is linked: $opencode_target. Migrate it manually."
+        done
+        download_and_run "$OPENCODE_INSTALL_URL" run_opencode_installer "OpenCode"
+        add_known_bin_directories
+        hash -r 2>/dev/null || true
+        opencode_installed=$(opencode_version "$opencode_native") || fail "Could not verify installed OpenCode at $opencode_native."
+        case "$opencode_installed" in
+            2.*) ;;
+            *) fail "The OpenCode installer did not install stable OpenCode 2. See https://opencode.ai/v2/docs/" ;;
+        esac
+    fi
+    # Check the command selected after the installer's PATH additions.
+    hash -r 2>/dev/null || true
+    opencode_path=$(command -v opencode || true)
+    [ -n "$opencode_path" ] || fail "OpenCode is not available on PATH after installation."
+    opencode_current=$(opencode_version "$opencode_path") || fail "Could not verify OpenCode at $opencode_path."
+    case "$opencode_current" in
+        2.*) printf 'Verified OpenCode %s at %s.\n' "$opencode_current" "$opencode_path" ;;
+        *) fail "OpenCode at $opencode_path is not stable OpenCode 2. Correct PATH, then rerun the installer." ;;
+    esac
+    if [ -n "$opencode_plugin" ]; then
+        opencode_plugin=$(opencode_rtk_plugin) || return $?
+        [ -n "$opencode_plugin" ] || return 0
+        assert_no_opencode_processes_running
+        opencode_backup=$(mktemp "$HOME/.config/opencode/rtk-v1-XXXXXX") || fail "Could not create an RTK plugin backup."
+        if mv "$opencode_plugin" "$opencode_backup"; then
+            printf 'OpenCode 2 RTK support is unavailable; the old plugin was saved at %s.\n' "$opencode_backup"
+        else
+            rm -f "$opencode_backup"
+            fail "Could not disable the old RTK plugin at $opencode_plugin."
+        fi
+    fi
 }
 
 ensure_cline() {
@@ -1313,6 +1407,8 @@ PLIST
 
 parse_args "$@"
 validate_args
+# Preserve the user's winning command before adding installer search paths.
+original_opencode_path=$(command -v opencode || true)
 add_known_bin_directories
 if command -v cline >/dev/null 2>&1 || command -v npm >/dev/null 2>&1; then
     install_cline=1
