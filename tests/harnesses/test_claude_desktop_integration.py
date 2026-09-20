@@ -16,6 +16,64 @@ URL = "http://127.0.0.1:8000"
 TOKEN = "desktop-test-token"
 
 
+def test_connect_preserves_pending_windows_migration(tmp_path, monkeypatch):
+    root = tmp_path / "Local/Claude-3p"
+    legacy = tmp_path / "Roaming/Claude-3p"
+    record = claude_desktop_disconnect_path()
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    monkeypatch.setattr(desktop, "legacy_windows_root", lambda: legacy)
+    other = "11111111-1111-4111-8111-111111111111"
+    write(legacy / "configLibrary" / f"{other}.json", {"user": "settings"})
+    write(
+        meta(legacy), {"appliedId": other, "entries": [{"id": other, "name": "Other"}]}
+    )
+    write(legacy / "claude-code-sessions/history.json", {"chat": "keep"})
+    before = {p.relative_to(legacy): p.read_bytes() for p in legacy.rglob("*.json")}
+    assert not desktop.configure(root, URL, TOKEN, disconnect_path=record)["connected"]
+    assert not desktop.refresh_connected(root, URL, TOKEN, disconnect_path=record)
+    with pytest.raises(desktop.PendingMigrationError):
+        desktop.configure(root, URL, TOKEN, True, disconnect_path=record)
+    assert not root.exists()
+    assert not record.exists()
+    assert {
+        p.relative_to(legacy): p.read_bytes() for p in legacy.rglob("*.json")
+    } == before
+    # Simulate Desktop completing its own native migration, then retry Connect.
+    root.parent.mkdir(parents=True)
+    legacy.rename(root)
+    assert desktop.configure(root, URL, TOKEN, True, disconnect_path=record)[
+        "connected"
+    ]
+    assert (root / "configLibrary" / f"{other}.json").read_bytes() == before[
+        Path("configLibrary") / f"{other}.json"
+    ]
+    assert (root / "claude-code-sessions/history.json").read_bytes() == before[
+        Path("claude-code-sessions/history.json")
+    ]
+
+
+@pytest.mark.parametrize(
+    "platform,existing_root,existing_legacy",
+    [("win32", False, False), ("win32", True, True), ("darwin", False, True)],
+)
+def test_connect_allowed_without_pending_migration(
+    tmp_path, monkeypatch, platform, existing_root, existing_legacy
+):
+    root = tmp_path / "current"
+    legacy = tmp_path / "legacy"
+    monkeypatch.setattr(desktop.sys, "platform", platform)
+    monkeypatch.setattr(desktop, "legacy_windows_root", lambda: legacy)
+    if existing_root:
+        root.mkdir()
+    if existing_legacy:
+        write(legacy / "history.json", {"chat": "keep"})
+    assert desktop.configure(
+        root, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
+    )["connected"]
+    if existing_legacy:
+        assert read(legacy / "history.json") == {"chat": "keep"}
+
+
 @pytest.mark.parametrize(
     "platform,variable,suffix",
     [

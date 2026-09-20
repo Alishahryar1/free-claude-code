@@ -178,3 +178,20 @@ def test_desktop_token_count_routes_to_original_provider(no_thinking):
         if call.kwargs["stage"] == "routing"
     )
     assert routed["provider_model_ref"] == ref
+
+
+def test_pending_windows_migration_reports_recovery_without_writes(client, monkeypatch):
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    legacy = desktop.legacy_windows_root()
+    assert legacy is not None
+    legacy.mkdir()
+    history = legacy / "history.json"
+    history.write_text('{"chat":"keep"}')
+    response = client.post(ROOT + "/connect")
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "Launch Claude Desktop" in detail
+    assert "quit" in detail
+    assert "retry Connect" in detail
+    assert not desktop.config_root().exists()
+    assert history.read_text() == '{"chat":"keep"}'

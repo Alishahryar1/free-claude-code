@@ -33,6 +33,10 @@ class PendingDisconnectError(ValueError):
     """A new connection must wait for the requested removal to finish."""
 
 
+class PendingMigrationError(ValueError):
+    """Desktop must move its legacy Windows data before FCC creates the new root."""
+
+
 def config_root() -> Path:
     home = Path.home()
     if sys.platform == "win32":
@@ -44,6 +48,29 @@ def config_root() -> Path:
         if not parent.is_absolute():
             parent = home / ".config"
     return parent / "Claude-3p"
+
+
+def legacy_windows_root() -> Path | None:
+    appdata = os.environ.get("APPDATA")
+    return Path(appdata) / "Claude-3p" if appdata else None
+
+
+def _check_pending_migration(root: Path) -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        root.stat()
+    except FileNotFoundError:
+        pass
+    else:
+        return
+    legacy = legacy_windows_root()
+    if legacy is not None:
+        try:
+            legacy.stat()
+        except FileNotFoundError:
+            return
+        raise PendingMigrationError
 
 
 def check_unmanaged() -> None:
@@ -362,6 +389,7 @@ def configure(
     if connected is True:
         if intent is not None:
             raise PendingDisconnectError
+        _check_pending_migration(library.root)
         values = _values(proxy_root_url, auth_token)
         if not library.entries:
             library.validate_default()

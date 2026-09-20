@@ -36,6 +36,11 @@ def _isolate_managed_config(monkeypatch, tmp_path):
         claude_desktop_integration, "config_root", lambda: tmp_path / "Claude-3p"
     )
     monkeypatch.setattr(claude_desktop_integration, "check_unmanaged", lambda: None)
+    monkeypatch.setattr(
+        claude_desktop_integration,
+        "legacy_windows_root",
+        lambda: tmp_path / "LegacyClaude-3p",
+    )
     monkeypatch.setattr(paths, "config_dir_path", lambda: config_dir)
     monkeypatch.setattr(env_migrations, "legacy_env_paths", lambda: ())
     monkeypatch.setattr(env_migrations, "verified_checkout_env_path", lambda: None)

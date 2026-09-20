@@ -145,6 +145,11 @@ def admin_base_url(
     )
     monkeypatch.setattr(claude_desktop_integration, "check_unmanaged", lambda: None)
     monkeypatch.setattr(
+        claude_desktop_integration,
+        "legacy_windows_root",
+        lambda: tmp_path / "LegacyClaude-3p",
+    )
+    monkeypatch.setattr(
         codex_integration, "config_path", lambda: tmp_path / ".codex" / "config.toml"
     )
     monkeypatch.setattr(

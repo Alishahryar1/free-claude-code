@@ -526,6 +526,10 @@ class ApplicationRuntime:
                 raise InvalidRequestError(
                     "Finish disconnecting Claude Desktop before connecting again."
                 ) from None
+            except claude_desktop_integration.PendingMigrationError:
+                raise InvalidRequestError(
+                    "Claude Desktop has data in its previous Windows location. Launch Claude Desktop once so it can migrate that data, fully quit it, then retry Connect."
+                ) from None
             except ValueError, UnicodeError:
                 raise InvalidRequestError(
                     "Could not configure Claude Desktop. Check its configuration JSON and FCC disconnect record, and ensure FCC uses a localhost address and a nonempty managed token."
