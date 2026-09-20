@@ -29,6 +29,10 @@ class ManagedDesktopError(ValueError):
     """Local configuration cannot override an organization policy."""
 
 
+class PendingDisconnectError(ValueError):
+    """A new connection must wait for the requested removal to finish."""
+
+
 def config_root() -> Path:
     home = Path.home()
     if sys.platform == "win32":
@@ -160,7 +164,7 @@ class _Library:
             "desktop_library": str(self.metadata_path),
             "desktop_settings": str(self.mode_path),
         }
-        if not self.entries or all(entry["id"] == FCC_ID for entry in self.entries):
+        if not self.entries or self.selected:
             result["default_profile"] = str(self.default_path)
         return result
 
@@ -269,18 +273,95 @@ def _update_profile(library: _Library, values: JsonObject) -> bool:
     return _write(library.profile_path, profile)
 
 
-def refresh_connected(root: Path, proxy_root_url: str, auth_token: str) -> bool:
+def _disconnect_intent(path: Path, root: Path) -> bool | None:
+    record = _read(path)
+    if record is None:
+        return None
+    if (
+        set(record) != {"root", "return_to_sign_in"}
+        or record["root"] != str(root.resolve())
+        or not isinstance(record["return_to_sign_in"], bool)
+    ):
+        raise ValueError("Invalid Desktop disconnect record")
+    return record["return_to_sign_in"]
+
+
+def _empty_profile(path: Path) -> bool:
+    try:
+        return _read(path) == {}
+    except ValueError, UnicodeError:
+        # A user may change the neutral profile between a failure and retry.
+        return False
+
+
+def _disconnect(library: _Library, path: Path, intent: bool | None) -> None:
+    has_entry = any(entry["id"] == FCC_ID for entry in library.entries)
+    if not has_entry and library.profile is None and intent is None:
+        return
+    if library.selected:
+        library.validate_default()
+    return_to_sign_in = intent is True or library.selected
+    _write(path, {"root": str(library.root), "return_to_sign_in": return_to_sign_in})
+    if library.selected:
+        default = library.ensure_default()
+        entries = list(library.entries)
+        if not any(entry["id"] == DEFAULT_ID for entry in entries):
+            entries.append(default)
+        metadata = dict(library.metadata or {})
+        metadata.update({"entries": entries, "appliedId": DEFAULT_ID})
+        metadata.pop("hybridPointer", None)
+        _write(library.metadata_path, metadata)
+        library = _load(library.root)
+    if (
+        return_to_sign_in
+        and library.metadata is not None
+        and library.metadata.get("appliedId") == DEFAULT_ID
+        and not library.metadata.get("hybridPointer")
+        and _empty_profile(library.default_path)
+    ):
+        _write(library.mode_path, library.mode | {"deploymentMode": "1p"})
+    # Keep the registered ownership until unlink succeeds, even if its header
+    # was changed. A retry after unlink safely accepts the missing profile.
+    library.profile_path.unlink(missing_ok=True)
+    library = _load(library.root)
+    entries = [entry for entry in library.entries if entry["id"] != FCC_ID]
+    if len(entries) != len(library.entries):
+        metadata = dict(library.metadata or {})
+        metadata["entries"] = entries
+        _write(library.metadata_path, metadata)
+    remaining = _load(library.root)
+    if remaining.profile is not None or any(
+        entry["id"] == FCC_ID for entry in remaining.entries
+    ):
+        raise ValueError("Desktop disconnect cleanup is incomplete")
+    path.unlink(missing_ok=True)
+
+
+def refresh_connected(
+    root: Path, proxy_root_url: str, auth_token: str, *, disconnect_path: Path
+) -> bool:
     library = _load(root)
+    if _disconnect_intent(disconnect_path, root) is not None:
+        return False
     if not library.active or library.profile is None:
         return False
     return _update_profile(library, _values(proxy_root_url, auth_token))
 
 
 def configure(
-    root: Path, proxy_root_url: str, auth_token: str, connected: bool | None = None
+    root: Path,
+    proxy_root_url: str,
+    auth_token: str,
+    connected: bool | None = None,
+    *,
+    disconnect_path: Path,
 ) -> JsonObject:
     library = _load(root)
+    disconnect_path = disconnect_path.resolve()
+    intent = _disconnect_intent(disconnect_path, root)
     if connected is True:
+        if intent is not None:
+            raise PendingDisconnectError
         values = _values(proxy_root_url, auth_token)
         if not library.entries:
             library.validate_default()
@@ -294,33 +375,7 @@ def configure(
         _write(library.metadata_path, metadata)
         _write(library.mode_path, library.mode | {"deploymentMode": "3p"})
     elif connected is False:
-        entries = [entry for entry in library.entries if entry["id"] != FCC_ID]
-        has_entry = len(entries) != len(library.entries)
-        if has_entry and not entries:
-            library.validate_default()
-        if library.selected:
-            _write(library.mode_path, library.mode | {"deploymentMode": "1p"})
-        if has_entry:
-            # Retain orphan ownership if metadata removal succeeds but unlink fails.
-            if library.profile is not None and not _owned(library.profile):
-                _write(
-                    library.profile_path,
-                    library.profile
-                    | {
-                        "inferenceCustomHeaders": _headers(library.profile)
-                        | {_VIEW_HEADER: "claude-desktop"}
-                    },
-                )
-            if not entries:
-                entries = [library.ensure_default()]
-            metadata = dict(library.metadata or {})
-            metadata["entries"] = entries
-            if library.selected:
-                metadata["appliedId"] = entries[0]["id"]
-                metadata.pop("hybridPointer", None)
-            _write(library.metadata_path, metadata)
-        if library.profile is not None:
-            library.profile_path.unlink(missing_ok=True)
+        _disconnect(library, disconnect_path, intent)
     if connected is not None:
         library = _load(root)
     is_connected = (
@@ -328,4 +383,8 @@ def configure(
     )
     if is_connected:
         is_connected = _current(library, _values(proxy_root_url, auth_token))
-    return {"connected": is_connected, "paths": library.paths()}
+    return {
+        "connected": is_connected,
+        "disconnect_pending": _disconnect_intent(disconnect_path, root) is not None,
+        "paths": library.paths() | {"disconnect_record": str(disconnect_path)},
+    }

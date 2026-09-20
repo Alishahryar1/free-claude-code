@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -12,6 +13,45 @@ from free_claude_code.harnesses import claude_desktop_integration as desktop
 from tests.api.support import create_test_app
 
 ROOT = "/admin/api/integrations/claude-desktop"
+
+
+def test_pending_disconnect_survives_runtime_restart(monkeypatch):
+    settings = Settings(host="127.0.0.1", port=4321, proxy_auth_token="original")
+    root = desktop.config_root()
+    profile = root / "configLibrary" / f"{desktop.FCC_ID}.json"
+    unlink = Path.unlink
+
+    def fail(path, *args, **kwargs):
+        if path == profile:
+            raise PermissionError("test")
+        return unlink(path, *args, **kwargs)
+
+    with TestClient(
+        create_test_app(settings),
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 50000),
+    ) as client:
+        assert client.post(ROOT + "/connect").status_code == 200
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "unlink", fail)
+            assert client.post(ROOT + "/disconnect").status_code == 503
+        assert client.get(ROOT).json()["disconnect_pending"] is True
+    before = profile.read_bytes()
+    with TestClient(
+        create_test_app(settings.model_copy(update={"proxy_auth_token": "rotated"})),
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 50000),
+    ) as client:
+        status = client.get(ROOT).json()
+        assert status["disconnect_pending"] is True
+        assert profile.read_bytes() == before
+        refused = client.post(ROOT + "/connect")
+        assert refused.status_code == 400
+        assert "Finish disconnecting" in refused.json()["detail"]
+        result = client.post(ROOT + "/disconnect").json()
+        assert result["connected"] is False
+        assert result["disconnect_pending"] is False
+        assert not profile.exists()
 
 
 @pytest.fixture

@@ -11,6 +11,7 @@ from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.readiness import InitializationWait
 from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.config.paths import claude_desktop_disconnect_path
 from free_claude_code.config.settings import Settings
 from free_claude_code.harnesses import (
     claude_desktop_integration as desktop,
@@ -299,7 +300,13 @@ async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off
     runtime,
 ):
     root = desktop.config_root()
-    desktop.configure(root, "http://localhost:9999", "old-token", True)
+    desktop.configure(
+        root,
+        "http://localhost:9999",
+        "old-token",
+        True,
+        disconnect_path=claude_desktop_disconnect_path(),
+    )
     try:
         await runtime.start()
         await runtime._desktop_update.task
@@ -319,7 +326,7 @@ async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off
 
 @pytest.mark.asyncio
 async def test_desktop_failure_does_not_block_other_startup(runtime, monkeypatch):
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise ValueError("private-invalid-file")
 
     monkeypatch.setattr(desktop, "refresh_connected", fail)

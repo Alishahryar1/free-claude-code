@@ -35,6 +35,7 @@ from free_claude_code.config.admin.status import provider_config_status
 from free_claude_code.config.loader import clear_settings_cache
 from free_claude_code.config.model_refs import parse_provider_type
 from free_claude_code.config.paths import (
+    claude_desktop_disconnect_path,
     codex_model_catalog_path,
     messaging_state_dir_path,
 )
@@ -501,7 +502,10 @@ class ApplicationRuntime:
                 if action == "refresh":
                     return {
                         "changed": claude_desktop_integration.refresh_connected(
-                            root, url, settings.proxy_auth_token
+                            root,
+                            url,
+                            settings.proxy_auth_token,
+                            disconnect_path=claude_desktop_disconnect_path(),
                         )
                     }
                 return claude_desktop_integration.configure(
@@ -509,6 +513,7 @@ class ApplicationRuntime:
                     url,
                     settings.proxy_auth_token,
                     None if action == "status" else action == "connect",
+                    disconnect_path=claude_desktop_disconnect_path(),
                 )
 
             try:
@@ -517,13 +522,17 @@ class ApplicationRuntime:
                 raise InvalidRequestError(
                     "Claude Desktop is managed by an organization, or its policy could not be read. FCC can configure only unmanaged Desktop installations."
                 ) from None
+            except claude_desktop_integration.PendingDisconnectError:
+                raise InvalidRequestError(
+                    "Finish disconnecting Claude Desktop before connecting again."
+                ) from None
             except ValueError, UnicodeError:
                 raise InvalidRequestError(
-                    "Could not configure Claude Desktop. Check its configuration JSON and ensure FCC uses a localhost address and a nonempty managed token."
+                    "Could not configure Claude Desktop. Check its configuration JSON and FCC disconnect record, and ensure FCC uses a localhost address and a nonempty managed token."
                 ) from None
             except OSError:
                 raise ApplicationUnavailableError(
-                    "Could not access Claude Desktop settings. Fully quit Claude Desktop, check file permissions, and retry."
+                    "Could not access Claude Desktop settings or the FCC disconnect record. Fully quit Claude Desktop, check file permissions, and retry."
                 ) from None
             if action in {"connect", "disconnect"}:
                 self._desktop_update.complete()
