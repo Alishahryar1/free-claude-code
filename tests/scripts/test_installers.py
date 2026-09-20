@@ -301,9 +301,23 @@ printf '%s\n' "$FCC_PS_OUTPUT"
         *args: str,
         fail_step: str = "",
     ) -> subprocess.CompletedProcess[str]:
+        source = (_repo_root() / "scripts/install.sh").read_text(encoding="utf-8")
+        source = source.replace(
+            '    step "Choosing coding agents"',
+            "    selection_path_before=$PATH\n"
+            "    selection_opencode_before=$original_opencode_path\n"
+            '    step "Choosing coding agents"',
+        ).replace(
+            "    choose_coding_agents /dev/tty /dev/tty",
+            "    choose_coding_agents /dev/tty /dev/tty\n"
+            '    [ "$PATH" = "$selection_path_before" ] || fail "Selection changed PATH"\n'
+            '    [ "$original_opencode_path" = "$selection_opencode_before" ] || fail "Selection changed original OpenCode"',
+        )
+        installer = self.root / "interactive-installer.sh"
+        installer.write_text(source, encoding="utf-8")
         env = self.env | {
             "FAIL_STEP": fail_step,
-            "FCC_INSTALLER": str(_repo_root() / "scripts" / "install.sh"),
+            "FCC_INSTALLER": str(installer),
         }
         command = [
             "/bin/sh",
@@ -654,13 +668,16 @@ def test_install_sh_auto_selects_installed_harnesses(
 
 
 @pytest.mark.parametrize("install_codex", (False, True))
+@pytest.mark.parametrize("rtk", (False, True))
 def test_install_sh_asks_only_about_missing_harnesses(
-    posix_harness: PosixHarness, install_codex: bool
+    posix_harness: PosixHarness, install_codex: bool, rtk: bool
 ) -> None:
     posix_harness.add_client("claude")
+    if rtk:
+        posix_harness.add_rtk()
 
     result = posix_harness.run_interactive(
-        ("y\n" if install_codex else "n\n") + "n\n" * 8
+        ("y\n" if install_codex else "n\n") + "n\n" * (7 if rtk else 8)
     )
 
     assert result.returncode == 0, result.stdout
@@ -679,6 +696,12 @@ def test_install_sh_asks_only_about_missing_harnesses(
     assert "opencode:--version" in calls
     assert ("codex-install:1" in calls) is install_codex
     assert not any(f"{command}:--version" in calls for command in CODING_AGENTS[4:])
+    assert ("Enable RTK token optimization" in result.stdout) is not rtk
+    assert ("rtk:init --global --codex:telemetry=1" in calls) is (rtk and install_codex)
+    if rtk and install_codex:
+        assert calls.index("codex:--version") < calls.index(
+            "rtk:init --global --codex:telemetry=1"
+        )
 
 
 def test_install_sh_discovers_installed_npm_harnesses_before_questions(
@@ -2276,7 +2299,12 @@ Add-Content -LiteralPath $env:CALL_LOG -Value "grok-install"
     )
     (fixtures / "muse-installer.ps1").write_text(
         r"""if ($env:FAIL_STEP -eq "muse-install") { exit 68 }
+$originalPath = $env:Path
+if ($env:FCC_TEST_USER_PATH) {
+    $env:Path = "$originalPath$([IO.Path]::PathSeparator)$env:FCC_TEST_USER_PATH"
+}
 $existing = Get-Command "muse" -CommandType Application -ErrorAction SilentlyContinue
+$env:Path = $originalPath
 if ($existing) {
     Add-Content -LiteralPath $env:CALL_LOG -Value "muse-install:external"
     return
@@ -2426,6 +2454,10 @@ function Get-Process {
     }
 }
 $installerSource = [IO.File]::ReadAllText($env:FCC_INSTALLER)
+$installerSource = $installerSource.Replace(
+    '[Environment]::GetEnvironmentVariable("Path", "User")',
+    '$env:FCC_TEST_USER_PATH'
+)
 if ($env:FCC_INSTALLER_ANSWERS) {
     $script:InstallerAnswers = (ConvertFrom-Json $env:FCC_INSTALLER_ANSWERS).answers
     $script:InstallerAnswerIndex = 0
@@ -2444,8 +2476,19 @@ if ($env:FCC_INSTALLER_ANSWERS) {
         'return $true'
     )
     $installerSource = $installerSource.Replace(
-        '    Initialize-CodingAgentDiscovery',
-        '    Initialize-CodingAgentDiscovery -UserPath $env:FCC_TEST_USER_PATH'
+        '    Write-Step "Choosing coding agents"',
+        @'
+    $selectionPathBefore = $env:Path
+    $selectionOpenCodeBefore = $script:OriginalOpenCode
+    Write-Step "Choosing coding agents"
+'@
+    ).Replace(
+        '    Select-CodingAgents',
+        @'
+    Select-CodingAgents
+    if ($env:Path -cne $selectionPathBefore) { throw "Selection changed PATH" }
+    if ($script:OriginalOpenCode -ne $selectionOpenCodeBefore) { throw "Selection changed original OpenCode" }
+'@
     )
 }
 $nativeVersionProbe = '    $output = Read-OpenCodeVersionOutput $OpenCodePath'
@@ -2546,13 +2589,16 @@ def test_install_ps1_auto_selects_installed_harnesses(
 
 
 @pytest.mark.parametrize("install_codex", (False, True))
+@pytest.mark.parametrize("rtk", (False, True))
 def test_install_ps1_asks_only_about_missing_harnesses(
-    powershell_harness: PowerShellHarness, install_codex: bool
+    powershell_harness: PowerShellHarness, install_codex: bool, rtk: bool
 ) -> None:
     powershell_harness.add_client("claude")
+    if rtk:
+        powershell_harness.add_rtk()
 
     result = powershell_harness.run_interactive(
-        ["y" if install_codex else "n"] + ["n"] * 8
+        ["y" if install_codex else "n"] + ["n"] * (7 if rtk else 8)
     )
 
     assert result.returncode == 0, result.stderr
@@ -2571,6 +2617,12 @@ def test_install_ps1_asks_only_about_missing_harnesses(
     assert "opencode:--version" in calls
     assert ("codex-install:1" in calls) is install_codex
     assert not any(f"{command}:--version" in calls for command in CODING_AGENTS[4:])
+    assert ("Enable RTK token optimization" in result.stdout) is not rtk
+    assert ("rtk:init --global --codex:telemetry=1" in calls) is (rtk and install_codex)
+    if rtk and install_codex:
+        assert calls.index("codex:--version") < calls.index(
+            "rtk:init --global --codex:telemetry=1"
+        )
 
 
 def test_install_ps1_discovers_installed_npm_harnesses_before_questions(
@@ -2667,6 +2719,239 @@ def test_install_ps1_discovery_preserves_existing_command_priority(
     assert f"{candidate}:--version" in calls
     assert "uv-install" not in calls
     assert not any(call.startswith(f"stale-{command}:") for call in calls)
+
+
+def _assert_setup_preserves_other_commands(
+    harness: PosixHarness | PowerShellHarness, installing: str, other: str
+) -> None:
+    windows = isinstance(harness, PowerShellHarness)
+    suffix = ".cmd" if windows else ""
+    make_command = _batch_client if windows else _posix_command
+    prefix = harness.root / "other npm"
+    harness.add_npm_prefix(prefix)
+    npm_bin = prefix if windows else prefix / "bin"
+    npm_bin.mkdir(exist_ok=True)
+    if other == "uv":
+        stale_uv = (
+            '@echo off\necho stale-uv:%*>>"%CALL_LOG%"\n'
+            'if "%1"=="--version" (echo uv 0.11.0& exit /b 0)\nexit /b 77\n'
+            if windows
+            else '#!/bin/sh\necho "stale-uv:$*" >> "$CALL_LOG"\n'
+            'if [ "$1" = --version ]; then echo "uv 0.11.0"; else exit 77; fi\n'
+        )
+        _write_executable(npm_bin / f"uv{suffix}", stale_uv)
+        harness.env["PATH"] = str(npm_bin) + os.pathsep + harness.env["PATH"]
+    else:
+        harness.add_uv("0.12.13")
+        harness.add_client(other)
+        _write_executable(npm_bin / f"{other}{suffix}", make_command(f"stale-{other}"))
+        harness.env["PATH"] += os.pathsep + str(npm_bin)
+    installed = {"opencode", other}
+    if installing == "dsh":
+        _write_executable(
+            npm_bin / f"dsh{suffix}",
+            make_command("dsh").replace("0.1.0-rc.8", "0.1.0-rc.7"),
+        )
+        installed.add("dsh")
+    answers = [
+        "y" if name == installing else "n"
+        for name in CODING_AGENTS
+        if name not in installed
+    ] + ["n"]
+    failure = "" if other == "uv" else f"stale-{other}-verify"
+    result = (
+        harness.run_interactive(answers, fail_step=failure)
+        if windows
+        else harness.run_interactive("\n".join(answers) + "\n", fail_step=failure)
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = harness.calls()
+    assert f"{installing}:--version" in calls
+    assert f"{other}:--version" in calls
+    if other == "uv":
+        assert "uv-install" in calls
+        assert not any(call.startswith("stale-uv:tool") for call in calls)
+    else:
+        assert not any(call.startswith(f"stale-{other}:") for call in calls)
+    assert any("--refresh-package free-claude-code" in call for call in calls)
+
+
+@pytest.mark.parametrize(
+    ("installing", "other"),
+    (("pi", "cline"), ("dsh", "grok"), ("pi", "uv"), ("dsh", "uv")),
+)
+def test_install_sh_setup_preserves_other_commands(
+    posix_harness: PosixHarness, installing: str, other: str
+) -> None:
+    _assert_setup_preserves_other_commands(posix_harness, installing, other)
+
+
+@pytest.mark.parametrize(
+    ("installing", "other"),
+    (("pi", "cline"), ("dsh", "grok"), ("pi", "uv"), ("dsh", "uv")),
+)
+def test_install_ps1_setup_preserves_other_commands(
+    powershell_harness: PowerShellHarness, installing: str, other: str
+) -> None:
+    _assert_setup_preserves_other_commands(powershell_harness, installing, other)
+
+
+def test_install_ps1_verifies_new_fcc_after_custom_tool_discovery(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    powershell_harness.add_uv("0.12.13")
+    powershell_harness.env["UV_TOOL_BIN_DIR"] = str(powershell_harness.tool_bin)
+    _write_executable(
+        powershell_harness.bin_dir / "fcc-server.cmd", _batch_client("stale-fcc")
+    )
+
+    result = powershell_harness.run_interactive(["n"] * 10)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = powershell_harness.calls()
+    assert "fcc-server:--version" in calls
+    assert not any(call.startswith("stale-fcc:") for call in calls)
+
+
+def _assert_lookup_is_isolated(
+    harness: PosixHarness | PowerShellHarness, command: str, present: bool
+) -> None:
+    windows = isinstance(harness, PowerShellHarness)
+    suffix = ".cmd" if windows else ""
+    make_command = _batch_client if windows else _posix_command
+    tool_bin = harness.root / "query tool bin"
+    harness.env["UV_TOOL_BIN_DIR"] = str(tool_bin)
+    harness.env["FCC_TEST_USER_PATH"] = str(tool_bin)
+    harness.env["QUERY_COMMAND"] = command
+    harness.env["QUERY_PRESENT"] = "1" if present else "0"
+    if command == "opencode":
+        (harness.bin_dir / f"opencode{suffix}").unlink()
+    if command in ("pi", "cline", "dsh"):
+        destination = Path(harness.env["FAKE_NPM_PREFIX"])
+        if not windows:
+            destination /= "bin"
+    elif command == "aider" or (windows and command == "muse"):
+        destination = tool_bin
+    else:
+        destination = harness.bin_dir
+    if present:
+        _write_executable(destination / f"{command}{suffix}", make_command(command))
+
+    source = (
+        _repo_root() / "scripts" / f"install.{'ps1' if windows else 'sh'}"
+    ).read_text(encoding="utf-8")
+    if windows:
+        source = (
+            source.split("\nif ($Help) {", 1)[0]
+            + """
+$script:OriginalOpenCode = $null
+Add-KnownBinDirectories
+$pathBefore = $env:Path
+$found = Find-InstalledCodingAgent $env:QUERY_COMMAND
+if ($env:Path -cne $pathBefore) { throw "Lookup changed PATH" }
+if ([bool] $found -ne ($env:QUERY_PRESENT -eq "1")) { throw "Wrong presence result" }
+if ($found -and (-not (Test-Path -LiteralPath $found.Source -PathType Leaf))) {
+    throw "Lookup did not return an application"
+}
+Write-Output "lookup isolated"
+"""
+        )
+        installer = harness.root / "query.ps1"
+        installer.write_text(source, encoding="utf-8")
+        harness.env["FCC_INSTALLER"] = str(installer)
+        result = harness.run()
+    else:
+        source = (
+            source.split('\nparse_args "$@"\n', 1)[0]
+            + """
+original_opencode_path=""
+add_known_bin_directories
+path_before=$PATH
+command_path=keep-command
+pi_npm_prefix=keep-prefix
+tool_bin=keep-tool-bin
+found=""
+if find_installed_coding_agent "$QUERY_COMMAND" > "$HOME/query-result"; then
+    IFS= read -r found < "$HOME/query-result"
+    [ "$QUERY_PRESENT" = 1 ] || fail "Unexpected command"
+    [ -x "$found" ] || fail "Lookup did not return an executable"
+else
+    [ "$QUERY_PRESENT" = 0 ] || fail "Missing command"
+fi
+[ "$PATH" = "$path_before" ] || fail "Lookup changed PATH"
+[ "$command_path:$pi_npm_prefix:$tool_bin" = keep-command:keep-prefix:keep-tool-bin ] || fail "Lookup changed helper state"
+printf 'lookup isolated\\n'
+"""
+        )
+        installer = harness.root / "query.sh"
+        installer.write_text(source, encoding="utf-8")
+        result = subprocess.run(
+            ["/bin/sh", str(installer)],
+            env=harness.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "lookup isolated" in result.stdout
+    assert not any("install" in call or "--version" in call for call in harness.calls())
+
+
+@pytest.mark.parametrize("command", (*CODING_AGENTS, "rtk"))
+@pytest.mark.parametrize("present", (False, True))
+def test_install_sh_lookup_is_isolated(
+    posix_harness: PosixHarness, command: str, present: bool
+) -> None:
+    _assert_lookup_is_isolated(posix_harness, command, present)
+
+
+@pytest.mark.parametrize("command", (*CODING_AGENTS, "rtk"))
+@pytest.mark.parametrize("present", (False, True))
+def test_install_ps1_lookup_is_isolated(
+    powershell_harness: PowerShellHarness, command: str, present: bool
+) -> None:
+    _assert_lookup_is_isolated(powershell_harness, command, present)
+
+
+def test_install_ps1_lookup_restores_path_after_exception(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    source = (_repo_root() / "scripts/install.ps1").read_text(encoding="utf-8")
+    source = (
+        source.split("\nif ($Help) {", 1)[0]
+        + """
+$script:OriginalOpenCode = $null
+$env:UV_TOOL_BIN_DIR = Join-Path $env:USERPROFILE "exception lookup"
+$pathBefore = $env:Path
+function Get-ApplicationCommand {
+    param([string] $Name)
+    if ($env:Path.Contains($env:UV_TOOL_BIN_DIR)) { throw "query failed after PATH change" }
+    return $null
+}
+$caught = $false
+try {
+    $null = Find-InstalledCodingAgent "aider"
+}
+catch {
+    if ($_.Exception.Message -ne "query failed after PATH change") { throw }
+    $caught = $true
+}
+if (-not $caught) { throw "Expected lookup exception" }
+if ($env:Path -cne $pathBefore) { throw "Failed lookup changed PATH" }
+Write-Output "exception isolated"
+"""
+    )
+    installer = powershell_harness.root / "exception.ps1"
+    installer.write_text(source, encoding="utf-8")
+    powershell_harness.env["FCC_INSTALLER"] = str(installer)
+
+    result = powershell_harness.run()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "exception isolated" in result.stdout
+    assert powershell_harness.calls() == []
 
 
 def _aider_discovery_location(root: Path, env: dict[str, str], location: str) -> Path:
@@ -3847,6 +4132,7 @@ $script:Answers = @({answer_array})
 $script:OriginalOpenCode = $null
 $DryRun = $false
 function Get-ApplicationCommand {{ param([string] $Name) return $null }}
+function Find-InstalledCodingAgent {{ param([string] $CommandName) return $null }}
 $script:AnswerIndex = 0
 $script:InstallClaudeCode = $true
 $script:InstallCodex = $true

@@ -113,6 +113,60 @@ function Read-YesNo {
     }
 }
 
+function Find-InstalledCodingAgent {
+    param([string] $CommandName)
+
+    $originalPath = $env:Path
+    try {
+        if ($CommandName -eq "opencode" -and $script:OriginalOpenCode) {
+            return $script:OriginalOpenCode
+        }
+        if ($CommandName -in @("pi", "cline", "dsh")) {
+            try {
+                Add-NpmBinDirectories
+            }
+            catch {
+                # An optional lookup must not prevent choosing other harnesses.
+            }
+        }
+        $command = Get-ApplicationCommand $CommandName
+        if (-not $command) {
+            if ($CommandName -eq "aider") {
+                if ($env:UV_TOOL_BIN_DIR) {
+                    Add-PathEntry $env:UV_TOOL_BIN_DIR
+                }
+                elseif ($env:XDG_BIN_HOME) {
+                    Add-PathEntry $env:XDG_BIN_HOME
+                }
+                elseif ($env:XDG_DATA_HOME) {
+                    Add-PathEntry (Join-Path $env:XDG_DATA_HOME "..\bin")
+                }
+                elseif ($env:USERPROFILE) {
+                    Add-PathEntry (Join-Path $env:USERPROFILE ".local\bin")
+                }
+                $command = Get-ApplicationCommand $CommandName
+            }
+            elseif ($CommandName -eq "muse") {
+                $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+                if (-not [string]::IsNullOrWhiteSpace($userPath)) {
+                    $env:Path = "$originalPath$([IO.Path]::PathSeparator)$userPath"
+                    $command = Get-ApplicationCommand $CommandName
+                }
+            }
+        }
+        if ($CommandName -eq "pi" -and $command -and (-not $DryRun)) {
+            if (-not (Test-PiApplication $command)) {
+                return $null
+            }
+        }
+        return $command
+    }
+    finally {
+        # Environment variables are process-wide, even inside a function.
+        $env:Path = $originalPath
+    }
+}
+
 function Read-CodingAgentSelection {
     param(
         [string] $CommandName,
@@ -121,15 +175,7 @@ function Read-CodingAgentSelection {
         [bool] $DefaultYes = $true
     )
 
-    $command = Get-ApplicationCommand $CommandName
-    $found = [bool] $command
-    if ($CommandName -eq "opencode" -and $script:OriginalOpenCode) {
-        $found = $true
-    }
-    if ($CommandName -eq "pi" -and $found -and (-not $DryRun)) {
-        $found = Test-PiApplication $command
-    }
-    if ($found) {
+    if (Find-InstalledCodingAgent $CommandName) {
         Write-Host "$DisplayName already installed; will verify."
         return $true
     }
@@ -274,7 +320,7 @@ function Get-PowerShellExecutable {
 }
 
 function Add-PathEntry {
-    param([string] $PathEntry, [switch] $Append)
+    param([string] $PathEntry)
 
     if ([string]::IsNullOrWhiteSpace($PathEntry)) {
         return
@@ -287,12 +333,7 @@ function Add-PathEntry {
     }
 
     if ($entries -notcontains $PathEntry) {
-        if ($Append) {
-            $env:Path = "$env:Path$separator$PathEntry"
-        }
-        else {
-            $env:Path = "$PathEntry$separator$env:Path"
-        }
+        $env:Path = "$PathEntry$separator$env:Path"
     }
 }
 
@@ -332,8 +373,6 @@ function Add-KnownBinDirectories {
 }
 
 function Add-NpmBinDirectories {
-    param([switch] $Append, [switch] $Prioritize)
-
     if ($DryRun) {
         return
     }
@@ -349,51 +388,7 @@ function Add-NpmBinDirectories {
         $prefix = (& $npm.Source config get prefix 2>$null | Out-String).Trim()
     }
     if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($prefix)) {
-        if ($Prioritize) {
-            Prioritize-PathEntry $prefix
-        }
-        else {
-            Add-PathEntry $prefix -Append:$Append
-        }
-    }
-}
-
-function Initialize-CodingAgentDiscovery {
-    param([string] $UserPath = [Environment]::GetEnvironmentVariable("Path", "User"))
-
-    try {
-        # Discovery must not replace commands that are already available.
-        Add-NpmBinDirectories -Append
-    }
-    catch {
-        # A failed optional npm lookup must not prevent choosing other harnesses.
-    }
-    # uv need not be installed yet to locate its tool executables.
-    if ($env:UV_TOOL_BIN_DIR) {
-        Add-PathEntry $env:UV_TOOL_BIN_DIR -Append
-    }
-    elseif ($env:XDG_BIN_HOME) {
-        Add-PathEntry $env:XDG_BIN_HOME -Append
-    }
-    elseif ($env:XDG_DATA_HOME) {
-        Add-PathEntry (Join-Path $env:XDG_DATA_HOME "..\bin") -Append
-    }
-    elseif ($env:USERPROFILE) {
-        Add-PathEntry (Join-Path $env:USERPROFILE ".local\bin") -Append
-    }
-
-    if ((-not (Get-ApplicationCommand "muse")) -and (-not [string]::IsNullOrWhiteSpace($UserPath))) {
-        $originalPath = $env:Path
-        try {
-            $env:Path = "$originalPath$([IO.Path]::PathSeparator)$UserPath"
-            $muse = Get-ApplicationCommand "muse"
-        }
-        finally {
-            $env:Path = $originalPath
-        }
-        if ($muse) {
-            Add-PathEntry (Split-Path -LiteralPath $muse.Source) -Append
-        }
+        Add-PathEntry $prefix
     }
 }
 
@@ -719,7 +714,7 @@ function Ensure-Pi {
             Write-Host "The existing 'pi' command at '$($existingPi.Source)' is not Pi Coding Agent; installing Pi."
         }
         Invoke-DownloadedPowerShellInstaller -Url $PiInstallUrl -Name "Pi"
-        Add-NpmBinDirectories -Prioritize
+        Add-NpmBinDirectories
 
         if (-not $DryRun) {
             $currentPi = Get-ApplicationCommand "pi"
@@ -1106,7 +1101,15 @@ function Ensure-Muse {
     $script:MuseAvailable = $false
     Invoke-DownloadedPowerShellInstaller -Url $MuseInstallUrl -Name "Muse Code"
     Add-KnownBinDirectories
-    Confirm-Application -CommandName "muse" -DisplayName "Muse Code"
+    $commandName = "muse"
+    if (-not $DryRun) {
+        $command = Find-InstalledCodingAgent "muse"
+        if (-not $command) {
+            throw "Muse Code was installed, but 'muse' is not available on PATH."
+        }
+        $commandName = $command.Source
+    }
+    Confirm-Application -CommandName $commandName -DisplayName "Muse Code"
     $script:MuseAvailable = $true
 }
 
@@ -1197,7 +1200,7 @@ function Confirm-DshApplication {
 function Install-Dsh {
     $npmPath = Confirm-DshToolchain
     Invoke-NativeCommand -FilePath $npmPath -Arguments @("install", "-g", $DshPackage)
-    Add-NpmBinDirectories -Prioritize
+    Add-NpmBinDirectories
 }
 
 function Ensure-Dsh {
@@ -1624,7 +1627,6 @@ if (-not (Test-InteractiveInstaller)) {
 
 if (Test-InteractiveInstaller) {
     Write-Step "Choosing coding agents"
-    Initialize-CodingAgentDiscovery
     Select-CodingAgents
 }
 

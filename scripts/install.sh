@@ -97,13 +97,42 @@ prompt_yes_no() {
     done
 }
 
+find_installed_coding_agent() (
+    # Lookup may prepare search paths, but must not change the installer's state.
+    case "$1" in
+        pi|cline|dsh)
+            add_npm_bin_directories
+            ;;
+        aider)
+            if ! command -v aider >/dev/null 2>&1; then
+                if [ -n "${UV_TOOL_BIN_DIR:-}" ]; then
+                    add_path_entry "$UV_TOOL_BIN_DIR"
+                elif [ -n "${XDG_BIN_HOME:-}" ]; then
+                    add_path_entry "$XDG_BIN_HOME"
+                elif [ -n "${XDG_DATA_HOME:-}" ]; then
+                    add_path_entry "$XDG_DATA_HOME/../bin"
+                elif [ -n "${HOME:-}" ]; then
+                    add_path_entry "$HOME/.local/bin"
+                fi
+            fi
+            ;;
+    esac
+
+    if [ "$1" = opencode ] && [ -n "$original_opencode_path" ]; then
+        printf '%s\n' "$original_opencode_path"
+        return 0
+    fi
+    command_path=$(command -v "$1" 2>/dev/null) || return 1
+    if [ "$1" = pi ] && [ "$dry_run" -eq 0 ]; then
+        pi_command_is_compatible || return 1
+    fi
+    printf '%s\n' "$command_path"
+)
+
 select_coding_agent() {
-    if { [ "$1" = opencode ] && [ -n "$original_opencode_path" ]; } ||
-        command -v "$1" >/dev/null 2>&1; then
-        if [ "$1" != pi ] || [ "$dry_run" -eq 1 ] || pi_command_is_compatible; then
-            printf '%s already installed; will verify.\n' "$2" >&4
-            return 0
-        fi
+    if find_installed_coding_agent "$1" >/dev/null; then
+        printf '%s already installed; will verify.\n' "$2" >&4
+        return 0
     fi
     prompt_yes_no "Install $2 for $3?" "${4:-yes}"
 }
@@ -278,13 +307,7 @@ add_path_entry() {
     [ -n "$1" ] || return 0
     case ":$PATH:" in
         *":$1:"*) ;;
-        *)
-            if [ "${2:-prepend}" = append ]; then
-                PATH="$PATH:$1"
-            else
-                PATH="$1:$PATH"
-            fi
-            ;;
+        *) PATH="$1:$PATH" ;;
     esac
 }
 
@@ -338,32 +361,11 @@ add_npm_bin_directories() {
     if command -v npm >/dev/null 2>&1; then
         pi_npm_prefix=$(npm prefix -g 2>/dev/null || npm config get prefix 2>/dev/null || true)
         if [ -n "$pi_npm_prefix" ]; then
-            if [ "${1:-}" = prioritize ]; then
-                prioritize_path_entry "$pi_npm_prefix/bin"
-            else
-                add_path_entry "$pi_npm_prefix/bin" "${1:-prepend}"
-            fi
+            add_path_entry "$pi_npm_prefix/bin"
             export PATH
             hash -r 2>/dev/null || true
         fi
     fi
-}
-
-prepare_coding_agent_discovery() {
-    # Discovery must not replace commands that are already available.
-    add_npm_bin_directories append
-    # uv need not be installed yet to locate its tool executables.
-    if [ -n "${UV_TOOL_BIN_DIR:-}" ]; then
-        add_path_entry "$UV_TOOL_BIN_DIR" append
-    elif [ -n "${XDG_BIN_HOME:-}" ]; then
-        add_path_entry "$XDG_BIN_HOME" append
-    elif [ -n "${XDG_DATA_HOME:-}" ]; then
-        add_path_entry "$XDG_DATA_HOME/../bin" append
-    elif [ -n "${HOME:-}" ]; then
-        add_path_entry "$HOME/.local/bin" append
-    fi
-    export PATH
-    hash -r 2>/dev/null || true
 }
 
 fcc_process_ids() {
@@ -723,7 +725,7 @@ ensure_pi() {
             printf "The existing 'pi' command at %s is not Pi Coding Agent; installing Pi.\n" "$existing_pi_path"
         fi
         download_and_run "$PI_INSTALL_URL" sh "Pi"
-        add_npm_bin_directories prioritize
+        add_npm_bin_directories
 
         if [ "$dry_run" -eq 0 ]; then
             current_pi_path=$(command -v pi 2>/dev/null || true)
@@ -978,7 +980,7 @@ verify_dsh_command() {
 install_dsh_package() {
     require_dsh_toolchain
     run npm install -g "$DSH_PACKAGE"
-    add_npm_bin_directories prioritize
+    add_npm_bin_directories
 }
 
 ensure_dsh() {
@@ -1471,7 +1473,6 @@ fi
 
 if installer_is_interactive; then
     step "Choosing coding agents"
-    prepare_coding_agent_discovery
     choose_coding_agents /dev/tty /dev/tty
 fi
 
