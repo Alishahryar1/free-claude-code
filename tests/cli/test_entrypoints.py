@@ -283,7 +283,7 @@ def test_load_server_settings_leaves_process_owned_invalid_proxy_explicit(
 def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
     from free_claude_code.cli import commands
 
-    settings = _launcher_settings()
+    settings = _launcher_settings(port=0)
     get_settings = MagicMock(side_effect=[settings, settings])
     servers: list[object] = []
     restart_callbacks: list[Callable[[], None]] = []
@@ -346,7 +346,7 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
 def test_serve_supervisor_refuses_restart_after_incomplete_shutdown() -> None:
     from free_claude_code.cli import commands
 
-    settings = _launcher_settings()
+    settings = _launcher_settings(port=0)
     get_settings = MagicMock(return_value=settings)
     servers: list[object] = []
     restart_callbacks: list[Callable[[], None]] = []
