@@ -88,6 +88,13 @@ fi'''
     )
     return f"""#!/bin/sh
 echo "{name}:$*" >> "$CALL_LOG"
+if [ "{name}" = "opencode" ] && [ "${{FCC_RUNNING_PHASE:-}}" = "opencode-plugin" ]; then
+    if [ -e "$FCC_PROCESS_MARKER.probed" ]; then
+        : > "$FCC_PROCESS_MARKER"
+    else
+        : > "$FCC_PROCESS_MARKER.probed"
+    fi
+fi
 if [ "$FAIL_STEP" = "{name}-verify" ]; then
     exit 31
 fi
@@ -329,7 +336,7 @@ def posix_harness(tmp_path: Path) -> PosixHarness:
         bin_dir / "pgrep",
         """#!/bin/sh
 [ -n "${FCC_RUNNING_COMMAND:-}" ] || exit 1
-if [ "${FCC_RUNNING_PHASE:-early}" = "late" ] && [ ! -e "$FCC_PROCESS_MARKER" ]; then
+if [ "${FCC_RUNNING_PHASE:-early}" != "early" ] && [ ! -e "$FCC_PROCESS_MARKER" ]; then
     exit 1
 fi
 case "$*" in
@@ -372,7 +379,12 @@ case "$url" in
     *claude.ai*) source="$FAKE_FIXTURES/claude-installer.sh" ;;
     *chatgpt.com*) source="$FAKE_FIXTURES/codex-installer.sh" ;;
     *pi.dev*) source="$FAKE_FIXTURES/pi-installer.sh" ;;
-    *opencode.ai*) source="$FAKE_FIXTURES/opencode-installer.sh" ;;
+    *opencode.ai*)
+        source="$FAKE_FIXTURES/opencode-installer.sh"
+        if [ "${FCC_RUNNING_PHASE:-}" = "opencode-download" ]; then
+            : > "$FCC_PROCESS_MARKER"
+        fi
+        ;;
     *hermes-agent.nousresearch.com*) source="$FAKE_FIXTURES/hermes-installer.sh" ;;
     *x.ai*) source="$FAKE_FIXTURES/grok-installer.sh" ;;
     *dev.meta.ai*) source="$FAKE_FIXTURES/muse-installer.sh" ;;
@@ -1779,6 +1791,13 @@ def _batch_client(name: str, *, version_output: str | None = None) -> str:
     )
     return f"""@echo off
 echo {name}:%*>>"%CALL_LOG%"
+if "{name}"=="opencode" if "%FCC_RUNNING_PHASE%"=="opencode-plugin" (
+    if exist "%FCC_PROCESS_MARKER%.probed" (
+        type nul > "%FCC_PROCESS_MARKER%"
+    ) else (
+        type nul > "%FCC_PROCESS_MARKER%.probed"
+    )
+)
 if "%FAIL_STEP%"=="{name}-verify" exit /b 51
 {version_command}
 if "%1"=="--help" (
@@ -2178,6 +2197,9 @@ function Invoke-RestMethod {
         throw "unexpected installer URL: $Uri"
     }
     Copy-Item -LiteralPath $source -Destination $OutFile -Force
+    if ($env:FCC_RUNNING_PHASE -eq "opencode-download" -and $Uri.Contains("opencode.ai/files/bin/")) {
+        New-Item -ItemType File -Path $env:FCC_PROCESS_MARKER -Force | Out-Null
+    }
 }
 function Get-Process {
     [CmdletBinding()]
@@ -2187,7 +2209,7 @@ function Get-Process {
         return
     }
     if (
-        $env:FCC_RUNNING_PHASE -eq "late" -and
+        $env:FCC_RUNNING_PHASE -ne "early" -and
         -not (Test-Path -LiteralPath $env:FCC_PROCESS_MARKER)
     ) {
         return
@@ -2203,6 +2225,9 @@ $nativeVersionProbe = '    $output = Read-OpenCodeVersionOutput $OpenCodePath'
 $fakeArchiveVersionProbe = @'
     $output = if ([IO.Path]::GetExtension($OpenCodePath) -eq ".exe") {
         Add-Content -LiteralPath $env:CALL_LOG -Value "opencode:--version"
+        if ($env:FCC_RUNNING_PHASE -eq "opencode-publish" -and [IO.File]::ReadAllText($OpenCodePath) -ne "old-opencode-v1") {
+            New-Item -ItemType File -Path $env:FCC_PROCESS_MARKER -Force | Out-Null
+        }
         if ($env:FAIL_STEP -eq "opencode-verify") { throw "simulated version failure" }
         if ([IO.File]::ReadAllText($OpenCodePath) -eq "old-opencode-v1") {
             "opencode v1.18.31"
@@ -3604,6 +3629,115 @@ def test_install_ps1_opencode_rtk_cleanup_without_rtk_option(
     _assert_opencode_rtk_cleanup(powershell_harness, modified)
 
 
+def _assert_opencode_linked_rtk_parent_is_preserved(
+    harness: PosixHarness | PowerShellHarness, parent: str
+) -> None:
+    native = _prepare_native_opencode_v1(harness)
+    original = native.read_bytes()
+    home = native.parents[2]
+    plugin = home / ".config/opencode/plugins/rtk.ts"
+    plugin.parent.mkdir(parents=True)
+    contents = (
+        Path(__file__).with_name("fixtures").joinpath("rtk-opencode-v1.ts").read_bytes()
+    )
+    plugin.write_bytes(contents)
+    linked = home / parent
+    shared = harness.root / "shared-config"
+    linked.rename(shared)
+    if isinstance(harness, PowerShellHarness):
+        subprocess.run(
+            [
+                harness.powershell,
+                "-NoProfile",
+                "-Command",
+                "New-Item -ItemType Junction -Path $env:FCC_TEST_LINK -Target $env:FCC_TEST_TARGET -ErrorAction Stop | Out-Null",
+            ],
+            env=harness.env
+            | {"FCC_TEST_LINK": str(linked), "FCC_TEST_TARGET": str(shared)},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    else:
+        linked.symlink_to(shared, target_is_directory=True)
+    try:
+        result = harness.run()
+        assert result.returncode != 0
+        assert "manually" in result.stderr
+        assert plugin.read_bytes() == contents
+        assert not list((home / ".config/opencode").glob("rtk-v1-*"))
+        assert native.read_bytes() == original
+        assert not any("opencode.ai" in call for call in harness.calls())
+    finally:
+        if isinstance(harness, PowerShellHarness):
+            linked.rmdir()
+        else:
+            linked.unlink()
+
+
+@pytest.mark.parametrize(
+    "parent", [".config", ".config/opencode", ".config/opencode/plugins"]
+)
+def test_install_sh_opencode_linked_rtk_parent_is_preserved(
+    posix_harness: PosixHarness, parent: str
+) -> None:
+    _assert_opencode_linked_rtk_parent_is_preserved(posix_harness, parent)
+
+
+@pytest.mark.parametrize(
+    "parent", [".config", ".config/opencode", ".config/opencode/plugins"]
+)
+def test_install_ps1_opencode_linked_rtk_parent_is_preserved(
+    powershell_harness: PowerShellHarness, parent: str
+) -> None:
+    _assert_opencode_linked_rtk_parent_is_preserved(powershell_harness, parent)
+
+
+def _assert_opencode_starting_late_blocks_mutation(
+    harness: PosixHarness | PowerShellHarness, phase: str, command: str
+) -> None:
+    plugin_only = phase == "opencode-plugin"
+    windows = isinstance(harness, PowerShellHarness)
+    home = Path(harness.env["USERPROFILE" if windows else "HOME"])
+    native = None if plugin_only else _prepare_native_opencode_v1(harness)
+    original = native.read_bytes() if native else None
+    plugin = home / ".config/opencode/plugins/rtk.ts"
+    plugin.parent.mkdir(parents=True)
+    contents = (
+        Path(__file__).with_name("fixtures").joinpath("rtk-opencode-v1.ts").read_bytes()
+    )
+    plugin.write_bytes(contents)
+    harness.env["FCC_RUNNING_COMMAND"] = command
+    harness.env["FCC_RUNNING_PHASE"] = phase
+    result = harness.run()
+    assert Path(harness.env["FCC_PROCESS_MARKER"]).exists()
+    assert result.returncode != 0
+    assert "Close OpenCode" in result.stderr
+    assert plugin.read_bytes() == contents
+    assert not list(plugin.parents[1].glob("rtk-v1-*"))
+    if native:
+        assert native.read_bytes() == original
+        assert not list(native.parent.glob(".opencode-*"))
+
+
+@pytest.mark.parametrize("phase", ["opencode-download", "opencode-plugin"])
+@pytest.mark.parametrize("command", ["opencode", "opencode2"])
+def test_install_sh_opencode_starting_late_blocks_mutation(
+    posix_harness: PosixHarness, phase: str, command: str
+) -> None:
+    _assert_opencode_starting_late_blocks_mutation(posix_harness, phase, command)
+
+
+@pytest.mark.parametrize(
+    "phase", ["opencode-download", "opencode-publish", "opencode-plugin"]
+)
+@pytest.mark.parametrize("command", ["opencode", "opencode2"])
+def test_install_ps1_opencode_starting_late_blocks_mutation(
+    powershell_harness: PowerShellHarness, phase: str, command: str
+) -> None:
+    _assert_opencode_starting_late_blocks_mutation(powershell_harness, phase, command)
+
+
 def test_install_sh_opencode_running_blocks_native_migration(
     posix_harness: PosixHarness,
 ) -> None:
@@ -3755,6 +3889,7 @@ def test_install_ps1_opencode_rejects_mismatched_archive_before_replacement(
 
 @pytest.mark.parametrize("powershell", _powershells())
 @pytest.mark.parametrize("exit_code", [0, 31])
+@pytest.mark.skipif(os.name != "nt", reason="Windows native command probe")
 def test_install_ps1_opencode_version_probe_runs_native_command(
     tmp_path: Path, powershell: str, exit_code: int
 ) -> None:

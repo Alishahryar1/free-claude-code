@@ -711,6 +711,12 @@ opencode_rtk_plugin() {
     fi
     [ -f "$opencode_plugin_path" ] && [ ! -L "$opencode_plugin_path" ] ||
         fail "Disable or migrate the RTK plugin at $opencode_plugin_path manually, then rerun the installer."
+    # The backup lives in .config/opencode; check its parents as well as the
+    # plugin directory so a linked parent cannot redirect either mutation.
+    for opencode_parent in "$HOME/.config" "$HOME/.config/opencode" "$HOME/.config/opencode/plugins"; do
+        [ ! -L "$opencode_parent" ] ||
+            fail "The RTK plugin directory is linked: $opencode_parent. Disable or migrate it manually, then rerun the installer."
+    done
     if command -v sha256sum >/dev/null 2>&1; then
         opencode_plugin_hash=$(sha256sum "$opencode_plugin_path") || return 1
     elif command -v shasum >/dev/null 2>&1; then
@@ -721,6 +727,17 @@ opencode_rtk_plugin() {
     [ "${opencode_plugin_hash%% *}" = "6530c131946c84892f9522abd68d4e513e1e658d8ddbad1f59388c86ebbcb6bb" ] ||
         fail "The RTK plugin at $opencode_plugin_path was modified or is unrecognized. Disable or migrate it manually, then rerun the installer."
     printf '%s\n' "$opencode_plugin_path"
+}
+
+assert_no_opencode_processes_running() {
+    [ -z "$(fcc_process_ids opencode)$(fcc_process_ids opencode2)" ] ||
+        fail "Close OpenCode before replacing its executable or RTK plugin, then rerun the installer."
+}
+
+run_opencode_installer() {
+    # Recheck after the script download. Upstream owns the actual installation.
+    assert_no_opencode_processes_running
+    bash "$@"
 }
 
 ensure_opencode() {
@@ -752,14 +769,13 @@ ensure_opencode() {
     fi
     opencode_plugin=$(opencode_rtk_plugin) || return $?
     if [ "$opencode_install" -eq 1 ] || [ -n "$opencode_plugin" ]; then
-        [ -z "$(fcc_process_ids opencode)$(fcc_process_ids opencode2)" ] ||
-            fail "Close OpenCode before replacing its executable or RTK plugin, then rerun the installer."
+        assert_no_opencode_processes_running
     fi
     if [ "$opencode_install" -eq 1 ]; then
         for opencode_target in "$HOME/.opencode" "$HOME/.opencode/bin" "$opencode_native"; do
             [ ! -L "$opencode_target" ] || fail "OpenCode installation path is linked: $opencode_target. Migrate it manually."
         done
-        download_and_run "$OPENCODE_INSTALL_URL" bash "OpenCode"
+        download_and_run "$OPENCODE_INSTALL_URL" run_opencode_installer "OpenCode"
         add_known_bin_directories
         hash -r 2>/dev/null || true
         opencode_installed=$(opencode_version "$opencode_native") || fail "Could not verify installed OpenCode at $opencode_native."
@@ -776,6 +792,9 @@ ensure_opencode() {
         *) fail "OpenCode at $opencode_path is not stable OpenCode 2. Correct PATH, then rerun the installer." ;;
     esac
     if [ -n "$opencode_plugin" ]; then
+        opencode_plugin=$(opencode_rtk_plugin) || return $?
+        [ -n "$opencode_plugin" ] || return 0
+        assert_no_opencode_processes_running
         opencode_backup=$(mktemp "$HOME/.config/opencode/rtk-v1-XXXXXX") || fail "Could not create an RTK plugin backup."
         if mv "$opencode_plugin" "$opencode_backup"; then
             printf 'OpenCode 2 RTK support is unavailable; the old plugin was saved at %s.\n' "$opencode_backup"

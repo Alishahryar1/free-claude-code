@@ -39,6 +39,19 @@ def build_opencode_config(
         },
     }
     default_model = f"{OPENCODE_PROVIDER_ID}/{default_model_id}"
+    # OpenCode's buffer is global, so it must also fit the smallest selectable
+    # model. Leave its native 20K default alone when every known window fits it.
+    buffer = min(
+        (
+            model.context_window_tokens // 4
+            for model in models
+            if model.context_window_tokens is not None
+        ),
+        default=20000,
+    )
+    compaction: JsonObject = (
+        {"compaction": {"buffer": buffer}} if buffer < 20000 else {}
+    )
 
     return OpenCodeConfig(
         file={
@@ -50,6 +63,7 @@ def build_opencode_config(
             }
         },
         overlay={
+            **compaction,
             "providers": {OPENCODE_PROVIDER_ID: provider_config},
             "experimental": {
                 "policies": [
@@ -84,6 +98,10 @@ def _model_config(model: CatalogModel) -> JsonObject:
         limits["context"] = model.context_window_tokens
     if model.max_output_tokens is not None:
         limits["output"] = model.max_output_tokens
+    elif model.context_window_tokens is not None:
+        # An omitted output limit inherits 32K in OpenCode, which can consume
+        # the entire known window. This fallback is an OpenCode runtime budget.
+        limits["output"] = max(1, min(4096, model.context_window_tokens // 4))
     if limits:
         config["limit"] = limits
     return config

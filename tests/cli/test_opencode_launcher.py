@@ -10,7 +10,7 @@ from free_claude_code.cli.launchers.opencode_config import build_opencode_config
 from free_claude_code.core.model_capabilities import ModelInputModality
 
 
-def test_opencode_config_uses_native_responses_and_only_known_metadata() -> None:
+def test_opencode_config_uses_native_responses_and_model_budgets() -> None:
     config = build_opencode_config(
         (
             CatalogModel(
@@ -72,7 +72,7 @@ def test_opencode_config_uses_native_responses_and_only_known_metadata() -> None
         "claude-3-freecc-no-thinking/open_router/plain-model": {
             "name": "No-thinking model",
             "capabilities": {"tools": True, "input": ["text"], "output": ["text"]},
-            "limit": {"context": 65536},
+            "limit": {"context": 65536, "output": 4096},
         },
         "future_provider/unknown-model": {
             "name": "Unknown model",
@@ -83,6 +83,7 @@ def test_opencode_config_uses_native_responses_and_only_known_metadata() -> None
         },
     }
     assert config.overlay == {
+        "compaction": {"buffer": 16384},
         "providers": {
             "free-claude-code": {
                 "name": "Free Claude Code",
@@ -109,6 +110,52 @@ def test_opencode_config_uses_native_responses_and_only_known_metadata() -> None
     serialized = json.dumps(config.file | config.overlay)
     assert "proxy-token" not in serialized
     assert "attachment" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("context", "output", "expected_limits", "expected_buffer"),
+    [
+        (32768, None, {"context": 32768, "output": 4096}, 8192),
+        (8192, None, {"context": 8192, "output": 2048}, 2048),
+        (16384, 1024, {"context": 16384, "output": 1024}, 4096),
+        (131072, 65536, {"context": 131072, "output": 65536}, None),
+        (200000, None, {"context": 200000, "output": 4096}, None),
+        (None, 4096, {"output": 4096}, None),
+        (None, None, None, None),
+    ],
+)
+def test_opencode_context_reserves_fit_small_models(
+    context: int | None,
+    output: int | None,
+    expected_limits: dict[str, int] | None,
+    expected_buffer: int | None,
+) -> None:
+    config = build_opencode_config(
+        (
+            CatalogModel(
+                wire_slug="test/model",
+                provider_model_ref="test/model",
+                display_name="Test model",
+                supports_reasoning=None,
+                context_window_tokens=context,
+                max_output_tokens=output,
+            ),
+        ),
+        default_model_id="test/model",
+        proxy_root_url="http://127.0.0.1:8182",
+    )
+    provider = config.file["providers"]
+    assert isinstance(provider, dict)
+    fcc = provider["free-claude-code"]
+    assert isinstance(fcc, dict)
+    models = fcc["models"]
+    assert isinstance(models, dict)
+    model = models["test/model"]
+    assert isinstance(model, dict)
+    assert model.get("limit") == expected_limits
+    assert config.overlay.get("compaction") == (
+        {"buffer": expected_buffer} if expected_buffer is not None else None
+    )
 
 
 def test_opencode_config_rejects_empty_model_catalog() -> None:

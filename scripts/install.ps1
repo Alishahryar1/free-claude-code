@@ -747,6 +747,13 @@ function Get-OpenCodeRtkPlugin {
     if ($plugin.PSIsContainer -or ($plugin.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw "Disable or migrate the RTK plugin at '$pluginPath' manually, then rerun the installer."
     }
+    # These include the backup's parent; a junction must not redirect either move.
+    foreach ($relativePath in @(".config", ".config\opencode", ".config\opencode\plugins")) {
+        $parent = Get-Item -LiteralPath (Join-Path $env:USERPROFILE $relativePath) -Force -ErrorAction Stop
+        if ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "The RTK plugin directory is linked: '$($parent.FullName)'. Disable or migrate it manually, then rerun the installer."
+        }
+    }
     $sha256 = [Security.Cryptography.SHA256]::Create()
     try {
         $hash = [BitConverter]::ToString($sha256.ComputeHash([IO.File]::ReadAllBytes($pluginPath))).Replace("-", "").ToLowerInvariant()
@@ -775,6 +782,12 @@ function Get-OpenCodeWindowsAssetName {
         "X64" { return "opencode-windows-x64-baseline.zip" }
         "X86_64" { return "opencode-windows-x64-baseline.zip" }
         default { throw "OpenCode does not provide a supported Windows release for architecture '$architecture'." }
+    }
+}
+
+function Assert-NoOpenCodeProcessesRunning {
+    if (@(Get-Process -Name opencode,opencode2 -ErrorAction SilentlyContinue).Count -gt 0) {
+        throw "Close OpenCode before replacing its executable or RTK plugin, then rerun the installer."
     }
 }
 
@@ -820,6 +833,7 @@ function Install-OpenCode {
         if ((-not (Test-Path -LiteralPath $temporaryInstallPath -PathType Leaf)) -or ((Get-Item -LiteralPath $temporaryInstallPath).Length -eq 0)) {
             throw "The extracted OpenCode executable was empty."
         }
+        Assert-NoOpenCodeProcessesRunning
         Move-Item -LiteralPath $temporaryInstallPath -Destination (Join-Path $installDirectory "opencode.exe") -Force
     }
     finally {
@@ -856,9 +870,7 @@ function Ensure-OpenCode {
     }
     $pluginPath = Get-OpenCodeRtkPlugin
     if ($install -or $pluginPath) {
-        if (@(Get-Process -Name opencode,opencode2 -ErrorAction SilentlyContinue).Count -gt 0) {
-            throw "Close OpenCode before replacing its executable or RTK plugin, then rerun the installer."
-        }
+        Assert-NoOpenCodeProcessesRunning
     }
     if ($install) {
         foreach ($target in @((Join-Path $env:USERPROFILE ".opencode"), (Split-Path -Parent $nativePath), $nativePath)) {
@@ -881,7 +893,10 @@ function Ensure-OpenCode {
     }
     Write-Host "Verified OpenCode $version at '$($command.Source)'."
     if ($pluginPath) {
+        $pluginPath = Get-OpenCodeRtkPlugin
+        if (-not $pluginPath) { return }
         $backupPath = Join-Path (Split-Path -Parent (Split-Path -Parent $pluginPath)) ("rtk-v1-" + [guid]::NewGuid().ToString("N") + ".bak")
+        Assert-NoOpenCodeProcessesRunning
         Move-Item -LiteralPath $pluginPath -Destination $backupPath -ErrorAction Stop
         Write-Host "OpenCode 2 RTK support is unavailable; the old plugin was saved at '$backupPath'."
     }
