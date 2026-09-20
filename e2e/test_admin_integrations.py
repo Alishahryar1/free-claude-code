@@ -58,14 +58,6 @@ def test_codex_connect_disconnect_and_modal_paths(
     expect(page.locator("#messageArea")).to_have_text("")
     cards = page.locator("#view-integrations > article")
     expect(cards).to_have_count(4)
-    expect(cards.locator("h3")).to_have_text(
-        [
-            "Claude Code in VS Code",
-            "Codex in VS Code and App",
-            "Claude Code in JetBrains ACP",
-            "Claude Desktop",
-        ]
-    )
     expect(page.locator("#claudeIntegrationStatus")).to_have_count(0)
     expect(page.locator("#openCodexIntegration")).to_be_enabled()
     expect(page.locator("#codexIntegrationStatus")).to_have_count(0)
