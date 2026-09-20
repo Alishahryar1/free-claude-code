@@ -144,6 +144,7 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
         {"name": "KEEP", "value": "yes"},
         {"name": "ANTHROPIC_AUTH_TOKEN", "value": "old", "extra": "keep"},
         {"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "value": "0"},
+        {"name": "CLAUDE_CODE_AUTO_MODE_SERVER", "value": "1"},
       ],
     }""",
         encoding="utf-8",
@@ -158,6 +159,7 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
         "ANTHROPIC_AUTH_TOKEN",
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         "CLAUDE_CODE_DISABLE_ADVISOR_TOOL",
+        "CLAUDE_CODE_AUTO_MODE_SERVER",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
         "DISABLE_AUTOUPDATER",
         "DISABLE_FEEDBACK_COMMAND",
@@ -170,6 +172,7 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
     }
     assert entries["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]["value"] == "190000"
     assert entries["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"]["value"] == "1"
+    assert entries["CLAUDE_CODE_AUTO_MODE_SERVER"]["value"] == "0"
     assert "//" not in path.read_text().replace("http://", "")
     assert operate(path, False) == {"connected": False}
     assert json.loads(path.read_text()) == {
