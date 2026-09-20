@@ -16,7 +16,7 @@ def test_real_disconnect_failure_keeps_retry_after_reload(
     opener = page.locator("#openClaudeDesktopIntegration")
     expect(opener).to_have_text("Connect")
     opener.click()
-    dialog = page.get_by_role("dialog", name="Claude Desktop", exact=True)
+    dialog = page.locator("#claudeDesktopIntegrationDialog")
     dialog.get_by_role("button", name="Connect", exact=True).click()
     expect(opener).to_have_text("Disconnect")
     unlink = Path.unlink
@@ -80,7 +80,7 @@ def test_desktop_connect_disconnect_and_retry(page, admin_base_url, tmp_path):
     opener = page.locator("#openClaudeDesktopIntegration")
     expect(opener).to_have_text("Connect")
     expect(opener).to_be_enabled()
-    dialog = page.get_by_role("dialog", name="Claude Desktop", exact=True)
+    dialog = page.locator("#claudeDesktopIntegrationDialog")
     profile = tmp_path / "Claude-3p/configLibrary" / f"{desktop.FCC_ID}.json"
     for dismissal in ("close", "escape", "outside"):
         opener.click()
