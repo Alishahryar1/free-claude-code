@@ -1710,6 +1710,17 @@ jetBrainsIntegrationDialog.addEventListener("click", (event) => {
   }
 });
 
+const claudeDesktopIntegrationDialog = byId("claudeDesktopIntegrationDialog");
+byId("openClaudeDesktopIntegration").addEventListener("click", () => claudeDesktopIntegrationDialog.showModal());
+byId("closeClaudeDesktopIntegration").addEventListener("click", () => claudeDesktopIntegrationDialog.close());
+claudeDesktopIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== claudeDesktopIntegrationDialog) return;
+  const bounds = claudeDesktopIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    claudeDesktopIntegrationDialog.close();
+  }
+});
+
 // Keep footer clearance exact when messages wrap or a view hides the bar.
 new ResizeObserver(([entry]) => {
   document.documentElement.style.setProperty(
