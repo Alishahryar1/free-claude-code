@@ -144,7 +144,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         ("test_opencode_cli_prompt_e2e",),
         ("clients",),
         (
-            "stable OpenCode V1 CLI",
+            "stable OpenCode 2 CLI",
             "configured provider credentials or local provider endpoint",
         ),
         "skip only when OpenCode is absent; configured providers must pass",

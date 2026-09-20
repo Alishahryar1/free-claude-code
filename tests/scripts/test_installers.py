@@ -60,7 +60,7 @@ def _braced_body(text: str, declaration: str) -> str:
 
 def _posix_command(name: str, *, version_output: str | None = None) -> str:
     version = {
-        "opencode": "1.18.18",
+        "opencode": "v2.0.10",
         "cline": "3.0.55",
         "hermes": "0.20.4",
         "dsh": "0.1.0-rc.8",
@@ -333,7 +333,7 @@ if [ "${FCC_RUNNING_PHASE:-early}" = "late" ] && [ ! -e "$FCC_PROCESS_MARKER" ];
     exit 1
 fi
 case "$*" in
-    *"$FCC_RUNNING_COMMAND"*) printf '4242\n'; exit 0 ;;
+    "-x $FCC_RUNNING_COMMAND"|"-f (^|/)$FCC_RUNNING_COMMAND([[:space:]]|$)") printf '4242\n'; exit 0 ;;
     *) exit 1 ;;
 esac
 """,
@@ -557,6 +557,9 @@ esac
         bin_dir / "sha256sum",
         """#!/bin/sh
 echo "sha256sum:$*" >> "$CALL_LOG"
+case "$1" in
+    */rtk.ts) exec /usr/bin/shasum -a 256 "$1" ;;
+esac
 if [ "$FAIL_STEP" = "rtk-checksum" ]; then
     checksum="0000000000000000000000000000000000000000000000000000000000000000"
 else
@@ -705,7 +708,6 @@ def test_install_sh_rejects_unsupported_hermes_platform_before_download(
 @pytest.mark.parametrize(
     ("client", "install_call"),
     [
-        ("opencode", "opencode-install"),
         ("cline", "npm:install -g cline"),
         ("hermes", "hermes-install:--non-interactive --skip-setup"),
         ("grok", "grok-install"),
@@ -966,10 +968,9 @@ def test_install_sh_installs_and_configures_rtk_for_selected_agents(
         "rtk:init --global --auto-patch:telemetry=1",
         "rtk:init --global --codex:telemetry=1",
         "rtk:init --global --agent pi:telemetry=1",
-        "rtk:init --global --opencode:telemetry=1",
     ]
     assert calls.index("uv:--version") < calls.index(
-        "rtk:init --global --opencode:telemetry=1"
+        "rtk:init --global --agent pi:telemetry=1"
     )
     assert (Path(posix_harness.env["HOME"]) / ".claude").is_dir()
 
@@ -1740,7 +1741,7 @@ def _windows_shortcut_icon(
 
 def _batch_client(name: str, *, version_output: str | None = None) -> str:
     version = {
-        "opencode": "1.18.18",
+        "opencode": "v2.0.10",
         "cline": "3.0.55",
         "hermes": "0.20.4",
         "dsh": "0.1.0-rc.8",
@@ -2130,7 +2131,7 @@ function Invoke-RestMethod {
         ($env:FAIL_STEP -eq "claude-download" -and $Uri.Contains("claude.ai")) -or
         ($env:FAIL_STEP -eq "codex-download" -and $Uri.Contains("chatgpt.com")) -or
         ($env:FAIL_STEP -eq "pi-download" -and $Uri.Contains("pi.dev")) -or
-        ($env:FAIL_STEP -eq "opencode-download" -and $Uri.Contains("anomalyco/opencode")) -or
+        ($env:FAIL_STEP -eq "opencode-download" -and $Uri.Contains("opencode.ai/files/bin/")) -or
         ($env:FAIL_STEP -eq "hermes-download" -and $Uri.Contains("hermes-agent.nousresearch.com")) -or
         ($env:FAIL_STEP -eq "grok-download" -and $Uri.Contains("x.ai/cli")) -or
         ($env:FAIL_STEP -eq "muse-download" -and $Uri.Contains("scripts/install-muse.ps1")) -or
@@ -2138,6 +2139,9 @@ function Invoke-RestMethod {
         ($env:FAIL_STEP -eq "uv-download" -and $Uri.Contains("astral.sh"))
     ) {
         throw "simulated download failure"
+    }
+    if ($Uri.Contains("opencode.ai/update/api/latest/cli/npm")) {
+        return @{ version = $(if ($env:FAKE_OPENCODE_RELEASE) { $env:FAKE_OPENCODE_RELEASE } else { "2.0.10" }) }
     }
     if ($Uri.Contains("claude.ai")) {
         $source = Join-Path $env:FAKE_FIXTURES "claude-installer.ps1"
@@ -2195,10 +2199,18 @@ function Get-Process {
     }
 }
 $installerSource = [IO.File]::ReadAllText($env:FCC_INSTALLER)
-$nativeVersionProbe = '    $output = Invoke-Utf8NativeCapture -FilePath $OpenCodePath -Arguments @("--version")'
+$nativeVersionProbe = '    $output = Read-OpenCodeVersionOutput $OpenCodePath'
 $fakeArchiveVersionProbe = @'
-    $output = if ([IO.Path]::GetFileName($OpenCodePath) -eq "opencode.exe") {
-        "opencode 1.18.18"
+    $output = if ([IO.Path]::GetExtension($OpenCodePath) -eq ".exe") {
+        Add-Content -LiteralPath $env:CALL_LOG -Value "opencode:--version"
+        if ($env:FAIL_STEP -eq "opencode-verify") { throw "simulated version failure" }
+        if ([IO.File]::ReadAllText($OpenCodePath) -eq "old-opencode-v1") {
+            "opencode v1.18.31"
+        } elseif ($env:FAKE_OPENCODE_ARCHIVE_VERSION) {
+            $env:FAKE_OPENCODE_ARCHIVE_VERSION
+        } else {
+            "opencode v2.0.10"
+        }
     }
     else {
         Invoke-Utf8NativeCapture -FilePath $OpenCodePath -Arguments @("--version")
@@ -2234,6 +2246,8 @@ $installer = [scriptblock]::Create($installerSource)
             "PROCESSOR_ARCHITECTURE": "AMD64",
             "PROCESSOR_ARCHITEW6432": "",
             "FAIL_STEP": "",
+            "FAKE_OPENCODE_RELEASE": "",
+            "FAKE_OPENCODE_ARCHIVE_VERSION": "",
         }
     )
     env.pop("XDG_BIN_HOME", None)
@@ -2260,7 +2274,10 @@ def test_install_ps1_fresh_install_is_verified(
     assert calls.index("claude-install") < calls.index("claude:--version")
     assert calls.index("codex-install:1") < calls.index("codex:--version")
     assert calls.index("pi-install") < calls.index("pi:--version")
-    assert any("anomalyco/opencode" in call for call in calls)
+    assert (
+        "download:https://opencode.ai/files/bin/2.0.10/opencode-windows-x64-baseline.zip"
+        in calls
+    )
     assert calls.index("npm:install -g cline") < calls.index("cline:--version")
     assert any("hermes-agent.nousresearch.com/install.ps1" in call for call in calls)
     assert "hermes-install:True:True" in calls
@@ -2338,7 +2355,6 @@ def test_install_ps1_discovers_grok_in_custom_bin_directory(
 @pytest.mark.parametrize(
     ("client", "install_call"),
     [
-        ("opencode", "anomalyco/opencode"),
         ("cline", "npm:install -g cline"),
         ("hermes", "hermes-install:True:True"),
         ("grok", "grok-install"),
@@ -2612,7 +2628,9 @@ def test_install_ps1_rejects_unsupported_opencode_architecture(
 
     assert result.returncode != 0
     assert "does not provide a supported Windows release" in result.stderr
-    assert not any("anomalyco/opencode" in call for call in powershell_harness.calls())
+    assert not any(
+        "opencode.ai/files/bin/" in call for call in powershell_harness.calls()
+    )
 
 
 def test_install_ps1_preserves_existing_rtk_and_configures_selected_agents(
@@ -2632,7 +2650,6 @@ def test_install_ps1_preserves_existing_rtk_and_configures_selected_agents(
         "rtk:init --global --auto-patch:telemetry=1",
         "rtk:init --global --codex:telemetry=1",
         "rtk:init --global --agent pi:telemetry=1",
-        "rtk:init --global --opencode:telemetry=1",
     ]
     assert (Path(powershell_harness.env["USERPROFILE"]) / ".claude").is_dir()
 
@@ -3446,6 +3463,326 @@ Ensure-SelectedCodingAgents
 
     assert result.returncode != 0
     assert "No selected coding agent was installed." in result.stderr
+
+
+def _prepare_native_opencode_v1(harness: PosixHarness | PowerShellHarness) -> Path:
+    windows = isinstance(harness, PowerShellHarness)
+    home = Path(harness.env["USERPROFILE" if windows else "HOME"])
+    (harness.bin_dir / ("opencode.cmd" if windows else "opencode")).unlink()
+    binary = home / ".opencode" / "bin" / ("opencode.exe" if windows else "opencode")
+    _write_executable(
+        binary,
+        "old-opencode-v1"
+        if windows
+        else _posix_command("opencode", version_output="opencode v1.18.31"),
+    )
+    return binary
+
+
+def _assert_native_opencode_migration(
+    harness: PosixHarness | PowerShellHarness,
+) -> None:
+    binary = _prepare_native_opencode_v1(harness)
+    original = binary.read_bytes()
+    result = harness.run()
+    assert result.returncode == 0, result.stderr
+    assert binary.read_bytes() != original
+    assert any(
+        "opencode.ai/v2/install" in call or "opencode.ai/files/bin/2.0.10/" in call
+        for call in harness.calls()
+    )
+    assert not any(
+        "anomalyco/opencode" in call or "npm:uninstall" in call
+        for call in harness.calls()
+    )
+    harness.log.unlink()
+    result = harness.run()
+    assert result.returncode == 0, result.stderr
+    assert not any("opencode.ai" in call for call in harness.calls())
+
+
+def test_install_sh_opencode_v2_migrates_native_v1(posix_harness: PosixHarness) -> None:
+    _assert_native_opencode_migration(posix_harness)
+
+
+def test_install_ps1_opencode_v2_migrates_native_v1(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    _assert_native_opencode_migration(powershell_harness)
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["opencode v1.18.31", "opencode v2.0.10-beta", "opencode v3.0.0", "opaque output"],
+)
+def test_install_sh_opencode_rejects_external_incompatible_version(
+    posix_harness: PosixHarness, version: str
+) -> None:
+    path = posix_harness.bin_dir / "opencode"
+    _write_executable(path, _posix_command("opencode", version_output=version))
+    original = path.read_bytes()
+    result = posix_harness.run()
+    assert result.returncode != 0
+    assert str(path) in result.stderr
+    assert path.read_bytes() == original
+    assert not any("opencode-install" in call for call in posix_harness.calls())
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["opencode v1.18.31", "opencode v2.0.10-beta", "opencode v3.0.0", "opaque output"],
+)
+def test_install_ps1_opencode_rejects_external_incompatible_version(
+    powershell_harness: PowerShellHarness, version: str
+) -> None:
+    path = powershell_harness.bin_dir / "opencode.cmd"
+    _write_executable(path, _batch_client("opencode", version_output=version))
+    original = path.read_bytes()
+    result = powershell_harness.run()
+    assert result.returncode != 0
+    assert str(path) in "".join(result.stderr.split())
+    assert path.read_bytes() == original
+    assert not any("opencode.ai" in call for call in powershell_harness.calls())
+
+
+def _assert_opencode_rtk_cleanup(
+    harness: PosixHarness | PowerShellHarness, modified: bool
+) -> None:
+    native = _prepare_native_opencode_v1(harness) if modified else None
+    original = native.read_bytes() if native else None
+    windows = isinstance(harness, PowerShellHarness)
+    home = Path(harness.env["USERPROFILE" if windows else "HOME"])
+    config = home / ".config" / "opencode"
+    plugin = config / "plugins" / "rtk.ts"
+    plugin.parent.mkdir(parents=True)
+    contents = (
+        Path(__file__).with_name("fixtures").joinpath("rtk-opencode-v1.ts").read_bytes()
+    )
+    assert (
+        hashlib.sha256(contents).hexdigest()
+        == "6530c131946c84892f9522abd68d4e513e1e658d8ddbad1f59388c86ebbcb6bb"
+    )
+    if modified:
+        contents += b"\n// user customization\n"
+    plugin.write_bytes(contents)
+    previous_backup = config / "rtk-v1-existing.bak"
+    previous_backup.write_bytes(b"prior backup")
+    database = home / ".local" / "share" / "opencode" / "opencode.db"
+    database.parent.mkdir(parents=True)
+    database.write_bytes(b"user-owned database sentinel")
+    result = harness.run()
+    assert database.read_bytes() == b"user-owned database sentinel"
+    assert list(database.parent.iterdir()) == [database]
+    assert previous_backup.read_bytes() == b"prior backup"
+    if modified:
+        assert result.returncode != 0
+        assert "rtk.ts" in result.stderr
+        assert plugin.read_bytes() == contents
+        assert native is not None and native.read_bytes() == original
+        assert not any("opencode.ai" in call for call in harness.calls())
+    else:
+        assert result.returncode == 0, result.stderr
+        assert not plugin.exists()
+        backups = [path for path in config.glob("rtk-v1-*") if path != previous_backup]
+        assert len(backups) == 1
+        assert backups[0].read_bytes() == contents
+        assert str(backups[0]) in result.stdout
+    assert not any("rtk:init --global --opencode" in call for call in harness.calls())
+
+
+@pytest.mark.parametrize("modified", [False, True])
+def test_install_sh_opencode_rtk_cleanup_without_rtk_option(
+    posix_harness: PosixHarness, modified: bool
+) -> None:
+    _assert_opencode_rtk_cleanup(posix_harness, modified)
+
+
+@pytest.mark.parametrize("modified", [False, True])
+def test_install_ps1_opencode_rtk_cleanup_without_rtk_option(
+    powershell_harness: PowerShellHarness, modified: bool
+) -> None:
+    _assert_opencode_rtk_cleanup(powershell_harness, modified)
+
+
+def test_install_sh_opencode_running_blocks_native_migration(
+    posix_harness: PosixHarness,
+) -> None:
+    binary = _prepare_native_opencode_v1(posix_harness)
+    original = binary.read_bytes()
+    posix_harness.env["FCC_RUNNING_COMMAND"] = "opencode"
+    result = posix_harness.run()
+    assert result.returncode != 0
+    assert "Close OpenCode" in result.stderr
+    assert binary.read_bytes() == original
+
+
+def test_install_ps1_opencode_running_blocks_native_migration(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    binary = _prepare_native_opencode_v1(powershell_harness)
+    original = binary.read_bytes()
+    powershell_harness.env["FCC_RUNNING_COMMAND"] = "opencode"
+    result = powershell_harness.run()
+    assert result.returncode != 0
+    assert "Close OpenCode" in result.stderr
+    assert binary.read_bytes() == original
+
+
+def _assert_external_opencode_is_not_shadowed(
+    harness: PosixHarness | PowerShellHarness,
+) -> None:
+    windows = isinstance(harness, PowerShellHarness)
+    home = Path(harness.env["USERPROFILE" if windows else "HOME"])
+    external = harness.bin_dir / ("opencode.cmd" if windows else "opencode")
+    _write_executable(
+        external,
+        (_batch_client if windows else _posix_command)(
+            "opencode", version_output="opencode v1.18.31"
+        ),
+    )
+    native = home / ".opencode" / "bin" / ("opencode.exe" if windows else "opencode")
+    _write_executable(native, "native-v2" if windows else _posix_command("opencode"))
+    original = native.read_bytes()
+    result = harness.run()
+    assert result.returncode != 0
+    assert str(external) in "".join(result.stderr.split())
+    assert native.read_bytes() == original
+    assert not any("opencode.ai" in call for call in harness.calls())
+
+
+def test_install_sh_opencode_does_not_shadow_external_v1(
+    posix_harness: PosixHarness,
+) -> None:
+    _assert_external_opencode_is_not_shadowed(posix_harness)
+
+
+def test_install_ps1_opencode_does_not_shadow_external_v1(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    _assert_external_opencode_is_not_shadowed(powershell_harness)
+
+
+def _assert_opencode_dry_run_preserves_migration_files(
+    harness: PosixHarness | PowerShellHarness,
+) -> None:
+    native = _prepare_native_opencode_v1(harness)
+    original = native.read_bytes()
+    home = native.parents[2]
+    plugin = home / ".config" / "opencode" / "plugins" / "rtk.ts"
+    plugin.parent.mkdir(parents=True)
+    contents = (
+        Path(__file__).with_name("fixtures").joinpath("rtk-opencode-v1.ts").read_bytes()
+    )
+    plugin.write_bytes(contents)
+    result = harness.run(
+        "-DryRun" if isinstance(harness, PowerShellHarness) else "--dry-run"
+    )
+    assert result.returncode == 0, result.stderr
+    assert native.read_bytes() == original
+    assert plugin.read_bytes() == contents
+    assert not list(plugin.parents[1].glob("rtk-v1-*"))
+    assert harness.calls() == []
+
+
+def test_install_sh_opencode_dry_run_preserves_v1_and_plugin(
+    posix_harness: PosixHarness,
+) -> None:
+    _assert_opencode_dry_run_preserves_migration_files(posix_harness)
+
+
+def test_install_ps1_opencode_dry_run_preserves_v1_and_plugin(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    _assert_opencode_dry_run_preserves_migration_files(powershell_harness)
+
+
+def _assert_opencode_link_requires_manual_migration(
+    harness: PosixHarness | PowerShellHarness,
+) -> None:
+    native = _prepare_native_opencode_v1(harness)
+    target = native.with_name("user-managed" + native.suffix)
+    native.rename(target)
+    original = target.read_bytes()
+    try:
+        native.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+    result = harness.run()
+    assert result.returncode != 0
+    assert "linked" in result.stderr
+    assert target.read_bytes() == original
+    assert native.is_symlink()
+    assert not any("opencode.ai" in call for call in harness.calls())
+
+
+def test_install_sh_opencode_link_requires_manual_migration(
+    posix_harness: PosixHarness,
+) -> None:
+    _assert_opencode_link_requires_manual_migration(posix_harness)
+
+
+def test_install_ps1_opencode_link_requires_manual_migration(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    _assert_opencode_link_requires_manual_migration(powershell_harness)
+
+
+@pytest.mark.parametrize("version", ["1.18.31", "2.0.11-beta", "3.0.0", "bad/version"])
+def test_install_ps1_opencode_rejects_invalid_release_before_replacement(
+    powershell_harness: PowerShellHarness, version: str
+) -> None:
+    binary = _prepare_native_opencode_v1(powershell_harness)
+    original = binary.read_bytes()
+    powershell_harness.env["FAKE_OPENCODE_RELEASE"] = version
+    result = powershell_harness.run()
+    assert result.returncode != 0
+    assert binary.read_bytes() == original
+    assert not any(
+        "opencode.ai/files/bin/" in call for call in powershell_harness.calls()
+    )
+
+
+def test_install_ps1_opencode_rejects_mismatched_archive_before_replacement(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    binary = _prepare_native_opencode_v1(powershell_harness)
+    original = binary.read_bytes()
+    powershell_harness.env["FAKE_OPENCODE_ARCHIVE_VERSION"] = "opencode v1.18.31"
+    result = powershell_harness.run()
+    assert result.returncode != 0
+    assert binary.read_bytes() == original
+
+
+@pytest.mark.parametrize("powershell", _powershells())
+@pytest.mark.parametrize("exit_code", [0, 31])
+def test_install_ps1_opencode_version_probe_runs_native_command(
+    tmp_path: Path, powershell: str, exit_code: int
+) -> None:
+    binary = tmp_path / "path with spaces" / "opencode.cmd"
+    _write_executable(
+        binary,
+        f"@echo off\necho opencode v2.0.10\nexit /b {exit_code}\n",
+    )
+    text = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
+    body = _braced_body(text, "function Read-OpenCodeVersionOutput")
+    script = f"""$ErrorActionPreference = "Stop"
+function Read-OpenCodeVersionOutput {{{body}}}
+Read-OpenCodeVersionOutput $env:TEST_OPENCODE
+"""
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", script],
+        env=os.environ | {"TEST_OPENCODE": str(binary)},
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    if exit_code:
+        assert result.returncode != 0
+        assert f"exit code {exit_code}" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "opencode v2.0.10"
 
 
 @pytest.mark.parametrize("powershell", _powershells())
