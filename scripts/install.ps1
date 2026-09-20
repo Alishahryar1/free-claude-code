@@ -885,7 +885,8 @@ function Ensure-OpenCode {
             throw "The OpenCode installer did not install stable OpenCode 2 at '$nativePath'."
         }
     }
-    $command = if ($script:OriginalOpenCode) { $script:OriginalOpenCode } else { Get-ApplicationCommand "opencode" }
+    # Check the command selected after the installer's PATH additions.
+    $command = Get-ApplicationCommand "opencode"
     if (-not $command) { throw "OpenCode is not available on PATH after installation." }
     $version = Get-OpenCodeVersion $command.Source
     if ($version -notmatch '^2\.') {

@@ -737,7 +737,7 @@ assert_no_opencode_processes_running() {
 run_opencode_installer() {
     # Recheck after the script download. Upstream owns the actual installation.
     assert_no_opencode_processes_running
-    bash "$@"
+    VERSION= bash "$@"
 }
 
 ensure_opencode() {
@@ -784,7 +784,9 @@ ensure_opencode() {
             *) fail "The OpenCode installer did not install stable OpenCode 2. See https://opencode.ai/v2/docs/" ;;
         esac
     fi
-    opencode_path=${original_opencode_path:-$(command -v opencode || true)}
+    # Check the command selected after the installer's PATH additions.
+    hash -r 2>/dev/null || true
+    opencode_path=$(command -v opencode || true)
     [ -n "$opencode_path" ] || fail "OpenCode is not available on PATH after installation."
     opencode_current=$(opencode_version "$opencode_path") || fail "Could not verify OpenCode at $opencode_path."
     case "$opencode_current" in

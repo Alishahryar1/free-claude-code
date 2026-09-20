@@ -444,6 +444,9 @@ echo "opencode-install" >> "$CALL_LOG"
 [ "$FAIL_STEP" = "opencode-install" ] && exit 25
 mkdir -p "$HOME/.opencode/bin"
 cp "$FAKE_FIXTURES/opencode-command.sh" "$HOME/.opencode/bin/opencode"
+if [ -n "${VERSION:-}" ]; then
+    printf '#!/bin/sh\necho "opencode v%s"\n' "$VERSION" > "$HOME/.opencode/bin/opencode"
+fi
 chmod +x "$HOME/.opencode/bin/opencode"
 """,
     )
@@ -3794,6 +3797,80 @@ def test_install_ps1_opencode_does_not_shadow_external_v1(
     powershell_harness: PowerShellHarness,
 ) -> None:
     _assert_external_opencode_is_not_shadowed(powershell_harness)
+
+
+def _assert_opencode_validates_current_path(
+    harness: PosixHarness | PowerShellHarness, native_version: str
+) -> None:
+    windows = isinstance(harness, PowerShellHarness)
+    home = Path(harness.env["USERPROFILE" if windows else "HOME"])
+    native = home / ".opencode/bin" / ("opencode.exe" if windows else "opencode")
+    _write_executable(
+        native,
+        ("old-opencode-v1" if native_version.startswith("1.") else "native-v2")
+        if windows
+        else _posix_command("opencode", version_output=f"opencode v{native_version}"),
+    )
+    original = native.read_bytes()
+    plugin = home / ".config/opencode/plugins/rtk.ts"
+    plugin.parent.mkdir(parents=True)
+    contents = (
+        Path(__file__).with_name("fixtures").joinpath("rtk-opencode-v1.ts").read_bytes()
+    )
+    plugin.write_bytes(contents)
+
+    # The external v2 wins initially; adding the native directory puts it first.
+    result = harness.run()
+    assert native.read_bytes() == original
+    assert not any("opencode.ai" in call for call in harness.calls())
+    if native_version.startswith("1."):
+        assert result.returncode != 0
+        assert str(native) in "".join(result.stderr.split())
+        assert "Correct PATH" in result.stderr
+        assert plugin.read_bytes() == contents
+        assert not list(plugin.parents[1].glob("rtk-v1-*"))
+    else:
+        assert result.returncode == 0, result.stderr
+        assert f"Verified OpenCode {native_version} at " in result.stdout
+        assert str(native) in result.stdout
+
+
+@pytest.mark.parametrize("native_version", ["1.18.31", "2.0.10"])
+def test_install_sh_opencode_validates_current_path(
+    posix_harness: PosixHarness, native_version: str
+) -> None:
+    _assert_opencode_validates_current_path(posix_harness, native_version)
+
+
+@pytest.mark.parametrize("native_version", ["1.18.31", "2.0.10"])
+def test_install_ps1_opencode_validates_current_path(
+    powershell_harness: PowerShellHarness, native_version: str
+) -> None:
+    _assert_opencode_validates_current_path(powershell_harness, native_version)
+
+
+@pytest.mark.parametrize("version_pin", ["1.18.31", "0.0.0-dev-19882", "2.0.9"])
+def test_install_sh_opencode_ignores_version_pin_only_for_upstream_installer(
+    posix_harness: PosixHarness, version_pin: str
+) -> None:
+    native = _prepare_native_opencode_v1(posix_harness)
+    posix_harness.env["VERSION"] = version_pin
+    next_installer = posix_harness.fixtures / "hermes-installer.sh"
+    with next_installer.open("a", encoding="utf-8") as script:
+        script.write(
+            '\nprintf "version-after-opencode:%s\\n" "${VERSION:-unset}" >> "$CALL_LOG"\n'
+        )
+    result = posix_harness.run()
+    assert result.returncode == 0, result.stderr
+    installed = subprocess.run(
+        [str(native), "--version"],
+        env=posix_harness.env | {"FAIL_STEP": ""},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert installed.stdout.strip() == "opencode v2.0.10"
+    assert f"version-after-opencode:{version_pin}" in posix_harness.calls()
 
 
 def _assert_opencode_dry_run_preserves_migration_files(
