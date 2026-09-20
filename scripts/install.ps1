@@ -113,29 +113,46 @@ function Read-YesNo {
     }
 }
 
+function Read-CodingAgentSelection {
+    param(
+        [string] $CommandName,
+        [string] $DisplayName,
+        [string] $FccCommand,
+        [bool] $DefaultYes = $true
+    )
+
+    $command = Get-ApplicationCommand $CommandName
+    $found = [bool] $command
+    if ($CommandName -eq "opencode" -and $script:OriginalOpenCode) {
+        $found = $true
+    }
+    if ($CommandName -eq "pi" -and $found -and (-not $DryRun)) {
+        $found = Test-PiApplication $command
+    }
+    if ($found) {
+        Write-Host "$DisplayName already installed; will verify."
+        return $true
+    }
+    return Read-YesNo -Prompt "Install $DisplayName for ${FccCommand}?" -DefaultYes $DefaultYes
+}
+
 function Select-CodingAgents {
     while ($true) {
-        $script:InstallClaudeCode = Read-YesNo "Install or verify Claude Code for fcc-claude?"
-        $script:InstallCodex = Read-YesNo "Install or verify Codex for fcc-codex?"
-        $script:InstallPi = Read-YesNo "Install or verify Pi for fcc-pi?"
-        $script:InstallOpenCode = Read-YesNo "Install or verify OpenCode for fcc-opencode?"
-        $script:InstallCline = Read-YesNo `
-            -Prompt "Install or verify Cline CLI for fcc-cline?" `
+        $script:InstallClaudeCode = Read-CodingAgentSelection claude "Claude Code" fcc-claude
+        $script:InstallCodex = Read-CodingAgentSelection codex Codex fcc-codex
+        $script:InstallPi = Read-CodingAgentSelection pi Pi fcc-pi
+        $script:InstallOpenCode = Read-CodingAgentSelection opencode OpenCode fcc-opencode
+        $script:InstallCline = Read-CodingAgentSelection cline "Cline CLI" fcc-cline `
             -DefaultYes $script:InstallCline
-        $script:InstallHermes = Read-YesNo `
-            -Prompt "Install or verify Hermes Agent for fcc-hermes?" `
+        $script:InstallHermes = Read-CodingAgentSelection hermes "Hermes Agent" fcc-hermes `
             -DefaultYes $script:InstallHermes
-        $script:InstallDsh = Read-YesNo `
-            -Prompt "Install or verify DeepSeek Harness for fcc-dsh?" `
+        $script:InstallDsh = Read-CodingAgentSelection dsh "DeepSeek Harness" fcc-dsh `
             -DefaultYes $script:InstallDsh
-        $script:InstallGrok = Read-YesNo `
-            -Prompt "Install or verify Grok Build for fcc-grok?" `
+        $script:InstallGrok = Read-CodingAgentSelection grok "Grok Build" fcc-grok `
             -DefaultYes $script:InstallGrok
-        $script:InstallMuse = Read-YesNo `
-            -Prompt "Install or verify Muse Code for fcc-muse?" `
+        $script:InstallMuse = Read-CodingAgentSelection muse "Muse Code" fcc-muse `
             -DefaultYes $script:InstallMuse
-        $script:InstallAider = Read-YesNo `
-            -Prompt "Install or verify Aider for fcc-aider?" `
+        $script:InstallAider = Read-CodingAgentSelection aider Aider fcc-aider `
             -DefaultYes $script:InstallAider
 
         if ($script:InstallClaudeCode -or $script:InstallCodex -or $script:InstallPi -or $script:InstallOpenCode -or $script:InstallCline -or $script:InstallHermes -or $script:InstallDsh -or $script:InstallGrok -or $script:InstallMuse -or $script:InstallAider) {
@@ -320,6 +337,45 @@ function Add-NpmBinDirectories {
     }
     if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($prefix)) {
         Add-PathEntry $prefix
+    }
+}
+
+function Initialize-CodingAgentDiscovery {
+    param([string] $UserPath = [Environment]::GetEnvironmentVariable("Path", "User"))
+
+    try {
+        Add-NpmBinDirectories
+    }
+    catch {
+        # A failed optional npm lookup must not prevent choosing other harnesses.
+    }
+    # uv need not be installed yet to locate its tool executables.
+    if ($env:UV_TOOL_BIN_DIR) {
+        Add-PathEntry $env:UV_TOOL_BIN_DIR
+    }
+    elseif ($env:XDG_BIN_HOME) {
+        Add-PathEntry $env:XDG_BIN_HOME
+    }
+    elseif ($env:XDG_DATA_HOME) {
+        Add-PathEntry (Join-Path $env:XDG_DATA_HOME "..\bin")
+    }
+    elseif ($env:USERPROFILE) {
+        Add-PathEntry (Join-Path $env:USERPROFILE ".local\bin")
+    }
+
+    if ((-not (Get-ApplicationCommand "muse")) -and (-not [string]::IsNullOrWhiteSpace($UserPath))) {
+        $originalPath = $env:Path
+        try {
+            $env:Path = "$originalPath$([IO.Path]::PathSeparator)$UserPath"
+            $muse = Get-ApplicationCommand "muse"
+        }
+        finally {
+            $env:Path = $originalPath
+        }
+        if ($muse) {
+            $museBin = Split-Path -LiteralPath $muse.Source
+            $env:Path = "$originalPath$([IO.Path]::PathSeparator)$museBin"
+        }
     }
 }
 
@@ -1550,6 +1606,7 @@ if (-not (Test-InteractiveInstaller)) {
 
 if (Test-InteractiveInstaller) {
     Write-Step "Choosing coding agents"
+    Initialize-CodingAgentDiscovery
     Select-CodingAgents
 }
 

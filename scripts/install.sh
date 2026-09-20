@@ -97,6 +97,17 @@ prompt_yes_no() {
     done
 }
 
+select_coding_agent() {
+    if { [ "$1" = opencode ] && [ -n "$original_opencode_path" ]; } ||
+        command -v "$1" >/dev/null 2>&1; then
+        if [ "$1" != pi ] || [ "$dry_run" -eq 1 ] || pi_command_is_compatible; then
+            printf '%s already installed; will verify.\n' "$2" >&4
+            return 0
+        fi
+    fi
+    prompt_yes_no "Install $2 for $3?" "${4:-yes}"
+}
+
 choose_coding_agents() {
     selection_input=$1
     selection_output=$2
@@ -104,22 +115,22 @@ choose_coding_agents() {
     exec 4>"$selection_output"
 
     while :; do
-        if prompt_yes_no "Install or verify Claude Code for fcc-claude?"; then
+        if select_coding_agent claude "Claude Code" fcc-claude; then
             install_claude=1
         else
             install_claude=0
         fi
-        if prompt_yes_no "Install or verify Codex for fcc-codex?"; then
+        if select_coding_agent codex Codex fcc-codex; then
             install_codex=1
         else
             install_codex=0
         fi
-        if prompt_yes_no "Install or verify Pi for fcc-pi?"; then
+        if select_coding_agent pi Pi fcc-pi; then
             install_pi=1
         else
             install_pi=0
         fi
-        if prompt_yes_no "Install or verify OpenCode for fcc-opencode?"; then
+        if select_coding_agent opencode OpenCode fcc-opencode; then
             install_opencode=1
         else
             install_opencode=0
@@ -130,7 +141,7 @@ choose_coding_agents() {
         else
             cline_default=no
         fi
-        if prompt_yes_no "Install or verify Cline CLI for fcc-cline?" "$cline_default"; then
+        if select_coding_agent cline "Cline CLI" fcc-cline "$cline_default"; then
             install_cline=1
         else
             install_cline=0
@@ -141,7 +152,7 @@ choose_coding_agents() {
         else
             hermes_default=no
         fi
-        if prompt_yes_no "Install or verify Hermes Agent for fcc-hermes?" "$hermes_default"; then
+        if select_coding_agent hermes "Hermes Agent" fcc-hermes "$hermes_default"; then
             install_hermes=1
         else
             install_hermes=0
@@ -152,7 +163,7 @@ choose_coding_agents() {
         else
             dsh_default=no
         fi
-        if prompt_yes_no "Install or verify DeepSeek Harness for fcc-dsh?" "$dsh_default"; then
+        if select_coding_agent dsh "DeepSeek Harness" fcc-dsh "$dsh_default"; then
             install_dsh=1
         else
             install_dsh=0
@@ -163,7 +174,7 @@ choose_coding_agents() {
         else
             grok_default=no
         fi
-        if prompt_yes_no "Install or verify Grok Build for fcc-grok?" "$grok_default"; then
+        if select_coding_agent grok "Grok Build" fcc-grok "$grok_default"; then
             install_grok=1
         else
             install_grok=0
@@ -174,7 +185,7 @@ choose_coding_agents() {
         else
             muse_default=no
         fi
-        if prompt_yes_no "Install or verify Muse Code for fcc-muse?" "$muse_default"; then
+        if select_coding_agent muse "Muse Code" fcc-muse "$muse_default"; then
             install_muse=1
         else
             install_muse=0
@@ -185,7 +196,7 @@ choose_coding_agents() {
         else
             aider_default=no
         fi
-        if prompt_yes_no "Install or verify Aider for fcc-aider?" "$aider_default"; then
+        if select_coding_agent aider Aider fcc-aider "$aider_default"; then
             install_aider=1
         else
             install_aider=0
@@ -322,6 +333,22 @@ add_npm_bin_directories() {
             hash -r 2>/dev/null || true
         fi
     fi
+}
+
+prepare_coding_agent_discovery() {
+    add_npm_bin_directories
+    # uv need not be installed yet to locate its tool executables.
+    if [ -n "${UV_TOOL_BIN_DIR:-}" ]; then
+        add_path_entry "$UV_TOOL_BIN_DIR"
+    elif [ -n "${XDG_BIN_HOME:-}" ]; then
+        add_path_entry "$XDG_BIN_HOME"
+    elif [ -n "${XDG_DATA_HOME:-}" ]; then
+        add_path_entry "$XDG_DATA_HOME/../bin"
+    elif [ -n "${HOME:-}" ]; then
+        add_path_entry "$HOME/.local/bin"
+    fi
+    export PATH
+    hash -r 2>/dev/null || true
 }
 
 fcc_process_ids() {
@@ -1429,6 +1456,7 @@ fi
 
 if installer_is_interactive; then
     step "Choosing coding agents"
+    prepare_coding_agent_discovery
     choose_coding_agents /dev/tty /dev/tty
 fi
 
