@@ -269,6 +269,15 @@ async def connect_claude_vscode(
     return await _integration_response(services.admin.connect_claude_vscode)
 
 
+@router.post("/admin/api/integrations/claude-vscode/refresh")
+async def refresh_claude_vscode(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_claude_vscode)
+
+
 @router.post("/admin/api/integrations/claude-vscode/disconnect")
 async def disconnect_claude_vscode(
     request: Request,
@@ -294,6 +303,15 @@ async def connect_codex(
 ):
     require_loopback_admin(request)
     return await _integration_response(services.admin.connect_codex)
+
+
+@router.post("/admin/api/integrations/codex/refresh")
+async def refresh_codex_integration(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_codex_integration)
 
 
 @router.post("/admin/api/integrations/codex/disconnect")

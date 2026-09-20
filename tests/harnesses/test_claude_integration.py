@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.harnesses import claude_integration
+from free_claude_code.harnesses.claude_integration import settings_path
 
 URL = "http://127.0.0.1:8000"
 TOKEN = "test-integration-token"
@@ -344,7 +345,7 @@ def test_standard_global_path(tmp_path, monkeypatch, platform, suffix):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    assert claude_integration.settings_path() == tmp_path / suffix
+    assert settings_path() == tmp_path / suffix
 
 
 @pytest.mark.parametrize(
@@ -353,4 +354,4 @@ def test_standard_global_path(tmp_path, monkeypatch, platform, suffix):
 def test_config_root_override(tmp_path, monkeypatch, platform, variable):
     monkeypatch.setattr(claude_integration.sys, "platform", platform)
     monkeypatch.setenv(variable, str(tmp_path))
-    assert claude_integration.settings_path() == tmp_path / "Code/User/settings.json"
+    assert settings_path() == tmp_path / "Code/User/settings.json"
