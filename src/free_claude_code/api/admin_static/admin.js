@@ -140,6 +140,7 @@ function renderStartup() {
   });
   renderClaudeIntegration();
   renderCodexIntegration();
+  renderClaudeDesktopIntegration();
 }
 
 async function refreshStartup() {
@@ -282,6 +283,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   if (activeView.id === "integrations") {
     refreshClaudeIntegration();
     refreshCodexIntegration();
+    refreshClaudeDesktopIntegration();
   }
 }
 
@@ -1497,6 +1499,7 @@ function refreshIntegrationUpdates(previous, current) {
   for (const [id, integration, refresh] of [
     ["claude-vscode", claudeIntegration, refreshClaudeIntegration],
     ["codex", codexIntegration, refreshCodexIntegration],
+    ["claude-desktop", claudeDesktopIntegration, refreshClaudeDesktopIntegration],
   ]) {
     const phase = current?.[id]?.state;
     if (phase && phase !== "starting" && (
@@ -1711,7 +1714,110 @@ jetBrainsIntegrationDialog.addEventListener("click", (event) => {
 });
 
 const claudeDesktopIntegrationDialog = byId("claudeDesktopIntegrationDialog");
-byId("openClaudeDesktopIntegration").addEventListener("click", () => claudeDesktopIntegrationDialog.showModal());
+const claudeDesktopIntegration = { connected: null, disconnectPending: false, busy: false, paths: null, update: null };
+const claudeDesktopIntegrationPath = "/admin/api/integrations/claude-desktop";
+
+function renderClaudeDesktopIntegration() {
+  const { connected, paths, disconnectPending } = claudeDesktopIntegration;
+  const busy = claudeDesktopIntegration.busy || integrationUpdating(claudeDesktopIntegration, "claude-desktop");
+  const disconnect = disconnectPending || connected;
+  const action = disconnectPending ? "Retry disconnect" : connected ? "Disconnect" : "Connect";
+  byId("openClaudeDesktopIntegration").textContent = busy ? "Loading…" : connected === null && !disconnectPending ? "Retry" : action;
+  byId("openClaudeDesktopIntegration").disabled = busy;
+  byId("openClaudeDesktopIntegration").setAttribute("aria-busy", String(busy));
+  byId("confirmClaudeDesktopIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmClaudeDesktopIntegration").disabled = busy || (connected === null && !disconnectPending);
+  byId("openClaudeDesktopIntegration").className = disconnect && !busy ? "danger-button" : "primary-button";
+  byId("confirmClaudeDesktopIntegration").className = disconnect ? "danger-button" : "primary-button";
+  byId("claudeDesktopIntegrationDescription").textContent = disconnectPending
+    ? "Finish removing FCC's configuration. Fully quit Claude Desktop before retrying, then reopen it."
+    : connected
+    ? "Remove FCC's configuration and return to normal Claude sign-in. Fully quit Claude Desktop first, then reopen it."
+    : "Set FCC as Claude Desktop's gateway. Fully quit Claude Desktop before connecting, then reopen it.";
+  const files = byId("claudeDesktopIntegrationFiles");
+  files.replaceChildren();
+  if (paths) {
+    const targets = Object.values(paths);
+    targets.forEach((path) => {
+      const item = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = path;
+      item.appendChild(code);
+      files.appendChild(item);
+    });
+  }
+}
+
+async function refreshClaudeDesktopIntegration(retry = false) {
+  if (claudeDesktopIntegration.busy) return;
+  claudeDesktopIntegration.busy = true;
+  renderClaudeDesktopIntegration();
+  integrationMessage("claudeDesktopIntegrationMessage", "");
+  try {
+    if (retry) await api(`${claudeDesktopIntegrationPath}/refresh`, { method: "POST" });
+    const result = await api(claudeDesktopIntegrationPath);
+    claudeDesktopIntegration.connected = result.connected;
+    claudeDesktopIntegration.disconnectPending = result.disconnect_pending;
+    claudeDesktopIntegration.paths = result.paths;
+    claudeDesktopIntegration.update = result.update;
+    if (result.update?.state === "failed") integrationMessage("claudeDesktopIntegrationMessage", result.update.message, true);
+    else if (result.update?.changed) integrationMessage("claudeDesktopIntegrationMessage", "Settings updated. Reopen Claude Desktop.");
+  } catch (error) {
+    claudeDesktopIntegration.connected = null;
+    claudeDesktopIntegration.disconnectPending = false;
+    claudeDesktopIntegration.update = null;
+    integrationMessage("claudeDesktopIntegrationMessage", error.message, true);
+  } finally {
+    claudeDesktopIntegration.busy = false;
+    renderClaudeDesktopIntegration();
+    if (claudeDesktopIntegration.update?.state === "starting") void refreshStartup();
+  }
+}
+
+byId("openClaudeDesktopIntegration").addEventListener("click", () => {
+  if (claudeDesktopIntegration.connected === null && !claudeDesktopIntegration.disconnectPending) {
+    refreshClaudeDesktopIntegration(claudeDesktopIntegration.update?.state === "failed");
+    return;
+  }
+  integrationMessage("claudeDesktopIntegrationDialogMessage", "");
+  claudeDesktopIntegrationDialog.showModal();
+});
+byId("confirmClaudeDesktopIntegration").addEventListener("click", async () => {
+  if (byId("confirmClaudeDesktopIntegration").disabled) return;
+  const disconnect = claudeDesktopIntegration.disconnectPending || claudeDesktopIntegration.connected;
+  claudeDesktopIntegration.busy = true;
+  renderClaudeDesktopIntegration();
+  integrationMessage("claudeDesktopIntegrationDialogMessage", "");
+  integrationMessage("claudeDesktopIntegrationMessage", "");
+  try {
+    const result = await api(`${claudeDesktopIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    claudeDesktopIntegration.connected = result.connected;
+    claudeDesktopIntegration.disconnectPending = result.disconnect_pending;
+    claudeDesktopIntegration.paths = result.paths;
+    claudeDesktopIntegration.update = null;
+    claudeDesktopIntegrationDialog.close();
+    integrationMessage("claudeDesktopIntegrationMessage", disconnect
+      ? "Settings removed. Reopen Claude Desktop to disconnect."
+      : "Settings saved. Reopen Claude Desktop to connect.");
+  } catch (error) {
+    if (disconnect) {
+      try {
+        const result = await api(claudeDesktopIntegrationPath);
+        claudeDesktopIntegration.connected = result.connected;
+        claudeDesktopIntegration.disconnectPending = result.disconnect_pending;
+        claudeDesktopIntegration.paths = result.paths;
+        claudeDesktopIntegration.update = result.update;
+      } catch {
+        // Keep the user's disconnect action available if status is unreadable too.
+      }
+    }
+    integrationMessage("claudeDesktopIntegrationDialogMessage", error.message, true);
+    integrationMessage("claudeDesktopIntegrationMessage", error.message, true);
+  } finally {
+    claudeDesktopIntegration.busy = false;
+    renderClaudeDesktopIntegration();
+  }
+});
 byId("closeClaudeDesktopIntegration").addEventListener("click", () => claudeDesktopIntegrationDialog.close());
 claudeDesktopIntegrationDialog.addEventListener("click", (event) => {
   if (event.target !== claudeDesktopIntegrationDialog) return;

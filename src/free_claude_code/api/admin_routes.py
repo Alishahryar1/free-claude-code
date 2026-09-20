@@ -287,6 +287,38 @@ async def disconnect_claude_vscode(
     return await _integration_response(services.admin.disconnect_claude_vscode)
 
 
+@router.get("/admin/api/integrations/claude-desktop")
+async def claude_desktop_status(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.claude_desktop_status)
+
+
+@router.post("/admin/api/integrations/claude-desktop/connect")
+async def connect_claude_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_claude_desktop)
+
+
+@router.post("/admin/api/integrations/claude-desktop/disconnect")
+async def disconnect_claude_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_claude_desktop)
+
+
+@router.post("/admin/api/integrations/claude-desktop/refresh")
+async def refresh_claude_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_claude_desktop)
+
+
 @router.get("/admin/api/integrations/codex")
 async def codex_integration_status(
     request: Request,
