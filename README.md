@@ -363,10 +363,11 @@ For editor and app integrations, install the client, start FCC, then open
 **Admin UI → Integrations** and click **Connect** on its card.
 
 - **Claude Code in VS Code** — install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code).
+- **Claude Desktop** — install [Claude Desktop](https://claude.ai/download). Fully quit it before connecting or disconnecting, then reopen it. Disconnect returns to normal Claude sign-in.
 - **Codex in VS Code and App** — install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt) or Codex App.
 - **Claude Code in JetBrains ACP** — install the Claude Code agent in your JetBrains IDE.
 
-Reload VS Code or restart the app/IDE after connecting. In Codex, select an FCC
+Reload VS Code or restart the app/IDE after connecting. In Codex and Claude Desktop, select an FCC
 model from the model picker. FCC keeps connected integrations up to date when it
 starts; reload or restart the client when FCC reports updated settings. Use
 **Disconnect** on the same card to remove the integration.

@@ -12,7 +12,13 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.readiness import InitializationWait
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
-from free_claude_code.harnesses import claude_integration, codex_integration
+from free_claude_code.harnesses import (
+    claude_desktop_integration as desktop,
+)
+from free_claude_code.harnesses import (
+    claude_integration,
+    codex_integration,
+)
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
@@ -284,5 +290,46 @@ async def test_refresh_endpoint_is_local_only_and_does_not_connect(
             assert (await client.get(path)).json()["connected"] is False
         assert not claude_integration.settings_path().exists()
         assert not codex_integration.config_path().exists()
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off(
+    runtime,
+):
+    root = desktop.config_root()
+    desktop.configure(root, "http://localhost:9999", "old-token", True)
+    try:
+        await runtime.start()
+        await runtime._desktop_update.task
+        result = await runtime.claude_desktop_status()
+        assert result["connected"] is True
+        assert result["update"]["changed"] is True
+        before = {p: p.stat().st_mtime_ns for p in root.rglob("*.json")}
+        await runtime.claude_desktop_status()
+        assert before == {p: p.stat().st_mtime_ns for p in root.rglob("*.json")}
+        await runtime.disconnect_claude_desktop()
+        await runtime.refresh_claude_desktop()
+        await runtime._desktop_update.task
+        assert (await runtime.claude_desktop_status())["connected"] is False
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_desktop_failure_does_not_block_other_startup(runtime, monkeypatch):
+    def fail(*args):
+        raise ValueError("private-invalid-file")
+
+    monkeypatch.setattr(desktop, "refresh_connected", fail)
+    try:
+        await runtime.start()
+        await runtime._desktop_update.task
+        await finish(runtime)
+        assert runtime._desktop_update.state == "failed"
+        assert "private-invalid-file" not in runtime._desktop_update.message
+        assert runtime._claude_update.state == "ready"
+        assert runtime._codex_update.state == "ready"
     finally:
         await runtime.close()

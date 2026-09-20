@@ -13,6 +13,7 @@ from free_claude_code.harnesses import claude_integration
     [
         ("claude-vscode", "openClaudeIntegration"),
         ("codex", "openCodexIntegration"),
+        ("claude-desktop", "openClaudeDesktopIntegration"),
     ],
 )
 @pytest.mark.parametrize("connected", [False, True])
@@ -165,15 +166,8 @@ def test_codex_connect_disconnect_and_modal_paths(
             "Route Claude Code in JetBrains through your FCC server.",
             2,
         ),
-        (
-            "ClaudeDesktop",
-            "Claude Desktop",
-            "Use FCC's models in the Claude desktop app.",
-            "Route Claude Desktop through your FCC server. Setup is coming soon.",
-            3,
-        ),
     ],
-    ids=["jetbrains", "claude-desktop"],
+    ids=["jetbrains"],
 )
 @pytest.mark.parametrize("width", [1200, 1440, 390])
 def test_preview_connect_is_noop_and_modal_dismisses(

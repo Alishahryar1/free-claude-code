@@ -41,7 +41,11 @@ from free_claude_code.config.paths import (
 from free_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.harnesses import claude_integration, codex_integration
+from free_claude_code.harnesses import (
+    claude_desktop_integration,
+    claude_integration,
+    codex_integration,
+)
 from free_claude_code.messaging.platforms import factory as messaging_platform_factory
 from free_claude_code.messaging.platforms.factory import MessagingPlatformOptions
 from free_claude_code.messaging.platforms.ports import (
@@ -208,6 +212,7 @@ class ApplicationRuntime:
         self._lifecycle_lock = asyncio.Lock()
         self._startup_tasks: list[asyncio.Task[None]] = []
         self._claude_update = _IntegrationUpdate()
+        self._desktop_update = _IntegrationUpdate()
         self._codex_update = _IntegrationUpdate()
         self._http_ready = asyncio.Event()
         self._messaging_state = (
@@ -244,6 +249,7 @@ class ApplicationRuntime:
                 self.provider_manager.start_model_list_refresh()
                 await self.refresh_claude_vscode()
                 await self.refresh_codex_integration()
+                await self.refresh_claude_desktop()
                 self._startup_tasks.append(
                     asyncio.create_task(
                         run_sync_owned(remove_retired_chat_history),
@@ -470,6 +476,63 @@ class ApplicationRuntime:
             self._codex_update, partial(self._codex_integration, "refresh")
         )
 
+    async def claude_desktop_status(self) -> JsonObject:
+        return await self._claude_desktop("status")
+
+    async def connect_claude_desktop(self) -> JsonObject:
+        return await self._claude_desktop("connect")
+
+    async def disconnect_claude_desktop(self) -> JsonObject:
+        return await self._claude_desktop("disconnect")
+
+    async def refresh_claude_desktop(self) -> JsonObject:
+        return self._start_integration_update(
+            self._desktop_update, partial(self._claude_desktop, "refresh")
+        )
+
+    async def _claude_desktop(self, action: IntegrationAction) -> JsonObject:
+        async with self._config_lock:
+            self._check_integration_available()
+            settings = self.settings
+
+            def operate() -> JsonObject:
+                root = claude_desktop_integration.config_root()
+                url = local_proxy_root_url(settings)
+                if action == "refresh":
+                    return {
+                        "changed": claude_desktop_integration.refresh_connected(
+                            root, url, settings.proxy_auth_token
+                        )
+                    }
+                return claude_desktop_integration.configure(
+                    root,
+                    url,
+                    settings.proxy_auth_token,
+                    None if action == "status" else action == "connect",
+                )
+
+            try:
+                result = await run_sync_owned(operate)
+            except claude_desktop_integration.ManagedDesktopError:
+                raise InvalidRequestError(
+                    "Claude Desktop is managed by an organization, or its policy could not be read. FCC can configure only unmanaged Desktop installations."
+                ) from None
+            except ValueError, UnicodeError:
+                raise InvalidRequestError(
+                    "Could not configure Claude Desktop. Check its configuration JSON and ensure FCC uses a localhost address and a nonempty managed token."
+                ) from None
+            except OSError:
+                raise ApplicationUnavailableError(
+                    "Could not access Claude Desktop settings. Fully quit Claude Desktop, check file permissions, and retry."
+                ) from None
+            if action in {"connect", "disconnect"}:
+                self._desktop_update.complete()
+            if action == "status":
+                if self._desktop_update.state != "ready":
+                    result["connected"] = None
+                result["update"] = self._desktop_update.snapshot()
+            return result
+
     async def _claude_vscode(self, action: IntegrationAction) -> JsonObject:
         async with self._config_lock:
             self._check_integration_available()
@@ -609,6 +672,7 @@ class ApplicationRuntime:
                 },
                 "integrations": {
                     "claude-vscode": self._claude_update.snapshot(),
+                    "claude-desktop": self._desktop_update.snapshot(),
                     "codex": self._codex_update.snapshot(),
                 },
             },
