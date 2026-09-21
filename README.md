@@ -355,9 +355,11 @@ Providers that do not support a selected control retain their own behavior.
 
 ## Connect Your Client
 
-For terminal use, start `fcc-server`, then run `fcc-claude`, `fcc-codex`,
-`fcc-pi`, `fcc-opencode`, `fcc-cline`, `fcc-hermes`, `fcc-dsh`, `fcc-grok`,
-`fcc-muse`, or `fcc-aider`.
+For terminal use, run `fcc-claude`, `fcc-codex`, `fcc-pi`, `fcc-opencode`,
+`fcc-cline`, `fcc-hermes`, `fcc-dsh`, `fcc-grok`, `fcc-muse`, or `fcc-aider`.
+If `fcc-server` is not running, the launcher starts it in the background and
+waits for it to become ready; it keeps running after the client exits. Set
+`FCC_AUTO_START_SERVER=0` to keep starting the server yourself.
 
 For editor and app integrations, install the client, start FCC, then open
 **Admin UI → Integrations** and click **Connect** on its card.

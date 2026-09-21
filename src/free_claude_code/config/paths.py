@@ -14,6 +14,7 @@ AUTH_DIRNAME = "auth"
 OPENAI_AUTH_FILENAME = "openai.json"
 OPENAI_AUTH_LOCK_FILENAME = "openai.lock"
 CONFIG_LOCK_FILENAME = "config.lock"
+SERVER_STARTUP_LOCK_FILENAME = "server.startup.lock"
 FCC_TEMP_DIRNAME = "tmp"
 LAUNCHER_TEMP_DIRNAME = "launchers"
 CODE_STATE_DIRNAME = "code"
@@ -37,6 +38,12 @@ def config_lock_path() -> Path:
     """Return the cross-process managed-config migration lock path."""
 
     return config_dir_path() / CONFIG_LOCK_FILENAME
+
+
+def server_startup_lock_path() -> Path:
+    """Return the lock launchers hold while starting one shared fcc-server."""
+
+    return config_dir_path() / SERVER_STARTUP_LOCK_FILENAME
 
 
 def launcher_temp_dir_path() -> Path:

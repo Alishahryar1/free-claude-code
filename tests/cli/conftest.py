@@ -111,6 +111,8 @@ def launch_capture(monkeypatch: pytest.MonkeyPatch) -> LaunchCapture:
     )
     monkeypatch.setenv("HOST", "127.0.0.1")
     monkeypatch.setenv("PORT", "8182")
+    # Launcher tests own the unreachable-proxy path; auto-start has its own tests.
+    monkeypatch.setenv(common.AUTO_START_ENV, "0")
     monkeypatch.setenv("MODEL", "nvidia_nim/catalog-model:variant")
     for key in (
         "OPENCODE_CONFIG",
