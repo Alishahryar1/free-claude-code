@@ -736,6 +736,44 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         reasoning_delta_field="reasoning",
     ),
+    # Poe exposes hundreds of bots through one OpenAI-compatible gateway
+    # (https://creator.poe.com/docs/external-applications/openai-compatible-api,
+    # https://creator.poe.com/api-reference/createChatCompletion).
+    # Top-level ``reasoning_effort`` is documented as ignored: named efforts
+    # must travel through ``extra_body``. Thinking budgets map to Poe's
+    # ``thinking_budget`` bot parameter, and ``n`` must be exactly 1.
+    # Thinking is replayed through ``reasoning_content``. Remaining
+    # unsupported request fields (``response_format``, penalties, ``seed``)
+    # are silently ignored server-side.
+    "poe": OpenAIChatProfile(
+        _policy(
+            "POE",
+            ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+            # Poe documents n as "must be exactly 1".
+            normalize_n_to_one=True,
+        ),
+        NamedEffortReasoning(
+            # Poe passes efforts through to bots best-effort; the OpenAI
+            # Responses API documents low/medium/high, so xhigh/max clamp to
+            # high rather than relying on silent server-side ignoring.
+            _LOW_MEDIUM_HIGH,
+            disabled_value="none",
+            enabled_value="high",
+            use_extra_body=True,
+            budget_field="thinking_budget",
+        ),
+        model_listing=OpenAIModelListing(
+            path="/models",
+            required_sequence_items=(("supported_endpoints", "/v1/chat/completions"),),
+            thinking_boolean_path=("reasoning", "supports_reasoning_effort"),
+            input_modalities_path=("architecture", "input_modalities"),
+            context_window_tokens_path=("context_window", "context_length"),
+            max_output_tokens_path=("context_window", "max_output_tokens"),
+        ),
+    ),
     "tokenrouter": OpenAIChatProfile(
         _policy(
             "TOKENROUTER",

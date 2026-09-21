@@ -70,6 +70,7 @@ def _settings(**overrides):
         "llm7_api_key": "",
         "lightning_api_key": "",
         "experiential_api_key": "",
+        "poe_api_key": "",
         "fireworks_api_key": "",
         "novita_api_key": "",
         "cloudflare_api_token": "",
@@ -301,6 +302,23 @@ def test_experiential_provider_configuration_uses_documented_free_model(
     models = config.provider_smoke_models()
     assert [model.provider for model in models] == ["experiential"]
     assert models[0].full_model == "experiential/union-alpha"
+    assert models[0].source == "provider_default"
+
+
+def test_poe_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_POE", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            poe_api_key="poe-key",
+        )
+    )
+
+    assert config.has_provider_configuration("poe")
+    models = config.provider_smoke_models()
+    assert [model.provider for model in models] == ["poe"]
+    assert models[0].full_model == "poe/gpt-5.4-nano"
     assert models[0].source == "provider_default"
 
 
