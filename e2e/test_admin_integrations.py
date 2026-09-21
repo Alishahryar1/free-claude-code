@@ -308,21 +308,21 @@ def test_codex_existing_setup_revisit_and_invalid_config_retry(
 def test_codex_save_pending_and_failure_stay_in_modal(page, admin_base_url, tmp_path):
     page.goto(f"{admin_base_url}/admin/integrations")
     page.locator("#openCodexIntegration").click()
-    requests = []
-    page.route(
-        "**/admin/api/integrations/codex/connect", lambda route: requests.append(route)
-    )
     action = page.locator("#confirmCodexIntegration")
+
+    def reject_save(route):
+        expect(action).to_be_disabled()
+        expect(action).to_have_text("Saving…")
+        expect(page.locator("#openCodexIntegration")).to_be_disabled()
+        route.fulfill(status=503, json={"detail": "Could not save settings."})
+
+    page.route("**/admin/api/integrations/codex/connect", reject_save)
     action.click()
-    expect(action).to_be_disabled()
-    expect(action).to_have_text("Saving…")
-    expect(page.locator("#openCodexIntegration")).to_be_disabled()
-    requests[0].fulfill(status=503, json={"detail": "Could not save settings."})
-    expect(action).to_be_enabled()
-    expect(page.locator("#codexIntegrationDialog")).to_be_visible()
     expect(page.locator("#codexIntegrationDialogMessage")).to_have_text(
         "Could not save settings."
     )
+    expect(action).to_be_enabled()
+    expect(page.locator("#codexIntegrationDialog")).to_be_visible()
     assert not (tmp_path / ".codex" / "config.toml").exists()
 
 
