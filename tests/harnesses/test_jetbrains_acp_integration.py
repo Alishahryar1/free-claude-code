@@ -211,6 +211,7 @@ def test_platform_layout_and_launch(
     files, monkeypatch, tmp_path, platform, data, cache
 ):
     monkeypatch.setattr(jb, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(jb.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     for key in ("APPDATA", "LOCALAPPDATA", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
         monkeypatch.delenv(key, raising=False)
