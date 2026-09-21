@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from loguru import logger
 
 from free_claude_code.application.errors import ApplicationError
@@ -215,14 +215,19 @@ async def probe_health():
     response_model_exclude_none=True,
 )
 async def list_models(
-    view: ModelCatalogView = ModelCatalogView.CLAUDE,
+    view: ModelCatalogView | None = None,
+    x_fcc_model_view: ModelCatalogView | None = Header(default=None),
     services: ApiServices = Depends(get_services),
     _auth=Depends(require_proxy_auth),
 ):
     """List the model ids this proxy advertises to compatible clients."""
     trace_event(stage="ingress", event="free_claude_code.api.models.list", source="api")
     snapshot = await services.requests.wait_for_catalog()
-    return build_models_list_response(snapshot.settings, snapshot, view=view)
+    return build_models_list_response(
+        snapshot.settings,
+        snapshot,
+        view=view or x_fcc_model_view or ModelCatalogView.CLAUDE,
+    )
 
 
 @router.get(

@@ -138,7 +138,9 @@ function renderStartup() {
   state.config.provider_status.forEach((provider) => {
     renderProviderCheckResult(provider.provider_id);
   });
+  renderClaudeIntegration();
   renderCodexIntegration();
+  renderClaudeDesktopIntegration();
 }
 
 async function refreshStartup() {
@@ -162,12 +164,14 @@ async function refreshStartup() {
     )) return;
     state.startup = result;
     renderStartup();
+    refreshIntegrationUpdates(previous?.startup?.integrations, current.integrations);
     const changed = !previous || previous.instance_id !== result.instance_id ||
       JSON.stringify(previous.startup) !== JSON.stringify(current);
     if (changed) void hydrateModelOptions();
     if (changed || state.codeCatalogRetry) state.codeCatalogRetry = await window.CodeSessions?.refresh(result) === false;
     pending = state.codeCatalogRetry || current.catalog === "starting" || current.catalog_file === "starting" ||
       current.code?.state === "starting" || current.messaging?.state === "starting" ||
+      Object.values(current.integrations || {}).some((update) => update.state === "starting") ||
       Object.values(current.providers || {}).includes("starting");
   } catch (error) {
     if (error.name !== "AbortError") pending = true;
@@ -279,6 +283,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   if (activeView.id === "integrations") {
     refreshClaudeIntegration();
     refreshCodexIntegration();
+    refreshClaudeDesktopIntegration();
   }
 }
 
@@ -1474,7 +1479,7 @@ try {
 }
 
 const claudeIntegrationDialog = byId("claudeIntegrationDialog");
-const claudeIntegration = { connected: null, busy: false, paths: null };
+const claudeIntegration = { connected: null, busy: false, paths: null, update: null };
 const claudeIntegrationPath = "/admin/api/integrations/claude-vscode";
 
 function integrationMessage(id, message, error = false) {
@@ -1484,8 +1489,28 @@ function integrationMessage(id, message, error = false) {
   element.classList.toggle("error", error);
 }
 
+function integrationUpdating(integration, id) {
+  return integration.update?.state === "starting" ||
+    state.startup?.startup?.integrations?.[id]?.state === "starting";
+}
+
+function refreshIntegrationUpdates(previous, current) {
+  if (state.activeView !== "integrations") return;
+  for (const [id, integration, refresh] of [
+    ["claude-vscode", claudeIntegration, refreshClaudeIntegration],
+    ["codex", codexIntegration, refreshCodexIntegration],
+    ["claude-desktop", claudeDesktopIntegration, refreshClaudeDesktopIntegration],
+  ]) {
+    const phase = current?.[id]?.state;
+    if (phase && phase !== "starting" && (
+      previous?.[id]?.state === "starting" || integration.update?.state === "starting"
+    )) void refresh();
+  }
+}
+
 function renderClaudeIntegration() {
-  const { connected, busy, paths } = claudeIntegration;
+  const { connected, paths } = claudeIntegration;
+  const busy = claudeIntegration.busy || integrationUpdating(claudeIntegration, "claude-vscode");
   const action = connected ? "Disconnect" : "Connect";
   byId("openClaudeIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
   byId("openClaudeIntegration").disabled = busy;
@@ -1511,34 +1536,40 @@ function renderClaudeIntegration() {
   }
 }
 
-async function refreshClaudeIntegration() {
+async function refreshClaudeIntegration(retry = false) {
   if (claudeIntegration.busy) return;
   claudeIntegration.busy = true;
   renderClaudeIntegration();
   integrationMessage("claudeIntegrationMessage", "");
   try {
+    if (retry) await api(`${claudeIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(claudeIntegrationPath);
     claudeIntegration.connected = result.connected;
     claudeIntegration.paths = result.paths;
+    claudeIntegration.update = result.update;
+    if (result.update?.state === "failed") integrationMessage("claudeIntegrationMessage", result.update.message, true);
+    else if (result.update?.changed) integrationMessage("claudeIntegrationMessage", "Settings updated. Reload VS Code.");
   } catch (error) {
     claudeIntegration.connected = null;
+    claudeIntegration.update = null;
     integrationMessage("claudeIntegrationMessage", error.message, true);
   } finally {
     claudeIntegration.busy = false;
     renderClaudeIntegration();
+    if (claudeIntegration.update?.state === "starting") void refreshStartup();
   }
 }
 
 byId("openClaudeIntegration").addEventListener("click", () => {
   if (claudeIntegration.connected === null) {
-    refreshClaudeIntegration();
+    refreshClaudeIntegration(claudeIntegration.update?.state === "failed");
     return;
   }
   integrationMessage("claudeIntegrationDialogMessage", "");
   claudeIntegrationDialog.showModal();
 });
 byId("confirmClaudeIntegration").addEventListener("click", async () => {
-  if (claudeIntegration.busy || claudeIntegration.connected === null) return;
+  if (byId("confirmClaudeIntegration").disabled) return;
   const disconnect = claudeIntegration.connected;
   claudeIntegration.busy = true;
   renderClaudeIntegration();
@@ -1547,6 +1578,7 @@ byId("confirmClaudeIntegration").addEventListener("click", async () => {
   try {
     const result = await api(`${claudeIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
     claudeIntegration.connected = result.connected;
+    claudeIntegration.update = null;
     claudeIntegrationDialog.close();
     integrationMessage("claudeIntegrationMessage", disconnect
       ? "Settings removed. Reload VS Code to disconnect."
@@ -1569,14 +1601,14 @@ claudeIntegrationDialog.addEventListener("click", (event) => {
 });
 
 const codexIntegrationDialog = byId("codexIntegrationDialog");
-const codexIntegration = { connected: null, busy: false, paths: null };
+const codexIntegration = { connected: null, busy: false, paths: null, update: null };
 const codexIntegrationPath = "/admin/api/integrations/codex";
 
 function renderCodexIntegration() {
   const { connected, paths } = codexIntegration;
   const initializing = connected === false && state.startup?.startup?.catalog_file === "starting";
   const unavailable = connected === false && state.startup?.startup?.catalog_file === "failed";
-  const busy = codexIntegration.busy || initializing;
+  const busy = codexIntegration.busy || initializing || integrationUpdating(codexIntegration, "codex");
   const catalogError = "Could not prepare the Codex model catalog. Refresh models to retry.";
   if (unavailable) integrationMessage("codexIntegrationMessage", catalogError, true);
   else if (byId("codexIntegrationMessage").textContent === catalogError) integrationMessage("codexIntegrationMessage", "");
@@ -1605,34 +1637,40 @@ function renderCodexIntegration() {
   }
 }
 
-async function refreshCodexIntegration() {
+async function refreshCodexIntegration(retry = false) {
   if (codexIntegration.busy) return;
   codexIntegration.busy = true;
   renderCodexIntegration();
   integrationMessage("codexIntegrationMessage", "");
   try {
+    if (retry) await api(`${codexIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(codexIntegrationPath);
     codexIntegration.connected = result.connected;
     codexIntegration.paths = result.paths;
+    codexIntegration.update = result.update;
+    if (result.update?.state === "failed") integrationMessage("codexIntegrationMessage", result.update.message, true);
+    else if (result.update?.changed) integrationMessage("codexIntegrationMessage", "Settings updated. Restart Codex.");
   } catch (error) {
     codexIntegration.connected = null;
+    codexIntegration.update = null;
     integrationMessage("codexIntegrationMessage", error.message, true);
   } finally {
     codexIntegration.busy = false;
     renderCodexIntegration();
+    if (codexIntegration.update?.state === "starting") void refreshStartup();
   }
 }
 
 byId("openCodexIntegration").addEventListener("click", () => {
   if (codexIntegration.connected === null) {
-    refreshCodexIntegration();
+    refreshCodexIntegration(codexIntegration.update?.state === "failed");
     return;
   }
   integrationMessage("codexIntegrationDialogMessage", "");
   codexIntegrationDialog.showModal();
 });
 byId("confirmCodexIntegration").addEventListener("click", async () => {
-  if (codexIntegration.busy || codexIntegration.connected === null) return;
+  if (byId("confirmCodexIntegration").disabled) return;
   const disconnect = codexIntegration.connected;
   codexIntegration.busy = true;
   renderCodexIntegration();
@@ -1642,6 +1680,7 @@ byId("confirmCodexIntegration").addEventListener("click", async () => {
     const result = await api(`${codexIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
     codexIntegration.connected = result.connected;
     codexIntegration.paths = result.paths;
+    codexIntegration.update = null;
     codexIntegrationDialog.close();
     integrationMessage("codexIntegrationMessage", disconnect
       ? "Settings removed. Restart Codex to disconnect."
@@ -1671,6 +1710,120 @@ jetBrainsIntegrationDialog.addEventListener("click", (event) => {
   const bounds = jetBrainsIntegrationDialog.getBoundingClientRect();
   if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
     jetBrainsIntegrationDialog.close();
+  }
+});
+
+const claudeDesktopIntegrationDialog = byId("claudeDesktopIntegrationDialog");
+const claudeDesktopIntegration = { connected: null, disconnectPending: false, busy: false, paths: null, update: null };
+const claudeDesktopIntegrationPath = "/admin/api/integrations/claude-desktop";
+
+function renderClaudeDesktopIntegration() {
+  const { connected, paths, disconnectPending } = claudeDesktopIntegration;
+  const busy = claudeDesktopIntegration.busy || integrationUpdating(claudeDesktopIntegration, "claude-desktop");
+  const disconnect = disconnectPending || connected;
+  const action = disconnectPending ? "Retry disconnect" : connected ? "Disconnect" : "Connect";
+  byId("openClaudeDesktopIntegration").textContent = busy ? "Loading…" : connected === null && !disconnectPending ? "Retry" : action;
+  byId("openClaudeDesktopIntegration").disabled = busy;
+  byId("openClaudeDesktopIntegration").setAttribute("aria-busy", String(busy));
+  byId("confirmClaudeDesktopIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmClaudeDesktopIntegration").disabled = busy || (connected === null && !disconnectPending);
+  byId("openClaudeDesktopIntegration").className = disconnect && !busy ? "danger-button" : "primary-button";
+  byId("confirmClaudeDesktopIntegration").className = disconnect ? "danger-button" : "primary-button";
+  byId("claudeDesktopIntegrationDescription").textContent = disconnectPending
+    ? "Finish removing FCC's configuration. Fully quit Claude Desktop before retrying, then reopen it."
+    : connected
+    ? "Remove FCC's configuration and return to normal Claude sign-in. Fully quit Claude Desktop first, then reopen it."
+    : "Set FCC as Claude Desktop's gateway. Fully quit Claude Desktop before connecting, then reopen it.";
+  const files = byId("claudeDesktopIntegrationFiles");
+  files.replaceChildren();
+  if (paths) {
+    const targets = Object.values(paths);
+    targets.forEach((path) => {
+      const item = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = path;
+      item.appendChild(code);
+      files.appendChild(item);
+    });
+  }
+}
+
+async function refreshClaudeDesktopIntegration(retry = false) {
+  if (claudeDesktopIntegration.busy) return;
+  claudeDesktopIntegration.busy = true;
+  renderClaudeDesktopIntegration();
+  integrationMessage("claudeDesktopIntegrationMessage", "");
+  try {
+    if (retry) await api(`${claudeDesktopIntegrationPath}/refresh`, { method: "POST" });
+    const result = await api(claudeDesktopIntegrationPath);
+    claudeDesktopIntegration.connected = result.connected;
+    claudeDesktopIntegration.disconnectPending = result.disconnect_pending;
+    claudeDesktopIntegration.paths = result.paths;
+    claudeDesktopIntegration.update = result.update;
+    if (result.update?.state === "failed") integrationMessage("claudeDesktopIntegrationMessage", result.update.message, true);
+    else if (result.update?.changed) integrationMessage("claudeDesktopIntegrationMessage", "Settings updated. Reopen Claude Desktop.");
+  } catch (error) {
+    claudeDesktopIntegration.connected = null;
+    claudeDesktopIntegration.disconnectPending = false;
+    claudeDesktopIntegration.update = null;
+    integrationMessage("claudeDesktopIntegrationMessage", error.message, true);
+  } finally {
+    claudeDesktopIntegration.busy = false;
+    renderClaudeDesktopIntegration();
+    if (claudeDesktopIntegration.update?.state === "starting") void refreshStartup();
+  }
+}
+
+byId("openClaudeDesktopIntegration").addEventListener("click", () => {
+  if (claudeDesktopIntegration.connected === null && !claudeDesktopIntegration.disconnectPending) {
+    refreshClaudeDesktopIntegration(claudeDesktopIntegration.update?.state === "failed");
+    return;
+  }
+  integrationMessage("claudeDesktopIntegrationDialogMessage", "");
+  claudeDesktopIntegrationDialog.showModal();
+});
+byId("confirmClaudeDesktopIntegration").addEventListener("click", async () => {
+  if (byId("confirmClaudeDesktopIntegration").disabled) return;
+  const disconnect = claudeDesktopIntegration.disconnectPending || claudeDesktopIntegration.connected;
+  claudeDesktopIntegration.busy = true;
+  renderClaudeDesktopIntegration();
+  integrationMessage("claudeDesktopIntegrationDialogMessage", "");
+  integrationMessage("claudeDesktopIntegrationMessage", "");
+  try {
+    const result = await api(`${claudeDesktopIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    claudeDesktopIntegration.connected = result.connected;
+    claudeDesktopIntegration.disconnectPending = result.disconnect_pending;
+    claudeDesktopIntegration.paths = result.paths;
+    claudeDesktopIntegration.update = null;
+    claudeDesktopIntegrationDialog.close();
+    integrationMessage("claudeDesktopIntegrationMessage", disconnect
+      ? "Settings removed. Reopen Claude Desktop to disconnect."
+      : "Settings saved. Reopen Claude Desktop to connect.");
+  } catch (error) {
+    if (disconnect) {
+      try {
+        const result = await api(claudeDesktopIntegrationPath);
+        claudeDesktopIntegration.connected = result.connected;
+        claudeDesktopIntegration.disconnectPending = result.disconnect_pending;
+        claudeDesktopIntegration.paths = result.paths;
+        claudeDesktopIntegration.update = result.update;
+      } catch {
+        // Keep the user's disconnect action available if status is unreadable too.
+      }
+    }
+    integrationMessage("claudeDesktopIntegrationDialogMessage", error.message, true);
+    integrationMessage("claudeDesktopIntegrationMessage", error.message, true);
+  } finally {
+    claudeDesktopIntegration.busy = false;
+    renderClaudeDesktopIntegration();
+  }
+});
+byId("closeClaudeDesktopIntegration").addEventListener("click", () => claudeDesktopIntegrationDialog.close());
+claudeDesktopIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== claudeDesktopIntegrationDialog) return;
+  const bounds = claudeDesktopIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    claudeDesktopIntegrationDialog.close();
   }
 });
 

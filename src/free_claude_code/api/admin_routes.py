@@ -269,6 +269,15 @@ async def connect_claude_vscode(
     return await _integration_response(services.admin.connect_claude_vscode)
 
 
+@router.post("/admin/api/integrations/claude-vscode/refresh")
+async def refresh_claude_vscode(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_claude_vscode)
+
+
 @router.post("/admin/api/integrations/claude-vscode/disconnect")
 async def disconnect_claude_vscode(
     request: Request,
@@ -276,6 +285,38 @@ async def disconnect_claude_vscode(
 ):
     require_loopback_admin(request)
     return await _integration_response(services.admin.disconnect_claude_vscode)
+
+
+@router.get("/admin/api/integrations/claude-desktop")
+async def claude_desktop_status(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.claude_desktop_status)
+
+
+@router.post("/admin/api/integrations/claude-desktop/connect")
+async def connect_claude_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_claude_desktop)
+
+
+@router.post("/admin/api/integrations/claude-desktop/disconnect")
+async def disconnect_claude_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_claude_desktop)
+
+
+@router.post("/admin/api/integrations/claude-desktop/refresh")
+async def refresh_claude_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_claude_desktop)
 
 
 @router.get("/admin/api/integrations/codex")
@@ -294,6 +335,15 @@ async def connect_codex(
 ):
     require_loopback_admin(request)
     return await _integration_response(services.admin.connect_codex)
+
+
+@router.post("/admin/api/integrations/codex/refresh")
+async def refresh_codex_integration(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_codex_integration)
 
 
 @router.post("/admin/api/integrations/codex/disconnect")

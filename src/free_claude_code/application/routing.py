@@ -4,7 +4,10 @@ from dataclasses import dataclass
 
 from loguru import logger
 
-from free_claude_code.application.errors import UnknownProviderError
+from free_claude_code.application.errors import (
+    InvalidRequestError,
+    UnknownProviderError,
+)
 from free_claude_code.config.model_refs import (
     is_retired_model_ref,
     parse_model_name,
@@ -17,7 +20,11 @@ from free_claude_code.config.provider_catalog import (
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest, TokenCountRequest
-from free_claude_code.core.gateway_model_ids import decode_gateway_model_id
+from free_claude_code.core.gateway_model_ids import (
+    DESKTOP_MODEL_PREFIX,
+    DESKTOP_NO_THINKING_PREFIX,
+    decode_gateway_model_id,
+)
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 
@@ -150,7 +157,10 @@ class ModelRouter:
     def _direct_provider_model(
         self, model_name: str
     ) -> tuple[str | None, str | None, bool]:
-        decoded = decode_gateway_model_id(model_name)
+        try:
+            decoded = decode_gateway_model_id(model_name)
+        except ValueError:
+            raise InvalidRequestError("Invalid Claude Desktop model ID") from None
         candidate = (
             f"{decoded.provider_id}/{decoded.provider_model}"
             if decoded is not None
@@ -164,6 +174,13 @@ class ModelRouter:
             )
         if decoded is not None:
             if decoded.provider_id not in SUPPORTED_PROVIDER_IDS:
+                if model_name.partition("/")[0] in {
+                    DESKTOP_MODEL_PREFIX,
+                    DESKTOP_NO_THINKING_PREFIX,
+                }:
+                    raise UnknownProviderError.for_provider(
+                        decoded.provider_id, PROVIDER_CATALOG
+                    )
                 return None, None, False
             return (
                 decoded.provider_id,

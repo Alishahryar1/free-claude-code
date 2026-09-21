@@ -1,4 +1,4 @@
-"""Process-local OpenCode v1 configuration for FCC model routing."""
+"""Process-local OpenCode v2 configuration for FCC model routing."""
 
 from dataclasses import dataclass
 
@@ -22,7 +22,7 @@ class OpenCodeConfig:
 def build_opencode_config(
     models: tuple[CatalogModel, ...], *, default_model_id: str, proxy_root_url: str
 ) -> OpenCodeConfig:
-    """Translate a non-empty FCC model snapshot into OpenCode v1 config."""
+    """Translate a non-empty FCC model snapshot into OpenCode v2 config."""
 
     if not models:
         raise ValueError("OpenCode requires at least one routable FCC model")
@@ -32,17 +32,30 @@ def build_opencode_config(
     }
     provider_config: JsonObject = {
         "name": "Free Claude Code",
-        "npm": "@ai-sdk/openai",
-        "options": {
+        "package": "@opencode/ai/providers/openai/responses",
+        "settings": {
             "baseURL": proxy_v1_url(proxy_root_url),
             "apiKey": f"{{env:{OPENCODE_API_KEY_ENV}}}",
         },
     }
     default_model = f"{OPENCODE_PROVIDER_ID}/{default_model_id}"
+    # OpenCode's buffer is global, so it must also fit the smallest selectable
+    # model. Leave its native 20K default alone when every known window fits it.
+    buffer = min(
+        (
+            model.context_window_tokens // 4
+            for model in models
+            if model.context_window_tokens is not None
+        ),
+        default=20000,
+    )
+    compaction: JsonObject = (
+        {"compaction": {"buffer": buffer}} if buffer < 20000 else {}
+    )
 
     return OpenCodeConfig(
         file={
-            "provider": {
+            "providers": {
                 OPENCODE_PROVIDER_ID: {
                     **provider_config,
                     "models": model_config,
@@ -50,38 +63,45 @@ def build_opencode_config(
             }
         },
         overlay={
-            "provider": {OPENCODE_PROVIDER_ID: provider_config},
-            "enabled_providers": [OPENCODE_PROVIDER_ID],
-            "disabled_providers": [],
+            **compaction,
+            "providers": {OPENCODE_PROVIDER_ID: provider_config},
+            "experimental": {
+                "policies": [
+                    {"action": "provider.use", "resource": "*", "effect": "deny"},
+                    {
+                        "action": "provider.use",
+                        "resource": OPENCODE_PROVIDER_ID,
+                        "effect": "allow",
+                    },
+                ]
+            },
             "model": default_model,
-            "small_model": default_model,
+            "agents": {"title": {"model": default_model}},
         },
     )
 
 
 def _model_config(model: CatalogModel) -> JsonObject:
-    config: JsonObject = {
-        "name": model.display_name,
-        "reasoning": model.supports_reasoning is not False,
-    }
+    config: JsonObject = {"name": model.display_name}
     if model.input_modalities is not None:
-        config["modalities"] = {
+        config["capabilities"] = {
+            "tools": True,
             "input": [
                 modality.value
                 for modality in ModelInputModality
                 if modality in model.input_modalities
-            ]
+            ],
+            "output": ["text"],
         }
-    if model.context_window_tokens is not None or model.max_output_tokens is not None:
-        # OpenCode requires both fields and uses zero when either limit is unknown.
-        config["limit"] = {
-            "context": (
-                model.context_window_tokens
-                if model.context_window_tokens is not None
-                else 0
-            ),
-            "output": (
-                model.max_output_tokens if model.max_output_tokens is not None else 0
-            ),
-        }
+    limits: JsonObject = {}
+    if model.context_window_tokens is not None:
+        limits["context"] = model.context_window_tokens
+    if model.max_output_tokens is not None:
+        limits["output"] = model.max_output_tokens
+    elif model.context_window_tokens is not None:
+        # An omitted output limit inherits 32K in OpenCode, which can consume
+        # the entire known window. This fallback is an OpenCode runtime budget.
+        limits["output"] = max(1, min(4096, model.context_window_tokens // 4))
+    if limits:
+        config["limit"] = limits
     return config
