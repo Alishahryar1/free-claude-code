@@ -42,6 +42,7 @@ def test_refresh_upgrades_original_claude_directly_and_only_once(tmp_path):
         for entry in saved["claudeCode.environmentVariables"]
     }
     assert env["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
+    assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
     assert env["KEEP_ME"] == "user-value"
     assert saved["editor.fontSize"] == 15
     assert json.loads(state.read_text()) == {

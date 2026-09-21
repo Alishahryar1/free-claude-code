@@ -46,6 +46,7 @@ from free_claude_code.harnesses import (
     claude_desktop_integration,
     claude_integration,
     codex_integration,
+    jetbrains_acp_integration,
 )
 from free_claude_code.messaging.platforms import factory as messaging_platform_factory
 from free_claude_code.messaging.platforms.factory import MessagingPlatformOptions
@@ -215,6 +216,7 @@ class ApplicationRuntime:
         self._claude_update = _IntegrationUpdate()
         self._desktop_update = _IntegrationUpdate()
         self._codex_update = _IntegrationUpdate()
+        self._jetbrains_update = _IntegrationUpdate()
         self._http_ready = asyncio.Event()
         self._messaging_state = (
             "disabled" if self.settings.messaging_platform == "none" else "starting"
@@ -251,6 +253,7 @@ class ApplicationRuntime:
                 await self.refresh_claude_vscode()
                 await self.refresh_codex_integration()
                 await self.refresh_claude_desktop()
+                await self.refresh_jetbrains_acp()
                 self._startup_tasks.append(
                     asyncio.create_task(
                         run_sync_owned(remove_retired_chat_history),
@@ -477,6 +480,59 @@ class ApplicationRuntime:
             self._codex_update, partial(self._codex_integration, "refresh")
         )
 
+    async def jetbrains_acp_status(self) -> JsonObject:
+        return await self._jetbrains_acp("status")
+
+    async def connect_jetbrains_acp(self) -> JsonObject:
+        return await self._jetbrains_acp("connect")
+
+    async def disconnect_jetbrains_acp(self) -> JsonObject:
+        return await self._jetbrains_acp("disconnect")
+
+    async def refresh_jetbrains_acp(self) -> JsonObject:
+        return self._start_integration_update(
+            self._jetbrains_update, partial(self._jetbrains_acp, "refresh")
+        )
+
+    async def _jetbrains_acp(self, action: IntegrationAction) -> JsonObject:
+        async with self._config_lock:
+            self._check_integration_available()
+            settings = self.settings
+
+            def operate() -> JsonObject:
+                path = jetbrains_acp_integration.config_path()
+                url = local_proxy_root_url(settings)
+                if action == "refresh":
+                    return {
+                        "changed": jetbrains_acp_integration.refresh_connected(
+                            path, url, settings.proxy_auth_token
+                        )
+                    }
+                return jetbrains_acp_integration.configure(
+                    path,
+                    url,
+                    settings.proxy_auth_token,
+                    None if action == "status" else action == "connect",
+                )
+
+            try:
+                result = await run_sync_owned(operate)
+            except jetbrains_acp_integration.SetupError as exc:
+                raise InvalidRequestError(str(exc)) from None
+            except ValueError, UnicodeError:
+                raise InvalidRequestError(
+                    "Could not read JetBrains ACP configuration. Check the JSON in acp.json and the installed Claude Agent metadata."
+                ) from None
+            except OSError:
+                raise ApplicationUnavailableError(
+                    "Could not access JetBrains ACP files. Finish any configuration edits, check file permissions, and retry."
+                ) from None
+            if action in {"connect", "disconnect"}:
+                self._jetbrains_update.complete()
+            if action == "status":
+                result["update"] = self._jetbrains_update.snapshot()
+            return result
+
     async def claude_desktop_status(self) -> JsonObject:
         return await self._claude_desktop("status")
 
@@ -687,6 +743,7 @@ class ApplicationRuntime:
                     "claude-vscode": self._claude_update.snapshot(),
                     "claude-desktop": self._desktop_update.snapshot(),
                     "codex": self._codex_update.snapshot(),
+                    "jetbrains-acp": self._jetbrains_update.snapshot(),
                 },
             },
             "host": settings.host,
