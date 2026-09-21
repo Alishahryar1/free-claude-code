@@ -14,6 +14,7 @@ from free_claude_code.harnesses import claude_integration
         ("claude-vscode", "openClaudeIntegration"),
         ("codex", "openCodexIntegration"),
         ("claude-desktop", "openClaudeDesktopIntegration"),
+        ("jetbrains-acp", "openJetBrainsIntegration"),
     ],
 )
 @pytest.mark.parametrize("connected", [False, True])
@@ -146,101 +147,6 @@ def test_codex_connect_disconnect_and_modal_paths(
     assert tomllib.loads(path.read_text()) == {"model": "my-choice"}
     assert not (tmp_path / "vscode" / "settings.json").exists()
     assert not (tmp_path / ".claude.json").exists()
-
-
-@pytest.mark.parametrize(
-    "integration,title,description,modal_description,card_index",
-    [
-        (
-            "JetBrains",
-            "Claude Code in JetBrains ACP",
-            "Use FCC's models in Claude Code through JetBrains ACP.",
-            "Route Claude Code in JetBrains through your FCC server.",
-            2,
-        ),
-    ],
-    ids=["jetbrains"],
-)
-@pytest.mark.parametrize("width", [1200, 1440, 390])
-def test_preview_connect_is_noop_and_modal_dismisses(
-    page,
-    admin_base_url,
-    tmp_path,
-    width,
-    integration,
-    title,
-    description,
-    modal_description,
-    card_index,
-):
-    page.set_viewport_size({"width": width, "height": 900})
-    page.goto(f"{admin_base_url}/admin/integrations")
-    expect(page.locator("#messageArea")).to_have_text("")
-    expect(page.locator("#openClaudeIntegration")).to_be_enabled()
-    expect(page.locator("#openCodexIntegration")).to_be_enabled()
-    opener = page.locator(f"#open{integration}Integration")
-    expect(opener).to_be_enabled()
-    expect(opener).to_have_text("Connect")
-    card = page.locator("#view-integrations > article").nth(card_index)
-    expect(card).to_contain_text(description)
-    expect(card.get_by_role("status")).to_have_count(0)
-    page.screenshot(
-        path=str(tmp_path / f"{integration}-card-{width}.png"), full_page=True
-    )
-    paths = [
-        tmp_path / ".fcc" / ".env",
-        tmp_path / "vscode" / "settings.json",
-        tmp_path / ".claude.json",
-        tmp_path / ".codex" / "config.toml",
-    ]
-    before = {path: path.read_bytes() if path.exists() else None for path in paths}
-    page.wait_for_function("!state.startupRequest && !state.startupTimer")
-    requests = []
-
-    def record_request(request):
-        requests.append((request.method, request.url))
-
-    page.on("request", record_request)
-    dialog = page.get_by_role("dialog", name=title, exact=True)
-    for dismiss in ("close", "escape", "outside"):
-        opener.click()
-        expect(dialog).to_be_visible()
-        close = dialog.get_by_role("button", name="Close", exact=True)
-        expect(close).to_be_focused()
-        expect(dialog).to_have_accessible_description(modal_description)
-        assert dialog.evaluate("element => element.scrollWidth <= element.clientWidth")
-        dialog.locator("p").click()
-        dialog.click(position={"x": 10, "y": 80})
-        expect(dialog).to_be_visible()
-        action = dialog.get_by_role("button", name="Connect", exact=True)
-        for _ in range(2):
-            expect(action).to_be_enabled()
-            action.click()
-            expect(dialog).to_be_visible()
-            expect(action).to_have_text("Connect")
-        if dismiss == "close":
-            page.screenshot(path=str(tmp_path / f"{integration}-modal-{width}.png"))
-            close.click()
-        elif dismiss == "escape":
-            page.keyboard.press("Escape")
-        else:
-            page.mouse.click(1, 1)
-        expect(dialog).not_to_be_visible()
-        expect(opener).to_be_focused()
-        expect(opener).to_have_text("Connect")
-    assert requests == []
-    expect(page.locator("#dirtyState")).to_have_text("No changes")
-    expect(page.locator("#applyButton")).to_be_disabled()
-    assert {
-        path: path.read_bytes() if path.exists() else None for path in paths
-    } == before
-    page.remove_listener("request", record_request)
-    page.reload()
-    expect(opener).to_be_enabled()
-    expect(opener).to_have_text("Connect")
-    expect(dialog).not_to_be_visible()
-    opener.click()
-    expect(dialog).to_be_visible()
 
 
 @pytest.mark.parametrize("width", [1280, 390])
@@ -402,21 +308,21 @@ def test_codex_existing_setup_revisit_and_invalid_config_retry(
 def test_codex_save_pending_and_failure_stay_in_modal(page, admin_base_url, tmp_path):
     page.goto(f"{admin_base_url}/admin/integrations")
     page.locator("#openCodexIntegration").click()
-    requests = []
-    page.route(
-        "**/admin/api/integrations/codex/connect", lambda route: requests.append(route)
-    )
     action = page.locator("#confirmCodexIntegration")
+
+    def reject_save(route):
+        expect(action).to_be_disabled()
+        expect(action).to_have_text("Saving…")
+        expect(page.locator("#openCodexIntegration")).to_be_disabled()
+        route.fulfill(status=503, json={"detail": "Could not save settings."})
+
+    page.route("**/admin/api/integrations/codex/connect", reject_save)
     action.click()
-    expect(action).to_be_disabled()
-    expect(action).to_have_text("Saving…")
-    expect(page.locator("#openCodexIntegration")).to_be_disabled()
-    requests[0].fulfill(status=503, json={"detail": "Could not save settings."})
-    expect(action).to_be_enabled()
-    expect(page.locator("#codexIntegrationDialog")).to_be_visible()
     expect(page.locator("#codexIntegrationDialogMessage")).to_have_text(
         "Could not save settings."
     )
+    expect(action).to_be_enabled()
+    expect(page.locator("#codexIntegrationDialog")).to_be_visible()
     assert not (tmp_path / ".codex" / "config.toml").exists()
 
 
