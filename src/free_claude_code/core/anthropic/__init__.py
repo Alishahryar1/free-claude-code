@@ -46,7 +46,11 @@ from .streaming import (
 )
 from .thinking import ContentChunk, ContentType, ThinkTagParser
 from .tokens import get_token_count
-from .tools import FunctionTagToolParser, HeuristicToolParser
+from .tools import (
+    FunctionTagToolParser,
+    HeuristicToolParser,
+    TerminalJsonToolParser,
+)
 from .utils import set_if_not_none
 
 __all__ = [
@@ -73,6 +77,7 @@ __all__ = [
     "ReasoningReplayMode",
     "StreamBlockLedger",
     "SystemContent",
+    "TerminalJsonToolParser",
     "ThinkTagParser",
     "ThinkingConfig",
     "TokenCountRequest",
