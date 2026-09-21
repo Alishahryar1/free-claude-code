@@ -565,9 +565,29 @@ def test_model_ref_parsing(model_ref: str, provider: str, model: str) -> None:
 def test_paths_are_owned_by_fcc_home(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("FCC_STATE_DIR", raising=False)
 
     assert messaging_state_dir_path() == tmp_path / ".fcc" / "agent_workspace"
     assert server_log_path() == tmp_path / ".fcc" / "logs" / "server.log"
+
+
+def test_messaging_state_dir_respects_fcc_state_dir_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    override = tmp_path / "instance-a-state"
+    monkeypatch.setenv("FCC_STATE_DIR", str(override))
+
+    assert messaging_state_dir_path() == override
+
+
+def test_messaging_state_dir_empty_override_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("FCC_STATE_DIR", "")
+
+    assert messaging_state_dir_path() == tmp_path / ".fcc" / "agent_workspace"
 
 
 def test_nim_settings_keep_request_local_validation() -> None:

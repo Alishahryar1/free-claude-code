@@ -1,5 +1,6 @@
 """Shared filesystem paths for Free Claude Code configuration."""
 
+import os
 from pathlib import Path
 
 FCC_CONFIG_DIRNAME = ".fcc"
@@ -68,6 +69,9 @@ def legacy_env_paths() -> tuple[Path, ...]:
 def messaging_state_dir_path() -> Path:
     """Return the managed messaging state directory."""
 
+    override = os.environ.get("FCC_STATE_DIR")
+    if override:
+        return Path(override).expanduser()
     return config_dir_path() / MESSAGING_STATE_DIRNAME
 
 
