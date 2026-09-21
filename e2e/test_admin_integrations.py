@@ -374,6 +374,10 @@ def test_background_update_spinner_failure_retry_and_completion(
     button.click()
     expect(button).to_be_disabled()
     assert retries == ["POST"]
+    page.wait_for_function(
+        "id => state.startup?.startup?.integrations[id]?.state === 'starting'",
+        arg=integration,
+    )
     progress.update(state="ready", changed=True)
     expect(button).to_have_text("Disconnect")
     expect(button).to_be_enabled()
@@ -417,9 +421,7 @@ def test_startup_updates_before_opening_integrations(
     page.goto(f"{admin_base_url}/admin/integrations")
     button = page.locator("#openClaudeIntegration")
     expect(button).to_have_text("Disconnect")
-    expect(page.locator("#claudeIntegrationMessage")).to_have_text(
-        "Settings updated. Reload VS Code."
-    )
+    expect(page.locator("#claudeIntegrationMessage")).to_be_hidden()
     saved = json.loads(admin_client_files.read_text())
     assert saved["editor.fontSize"] == 15
     assert any(

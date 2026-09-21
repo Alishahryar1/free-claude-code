@@ -165,7 +165,10 @@ async function refreshStartup() {
     )) return;
     state.startup = result;
     renderStartup();
-    refreshIntegrationUpdates(previous?.startup?.integrations, current.integrations);
+    refreshIntegrationUpdates(
+      previous?.instance_id === result.instance_id ? previous.startup.integrations : null,
+      current.integrations,
+    );
     const changed = !previous || previous.instance_id !== result.instance_id ||
       JSON.stringify(previous.startup) !== JSON.stringify(current);
     if (changed) void hydrateModelOptions();
@@ -1498,16 +1501,19 @@ function integrationUpdating(integration, id) {
 
 function refreshIntegrationUpdates(previous, current) {
   if (state.activeView !== "integrations") return;
-  for (const [id, integration, refresh] of [
-    ["claude-vscode", claudeIntegration, refreshClaudeIntegration],
-    ["jetbrains-acp", jetBrainsIntegration, refreshJetBrainsIntegration],
-    ["codex", codexIntegration, refreshCodexIntegration],
-    ["claude-desktop", claudeDesktopIntegration, refreshClaudeDesktopIntegration],
+  for (const [id, integration, refresh, messageId, message] of [
+    ["claude-vscode", claudeIntegration, refreshClaudeIntegration, "claudeIntegrationMessage", "Settings updated. Reload VS Code."],
+    ["jetbrains-acp", jetBrainsIntegration, refreshJetBrainsIntegration, "jetBrainsIntegrationMessage", "Settings updated. Reopen JetBrains and start a new chat."],
+    ["codex", codexIntegration, refreshCodexIntegration, "codexIntegrationMessage", "Settings updated. Restart Codex."],
+    ["claude-desktop", claudeDesktopIntegration, refreshClaudeDesktopIntegration, "claudeDesktopIntegrationMessage", "Settings updated. Reopen Claude Desktop."],
   ]) {
     const phase = current?.[id]?.state;
     if (phase && phase !== "starting" && (
       previous?.[id]?.state === "starting" || integration.update?.state === "starting"
-    )) void refresh();
+    )) void refresh(false, { background: true });
+    if (previous?.[id]?.state === "starting" && phase === "ready" && current[id].changed === true) {
+      integrationMessage(messageId, message);
+    }
   }
 }
 
@@ -1539,11 +1545,11 @@ function renderClaudeIntegration() {
   }
 }
 
-async function refreshClaudeIntegration(retry = false) {
+async function refreshClaudeIntegration(retry = false, { background = false } = {}) {
+  if (!background) integrationMessage("claudeIntegrationMessage", "");
   if (claudeIntegration.busy) return;
   claudeIntegration.busy = true;
   renderClaudeIntegration();
-  integrationMessage("claudeIntegrationMessage", "");
   try {
     if (retry) await api(`${claudeIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(claudeIntegrationPath);
@@ -1551,7 +1557,7 @@ async function refreshClaudeIntegration(retry = false) {
     claudeIntegration.paths = result.paths;
     claudeIntegration.update = result.update;
     if (result.update?.state === "failed") integrationMessage("claudeIntegrationMessage", result.update.message, true);
-    else if (result.update?.changed) integrationMessage("claudeIntegrationMessage", "Settings updated. Reload VS Code.");
+    else if (byId("claudeIntegrationMessage").classList.contains("error")) integrationMessage("claudeIntegrationMessage", "");
   } catch (error) {
     claudeIntegration.connected = null;
     claudeIntegration.update = null;
@@ -1640,11 +1646,11 @@ function renderCodexIntegration() {
   }
 }
 
-async function refreshCodexIntegration(retry = false) {
+async function refreshCodexIntegration(retry = false, { background = false } = {}) {
+  if (!background) integrationMessage("codexIntegrationMessage", "");
   if (codexIntegration.busy) return;
   codexIntegration.busy = true;
   renderCodexIntegration();
-  integrationMessage("codexIntegrationMessage", "");
   try {
     if (retry) await api(`${codexIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(codexIntegrationPath);
@@ -1652,7 +1658,7 @@ async function refreshCodexIntegration(retry = false) {
     codexIntegration.paths = result.paths;
     codexIntegration.update = result.update;
     if (result.update?.state === "failed") integrationMessage("codexIntegrationMessage", result.update.message, true);
-    else if (result.update?.changed) integrationMessage("codexIntegrationMessage", "Settings updated. Restart Codex.");
+    else if (byId("codexIntegrationMessage").classList.contains("error")) integrationMessage("codexIntegrationMessage", "");
   } catch (error) {
     codexIntegration.connected = null;
     codexIntegration.update = null;
@@ -1737,11 +1743,11 @@ function renderJetBrainsIntegration() {
   }
 }
 
-async function refreshJetBrainsIntegration(retry = false) {
+async function refreshJetBrainsIntegration(retry = false, { background = false } = {}) {
+  if (!background) integrationMessage("jetBrainsIntegrationMessage", "");
   if (jetBrainsIntegration.busy) return;
   jetBrainsIntegration.busy = true;
   renderJetBrainsIntegration();
-  integrationMessage("jetBrainsIntegrationMessage", "");
   try {
     if (retry) await api(`${jetBrainsIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(jetBrainsIntegrationPath);
@@ -1749,7 +1755,7 @@ async function refreshJetBrainsIntegration(retry = false) {
     jetBrainsIntegration.paths = result.paths;
     jetBrainsIntegration.update = result.update;
     if (result.update?.state === "failed") integrationMessage("jetBrainsIntegrationMessage", result.update.message, true);
-    else if (result.update?.changed) integrationMessage("jetBrainsIntegrationMessage", "Settings updated. Reopen JetBrains and start a new chat.");
+    else if (byId("jetBrainsIntegrationMessage").classList.contains("error")) integrationMessage("jetBrainsIntegrationMessage", "");
   } catch (error) {
     jetBrainsIntegration.connected = null;
     jetBrainsIntegration.update = null;
@@ -1836,11 +1842,11 @@ function renderClaudeDesktopIntegration() {
   }
 }
 
-async function refreshClaudeDesktopIntegration(retry = false) {
+async function refreshClaudeDesktopIntegration(retry = false, { background = false } = {}) {
+  if (!background) integrationMessage("claudeDesktopIntegrationMessage", "");
   if (claudeDesktopIntegration.busy) return;
   claudeDesktopIntegration.busy = true;
   renderClaudeDesktopIntegration();
-  integrationMessage("claudeDesktopIntegrationMessage", "");
   try {
     if (retry) await api(`${claudeDesktopIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(claudeDesktopIntegrationPath);
@@ -1849,7 +1855,7 @@ async function refreshClaudeDesktopIntegration(retry = false) {
     claudeDesktopIntegration.paths = result.paths;
     claudeDesktopIntegration.update = result.update;
     if (result.update?.state === "failed") integrationMessage("claudeDesktopIntegrationMessage", result.update.message, true);
-    else if (result.update?.changed) integrationMessage("claudeDesktopIntegrationMessage", "Settings updated. Reopen Claude Desktop.");
+    else if (byId("claudeDesktopIntegrationMessage").classList.contains("error")) integrationMessage("claudeDesktopIntegrationMessage", "");
   } catch (error) {
     claudeDesktopIntegration.connected = null;
     claudeDesktopIntegration.disconnectPending = false;
