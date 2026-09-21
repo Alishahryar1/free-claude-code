@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+import threading
 from collections.abc import Mapping
 from unittest.mock import MagicMock
 from urllib.error import URLError
@@ -159,6 +160,7 @@ def test_concurrent_launchers_wait_for_the_lock_holder(
     monkeypatch, spawned, winner_succeeds: bool
 ) -> None:
     monkeypatch.setattr(common, "SERVER_STARTUP_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(common, "SERVER_STARTUP_LOCK_TIMEOUT_SECONDS", 0.05)
     holder = InterprocessFileLock(server_startup_lock_path())
     assert holder.acquire()
     try:
@@ -176,6 +178,24 @@ def test_concurrent_launchers_wait_for_the_lock_holder(
     assert spawned == []
 
 
+def test_startup_budget_starts_after_the_lock_is_acquired(monkeypatch, spawned) -> None:
+    monkeypatch.setattr(common, "SERVER_STARTUP_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(common, "SERVER_STARTUP_LOCK_TIMEOUT_SECONDS", 5.0)
+    holder = InterprocessFileLock(server_startup_lock_path())
+    assert holder.acquire()
+    # The previous launcher gave up without a server, well after this
+    # launcher's own startup budget would have expired.
+    releaser = threading.Timer(0.2, holder.release)
+    releaser.start()
+    try:
+        _responses(monkeypatch, _refused(), _refused(), _refused(), _healthy())
+        assert common.ensure_proxy_available(URL, env={}) is None
+    finally:
+        releaser.cancel()
+        holder.release()
+    assert len(spawned) == 1
+
+
 def test_server_command_prefers_the_installed_sibling(monkeypatch, tmp_path) -> None:
     executable = tmp_path / "bin" / "python"
     executable.parent.mkdir()
@@ -187,6 +207,11 @@ def test_server_command_prefers_the_installed_sibling(monkeypatch, tmp_path) -> 
     suffix = ".exe" if sys.platform == "win32" else ""
     sibling = executable.parent / f"fcc-server{suffix}"
     sibling.write_text("")
+    if sys.platform != "win32":
+        # A stale, non-executable script must not shadow the package fallback.
+        sibling.chmod(0o644)
+        assert common.server_command() == fallback
+        sibling.chmod(0o755)
     assert common.server_command() == [str(sibling)]
 
 

@@ -1,5 +1,6 @@
 """Shared process helpers for installed client CLI launchers."""
 
+import os
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,7 @@ PROXY_PREFLIGHT_BUDGET_SECONDS = 30.0
 
 AUTO_START_ENV = "FCC_AUTO_START_SERVER"
 SERVER_STARTUP_TIMEOUT_SECONDS = 30.0
+SERVER_STARTUP_LOCK_TIMEOUT_SECONDS = 30.0
 SERVER_STARTUP_POLL_SECONDS = 0.25
 SERVER_COMMAND_NAME = "fcc-server"
 MANUAL_START_HINT = f"Start it in another terminal with: {SERVER_COMMAND_NAME}"
@@ -99,7 +101,7 @@ def server_command() -> list[str]:
 
     suffix = ".exe" if sys.platform == "win32" else ""
     sibling = Path(sys.executable).parent / f"{SERVER_COMMAND_NAME}{suffix}"
-    if sibling.is_file():
+    if sibling.is_file() and os.access(sibling, os.X_OK):
         return [str(sibling)]
     return [
         sys.executable,
@@ -188,15 +190,17 @@ def ensure_proxy_available(
             proxy_root_url, probe, f"Automatic start is disabled by {AUTO_START_ENV}."
         )
 
-    deadline = time.monotonic() + SERVER_STARTUP_TIMEOUT_SECONDS
     lock = InterprocessFileLock(server_startup_lock_path())
     try:
-        acquired = lock.acquire(wait=True, timeout=SERVER_STARTUP_TIMEOUT_SECONDS)
+        acquired = lock.acquire(wait=True, timeout=SERVER_STARTUP_LOCK_TIMEOUT_SECONDS)
     except OSError as exc:
         return _unreachable_message(
             proxy_root_url, probe, f"Could not acquire the startup lock: {exc}"
         )
     try:
+        # The startup budget starts now: time spent waiting for another
+        # launcher's attempt must not shorten this launcher's own attempt.
+        deadline = time.monotonic() + SERVER_STARTUP_TIMEOUT_SECONDS
         # Another launcher may have started the server while this one waited.
         probe = _probe_proxy(proxy_root_url, deadline=deadline)
         if probe.state is ProxyState.HEALTHY:
