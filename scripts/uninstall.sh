@@ -6,7 +6,7 @@ FCC_HOME_DIRNAME=".fcc"
 FCC_MACOS_BUNDLE_ID="io.github.alishahryar1.free-claude-code"
 FCC_MACOS_OWNER_FILE=".free-claude-code-owner"
 # Include retired entry points so older installations are fully stopped and removed.
-FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-init free-claude-code"
+FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-update fcc-init free-claude-code"
 
 dry_run=0
 uv_tool_bin=""
@@ -191,7 +191,7 @@ verify_fcc_commands_removed() {
     fi
 
     remaining=""
-    for command_name in $FCC_COMMANDS; do
+    for command_name in $FCC_COMMANDS fcc-update.cmd fcc-update-windows.ps1; do
         command_path="$uv_tool_bin/$command_name"
         if [ -e "$command_path" ] || [ -L "$command_path" ]; then
             remaining="${remaining} ${command_path}"

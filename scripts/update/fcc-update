@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+if [ "$#" -ne 0 ]; then
+    printf 'Usage: fcc-update (stop other FCC commands first)\n' >&2
+    exit 2
+fi
+uv_path=$(command -v uv) || { printf 'uv is missing; rerun the FCC installer.\n' >&2; exit 1; }
+tool_dir=$("$uv_path" tool dir)
+worker=$("$tool_dir/free-claude-code/bin/python" -I -m free_claude_code.cli.update --uv "$uv_path" --launcher "$0" --shell)
+trap 'rm -f -- "$worker"' EXIT
+# The metadata-reading Python has exited before uv can replace the environment.
+exec /bin/sh "$worker"

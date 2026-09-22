@@ -50,7 +50,7 @@ Free-tier availability and limits are controlled by each provider and may change
 
 <a id="install"></a>
 
-### 1. Install Or Update
+### 1. Install
 
 macOS/Linux:
 
@@ -64,7 +64,7 @@ Windows PowerShell:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1")))
 ```
 
-Re-run the same command to update. When prompted, choose at least one coding agent and optionally RTK. You can review the installers before running them: [install.sh](scripts/install.sh) and [install.ps1](scripts/install.ps1).
+When prompted, choose at least one coding agent and optionally RTK. You can review the installers before running them: [install.sh](scripts/install.sh) and [install.ps1](scripts/install.ps1).
 
 ### 2. Start FCC
 
@@ -483,7 +483,13 @@ Run `fcc-server --version` to check the installed version without starting FCC.
 
 ### Update
 
-Re-run the matching command from [Install Or Update](#install).
+Stop all running FCC commands, then run:
+
+```sh
+fcc-update
+```
+
+If your installation does not have `fcc-update` yet, run the [installer](#install) once to add it.
 
 ### Muse Code on native Windows
 

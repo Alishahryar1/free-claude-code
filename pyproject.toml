@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "free-claude-code"
-version = "6.2.55"
+version = "6.2.56"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 requires-python = ">=3.14.0"
@@ -65,6 +65,11 @@ voice_local = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/free_claude_code"]
+
+[tool.hatch.build.targets.wheel.shared-scripts]
+"scripts/update/fcc-update" = "fcc-update"
+"scripts/update/fcc-update.cmd" = "fcc-update.cmd"
+"scripts/update/fcc-update-windows.ps1" = "fcc-update-windows.ps1"
 
 [tool.uv]
 required-version = ">=0.12.13"
