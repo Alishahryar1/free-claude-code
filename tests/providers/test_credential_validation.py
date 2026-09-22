@@ -40,6 +40,7 @@ CASES = [
     ),
     ("nebius", "https://api.tokenfactory.nebius.com/v1/models", {"data": []}, 401),
     ("scaleway", "https://api.scaleway.ai/v1/models", {"data": []}, 401),
+    ("opper", "https://api.opper.ai/v3/compat/models", {"data": []}, 401),
     (
         "vercel",
         "https://ai-gateway.vercel.sh/v1/credits",

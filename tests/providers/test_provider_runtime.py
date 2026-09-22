@@ -28,6 +28,7 @@ from free_claude_code.config.provider_catalog import (
     NARAROUTE_DEFAULT_BASE,
     NEBIUS_DEFAULT_BASE,
     OLLAMA_CLOUD_DEFAULT_BASE,
+    OPPER_DEFAULT_BASE,
     POOLSIDE_DEFAULT_BASE,
     PROVIDER_CATALOG,
     QWENCLOUD_CODING_DEFAULT_BASE,
@@ -88,6 +89,8 @@ def _make_settings(**overrides):
     mock.siliconflow_api_key = "test_siliconflow_key"
     mock.nebius_api_key = "test_nebius_key"
     mock.scw_secret_key = "test_scw_key"
+    mock.opper_api_key = "test_opper_key"
+    mock.opper_base_url = OPPER_DEFAULT_BASE
     mock.chutes_api_key = "test_chutes_key"
     mock.featherless_api_key = "test_featherless_key"
     mock.mistral_api_key = "test_mistral_key"
@@ -178,6 +181,7 @@ def _make_settings(**overrides):
     mock.siliconflow_proxy = None
     mock.nebius_proxy = None
     mock.scw_proxy = None
+    mock.opper_proxy = None
     mock.chutes_proxy = None
     mock.featherless_proxy = None
     mock.azure_openai_proxy = None
@@ -515,6 +519,28 @@ async def test_scaleway_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.base_url_attr is None
     assert config.api_key == "scw-token"
     assert config.base_url == SCALEWAY_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
+async def test_opper_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["opper"]
+    settings = _make_settings(
+        opper_api_key="opper-token",
+        opper_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider("opper", settings)
+
+    assert descriptor.display_name == "Opper"
+    assert descriptor.credential_env == "OPPER_API_KEY"
+    assert descriptor.credential_url == "https://platform.opper.ai/"
+    assert descriptor.base_url_attr == "opper_base_url"
+    assert config.api_key == "opper-token"
+    assert config.base_url == OPPER_DEFAULT_BASE
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
@@ -943,6 +969,7 @@ async def test_create_provider_instantiates_each_builtin():
         "siliconflow": OpenAIChatProvider,
         "nebius": OpenAIChatProvider,
         "scaleway": OpenAIChatProvider,
+        "opper": OpenAIChatProvider,
         "chutes": OpenAIChatProvider,
         "featherless": OpenAIChatProvider,
         "azure_openai": OpenAIChatProvider,
