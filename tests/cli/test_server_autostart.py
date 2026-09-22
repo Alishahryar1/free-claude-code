@@ -55,6 +55,7 @@ class FakeServer:
 def _fast_polling(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(common, "SERVER_STARTUP_POLL_SECONDS", 0)
     monkeypatch.setattr(common, "_desktop_owner_running", lambda: False)
+    monkeypatch.setattr(common, "_desktop_port_owner_running", lambda _url: False)
 
 
 @pytest.fixture
@@ -104,7 +105,10 @@ def test_missing_server_is_started_once_and_awaited(
     assert len(spawned) == 1
     command, kwargs = spawned[0]
     assert command == common.server_command()
-    assert kwargs["env"] == env
+    expected_env = dict(env)
+    if sys.platform in {"win32", "darwin"}:
+        expected_env["FCC_DESKTOP_STARTED_BY_LAUNCHER"] = "1"
+    assert kwargs["env"] == expected_env
     assert kwargs["env"] is not env
     assert kwargs["stdin"] is subprocess.DEVNULL
     assert kwargs["stdout"] is not subprocess.DEVNULL
@@ -178,7 +182,7 @@ def test_ready_server_outlives_harness(monkeypatch) -> None:
 def test_manual_desktop_startup_is_awaited_without_another_spawn(
     monkeypatch, spawned
 ) -> None:
-    monkeypatch.setattr(common, "_desktop_owner_running", lambda: True)
+    monkeypatch.setattr(common, "_desktop_port_owner_running", lambda _url: True)
     _responses(monkeypatch, _refused(), _refused(), _healthy())
 
     assert common.ensure_proxy_available(URL, env={}) is None
@@ -188,13 +192,46 @@ def test_manual_desktop_startup_is_awaited_without_another_spawn(
 def test_short_lived_duplicate_desktop_yields_to_manual_owner(monkeypatch) -> None:
     _responses(monkeypatch, _refused(), _refused(), _refused(), _healthy())
     ownership = iter((False, True))
-    monkeypatch.setattr(common, "_desktop_owner_running", lambda: next(ownership))
+    monkeypatch.setattr(
+        common, "_desktop_port_owner_running", lambda _url: next(ownership)
+    )
     child = FakeServer(exit_code=0)
     monkeypatch.setattr(common, "server_command", lambda: ["fcc-test"])
     monkeypatch.setattr(common.subprocess, "Popen", lambda *_a, **_k: child)
 
     assert common.ensure_proxy_available(URL, env={}) is None
     assert not child.terminated
+
+
+def test_other_port_desktop_owner_fails_without_waiting_or_spawning(
+    monkeypatch, spawned
+) -> None:
+    monkeypatch.setattr(common, "_desktop_owner_running", lambda: True)
+    _responses(monkeypatch, _refused(), _refused())
+
+    message = common.ensure_proxy_available(URL, env={})
+
+    assert message is not None and "different port" in message
+    assert spawned == []
+
+
+def test_cancelled_start_stops_only_new_child(monkeypatch) -> None:
+    _responses(monkeypatch, _refused(), _refused())
+    child = FakeServer()
+    monkeypatch.setattr(common, "_spawn_server", lambda _env: child)
+    monkeypatch.setattr(
+        common,
+        "_wait_for_server",
+        lambda *_a, **_k: (_ for _ in ()).throw(KeyboardInterrupt),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        common.ensure_proxy_available(URL, env={})
+
+    assert child.terminated
+    lock = InterprocessFileLock(server_startup_lock_path())
+    assert lock.acquire()
+    lock.release()
 
 
 def test_early_output_is_kept_and_browser_preference_is_inherited(monkeypatch) -> None:
@@ -316,7 +353,7 @@ def test_server_command_selects_platform_owner(
     )
     sibling = executable.parent / command_name
     sibling.write_text("")
-    if platform != "win32" and sys.platform != "win32":
+    if sys.platform != "win32":
         sibling.chmod(0o755)
     assert common.server_command() == [str(sibling)]
 

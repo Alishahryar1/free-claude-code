@@ -125,6 +125,9 @@ def _spawn_server(env: Mapping[str, str]) -> subprocess.Popen[bytes]:
     """Start the platform owner independently and preserve early diagnostics."""
 
     command = server_command()
+    child_env = dict(env)
+    if sys.platform in {"win32", "darwin"}:
+        child_env["FCC_DESKTOP_STARTED_BY_LAUNCHER"] = "1"
     log_path = server_startup_log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as output:
@@ -133,7 +136,7 @@ def _spawn_server(env: Mapping[str, str]) -> subprocess.Popen[bytes]:
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=subprocess.STDOUT,
-            env=dict(env),
+            env=child_env,
             creationflags=(
                 getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 | getattr(subprocess, "DETACHED_PROCESS", 0)
@@ -150,6 +153,24 @@ def _desktop_owner_running() -> bool:
     if sys.platform not in {"win32", "darwin"}:
         return False
     lock = InterprocessFileLock(paths.config_dir_path() / "desktop.lock")
+    try:
+        acquired = lock.acquire()
+    except OSError:
+        return False
+    if acquired:
+        lock.release()
+    return not acquired
+
+
+def _desktop_port_owner_running(proxy_root_url: str) -> bool:
+    """Check whether Desktop owns the requested port, including startup."""
+
+    if sys.platform not in {"win32", "darwin"}:
+        return False
+    port = urlsplit(proxy_root_url).port
+    if port is None:
+        return False
+    lock = InterprocessFileLock(paths.desktop_port_lock_path(port))
     try:
         acquired = lock.acquire()
     except OSError:
@@ -201,13 +222,18 @@ def _wait_for_server(
         }:
             return probe
         exit_code = process.poll() if process is not None else None
-        if exit_code is not None and _desktop_owner_running():
+        port_owner_running = _desktop_port_owner_running(proxy_root_url)
+        if exit_code is not None and port_owner_running:
             process = None
         elif exit_code is not None:
+            if _desktop_owner_running():
+                return "Existing Desktop is running on a different port."
             name = (
                 "fcc-desktop" if sys.platform in {"win32", "darwin"} else "fcc-server"
             )
             return f"{name} exited with code {exit_code} before it was ready."
+        if process is None and not port_owner_running:
+            return "Existing Desktop stopped before it was ready."
         if time.monotonic() >= deadline:
             return (
                 "Free Claude Code did not become ready within "
@@ -259,7 +285,7 @@ def ensure_proxy_available(
                 probe,
                 "Another launcher is still starting the server; retry shortly.",
             )
-        if _desktop_owner_running():
+        if _desktop_port_owner_running(proxy_root_url):
             outcome = _wait_for_server(proxy_root_url, None, deadline=deadline)
             if isinstance(outcome, ProxyProbe) and outcome.state is ProxyState.HEALTHY:
                 return None
@@ -269,6 +295,13 @@ def ensure_proxy_available(
                 outcome
                 if isinstance(outcome, str)
                 else "Existing Desktop is not ready.",
+            )
+        if _desktop_owner_running():
+            return _unreachable_message(
+                proxy_root_url,
+                probe,
+                "Existing Desktop is running on a different port. "
+                "Stop it or use its configured PORT.",
             )
         try:
             process = _spawn_server(env)
@@ -281,7 +314,11 @@ def ensure_proxy_available(
             "(it keeps running after this client exits).",
             file=sys.stderr,
         )
-        outcome = _wait_for_server(proxy_root_url, process, deadline=deadline)
+        try:
+            outcome = _wait_for_server(proxy_root_url, process, deadline=deadline)
+        except BaseException:
+            _stop_owned_process(process)
+            raise
         if isinstance(outcome, str):
             _stop_owned_process(process)
             return _unreachable_message(proxy_root_url, probe, outcome)
