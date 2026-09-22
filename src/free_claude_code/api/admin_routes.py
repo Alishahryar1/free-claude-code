@@ -319,6 +319,38 @@ async def refresh_claude_desktop(
     return await _integration_response(services.admin.refresh_claude_desktop)
 
 
+@router.get("/admin/api/integrations/jetbrains-acp")
+async def jetbrains_acp_status(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.jetbrains_acp_status)
+
+
+@router.post("/admin/api/integrations/jetbrains-acp/connect")
+async def connect_jetbrains_acp(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_jetbrains_acp)
+
+
+@router.post("/admin/api/integrations/jetbrains-acp/disconnect")
+async def disconnect_jetbrains_acp(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_jetbrains_acp)
+
+
+@router.post("/admin/api/integrations/jetbrains-acp/refresh")
+async def refresh_jetbrains_acp(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_jetbrains_acp)
+
+
 @router.get("/admin/api/integrations/codex")
 async def codex_integration_status(
     request: Request,

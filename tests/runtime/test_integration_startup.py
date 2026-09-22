@@ -1,5 +1,6 @@
 import asyncio
 import json
+import subprocess
 import threading
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,12 +21,16 @@ from free_claude_code.harnesses import (
     claude_integration,
     codex_integration,
 )
+from free_claude_code.harnesses import (
+    jetbrains_acp_integration as jb,
+)
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.harnesses.test_integration_refresh import OLD_CLAUDE, OLD_CODEX, TOKEN
+from tests.harnesses.test_jetbrains_acp_integration import install, write
 from tests.web_tools_support import StubWebToolsClient
 
 
@@ -68,6 +73,49 @@ def old_connections():
     claude.write_text(json.dumps(OLD_CLAUDE))
     codex.write_text(OLD_CODEX)
     return claude, codex
+
+
+@pytest.mark.asyncio
+async def test_jetbrains_startup_refresh_and_failed_discovery_allow_disconnect(
+    runtime, monkeypatch
+):
+    install(jb.registry_path(), jb.system_root())
+    monkeypatch.setattr(
+        jb.subprocess,
+        "run",
+        lambda args, **kw: subprocess.CompletedProcess(args, 0, "v24.19.0", ""),
+    )
+    write(
+        jb.config_path(),
+        {
+            "agent_servers": {
+                "Claude Code (FCC)": {
+                    "command": "old-node",
+                    "env": {"FCC_JETBRAINS_ACP": "1", "ANTHROPIC_AUTH_TOKEN": "old"},
+                }
+            }
+        },
+    )
+    try:
+        await runtime.start()
+        await asyncio.wait_for(runtime._jetbrains_update.task, 5)
+        status = await runtime.jetbrains_acp_status()
+        assert status["connected"] is True
+        assert status["update"]["changed"] is True
+        entry = json.loads(jb.config_path().read_text())["agent_servers"][
+            "Claude Code (FCC)"
+        ]
+        assert entry["env"]["ANTHROPIC_AUTH_TOKEN"] == TOKEN
+        assert entry["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8000"
+        jb.registry_path().unlink()
+        await runtime.refresh_jetbrains_acp()
+        await asyncio.wait_for(runtime._jetbrains_update.task, 5)
+        status = await runtime.jetbrains_acp_status()
+        assert status["update"]["state"] == "failed"
+        assert status["connected"] is True
+        assert (await runtime.disconnect_jetbrains_acp())["connected"] is False
+    finally:
+        await runtime.close()
 
 
 async def finish(runtime):

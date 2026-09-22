@@ -30,6 +30,7 @@ from free_claude_code.harnesses import (
     claude_desktop_integration,
     claude_integration,
     codex_integration,
+    jetbrains_acp_integration,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.runtime import ProviderRuntime
@@ -140,6 +141,19 @@ def admin_base_url(
     """Serve one fully isolated Admin application on an OS-assigned port."""
 
     config_dir = tmp_path / ".fcc"
+    monkeypatch.setattr(
+        jetbrains_acp_integration,
+        "config_path",
+        lambda: tmp_path / ".jetbrains/acp.json",
+    )
+    monkeypatch.setattr(
+        jetbrains_acp_integration,
+        "registry_path",
+        lambda: tmp_path / "jetbrains/installed.json",
+    )
+    monkeypatch.setattr(
+        jetbrains_acp_integration, "system_root", lambda: tmp_path / "jetbrains/systems"
+    )
     monkeypatch.setattr(
         claude_desktop_integration, "config_root", lambda: tmp_path / "Claude-3p"
     )
