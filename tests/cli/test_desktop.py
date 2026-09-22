@@ -264,7 +264,10 @@ def test_automatically_started_duplicate_does_not_open_admin(
     controller.quit.assert_called_once_with()
 
 
-def test_desktop_attaches_to_terminal_server_instead_of_binding_twice() -> None:
+@pytest.mark.parametrize("endpoint_ready", [False, True])
+def test_desktop_attaches_to_terminal_server_instead_of_binding_twice(
+    endpoint_ready: bool,
+) -> None:
     from free_claude_code.cli import desktop
 
     settings = _settings()
@@ -275,7 +278,9 @@ def test_desktop_attaches_to_terminal_server_instead_of_binding_twice() -> None:
     with (
         patch.object(desktop, "load_server_settings", return_value=settings),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
-        patch.object(desktop, "open_admin_when_ready", return_value=True) as open_admin,
+        patch.object(
+            desktop, "open_admin_when_ready", return_value=endpoint_ready
+        ) as open_admin,
         patch.object(desktop, "ServerSupervisor") as supervisor,
         patch.object(desktop, "DesktopController", return_value=controller) as shell,
     ):
@@ -291,6 +296,7 @@ def test_desktop_attaches_to_terminal_server_instead_of_binding_twice() -> None:
     supervisor.assert_called_once_with(console_logging=False)
     supervisor.return_value.run.assert_called_once()
     instance_lock.release.assert_called_once_with()
+    controller.quit.assert_called_once_with()
 
 
 def test_fresh_desktop_launch_uses_console_free_supervisor() -> None:

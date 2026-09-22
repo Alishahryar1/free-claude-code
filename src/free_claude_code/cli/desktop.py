@@ -124,10 +124,10 @@ def launch_desktop(
         if auto_started:
             controller.quit()
             return True
-        reused = open_admin_when_ready(settings, stop_event=supervisor.stop_event)
-        if reused:
+        try:
+            return open_admin_when_ready(settings, stop_event=supervisor.stop_event)
+        finally:
             controller.quit()
-        return reused
 
     def run_server() -> None:
         instance_lock = InterprocessFileLock(config_dir_path() / "desktop.lock")

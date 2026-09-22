@@ -145,6 +145,23 @@ def _desktop_owner_running() -> bool:
     return not acquired
 
 
+def _server_owner_running() -> bool:
+    """The server may be between listener generations, regardless of entrypoint."""
+
+    lock = InterprocessFileLock(paths.server_owner_lock_path())
+    try:
+        acquired = lock.acquire()
+    except OSError:
+        return False
+    if acquired:
+        lock.release()
+    return not acquired
+
+
+def _owner_running() -> bool:
+    return _desktop_owner_running() or _server_owner_running()
+
+
 def _stop_owned_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
@@ -188,7 +205,7 @@ def _wait_for_server(
             return probe
         exit_code = process.poll() if process is not None else None
         if exit_code is not None:
-            if probe.state is ProxyState.STARTING or _desktop_owner_running():
+            if probe.state is ProxyState.STARTING or _owner_running():
                 # A manual owner may have won the bind/singleton race. Its actual
                 # endpoint, not the duplicate's exit code, determines readiness.
                 process = None
@@ -202,14 +219,10 @@ def _wait_for_server(
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(SERVER_STARTUP_POLL_SECONDS, remaining))
-    hint = (
-        " If Desktop is already running, check its configured port or restart it."
-        if sys.platform in {"win32", "darwin"}
-        else ""
-    )
     return (
         "Free Claude Code did not become ready within "
-        f"{SERVER_STARTUP_TIMEOUT_SECONDS:g} seconds.{hint}"
+        f"{SERVER_STARTUP_TIMEOUT_SECONDS:g} seconds. If FCC is already running, "
+        "check its configured port or restart it."
     )
 
 
@@ -263,7 +276,7 @@ def ensure_proxy_available(
         if (
             probe.state is ProxyState.UNREACHABLE
             and time.monotonic() < deadline
-            and not _desktop_owner_running()
+            and not _owner_running()
         ):
             try:
                 process = _spawn_server(env)

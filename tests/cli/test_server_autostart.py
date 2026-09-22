@@ -13,7 +13,10 @@ from urllib.error import URLError
 import pytest
 
 from free_claude_code.cli.launchers import common
-from free_claude_code.config.paths import server_startup_lock_path
+from free_claude_code.config.paths import (
+    server_owner_lock_path,
+    server_startup_lock_path,
+)
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
@@ -222,6 +225,24 @@ def test_other_port_desktop_owner_waits_without_spawning(
     assert message is not None and "did not become ready" in message
     assert URL in message
     assert clock.now == 1.0
+    assert spawned == []
+
+
+def test_terminal_owner_at_other_port_waits_without_spawning(
+    monkeypatch, spawned, clock
+) -> None:
+    owner = InterprocessFileLock(server_owner_lock_path())
+    assert owner.acquire()
+    try:
+        monkeypatch.setattr(
+            common, "open_local_request", MagicMock(side_effect=_refused())
+        )
+        message = common.ensure_proxy_available(URL, env={})
+    finally:
+        owner.release()
+
+    assert message is not None and "did not become ready" in message
+    assert "check its configured port" in message
     assert spawned == []
 
 

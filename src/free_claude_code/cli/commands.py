@@ -21,9 +21,10 @@ from free_claude_code.config.loader import (
     clear_settings_cache,
     get_settings,
 )
-from free_claude_code.config.paths import managed_env_path
+from free_claude_code.config.paths import managed_env_path, server_owner_lock_path
 from free_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
 from .server_socket import ServerSockets
 
@@ -137,10 +138,19 @@ class ServerSupervisor:
             if self.stop_event.is_set():
                 return
             self._running = True
+            self._owned_server = False
 
         self._auto_browser_opened = False
+        owner_lock = InterprocessFileLock(server_owner_lock_path())
         try:
             try:
+                if not owner_lock.acquire():
+                    if existing_server and existing_server(load_server_settings()):
+                        return
+                    raise OSError(
+                        errno.EADDRINUSE,
+                        "Another FCC server already owns this configuration.",
+                    )
                 while not self._is_stop_requested():
                     with self._lock:
                         restart_generation = self._restart_generation
@@ -170,11 +180,14 @@ class ServerSupervisor:
             except KeyboardInterrupt:
                 return
         finally:
-            with self._lock:
-                self._server = None
-                self._running = False
-            if self._owned_server:
-                kill_all_best_effort()
+            try:
+                with self._lock:
+                    self._server = None
+                    self._running = False
+                if self._owned_server:
+                    kill_all_best_effort()
+            finally:
+                owner_lock.release()
 
     def request_restart(self) -> bool:
         """Reload an active generation or coalesce into a scheduled fresh run."""

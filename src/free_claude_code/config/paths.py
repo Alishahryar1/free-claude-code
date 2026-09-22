@@ -15,6 +15,7 @@ OPENAI_AUTH_FILENAME = "openai.json"
 OPENAI_AUTH_LOCK_FILENAME = "openai.lock"
 CONFIG_LOCK_FILENAME = "config.lock"
 SERVER_STARTUP_LOCK_FILENAME = "server.startup.lock"
+SERVER_OWNER_LOCK_FILENAME = "server.owner.lock"
 FCC_TEMP_DIRNAME = "tmp"
 LAUNCHER_TEMP_DIRNAME = "launchers"
 CODE_STATE_DIRNAME = "code"
@@ -44,6 +45,12 @@ def server_startup_lock_path() -> Path:
     """Return the lock launchers hold while starting one shared fcc-server."""
 
     return config_dir_path() / SERVER_STARTUP_LOCK_FILENAME
+
+
+def server_owner_lock_path() -> Path:
+    """Return the lock held by one server through all configuration restarts."""
+
+    return config_dir_path() / SERVER_OWNER_LOCK_FILENAME
 
 
 def launcher_temp_dir_path() -> Path:
