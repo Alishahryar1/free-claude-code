@@ -24,6 +24,7 @@ $FccCommands = @(
     "fcc-grok",
     "fcc-muse",
     "fcc-aider",
+    "fcc-update",
     "fcc-init",
     "free-claude-code"
 )
@@ -205,7 +206,7 @@ function Confirm-FccCommandsRemoved {
 
     $remaining = @()
     $extensions = @("", ".exe", ".cmd", ".bat", ".ps1")
-    foreach ($commandName in $FccCommands) {
+    foreach ($commandName in ($FccCommands + "fcc-update-windows")) {
         foreach ($extension in $extensions) {
             $commandPath = Join-Path $script:UvToolBin "$commandName$extension"
             if (Test-Path -LiteralPath $commandPath) {
