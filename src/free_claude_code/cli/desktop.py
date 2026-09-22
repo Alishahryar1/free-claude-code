@@ -1,6 +1,5 @@
 """Platform-neutral lifecycle for the FCC desktop shell."""
 
-import os
 import threading
 from collections.abc import Callable
 from typing import Protocol
@@ -10,10 +9,10 @@ from loguru import logger
 from free_claude_code.cli.commands import (
     ServerStatus,
     ServerSupervisor,
+    load_server_settings,
     open_admin_when_ready,
 )
-from free_claude_code.config.loader import get_settings
-from free_claude_code.config.paths import config_dir_path, desktop_port_lock_path
+from free_claude_code.config.paths import config_dir_path
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
 
@@ -115,10 +114,11 @@ class DesktopController:
         self._server_run()
 
 
-def launch_desktop(tray_factory: DesktopTrayFactory) -> None:
+def launch_desktop(
+    tray_factory: DesktopTrayFactory, *, auto_started: bool = False
+) -> None:
     """Show the tray before acquiring configuration, singleton and server ownership."""
     supervisor = ServerSupervisor(console_logging=False)
-    auto_started = os.environ.get("FCC_DESKTOP_STARTED_BY_LAUNCHER") == "1"
 
     def reuse_existing(settings) -> bool:
         if auto_started:
@@ -130,37 +130,21 @@ def launch_desktop(tray_factory: DesktopTrayFactory) -> None:
         return reused
 
     def run_server() -> None:
-        try:
-            settings = get_settings()
-        except Exception as exc:
-            logger.error("Desktop server could not start: {}", exc)
-            return
-        port_lock = InterprocessFileLock(desktop_port_lock_path(settings.port))
-        try:
-            port_acquired = port_lock.acquire()
-        except OSError as exc:
-            logger.error("Could not acquire the desktop port lock: {}", exc)
-            controller.quit()
-            return
-        if not port_acquired:
-            try:
-                if not auto_started:
-                    open_admin_when_ready(settings, stop_event=supervisor.stop_event)
-            finally:
-                controller.quit()
-            return
         instance_lock = InterprocessFileLock(config_dir_path() / "desktop.lock")
         try:
             acquired = instance_lock.acquire()
         except OSError as exc:
             logger.error("Could not acquire the desktop lock: {}", exc)
-            port_lock.release()
             controller.quit()
             return
         if not acquired:
-            port_lock.release()
-            logger.error("Desktop is already running on a different port")
-            controller.quit()
+            try:
+                if not auto_started:
+                    open_admin_when_ready(
+                        load_server_settings(), stop_event=supervisor.stop_event
+                    )
+            finally:
+                controller.quit()
             return
         try:
             supervisor.run(existing_server=reuse_existing)
@@ -168,7 +152,6 @@ def launch_desktop(tray_factory: DesktopTrayFactory) -> None:
             logger.error("Desktop server could not start: {}", exc)
         finally:
             instance_lock.release()
-            port_lock.release()
 
     controller = DesktopController(
         supervisor,

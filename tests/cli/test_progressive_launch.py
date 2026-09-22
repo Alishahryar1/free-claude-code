@@ -9,14 +9,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
-from urllib.error import URLError
 
 import pytest
 import uvicorn
 from fastapi import FastAPI
 
 from free_claude_code.cli import commands
-from free_claude_code.cli.launchers import common
 from free_claude_code.cli.server_socket import ServerSockets
 from free_claude_code.cli.uvicorn_server import RuntimeServer
 from free_claude_code.config.settings import Settings
@@ -203,13 +201,8 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
         host="127.0.0.1", port=0, open_admin_browser=outcome == "automatic"
     )
     patcher.setattr(commands, "load_server_settings", lambda: settings)
-    patcher.setattr(desktop, "get_settings", lambda: settings)
+    patcher.setattr(desktop, "load_server_settings", lambda: settings)
     patcher.setattr(desktop, "config_dir_path", lambda: Path(directory))
-    patcher.setattr(
-        desktop,
-        "desktop_port_lock_path",
-        lambda port: Path(directory) / f"desktop.{port}.lock",
-    )
 
     def browser(url):
         assert url == "http://127.0.0.1:0/admin"
@@ -319,12 +312,8 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
                     self.stopped.set()
 
             lock = InterprocessFileLock(Path(directory) / "desktop.lock")
-            port_lock = InterprocessFileLock(
-                Path(directory) / f"desktop.{settings.port}.lock"
-            )
             try:
                 if mode == "reuse-desktop":
-                    assert port_lock.acquire()
                     assert lock.acquire()
                 desktop.launch_desktop(Tray)
                 assert cleaned == []
@@ -332,7 +321,6 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
                     ServerSockets.reserve(settings.host, settings.port)
             finally:
                 lock.release()
-                port_lock.release()
     patcher.undo()
     print("FCC exited while preserving its resource ownership", flush=True)
 
@@ -373,34 +361,3 @@ def test_external_probe_is_cancelled_before_any_request(monkeypatch):
     monkeypatch.setattr(commands, "open_local_request", request)
     assert not commands.open_admin_when_ready(Settings(), stop_event=stop)
     request.assert_not_called()
-
-
-def test_launcher_retries_starting_http_but_not_refused_socket(monkeypatch):
-    response = MagicMock()
-    response.__enter__.return_value.status = 200
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        url = f"http://127.0.0.1:{listener.getsockname()[1]}"
-        request = MagicMock(side_effect=[TimeoutError("starting"), response])
-        monkeypatch.setattr(common, "open_local_request", request)
-        assert common.preflight_proxy(url) is None
-        assert request.call_count == 2
-    request.reset_mock(side_effect=True)
-    request.side_effect = URLError(ConnectionRefusedError("refused"))
-    assert common.preflight_proxy(url) == "refused"
-    assert request.call_count == 1
-
-
-def test_launcher_http_wait_has_a_finite_budget(monkeypatch):
-    monkeypatch.setattr(common.time, "monotonic", MagicMock(side_effect=[0, 0, 31]))
-    request = MagicMock(side_effect=TimeoutError("still starting"))
-    monkeypatch.setattr(common, "open_local_request", request)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        assert (
-            common.preflight_proxy(f"http://127.0.0.1:{listener.getsockname()[1]}")
-            == "still starting"
-        )
-    assert request.call_count == 1

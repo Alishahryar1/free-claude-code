@@ -102,7 +102,7 @@ def test_non_version_entrypoint_delegates_to_server_command() -> None:
     with patch.object(commands, "serve") as command:
         entrypoints.serve(())
 
-    command.assert_called_once_with()
+    command.assert_called_once_with(console_logging=True)
 
 
 def test_explicit_open_admin_waits_for_owned_http_ready():
