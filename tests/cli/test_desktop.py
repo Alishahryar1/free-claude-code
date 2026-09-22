@@ -2,15 +2,12 @@
 
 import threading
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from free_claude_code.cli.commands import ServerStatus, ServerSupervisor
 from free_claude_code.cli.desktop import DesktopController
-from free_claude_code.cli.launchers import common
-from free_claude_code.config import paths
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
@@ -222,7 +219,7 @@ def test_second_desktop_launch_opens_existing_admin_without_new_server() -> None
 
     controller = MagicMock()
     with (
-        patch.object(desktop, "get_settings", return_value=settings),
+        patch.object(desktop, "load_server_settings", return_value=settings),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
         patch.object(desktop, "open_admin_when_ready", return_value=True) as open_admin,
         patch.object(desktop, "ServerSupervisor") as supervisor,
@@ -239,24 +236,19 @@ def test_second_desktop_launch_opens_existing_admin_without_new_server() -> None
     instance_lock.release.assert_not_called()
 
 
-@pytest.mark.parametrize("loser", ["port", "singleton", "existing_server"])
+@pytest.mark.parametrize("loser", ["singleton", "existing_server"])
 def test_automatically_started_duplicate_does_not_open_admin(
-    monkeypatch: pytest.MonkeyPatch, loser: str
+    loser: str,
 ) -> None:
     from free_claude_code.cli import desktop
 
-    monkeypatch.setenv("FCC_DESKTOP_STARTED_BY_LAUNCHER", "1")
     settings = _settings()
-    port_lock = MagicMock()
     instance_lock = MagicMock()
-    port_lock.acquire.return_value = loser != "port"
     instance_lock.acquire.return_value = loser != "singleton"
     controller = MagicMock()
     with (
-        patch.object(desktop, "get_settings", return_value=settings),
-        patch.object(
-            desktop, "InterprocessFileLock", side_effect=[port_lock, instance_lock]
-        ),
+        patch.object(desktop, "load_server_settings", return_value=settings),
+        patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
         patch.object(desktop, "open_admin_when_ready") as open_admin,
         patch.object(desktop, "ServerSupervisor") as supervisor,
         patch.object(desktop, "DesktopController", return_value=controller) as shell,
@@ -266,60 +258,10 @@ def test_automatically_started_duplicate_does_not_open_admin(
             supervisor.return_value.run.side_effect = lambda **kwargs: kwargs[
                 "existing_server"
             ](settings)
-        desktop.launch_desktop(MagicMock())
+        desktop.launch_desktop(MagicMock(), auto_started=True)
 
     open_admin.assert_not_called()
     controller.quit.assert_called_once_with()
-    if loser == "port":
-        instance_lock.acquire.assert_not_called()
-    if loser == "singleton":
-        port_lock.release.assert_called_once_with()
-
-
-def test_desktop_port_is_claimed_while_it_owns_the_server(tmp_path: Path) -> None:
-    from free_claude_code.cli import desktop
-
-    settings = _settings()
-    controller = MagicMock()
-    supervisor = MagicMock()
-    port_path = tmp_path / "desktop.8082.lock"
-    global_path = tmp_path / "desktop.lock"
-
-    def check_locks(**_kwargs: object) -> None:
-        for path in (port_path, global_path):
-            contender = InterprocessFileLock(path)
-            assert not contender.acquire()
-
-    with (
-        patch.object(desktop, "get_settings", return_value=settings),
-        patch.object(desktop, "desktop_port_lock_path", return_value=port_path),
-        patch.object(desktop, "config_dir_path", return_value=tmp_path),
-        patch.object(desktop, "ServerSupervisor", return_value=supervisor),
-        patch.object(desktop, "DesktopController", return_value=controller) as shell,
-    ):
-        controller.run.side_effect = lambda: shell.call_args.args[3]()
-        supervisor.run.side_effect = check_locks
-        desktop.launch_desktop(MagicMock())
-
-    for path in (port_path, global_path):
-        contender = InterprocessFileLock(path)
-        assert contender.acquire()
-        contender.release()
-
-
-def test_launcher_distinguishes_a_locked_desktop_port(tmp_path: Path) -> None:
-    with (
-        patch.object(paths, "config_dir_path", return_value=tmp_path),
-        patch.object(common, "sys", SimpleNamespace(platform="win32")),
-    ):
-        owner = InterprocessFileLock(paths.desktop_port_lock_path(8082))
-        assert owner.acquire()
-        try:
-            assert common._desktop_port_owner_running("http://127.0.0.1:8082")
-            assert not common._desktop_port_owner_running("http://127.0.0.1:9191")
-        finally:
-            owner.release()
-        assert not common._desktop_port_owner_running("http://127.0.0.1:8082")
 
 
 def test_desktop_attaches_to_terminal_server_instead_of_binding_twice() -> None:
@@ -331,7 +273,7 @@ def test_desktop_attaches_to_terminal_server_instead_of_binding_twice() -> None:
 
     controller = MagicMock()
     with (
-        patch.object(desktop, "get_settings", return_value=settings),
+        patch.object(desktop, "load_server_settings", return_value=settings),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
         patch.object(desktop, "open_admin_when_ready", return_value=True) as open_admin,
         patch.object(desktop, "ServerSupervisor") as supervisor,
@@ -348,7 +290,7 @@ def test_desktop_attaches_to_terminal_server_instead_of_binding_twice() -> None:
     )
     supervisor.assert_called_once_with(console_logging=False)
     supervisor.return_value.run.assert_called_once()
-    assert instance_lock.release.call_count == 2
+    instance_lock.release.assert_called_once_with()
 
 
 def test_fresh_desktop_launch_uses_console_free_supervisor() -> None:
@@ -361,7 +303,7 @@ def test_fresh_desktop_launch_uses_console_free_supervisor() -> None:
     controller = MagicMock()
 
     with (
-        patch.object(desktop, "get_settings", return_value=settings),
+        patch.object(desktop, "load_server_settings", return_value=settings),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
         patch.object(desktop, "ServerSupervisor", return_value=supervisor) as owner,
         patch.object(desktop, "DesktopController", return_value=controller) as shell,
@@ -373,7 +315,7 @@ def test_fresh_desktop_launch_uses_console_free_supervisor() -> None:
     owner.assert_called_once_with(console_logging=False)
     assert shell.call_args.args[:2] == (supervisor, tray_factory)
     controller.run.assert_called_once_with()
-    assert instance_lock.release.call_count == 2
+    instance_lock.release.assert_called_once_with()
 
 
 def test_desktop_lock_failure_closes_tray_without_starting_server():
@@ -383,7 +325,7 @@ def test_desktop_lock_failure_closes_tray_without_starting_server():
     instance_lock.acquire.side_effect = PermissionError("locked directory")
     controller = MagicMock()
     with (
-        patch.object(desktop, "get_settings", return_value=_settings()),
+        patch.object(desktop, "load_server_settings", return_value=_settings()),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
         patch.object(desktop, "ServerSupervisor") as supervisor,
         patch.object(desktop, "DesktopController", return_value=controller) as shell,

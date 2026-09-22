@@ -59,7 +59,8 @@ def test_desktop_entrypoint_rejects_unknown_arguments(
     assert "Usage: fcc-desktop" in capsys.readouterr().err
 
 
-def test_desktop_sets_scaling_before_importing_native_tray(monkeypatch):
+@pytest.mark.parametrize("auto_started", [False, True])
+def test_desktop_sets_scaling_before_importing_native_tray(monkeypatch, auto_started):
     calls = []
     monkeypatch.setattr(desktop_entrypoint.sys, "platform", "win32")
     monkeypatch.setattr(
@@ -72,9 +73,14 @@ def test_desktop_sets_scaling_before_importing_native_tray(monkeypatch):
     def import_module(name, *args, **kwargs):
         if name == "free_claude_code.cli.desktop_tray":
             assert calls == ["scaling"]
-            return SimpleNamespace(launch=lambda: calls.append("tray"))
+
+            def launch(**kwargs):
+                assert kwargs == {"auto_started": auto_started}
+                calls.append("tray")
+
+            return SimpleNamespace(launch=launch)
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", import_module)
-    desktop_entrypoint.launch([])
+    desktop_entrypoint.launch(["--auto-started"] if auto_started else [])
     assert calls == ["scaling", "tray"]

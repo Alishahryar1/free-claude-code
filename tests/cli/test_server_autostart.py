@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from urllib.error import URLError
@@ -55,7 +56,21 @@ class FakeServer:
 def _fast_polling(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(common, "SERVER_STARTUP_POLL_SECONDS", 0)
     monkeypatch.setattr(common, "_desktop_owner_running", lambda: False)
-    monkeypatch.setattr(common, "_desktop_port_owner_running", lambda _url: False)
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    clock = SimpleNamespace(now=0.0)
+
+    def sleep(seconds):
+        clock.now += seconds
+
+    monkeypatch.setattr(
+        common, "time", SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep)
+    )
+    monkeypatch.setattr(common, "SERVER_STARTUP_POLL_SECONDS", 0.25)
+    monkeypatch.setattr(common, "SERVER_STARTUP_TIMEOUT_SECONDS", 1.0)
+    return clock
 
 
 @pytest.fixture
@@ -88,7 +103,6 @@ def test_answering_but_unhealthy_proxy_is_not_restarted(monkeypatch, spawned) ->
     message = common.ensure_proxy_available(URL, env={})
     assert message is not None
     assert "returned HTTP 503" in message
-    assert "A server is answering" in message
     assert "Start it manually with:" in message
     assert spawned == []
 
@@ -105,14 +119,11 @@ def test_missing_server_is_started_once_and_awaited(
     assert len(spawned) == 1
     command, kwargs = spawned[0]
     assert command == common.server_command()
-    expected_env = dict(env)
-    if sys.platform in {"win32", "darwin"}:
-        expected_env["FCC_DESKTOP_STARTED_BY_LAUNCHER"] = "1"
-    assert kwargs["env"] == expected_env
+    assert kwargs["env"] == env
     assert kwargs["env"] is not env
     assert kwargs["stdin"] is subprocess.DEVNULL
-    assert kwargs["stdout"] is not subprocess.DEVNULL
-    assert kwargs["stderr"] is subprocess.STDOUT
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
     if sys.platform == "win32":
         assert kwargs["creationflags"]
     else:
@@ -132,21 +143,20 @@ def test_server_exit_before_ready_is_reported(monkeypatch) -> None:
     message = common.ensure_proxy_available(URL, env={})
     assert message is not None
     assert "exited with code 3" in message
-    assert "Startup log:" in message
+    assert "Start it manually with:" in message
 
 
-def test_startup_wait_is_bounded(monkeypatch, spawned) -> None:
-    monkeypatch.setattr(common, "SERVER_STARTUP_TIMEOUT_SECONDS", 0.0)
-    _responses(monkeypatch, *([_refused()] * 10))
+def test_startup_wait_is_bounded(monkeypatch, spawned, clock) -> None:
+    monkeypatch.setattr(common, "open_local_request", MagicMock(side_effect=_refused()))
     message = common.ensure_proxy_available(URL, env={})
     assert message is not None
     assert "did not become ready" in message
     assert len(spawned) == 1
+    assert clock.now == 1.0
 
 
-def test_timed_out_start_terminates_only_its_child(monkeypatch) -> None:
-    monkeypatch.setattr(common, "SERVER_STARTUP_TIMEOUT_SECONDS", 0.0)
-    _responses(monkeypatch, _refused(), _refused(), _refused())
+def test_timed_out_start_terminates_only_its_child(monkeypatch, clock) -> None:
+    monkeypatch.setattr(common, "open_local_request", MagicMock(side_effect=_refused()))
     child = FakeServer()
     monkeypatch.setattr(common, "server_command", lambda: ["fcc-test"])
     monkeypatch.setattr(common.subprocess, "Popen", lambda *_a, **_k: child)
@@ -182,7 +192,7 @@ def test_ready_server_outlives_harness(monkeypatch) -> None:
 def test_manual_desktop_startup_is_awaited_without_another_spawn(
     monkeypatch, spawned
 ) -> None:
-    monkeypatch.setattr(common, "_desktop_port_owner_running", lambda _url: True)
+    monkeypatch.setattr(common, "_desktop_owner_running", lambda: True)
     _responses(monkeypatch, _refused(), _refused(), _healthy())
 
     assert common.ensure_proxy_available(URL, env={}) is None
@@ -192,9 +202,7 @@ def test_manual_desktop_startup_is_awaited_without_another_spawn(
 def test_short_lived_duplicate_desktop_yields_to_manual_owner(monkeypatch) -> None:
     _responses(monkeypatch, _refused(), _refused(), _refused(), _healthy())
     ownership = iter((False, True))
-    monkeypatch.setattr(
-        common, "_desktop_port_owner_running", lambda _url: next(ownership)
-    )
+    monkeypatch.setattr(common, "_desktop_owner_running", lambda: next(ownership))
     child = FakeServer(exit_code=0)
     monkeypatch.setattr(common, "server_command", lambda: ["fcc-test"])
     monkeypatch.setattr(common.subprocess, "Popen", lambda *_a, **_k: child)
@@ -203,15 +211,17 @@ def test_short_lived_duplicate_desktop_yields_to_manual_owner(monkeypatch) -> No
     assert not child.terminated
 
 
-def test_other_port_desktop_owner_fails_without_waiting_or_spawning(
-    monkeypatch, spawned
+def test_other_port_desktop_owner_waits_without_spawning(
+    monkeypatch, spawned, clock
 ) -> None:
     monkeypatch.setattr(common, "_desktop_owner_running", lambda: True)
-    _responses(monkeypatch, _refused(), _refused())
+    monkeypatch.setattr(common, "open_local_request", MagicMock(side_effect=_refused()))
 
     message = common.ensure_proxy_available(URL, env={})
 
-    assert message is not None and "different port" in message
+    assert message is not None and "did not become ready" in message
+    assert URL in message
+    assert clock.now == 1.0
     assert spawned == []
 
 
@@ -234,12 +244,89 @@ def test_cancelled_start_stops_only_new_child(monkeypatch) -> None:
     lock.release()
 
 
-def test_early_output_is_kept_and_browser_preference_is_inherited(monkeypatch) -> None:
+def test_cancelled_wait_preserves_existing_owner(monkeypatch, spawned) -> None:
+    monkeypatch.setattr(common, "_desktop_owner_running", lambda: True)
+    _responses(monkeypatch, _refused(), _refused(), KeyboardInterrupt())
+    with pytest.raises(KeyboardInterrupt):
+        common.ensure_proxy_available(URL, env={})
+    assert spawned == []
+    lock = InterprocessFileLock(server_startup_lock_path())
+    assert lock.acquire()
+    lock.release()
+
+
+def test_manual_listener_wins_the_bind_race(monkeypatch) -> None:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        _responses(
+            monkeypatch, _refused(), _refused(), TimeoutError("starting"), _healthy()
+        )
+        child = FakeServer(exit_code=1)
+        monkeypatch.setattr(common, "_spawn_server", lambda _env: child)
+        assert common.ensure_proxy_available(url, env={}) is None
+        assert not child.terminated
+
+
+def test_probe_caps_both_connections_to_remaining_time(monkeypatch, clock) -> None:
+    def http(_request, *, timeout):
+        assert timeout == 1.0
+        clock.now = 0.8
+        raise TimeoutError("loading")
+
+    def tcp(_address, *, timeout):
+        assert timeout == pytest.approx(0.2)
+        return MagicMock()
+
+    monkeypatch.setattr(common, "open_local_request", http)
+    monkeypatch.setattr(common.socket, "create_connection", tcp)
+    assert common._probe_proxy(URL, deadline=1.0).state is common.ProxyState.STARTING
+
+
+def test_expired_probe_does_not_start_any_connection(monkeypatch, clock) -> None:
+    http = MagicMock()
+    tcp = MagicMock()
+    monkeypatch.setattr(common, "open_local_request", http)
+    monkeypatch.setattr(common.socket, "create_connection", tcp)
+    common._probe_proxy(URL, deadline=0.0)
+    http.assert_not_called()
+    tcp.assert_not_called()
+
+
+def test_http_timeout_at_deadline_does_not_start_tcp_probe(monkeypatch, clock) -> None:
+    def http(_request, *, timeout):
+        clock.now = 1.0
+        raise TimeoutError("loading")
+
+    tcp = MagicMock()
+    monkeypatch.setattr(common, "open_local_request", http)
+    monkeypatch.setattr(common.socket, "create_connection", tcp)
+    assert common._probe_proxy(URL, deadline=1.0).state is common.ProxyState.STARTING
+    tcp.assert_not_called()
+
+
+def test_exhausted_recheck_budget_does_not_spawn(monkeypatch, spawned, clock) -> None:
+    calls = 0
+
+    def request(_request, *, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            clock.now = 1.0
+        raise _refused()
+
+    monkeypatch.setattr(common, "open_local_request", request)
+    message = common.ensure_proxy_available(URL, env={})
+    assert message is not None and "did not become ready" in message
+    assert spawned == []
+
+
+def test_detached_streams_and_browser_preference_are_independent(monkeypatch) -> None:
     monkeypatch.setattr(common, "server_command", lambda: ["fcc-test"])
     observed = {}
 
     def popen(_command, **kwargs):
-        kwargs["stdout"].write(b"startup failed before app logging\n")
         observed.update(kwargs)
         return FakeServer()
 
@@ -247,18 +334,26 @@ def test_early_output_is_kept_and_browser_preference_is_inherited(monkeypatch) -
     common._spawn_server({"FCC_OPEN_BROWSER": "0"})
 
     assert observed["env"]["FCC_OPEN_BROWSER"] == "0"
-    assert b"startup failed before app logging" in (
-        common.server_startup_log_path().read_bytes()
+    assert (
+        observed["stdin"]
+        == observed["stdout"]
+        == observed["stderr"]
+        == subprocess.DEVNULL
     )
 
 
-def test_existing_unresponsive_listener_is_not_replaced(monkeypatch, spawned) -> None:
+def test_existing_unresponsive_listener_is_not_replaced(
+    monkeypatch, spawned, clock
+) -> None:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         url = f"http://127.0.0.1:{listener.getsockname()[1]}"
-        monkeypatch.setattr(common, "PROXY_PREFLIGHT_BUDGET_SECONDS", 0)
-        _responses(monkeypatch, URLError(TimeoutError("starting")))
+        monkeypatch.setattr(
+            common,
+            "open_local_request",
+            MagicMock(side_effect=URLError(TimeoutError("starting"))),
+        )
         assert common.ensure_proxy_available(url, env={}) is not None
         assert spawned == []
 
@@ -321,6 +416,41 @@ def test_concurrent_launchers_wait_for_the_lock_holder(
     assert spawned == []
 
 
+def test_two_launchers_share_one_start_attempt(monkeypatch) -> None:
+    spawning, other_probed, release, healthy = (threading.Event() for _ in range(4))
+    starts = []
+    child = FakeServer()
+
+    def probe(_url, *, deadline):
+        if healthy.is_set():
+            return common.ProxyProbe(common.ProxyState.HEALTHY)
+        if starts and starts[0] != threading.get_ident():
+            other_probed.set()
+        return common.ProxyProbe(common.ProxyState.UNREACHABLE, "refused")
+
+    def spawn(_env):
+        starts.append(threading.get_ident())
+        spawning.set()
+        assert release.wait(5)
+        healthy.set()
+        return child
+
+    monkeypatch.setattr(common, "_probe_proxy", probe)
+    monkeypatch.setattr(common, "_spawn_server", spawn)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(common.ensure_proxy_available, URL, env={})
+        try:
+            assert spawning.wait(5)
+            second = workers.submit(common.ensure_proxy_available, URL, env={})
+            assert other_probed.wait(5)
+        finally:
+            release.set()
+        assert first.result(timeout=5) is None
+        assert second.result(timeout=5) is None
+    assert len(starts) == 1
+    assert not child.terminated
+
+
 def test_startup_budget_starts_after_the_lock_is_acquired(monkeypatch, spawned) -> None:
     monkeypatch.setattr(common, "SERVER_STARTUP_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(common, "SERVER_STARTUP_LOCK_TIMEOUT_SECONDS", 5.0)
@@ -355,7 +485,7 @@ def test_server_command_selects_platform_owner(
     sibling.write_text("")
     if sys.platform != "win32":
         sibling.chmod(0o755)
-    assert common.server_command() == [str(sibling)]
+    assert common.server_command() == [str(sibling), "--auto-started"]
 
 
 def test_missing_installed_owner_does_not_fallback_to_python(
@@ -385,7 +515,7 @@ def test_launcher_starts_the_server_then_runs_the_client(
 
     def popen(command: list[str], **kwargs: object) -> object:
         if command == server_command:
-            assert kwargs["stdout"] is not subprocess.DEVNULL
+            assert kwargs["stdout"] is subprocess.DEVNULL
             launch_capture.health_error = None
             return FakeServer()
         env = kwargs["env"]
@@ -413,4 +543,4 @@ def test_launcher_keeps_the_manual_hint_when_the_server_cannot_start(
     assert not launch_capture.commands
     err = capsys.readouterr().err
     assert "exited with code 1" in err
-    assert "Startup log:" in err
+    assert "Start it manually with:" in err

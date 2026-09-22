@@ -4,13 +4,16 @@ import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
-from free_claude_code.cli import commands
+from free_claude_code.cli import commands, desktop
+from free_claude_code.cli.launchers import common
+from free_claude_code.config import paths
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
@@ -18,6 +21,134 @@ from free_claude_code.runtime.asgi import RuntimeASGIApp
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.web_tools_support import StubWebToolsClient
+
+
+@pytest.mark.parametrize("change_port", [False, True])
+def test_harness_waits_through_desktop_apply_restart(monkeypatch, change_port):
+    monkeypatch.setenv("HOST", "127.0.0.1")
+    monkeypatch.setenv("FCC_OPEN_BROWSER", "0")
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    with socket.socket() as first, socket.socket() as second:
+        first.bind(("127.0.0.1", 0))
+        second.bind(("127.0.0.1", 0))
+        port = first.getsockname()[1]
+        next_port = second.getsockname()[1] if change_port else port
+    store = ManagedConfigStore()
+    store.initialize()
+    store.commit(dict(store.read().managed) | {"PORT": str(port)})
+    runtimes = []
+
+    def build(settings, restart_callback):
+        manager = ProviderRuntimeManager(
+            settings, runtime_factory=lambda snapshot: ProviderRuntime(snapshot, {})
+        )
+        monkeypatch.setattr(manager, "start_model_list_refresh", lambda: None)
+        monkeypatch.setattr(manager, "_start_pass", lambda *args, **kwargs: None)
+        runtime = ApplicationRuntime(
+            manager,
+            configuration=ConfigurationService(ManagedConfigStore()),
+            transcriber=None,
+            restart_callback=restart_callback,
+        )
+        runtimes.append(runtime)
+        return RuntimeASGIApp(
+            create_app(
+                ApiServices(
+                    requests=manager,
+                    admin=runtime,
+                    tasks=runtime,
+                    web_tools=StubWebToolsClient(),
+                )
+            ),
+            runtime,
+        )
+
+    monkeypatch.setattr("free_claude_code.runtime.bootstrap.build_asgi_app", build)
+    monkeypatch.setattr(commands, "kill_all_best_effort", lambda: None)
+    monkeypatch.setattr(desktop, "config_dir_path", paths.config_dir_path)
+    # Exercise Desktop ownership on every host without importing native tray code.
+    monkeypatch.setattr(common, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(common, "PROXY_PREFLIGHT_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(common, "SERVER_STARTUP_POLL_SECONDS", 0.01)
+
+    def unexpected_spawn(_env):
+        pytest.fail("An existing Desktop must own its restart")
+
+    monkeypatch.setattr(common, "_spawn_server", unexpected_spawn)
+    restart_entered, release_restart = threading.Event(), threading.Event()
+    run_once = commands.ServerSupervisor._run_once
+
+    def gated_run(self, settings, **kwargs):
+        if runtimes:
+            restart_entered.set()
+            assert release_restart.wait(10)
+        return run_once(self, settings, **kwargs)
+
+    monkeypatch.setattr(commands.ServerSupervisor, "_run_once", gated_run)
+    wait_for_server = common._wait_for_server
+
+    def release_when_waiting(*args, **kwargs):
+        release_restart.set()
+        return wait_for_server(*args, **kwargs)
+
+    monkeypatch.setattr(common, "_wait_for_server", release_when_waiting)
+    trays = []
+
+    class Tray:
+        def __init__(self, controller):
+            self.controller = controller
+            self.stopped = threading.Event()
+            trays.append(self)
+
+        def run(self, setup):
+            setup()
+            assert self.stopped.wait(20)
+
+        def stop(self):
+            self.stopped.set()
+
+    owner = threading.Thread(target=desktop.launch_desktop, args=(Tray,))
+    owner.start()
+    try:
+        with httpx.Client(trust_env=False, timeout=1) as client:
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    before = client.get(f"http://127.0.0.1:{port}/admin/api/status")
+                    if before.status_code == 200:
+                        break
+                except httpx.TransportError:
+                    pass
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            response = client.post(
+                f"http://127.0.0.1:{port}/admin/api/config/apply",
+                json={
+                    "values": {"PORT": str(next_port)}
+                    if change_port
+                    else {"LOG_LEVEL": "WARNING"}
+                },
+            )
+            assert response.status_code == 200
+            assert response.json()["restart"]["automatic"]
+            assert restart_entered.wait(5)
+            assert (
+                common.ensure_proxy_available(f"http://127.0.0.1:{next_port}", env={})
+                is None
+            )
+            after = client.get(f"http://127.0.0.1:{next_port}/admin/api/status").json()
+            assert after["instance_id"] != before.json()["instance_id"]
+            assert after["port"] == next_port
+            assert owner.is_alive()
+    finally:
+        release_restart.set()
+        if trays:
+            trays[0].controller.quit()
+        owner.join(10)
+    assert not owner.is_alive()
+    assert len(runtimes) == 2
+    assert all(runtime.is_closed for runtime in runtimes)
 
 
 @pytest.mark.parametrize("stop_during_commit", [False, True])

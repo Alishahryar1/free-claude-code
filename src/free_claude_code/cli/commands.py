@@ -67,10 +67,10 @@ def _start_admin_browser(
     return completed
 
 
-def serve() -> None:
+def serve(*, console_logging: bool = True) -> None:
     """Start and supervise the FastAPI server."""
     try:
-        ServerSupervisor().run()
+        ServerSupervisor(console_logging=console_logging).run()
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
             _log_port_in_use(get_settings())

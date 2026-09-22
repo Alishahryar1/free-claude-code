@@ -22,15 +22,11 @@ from free_claude_code.cli.process_registry import (
     unregister_pid,
 )
 from free_claude_code.config import paths
-from free_claude_code.config.paths import (
-    server_startup_lock_path,
-    server_startup_log_path,
-)
+from free_claude_code.config.paths import server_startup_lock_path
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
 PROXY_PREFLIGHT_PATH = "/health"
 PROXY_PREFLIGHT_TIMEOUT_SECONDS = 1.5
-PROXY_PREFLIGHT_BUDGET_SECONDS = 30.0
 
 SERVER_STARTUP_TIMEOUT_SECONDS = 30.0
 SERVER_STARTUP_LOCK_TIMEOUT_SECONDS = 30.0
@@ -57,55 +53,48 @@ class ProxyProbe:
 
 
 def _probe_proxy(proxy_root_url: str, *, deadline: float) -> ProxyProbe:
+    """Observe the endpoint once without consuming the whole startup wait."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return ProxyProbe(ProxyState.STARTING, "readiness deadline expired")
     url = f"{proxy_root_url.rstrip('/')}{PROXY_PREFLIGHT_PATH}"
     request = Request(url, method="GET")
-    while True:
-        try:
-            with open_local_request(
-                request,
-                timeout=min(
-                    PROXY_PREFLIGHT_TIMEOUT_SECONDS,
-                    max(0.001, deadline - time.monotonic()),
-                ),
-            ) as response:
-                status_code = response.status
-        except HTTPError as exc:
-            return ProxyProbe(ProxyState.HTTP_ERROR, f"returned HTTP {exc.code}")
-        except (URLError, OSError) as exc:
-            reason = exc.reason if isinstance(exc, URLError) else exc
-            # A reserved listener can accept TCP while the HTTP app is loading.
-            # Refusals and other failures still return the normal launch hint.
-            if isinstance(reason, TimeoutError):
-                address = urlsplit(url)
-                try:
-                    with socket.create_connection(
-                        (address.hostname or "127.0.0.1", address.port or 80),
-                        timeout=PROXY_PREFLIGHT_TIMEOUT_SECONDS,
-                    ):
-                        pass
-                except ConnectionRefusedError, TimeoutError:
-                    return ProxyProbe(ProxyState.UNREACHABLE, str(reason))
-                except OSError as exc:
-                    return ProxyProbe(ProxyState.NETWORK_ERROR, str(exc))
-                if time.monotonic() < deadline:
-                    continue
+    try:
+        with open_local_request(
+            request, timeout=min(PROXY_PREFLIGHT_TIMEOUT_SECONDS, remaining)
+        ) as response:
+            status_code = response.status
+    except HTTPError as exc:
+        return ProxyProbe(ProxyState.HTTP_ERROR, f"returned HTTP {exc.code}")
+    except (URLError, OSError) as exc:
+        reason = exc.reason if isinstance(exc, URLError) else exc
+        if isinstance(reason, TimeoutError):
+            # Windows can time out connecting to an absent listener. Conversely,
+            # FCC reserves a listening socket before the HTTP app is ready.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 return ProxyProbe(ProxyState.STARTING, str(reason))
-            if isinstance(reason, ConnectionRefusedError) or getattr(
-                reason, "errno", None
-            ) in {errno.ECONNREFUSED, 10061}:
+            address = urlsplit(url)
+            try:
+                with socket.create_connection(
+                    (address.hostname or "127.0.0.1", address.port or 80),
+                    timeout=min(PROXY_PREFLIGHT_TIMEOUT_SECONDS, remaining),
+                ):
+                    pass
+            except ConnectionRefusedError, TimeoutError:
                 return ProxyProbe(ProxyState.UNREACHABLE, str(reason))
-            return ProxyProbe(ProxyState.NETWORK_ERROR, str(reason))
-        if not 200 <= status_code < 300:
-            return ProxyProbe(ProxyState.HTTP_ERROR, f"returned HTTP {status_code}")
-        return ProxyProbe(ProxyState.HEALTHY)
-
-
-def preflight_proxy(proxy_root_url: str) -> str | None:
-    """Return an error message when the local proxy health check is unreachable."""
-
-    return _probe_proxy(
-        proxy_root_url, deadline=time.monotonic() + PROXY_PREFLIGHT_BUDGET_SECONDS
-    ).error
+            except OSError as exc:
+                return ProxyProbe(ProxyState.NETWORK_ERROR, str(exc))
+            return ProxyProbe(ProxyState.STARTING, str(reason))
+        if isinstance(reason, ConnectionRefusedError) or getattr(
+            reason, "errno", None
+        ) in {errno.ECONNREFUSED, 10061}:
+            return ProxyProbe(ProxyState.UNREACHABLE, str(reason))
+        return ProxyProbe(ProxyState.NETWORK_ERROR, str(reason))
+    if not 200 <= status_code < 300:
+        return ProxyProbe(ProxyState.HTTP_ERROR, f"returned HTTP {status_code}")
+    return ProxyProbe(ProxyState.HEALTHY)
 
 
 def server_command() -> list[str]:
@@ -115,36 +104,30 @@ def server_command() -> list[str]:
     suffix = ".exe" if sys.platform == "win32" else ""
     sibling = Path(sys.executable).parent / f"{name}{suffix}"
     if sibling.is_file() and os.access(sibling, os.X_OK):
-        return [str(sibling)]
+        return [str(sibling), "--auto-started"]
     raise FileNotFoundError(
         f"Installed {name} command is missing or not executable: {sibling}"
     )
 
 
 def _spawn_server(env: Mapping[str, str]) -> subprocess.Popen[bytes]:
-    """Start the platform owner independently and preserve early diagnostics."""
+    """Start an independent owner that manages its own runtime logging."""
 
     command = server_command()
-    child_env = dict(env)
-    if sys.platform in {"win32", "darwin"}:
-        child_env["FCC_DESKTOP_STARTED_BY_LAUNCHER"] = "1"
-    log_path = server_startup_log_path()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("ab") as output:
-        return subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            env=child_env,
-            creationflags=(
-                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                | getattr(subprocess, "DETACHED_PROCESS", 0)
-                if sys.platform == "win32"
-                else 0
-            ),
-            start_new_session=sys.platform != "win32",
-        )
+    return subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=dict(env),
+        creationflags=(
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+            if sys.platform == "win32"
+            else 0
+        ),
+        start_new_session=sys.platform != "win32",
+    )
 
 
 def _desktop_owner_running() -> bool:
@@ -153,24 +136,6 @@ def _desktop_owner_running() -> bool:
     if sys.platform not in {"win32", "darwin"}:
         return False
     lock = InterprocessFileLock(paths.config_dir_path() / "desktop.lock")
-    try:
-        acquired = lock.acquire()
-    except OSError:
-        return False
-    if acquired:
-        lock.release()
-    return not acquired
-
-
-def _desktop_port_owner_running(proxy_root_url: str) -> bool:
-    """Check whether Desktop owns the requested port, including startup."""
-
-    if sys.platform not in {"win32", "darwin"}:
-        return False
-    port = urlsplit(proxy_root_url).port
-    if port is None:
-        return False
-    lock = InterprocessFileLock(paths.desktop_port_lock_path(port))
     try:
         acquired = lock.acquire()
     except OSError:
@@ -200,7 +165,7 @@ def _unreachable_message(proxy_root_url: str, probe: ProxyProbe, detail: str) ->
     name = "fcc-desktop" if sys.platform in {"win32", "darwin"} else "fcc-server"
     return (
         f"Free Claude Code proxy is not reachable at {proxy_root_url}: {probe.error}\n"
-        f"{detail}\nStartup log: {server_startup_log_path()}\n"
+        f"{detail}\n"
         f"Start it manually with: {name}"
     )
 
@@ -213,7 +178,7 @@ def _wait_for_server(
 ) -> ProxyProbe | str:
     """Poll until the spawned server answers, exits, or the budget runs out."""
 
-    while True:
+    while time.monotonic() < deadline:
         probe = _probe_proxy(proxy_root_url, deadline=deadline)
         if probe.state in {
             ProxyState.HEALTHY,
@@ -222,24 +187,30 @@ def _wait_for_server(
         }:
             return probe
         exit_code = process.poll() if process is not None else None
-        port_owner_running = _desktop_port_owner_running(proxy_root_url)
-        if exit_code is not None and port_owner_running:
-            process = None
-        elif exit_code is not None:
-            if _desktop_owner_running():
-                return "Existing Desktop is running on a different port."
-            name = (
-                "fcc-desktop" if sys.platform in {"win32", "darwin"} else "fcc-server"
-            )
-            return f"{name} exited with code {exit_code} before it was ready."
-        if process is None and not port_owner_running:
-            return "Existing Desktop stopped before it was ready."
-        if time.monotonic() >= deadline:
-            return (
-                "Free Claude Code did not become ready within "
-                f"{SERVER_STARTUP_TIMEOUT_SECONDS:g} seconds."
-            )
-        time.sleep(SERVER_STARTUP_POLL_SECONDS)
+        if exit_code is not None:
+            if probe.state is ProxyState.STARTING or _desktop_owner_running():
+                # A manual owner may have won the bind/singleton race. Its actual
+                # endpoint, not the duplicate's exit code, determines readiness.
+                process = None
+            else:
+                name = (
+                    "fcc-desktop"
+                    if sys.platform in {"win32", "darwin"}
+                    else "fcc-server"
+                )
+                return f"{name} exited with code {exit_code} before it was ready."
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(SERVER_STARTUP_POLL_SECONDS, remaining))
+    hint = (
+        " If Desktop is already running, check its configured port or restart it."
+        if sys.platform in {"win32", "darwin"}
+        else ""
+    )
+    return (
+        "Free Claude Code did not become ready within "
+        f"{SERVER_STARTUP_TIMEOUT_SECONDS:g} seconds.{hint}"
+    )
 
 
 def ensure_proxy_available(
@@ -252,13 +223,13 @@ def ensure_proxy_available(
     """
 
     probe = _probe_proxy(
-        proxy_root_url, deadline=time.monotonic() + PROXY_PREFLIGHT_BUDGET_SECONDS
+        proxy_root_url, deadline=time.monotonic() + SERVER_STARTUP_TIMEOUT_SECONDS
     )
     if probe.state is ProxyState.HEALTHY:
         return None
-    if probe.state is not ProxyState.UNREACHABLE:
+    if probe.state in {ProxyState.HTTP_ERROR, ProxyState.NETWORK_ERROR}:
         return _unreachable_message(
-            proxy_root_url, probe, "A server is answering on that address."
+            proxy_root_url, probe, "The configured endpoint failed its health check."
         )
     lock = InterprocessFileLock(server_startup_lock_path())
     try:
@@ -267,6 +238,8 @@ def ensure_proxy_available(
         return _unreachable_message(
             proxy_root_url, probe, f"Could not acquire the startup lock: {exc}"
         )
+    process = None
+    ready = False
     try:
         # The startup budget starts now: time spent waiting for another
         # launcher's attempt must not shorten this launcher's own attempt.
@@ -275,9 +248,11 @@ def ensure_proxy_available(
         probe = _probe_proxy(proxy_root_url, deadline=deadline)
         if probe.state is ProxyState.HEALTHY:
             return None
-        if probe.state is not ProxyState.UNREACHABLE:
+        if probe.state in {ProxyState.HTTP_ERROR, ProxyState.NETWORK_ERROR}:
             return _unreachable_message(
-                proxy_root_url, probe, "A server is answering on that address."
+                proxy_root_url,
+                probe,
+                "The configured endpoint failed its health check.",
             )
         if not acquired:
             return _unreachable_message(
@@ -285,51 +260,37 @@ def ensure_proxy_available(
                 probe,
                 "Another launcher is still starting the server; retry shortly.",
             )
-        if _desktop_port_owner_running(proxy_root_url):
-            outcome = _wait_for_server(proxy_root_url, None, deadline=deadline)
-            if isinstance(outcome, ProxyProbe) and outcome.state is ProxyState.HEALTHY:
-                return None
-            return _unreachable_message(
-                proxy_root_url,
-                probe,
-                outcome
-                if isinstance(outcome, str)
-                else "Existing Desktop is not ready.",
+        if (
+            probe.state is ProxyState.UNREACHABLE
+            and time.monotonic() < deadline
+            and not _desktop_owner_running()
+        ):
+            try:
+                process = _spawn_server(env)
+            except OSError as exc:
+                return _unreachable_message(
+                    proxy_root_url, probe, f"Could not start FCC: {exc}"
+                )
+            print(
+                f"Starting Free Claude Code at {proxy_root_url} "
+                "(it keeps running after this client exits).",
+                file=sys.stderr,
             )
-        if _desktop_owner_running():
-            return _unreachable_message(
-                proxy_root_url,
-                probe,
-                "Existing Desktop is running on a different port. "
-                "Stop it or use its configured PORT.",
-            )
-        try:
-            process = _spawn_server(env)
-        except OSError as exc:
-            return _unreachable_message(
-                proxy_root_url, probe, f"Could not start FCC: {exc}"
-            )
-        print(
-            f"Starting Free Claude Code at {proxy_root_url} "
-            "(it keeps running after this client exits).",
-            file=sys.stderr,
-        )
-        try:
-            outcome = _wait_for_server(proxy_root_url, process, deadline=deadline)
-        except BaseException:
-            _stop_owned_process(process)
-            raise
+        outcome = _wait_for_server(proxy_root_url, process, deadline=deadline)
         if isinstance(outcome, str):
-            _stop_owned_process(process)
             return _unreachable_message(proxy_root_url, probe, outcome)
         if outcome.state is ProxyState.HEALTHY:
+            ready = True
             return None
-        _stop_owned_process(process)
         return _unreachable_message(
-            proxy_root_url, outcome, "FCC started but is unhealthy."
+            proxy_root_url, outcome, "Could not use the FCC endpoint."
         )
     finally:
-        lock.release()
+        try:
+            if process is not None and not ready:
+                _stop_owned_process(process)
+        finally:
+            lock.release()
 
 
 def resolve_client_binary(
