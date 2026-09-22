@@ -1,4 +1,4 @@
-"""Strict request-local correction for Groq TPM-size rejections."""
+"""Recognize Groq token-limit rejections and correct combined TPM output budgets."""
 
 import re
 from collections.abc import Mapping
@@ -31,11 +31,8 @@ class GroqTpmCorrection:
     corrected_max_completion_tokens: int
 
 
-def correct_tpm_completion_budget(
-    error: Exception,
-    body: Mapping[str, JsonValue],
-) -> GroqTpmCorrection | None:
-    """Subtract Groq's reported TPM overage from this request's output cap."""
+def token_limit_message(error: Exception) -> str | None:
+    """Recognize Groq's structured token-rate rejection, regardless of quota wording."""
     if _status_code(error) != 413:
         return None
 
@@ -48,7 +45,16 @@ def correct_tpm_completion_budget(
         return None
 
     message = detail.get("message")
-    if not isinstance(message, str):
+    return message if isinstance(message, str) else None
+
+
+def correct_tpm_completion_budget(
+    error: Exception,
+    body: Mapping[str, JsonValue],
+) -> GroqTpmCorrection | None:
+    """Subtract Groq's reported TPM overage from this request's output cap."""
+    message = token_limit_message(error)
+    if message is None:
         return None
     if sum(1 for _ in _TPM_MARKER.finditer(message)) != 1:
         return None

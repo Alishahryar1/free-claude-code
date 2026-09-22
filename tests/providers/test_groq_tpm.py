@@ -9,9 +9,12 @@ import pytest
 
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.failures import FailureKind
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderOperationKind
+from free_claude_code.providers.failure_policy import classify_provider_failure
 from free_claude_code.providers.groq import GroqProvider
+from free_claude_code.providers.groq.client import GroqChatBehavior
 from free_claude_code.providers.groq.tpm import correct_tpm_completion_budget
 from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
@@ -26,6 +29,29 @@ _LIMIT = 8_000
 _REQUESTED = 26_206
 _ORIGINAL_MAX = 24_576
 _CORRECTED_MAX = 6_370
+_ITPM_MESSAGE = (
+    "Request too large for model `qwen/qwen3.8-27b` on input tokens per minute "
+    "(ITPM): Limit 7000, Requested 23253, please reduce your message size"
+)
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("message", [_ITPM_MESSAGE, "Token allowance exceeded"])
+def test_token_limit_failure_is_actionable_without_parsing_prose(wrapped, message):
+    error = _status_error(detail=_detail(message), wrapped=wrapped)
+    failure = classify_provider_failure(
+        error,
+        provider_name="GROQ",
+        read_timeout_s=30,
+        request_id="req_quota",
+        provider_failure_override=GroqChatBehavior().failure_override,
+    )
+    assert failure.status_code == 400
+    assert failure.kind == FailureKind.INVALID_REQUEST
+    assert failure.retryable is False
+    assert message in failure.message
+    assert "req_quota" in failure.message
+    assert "higher" in failure.message
 
 
 def _detail(
@@ -56,6 +82,23 @@ def _status_error(
         response=response,
         body=body,
     )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _status_error(status=429),
+        _status_error(status=401),
+        _status_error(detail=_detail(error_type="invalid_request_error")),
+        _status_error(detail=_detail(code="request_too_large")),
+        _status_error(detail={"message": "body too large"}),
+        _status_error(detail={**_detail(), "message": 42}),
+        _status_error(detail={**_detail(), "error": _detail()}),
+        _status_error(detail="not JSON"),
+    ],
+)
+def test_unrelated_or_ambiguous_errors_defer_to_shared_policy(error):
+    assert GroqChatBehavior().failure_override(error) is None
 
 
 def _body(max_completion_tokens: object = _ORIGINAL_MAX) -> dict:
@@ -115,6 +158,17 @@ def test_exact_tpm_rejection_corrects_only_completion_budget(wrapped: bool) -> N
     assert correction.body == {**body, "max_completion_tokens": _CORRECTED_MAX}
     assert correction.body is not body
     assert body == original
+
+
+@pytest.mark.parametrize(
+    "quota", ["input tokens per minute (ITPM)", "output tokens per minute (OTPM)"]
+)
+def test_separate_token_quotas_do_not_use_combined_tpm_arithmetic(quota):
+    error = _status_error(detail=_detail(f"{quota}: Limit 8000, Requested 26206"))
+    assert correct_tpm_completion_budget(error, _body()) is None
+    failure = GroqChatBehavior().failure_override(error)
+    assert failure is not None
+    assert failure.status_code == 400
 
 
 @pytest.mark.parametrize(
