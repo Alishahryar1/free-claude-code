@@ -13,9 +13,11 @@ from urllib.error import URLError
 import pytest
 
 from free_claude_code.cli.launchers import common
+from free_claude_code.config import paths
 from free_claude_code.config.paths import (
     server_owner_lock_path,
     server_startup_lock_path,
+    startup_log_path,
 )
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from tests.cli.conftest import LaunchCapture
@@ -125,8 +127,11 @@ def test_missing_server_is_started_once_and_awaited(
     assert kwargs["env"] == env
     assert kwargs["env"] is not env
     assert kwargs["stdin"] is subprocess.DEVNULL
-    assert kwargs["stdout"] is subprocess.DEVNULL
-    assert kwargs["stderr"] is subprocess.DEVNULL
+    assert kwargs["stdout"].name == str(startup_log_path())
+    assert kwargs["stderr"] is subprocess.STDOUT
+    assert kwargs["stdout"].closed
+    header = startup_log_path().read_text()
+    assert header.startswith("# ") and header.rstrip().endswith(" ".join(command))
     if sys.platform == "win32":
         assert kwargs["creationflags"]
     else:
@@ -146,7 +151,33 @@ def test_server_exit_before_ready_is_reported(monkeypatch) -> None:
     message = common.ensure_proxy_available(URL, env={})
     assert message is not None
     assert "exited with code 3" in message
+    assert f"Its output is in {startup_log_path()}." in message
     assert "Start it manually with:" in message
+
+
+def test_unwritable_startup_log_falls_back_to_devnull(monkeypatch, spawned) -> None:
+    blocker = paths.config_dir_path() / "logs"
+    blocker.parent.mkdir(parents=True, exist_ok=True)
+    blocker.write_text("not a directory")
+    _responses(monkeypatch, _refused(), _refused(), _refused())
+    monkeypatch.setattr(
+        common.subprocess, "Popen", lambda *_a, **_k: FakeServer(exit_code=2)
+    )
+    message = common.ensure_proxy_available(URL, env={})
+    assert message is not None
+    assert "exited with code 2" in message
+    assert "Its output is in" not in message
+
+
+def test_startup_log_keeps_only_the_latest_attempt(monkeypatch) -> None:
+    monkeypatch.setattr(common, "server_command", lambda: ["fcc-test", "--x"])
+    monkeypatch.setattr(common.subprocess, "Popen", lambda *_a, **_k: FakeServer())
+    startup_log_path().parent.mkdir(parents=True, exist_ok=True)
+    startup_log_path().write_text("stale output from an earlier attempt\n")
+    common._spawn_server({})
+    lines = startup_log_path().read_text().splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("# ") and lines[0].endswith("fcc-test --x")
 
 
 def test_startup_wait_is_bounded(monkeypatch, spawned, clock) -> None:
@@ -355,12 +386,9 @@ def test_detached_streams_and_browser_preference_are_independent(monkeypatch) ->
     common._spawn_server({"FCC_OPEN_BROWSER": "0"})
 
     assert observed["env"]["FCC_OPEN_BROWSER"] == "0"
-    assert (
-        observed["stdin"]
-        == observed["stdout"]
-        == observed["stderr"]
-        == subprocess.DEVNULL
-    )
+    assert observed["stdin"] is subprocess.DEVNULL
+    assert observed["stdout"].name == str(startup_log_path())
+    assert observed["stderr"] is subprocess.STDOUT
 
 
 def test_existing_unresponsive_listener_is_not_replaced(
@@ -536,7 +564,7 @@ def test_launcher_starts_the_server_then_runs_the_client(
 
     def popen(command: list[str], **kwargs: object) -> object:
         if command == server_command:
-            assert kwargs["stdout"] is subprocess.DEVNULL
+            assert getattr(kwargs["stdout"], "name", None) == str(startup_log_path())
             launch_capture.health_error = None
             return FakeServer()
         env = kwargs["env"]
@@ -564,4 +592,5 @@ def test_launcher_keeps_the_manual_hint_when_the_server_cannot_start(
     assert not launch_capture.commands
     err = capsys.readouterr().err
     assert "exited with code 1" in err
+    assert str(startup_log_path()) in err
     assert "Start it manually with:" in err
