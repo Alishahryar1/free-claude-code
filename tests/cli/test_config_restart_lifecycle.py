@@ -11,20 +11,27 @@ import pytest
 
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
+from free_claude_code.application.code_sessions import CodeService
 from free_claude_code.cli import commands, desktop
 from free_claude_code.cli.launchers import common
 from free_claude_code.config import paths
 from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.asgi import RuntimeASGIApp
+from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.code_sessions_support import FakeHarness
 from tests.web_tools_support import StubWebToolsClient
 
 
+@pytest.mark.parametrize("owner_kind", ["desktop", "terminal"])
 @pytest.mark.parametrize("change_port", [False, True])
-def test_harness_waits_through_desktop_apply_restart(monkeypatch, change_port):
+def test_harness_waits_through_owner_apply_restart(
+    monkeypatch, change_port, owner_kind
+):
     monkeypatch.setenv("HOST", "127.0.0.1")
     monkeypatch.setenv("FCC_OPEN_BROWSER", "0")
     monkeypatch.delenv("PORT", raising=False)
@@ -45,9 +52,14 @@ def test_harness_waits_through_desktop_apply_restart(monkeypatch, change_port):
         )
         monkeypatch.setattr(manager, "start_model_list_refresh", lambda: None)
         monkeypatch.setattr(manager, "_start_pass", lambda *args, **kwargs: None)
+        code = CodeService(
+            SQLiteCodeStore(paths.code_database_path(), paths.code_lock_path()),
+            FakeHarness(),
+        )
         runtime = ApplicationRuntime(
             manager,
             configuration=ConfigurationService(ManagedConfigStore()),
+            code_service=code,
             transcriber=None,
             restart_callback=restart_callback,
         )
@@ -59,6 +71,7 @@ def test_harness_waits_through_desktop_apply_restart(monkeypatch, change_port):
                     admin=runtime,
                     tasks=runtime,
                     web_tools=StubWebToolsClient(),
+                    code=code,
                 )
             ),
             runtime,
@@ -67,13 +80,17 @@ def test_harness_waits_through_desktop_apply_restart(monkeypatch, change_port):
     monkeypatch.setattr("free_claude_code.runtime.bootstrap.build_asgi_app", build)
     monkeypatch.setattr(commands, "kill_all_best_effort", lambda: None)
     monkeypatch.setattr(desktop, "config_dir_path", paths.config_dir_path)
-    # Exercise Desktop ownership on every host without importing native tray code.
-    monkeypatch.setattr(common, "sys", SimpleNamespace(platform="win32"))
+    # Exercise both installed owner paths on every host without native tray code.
+    monkeypatch.setattr(
+        common,
+        "sys",
+        SimpleNamespace(platform="win32" if owner_kind == "desktop" else "linux"),
+    )
     monkeypatch.setattr(common, "PROXY_PREFLIGHT_TIMEOUT_SECONDS", 0.1)
     monkeypatch.setattr(common, "SERVER_STARTUP_POLL_SECONDS", 0.01)
 
     def unexpected_spawn(_env):
-        pytest.fail("An existing Desktop must own its restart")
+        pytest.fail("The existing FCC process must own its restart")
 
     monkeypatch.setattr(common, "_spawn_server", unexpected_spawn)
     restart_entered, release_restart = threading.Event(), threading.Event()
@@ -108,10 +125,36 @@ def test_harness_waits_through_desktop_apply_restart(monkeypatch, change_port):
         def stop(self):
             self.stopped.set()
 
-    owner = threading.Thread(target=desktop.launch_desktop, args=(Tray,))
+    errors = []
+    supervisor = commands.ServerSupervisor(console_logging=False)
+
+    def serve_terminal():
+        try:
+            supervisor.run(open_admin_browser=False)
+        except BaseException as exc:
+            errors.append(exc)
+
+    owner = (
+        threading.Thread(target=desktop.launch_desktop, args=(Tray,))
+        if owner_kind == "desktop"
+        else threading.Thread(target=serve_terminal)
+    )
     owner.start()
     try:
         with httpx.Client(trust_env=False, timeout=1) as client:
+
+            def code_ready(on_port):
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    response = client.get(
+                        f"http://127.0.0.1:{on_port}/admin/api/code/bootstrap"
+                    )
+                    if response.json()["storage"]["state"] == "ready":
+                        assert response.json()["available"]
+                        return
+                    time.sleep(0.01)
+                pytest.fail("Code storage did not become ready")
+
             deadline = time.monotonic() + 10
             while True:
                 try:
@@ -122,6 +165,7 @@ def test_harness_waits_through_desktop_apply_restart(monkeypatch, change_port):
                     pass
                 assert time.monotonic() < deadline
                 time.sleep(0.01)
+            code_ready(port)
             response = client.post(
                 f"http://127.0.0.1:{port}/admin/api/config/apply",
                 json={
@@ -133,6 +177,8 @@ def test_harness_waits_through_desktop_apply_restart(monkeypatch, change_port):
             assert response.status_code == 200
             assert response.json()["restart"]["automatic"]
             assert restart_entered.wait(5)
+            with pytest.raises(OSError, match="already owns"):
+                commands.ServerSupervisor().run(open_admin_browser=False)
             assert (
                 common.ensure_proxy_available(f"http://127.0.0.1:{next_port}", env={})
                 is None
@@ -141,12 +187,19 @@ def test_harness_waits_through_desktop_apply_restart(monkeypatch, change_port):
             assert after["instance_id"] != before.json()["instance_id"]
             assert after["port"] == next_port
             assert owner.is_alive()
+            code_ready(next_port)
     finally:
         release_restart.set()
         if trays:
             trays[0].controller.quit()
+        else:
+            supervisor.request_stop()
         owner.join(10)
     assert not owner.is_alive()
+    assert not errors
+    released = InterprocessFileLock(paths.server_owner_lock_path())
+    assert released.acquire()
+    released.release()
     assert len(runtimes) == 2
     assert all(runtime.is_closed for runtime in runtimes)
 
