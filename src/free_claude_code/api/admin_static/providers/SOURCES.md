@@ -44,6 +44,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `openrouter.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/openrouter.svg |
 | `orcarouter.png` | https://www.orcarouter.ai/apple-touch-icon.png |
 | `xkiro.png` | https://xkiro.com/images/logo/logo-xt-green.png |
+| `opper.svg` | https://opper.ai/ (provided by Opper, single-colour `currentColor` mark) |
 | `poolside-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/poolside-color.svg |
 | `qwen-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/qwen-color.svg |
 | `sambanova-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/sambanova-color.svg |

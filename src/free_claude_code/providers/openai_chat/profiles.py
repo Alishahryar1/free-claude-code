@@ -774,6 +774,18 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             max_output_tokens_path=("max_output_tokens",),
         ),
     ),
+    "opper": OpenAIChatProfile(
+        _policy(
+            "OPPER",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(
+            _LOW_MEDIUM_HIGH,
+            enabled_value="medium",
+        ),
+        model_listing=OpenAIModelListing(path="/models"),
+    ),
     "ollama_cloud": OpenAIChatProfile(
         _policy(
             "OLLAMA_CLOUD",

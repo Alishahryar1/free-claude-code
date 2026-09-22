@@ -249,6 +249,11 @@ class Settings(BaseModel):
         default=None, validation_alias="XKIRO_API_KEY"
     )
 
+    # ==================== Opper (OpenAI-compatible) ====================
+    opper_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="OPPER_API_KEY"
+    )
+
     # ==================== Fireworks AI Config ====================
     fireworks_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_API_KEY"
@@ -580,6 +585,9 @@ class Settings(BaseModel):
     )
     xkiro_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="XKIRO_PROXY"
+    )
+    opper_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="OPPER_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"
