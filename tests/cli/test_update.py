@@ -23,7 +23,7 @@ def installation(tmp_path, monkeypatch):
     monkeypatch.setattr(update, "running_fcc", lambda: [])
     monkeypatch.setattr(update, "installed_version", lambda: "1.0.0")
 
-    def capture(args):
+    def capture(args, **kwargs):
         if args[1:] == ["--version"]:
             return "uv 0.12.13"
         if args[1:] == ["tool", "dir"]:
@@ -113,7 +113,9 @@ def test_running_fcc_refused(installation, monkeypatch):
 def test_torch_backend_uses_build_not_hardware(monkeypatch, build, expected):
     monkeypatch.setattr(update, "torch_build_version", lambda: build)
     calls = []
-    monkeypatch.setattr(update, "capture", lambda args: calls.append(args) or "")
+    monkeypatch.setattr(
+        update, "capture", lambda args, **kwargs: calls.append(args) or ""
+    )
     assert update.torch_backend(Path("uv"), {}) == expected
     assert calls == [["uv", "tool", "install", "--torch-backend", expected, "--help"]]
 
@@ -126,7 +128,9 @@ def test_unknown_torch_backend_is_not_silently_changed(monkeypatch):
 
 def test_recorded_backend_is_preserved_without_inspecting_build(monkeypatch):
     calls = []
-    monkeypatch.setattr(update, "capture", lambda args: calls.append(args) or "")
+    monkeypatch.setattr(
+        update, "capture", lambda args, **kwargs: calls.append(args) or ""
+    )
     monkeypatch.setattr(
         update, "torch_build_version", lambda: pytest.fail("must use recorded backend")
     )

@@ -39,8 +39,10 @@ FCC_COMMANDS = frozenset(
 )
 
 
-def capture(args: list[str]) -> str:
-    result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+def capture(args: list[str], *, encoding: str | None = None) -> str:
+    result = subprocess.run(
+        args, capture_output=True, text=True, encoding=encoding, timeout=30
+    )
     if result.returncode:
         raise ValueError(result.stderr.strip() or f"Command failed: {args[0]}")
     return result.stdout.strip()
@@ -126,17 +128,20 @@ def torch_backend(uv: Path, options: dict) -> str | None:
         raise ValueError(
             "Invalid recorded voice backend; rerun the matching voice installer."
         )
-    capture([str(uv), "tool", "install", "--torch-backend", backend, "--help"])
+    capture(
+        [str(uv), "tool", "install", "--torch-backend", backend, "--help"],
+        encoding="utf-8",
+    )
     return backend
 
 
 def prepare(uv: Path, launcher: Path) -> dict:
-    version = capture([str(uv), "--version"])
+    version = capture([str(uv), "--version"], encoding="utf-8")
     match = re.match(r"uv (\d+)\.(\d+)\.(\d+)(?:\s|$)", version)
     if not match or tuple(map(int, match.groups())) < (0, 12, 13):
         raise ValueError("uv 0.12.13 or newer is required. Rerun the FCC installer.")
-    root = Path(capture([str(uv), "tool", "dir"])) / PACKAGE
-    bin_dir = Path(capture([str(uv), "tool", "dir", "--bin"]))
+    root = Path(capture([str(uv), "tool", "dir"], encoding="utf-8")) / PACKAGE
+    bin_dir = Path(capture([str(uv), "tool", "dir", "--bin"], encoding="utf-8"))
     if not root.samefile(sys.prefix) or not Path(__file__).resolve().is_relative_to(
         root.resolve()
     ):

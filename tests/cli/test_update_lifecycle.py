@@ -112,7 +112,7 @@ def test_installed_updater_replaces_itself_and_uv_removes_scripts(tmp_path):
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("uv is required for real package-manager lifecycle coverage")
-    area = tmp_path / "path with spaces & (brackets) ! apostrophe'"
+    area = tmp_path / "José 测试 with spaces & (brackets) ! apostrophe'"
     area.mkdir()
     env = dict(os.environ)
     env.update(
@@ -170,7 +170,9 @@ def test_installed_updater_replaces_itself_and_uv_removes_scripts(tmp_path):
                 area,
             )
             assert installed.stdout.strip() == marker
-            receipt = tomllib.loads((root / "uv-receipt.toml").read_text())
+            receipt = tomllib.loads(
+                (root / "uv-receipt.toml").read_text(encoding="utf-8")
+            )
             assert receipt["tool"]["requirements"][0]["extras"] == ["voice"]
         payload["body"] = b"invalid archive"
         result = run(command, env, area)
