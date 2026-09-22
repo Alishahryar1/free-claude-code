@@ -47,6 +47,12 @@ def server_startup_lock_path() -> Path:
     return config_dir_path() / SERVER_STARTUP_LOCK_FILENAME
 
 
+def desktop_port_lock_path(port: int) -> Path:
+    """Return the lock held by a Desktop instance serving this port."""
+
+    return config_dir_path() / f"desktop.{port}.lock"
+
+
 def server_startup_log_path() -> Path:
     """Capture output emitted before the server configures its normal log."""
 

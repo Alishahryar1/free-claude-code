@@ -203,8 +203,13 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
         host="127.0.0.1", port=0, open_admin_browser=outcome == "automatic"
     )
     patcher.setattr(commands, "load_server_settings", lambda: settings)
-    patcher.setattr(desktop, "load_server_settings", lambda: settings)
+    patcher.setattr(desktop, "get_settings", lambda: settings)
     patcher.setattr(desktop, "config_dir_path", lambda: Path(directory))
+    patcher.setattr(
+        desktop,
+        "desktop_port_lock_path",
+        lambda port: Path(directory) / f"desktop.{port}.lock",
+    )
 
     def browser(url):
         assert url == "http://127.0.0.1:0/admin"
@@ -314,8 +319,12 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
                     self.stopped.set()
 
             lock = InterprocessFileLock(Path(directory) / "desktop.lock")
+            port_lock = InterprocessFileLock(
+                Path(directory) / f"desktop.{settings.port}.lock"
+            )
             try:
                 if mode == "reuse-desktop":
+                    assert port_lock.acquire()
                     assert lock.acquire()
                 desktop.launch_desktop(Tray)
                 assert cleaned == []
@@ -323,6 +332,7 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
                     ServerSockets.reserve(settings.host, settings.port)
             finally:
                 lock.release()
+                port_lock.release()
     patcher.undo()
     print("FCC exited while preserving its resource ownership", flush=True)
 
