@@ -1522,11 +1522,6 @@ function Configure-AndConfirmFreeClaudeCode {
         $installedCommands[$commandName] = $command.Source
     }
 
-    $updateCompanion = Join-Path $toolBinPath "fcc-update-windows.ps1"
-    if (-not (Test-Path -LiteralPath $updateCompanion -PathType Leaf)) {
-        throw "Free Claude Code installation did not create '$updateCompanion', required alongside fcc-update.cmd."
-    }
-
     Invoke-NativeCommand -FilePath $installedCommands["fcc-server"] -Arguments @("--version")
     Export-FccDesktopIcon `
         -DesktopCommand $installedCommands["fcc-desktop"] `

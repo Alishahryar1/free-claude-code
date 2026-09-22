@@ -191,7 +191,7 @@ verify_fcc_commands_removed() {
     fi
 
     remaining=""
-    for command_name in $FCC_COMMANDS fcc-update.cmd fcc-update-windows.ps1; do
+    for command_name in $FCC_COMMANDS fcc-update.cmd; do
         command_path="$uv_tool_bin/$command_name"
         if [ -e "$command_path" ] || [ -L "$command_path" ]; then
             remaining="${remaining} ${command_path}"

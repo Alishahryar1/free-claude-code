@@ -489,6 +489,8 @@ Stop all running FCC commands, then run:
 fcc-update
 ```
 
+This runs the same installer as above, including its coding-agent prompts and checks. If you use voice support, pass the same voice options used during installation.
+
 If your installation does not have `fcc-update` yet, run the [installer](#install) once to add it.
 
 ### Muse Code on native Windows
