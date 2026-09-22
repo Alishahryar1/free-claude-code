@@ -2083,6 +2083,9 @@ copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-grok.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-muse.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-aider.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-update.cmd" >nul
+if not "%FAIL_STEP%"=="fcc-update-companion-missing" (
+    echo exit 0 > "%UV_BIN_DIR%\fcc-update-windows.ps1"
+)
 if not "%FAIL_STEP%"=="fcc-missing" copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-codex.cmd" >nul
 exit /b 0
 :install_aider
@@ -3074,6 +3077,24 @@ def test_install_ps1_does_not_use_uv_install_directory_for_aider(
     assert result.returncode == 0, result.stderr
     assert "Install Aider for fcc-aider?" in result.stdout
     assert "aider:--version" not in powershell_harness.calls()
+
+
+@pytest.mark.parametrize("companion_elsewhere", [False, True])
+def test_install_ps1_rejects_missing_update_companion(
+    powershell_harness: PowerShellHarness, companion_elsewhere: bool
+) -> None:
+    if companion_elsewhere:
+        (powershell_harness.bin_dir / "fcc-update-windows.ps1").write_text(
+            "throw 'Must not use a companion from another directory'\n",
+            encoding="utf-8",
+        )
+
+    result = powershell_harness.run(fail_step="fcc-update-companion-missing")
+
+    assert result.returncode != 0
+    assert "fcc-update-windows.ps1" in result.stderr
+    assert "Free Claude Code is installed and verified." not in result.stdout
+    assert "fcc-server:--version" not in powershell_harness.calls()
 
 
 def test_install_ps1_fresh_install_is_verified(
