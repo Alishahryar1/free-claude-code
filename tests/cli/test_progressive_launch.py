@@ -368,13 +368,17 @@ def test_external_probe_is_cancelled_before_any_request(monkeypatch):
 def test_launcher_retries_starting_http_but_not_refused_socket(monkeypatch):
     response = MagicMock()
     response.__enter__.return_value.status = 200
-    request = MagicMock(side_effect=[TimeoutError("starting"), response])
-    monkeypatch.setattr(common, "open_local_request", request)
-    assert common.preflight_proxy("http://127.0.0.1:12345") is None
-    assert request.call_count == 2
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        request = MagicMock(side_effect=[TimeoutError("starting"), response])
+        monkeypatch.setattr(common, "open_local_request", request)
+        assert common.preflight_proxy(url) is None
+        assert request.call_count == 2
     request.reset_mock(side_effect=True)
     request.side_effect = URLError(ConnectionRefusedError("refused"))
-    assert common.preflight_proxy("http://127.0.0.1:12345") == "refused"
+    assert common.preflight_proxy(url) == "refused"
     assert request.call_count == 1
 
 
@@ -382,5 +386,11 @@ def test_launcher_http_wait_has_a_finite_budget(monkeypatch):
     monkeypatch.setattr(common.time, "monotonic", MagicMock(side_effect=[0, 0, 31]))
     request = MagicMock(side_effect=TimeoutError("still starting"))
     monkeypatch.setattr(common, "open_local_request", request)
-    assert common.preflight_proxy("http://127.0.0.1:12345") == "still starting"
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        assert (
+            common.preflight_proxy(f"http://127.0.0.1:{listener.getsockname()[1]}")
+            == "still starting"
+        )
     assert request.call_count == 1
