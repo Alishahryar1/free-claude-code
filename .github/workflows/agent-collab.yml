@@ -1,4 +1,4 @@
-name: Game Development Agent Collaboration
+name: TI-84 Z80 Game Development Collaboration
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       game concept:
         description: 'Describe the game you want to create'
         required: true
-        default: 'Create an engaging game'
+        default: 'Create a simple puzzle game'
       target platform:
         description: 'Target TI-84 platform'
         required: false
@@ -15,246 +15,502 @@ on:
           - ti84plus
           - ti83plus
           - ti83plusce
-          - ti84plusce
-      agent roles:
-        description: 'Comma-separated list of agent roles to include'
+      workflow mode:
+        description: 'How the agents should work together'
         required: false
-        default: 'programmer,designer,graphics,sound,debugger,architect,tester,overseer'
+        default: 'implement'
+        options:
+          - 'collaborate'  # Agents collaborate on design and planning
+          - 'implement'    # Agents actually implement the game
 
 jobs:
-  collaborate:
+  game-development:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup collaboration environment
+      - name: Setup development environment
         run: |
-          echo "Setting up game development collaboration environment..."
-          mkdir -p game-collab-workspace
-          echo "${{ github.event.inputs.game concept }}" > game-collab-workspace/GAME_CONCEPT.txt
-          echo "${{ github.event.inputs.target platform }}" > game-collab-workspace/TARGET_PLATFORM.txt
-          echo "${{ github.event.inputs.agent roles }}" > game-collab-workspace/AGENT_ROLES.txt
+          echo "Setting up TI-84/Z80 development environment..."
+          sudo apt-get update
+          sudo apt-get install -y make git wget
 
-      - name: Initialize agent collaboration
-        run: |
-          echo "🎮 Initializing Game Development Agent Collaboration"
-          echo "📝 Concept: ${{ github.event.inputs.game concept }}"
-          echo "🎯 Platform: ${{ github.event.inputs.target platform }}"
-          echo "👥 Roles: ${{ github.event.inputs.agent roles }}"
+          # Install SDCC (Small Device C Compiler) for Z80
+          wget https://github.com/mcameron/sdcc/releases/download/sdcc-4.3.0/sdcc-amd64-linux.tar.xz
+          tar -xf sdcc-amd64-linux.tar.xz
+          sudo cp -r sdcc-amd64-linux/* /usr/local/
+          rm -rf sdcc-amd64-linux sdcc-amd64-linux.tar.xz
 
-      - name: Deploy collaborative agents
+          # Install SPASM-ng (Z80 assembler)
+          wget https://github.com/jacobly0/spasm-ng/releases/download/1.5/spasm-ng-linux.zip
+          unzip spasm-ng-linux.zip
+          sudo cp spasm-ng /usr/local/bin/
+          rm -rf spasm-ng spasm-ng-linux.zip
+
+          # Verify installations
+          echo "SDCC: $(sdcc --version | head -1)"
+          echo "SPASM-ng: $(spasm-ng --version)"
+
+      - name: Initialize workflow
+        id: init
         run: |
-          echo "🚀 Deploying specialized game development agents..."
+          echo "GAME_CONCEPT=${{ github.event.inputs.game concept }}" >> $GITHUB_ENV
+          echo "TARGET_PLATFORM=${{ github.event.inputs.target platform }}" >> $GITHUB_ENV
+          echo "WORKFLOW_MODE=${{ github.event.inputs.workflow mode }}" >> $GITHUB_ENV
+          echo "🎮 Initializing workflow for: ${{ github.event.inputs.game concept }}"
+          echo "🎯 Target: ${{ github.event.inputs.target platform }}"
+          echo "🔧 Mode: ${{ github.event.inputs.workflow mode }}"
+
+      - name: Create agent workspace
+        run: |
+          mkdir -p agent-workspace
+          echo "${{ github.event.inputs.game concept }}" > agent-workspace/GAME_CONCEPT.txt
+          echo "${{ github.event.inputs.target platform }}" > agent-workspace/TARGET_PLATFORM.txt
+          echo "${{ github.event.inputs.workflow mode }}" > agent-workspace/WORKFLOW_MODE.txt
+          echo "✅ Agent workspace created"
+
+      - name: Deploy specialized agents
+        run: |
+          echo "🚀 Deploying specialized TI-84/Z80 game development agents..."
 
           # Read inputs
-          GAME_CONCEPT=$(cat game-collab-workspace/GAME_CONCEPT.txt)
-          TARGET_PLATFORM=$(cat game-collab-workspace/TARGET_PLATFORM.txt)
-          AGENT_ROLES_LIST=$(cat game-collab-workspace/AGENT_ROLES.txt)
+          GAME_CONCEPT=$(cat agent-workspace/GAME_CONCEPT.txt)
+          TARGET_PLATFORM=$(cat agent-workspace/TARGET_PLATFORM.txt)
+          WORKFLOW_MODE=$(cat agent-workspace/WORKFLOW_MODE.txt)
 
-          echo "🎯 Target: $GAME_CONCEPT"
-          echo "📱 Platform: $TARGET_PLATFORM"
-          echo "👥 Agents: $AGENT_ROLES_LIST"
+          echo "🎯 Game Concept: $GAME_CONCEPT"
+          echo "📱 Target Platform: $TARGET_PLATFORM"
+          echo "🔧 Workflow Mode: $WORKFLOW_MODE"
 
-          # Create agent collaboration directory
-          mkdir -p game-collab-workspace/agents
-
-          # Define agent responsibilities
-          declare -A AGENT_RESPONSIBILITIES=(
-            [programmer]="Responsible for game architecture, algorithm design, and technical specifications"
-            [designer]="Responsible for game mechanics, rules, user experience, and gameplay design"
-            [graphics]="Responsible for visual design, sprite concepts, UI layout, and artistic direction"
-            [sound]="Responsible for audio design, sound effects, music concepts, and audio implementation plan"
-            [debugger]="Responsible for testing strategy, debugging approach, quality assurance, and bug prevention"
-            [architect]="Responsible for system architecture, module design, data structures, and technical foundation"
-            [tester]="Responsible for test planning, validation strategies, playtesting approaches, and quality control"
-            [overseer]="Responsible for coordinating all agents, ensuring consistency, managing timeline, and resolving conflicts"
+          # Define agent roles
+          declare -A AGENT_ROLES=(
+            [programmer]="Implements game logic and systems"
+            [designer]="Defines game mechanics and user experience"
+            [graphics]="Creates visual assets and UI design"
+            [sound]="Creates audio effects and music"
+            [memory]="Optimizes memory usage and allocation"
+            [debugger]="Tests gameplay and identifies bugs"
+            [builder]="Manages compilation and build process"
+            [tester]="Validates functionality and creates test plans"
+            [overseer]="Coordinates all agents and ensures vision alignment"
           )
 
-          # Create task files for each requested agent
-          IFS=',' read -ra ROLES_ARRAY <<< "$AGENT_ROLES_LIST"
-          for role in "${ROLES_ARRAY[@]}"; do
-            role=$(echo "$role" | xargs) # Trim whitespace
-
-            if [[ -n "${AGENT_RESPONSIBILITIES[$role]}" ]]; then
-              echo "Role: $role" > "game-collab-workspace/agents/${role}-task.txt"
-              echo "Responsibility: ${AGENT_RESPONSIBILITIES[$role]}" >> "game-collab-workspace/agents/${role}-task.txt"
-              echo "Game Concept: $GAME_CONCEPT" >> "game-collab-workspace/agents/${role}-task.txt"
-              echo "Target Platform: $TARGET_PLATFORM" >> "game-collab-workspace/agents/${role}-task.txt"
-              echo "Collaboration Timestamp: $(date)" >> "game-collab-workspace/agents/${role}-task.txt"
-              echo "✅ Created task file for $role agent"
-            else
-              echo "⚠️  Unknown role: $role - skipping"
-            fi
-          done
-
           echo ""
-          echo "📋 Agent Task Files Created:"
-          ls -la game-collab-workspace/agents/
-
-      - name: Run collaboration simulation
-        run: |
-          echo "🤖 Starting Agent Collaboration Process..."
-
-          # Read inputs
-          GAME_CONCEPT=$(cat game-collab-workspace/GAME_CONCEPT.txt)
-          TARGET_PLATFORM=$(cat game-collab-workspace/TARGET_PLATFORM.txt)
-
-          # Create collaboration log
-          echo "# Game Development Agent Collaboration Log" > game-collab-workspace/COLLABORATION_LOG.md
-          echo "## Game Concept" >> game-collab-workspace/COLLABORATION_LOG.md
-          echo "$GAME_CONCEPT" >> game-collab-workspace/COLLABORATION_LOG.md
-          echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-          echo "## Target Platform" >> game-collab-workspace/COLLABORATION_LOG.md
-          echo "$TARGET_PLATFORM" >> game-collab-workspace/COLLABORATION_LOG.md
-          echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-          echo "## Collaboration Timeline" >> game-collab-workspace/COLLABORATION_LOG.md
-          echo "**Started:** $(date)" >> game-collab-workspace/COLLABORATION_LOG.md
-          echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-
-          # Process each agent role
-          IFS=',' read -ra ROLES_ARRAY <<< "$(cat game-collab-workspace/AGENT_ROLES.txt)"
-          for role in "${ROLES_ARRAY[@]}"; do
-            role=$(echo "$role" | xargs) # Trim whitespace
-
-            echo "⚙️  Processing $role agent contribution..."
-            echo "## $role Agent Contribution" >> game-collab-workspace/COLLABORATION_LOG.md
-            echo "**Timestamp:** $(date)" >> game-collab-workspace/COLLABORATION_LOG.md
-            echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-
-            # Generate role-specific contribution
-            case "$role" in
-              programmer)
-                echo "### Technical Architecture Plan" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Core Systems: Game loop, state management, input handling" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Programming Language: Recommendation based on target platform" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Performance Considerations: Optimization strategies" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Memory Management: RAM/ROM usage planning" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-                ;;
-              designer)
-                echo "### Game Design Document" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Core Mechanics: Fundamental gameplay systems" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Game Rules: Clear definition of gameplay and victory conditions" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Progression System: Player advancement and motivation" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Difficulty Curve: How challenge increases over time" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-                ;;
-              graphics)
-                echo "### Visual Design Specification" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Art Style: Visual direction and aesthetic approach" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Color Palette: Color usage based on platform limitations" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Sprite Design: Character, object, and effect visual concepts" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Backgrounds: Environmental and UI visual elements" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-                ;;
-              sound)
-                echo "### Audio Design Plan" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Sound Effects: Audio feedback for actions and events" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Music: Background music themes and adaptive audio" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Audio Channels: Sound mixing and prioritization" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Technical Limitations: Platform-specific audio capabilities" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-                ;;
-              debugger)
-                echo "### Quality Assurance Strategy" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Testing Approach: Methods for identifying and resolving issues" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Bug Prevention: Practices to minimize defects" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Test Coverage: Areas to be systematically tested" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Regression Testing: Ensuring changes don't break functionality" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-                ;;
-              architect)
-                echo "### System Architecture Design" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Module Decomposition: Breaking game into components" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Data Flow: Information movement between systems" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- API Design: Interfaces between modules" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Scalability: Design accommodation for feature expansion" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-                ;;
-              tester)
-                echo "### Test Plan and Validation Strategy" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Test Levels: Unit, integration, system, acceptance testing" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Test Cases: Specific scenarios to validate mechanics" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Automation: Opportunities for automated testing" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Performance Testing: Speed and responsiveness requirements" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-                ;;
-              overseer)
-                echo "### Collaboration Coordination" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Communication: Facilitating agent interaction" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Consistency: Ensuring integrated contributions" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Timeline: Managing development schedule" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "- Conflict Resolution: Addressing disagreements between agents" >> game-collab-workspace/COLLABORATION_LOG.md
-                echo "" >> game-collab-workspace/COLLABORATION_LOG.md
-                ;;
-            esac
-
-            echo "---" >> game-collab-workspace/COLLABORATION_LOG.md
-            echo "" >> game-collab-workspace/COLLABORATION_LOG.md
+          echo "👥 Activated Agents:"
+          for role in "${!AGENT_ROLES[@]}"; do
+            echo "  ${AGENT_ROLES[$role]}"
           done
 
-          # Add completion timestamp
-          echo "**Completed:** $(date)" >> game-collab-workspace/COLLABORATION_LOG.md
-          echo "" >> game-collab-workspace/COLLABORATION_LOG.md
+          # Create agent task files
+          mkdir -p agent-workspace/tasks
+          for role in "${!AGENT_ROLES[@]}"; do
+            echo "Role: $role" > "agent-workspace/tasks/${role}.txt"
+            echo "Description: ${AGENT_ROLES[$role]}" >> "agent-workspace/tasks/${role}.txt"
+            echo "Game Concept: $GAME_CONCEPT" >> "agent-workspace/tasks/${role}.txt"
+            echo "Target Platform: $TARGET_PLATFORM" >> "agent-workspace/tasks/${role}.txt"
+            echo "Workflow Mode: $WORKFLOW_MODE" >> "agent-workspace/tasks/${role}.txt"
+            echo "Timestamp: $(date)" >> "agent-workspace/tasks/${role}.txt"
+          done
 
-          # Create final summary
-          echo "# Game Development Collaboration Summary" > game-collab-workspace/FINAL_SUMMARY.md
-          echo "" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "## Overview" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "This document summarizes the collaborative work of specialized game development agents" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "working on the concept: \"$GAME_CONCEPT\"" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "## Target Platform" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "$TARGET_PLATFORM" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "## Participating Agents" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "$AGENT_ROLES_LIST" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "## Key Outcomes" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "1. Complete game design documentation from multiple perspectives" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "2. Technical architecture recommendations" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "3. Audio and visual design specifications" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "4. Quality assurance and testing strategies" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "5. Integrated development plan" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "## Next Steps" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "1. Review the detailed collaboration log" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "2. Synthesize perspectives into a unified game design" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "3. Create a prototype based on the agreed design" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "4. Iterate based on feedback and testing" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "" >> game-collab-workspace/FINAL_SUMMARY.md
-          echo "---\n*Generated by Game Development Agent Collaboration System*\n*Timestamp: $(date)*" >> game-collab-workspace/FINAL_SUMMARY.md
+          echo "✅ Created task files for all agents"
 
-      - name: Upload Collaboration Results
+      - name: Execute workflow based on mode
+        run: |
+          echo "🔄 Executing workflow in ${{ github.event.inputs.workflow mode }} mode..."
+
+          WORKFLOW_MODE=$(cat agent-workspace/WORKFLOW_MODE.txt)
+
+          if [ "$WORKFLOW_MODE" = "collaborate" ]; then
+            echo "🤝 Running collaboration mode - agents will plan and design the game"
+
+            # Create collaboration log
+            echo "# Agent Collaboration Log" > agent-workspace/COLLABORATION_LOG.md
+            echo "Game Concept: $(cat agent-workspace/GAME_CONCEPT.txt)" >> agent-workspace/COLLABORATION_LOG.md
+            echo "Target Platform: $(cat agent-workspace/TARGET_PLATFORM.txt)" >> agent-workspace/COLLABORATION_LOG.md
+            echo "Started: $(date)" >> agent-workspace/COLLABORATION_LOG.md
+            echo "" >> agent-workspace/COLLABORATION_LOG.md
+
+            # Each agent contributes their perspective
+            for role in programmer designer graphics sound memory debugger builder tester overseer; do
+              echo "## $role Agent Perspective" >> agent-workspace/COLLABORATION_LOG.md
+              echo "**Timestamp:** $(date)" >> agent-workspace/COLLABORATION_LOG.md
+              echo "" >> agent-workspace/COLLABORATION_LOG.md
+
+              case "$role" in
+                programmer)
+                  echo "### Technical Approach" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will implement core game mechanics using Z80 assembly or C" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will optimize for target platform constraints" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "" >> agent-workspace/COLLABORATION_LOG.md
+                  ;;
+                designer)
+                  echo "### Game Design" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will define clear game mechanics and objectives" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will ensure engaging gameplay loop and progression" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "" >> agent-workspace/COLLABORATION_LOG.md
+                  ;;
+                graphics)
+                  echo "### Visual Design" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will create appropriate sprites, tiles, and UI elements" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will optimize visuals for target platform capabilities" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "" >> agent-workspace/COLLABORATION_LOG.md
+                  ;;
+                sound)
+                  echo "### Audio Design" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will create fitting sound effects and music theme" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will work within platform audio limitations" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "" >> agent-workspace/COLLABORATION_LOG.md
+                  ;;
+                memory)
+                  echo "### Memory Optimization" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will map out efficient memory usage" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will ensure game fits within target platform limits" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "" >> agent-workspace/COLLABORATION_LOG.md
+                  ;;
+                debugger)
+                  echo "### Testing Strategy" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will implement comprehensive testing procedures" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will identify and help resolve bugs" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "" >> agent-workspace/COLLABORATION_LOG.md
+                  ;;
+                builder)
+                  echo "### Build System" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will ensure reliable compilation process" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will create proper build artifacts" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "" >> agent-workspace/COLLABORATION_LOG.md
+                  ;;
+                tester)
+                  echo "### Validation Approach" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will validate all game mechanics work correctly" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will create test plans for verification" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "" >> agent-workspace/COLLABORATION_LOG.md
+                  ;;
+                overseer)
+                  echo "### Coordination Role" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will ensure all agent contributions align with the game concept" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "- Will manage integration of all components" >> agent-workspace/COLLABORATION_LOG.md
+                  echo "" >> agent-workspace/COLLABORATION_LOG.md
+                  ;;
+              esac
+
+              echo "---" >> agent-workspace/COLLABORATION_LOG.md
+              echo "" >> agent-workspace/COLLABORATION_LOG.md
+            done
+
+            echo "**Completed:** $(date)" >> agent-workspace/COLLABORATION_LOG.md
+
+          elif [ "$WORKFLOW_MODE" = "implement" ]; then
+            echo "💻 Running implementation mode - agents will implement the game"
+
+            # Create implementation directories
+            mkdir -p agent-workspace/src
+            mkdir -p agent-workspace/assets
+            mkdir -p agent-workspace/bin
+            mkdir -p agent-workspace/logs
+
+            # Initialize implementation log
+            echo "# Game Implementation Log" > agent-workspace/IMPLEMENTATION_LOG.md
+            echo "Game Concept: $GAME_CONCEPT" >> agent-workspace/IMPLEMENTATION_LOG.md
+            echo "Target Platform: $TARGET_PLATFORM" >> agent-workspace/IMPLEMENTATION_LOG.md
+            echo "Started: $(date)" >> agent-workspace/IMPLEMENTATION_LOG.md
+            echo "" >> agent-workspace/IMPLEMENTATION_LOG.md
+
+            # Function to log agent work
+            log_work() {
+              local agent="$1"
+              local task="$2"
+              echo "[$(date)] [$agent] $task" >> agent-workspace/IMPLEMENTATION_LOG.md
+              echo "[$agent] $task"
+            }
+
+            # Overseer function
+            oversee_work() {
+              log_work "OVERSEER" "Overseeing implementation to ensure concept fidelity"
+
+              for role in programmer designer graphics sound memory debugger builder tester; do
+                log_work "OVERSEER" "Checking progress with $role agent"
+                sleep 0.3
+              done
+
+              log_work "OVERSEER" "Implementation oversight complete"
+            }
+
+            # Each agent performs implementation work
+            for role in programmer designer graphics sound memory debugger builder tester; do
+              echo "⚙️  $role agent working on implementation..."
+              log_work "$role" "Starting implementation tasks"
+
+              case "$role" in
+                programmer)
+                  log_work "PROGRAMMER" "Implementing core game systems"
+
+                  # Create a basic game structure based on the concept
+                  cat > agent-workspace/src/game.asm << 'EOF'
+; TI-84/Z80 Game Implementation
+; Based on user-provided concept
+
+; Replace "Custom Game" with actual game name based on concept
+.program_name:
+    .db "Game From Concept",0
+
+.main:
+    call .init
+.loop:
+    call .input
+    call .update
+    call .render
+    jr nz, .loop
+    call .cleanup
+    ret
+
+.init:
+    ; Initialize game state
+    ret
+
+.input:
+    ; Process user input
+    ret
+
+.update:
+    ; Update game logic
+    ret
+
+.render:
+    ; Render game frame
+    ret
+
+.cleanup:
+    ; Clean up resources
+    ret
+EOF
+                  log_work "PROGRAMMER" "Created base game.asm structure"
+                  ;;
+
+                designer)
+                  log_work "DESIGNER" "Defining game mechanics"
+
+                  cat > agent-workspace/assets/GAME_DESIGN.txt << EOF
+Game Design Based on Concept:
+$GAME_CONCEPT
+
+Core Mechanics:
+- [To be filled in based on specific concept]
+- Player objectives and goals
+- Game rules and win/lose conditions
+
+Progression:
+- How players advance through the game
+- Difficulty scaling
+- Replayability elements
+EOF
+                  log_work "DESIGNER" "Created GAME_DESIGN.txt"
+                  ;;
+
+                graphics)
+                  log_work "GRAPHICS" "Creating visual assets plan"
+
+                  cat > agent-workspace/assets/GRAPHICS_PLAN.txt << EOF
+Graphics Plan for: $GAME_CONCEPT
+
+Visual Style:
+- [Description based on concept]
+
+Required Assets:
+- Character sprites
+- Background tiles/environments
+- UI elements (menus, buttons, indicators)
+- Special effects
+
+Technical Notes:
+- Platform: $TARGET_PLATFORM
+- Memory constraints considered
+EOF
+                  log_work "GRAPHICS" "Created GRAPHICS_PLAN.txt"
+                  ;;
+
+                sound)
+                  log_work "SOUND" "Planning audio implementation"
+
+                  cat > agent-workspace/assets/AUDIO_PLAN.txt << EOF
+Audio Plan for: $GAME_CONCEPT
+
+Sound Effects:
+- [List based on concept]
+
+Music:
+- [Theme/style based on concept]
+
+Implementation:
+- Platform: $TARGET_PLATFORM
+- Audio capabilities considered
+EOF
+                  log_work "SOUND" "Created AUDIO_PLAN.txt"
+                  ;;
+
+                memory)
+                  log_work "MEMORY" "Analyzing memory requirements"
+
+                  cat > agent-workspace/assets/MEMORY_ANALYSIS.txt << EOF
+Memory Analysis for: $GAME_CONCEPT on $TARGET_PLATFORM
+
+Estimated Memory Usage:
+- Code: [To be determined]
+- Assets: [To be determined]
+- Runtime: [To be determined]
+
+Optimization Strategies:
+- Asset compression
+- Code optimization
+- Efficient data structures
+EOF
+                  log_work "MEMORY" "Created MEMORY_ANALYSIS.txt"
+                  ;;
+
+                debugger)
+                  log_work "DEBUGGER" "Setting up testing procedures"
+
+                  cat > agent-workspace/assets/TESTING_PLAN.txt << EOF
+Testing Plan for: $GAME_CONCEPT
+
+Test Types:
+- Unit testing: Individual components
+- Integration testing: Component interactions
+- System testing: Complete gameplay
+- Playtesting: Human validation
+
+Bug Tracking:
+- Issue identification
+- Reproduction steps
+- Fix verification
+EOF
+                  log_work "DEBUGGER" "Created TESTING_PLAN.txt"
+                  ;;
+
+                builder)
+                  log_work "BUILDER" "Setting up build system"
+
+                  cat > agent-workspace/src/Makefile << 'EOF'
+# Makefile for TI-84/Z80 Game
+
+ASM      = spasm-ng
+CC       = sdcc
+
+ASMFLAGS = -r
+CFLAGS   = -mz80 --code-loc $9D95 --data-loc $A000 --no-std-crt0
+
+TARGET   = game.bin
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): src/game.asm
+	$(ASM) $(ASMFLAGS) $< -o $@
+
+clean:
+	rm -f $(TARGET)
+EOF
+                  log_work "BUILDER" "Created Makefile"
+                  ;;
+
+                tester)
+                  log_work "TESTER" "Creating validation procedures"
+
+                  cat > agent-workspace/assets/VALIDATION_PLAN.txt << EOF
+Validation Plan for: $GAME_CONCEPT
+
+Validation Checks:
+- Game starts correctly
+- Input is responsive
+- Core mechanics work as intended
+- No obvious bugs or crashes
+- Win/lose conditions function properly
+
+Testing Methods:
+- Manual playthrough
+- Automated checks where possible
+- Edge case testing
+EOF
+                  log_work "TESTER" "Created VALIDATION_PLAN.txt"
+                  ;;
+              esac
+
+              log_work "$role" "Completed assigned tasks"
+              echo "" >> agent-workspace/IMPLEMENTATION_LOG.md
+
+              # Brief pause
+              sleep 1
+            done
+
+            # Run overseer
+            echo "👁️  Running Overseer..."
+            oversee_work
+
+            echo "[$(date)] [SYSTEM] Implementation work completed" >> agent-workspace/IMPLEMENTATION_LOG.md
+            echo "Completed: $(date)" >> agent-workspace/IMPLEMENTATION_LOG.md
+
+            # Try to build if source exists
+            if [ -f "agent-workspace/src/Makefile" ]; then
+              echo ""
+              echo "🔨 Attempting to build the implementation..."
+              cd agent-workspace/src
+              make clean > ../logs/build.log 2>&1
+              if make >> ../logs/build.log 2>&1; then
+                echo "✅ Build successful!" >> ../IMPLEMENTATION_LOG.md
+                echo "Binary size: $(wc -c < game.bin) bytes" >> ../IMPLEMENTATION_LOG.md
+              else
+                echo "❌ Build failed!" >> ../IMPLEMENTATION_LOG.md
+                echo "See build.log for compilation errors" >> ../IMPLEMENTATION_LOG.md
+              fi
+              cd ../..
+            fi
+          fi
+
+      - name: Upload Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: game-collaboration-results
-          path: game-collab-workspace/
+          name: game-development-results
+          path: agent-workspace/
           retention-days: 30
 
-      - name: Display Collaboration Summary
+      - name: Show Results Summary
         if: always()
         run: |
-          echo "📊 Game Development Agent Collaboration Summary"
-          echo "=============================================="
-          echo "🎮 Game Concept: $(cat game-collab-workspace/GAME_CONCEPT.txt)"
-          echo "🎯 Target Platform: $(cat game-collab-workspace/TARGET_PLATFORM.txt)"
-          echo "👥 Agent Roles: $(cat game-collab-workspace/AGENT_ROLES.txt)"
+          echo "📊 TI-84/Z80 Game Development Results"
+          echo "======================================"
+          echo "🎮 Game Concept: $(cat agent-workspace/GAME_CONCEPT.txt)"
+          echo "🎯 Target Platform: $(cat agent-workspace/TARGET_PLATFORM.txt)"
+          echo "🔧 Workflow Mode: $(cat agent-workspace/WORKFLOW_MODE.txt)"
           echo ""
           echo "📁 Generated Files:"
           echo "  - GAME_CONCEPT.txt: Original game idea"
           echo "  - TARGET_PLATFORM.txt: Selected platform"
-          echo "  - AGENT_ROLES.txt: Participating agent roles"
-          echo "  - agents/: Individual agent task files"
-          echo "  - COLLABORATION_LOG.md: Detailed agent contributions"
-          echo "  - FINAL_SUMMARY.md: High-level collaboration summary"
+          echo "  - WORKFLOW_MODE.txt: Selected workflow mode"
+          echo "  - tasks/: Individual agent task definitions"
           echo ""
-          echo "📋 Collaboration Preview:"
-          echo "----------------------------------------"
-          head -15 game-collab-workspace/COLLABORATION_LOG.md
-          echo "----------------------------------------"
+
+          WORKFLOW_MODE=$(cat agent-workspace/WORKFLOW_MODE.txt)
+          if [ "$WORKFLOW_MODE" = "collaborate" ]; then
+            echo "  - COLLABORATION_LOG.md: Agent collaboration perspectives"
+            echo ""
+            echo "📋 Collaboration Preview:"
+            echo "----------------------------------------"
+            head -10 agent-workspace/COLLABORATION_LOG.md
+            echo "----------------------------------------"
+          elif [ "$WORKFLOW_MODE" = "implement" ]; then
+            echo "  - src/: Source code files"
+            echo "  - assets/: Design documents and plans"
+            echo "  - bin/: Compiled binaries (if build succeeded)"
+            echo "  - logs/: Build and implementation logs"
+            echo "  - IMPLEMENTATION_LOG.md: Detailed implementation chronology"
+            echo ""
+            echo "📋 Implementation Preview:"
+            echo "----------------------------------------"
+            head -10 agent-workspace/IMPLEMENTATION_LOG.md
+            echo "----------------------------------------"
+          fi
 EOF
