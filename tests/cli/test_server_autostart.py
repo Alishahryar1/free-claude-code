@@ -6,6 +6,7 @@ import sys
 import threading
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from http.client import RemoteDisconnected
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from urllib.error import URLError
@@ -13,11 +14,9 @@ from urllib.error import URLError
 import pytest
 
 from free_claude_code.cli.launchers import common
-from free_claude_code.config import paths
 from free_claude_code.config.paths import (
     server_owner_lock_path,
     server_startup_lock_path,
-    startup_log_path,
 )
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from tests.cli.conftest import LaunchCapture
@@ -127,11 +126,8 @@ def test_missing_server_is_started_once_and_awaited(
     assert kwargs["env"] == env
     assert kwargs["env"] is not env
     assert kwargs["stdin"] is subprocess.DEVNULL
-    assert kwargs["stdout"].name == str(startup_log_path())
-    assert kwargs["stderr"] is subprocess.STDOUT
-    assert kwargs["stdout"].closed
-    header = startup_log_path().read_text()
-    assert header.startswith("# ") and header.rstrip().endswith(" ".join(command))
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
     if sys.platform == "win32":
         assert kwargs["creationflags"]
     else:
@@ -151,33 +147,7 @@ def test_server_exit_before_ready_is_reported(monkeypatch) -> None:
     message = common.ensure_proxy_available(URL, env={})
     assert message is not None
     assert "exited with code 3" in message
-    assert f"Its output is in {startup_log_path()}." in message
     assert "Start it manually with:" in message
-
-
-def test_unwritable_startup_log_falls_back_to_devnull(monkeypatch, spawned) -> None:
-    blocker = paths.config_dir_path() / "logs"
-    blocker.parent.mkdir(parents=True, exist_ok=True)
-    blocker.write_text("not a directory")
-    _responses(monkeypatch, _refused(), _refused(), _refused())
-    monkeypatch.setattr(
-        common.subprocess, "Popen", lambda *_a, **_k: FakeServer(exit_code=2)
-    )
-    message = common.ensure_proxy_available(URL, env={})
-    assert message is not None
-    assert "exited with code 2" in message
-    assert "Its output is in" not in message
-
-
-def test_startup_log_keeps_only_the_latest_attempt(monkeypatch) -> None:
-    monkeypatch.setattr(common, "server_command", lambda: ["fcc-test", "--x"])
-    monkeypatch.setattr(common.subprocess, "Popen", lambda *_a, **_k: FakeServer())
-    startup_log_path().parent.mkdir(parents=True, exist_ok=True)
-    startup_log_path().write_text("stale output from an earlier attempt\n")
-    common._spawn_server({})
-    lines = startup_log_path().read_text().splitlines()
-    assert len(lines) == 1
-    assert lines[0].startswith("# ") and lines[0].endswith("fcc-test --x")
 
 
 def test_startup_wait_is_bounded(monkeypatch, spawned, clock) -> None:
@@ -277,6 +247,40 @@ def test_terminal_owner_at_other_port_waits_without_spawning(
     assert spawned == []
 
 
+@pytest.mark.parametrize(
+    "closed_connection",
+    [
+        ConnectionResetError("reset during restart"),
+        ConnectionAbortedError("aborted during restart"),
+        RemoteDisconnected("closed during restart"),
+    ],
+)
+@pytest.mark.parametrize("phase", ["first_probe", "readiness_wait"])
+def test_harness_waits_through_owner_connection_close(
+    monkeypatch, spawned, closed_connection, phase
+) -> None:
+    owner = InterprocessFileLock(server_owner_lock_path())
+    assert owner.acquire()
+    try:
+        if phase == "first_probe":
+            _responses(monkeypatch, closed_connection, closed_connection, _healthy())
+        else:
+            _responses(
+                monkeypatch, _refused(), _refused(), closed_connection, _healthy()
+            )
+        assert common.ensure_proxy_available(URL, env={}) is None
+    finally:
+        owner.release()
+    assert spawned == []
+
+
+def test_unowned_connection_reset_does_not_start_fcc(monkeypatch, spawned) -> None:
+    _responses(monkeypatch, ConnectionResetError("foreign listener reset"))
+    message = common.ensure_proxy_available(URL, env={})
+    assert message is not None and "foreign listener reset" in message
+    assert spawned == []
+
+
 def test_cancelled_start_stops_only_new_child(monkeypatch) -> None:
     _responses(monkeypatch, _refused(), _refused())
     child = FakeServer()
@@ -308,6 +312,35 @@ def test_cancelled_wait_preserves_existing_owner(monkeypatch, spawned) -> None:
 
 
 def test_manual_listener_wins_the_bind_race(monkeypatch) -> None:
+    owner = InterprocessFileLock(server_owner_lock_path())
+    try:
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+            _responses(
+                monkeypatch,
+                _refused(),
+                _refused(),
+                TimeoutError("starting"),
+                _healthy(),
+            )
+            child = FakeServer(exit_code=1)
+
+            def spawn(_env):
+                assert owner.acquire()
+                return child
+
+            monkeypatch.setattr(common, "_spawn_server", spawn)
+            assert common.ensure_proxy_available(url, env={}) is None
+            assert not child.terminated
+    finally:
+        owner.release()
+
+
+def test_unowned_listener_winning_bind_race_does_not_hide_child_failure(
+    monkeypatch,
+) -> None:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
@@ -317,7 +350,8 @@ def test_manual_listener_wins_the_bind_race(monkeypatch) -> None:
         )
         child = FakeServer(exit_code=1)
         monkeypatch.setattr(common, "_spawn_server", lambda _env: child)
-        assert common.ensure_proxy_available(url, env={}) is None
+        message = common.ensure_proxy_available(url, env={})
+        assert message is not None and "exited with code 1" in message
         assert not child.terminated
 
 
@@ -387,8 +421,8 @@ def test_detached_streams_and_browser_preference_are_independent(monkeypatch) ->
 
     assert observed["env"]["FCC_OPEN_BROWSER"] == "0"
     assert observed["stdin"] is subprocess.DEVNULL
-    assert observed["stdout"].name == str(startup_log_path())
-    assert observed["stderr"] is subprocess.STDOUT
+    assert observed["stdout"] is subprocess.DEVNULL
+    assert observed["stderr"] is subprocess.DEVNULL
 
 
 def test_existing_unresponsive_listener_is_not_replaced(
@@ -564,7 +598,7 @@ def test_launcher_starts_the_server_then_runs_the_client(
 
     def popen(command: list[str], **kwargs: object) -> object:
         if command == server_command:
-            assert getattr(kwargs["stdout"], "name", None) == str(startup_log_path())
+            assert kwargs["stdout"] is subprocess.DEVNULL
             launch_capture.health_error = None
             return FakeServer()
         env = kwargs["env"]
@@ -592,5 +626,4 @@ def test_launcher_keeps_the_manual_hint_when_the_server_cannot_start(
     assert not launch_capture.commands
     err = capsys.readouterr().err
     assert "exited with code 1" in err
-    assert str(startup_log_path()) in err
     assert "Start it manually with:" in err

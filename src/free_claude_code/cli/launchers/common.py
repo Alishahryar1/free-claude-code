@@ -9,10 +9,8 @@ import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import BinaryIO
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request
@@ -45,6 +43,8 @@ class ProxyState(StrEnum):
     STARTING = "starting"
     # Nothing accepted the connection, so no server is running.
     UNREACHABLE = "unreachable"
+    # The listener closed a connection during a possible owner restart.
+    CONNECTION_CLOSED = "connection_closed"
     NETWORK_ERROR = "network_error"
 
 
@@ -93,6 +93,8 @@ def _probe_proxy(proxy_root_url: str, *, deadline: float) -> ProxyProbe:
             reason, "errno", None
         ) in {errno.ECONNREFUSED, 10061}:
             return ProxyProbe(ProxyState.UNREACHABLE, str(reason))
+        if isinstance(reason, ConnectionError):
+            return ProxyProbe(ProxyState.CONNECTION_CLOSED, str(reason))
         return ProxyProbe(ProxyState.NETWORK_ERROR, str(reason))
     if not 200 <= status_code < 300:
         return ProxyProbe(ProxyState.HTTP_ERROR, f"returned HTTP {status_code}")
@@ -112,62 +114,23 @@ def server_command() -> list[str]:
     )
 
 
-def _open_startup_log(command: list[str]) -> BinaryIO | None:
-    """Keep the owner's early output, which precedes its own runtime log sink.
-
-    Configuration errors surface before the server configures file logging, so
-    without this the client would only learn the owner's exit code. The log
-    holds the latest attempt only; a missing or unwritable log never blocks
-    startup.
-    """
-
-    path = paths.startup_log_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle = path.open("wb")
-    except OSError:
-        return None
-    try:
-        started = datetime.now().astimezone().isoformat(timespec="seconds")
-        handle.write(f"# {started} launcher started: {' '.join(command)}\n".encode())
-        handle.flush()
-    except OSError:
-        handle.close()
-        return None
-    return handle
-
-
-def _startup_log_hint() -> str:
-    path = paths.startup_log_path()
-    return f" Its output is in {path}." if path.is_file() else ""
-
-
 def _spawn_server(env: Mapping[str, str]) -> subprocess.Popen[bytes]:
-    """Start an independent owner that manages its own runtime logging.
-
-    Only output written before that logging exists reaches the startup log.
-    """
-
+    """Start an independent owner that manages its own runtime logging."""
     command = server_command()
-    log = _open_startup_log(command)
-    try:
-        return subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=log if log is not None else subprocess.DEVNULL,
-            stderr=subprocess.STDOUT if log is not None else subprocess.DEVNULL,
-            env=dict(env),
-            creationflags=(
-                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                | getattr(subprocess, "DETACHED_PROCESS", 0)
-                if sys.platform == "win32"
-                else 0
-            ),
-            start_new_session=sys.platform != "win32",
-        )
-    finally:
-        if log is not None:
-            log.close()
+    return subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=dict(env),
+        creationflags=(
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+            if sys.platform == "win32"
+            else 0
+        ),
+        start_new_session=sys.platform != "win32",
+    )
 
 
 def _desktop_owner_running() -> bool:
@@ -243,9 +206,15 @@ def _wait_for_server(
             ProxyState.NETWORK_ERROR,
         }:
             return probe
+        if (
+            probe.state is ProxyState.CONNECTION_CLOSED
+            and process is None
+            and not _owner_running()
+        ):
+            return probe
         exit_code = process.poll() if process is not None else None
         if exit_code is not None:
-            if probe.state is ProxyState.STARTING or _owner_running():
+            if _owner_running():
                 # A manual owner may have won the bind/singleton race. Its actual
                 # endpoint, not the duplicate's exit code, determines readiness.
                 process = None
@@ -255,10 +224,7 @@ def _wait_for_server(
                     if sys.platform in {"win32", "darwin"}
                     else "fcc-server"
                 )
-                return (
-                    f"{name} exited with code {exit_code} before it was ready."
-                    f"{_startup_log_hint()}"
-                )
+                return f"{name} exited with code {exit_code} before it was ready."
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(SERVER_STARTUP_POLL_SECONDS, remaining))
@@ -283,7 +249,9 @@ def ensure_proxy_available(
     )
     if probe.state is ProxyState.HEALTHY:
         return None
-    if probe.state in {ProxyState.HTTP_ERROR, ProxyState.NETWORK_ERROR}:
+    if probe.state in {ProxyState.HTTP_ERROR, ProxyState.NETWORK_ERROR} or (
+        probe.state is ProxyState.CONNECTION_CLOSED and not _owner_running()
+    ):
         return _unreachable_message(
             proxy_root_url, probe, "The configured endpoint failed its health check."
         )
@@ -304,7 +272,9 @@ def ensure_proxy_available(
         probe = _probe_proxy(proxy_root_url, deadline=deadline)
         if probe.state is ProxyState.HEALTHY:
             return None
-        if probe.state in {ProxyState.HTTP_ERROR, ProxyState.NETWORK_ERROR}:
+        if probe.state in {ProxyState.HTTP_ERROR, ProxyState.NETWORK_ERROR} or (
+            probe.state is ProxyState.CONNECTION_CLOSED and not _owner_running()
+        ):
             return _unreachable_message(
                 proxy_root_url,
                 probe,
