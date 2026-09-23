@@ -1,24 +1,18 @@
 """Public feature inventory for contract, prerequisite, and product smoke tests.
 
-The inventory is intentionally explicit. README-advertised behavior and exposed
-public surface area must have deterministic pytest contract coverage plus a
-product E2E scenario when that behavior is a user-facing product path. Liveness
-and route probes live in ``smoke/prereq`` and do not count as product coverage.
+The inventory is intentionally explicit. Public product behavior must have
+deterministic pytest contract coverage plus a product E2E scenario when that
+behavior is a user-facing product path. Liveness and route probes live in
+``smoke/prereq`` and do not count as product coverage.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
-from typing import Literal
-
-FeatureSource = Literal["readme", "public_surface"]
 
 
 @dataclass(frozen=True, slots=True)
 class FeatureCoverage:
     feature_id: str
     title: str
-    source: FeatureSource
     pytest_contract_tests: tuple[str, ...]
     live_prereq_tests: tuple[str, ...]
     product_e2e_tests: tuple[str, ...]
@@ -32,30 +26,33 @@ class FeatureCoverage:
         return bool(self.pytest_contract_tests)
 
 
-README_FEATURES: tuple[str, ...] = (
-    "zero_cost_provider_access",
-    "drop_in_claude_code_replacement",
-    "provider_matrix",
-    "per_model_mapping",
-    "thinking_token_support",
-    "heuristic_tool_parser",
-    "request_optimization",
-    "smart_rate_limiting",
-    "discord_telegram_bot",
-    "subagent_control",
-    "extensible_provider_platform_abcs",
-    "optional_authentication",
-    "vscode_extension",
-    "intellij_extension",
-    "voice_notes",
-)
-
-
 FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
+    FeatureCoverage(
+        "code_session_modes",
+        "Code session permission choices reach native Codex and persist their review results",
+        (
+            "tests/application/test_code_sessions.py",
+            "tests/runtime/test_codex_app_server.py",
+            "tests/runtime/test_codex_protocol.py",
+            "tests/runtime/test_code_sessions_sqlite.py",
+            "e2e/test_code_sessions.py",
+        ),
+        (),
+        (
+            "test_codex_modes_local_e2e",
+            "test_codex_child_review_local_e2e",
+            "test_codex_modes_free_provider_e2e",
+        ),
+        ("clients",),
+        (
+            "Codex executable",
+            "FCC_SMOKE_CODEX_FREE_MODEL and OpenRouter key for optional live inference",
+        ),
+        "local behavior must pass when Codex and native sandbox prerequisites are available; free inference is explicitly selected and pricing checked",
+    ),
     FeatureCoverage(
         "zero_cost_provider_access",
         "Configured provider accepts real conversation turns",
-        "readme",
         ("tests/api/test_dependencies.py", "tests/providers/"),
         ("test_configured_provider_models_stream_successfully",),
         ("test_provider_text_multiturn_e2e",),
@@ -66,56 +63,251 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "drop_in_claude_code_replacement",
         "Claude-compatible API, CLI, and editor protocol flows work",
-        "readme",
-        ("tests/api/test_api.py", "tests/cli/test_cli.py"),
+        (
+            "tests/api/test_api.py",
+            "tests/api/test_web_server_tools.py",
+            "tests/cli/test_cli.py",
+        ),
         ("test_probe_and_models_routes", "test_claude_cli_prompt_when_available"),
         (
             "test_api_basic_conversation_e2e",
             "test_claude_cli_adaptive_thinking_e2e",
+            "test_claude_cli_web_search_e2e",
+            "test_claude_cli_provider_error_e2e",
+            "test_nvidia_nim_cli_matrix_e2e",
+            "test_openrouter_free_cli_matrix_e2e",
             "test_vscode_protocol_e2e",
             "test_jetbrains_protocol_e2e",
         ),
-        ("api", "cli", "clients"),
-        ("configured provider", "FCC_SMOKE_CLAUDE_BIN for real Claude CLI"),
+        ("api", "cli", "clients", "nvidia_nim_cli", "openrouter_free_cli"),
+        (
+            "configured provider",
+            "FCC_SMOKE_CLAUDE_BIN for real Claude CLI",
+            "NVIDIA_NIM_API_KEY",
+            "OPENROUTER_API_KEY",
+        ),
         "skip real CLI when binary is absent; configured providers must pass",
+    ),
+    FeatureCoverage(
+        "claude_auto_mode_classifier",
+        "Claude Auto mode classifies and executes Bash through OpenAI connected accounts",
+        (
+            "tests/api/test_detection.py",
+            "tests/api/test_api_handlers.py",
+            "tests/api/test_openai_codex_compatibility.py",
+            "tests/contracts/test_nvidia_nim_cli_matrix.py",
+        ),
+        ("test_claude_cli_prompt_when_available",),
+        ("test_claude_auto_mode_openai_connected_e2e",),
+        ("cli",),
+        ("Claude CLI", "FCC_SMOKE_MODEL_OPENAI and connected OpenAI account"),
+        "skip only before launch when Claude or an explicit OpenAI smoke model is absent",
+    ),
+    FeatureCoverage(
+        "drop_in_codex_replacement",
+        "OpenAI Responses API and Codex CLI adapter route through the proxy",
+        (
+            "tests/api/test_openai_responses.py",
+            "tests/cli/test_entrypoints.py",
+            "tests/cli/test_codex_model_catalog.py",
+            "tests/harnesses/test_codex_model_catalog.py",
+            "tests/runtime/test_codex_catalog.py",
+            "tests/core/openai_responses/test_native.py",
+            "tests/providers/test_openai_chat_stream_output.py",
+        ),
+        ("test_probe_and_models_routes",),
+        ("test_provider_codex_responses_text_e2e",),
+        ("api", "providers"),
+        ("configured provider credentials or local provider endpoint",),
+        "missing providers are missing_env unless FCC_ALLOW_NO_PROVIDER_SMOKE=1",
+    ),
+    FeatureCoverage(
+        "pi_cli_integration",
+        "Pi discovers FCC models and sends Anthropic Messages through the proxy",
+        ("tests/cli/test_entrypoints.py",),
+        ("test_probe_and_models_routes",),
+        ("test_pi_cli_prompt_e2e",),
+        ("clients",),
+        ("Pi CLI", "configured provider credentials or local provider endpoint"),
+        "skip only when Pi is absent; configured providers must pass",
+    ),
+    FeatureCoverage(
+        "opencode_cli_integration",
+        "OpenCode discovers FCC models and sends Responses through the proxy",
+        (
+            "tests/cli/test_opencode_launcher.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
+            "tests/cli/test_catalog_http.py",
+        ),
+        ("test_probe_and_models_routes",),
+        ("test_opencode_cli_prompt_e2e",),
+        ("clients",),
+        (
+            "stable OpenCode 2 CLI",
+            "configured provider credentials or local provider endpoint",
+        ),
+        "skip only when OpenCode is absent; configured providers must pass",
+    ),
+    FeatureCoverage(
+        "aider_cli_integration",
+        "Aider discovers FCC models and sends Anthropic Messages through the proxy",
+        (
+            "tests/cli/test_aider_config.py",
+            "tests/cli/test_aider_launcher.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
+            "tests/cli/test_catalog_http.py",
+        ),
+        ("test_probe_and_models_routes",),
+        ("test_aider_cli_prompt_e2e",),
+        ("clients",),
+        (
+            "Aider 0.86.2+",
+            "configured provider credentials or local provider endpoint",
+        ),
+        "skip only when Aider is absent; configured providers must pass",
+    ),
+    FeatureCoverage(
+        "cline_cli_integration",
+        "Cline discovers FCC models and sends Responses through the proxy",
+        (
+            "tests/cli/test_cline_launcher.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
+            "tests/cli/test_catalog_http.py",
+        ),
+        ("test_probe_and_models_routes",),
+        ("test_cline_cli_prompt_e2e",),
+        ("clients",),
+        (
+            "stable Cline CLI",
+            "configured provider credentials or local provider endpoint",
+        ),
+        "skip only when Cline is absent; configured providers must pass",
+    ),
+    FeatureCoverage(
+        "hermes_cli_integration",
+        "Hermes discovers FCC models and sends Responses through the proxy",
+        (
+            "tests/cli/test_hermes_config.py",
+            "tests/cli/test_hermes_launcher.py",
+        ),
+        ("test_probe_and_models_routes",),
+        ("test_hermes_cli_prompt_e2e",),
+        ("clients",),
+        ("Hermes Agent 0.20.4+",),
+        "skip only when Hermes is absent; the local fake upstream must pass",
+    ),
+    FeatureCoverage(
+        "dsh_cli_integration",
+        "DeepSeek Harness discovers FCC models and sends Responses through the proxy",
+        (
+            "tests/cli/test_dsh_config.py",
+            "tests/cli/test_dsh_launcher.py",
+        ),
+        ("test_probe_and_models_routes",),
+        (
+            "test_dsh_cli_headless_e2e",
+            "test_dsh_cli_terminal_failure_e2e",
+            "test_dsh_cli_web_startup_e2e",
+        ),
+        ("clients",),
+        ("DeepSeek Harness 0.1.0-rc.8",),
+        "skip only when DSH is absent; the local fake upstream must pass",
+    ),
+    FeatureCoverage(
+        "grok_cli_integration",
+        "Grok Build discovers FCC models and sends Responses through the proxy",
+        (
+            "tests/cli/test_grok_launcher.py",
+            "tests/application/test_model_catalog.py",
+            "tests/cli/test_model_catalog_decoder.py",
+            "tests/cli/test_catalog_http.py",
+        ),
+        ("test_probe_and_models_routes",),
+        ("test_grok_cli_headless_e2e",),
+        ("clients",),
+        ("Grok Build 1.0.5+",),
+        "skip only when Grok Build is absent; the local fake upstream must pass",
+    ),
+    FeatureCoverage(
+        "muse_cli_integration",
+        "Muse Code discovers FCC models and sends Responses through the proxy",
+        (
+            "tests/cli/test_muse_launcher.py",
+            "tests/api/test_model_listing.py",
+        ),
+        ("test_muse_model_catalog_marks_every_routable_model_visible",),
+        ("test_muse_cli_headless_e2e",),
+        ("clients",),
+        ("Muse Code 0.2.1+",),
+        "skip only when Muse is absent; the local fake upstream must pass",
     ),
     FeatureCoverage(
         "provider_matrix",
         "Every configured provider prefix can satisfy conversation scenarios",
-        "readme",
         ("tests/api/test_dependencies.py", "tests/providers/"),
         ("test_configured_provider_models_stream_successfully",),
         ("test_provider_matrix_presence_e2e", "test_provider_text_multiturn_e2e"),
         ("providers",),
-        ("MODEL", "MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"),
+        ("configured provider credentials/endpoints", "optional FCC_SMOKE_MODEL_*"),
         "selected providers missing credentials are failing missing_env",
     ),
     FeatureCoverage(
+        "vision_protocol_matrix",
+        "Direct and tool-result images remain visual across protocol translation",
+        (
+            "tests/contracts/test_protocol_matrix.py",
+            "tests/core/anthropic/test_image_sources.py",
+            "tests/core/openai_responses/test_chat_request.py",
+        ),
+        (),
+        (
+            "test_nvidia_nim_vision_tool_result_e2e",
+            "test_nvidia_nim_vision_function_output_e2e",
+        ),
+        ("nvidia_nim_vision",),
+        ("NVIDIA_NIM_API_KEY", "FCC_SMOKE_MODEL_NVIDIA_NIM_VISION"),
+        "skip unless the dedicated vision target and explicit model are configured",
+    ),
+    FeatureCoverage(
         "per_model_mapping",
-        "Opus, Sonnet, Haiku, and fallback mappings route explicitly",
-        "readme",
-        ("tests/api/test_model_router.py", "tests/config/test_config.py"),
+        "Fable, Opus, Sonnet, Haiku, and fallback mappings route explicitly",
+        ("tests/application/test_routing.py", "tests/config/test_config.py"),
         ("test_model_mapping_configuration_is_consistent",),
         ("test_model_mapping_matrix_e2e",),
         ("providers",),
-        ("MODEL", "MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"),
+        ("MODEL", "MODEL_FABLE", "MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"),
         "skip only when live smoke is intentionally allowed to run with no provider",
     ),
     FeatureCoverage(
         "mixed_provider_mapping",
         "Model-specific overrides can route to different providers",
-        "public_surface",
-        ("tests/api/test_model_router.py", "tests/config/test_config.py"),
+        ("tests/application/test_routing.py", "tests/config/test_config.py"),
         ("test_mixed_provider_model_mapping_when_configured",),
         ("test_model_mapping_matrix_e2e",),
         ("providers",),
-        ("MODEL", "MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"),
+        ("MODEL", "MODEL_FABLE", "MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"),
         "configured mixed-provider mappings must resolve consistently",
+    ),
+    FeatureCoverage(
+        "model_fallback",
+        "Retryable pre-response failures can move through an ordered model list",
+        (
+            "tests/application/test_execution.py",
+            "tests/api/test_model_fallback.py",
+            "tests/config/test_config.py",
+        ),
+        (),
+        ("test_model_fallback_e2e",),
+        ("api",),
+        (),
+        "always runnable with isolated controlled providers",
     ),
     FeatureCoverage(
         "thinking_token_support",
         "Thinking history, adaptive thinking, and redacted blocks are accepted",
-        "readme",
         (
             "tests/contracts/test_stream_contracts.py",
             "tests/providers/test_open_router.py",
@@ -123,8 +315,10 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         (),
         (
             "test_provider_adaptive_thinking_history_e2e",
+            "test_provider_reasoning_tool_continuation_e2e",
+            "test_gemini_thought_signature_tool_continuation_e2e",
             "test_claude_cli_adaptive_thinking_e2e",
-            "test_per_model_thinking_config_e2e",
+            "test_route_reasoning_config_e2e",
         ),
         ("providers", "cli", "config"),
         ("configured provider",),
@@ -133,12 +327,14 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "heuristic_tool_parser",
         "Tool use and tool result continuation survive provider/client paths",
-        "readme",
         ("tests/providers/test_parsers.py", "tests/contracts/test_stream_contracts.py"),
         ("test_live_tool_use_when_configured_model_supports_tools",),
         (
             "test_provider_interleaved_thinking_tool_e2e",
             "test_provider_tool_result_continuation_e2e",
+            "test_provider_interrupted_tool_turn_resume_e2e",
+            "test_gemini_thought_signature_tool_continuation_e2e",
+            "test_provider_reasoning_tool_continuation_e2e",
         ),
         ("tools", "providers"),
         ("configured tool-capable provider",),
@@ -147,7 +343,6 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "request_optimization",
         "Local request optimizations return product responses without providers",
-        "readme",
         (
             "tests/api/test_optimization_handlers.py",
             "tests/api/test_routes_optimizations.py",
@@ -160,9 +355,11 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     ),
     FeatureCoverage(
         "smart_rate_limiting",
-        "Disconnect and limiter cleanup preserve follow-up requests",
-        "readme",
-        ("tests/providers/test_provider_rate_limit.py",),
+        "Transient retries and disconnect cleanup preserve follow-up requests",
+        (
+            "tests/providers/test_provider_admission.py",
+            "tests/providers/test_nvidia_nim_degraded_retry.py",
+        ),
         ("test_client_disconnect_mid_stream_does_not_crash_server",),
         ("test_provider_disconnect_e2e",),
         ("rate_limit", "providers"),
@@ -170,12 +367,28 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         "upstream disconnects are skips only when classified upstream_unavailable",
     ),
     FeatureCoverage(
+        "provider_hot_swap",
+        "Provider config changes preserve active streams while new requests switch",
+        (
+            "tests/runtime/test_provider_manager.py",
+            "tests/api/test_response_streams.py",
+            "tests/api/test_admin.py",
+        ),
+        (),
+        ("test_provider_hot_swap_preserves_inflight_stream_e2e",),
+        ("api",),
+        (),
+        "credential-free local fake upstreams make the scenario always runnable",
+    ),
+    FeatureCoverage(
         "discord_telegram_bot",
         "Discord and Telegram product flows render progress and transcripts",
-        "readme",
         (
             "tests/messaging/test_discord_platform.py",
             "tests/messaging/test_telegram.py",
+            "tests/messaging/test_limiter.py",
+            "tests/messaging/test_platform_outbox.py",
+            "tests/runtime/test_application_runtime.py",
         ),
         (
             "test_telegram_bot_api_permissions",
@@ -193,7 +406,6 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "subagent_control",
         "Task-like tool output is rendered and controlled as foreground work",
-        "readme",
         ("tests/providers/test_subagent_interception.py",),
         (),
         ("test_messaging_subagent_control_e2e",),
@@ -204,24 +416,22 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "extensible_provider_platform_abcs",
         "Provider and platform factories expose built-in extension points",
-        "readme",
         (
             "tests/contracts/test_feature_manifest.py",
-            "tests/providers/test_registry.py",
+            "tests/providers/test_provider_runtime.py",
         ),
         (),
-        ("test_provider_registry_e2e", "test_platform_factory_e2e"),
+        ("test_provider_runtime_config_e2e", "test_platform_factory_e2e"),
         ("extensibility",),
         (),
         "always runnable with isolated settings",
     ),
     FeatureCoverage(
         "optional_authentication",
-        "Anthropic-style auth headers are enforced and accepted",
-        "readme",
+        "Canonical bearer proxy authentication is enforced",
         ("tests/api/test_auth.py",),
-        ("test_auth_token_is_enforced_for_all_supported_header_shapes",),
-        ("test_api_auth_header_variants_e2e",),
+        ("test_bearer_auth_is_the_only_supported_header_shape",),
+        ("test_api_bearer_auth_contract_e2e",),
         ("auth",),
         ("ANTHROPIC_AUTH_TOKEN",),
         "product test starts an isolated token-protected server",
@@ -229,9 +439,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "vscode_extension",
         "VS Code protocol-shaped requests work against the proxy",
-        "readme",
         (
-            "tests/api/test_models_validators.py::test_messages_request_accepts_adaptive_thinking_type",
+            "tests/core/anthropic/test_models.py::test_messages_request_accepts_adaptive_thinking_type",
         ),
         ("test_vscode_and_jetbrains_shaped_requests",),
         ("test_vscode_protocol_e2e",),
@@ -242,9 +451,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "intellij_extension",
         "JetBrains/ACP protocol-shaped requests work against the proxy",
-        "readme",
         (
-            "tests/api/test_models_validators.py::test_messages_request_accepts_adaptive_thinking_type",
+            "tests/core/anthropic/test_models.py::test_messages_request_accepts_adaptive_thinking_type",
         ),
         ("test_vscode_and_jetbrains_shaped_requests",),
         ("test_jetbrains_protocol_e2e",),
@@ -255,7 +463,6 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "voice_notes",
         "Voice note intake, cancellation, and transcription backends work",
-        "readme",
         (
             "tests/messaging/test_voice_handlers.py",
             "tests/messaging/test_transcription.py",
@@ -273,7 +480,6 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "anthropic_api_routes",
         "Messages, count_tokens, errors, and stop use Anthropic-compatible shapes",
-        "public_surface",
         ("tests/api/test_api.py",),
         ("test_probe_and_models_routes", "test_stop_endpoint_reports_no_messaging"),
         (
@@ -289,7 +495,6 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "probe_routes",
         "HEAD and OPTIONS compatibility probes are accepted",
-        "public_surface",
         ("tests/api/test_api.py::test_probe_endpoints_return_204_with_allow_headers",),
         ("test_probe_and_models_routes",),
         (),
@@ -301,7 +506,6 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "count_tokens_contract",
         "Token counting accepts full Claude content payloads",
-        "public_surface",
         ("tests/api/test_request_utils.py",),
         ("test_count_tokens_accepts_thinking_tools_and_results",),
         ("test_api_count_tokens_full_payload_e2e",),
@@ -312,8 +516,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "provider_proxy_timeout_config",
         "Provider proxies and HTTP timeout settings reach provider config",
-        "public_surface",
-        ("tests/api/test_dependencies.py", "tests/providers/test_registry.py"),
+        ("tests/api/test_dependencies.py", "tests/providers/test_provider_runtime.py"),
         (),
         ("test_proxy_timeout_config_e2e",),
         ("config",),
@@ -322,53 +525,43 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     ),
     FeatureCoverage(
         "lmstudio_endpoint",
-        "LM Studio native messages and local no-key operation work when running",
-        "public_surface",
-        (
-            "tests/providers/test_lmstudio.py",
-            "tests/providers/test_anthropic_messages.py",
-        ),
+        "LM Studio Messages and local no-key operation work when running",
+        ("tests/providers/test_lmstudio.py",),
         ("test_lmstudio_models_endpoint_when_available",),
-        ("test_lmstudio_native_messages_e2e",),
+        ("test_lmstudio_messages_e2e",),
         ("lmstudio",),
         ("LM_STUDIO_BASE_URL with running LM Studio server",),
         "skip when local upstream is unavailable",
     ),
     FeatureCoverage(
         "llamacpp_endpoint",
-        "llama.cpp native messages and local no-key operation work when running",
-        "public_surface",
-        (
-            "tests/providers/test_llamacpp.py",
-            "tests/providers/test_anthropic_messages.py",
-        ),
+        "llama.cpp OpenAI Chat and local no-key operation work when running",
+        ("tests/providers/test_llamacpp.py",),
         ("test_llamacpp_models_endpoint_when_available",),
-        ("test_llamacpp_native_messages_e2e",),
+        ("test_llamacpp_openai_chat_e2e",),
         ("llamacpp",),
         ("LLAMACPP_BASE_URL with running llama-server",),
         "skip when local upstream is unavailable",
     ),
     FeatureCoverage(
         "ollama_endpoint",
-        "Ollama native Anthropic messages and local no-key operation work when running",
-        "public_surface",
+        "Ollama OpenAI Chat and local no-key operation work when running",
         ("tests/providers/test_ollama.py",),
         ("test_ollama_models_endpoint_when_available",),
-        ("test_ollama_native_messages_e2e",),
+        ("test_ollama_openai_chat_e2e",),
         ("ollama",),
         ("OLLAMA_BASE_URL with running Ollama server",),
         "skip when local upstream is unavailable",
     ),
     FeatureCoverage(
         "package_cli_entrypoints",
-        "Installed package scripts scaffold config and start the server",
-        "public_surface",
-        ("tests/cli/test_entrypoints.py",),
+        "Installed package scripts report version and start the server",
+        ("tests/cli/test_entrypoints.py", "tests/core/test_version.py"),
+        ("test_fcc_server_entrypoint_starts_server",),
         (
-            "test_fcc_init_scaffolds_user_config",
-            "test_free_claude_code_entrypoint_starts_server",
+            "test_entrypoint_server_e2e",
+            "test_entrypoint_version_e2e",
         ),
-        ("test_entrypoint_init_e2e", "test_entrypoint_server_e2e"),
         ("cli",),
         (),
         "always runnable once uv project dependencies are available",
@@ -376,27 +569,40 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "claude_cli_drop_in",
         "Claude CLI can send adaptive thinking and tool-shaped history",
-        "public_surface",
-        ("tests/cli/test_cli.py",),
+        ("tests/api/test_web_server_tools.py", "tests/cli/test_cli.py"),
         ("test_claude_cli_prompt_when_available",),
         (
             "test_claude_cli_adaptive_thinking_e2e",
+            "test_claude_cli_web_search_e2e",
             "test_claude_cli_multiturn_tool_protocol_e2e",
+            "test_nvidia_nim_cli_matrix_e2e",
+            "test_openrouter_free_cli_matrix_e2e",
         ),
-        ("cli",),
-        ("FCC_SMOKE_CLAUDE_BIN", "configured provider"),
+        ("cli", "nvidia_nim_cli", "openrouter_free_cli"),
+        (
+            "FCC_SMOKE_CLAUDE_BIN",
+            "configured provider",
+            "NVIDIA_NIM_API_KEY",
+            "OPENROUTER_API_KEY",
+        ),
         "skip only when Claude CLI binary is absent",
     ),
     FeatureCoverage(
         "messaging_commands",
-        "Messaging /stop, /clear, and /stats operate on product state",
-        "public_surface",
+        "Messaging commands clear exact reply subtrees or whole managed chats",
         (
             "tests/messaging/test_handler.py",
             "tests/messaging/test_handler_integration.py",
+            "tests/messaging/test_tree_ownership_concurrency.py",
         ),
         (),
-        ("test_messaging_commands_stop_clear_stats_e2e",),
+        (
+            "test_messaging_commands_stop_clear_stats_e2e",
+            "test_reply_clear_uses_literal_platform_subtree_e2e",
+            "test_messaging_startup_notice_is_clearable_e2e",
+            "test_messaging_active_stop_uses_status_only_e2e",
+            "test_messaging_queued_scoped_cancel_e2e",
+        ),
         ("messaging",),
         (),
         "required fake-platform product flow",
@@ -404,13 +610,18 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "tree_threading",
         "Reply-based branches fork sessions and stay scoped",
-        "public_surface",
         (
             "tests/messaging/test_tree_queue.py",
             "tests/messaging/test_tree_concurrency.py",
+            "tests/messaging/test_message_tree_transitions.py",
+            "tests/messaging/test_tree_ownership_concurrency.py",
         ),
         (),
-        ("test_tree_threading_e2e",),
+        (
+            "test_tree_threading_e2e",
+            "test_messaging_queued_scoped_cancel_e2e",
+            "test_same_message_ids_are_isolated_by_chat_e2e",
+        ),
         ("messaging",),
         (),
         "required fake-platform product flow",
@@ -418,7 +629,6 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "restart_restore",
         "Persisted tree state restores reply routing after restart",
-        "public_surface",
         ("tests/messaging/test_restart_reply_restore.py",),
         (),
         ("test_restart_restore_and_session_persistence_e2e",),
@@ -428,8 +638,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     ),
     FeatureCoverage(
         "session_persistence",
-        "Session JSON preserves trees, node mapping, and message logs",
-        "public_surface",
+        "Session JSON preserves scoped trees and message logs",
         ("tests/messaging/test_session_store_edge_cases.py",),
         (),
         ("test_restart_restore_and_session_persistence_e2e",),
@@ -439,19 +648,17 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     ),
     FeatureCoverage(
         "config_env_precedence",
-        "FCC_ENV_FILE, dotenv, and process env precedence are deterministic",
-        "public_surface",
-        ("tests/config/test_config.py",),
+        "Managed config, process env, and one-time legacy import are deterministic",
+        ("tests/config/test_config.py", "tests/config/test_env_migrations.py"),
         (),
         ("test_env_precedence_e2e",),
         ("config",),
         (),
-        "always runnable with isolated env files",
+        "always runnable with an isolated managed home",
     ),
     FeatureCoverage(
         "removed_env_migration",
-        "Removed env vars fail fast with migration guidance",
-        "public_surface",
+        "Removed thinking env vars are ignored without changing defaults",
         ("tests/config/test_config.py",),
         (),
         ("test_removed_env_migration_e2e",),
@@ -461,25 +668,26 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     ),
     FeatureCoverage(
         "streaming_error_mapping",
-        "Provider and validation errors map to Anthropic-compatible payloads",
-        "public_surface",
+        "Canonical execution failures map to protocol-correct terminal output",
         (
-            "tests/providers/test_streaming_errors.py",
-            "tests/providers/test_error_mapping.py",
+            "tests/api/test_execution_failure_contract.py",
+            "tests/core/test_failure_protocol_mapping.py",
+            "tests/providers/test_execution_failure_boundary.py",
+            "tests/providers/test_failure_policy.py",
         ),
         (),
-        ("test_api_error_shape_e2e", "test_provider_error_e2e"),
-        ("api", "providers"),
+        (
+            "test_api_error_shape_e2e",
+            "test_provider_error_e2e",
+            "test_claude_cli_provider_error_e2e",
+        ),
+        ("api", "providers", "cli"),
         ("configured provider for provider error scenario",),
         "invalid request path is required; provider error path requires provider",
     ),
 )
 
 
-def feature_ids(*, source: FeatureSource | None = None) -> set[str]:
+def feature_ids() -> set[str]:
     """Return feature IDs covered by the inventory."""
-    return {
-        feature.feature_id
-        for feature in FEATURE_INVENTORY
-        if source is None or feature.source == source
-    }
+    return {feature.feature_id for feature in FEATURE_INVENTORY}

@@ -1,7 +1,5 @@
 """Reusable product E2E smoke drivers."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import os
@@ -9,7 +7,7 @@ import subprocess
 import time
 import uuid
 import wave
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,8 +16,8 @@ from typing import Any
 import httpx
 import pytest
 
-from config.provider_ids import SUPPORTED_PROVIDER_IDS
-from core.anthropic.stream_contracts import (
+from free_claude_code.config.provider_catalog import SUPPORTED_PROVIDER_IDS
+from free_claude_code.core.anthropic.stream_contracts import (
     SSEEvent,
     assert_anthropic_stream_contract,
     event_index,
@@ -27,13 +25,15 @@ from core.anthropic.stream_contracts import (
     parse_sse_lines,
     text_content,
 )
-from messaging.handler import ClaudeMessageHandler
-from messaging.models import IncomingMessage
-from messaging.platforms.base import MessagingPlatform
-from messaging.session import SessionStore
+from free_claude_code.harnesses.claude import build_claude_proxy_env
+from free_claude_code.messaging.models import IncomingMessage, MessageScope
+from free_claude_code.messaging.session import SessionStore
+from free_claude_code.messaging.voice import VoiceCancellationResult
+from free_claude_code.messaging.workflow import MessagingWorkflow
+from smoke.lib.child_process import run_captured_text
 from smoke.lib.config import ProviderModel, SmokeConfig, auth_headers
 from smoke.lib.server import RunningServer, start_server
-from smoke.lib.skips import fail_missing_env
+from smoke.lib.skips import fail_missing_env, skip_if_upstream_unavailable_events
 
 
 @dataclass(slots=True)
@@ -59,11 +59,13 @@ class SmokeServerDriver:
         *,
         name: str,
         env_overrides: dict[str, str] | None = None,
+        env_unset: Iterable[str] = (),
         command: list[str] | None = None,
     ) -> None:
         self.config = config
         self.name = name
         self.env_overrides = env_overrides
+        self.env_unset = tuple(env_unset)
         self.command = command
 
     @contextmanager
@@ -71,6 +73,7 @@ class SmokeServerDriver:
         with start_server(
             self.config,
             env_overrides=self.env_overrides,
+            env_unset=self.env_unset,
             command=self.command,
             name=self.name,
         ) as server:
@@ -118,11 +121,12 @@ class ConversationDriver:
         headers: dict[str, str] | None = None,
     ) -> ConversationTurn:
         request_headers = headers or auth_headers()
+        stream_payload = {**payload, "stream": True}
         with httpx.stream(
             "POST",
             f"{self.server.base_url}/v1/messages",
             headers=request_headers,
-            json=payload,
+            json=stream_payload,
             timeout=self.config.timeout_s,
         ) as response:
             if response.status_code != 200:
@@ -132,7 +136,7 @@ class ConversationDriver:
                 )
             events = parse_sse_lines(response.iter_lines())
         assert_anthropic_stream_contract(events)
-        turn = ConversationTurn(payload, events)
+        turn = ConversationTurn(stream_payload, events)
         self.turns.append(turn)
         return turn
 
@@ -161,6 +165,9 @@ class ProviderMatrixDriver:
         self.config = config
 
     def configured_models(self) -> list[ProviderModel]:
+        return self.config.provider_models()
+
+    def provider_smoke_models(self) -> list[ProviderModel]:
         selected = self.config.provider_matrix
         missing_selected = [
             provider
@@ -174,16 +181,16 @@ class ProviderMatrixDriver:
                 + ", ".join(sorted(missing_selected))
             )
 
-        models = self.config.provider_models()
+        models = self.config.provider_smoke_models()
         if not models and os.getenv("FCC_ALLOW_NO_PROVIDER_SMOKE") != "1":
             fail_missing_env(
-                "no configured provider models; set FCC_ALLOW_NO_PROVIDER_SMOKE=1 "
+                "no configured provider smoke models; set FCC_ALLOW_NO_PROVIDER_SMOKE=1 "
                 "only for no-provider smoke collection"
             )
         return models
 
     def first_model(self) -> ProviderModel:
-        models = self.configured_models()
+        models = self.provider_smoke_models()
         if not models:
             pytest.skip("missing_env: no configured provider model")
         return models[0]
@@ -204,12 +211,8 @@ class ClientProtocolDriver:
         return headers
 
     @staticmethod
-    def jetbrains_headers(config: SmokeConfig) -> dict[str, str]:
+    def jetbrains_headers() -> dict[str, str]:
         headers = auth_headers()
-        token = config.settings.anthropic_auth_token
-        if token:
-            headers.pop("x-api-key", None)
-            headers["authorization"] = f"Bearer {token}"
         headers["user-agent"] = "JetBrains-ACP product smoke"
         return headers
 
@@ -274,34 +277,35 @@ class ClientProtocolDriver:
         config: SmokeConfig,
         cwd: Path,
         prompt: str,
+        model: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        env = os.environ.copy()
-        env["ANTHROPIC_BASE_URL"] = server.base_url
-        env["ANTHROPIC_API_URL"] = f"{server.base_url}/v1"
-        env.setdefault("ANTHROPIC_API_KEY", "sk-smoke-proxy")
-        if config.settings.anthropic_auth_token:
-            env["ANTHROPIC_AUTH_TOKEN"] = config.settings.anthropic_auth_token
-        return subprocess.run(
-            [
-                claude_bin,
-                "--bare",
-                "--tools",
-                "",
-                "--system-prompt",
-                "Reply with exactly the requested smoke token and no other text.",
-                "-p",
-                prompt,
-            ],
+        env = build_claude_proxy_env(
+            proxy_root_url=server.base_url,
+            auth_token=config.settings.proxy_auth_token,
+            base_env=os.environ,
+        )
+        command = [
+            claude_bin,
+            "--bare",
+            "--no-session-persistence",
+            "--tools",
+            "",
+            "--system-prompt",
+            "Reply with exactly the requested smoke token and no other text.",
+        ]
+        if model is not None:
+            command.extend(["--model", model])
+        command.extend(["-p", prompt])
+        return run_captured_text(
+            command,
             cwd=cwd,
             env=env,
-            capture_output=True,
-            text=True,
             timeout=config.timeout_s,
             check=False,
         )
 
 
-class FakePlatform(MessagingPlatform):
+class FakePlatform:
     """In-memory platform that exercises the real message handler."""
 
     def __init__(self, name: str) -> None:
@@ -312,12 +316,17 @@ class FakePlatform(MessagingPlatform):
         self.deletes: list[dict[str, Any]] = []
         self._counter = 0
         self._tasks: list[asyncio.Future[Any]] = []
-        self._pending_voice: dict[tuple[str, str], tuple[str, str]] = {}
+        self._pending_voice: dict[
+            tuple[MessageScope, str], VoiceCancellationResult
+        ] = {}
 
     async def start(self) -> None:
         return None
 
-    async def stop(self) -> None:
+    async def quiesce(self) -> None:
+        return None
+
+    async def close(self) -> None:
         for task in self._tasks:
             if not task.done():
                 task.cancel()
@@ -330,6 +339,10 @@ class FakePlatform(MessagingPlatform):
 
     def on_message(self, handler: Callable[[IncomingMessage], Awaitable[None]]) -> None:
         self.handler = handler
+
+    def continue_message_sequence_after(self, previous: FakePlatform) -> None:
+        """Model platform-owned message IDs surviving an FCC restart."""
+        self._counter = previous._counter
 
     async def emit(self, incoming: IncomingMessage) -> None:
         assert self.handler is not None
@@ -407,35 +420,88 @@ class FakePlatform(MessagingPlatform):
     ) -> None:
         await self.edit_message(chat_id, message_id, text, parse_mode=parse_mode)
 
-    async def queue_delete_message(
-        self,
-        chat_id: str,
-        message_id: str,
-        fire_and_forget: bool = True,
-    ) -> None:
-        await self.delete_message(chat_id, message_id)
-
     async def queue_delete_messages(
         self,
         chat_id: str,
-        message_ids: Sequence[str],
+        message_ids: list[str],
         fire_and_forget: bool = True,
     ) -> None:
         for message_id in message_ids:
-            await self.queue_delete_message(chat_id, message_id, fire_and_forget=False)
+            await self.delete_message(chat_id, message_id)
 
-    def register_pending_voice(
+    def seed_pending_voice(
         self, chat_id: str, voice_message_id: str, status_message_id: str
     ) -> None:
-        self._pending_voice[(chat_id, voice_message_id)] = (
-            voice_message_id,
-            status_message_id,
+        scope = MessageScope(platform=self.name, chat_id=chat_id)
+        result = VoiceCancellationResult(
+            scope=scope,
+            voice_message_id=voice_message_id,
+            status_message_id=status_message_id,
+            delete_message_ids=frozenset({voice_message_id, status_message_id}),
         )
+        self._pending_voice[(scope, voice_message_id)] = result
+        self._pending_voice[(scope, status_message_id)] = result
 
     async def cancel_pending_voice(
-        self, chat_id: str, voice_message_id: str
-    ) -> tuple[str, str] | None:
-        return self._pending_voice.pop((chat_id, voice_message_id), None)
+        self, scope: MessageScope, reply_id: str
+    ) -> VoiceCancellationResult | None:
+        result = self._pending_voice.get((scope, reply_id))
+        if result is None:
+            return None
+        self._pending_voice.pop((scope, result.voice_message_id), None)
+        if result.status_message_id is not None:
+            self._pending_voice.pop((scope, result.status_message_id), None)
+        delete_message_ids = {result.voice_message_id, result.status_message_id}
+        if reply_id == result.status_message_id:
+            delete_message_ids = {result.status_message_id}
+        return VoiceCancellationResult(
+            scope=result.scope,
+            voice_message_id=result.voice_message_id,
+            status_message_id=result.status_message_id,
+            delete_message_ids=frozenset(
+                message_id
+                for message_id in delete_message_ids
+                if message_id is not None
+            ),
+        )
+
+    async def cancel_all_pending_voices(
+        self,
+    ) -> tuple[VoiceCancellationResult, ...]:
+        results = tuple(
+            {
+                (result.scope, result.voice_message_id): result
+                for result in self._pending_voice.values()
+            }.values()
+        )
+        self._pending_voice.clear()
+        return results
+
+    async def cancel_pending_voices_in_scope(
+        self,
+        scope: MessageScope,
+    ) -> tuple[VoiceCancellationResult, ...]:
+        results = tuple(
+            {
+                result.voice_message_id: result
+                for (entry_scope, _reference_id), result in self._pending_voice.items()
+                if entry_scope == scope
+            }.values()
+        )
+        for result in results:
+            self._pending_voice.pop((scope, result.voice_message_id), None)
+            if result.status_message_id is not None:
+                self._pending_voice.pop((scope, result.status_message_id), None)
+        return results
+
+    @property
+    def pending_voice_count(self) -> int:
+        return len(
+            {
+                (result.scope, result.voice_message_id)
+                for result in self._pending_voice.values()
+            }
+        )
 
 
 class FakeCLISession:
@@ -501,7 +567,7 @@ class FakePlatformDriver:
     platform: FakePlatform = field(init=False)
     cli_manager: FakeCLIManager = field(init=False)
     session_store: SessionStore = field(init=False)
-    handler: ClaudeMessageHandler = field(init=False)
+    workflow: MessagingWorkflow = field(init=False)
 
     def __post_init__(self) -> None:
         self.platform = FakePlatform(self.platform_name)
@@ -509,47 +575,66 @@ class FakePlatformDriver:
         self.session_store = SessionStore(
             storage_path=str(self.tmp_path / f"{self.platform_name}-sessions.json")
         )
-        self.handler = ClaudeMessageHandler(
-            self.platform, self.cli_manager, self.session_store
+        self.workflow = MessagingWorkflow(
+            self.platform,
+            self.cli_manager,
+            self.session_store,
+            platform_name=self.platform_name,
+            voice_cancellation=self.platform,
         )
-        self.platform.on_message(self.handler.handle_message)
+        self.platform.on_message(self.workflow.handle_message)
 
     async def send(
         self,
         text: str,
         *,
+        chat_id: str = "chat_1",
         message_id: str | None = None,
         reply_to: str | None = None,
     ) -> IncomingMessage:
+        incoming = await self.emit(
+            text,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_to=reply_to,
+        )
+        await self.wait_for_idle()
+        return incoming
+
+    async def emit(
+        self,
+        text: str,
+        *,
+        chat_id: str = "chat_1",
+        message_id: str | None = None,
+        reply_to: str | None = None,
+    ) -> IncomingMessage:
+        """Deliver a message without waiting for background claims to finish."""
         incoming = IncomingMessage(
             text=text,
-            chat_id="chat_1",
+            chat_id=chat_id,
             user_id="user_1",
             message_id=message_id or f"in_{uuid.uuid4().hex[:8]}",
             platform=self.platform_name,
             reply_to_message_id=reply_to,
         )
         await self.platform.emit(incoming)
-        await self.wait_for_idle()
         return incoming
 
     async def wait_for_idle(self, *, timeout_s: float = 5.0) -> None:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             pending = [task for task in self.platform._tasks if not task.done()]
-            if not pending and self._all_tree_nodes_terminal():
+            if not pending and await self._all_tree_nodes_terminal():
                 self.session_store.flush_pending_save()
                 return
             await asyncio.sleep(0.02)
         raise AssertionError("fake platform did not become idle")
 
-    def _all_tree_nodes_terminal(self) -> bool:
-        data = self.handler.tree_queue.to_dict()
-        for tree in data.get("trees", {}).values():
-            nodes = tree.get("nodes", {}) if isinstance(tree, dict) else {}
-            for node in nodes.values():
-                if not isinstance(node, dict):
-                    continue
+    async def _all_tree_nodes_terminal(self) -> bool:
+        snapshot = await self.workflow.tree_queue.snapshot()
+        for tree in snapshot.trees.values():
+            for node in tree.nodes.values():
                 if node.get("state") in {"pending", "in_progress"}:
                     return False
         return True
@@ -669,3 +754,14 @@ def assert_product_stream(events: list[SSEEvent]) -> None:
     assert text_content(events).strip() or has_tool_use(events), (
         "product stream emitted neither text nor tool_use"
     )
+
+
+def assert_native_thinking_stream(events: list[SSEEvent], *, context: str) -> None:
+    skip_if_upstream_unavailable_events(events)
+    assert_anthropic_stream_contract(events)
+    assert any(
+        event.event == "content_block_delta"
+        and isinstance(delta := event.data.get("delta"), dict)
+        and delta.get("type") == "thinking_delta"
+        for event in events
+    ), f"{context} completed without native thinking output"

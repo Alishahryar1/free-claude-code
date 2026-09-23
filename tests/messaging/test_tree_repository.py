@@ -1,143 +1,194 @@
-from unittest.mock import MagicMock
+"""Persistence and restored-manager contracts for messaging trees."""
+
+import asyncio
 
 import pytest
 
-from messaging.models import IncomingMessage
-from messaging.trees.data import MessageNode, MessageState, MessageTree
-from messaging.trees.queue_manager import TreeRepository
+from free_claude_code.messaging.models import IncomingMessage, MessageScope
+from free_claude_code.messaging.trees import (
+    ConversationSnapshot,
+    MessageState,
+    NodeClaim,
+    TreeIdentity,
+    TreeQueueManager,
+    TreeSnapshot,
+)
+from free_claude_code.messaging.trees.node import MessageNode
+from free_claude_code.messaging.trees.snapshot import node_to_snapshot
+
+TELEGRAM_CHAT = MessageScope(platform="telegram", chat_id="chat")
+ROOT_IDENTITY = TreeIdentity(scope=TELEGRAM_CHAT, root_id="root")
 
 
-@pytest.fixture
-def repository():
-    return TreeRepository()
-
-
-@pytest.fixture
-def sample_tree():
-    incoming = IncomingMessage(
-        text="root",
-        chat_id="c1",
-        user_id="u1",
-        message_id="root_id",
+def _incoming(node_id: str, *, reply_to: str | None = None) -> IncomingMessage:
+    return IncomingMessage(
+        text=f"prompt {node_id}",
+        chat_id="chat",
+        user_id="user",
+        message_id=node_id,
         platform="telegram",
+        reply_to_message_id=reply_to,
     )
-    node = MessageNode(node_id="root_id", incoming=incoming, status_message_id="s1")
-    return MessageTree(node)
 
 
-def test_add_and_get_tree(repository, sample_tree):
-    repository.add_tree("root_id", sample_tree)
-
-    assert repository.get_tree("root_id") == sample_tree
-    assert repository.get_tree_for_node("root_id") == sample_tree
-    assert repository.has_node("root_id")
-
-
-def test_get_tree_nonexistent(repository):
-    assert repository.get_tree("none") is None
-    assert repository.get_tree_for_node("none") is None
+async def _wait_for_no_tasks(manager: TreeQueueManager) -> None:
+    loop = asyncio.get_running_loop()
+    for _ in range(20):
+        if manager.task_count() == 0:
+            return
+        checkpoint = asyncio.Event()
+        loop.call_soon(checkpoint.set)
+        await checkpoint.wait()
+    assert manager.task_count() == 0
 
 
-def test_register_node(repository, sample_tree):
-    repository.add_tree("root_id", sample_tree)
-    repository.register_node("child_id", "root_id")
-
-    assert repository.get_tree_for_node("child_id") == sample_tree
-    assert repository.has_node("child_id")
-
-
-def test_get_node(repository, sample_tree):
-    repository.add_tree("root_id", sample_tree)
-    node = repository.get_node("root_id")
-
-    assert node is not None
-    assert node.node_id == "root_id"
-    assert repository.get_node("none") is None
-
-
-def test_is_tree_busy(repository, sample_tree):
-    repository.add_tree("root_id", sample_tree)
-    assert repository.is_tree_busy("root_id") is False
-
-    sample_tree._is_processing = True
-    assert repository.is_tree_busy("root_id") is True
-    assert repository.is_node_tree_busy("root_id") is True
-
-
-def test_get_queue_size(repository, sample_tree):
-    repository.add_tree("root_id", sample_tree)
-    assert repository.get_queue_size("root_id") == 0
-
-    # We can't easily put items in asyncio.Queue without async,
-    # but we can mock it for this unit test if needed, or just skip if it's too complex.
-    # Actually, we can use a mock queue since this is a unit test of the repository wrapper.
-    sample_tree._queue = MagicMock()
-    sample_tree._queue.qsize.return_value = 5
-
-    assert repository.get_queue_size("root_id") == 5
-
-
-def test_resolve_parent_node_id(repository, sample_tree):
-    repository.add_tree("root_id", sample_tree)
-    repository.register_node("s1", "root_id")
-
-    # 1. Direct node match
-    assert repository.resolve_parent_node_id("root_id") == "root_id"
-
-    # 2. Status message match
-    # find_node_by_status_message is used inside resolve_parent_node_id
-    # sample_tree has root_id node with status_message_id "s1"
-    assert repository.resolve_parent_node_id("s1") == "root_id"
-
-    # 3. No match
-    assert repository.resolve_parent_node_id("unknown") is None
-
-
-def test_get_pending_children(repository, sample_tree):
-    repository.add_tree("root_id", sample_tree)
-
-    # Create a child node
-    child_incoming = IncomingMessage(
-        text="child",
-        chat_id="c1",
-        user_id="u1",
-        message_id="child_id",
-        platform="telegram",
+def _interrupted_conversation() -> ConversationSnapshot:
+    root = MessageNode(
+        node_id="root",
+        scope=TELEGRAM_CHAT,
+        prompt="prompt root",
+        status_message_id="status-root",
+        state=MessageState.COMPLETED,
+        session_id="session-root",
+        children_ids=["pending", "failed"],
     )
-    child_node = MessageNode(
-        node_id="child_id",
-        incoming=child_incoming,
-        status_message_id="s2",
-        parent_id="root_id",
+    pending = MessageNode(
+        node_id="pending",
+        scope=TELEGRAM_CHAT,
+        prompt="prompt pending",
+        status_message_id="status-pending",
+        parent_id="root",
         state=MessageState.PENDING,
+        children_ids=["running"],
+    )
+    running = MessageNode(
+        node_id="running",
+        scope=TELEGRAM_CHAT,
+        prompt="prompt running",
+        status_message_id="status-running",
+        parent_id="pending",
+        state=MessageState.IN_PROGRESS,
+    )
+    failed = MessageNode(
+        node_id="failed",
+        scope=TELEGRAM_CHAT,
+        prompt="prompt failed",
+        status_message_id="status-failed",
+        parent_id="root",
+        state=MessageState.ERROR,
+    )
+    snapshot = TreeSnapshot(
+        scope=TELEGRAM_CHAT,
+        root_id="root",
+        nodes={
+            node.node_id: node_to_snapshot(node)
+            for node in (root, pending, running, failed)
+        },
+    )
+    return ConversationSnapshot(trees={snapshot.identity: snapshot})
+
+
+@pytest.mark.asyncio
+async def test_restore_reconciles_interrupted_nodes_before_manager_exposure() -> None:
+    processed: list[str] = []
+
+    async def process(claim: NodeClaim) -> None:
+        processed.append(claim.node.node_id)
+
+    manager = TreeQueueManager.from_snapshot(_interrupted_conversation(), process)
+
+    assert len(manager.restored_stale_targets) == 2
+    assert manager.restored_snapshot is not None
+    assert manager.restored_snapshot == await manager.snapshot()
+    assert manager.task_count() == 0
+    assert processed == []
+
+    root = await manager.get_node(TELEGRAM_CHAT, "root")
+    pending = await manager.get_node(TELEGRAM_CHAT, "pending")
+    running = await manager.get_node(TELEGRAM_CHAT, "status-running")
+    failed = await manager.get_node(TELEGRAM_CHAT, "failed")
+    assert root is not None and root.state is MessageState.COMPLETED
+    assert root.session_id == "session-root"
+    assert pending is not None and pending.state is MessageState.ERROR
+    assert running is not None and running.state is MessageState.ERROR
+    assert failed is not None and failed.state is MessageState.ERROR
+    assert await manager.resolve_node_id(TELEGRAM_CHAT, "status-pending") == "pending"
+    assert {
+        (target.scope, target.node_id) for target in manager.restored_stale_targets
+    } == {
+        (TELEGRAM_CHAT, "pending"),
+        (TELEGRAM_CHAT, "running"),
+    }
+
+    normalized = await manager.snapshot()
+    normalized_tree = normalized.get_tree(ROOT_IDENTITY)
+    assert normalized_tree is not None
+    assert normalized_tree.nodes["pending"]["state"] == "error"
+    assert normalized_tree.nodes["running"]["state"] == "error"
+    assert normalized_tree.nodes["failed"]["state"] == "error"
+    assert all("error_message" not in node for node in normalized_tree.nodes.values())
+
+
+@pytest.mark.parametrize("corruption", ["cross_scope", "duplicate_reference"])
+def test_restore_rejects_tree_that_violates_scoped_reference_invariants(
+    corruption: str,
+) -> None:
+    snapshot = _interrupted_conversation()
+    tree = snapshot.get_tree(ROOT_IDENTITY)
+    assert tree is not None
+    if corruption == "cross_scope":
+        tree.nodes["pending"]["incoming"] = {
+            "platform": "telegram",
+            "chat_id": "other-chat",
+        }
+    else:
+        tree.nodes["failed"]["status_message_id"] = "status-pending"
+
+    manager = TreeQueueManager.from_snapshot(snapshot, lambda _claim: asyncio.sleep(0))
+
+    assert manager.get_tree_count() == 0
+    assert manager.restored_snapshot == ConversationSnapshot()
+
+
+@pytest.mark.asyncio
+async def test_claim_state_and_session_updates_produce_detached_snapshots() -> None:
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def process(_claim: NodeClaim) -> None:
+        started.set()
+        await release.wait()
+
+    manager = TreeQueueManager(process)
+    decision = await manager.admit(_incoming("root"), "status-root")
+    assert decision.claim is not None
+    await started.wait()
+
+    session_snapshot = await manager.record_session(decision.claim, "session-root")
+    completed_snapshot = await manager.complete_claim(
+        decision.claim,
+        "session-root",
     )
 
-    sample_tree._nodes["child_id"] = child_node
-    sample_tree.get_node("root_id").children_ids.append("child_id")
-    repository.register_node("child_id", "root_id")
+    assert session_snapshot is not None
+    assert session_snapshot.nodes["root"]["state"] == "in_progress"
+    assert session_snapshot.nodes["root"]["session_id"] == "session-root"
+    assert completed_snapshot is not None
+    assert completed_snapshot.nodes["root"]["state"] == "completed"
+    assert completed_snapshot.nodes["root"]["session_id"] == "session-root"
 
-    pending = repository.get_pending_children("root_id")
-    assert len(pending) == 1
-    assert pending[0].node_id == "child_id"
+    assert decision.snapshot is not None
+    decision.snapshot.nodes["root"]["state"] = "mutated-copy"
+    view = await manager.get_node(TELEGRAM_CHAT, "status-root")
+    assert view is not None and view.state is MessageState.COMPLETED
+    assert view.session_id == "session-root"
+    assert await manager.get_message_ids_for_chat("telegram", "chat") == {
+        "root",
+        "status-root",
+    }
 
-
-def test_to_from_dict(repository, sample_tree):
-    repository.add_tree("root_id", sample_tree)
-    data = repository.to_dict()
-
-    assert "trees" in data
-    assert "root_id" in data["trees"]
-    assert "node_to_tree" in data
-    assert data["node_to_tree"]["root_id"] == "root_id"
-
-    new_repo = TreeRepository.from_dict(data)
-    tree = new_repo.get_tree("root_id")
-    assert tree is not None
-    assert tree.root_id == "root_id"
-    assert new_repo.get_tree_for_node("root_id") == tree
-
-
-def test_all_trees(repository, sample_tree):
-    repository.add_tree("root_id", sample_tree)
-    assert len(repository.all_trees()) == 1
-    assert repository.tree_ids() == ["root_id"]
+    release.set()
+    await _wait_for_no_tasks(manager)
+    assert await manager.snapshot() == ConversationSnapshot(
+        trees={ROOT_IDENTITY: completed_snapshot}
+    )

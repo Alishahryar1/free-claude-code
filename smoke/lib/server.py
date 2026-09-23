@@ -1,19 +1,17 @@
 """Subprocess lifecycle helpers for local smoke servers."""
 
-from __future__ import annotations
-
 import os
 import socket
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
-from .child_process import cmd_uvicorn_server_app
+from .child_process import cmd_fcc_server
 from .config import SmokeConfig, redacted
 
 
@@ -36,6 +34,7 @@ def start_server(
     config: SmokeConfig,
     *,
     env_overrides: dict[str, str] | None = None,
+    env_unset: Iterable[str] = (),
     command: list[str] | None = None,
     name: str = "server",
 ) -> Iterator[RunningServer]:
@@ -44,11 +43,14 @@ def start_server(
     log_path = config.results_dir / f"{name}-{config.worker_id}-{port}.log"
 
     env = os.environ.copy()
+    for key in env_unset:
+        env.pop(key, None)
     env.update(
         {
             "HOST": "127.0.0.1",
             "PORT": str(port),
             "LOG_FILE": str(log_path),
+            "FCC_OPEN_BROWSER": "0",
             "MESSAGING_PLATFORM": "none",
             "PYTHONUNBUFFERED": "1",
         }
@@ -56,7 +58,7 @@ def start_server(
     if env_overrides:
         env.update(env_overrides)
 
-    cmd = command or cmd_uvicorn_server_app("127.0.0.1", port)
+    cmd = command or cmd_fcc_server()
 
     with log_path.open("ab") as log_file:
         process = subprocess.Popen(

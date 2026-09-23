@@ -1,6 +1,10 @@
 import pytest
 
-from core.anthropic import ContentType, HeuristicToolParser, ThinkTagParser
+from free_claude_code.core.anthropic import (
+    ContentType,
+    HeuristicToolParser,
+    ThinkTagParser,
+)
 
 
 def test_think_tag_parser_basic():

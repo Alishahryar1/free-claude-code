@@ -1,13 +1,14 @@
-from unittest.mock import patch
-
-from messaging.rendering.telegram_markdown import (
+from free_claude_code.messaging.rendering.telegram_markdown import (
     escape_md_v2,
     escape_md_v2_code,
     mdv2_bold,
     mdv2_code_inline,
     render_markdown_to_mdv2,
 )
-from messaging.transcript import RenderCtx, TranscriptBuffer
+from free_claude_code.messaging.transcript import RenderCtx, TranscriptBuffer
+from free_claude_code.messaging.transcript.renderer import render_segments
+from free_claude_code.messaging.transcript.segments import Segment, SubagentSegment
+from free_claude_code.messaging.transcript.subagents import SubagentState
 
 
 def _ctx() -> RenderCtx:
@@ -32,6 +33,17 @@ def test_transcript_order_thinking_tool_text():
 
     out = t.render(_ctx(), limit_chars=3900, status=None)
     assert out.find("think1") < out.find("Tool call:") < out.find("done")
+
+
+def test_transcript_can_hide_tool_results():
+    t = TranscriptBuffer(show_tool_results=False)
+    t.apply({"type": "tool_use", "id": "tool_1", "name": "ls", "input": {"path": "."}})
+    t.apply({"type": "tool_result", "tool_use_id": "tool_1", "content": "secret"})
+
+    out = t.render(_ctx(), limit_chars=3900, status=None)
+    assert "Tool call:" in out
+    assert "Tool result:" not in out
+    assert "secret" not in out
 
 
 def test_transcript_subagent_suppresses_thinking_and_text_inside():
@@ -133,18 +145,11 @@ def test_transcript_subagent_closes_on_task_result_id_suffix_match():
 
 
 def test_transcript_unmatched_non_task_tool_result_does_not_pop_subagent():
-    t = TranscriptBuffer()
-    t.apply(
-        {
-            "type": "tool_use",
-            "id": "task_1",
-            "name": "Task",
-            "input": {"description": "Outer"},
-        }
-    )
-    t.apply({"type": "tool_result", "tool_use_id": "totally_unrelated", "content": "x"})
+    state = SubagentState()
+    state.push("task_1", SubagentSegment("Outer"))
 
-    assert t._subagent_stack == ["task_1"]
+    assert not state.close_for_tool_result("totally_unrelated", tool_name=None)
+    assert state.open_ids == ("task_1",)
 
 
 def test_transcript_sequential_tasks_mismatched_results_no_depth_drift():
@@ -175,11 +180,12 @@ def test_transcript_sequential_tasks_mismatched_results_no_depth_drift():
             "input": {"description": "C"},
         }
     )
+    t.apply({"type": "text_chunk", "text": "still hidden inside task three"})
 
     out = t.render(_ctx(), limit_chars=3900, status=None)
     assert "🤖 *Subagent:* `A`\n  🤖 *Subagent:* `B`" not in out
     assert "\n  🤖 *Subagent:* `C`" not in out
-    assert t._subagent_stack == ["task_3"]
+    assert "still hidden inside task three" not in out
 
 
 def test_transcript_synthetic_task_start_closes_on_functions_task_result_id():
@@ -221,8 +227,10 @@ def test_transcript_synthetic_task_not_closed_by_unknown_non_task_result_id():
         }
     )
     t.apply({"type": "tool_result", "tool_use_id": "call_deadbeef", "content": "x"})
+    t.apply({"type": "text_chunk", "text": "hidden while synthetic task is open"})
 
-    assert t._subagent_stack == ["__task_1"]
+    out = t.render(_ctx(), limit_chars=3900, status=None)
+    assert "hidden while synthetic task is open" not in out
 
 
 def test_transcript_overlapping_tasks_are_flat_not_nested():
@@ -289,33 +297,43 @@ def test_transcript_reused_index_closes_previous_open_block():
     t = TranscriptBuffer()
     # Open a text block at index 0, but never close it.
     t.apply({"type": "text_start", "index": 0})
-    t.apply({"type": "text_delta", "index": 0, "text": "a"})
+    t.apply({"type": "text_delta", "index": 0, "text": "alpha visible"})
     # Provider reuses index 0 for a new tool block without a stop.
     t.apply(
         {"type": "tool_use_start", "index": 0, "id": "t1", "name": "ls", "input": {}}
     )
-    # Old open text should have been closed.
-    assert 0 not in t._open_text_by_index
-    assert 0 in t._open_tools_by_index
+    t.apply({"type": "text_delta", "index": 0, "text": "omega visible"})
+
+    out = t.render(_ctx(), limit_chars=3900, status=None)
+    assert out.find("alpha") < out.find("Tool call:") < out.find("omega")
 
 
 def test_transcript_render_segment_exception_skipped():
     """When a segment's render() raises, that segment is skipped and rest is rendered."""
-    t = TranscriptBuffer()
-    t.apply({"type": "thinking_chunk", "text": "before"})
-    t.apply({"type": "text_chunk", "text": "middle"})
-    t.apply({"type": "text_chunk", "text": "after"})
 
-    bad_segment = t._segments[1]
+    class StaticSegment(Segment):
+        def __init__(self, text: str) -> None:
+            super().__init__(kind="static")
+            self._text = text
 
-    def _raising_render(self, ctx):
-        raise ValueError("render failed")
+        def render(self, ctx: RenderCtx) -> str:
+            return self._text
 
-    with patch.object(bad_segment, "render", _raising_render):
-        out = t.render(_ctx(), limit_chars=3900, status=None)
+    class BrokenSegment(Segment):
+        def __init__(self) -> None:
+            super().__init__(kind="broken")
+
+        def render(self, ctx: RenderCtx) -> str:
+            raise ValueError("render failed")
+
+    out = render_segments(
+        [StaticSegment("before"), BrokenSegment(), StaticSegment("after")],
+        _ctx(),
+        limit_chars=3900,
+        status=None,
+    )
     assert "before" in out
     assert "after" in out
-    assert "middle" not in out
 
 
 def test_transcript_render_status_only_exceeds_limit():

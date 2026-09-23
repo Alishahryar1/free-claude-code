@@ -1,7 +1,5 @@
 """Summarize smoke JSON reports for local and workflow triage."""
 
-from __future__ import annotations
-
 import json
 from collections import Counter
 from dataclasses import dataclass

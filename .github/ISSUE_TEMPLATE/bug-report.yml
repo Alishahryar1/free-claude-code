@@ -1,0 +1,57 @@
+name: Bug report
+description: Report something that is not working in Free Claude Code.
+labels:
+  - bug
+body:
+  - type: input
+    id: fcc-version
+    attributes:
+      label: FCC version
+      description: Run `fcc-server --version` and include one version in `number.number.number` format. If FCC did not install, enter `None`.
+      placeholder: "The version is 1.22.333, or None"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cli
+    attributes:
+      label: CLI
+      description: If the problem occurred while using a coding CLI, select it.
+      options:
+        - Claude Code (fcc-claude)
+        - Codex (fcc-codex)
+        - Pi (fcc-pi)
+
+  - type: input
+    id: selected-models
+    attributes:
+      label: Selected model(s)
+      description: If relevant, enter each model exactly as shown in the selector or configuration.
+      placeholder: nvidia_nim/nvidia/nemotron-3-super-120b-a12b
+
+  - type: textarea
+    id: model-mappings
+    attributes:
+      label: Model mappings
+      description: If relevant, enter the model mappings used when the problem occurred.
+      placeholder: |
+        MODEL_FABLE=
+        MODEL_OPUS=
+        MODEL_SONNET=
+        MODEL_HAIKU=
+
+  - type: input
+    id: providers
+    attributes:
+      label: Provider(s)
+      description: If relevant, enter the provider or providers involved.
+      placeholder: NVIDIA NIM, OpenRouter
+
+  - type: textarea
+    id: issue
+    attributes:
+      label: Issue
+      description: Describe what happened and include any useful reproduction details. Remove API keys and tokens from logs or screenshots.
+      placeholder: Tell us what went wrong.
+    validations:
+      required: true

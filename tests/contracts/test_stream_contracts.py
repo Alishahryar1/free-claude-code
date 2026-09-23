@@ -1,21 +1,24 @@
 """Stream/SSE contract tests. Strict transcript *ordering* is covered here for
-``SSEBuilder`` output; for transport-integrated ordering, add messaging or API
+``AnthropicStreamLedger`` output; for integration ordering, add messaging or API
 integration tests.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 
-from core.anthropic import ContentType, HeuristicToolParser, SSEBuilder, ThinkTagParser
-from core.anthropic.sse import format_sse_event
-from core.anthropic.stream_contracts import (
+from free_claude_code.core.anthropic import (
+    AnthropicStreamLedger,
+    ContentType,
+    HeuristicToolParser,
+    ThinkTagParser,
+)
+from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     event_names,
     parse_sse_text,
     text_content,
     thinking_content,
 )
+from free_claude_code.core.anthropic.streaming import format_sse_event
 
 
 def test_interleaved_thinking_text_blocks_are_valid() -> None:
@@ -40,7 +43,7 @@ def test_split_think_tags_preserve_text_and_thinking() -> None:
 
 
 def test_mixed_reasoning_content_and_think_tags_keep_order() -> None:
-    builder = SSEBuilder("msg_contract", "contract-model")
+    builder = AnthropicStreamLedger("msg_contract", "contract-model")
     chunks = [builder.message_start()]
     chunks.extend(builder.ensure_thinking_block())
     chunks.append(builder.emit_thinking_delta("reasoning field"))
@@ -131,7 +134,7 @@ def test_task_tool_arguments_force_foreground_execution() -> None:
 def _interleaved_thinking_text_events(
     parts: tuple[str, str, str, str],
 ) -> Iterable[str]:
-    builder = SSEBuilder("msg_contract", "contract-model")
+    builder = AnthropicStreamLedger("msg_contract", "contract-model")
     yield builder.message_start()
     yield from builder.ensure_thinking_block()
     yield builder.emit_thinking_delta(parts[0])
@@ -148,11 +151,11 @@ def _interleaved_thinking_text_events(
 
 def _events_from_text_chunks(
     chunks: list[str],
-    builder: SSEBuilder | None = None,
+    builder: AnthropicStreamLedger | None = None,
     *,
     enable_thinking: bool = True,
 ) -> list[str]:
-    sse = builder or SSEBuilder("msg_contract", "contract-model")
+    sse = builder or AnthropicStreamLedger("msg_contract", "contract-model")
     out: list[str] = [] if builder else [sse.message_start()]
     parser = ThinkTagParser()
 
@@ -171,7 +174,7 @@ def _events_from_text_chunks(
 
 
 def _emit_parser_parts(
-    builder: SSEBuilder,
+    builder: AnthropicStreamLedger,
     parts: Iterable,
     enable_thinking: bool,
 ) -> list[str]:

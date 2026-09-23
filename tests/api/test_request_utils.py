@@ -1,17 +1,21 @@
 """Tests for API request detection and token counting helpers."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from api.command_utils import extract_command_prefix
-from api.detection import (
+from free_claude_code.api.command_utils import extract_command_prefix
+from free_claude_code.api.detection import (
     is_prefix_detection_request,
     is_quota_check_request,
     is_title_generation_request,
 )
-from api.models.anthropic import Message, MessagesRequest
-from core.anthropic import get_token_count
+from free_claude_code.core.anthropic import get_token_count
+from free_claude_code.core.anthropic.models import (
+    Message,
+    MessagesRequest,
+    SystemContent,
+)
 
 
 class TestQuotaCheckRequest:
@@ -126,6 +130,7 @@ class TestTitleGenerationRequest:
         req = MagicMock(spec=MessagesRequest)
         req.system = self._title_gen_system()
         req.tools = None
+        req.messages = []
 
         assert is_title_generation_request(req) is True
 
@@ -134,6 +139,7 @@ class TestTitleGenerationRequest:
         req = MagicMock(spec=MessagesRequest)
         req.system = self._title_gen_system()
         req.tools = [MagicMock()]
+        req.messages = []
 
         assert is_title_generation_request(req) is False
 
@@ -142,6 +148,7 @@ class TestTitleGenerationRequest:
         req = MagicMock(spec=MessagesRequest)
         req.system = None
         req.tools = None
+        req.messages = []
 
         assert is_title_generation_request(req) is False
 
@@ -152,6 +159,7 @@ class TestTitleGenerationRequest:
         req = MagicMock(spec=MessagesRequest)
         req.system = [block]
         req.tools = None
+        req.messages = []
 
         assert is_title_generation_request(req) is False
 
@@ -162,6 +170,7 @@ class TestTitleGenerationRequest:
         req = MagicMock(spec=MessagesRequest)
         req.system = [block]
         req.tools = None
+        req.messages = []
 
         assert is_title_generation_request(req) is True
 
@@ -335,6 +344,14 @@ class TestGetTokenCount:
         # "Hello world" is ~2-3 tokens plus overhead
         assert count >= 3
 
+    def test_special_token_text_is_counted_as_plain_text(self):
+        """Tiktoken special-token strings should not break token estimates."""
+        msg = MagicMock()
+        msg.content = "<|endoftext|>"
+
+        count = get_token_count([msg], system="<|endoftext|>")
+        assert count > 0
+
     def test_message_with_system_prompt(self):
         """Test token count includes system prompt."""
         msg = MagicMock()
@@ -442,6 +459,16 @@ class TestGetTokenCount:
         # Double message should have more tokens (including overhead)
         assert count_double > count_single
 
+    def test_inline_system_message_contributes_to_token_count(self):
+        """Mid-conversation system content remains part of the counted transcript."""
+        user_message = Message(role="user", content="Hello")
+        inline_system = Message(role="system", content="New instructions")
+
+        without_inline_system = get_token_count([user_message])
+        with_inline_system = get_token_count([user_message, inline_system])
+
+        assert with_inline_system > without_inline_system
+
     def test_per_message_overhead_four_tokens(self):
         """Per-message overhead is 4 tokens (was 3)."""
         msg = MagicMock()
@@ -458,14 +485,16 @@ class TestGetTokenCount:
         count_with_sys = get_token_count([msg], system="You are helpful")
         assert count_with_sys >= count_no_sys + 4
 
-    def test_system_as_list_of_dicts(self):
-        """System blocks as dicts (not objects) are counted."""
+    def test_system_as_typed_content_blocks(self):
+        """Typed system content blocks are counted."""
         msg = MagicMock()
         msg.content = "Hi"
         count_no_sys = get_token_count([msg])
-        system_dicts = [{"type": "text", "text": "System prompt from dict"}]
-        count_with_dict_sys = get_token_count([msg], system=system_dicts)
-        assert count_with_dict_sys > count_no_sys
+        system_blocks = [
+            SystemContent(type="text", text="System prompt from typed block")
+        ]
+        count_with_system = get_token_count([msg], system=system_blocks)
+        assert count_with_system > count_no_sys
 
     def test_tool_use_includes_id(self):
         """Tool use blocks count id field."""
@@ -520,21 +549,19 @@ class TestGetTokenCount:
         count = get_token_count([msg])
         assert count >= 85
 
-    def test_known_payload_estimate_range(self):
-        """Known payload produces estimate within expected range (validation harness)."""
-        import tiktoken
-
-        enc = tiktoken.get_encoding("cl100k_base")
+    def test_known_payload_structural_overhead(self):
+        """Protocol overhead remains separate from plain-text estimation."""
         system_text = "You are a helpful assistant."
         user_text = "Hello, how are you?"
-        sys_tokens = len(enc.encode(system_text))
-        user_tokens = len(enc.encode(user_text))
-        # Min: content tokens + system overhead (4) + per-msg overhead (4)
-        expected_min = sys_tokens + user_tokens + 4 + 4
         msg = MagicMock()
         msg.content = user_text
-        count = get_token_count([msg], system=system_text)
-        assert count >= expected_min, f"count={count} < expected_min={expected_min}"
+        with patch(
+            "free_claude_code.core.anthropic.tokens.estimate_text_tokens",
+            side_effect=len,
+        ):
+            count = get_token_count([msg], system=system_text)
+
+        assert count == len(system_text) + len(user_text) + 4 + 4
 
 
 # --- Parametrized Edge Case Tests ---

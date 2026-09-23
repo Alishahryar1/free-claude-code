@@ -1,61 +1,383 @@
+import asyncio
+import json
+import socket
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi.responses import JSONResponse, StreamingResponse
 
-import api.web_tools.constants as web_tool_constants
-from api.model_router import ModelRouter, ResolvedModel, RoutedMessagesRequest
-from api.models.anthropic import Message, MessagesRequest, Tool
-from api.services import ClaudeProxyService
-from api.web_tools import egress as web_egress
-from api.web_tools.egress import (
+import free_claude_code.runtime.web_tools.constants as web_tool_constants
+from free_claude_code.api.handlers import MessagesHandler
+from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.routing import (
+    ModelRouter,
+    ProviderModelTarget,
+    ResolvedModelRoute,
+    RoutedMessagesRequest,
+)
+from free_claude_code.application.web_tools.ports import (
     WebFetchEgressPolicy,
     WebFetchEgressViolation,
-    enforce_web_fetch_egress,
 )
-from api.web_tools.outbound import (
-    _drain_response_body_capped,
-    _read_response_body_capped,
-    _run_web_fetch,
+from free_claude_code.application.web_tools.request import (
+    HIDDEN_WEB_SEARCH_NAME,
+    is_web_server_tool_request,
+    plan_automatic_web_search,
+    unsupported_server_tool_error,
 )
-from api.web_tools.request import is_web_server_tool_request
-from api.web_tools.streaming import stream_web_server_tool_response
-from config.settings import Settings
-from core.anthropic.stream_contracts import (
+from free_claude_code.application.web_tools.service import WebToolService
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from free_claude_code.config.reasoning import ReasoningPreference
+from free_claude_code.config.settings import Settings
+from free_claude_code.core.anthropic.models import (
+    ContentBlockServerToolUse,
+    Message,
+    MessagesRequest,
+    Tool,
+)
+from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
     text_content,
 )
-from messaging.event_parser import parse_cli_event
-from providers.exceptions import InvalidRequestError
+from free_claude_code.core.anthropic.streaming import format_sse_event
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.version import package_version
+from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
+from free_claude_code.messaging.event_parser import parse_cli_event
+from free_claude_code.runtime.web_tools import egress as web_egress
+from free_claude_code.runtime.web_tools.client import (
+    HTTPWebToolsClient,
+    _drain_response_body_capped,
+    _read_response_body_capped,
+)
+from free_claude_code.runtime.web_tools.egress import enforce_web_fetch_egress
+from tests.web_tools_support import StubWebToolsClient
 
 _STRICT_EGRESS = WebFetchEgressPolicy(
     allow_private_network_targets=False,
     allowed_schemes=frozenset({"http", "https"}),
 )
+_PROVIDER_IDS = tuple(PROVIDER_CATALOG)
+
+
+def test_web_tool_user_agent_reports_installed_package_version() -> None:
+    assert {
+        "User-Agent": (f"Mozilla/5.0 compatible; free-claude-code/{package_version()}")
+    } == web_tool_constants._WEB_TOOL_HTTP_HEADERS
 
 
 class FixedProviderModelRouter(ModelRouter):
-    """Test double: pin ``provider_id`` for OpenAI vs native routing assertions."""
+    """Test double that pins provider identity."""
 
-    def __init__(self, settings: Settings, provider_id: str) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        provider_id: str,
+        *,
+        provider_model: str | None = None,
+    ) -> None:
         super().__init__(settings)
         self._fixed_provider_id = provider_id
+        self._fixed_provider_model = provider_model
 
     def resolve_messages_request(
         self, request: MessagesRequest
     ) -> RoutedMessagesRequest:
-        resolved = ResolvedModel(
-            original_model=request.model,
+        provider_model = self._fixed_provider_model or request.model
+        target = ProviderModelTarget(
             provider_id=self._fixed_provider_id,
-            provider_model=request.model,
-            provider_model_ref=f"{self._fixed_provider_id}/{request.model}",
-            thinking_enabled=False,
+            provider_model=provider_model,
+            provider_model_ref=f"{self._fixed_provider_id}/{provider_model}",
+        )
+        resolved = ResolvedModelRoute(
+            original_model=request.model,
+            primary=target,
+            fallbacks=(),
+            reasoning_preference=ReasoningPreference.OFF,
         )
         routed = request.model_copy(deep=True)
-        routed.model = resolved.provider_model
-        return RoutedMessagesRequest(request=routed, resolved=resolved)
+        routed.model = resolved.primary.provider_model
+        return RoutedMessagesRequest(
+            request=routed,
+            resolved=resolved,
+            reasoning=ReasoningPolicy.off(),
+        )
+
+
+def _local_tool_body(
+    request: MessagesRequest,
+    input_tokens: int,
+    *,
+    web_fetch_egress: WebFetchEgressPolicy,
+    verbose_client_errors: bool = False,
+) -> AsyncGenerator[str]:
+    settings = Settings().model_copy(
+        update={
+            "enable_web_server_tools": True,
+            "web_fetch_allow_private_networks": web_fetch_egress.allow_private_network_targets,
+            "web_fetch_allowed_schemes": ",".join(
+                sorted(web_fetch_egress.allowed_schemes)
+            ),
+            "log_api_error_tracebacks": verbose_client_errors,
+        }
+    )
+
+    async def unexpected_provider(_provider_id: str):
+        pytest.fail("Forced local tools must not resolve a provider")
+
+    service = WebToolService(
+        settings=settings,
+        client=StubWebToolsClient(),
+        executor=ProviderExecutor(unexpected_provider, progress_timeout_seconds=30),
+        token_counter=lambda *_: input_tokens,
+    )
+    routed = FixedProviderModelRouter(
+        settings, _PROVIDER_IDS[0]
+    ).resolve_messages_request(request)
+    body = service.try_stream_messages(routed, request_id="req_local_tool")
+    assert isinstance(body, AsyncGenerator)
+    return body
+
+
+class ScriptedSelectionProvider:
+    """One-stream provider double for the automatic WebSearch decision."""
+
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        failure: ExecutionFailure | None = None,
+        failure_after_events: bool = False,
+        wait_for: asyncio.Event | None = None,
+    ) -> None:
+        self.events = events
+        self.failure = failure
+        self.failure_after_events = failure_after_events
+        self.wait_for = wait_for
+        self.started = asyncio.Event()
+        self.requests: list[MessagesRequest] = []
+        self.stream_kwargs: list[dict[str, object]] = []
+        self.close_count = 0
+
+    async def stream_responses(
+        self,
+        request: OpenAIResponsesRequest,
+        *,
+        input_tokens: int,
+        request_id: str,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[str]:
+        raise AssertionError("Web-search selection received a Responses request")
+        yield ""
+
+    async def stream_messages(
+        self,
+        request: MessagesRequest,
+        *,
+        input_tokens: int,
+        request_id: str,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+    ) -> AsyncIterator[str]:
+        self.requests.append(request)
+        self.stream_kwargs.append(
+            {
+                "input_tokens": input_tokens,
+                "request_id": request_id,
+                "response_model": response_model,
+                "reasoning": reasoning,
+            }
+        )
+        self.started.set()
+        try:
+            if self.wait_for is not None:
+                await self.wait_for.wait()
+            if self.failure is not None and not self.failure_after_events:
+                raise self.failure
+            for event in self.events:
+                yield event
+            if self.failure is not None:
+                raise self.failure
+        finally:
+            self.close_count += 1
+
+
+def _provider_text_events(text: str) -> list[str]:
+    return [
+        format_sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_provider",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": "gateway-model",
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 11, "output_tokens": 1},
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": text},
+            },
+        ),
+        format_sse_event(
+            "content_block_stop", {"type": "content_block_stop", "index": 0}
+        ),
+        format_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 3},
+            },
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def _provider_tool_events(
+    *,
+    name: str = HIDDEN_WEB_SEARCH_NAME,
+    arguments: dict[str, object] | None = None,
+    additional_calls: int = 0,
+) -> list[str]:
+    calls = [(name, arguments if arguments is not None else {"query": "selected"})]
+    calls.extend(
+        (name, {"query": f"extra-{index}"}) for index in range(additional_calls)
+    )
+    events = [
+        format_sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_provider",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": "gateway-model",
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {
+                        "input_tokens": 17,
+                        "output_tokens": 1,
+                        "cache_read_input_tokens": 5,
+                    },
+                },
+            },
+        )
+    ]
+    for index, (tool_name, tool_input) in enumerate(calls):
+        events.extend(
+            [
+                format_sse_event(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": index,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": f"call_{index}",
+                            "name": tool_name,
+                            "input": {},
+                        },
+                    },
+                ),
+                format_sse_event(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": json.dumps(tool_input),
+                        },
+                    },
+                ),
+                format_sse_event(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": index},
+                ),
+            ]
+        )
+    events.extend(
+        [
+            format_sse_event(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                    "usage": {"output_tokens": 9},
+                },
+            ),
+            format_sse_event("message_stop", {"type": "message_stop"}),
+        ]
+    )
+    return events
+
+
+def _automatic_search_request(
+    *,
+    stream: bool = True,
+    tool: Tool | None = None,
+    tool_choice: dict[str, Any] | None = None,
+) -> MessagesRequest:
+    return MessagesRequest(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        stream=stream,
+        messages=[
+            Message(role="user", content="Prompt text must not become the query")
+        ],
+        tools=[tool or Tool(name="web_search", type="web_search_20250305")],
+        tool_choice={"type": "auto"} if tool_choice is None else tool_choice,
+    )
+
+
+def _automatic_search_service(
+    provider: ScriptedSelectionProvider,
+    *,
+    settings: Settings | None = None,
+) -> MessagesHandler:
+    effective_settings = settings or Settings()
+    return MessagesHandler(
+        effective_settings,
+        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        model_router=FixedProviderModelRouter(
+            effective_settings,
+            _PROVIDER_IDS[0],
+            provider_model="upstream-model",
+        ),
+        web_tools=StubWebToolsClient(),
+    )
 
 
 def test_web_server_tool_not_detected_when_tool_only_listed():
@@ -94,14 +416,187 @@ def test_web_server_tool_not_detected_when_forced_name_missing_from_tools():
     assert not is_web_server_tool_request(request)
 
 
-def test_service_rejects_forced_server_tool_on_openai_when_disabled():
-    """OpenAI Chat upstreams cannot run forced server tools without the local handler."""
-    settings = Settings()
+@pytest.mark.parametrize("tool_choice", [None, {"type": "auto"}])
+def test_plans_exact_automatic_web_search(tool_choice: dict[str, Any] | None) -> None:
+    request = MessagesRequest(
+        model="m",
+        max_tokens=20,
+        messages=[Message(role="user", content="search")],
+        tools=[
+            Tool(
+                name="web_search",
+                type="web_search_20250305",
+                max_uses=8,
+                allowed_domains=["Example.com"],
+            )
+        ],
+        tool_choice=tool_choice,
+    )
+
+    plan = plan_automatic_web_search(request, web_tools_enabled=True)
+
+    assert plan is not None
+    assert plan.domains.allowed == ("example.com",)
+    assert plan.domains.blocked == ()
+    assert plan.request.tool_choice == tool_choice
+    assert plan.request.tools is not None
+    assert [tool.name for tool in plan.request.tools] == [HIDDEN_WEB_SEARCH_NAME]
+    assert plan.request.tools[0].input_schema == {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    assert request.tools is not None
+    assert request.tools[0].name == "web_search"
+
+
+def test_ordinary_function_named_web_search_remains_a_client_tool() -> None:
+    request = MessagesRequest(
+        model="m",
+        max_tokens=20,
+        messages=[Message(role="user", content="search")],
+        tools=[
+            Tool(
+                name="web_search",
+                description="ordinary client function",
+                input_schema={"type": "object"},
+            )
+        ],
+        tool_choice={"type": "tool", "name": "web_search"},
+    )
+
+    assert plan_automatic_web_search(request, web_tools_enabled=True) is None
+    assert unsupported_server_tool_error(request, web_tools_enabled=True) is None
+    assert not is_web_server_tool_request(request)
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        Tool(name="web_fetch", type="web_fetch_20250910"),
+        Tool(name="web_search", type="web_search_20260209"),
+        Tool(name="WebSearch", input_schema={"type": "object"}),
+        Tool(name="WebFetch", input_schema={"type": "object"}),
+    ],
+)
+def test_does_not_plan_noncanonical_automatic_search(tool: Tool) -> None:
+    request = _automatic_search_request(tool=tool)
+
+    assert plan_automatic_web_search(request, web_tools_enabled=True) is None
+
+
+def test_does_not_plan_mixed_tools_or_extended_auto_choice() -> None:
+    mixed = _automatic_search_request()
+    mixed.tools = [
+        Tool(name="web_search", type="web_search_20250305"),
+        Tool(name="client_tool", input_schema={"type": "object"}),
+    ]
+    extended_choice = _automatic_search_request(
+        tool_choice={"type": "auto", "disable_parallel_tool_use": True}
+    )
+
+    for request in (mixed, extended_choice):
+        assert plan_automatic_web_search(request, web_tools_enabled=True) is None
+        assert (
+            unsupported_server_tool_error(request, web_tools_enabled=True) is not None
+        )
+
+
+@pytest.mark.parametrize(
+    ("tool", "message"),
+    [
+        (
+            Tool(name="other", type="web_search_20250305"),
+            "must use name 'web_search'",
+        ),
+        (
+            Tool(
+                name="web_search",
+                type="web_search_20250305",
+                description="custom",
+            ),
+            "must not define description",
+        ),
+        (
+            Tool(name="web_search", type="web_search_20250305", max_uses=0),
+            "must be a positive integer",
+        ),
+        (
+            Tool(name="web_search", type="web_search_20250305", unknown="value"),
+            "unsupported option",
+        ),
+        (
+            Tool(
+                name="web_search",
+                type="web_search_20250305",
+                allowed_domains=["example.com"],
+                blocked_domains=["blocked.test"],
+            ),
+            "may define allowed_domains or blocked_domains",
+        ),
+    ],
+)
+def test_rejects_malformed_automatic_web_search_definition(
+    tool: Tool, message: str
+) -> None:
+    with pytest.raises(InvalidRequestError, match=message):
+        plan_automatic_web_search(
+            _automatic_search_request(tool=tool), web_tools_enabled=True
+        )
+
+
+def test_rejects_automatic_web_search_with_server_tool_history() -> None:
+    request = _automatic_search_request()
+    request.messages.insert(
+        0,
+        Message(
+            role="assistant",
+            content=[
+                ContentBlockServerToolUse(
+                    type="server_tool_use",
+                    id="srvtoolu_prior",
+                    name="web_search",
+                    input={"query": "prior"},
+                )
+            ],
+        ),
+    )
+
+    with pytest.raises(InvalidRequestError, match="prior Anthropic server-tool"):
+        plan_automatic_web_search(request, web_tools_enabled=True)
+
+
+@pytest.mark.parametrize(
+    "domain",
+    ["*.example.com", "example.com/path", "https://example.com", "example.com:443"],
+)
+def test_rejects_web_search_domain_wildcards_and_url_parts(domain: str) -> None:
+    request = _automatic_search_request(
+        tool=Tool(
+            name="web_search",
+            type="web_search_20250305",
+            allowed_domains=[domain],
+        )
+    )
+
+    with pytest.raises(InvalidRequestError, match="literal hostname"):
+        plan_automatic_web_search(request, web_tools_enabled=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_id", _PROVIDER_IDS)
+async def test_service_rejects_forced_server_tool_when_local_handler_is_disabled(
+    provider_id: str,
+):
+    """Every provider needs FCC's local handler for forced server tools."""
+    settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": False})
     assert settings.enable_web_server_tools is False
-    service = ClaudeProxyService(
+    service = MessagesHandler(
         settings,
-        provider_getter=lambda _: MagicMock(),
-        model_router=FixedProviderModelRouter(settings, "nvidia_nim"),
+        provider_resolver=AsyncMock(side_effect=lambda _: MagicMock()),
+        model_router=FixedProviderModelRouter(settings, provider_id),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
@@ -116,7 +611,271 @@ def test_service_rejects_forced_server_tool_on_openai_when_disabled():
         tool_choice={"type": "tool", "name": "web_search"},
     )
     with pytest.raises(InvalidRequestError, match="ENABLE_WEB_SERVER_TOOLS"):
-        service.create_message(request)
+        await service.create(request)
+
+
+@pytest.mark.asyncio
+async def test_automatic_web_search_replays_provider_response_when_declined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _provider_text_events("No search needed")
+    provider = ScriptedSelectionProvider(events)
+    search = AsyncMock()
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    service = _automatic_search_service(provider)
+
+    response = await service.create(
+        _automatic_search_request(), request_id="req_automatic_declined"
+    )
+
+    assert isinstance(response, StreamingResponse)
+    assert await _streaming_body_text(response) == "".join(events)
+    search.assert_not_awaited()
+    assert provider.close_count == 1
+    assert len(provider.requests) == 1
+    translated = provider.requests[0]
+    assert translated.model == "upstream-model"
+    assert translated.tool_choice == {"type": "auto"}
+    assert translated.tools is not None
+    assert [tool.name for tool in translated.tools] == [HIDDEN_WEB_SEARCH_NAME]
+    assert provider.stream_kwargs == [
+        {
+            "input_tokens": provider.stream_kwargs[0]["input_tokens"],
+            "request_id": "req_automatic_declined",
+            "response_model": "claude-haiku-4-5-20251001",
+            "reasoning": ReasoningPolicy.off(),
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain_option", "domain"),
+    [
+        ("allowed_domains", "example.com"),
+        ("blocked_domains", "unrelated.test"),
+    ],
+)
+async def test_automatic_web_search_uses_model_query_and_filters_domains(
+    domain_option: str,
+    domain: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ScriptedSelectionProvider(
+        _provider_tool_events(arguments={"query": "model selected query"})
+    )
+    seen_queries: list[str] = []
+
+    async def fake_search(self, query: str) -> list[WebSearchResult]:
+        seen_queries.append(query)
+        return [
+            WebSearchResult(title="Allowed", url="https://docs.example.com/page"),
+            WebSearchResult(title="Filtered", url="https://unrelated.test/page"),
+        ]
+
+    monkeypatch.setattr(
+        "tests.web_tools_support.StubWebToolsClient.search", fake_search
+    )
+    service = _automatic_search_service(provider)
+    request = _automatic_search_request(
+        tool=Tool.model_validate(
+            {
+                "name": "web_search",
+                "type": "web_search_20250305",
+                "max_uses": 8,
+                domain_option: [domain],
+            }
+        )
+    )
+
+    response = await service.create(request, request_id="req_automatic_selected")
+
+    assert isinstance(response, StreamingResponse)
+    raw = await _streaming_body_text(response)
+    events = parse_sse_text(raw)
+    assert_anthropic_stream_contract(events)
+    assert seen_queries == ["model selected query"]
+    assert HIDDEN_WEB_SEARCH_NAME not in raw
+    assert "call_0" not in raw
+    assert "Prompt text must not become the query" not in raw
+    assert "docs.example.com/page" in raw
+    assert "unrelated.test/page" not in raw
+    assert sum(event.event == "message_start" for event in events) == 1
+    assert sum(event.event == "message_stop" for event in events) == 1
+    starts = [event for event in events if event.event == "content_block_start"]
+    assert [start.data["content_block"]["type"] for start in starts] == [
+        "server_tool_use",
+        "web_search_tool_result",
+        "text",
+    ]
+    assert starts[0].data["content_block"]["input"] == {"query": "model selected query"}
+    assert (
+        starts[1].data["content_block"]["tool_use_id"]
+        == starts[0].data["content_block"]["id"]
+    )
+    message_start = next(
+        event.data["message"] for event in events if event.event == "message_start"
+    )
+    assert message_start["model"] == "claude-haiku-4-5-20251001"
+    final_usage = next(
+        event.data["usage"] for event in events if event.event == "message_delta"
+    )
+    assert final_usage == {
+        "input_tokens": 17,
+        "output_tokens": 9,
+        "cache_read_input_tokens": 5,
+        "server_tool_use": {"web_search_requests": 1},
+    }
+    assert len(provider.requests) == 1
+    assert provider.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_automatic_web_search_aggregates_when_stream_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ScriptedSelectionProvider(
+        _provider_tool_events(arguments={"query": "json query"})
+    )
+
+    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+        return [WebSearchResult(title="JSON result", url="https://example.com/json")]
+
+    monkeypatch.setattr(
+        "tests.web_tools_support.StubWebToolsClient.search", fake_search
+    )
+    service = _automatic_search_service(provider)
+
+    response = await service.create(
+        _automatic_search_request(stream=False),
+        request_id="req_automatic_json",
+    )
+
+    assert isinstance(response, JSONResponse)
+    body = _json_body(response)
+    assert [block["type"] for block in body["content"]] == [
+        "server_tool_use",
+        "web_search_tool_result",
+        "text",
+    ]
+    assert body["content"][1]["content"][0]["url"] == "https://example.com/json"
+    assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "events",
+    [
+        _provider_tool_events(arguments={"query": ""}),
+        _provider_tool_events(name="unexpected_tool"),
+        _provider_tool_events(additional_calls=1),
+    ],
+    ids=["blank-query", "wrong-tool", "multiple-tools"],
+)
+async def test_automatic_web_search_rejects_malformed_provider_selection(
+    events: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ScriptedSelectionProvider(events)
+    search = AsyncMock()
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    service = _automatic_search_service(provider)
+
+    response = await service.create(
+        _automatic_search_request(), request_id="req_malformed_selection"
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 500
+    assert response.headers["x-should-retry"] == "false"
+    assert response.headers["content-type"].startswith("application/json")
+    assert _json_body(response)["request_id"] == "req_malformed_selection"
+    search.assert_not_awaited()
+    assert provider.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_automatic_web_search_preserves_provider_failure_before_public_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ScriptedSelectionProvider(
+        [],
+        failure=ExecutionFailure(
+            kind=FailureKind.RATE_LIMIT,
+            status_code=429,
+            message="provider exhausted retries",
+            retryable=False,
+        ),
+    )
+    search = AsyncMock()
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    service = _automatic_search_service(provider)
+
+    response = await service.create(
+        _automatic_search_request(), request_id="req_selection_failure"
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 429
+    assert response.headers["x-should-retry"] == "false"
+    assert _json_body(response)["error"]["type"] == "rate_limit_error"
+    search.assert_not_awaited()
+    assert provider.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_automatic_web_search_converts_internal_post_start_failure_to_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ScriptedSelectionProvider(
+        _provider_text_events("partial")[:2],
+        failure=ExecutionFailure(
+            kind=FailureKind.OVERLOADED,
+            status_code=529,
+            message="provider exhausted retries after starting",
+            retryable=False,
+        ),
+        failure_after_events=True,
+    )
+    search = AsyncMock()
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    service = _automatic_search_service(provider)
+
+    response = await service.create(
+        _automatic_search_request(), request_id="req_selection_post_start_failure"
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 529
+    assert response.headers["x-should-retry"] == "false"
+    assert response.headers["content-type"].startswith("application/json")
+    body = _json_body(response)
+    assert body["error"]["type"] == "overloaded_error"
+    assert body["request_id"] == "req_selection_post_start_failure"
+    search.assert_not_awaited()
+    assert provider.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_automatic_web_search_cancellation_closes_provider_stream() -> None:
+    release = asyncio.Event()
+    provider = ScriptedSelectionProvider(
+        _provider_text_events("unused"), wait_for=release
+    )
+    service = _automatic_search_service(provider)
+    task = asyncio.create_task(
+        service.create(
+            _automatic_search_request(), request_id="req_selection_cancelled"
+        )
+    )
+    await provider.started.wait()
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert provider.close_count == 1
 
 
 @pytest.mark.parametrize(
@@ -163,6 +922,20 @@ def _stream_cm(response: httpx.Response) -> MagicMock:
     cm.__aenter__ = AsyncMock(return_value=response)
     cm.__aexit__ = AsyncMock(return_value=None)
     return cm
+
+
+def _json_body(response: JSONResponse) -> dict[str, Any]:
+    payload = json.loads(bytes(response.body).decode("utf-8"))
+    assert isinstance(payload, dict)
+    return payload
+
+
+async def _streaming_body_text(response: StreamingResponse) -> str:
+    parts = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+        async for chunk in response.body_iterator
+    ]
+    return "".join(parts)
 
 
 def _aiohttp_response(
@@ -216,16 +989,59 @@ def _aiohttp_client_session_patch(
     return client_cm, session
 
 
-def test_enforce_web_fetch_egress_documents_connect_time_pinning():
-    assert enforce_web_fetch_egress.__doc__ and "resolved addresses" in (
-        enforce_web_fetch_egress.__doc__ or ""
+@pytest.mark.asyncio
+async def test_web_fetch_pins_validated_addresses_for_every_redirect(monkeypatch):
+    addresses = iter(["8.8.8.8", "1.1.1.1"])
+    resolved_hosts = []
+
+    def resolve(host, port, **kwargs):
+        resolved_hosts.append(host)
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                (next(addresses), port),
+            )
+        ]
+
+    monkeypatch.setattr(web_egress.socket, "getaddrinfo", resolve)
+    redirect = _aiohttp_response(
+        302, url="https://first.example/", location="https://next.example/", body=b""
     )
-    assert (
-        web_egress.get_validated_stream_addrinfos_for_egress.__doc__
-        and "pinning"
-        in (web_egress.get_validated_stream_addrinfos_for_egress.__doc__ or "")
-    )
-    assert "DNS-pinned" in (_run_web_fetch.__doc__ or "")
+    final = _aiohttp_response(200, url="https://next.example/", body=b"done")
+    client_cm, _ = _aiohttp_client_session_patch(redirect, final)
+    connectors = []
+
+    def connector(**kwargs):
+        value = MagicMock()
+        value.close = AsyncMock()
+        connectors.append((kwargs["resolver"], value))
+        return value
+
+    with (
+        patch(
+            "free_claude_code.runtime.web_tools.client.ClientSession",
+            return_value=client_cm,
+        ),
+        patch(
+            "free_claude_code.runtime.web_tools.client.TCPConnector",
+            side_effect=connector,
+        ),
+    ):
+        result = await HTTPWebToolsClient().fetch(
+            "https://first.example/", egress=_STRICT_EGRESS
+        )
+
+    assert result.data == "done"
+    assert resolved_hosts == ["first.example", "next.example"]
+    for (resolver, value), expected in zip(
+        connectors, ["8.8.8.8", "1.1.1.1"], strict=True
+    ):
+        pinned = await resolver.resolve("ignored.example", 443)
+        assert [row["host"] for row in pinned] == [expected]
+        value.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -235,10 +1051,15 @@ async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
     )
     res_ok = _aiohttp_response(200, url="http://8.8.8.8/final", body=b"hello world")
     client_cm, session = _aiohttp_client_session_patch(res_redirect, res_ok)
-    with patch("api.web_tools.outbound.ClientSession", return_value=client_cm):
-        out = await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
+    with patch(
+        "free_claude_code.runtime.web_tools.client.ClientSession",
+        return_value=client_cm,
+    ):
+        out = await HTTPWebToolsClient().fetch(
+            "http://8.8.8.8/start", egress=_STRICT_EGRESS
+        )
 
-    assert out["data"] == "hello world"
+    assert out.data == "hello world"
     assert session.get.call_count == 2
 
 
@@ -248,11 +1069,16 @@ async def test_run_web_fetch_truncates_large_body_to_byte_cap(monkeypatch):
     res_ok = _aiohttp_response(200, url="http://8.8.8.8/big", body=huge)
     client_cm, _ = _aiohttp_client_session_patch(res_ok)
     monkeypatch.setattr(web_tool_constants, "_MAX_WEB_FETCH_RESPONSE_BYTES", 100)
-    with patch("api.web_tools.outbound.ClientSession", return_value=client_cm):
-        out = await _run_web_fetch("http://8.8.8.8/big", _STRICT_EGRESS)
+    with patch(
+        "free_claude_code.runtime.web_tools.client.ClientSession",
+        return_value=client_cm,
+    ):
+        out = await HTTPWebToolsClient().fetch(
+            "http://8.8.8.8/big", egress=_STRICT_EGRESS
+        )
 
-    assert len(out["data"]) <= 100
-    assert out["data"] == "x" * 100
+    assert len(out.data) <= 100
+    assert out.data == "x" * 100
 
 
 @pytest.mark.asyncio
@@ -265,10 +1091,13 @@ async def test_run_web_fetch_redirect_to_blocked_host_raises():
     )
     client_cm, session = _aiohttp_client_session_patch(res_redirect)
     with (
-        patch("api.web_tools.outbound.ClientSession", return_value=client_cm),
+        patch(
+            "free_claude_code.runtime.web_tools.client.ClientSession",
+            return_value=client_cm,
+        ),
         pytest.raises(WebFetchEgressViolation),
     ):
-        await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
+        await HTTPWebToolsClient().fetch("http://8.8.8.8/start", egress=_STRICT_EGRESS)
 
     session.get.assert_called_once()
 
@@ -278,10 +1107,13 @@ async def test_run_web_fetch_redirect_without_location_raises():
     res_bad = _aiohttp_response(302, url="http://8.8.8.8/here", body=b"")
     client_cm, _ = _aiohttp_client_session_patch(res_bad)
     with (
-        patch("api.web_tools.outbound.ClientSession", return_value=client_cm),
+        patch(
+            "free_claude_code.runtime.web_tools.client.ClientSession",
+            return_value=client_cm,
+        ),
         pytest.raises(WebFetchEgressViolation, match="missing Location"),
     ):
-        await _run_web_fetch("http://8.8.8.8/here", _STRICT_EGRESS)
+        await HTTPWebToolsClient().fetch("http://8.8.8.8/here", egress=_STRICT_EGRESS)
 
 
 @pytest.mark.asyncio
@@ -290,20 +1122,29 @@ async def test_run_web_fetch_excess_redirects_raises():
     res2 = _aiohttp_response(302, url="http://8.8.8.8/b", location="/c", body=b"")
     client_cm, _ = _aiohttp_client_session_patch(res1, res2)
     with (
-        patch("api.web_tools.constants._MAX_WEB_FETCH_REDIRECTS", 1),
-        patch("api.web_tools.outbound.ClientSession", return_value=client_cm),
+        patch(
+            "free_claude_code.runtime.web_tools.constants._MAX_WEB_FETCH_REDIRECTS", 1
+        ),
+        patch(
+            "free_claude_code.runtime.web_tools.client.ClientSession",
+            return_value=client_cm,
+        ),
         pytest.raises(WebFetchEgressViolation, match="exceeded maximum redirects"),
     ):
-        await _run_web_fetch("http://8.8.8.8/a", _STRICT_EGRESS)
+        await HTTPWebToolsClient().fetch("http://8.8.8.8/a", egress=_STRICT_EGRESS)
 
 
 @pytest.mark.asyncio
 async def test_streams_web_search_server_tool_result(monkeypatch):
-    async def fake_search(query: str) -> list[dict[str, str]]:
+    async def fake_search(self, query: str) -> list[WebSearchResult]:
         assert query == "DeepSeek V4 model release 2026"
-        return [{"title": "DeepSeek V4 Released", "url": "https://example.com/v4"}]
+        return [
+            WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
+        ]
 
-    monkeypatch.setattr("api.web_tools.outbound._run_web_search", fake_search)
+    monkeypatch.setattr(
+        "tests.web_tools_support.StubWebToolsClient.search", fake_search
+    )
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -322,7 +1163,7 @@ async def test_streams_web_search_server_tool_result(monkeypatch):
     raw = "".join(
         [
             event
-            async for event in stream_web_server_tool_response(
+            async for event in _local_tool_body(
                 request, input_tokens=42, web_fetch_egress=_STRICT_EGRESS
             )
         ]
@@ -359,20 +1200,107 @@ async def test_streams_web_search_server_tool_result(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_service_streams_forced_web_search_by_default(monkeypatch):
+    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+        return [
+            WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
+        ]
+
+    monkeypatch.setattr(
+        "tests.web_tools_support.StubWebToolsClient.search", fake_search
+    )
+    settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": True})
+    provider_resolver = AsyncMock()
+    service = MessagesHandler(
+        settings,
+        provider_resolver=provider_resolver,
+        model_router=FixedProviderModelRouter(
+            settings,
+            _PROVIDER_IDS[0],
+            provider_model="upstream-model",
+        ),
+        web_tools=StubWebToolsClient(),
+    )
+    request = MessagesRequest(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        stream=True,
+        messages=[Message(role="user", content="Search for DeepSeek V4")],
+        tools=[Tool(name="web_search", type="web_search_20250305")],
+        tool_choice={"type": "tool", "name": "web_search"},
+    )
+
+    response = await service.create(request)
+
+    assert isinstance(response, StreamingResponse)
+    assert response.media_type == "text/event-stream"
+    raw = await _streaming_body_text(response)
+    assert "event: message_start" in raw
+    assert "DeepSeek V4 Released" in raw
+    message_start = next(
+        event.data["message"]
+        for event in parse_sse_text(raw)
+        if event.event == "message_start"
+    )
+    assert message_start["model"] == request.model
+    provider_resolver.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_service_aggregates_forced_web_search_when_stream_false(monkeypatch):
+    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+        return [
+            WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
+        ]
+
+    monkeypatch.setattr(
+        "tests.web_tools_support.StubWebToolsClient.search", fake_search
+    )
+    settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": True})
+    provider_resolver = AsyncMock()
+    service = MessagesHandler(
+        settings,
+        provider_resolver=provider_resolver,
+        model_router=FixedProviderModelRouter(settings, _PROVIDER_IDS[0]),
+        web_tools=StubWebToolsClient(),
+    )
+    request = MessagesRequest(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        messages=[Message(role="user", content="Search for DeepSeek V4")],
+        stream=False,
+        tools=[Tool(name="web_search", type="web_search_20250305")],
+        tool_choice={"type": "tool", "name": "web_search"},
+    )
+
+    response = await service.create(request)
+
+    assert isinstance(response, JSONResponse)
+    assert response.headers["content-type"].startswith("application/json")
+    body = _json_body(response)
+    assert [block["type"] for block in body["content"]] == [
+        "server_tool_use",
+        "web_search_tool_result",
+        "text",
+    ]
+    assert body["content"][1]["content"][0]["url"] == "https://example.com/v4"
+    assert "DeepSeek V4 Released" in body["content"][2]["text"]
+    assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    provider_resolver.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypatch):
     """Only the latest user message supplies the URL (not earlier transcript text)."""
     target = "https://new-only.example.com/page"
 
-    async def fake_fetch(url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def fake_fetch(
+        self, url: str, *, egress: WebFetchEgressPolicy
+    ) -> WebFetchResult:
         assert url == target
-        return {
-            "url": url,
-            "title": "T",
-            "media_type": "text/plain",
-            "data": "x",
-        }
+        return WebFetchResult(url=url, title="T", media_type="text/plain", data="x")
 
-    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", fake_fetch)
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", fake_fetch)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -394,7 +1322,7 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
     raw = "".join(
         [
             event
-            async for event in stream_web_server_tool_response(
+            async for event in _local_tool_body(
                 request, input_tokens=1, web_fetch_egress=_STRICT_EGRESS
             )
         ]
@@ -403,17 +1331,65 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_streams_web_fetch_server_tool_result(monkeypatch):
-    async def fake_fetch(url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
-        assert url == "https://example.com/article"
-        return {
-            "url": url,
-            "title": "Example Article",
-            "media_type": "text/plain",
-            "data": "Article body",
-        }
+async def test_service_aggregates_forced_web_fetch_when_stream_false(monkeypatch):
+    async def fake_fetch(
+        self, url: str, *, egress: WebFetchEgressPolicy
+    ) -> WebFetchResult:
+        return WebFetchResult(
+            url=url,
+            title="Example Article",
+            media_type="text/plain",
+            data="Article body",
+        )
 
-    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", fake_fetch)
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", fake_fetch)
+    settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": True})
+    provider_resolver = AsyncMock()
+    service = MessagesHandler(
+        settings,
+        provider_resolver=provider_resolver,
+        model_router=FixedProviderModelRouter(settings, _PROVIDER_IDS[0]),
+        web_tools=StubWebToolsClient(),
+    )
+    request = MessagesRequest(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        messages=[Message(role="user", content="Fetch https://example.com/article")],
+        stream=False,
+        tools=[Tool(name="web_fetch", type="web_fetch_20250910")],
+        tool_choice={"type": "tool", "name": "web_fetch"},
+    )
+
+    response = await service.create(request)
+
+    assert isinstance(response, JSONResponse)
+    assert response.headers["content-type"].startswith("application/json")
+    body = _json_body(response)
+    assert [block["type"] for block in body["content"]] == [
+        "server_tool_use",
+        "web_fetch_tool_result",
+        "text",
+    ]
+    assert body["content"][1]["content"]["content"]["title"] == "Example Article"
+    assert body["content"][2]["text"] == "Article body"
+    assert body["usage"]["server_tool_use"] == {"web_fetch_requests": 1}
+    provider_resolver.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_streams_web_fetch_server_tool_result(monkeypatch):
+    async def fake_fetch(
+        self, url: str, *, egress: WebFetchEgressPolicy
+    ) -> WebFetchResult:
+        assert url == "https://example.com/article"
+        return WebFetchResult(
+            url=url,
+            title="Example Article",
+            media_type="text/plain",
+            data="Article body",
+        )
+
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", fake_fetch)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -427,7 +1403,7 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
     raw = "".join(
         [
             event
-            async for event in stream_web_server_tool_response(
+            async for event in _local_tool_body(
                 request, input_tokens=42, web_fetch_egress=_STRICT_EGRESS
             )
         ]
@@ -464,10 +1440,10 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
 async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
     secret = "sensitive-upstream-token"
 
-    async def boom(_url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def boom(self, _url: str, *, egress: WebFetchEgressPolicy) -> WebFetchResult:
         raise ValueError(secret)
 
-    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", boom)
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", boom)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -481,11 +1457,13 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
         tool_choice={"type": "tool", "name": "web_fetch"},
     )
 
-    with patch("api.web_tools.outbound.logger.warning") as log_warn:
+    with patch(
+        "free_claude_code.application.web_tools.service.logger.warning"
+    ) as log_warn:
         raw = "".join(
             [
                 event
-                async for event in stream_web_server_tool_response(
+                async for event in _local_tool_body(
                     request,
                     input_tokens=1,
                     web_fetch_egress=_STRICT_EGRESS,
@@ -522,10 +1500,10 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
 async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
     monkeypatch,
 ):
-    async def boom(_url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def boom(self, _url: str, *, egress: WebFetchEgressPolicy) -> WebFetchResult:
         raise OSError(5, "oops")
 
-    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", boom)
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", boom)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -537,7 +1515,7 @@ async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
     raw = "".join(
         [
             event
-            async for event in stream_web_server_tool_response(
+            async for event in _local_tool_body(
                 request,
                 input_tokens=1,
                 web_fetch_egress=_STRICT_EGRESS,
@@ -579,12 +1557,17 @@ async def test_drain_response_body_capped_stops_after_first_chunk_when_oversized
     assert chunk_calls["n"] == 1
 
 
-def test_service_rejects_listed_server_tools_on_openai_chat() -> None:
-    settings = Settings()
-    service = ClaudeProxyService(
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_id", _PROVIDER_IDS)
+async def test_service_rejects_listed_server_tools_for_every_provider(
+    provider_id: str,
+) -> None:
+    settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": False})
+    service = MessagesHandler(
         settings,
-        provider_getter=lambda _: MagicMock(),
-        model_router=FixedProviderModelRouter(settings, "deepseek"),
+        provider_resolver=AsyncMock(side_effect=lambda _: MagicMock()),
+        model_router=FixedProviderModelRouter(settings, provider_id),
+        web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
         model="m",
@@ -592,30 +1575,176 @@ def test_service_rejects_listed_server_tools_on_openai_chat() -> None:
         messages=[Message(role="user", content="q")],
         tools=[Tool(name="web_search", type="web_search_20250305")],
     )
-    with pytest.raises(InvalidRequestError, match="OpenAI Chat upstreams"):
-        service.create_message(request)
+    with pytest.raises(InvalidRequestError, match="ENABLE_WEB_SERVER_TOOLS=false"):
+        await service.create(request)
 
 
-def test_listed_server_tools_routed_on_open_router() -> None:
-    """Native Anthropic transport may receive listed server tool definitions."""
-    settings = Settings()
+@pytest.mark.asyncio
+async def test_automatic_selection_stays_private_until_provider_finishes() -> None:
+    release = asyncio.Event()
+    provider = ScriptedSelectionProvider(
+        _provider_text_events("declined"), wait_for=release
+    )
+    task = asyncio.create_task(
+        _automatic_search_service(provider).create(_automatic_search_request())
+    )
+    try:
+        await asyncio.wait_for(provider.started.wait(), 1)
+        assert not task.done()
+        release.set()
+        response = await asyncio.wait_for(task, 1)
+        assert isinstance(response, StreamingResponse)
+        assert await _streaming_body_text(response) == "".join(provider.events)
+        assert provider.close_count == 1
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
-    async def fake_stream(*_a, **_k):
-        yield 'event: message_start\ndata: {"type":"message_start"}\n\n'
-        yield 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
 
-    mock_provider = MagicMock()
-    mock_provider.stream_response = fake_stream
-    service = ClaudeProxyService(
-        settings,
-        provider_getter=lambda _: mock_provider,
-        model_router=FixedProviderModelRouter(settings, "open_router"),
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["web_search", "web_fetch"])
+@pytest.mark.parametrize("close_before_outbound", [False, True])
+async def test_local_tool_start_precedes_outbound_and_cancellation_closes_operation(
+    monkeypatch, tool_name: str, close_before_outbound: bool
+) -> None:
+    entered, closed = asyncio.Event(), asyncio.Event()
+
+    async def blocked(*_args, **_kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    monkeypatch.setattr(
+        f"tests.web_tools_support.StubWebToolsClient.{tool_name.removeprefix('web_')}",
+        blocked,
+    )
+    tool_type = (
+        "web_search_20250305" if tool_name == "web_search" else "web_fetch_20250910"
     )
     request = MessagesRequest(
-        model="m",
-        max_tokens=20,
-        messages=[Message(role="user", content="q")],
-        tools=[Tool(name="web_search", type="web_search_20250305")],
+        model="public-model",
+        messages=[Message(role="user", content="https://example.com/")],
+        tools=[Tool(name=tool_name, type=tool_type)],
+        tool_choice={"type": "tool", "name": tool_name},
     )
-    service.create_message(request)
-    mock_provider.preflight_stream.assert_called()
+    body = _local_tool_body(request, 7, web_fetch_egress=_STRICT_EGRESS)
+    pending = None
+    try:
+        prefix = [await anext(body) for _ in range(3)]
+        assert [event.event for event in parse_sse_text("".join(prefix))] == [
+            "message_start",
+            "content_block_start",
+            "content_block_stop",
+        ]
+        assert not entered.is_set()
+        if close_before_outbound:
+            await body.aclose()
+            assert not entered.is_set()
+            return
+        pending = asyncio.create_task(anext(body))
+        await asyncio.wait_for(entered.wait(), 1)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert closed.is_set()
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await body.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "automatic"),
+    [("web_search", False), ("web_fetch", False), ("web_search", True)],
+)
+@pytest.mark.parametrize("stream", [False, True])
+async def test_local_failures_remain_completed_tool_results(
+    monkeypatch, tool_name: str, automatic: bool, stream: bool
+) -> None:
+    async def fail(*_args, **_kwargs):
+        raise OSError("private upstream detail")
+
+    monkeypatch.setattr(
+        f"tests.web_tools_support.StubWebToolsClient.{tool_name.removeprefix('web_')}",
+        fail,
+    )
+    provider = ScriptedSelectionProvider(
+        _provider_tool_events(arguments={"query": "query"})
+    )
+    handler = _automatic_search_service(provider)
+    request = _automatic_search_request().model_copy(update={"stream": stream})
+    if not automatic:
+        tool_type = (
+            "web_search_20250305" if tool_name == "web_search" else "web_fetch_20250910"
+        )
+        request = request.model_copy(
+            update={
+                "tools": [Tool(name=tool_name, type=tool_type)],
+                "tool_choice": {"type": "tool", "name": tool_name},
+            }
+        )
+    response = await handler.create(request)
+    if stream:
+        assert isinstance(response, StreamingResponse)
+        raw = await _streaming_body_text(response)
+        events = parse_sse_text(raw)
+        assert_anthropic_stream_contract(events)
+        assert not any(event.event == "error" for event in events)
+        result = next(
+            event.data["content_block"]
+            for event in events
+            if event.event == "content_block_start" and event.data["index"] == 1
+        )
+        usage = next(
+            event.data["usage"] for event in events if event.event == "message_delta"
+        )
+        assert events[-1].event == "message_stop"
+    else:
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 200
+        message = _json_body(response)
+        result, usage = message["content"][1], message["usage"]
+        assert message["stop_reason"] == "end_turn"
+    assert result["type"] == f"{tool_name}_tool_result"
+    expected_error = (
+        "web_search_tool_result_error"
+        if tool_name == "web_search"
+        else "web_fetch_tool_error"
+    )
+    assert result["content"] == {"type": expected_error, "error_code": "unavailable"}
+    assert usage["server_tool_use"] == {f"{tool_name}_requests": 1}
+    assert len(provider.requests) == int(automatic)
+
+
+@pytest.mark.parametrize("tool_name", ["web_search", "web_fetch"])
+def test_forced_tools_keep_permissive_matching(tool_name: str) -> None:
+    tool_type = (
+        "web_search_20250305" if tool_name == "web_search" else "web_fetch_20250910"
+    )
+    request = MessagesRequest(
+        model="model",
+        messages=[
+            Message(
+                role="assistant",
+                content=[
+                    ContentBlockServerToolUse(
+                        type="server_tool_use", id="old", name=tool_name, input={}
+                    )
+                ],
+            )
+        ],
+        tools=[
+            Tool(name=tool_name, type=tool_type, max_uses=0, unsupported_option=True),
+            Tool(name="client_tool", input_schema={"type": "object"}),
+        ],
+        tool_choice={"type": "tool", "name": tool_name, "extra": True},
+    )
+    assert is_web_server_tool_request(request)
+    assert plan_automatic_web_search(request, web_tools_enabled=True) is None
+    assert unsupported_server_tool_error(request, web_tools_enabled=True) is None

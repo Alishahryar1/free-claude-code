@@ -1,488 +1,420 @@
-import importlib
-from types import SimpleNamespace
+import logging
+from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from config.settings import Settings
-from providers.registry import ProviderRegistry
-
-_RUNTIME_EXTRAS = {
-    "voice_note_enabled": True,
-    "whisper_model": "base",
-    "whisper_device": "cpu",
-    "hf_token": "",
-    "nvidia_nim_api_key": "",
-    "claude_cli_bin": "claude",
-    "uses_process_anthropic_auth_token": lambda: False,
-    "messaging_rate_limit": 1,
-    "messaging_rate_window": 1.0,
-    "max_message_log_entries_per_chat": None,
-    "debug_platform_edits": False,
-    "debug_subagent_stack": False,
-    "log_api_error_tracebacks": False,
-    "log_raw_messaging_content": False,
-    "log_raw_cli_diagnostics": False,
-    "log_messaging_error_details": False,
-}
+from free_claude_code.application.errors import (
+    ApplicationUnavailableError,
+    InvalidRequestError,
+)
+from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.settings import Settings
+from free_claude_code.messaging.transcription import TranscriptionService
+from free_claude_code.providers.nvidia_nim.client import NvidiaNimProvider
+from free_claude_code.providers.nvidia_nim.voice import NvidiaNimTranscriber
+from free_claude_code.runtime.application import (
+    ApplicationRuntime,
+    startup_failure_message,
+)
+from free_claude_code.runtime.asgi import RuntimeASGIApp
+from free_claude_code.runtime.bootstrap import _create_transcriber, build_asgi_app
+from free_claude_code.runtime.configuration import ConfigurationService
+from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.api.support import create_test_app
 
 
-def _app_settings(**kwargs):
-    """Minimal settings namespace for AppRuntime (matches typed :class:`Settings` fields used)."""
-    data = {**_RUNTIME_EXTRAS, **kwargs}
-    return SimpleNamespace(**data)
+def _settings(**updates: object) -> Settings:
+    return Settings().model_copy(update=updates)
 
 
-def test_warn_if_process_auth_token_logs_warning():
-    api_runtime_mod = importlib.import_module("api.runtime")
-    settings = cast(
-        Settings, SimpleNamespace(uses_process_anthropic_auth_token=lambda: True)
-    )
-
-    with patch.object(api_runtime_mod.logger, "warning") as warning:
-        api_runtime_mod.warn_if_process_auth_token(settings)
-
-    warning.assert_called_once()
-    assert "ANTHROPIC_AUTH_TOKEN" in warning.call_args.args[0]
+@pytest.fixture(autouse=True)
+def _redirect_fcc_home(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
 
 
-def test_warn_if_process_auth_token_skips_explicit_dotenv_config():
-    api_runtime_mod = importlib.import_module("api.runtime")
-    settings = cast(
-        Settings, SimpleNamespace(uses_process_anthropic_auth_token=lambda: False)
-    )
-
-    with patch.object(api_runtime_mod.logger, "warning") as warning:
-        api_runtime_mod.warn_if_process_auth_token(settings)
-
-    warning.assert_not_called()
-
-
-def test_create_app_provider_error_handler_returns_anthropic_format():
-    from api.app import create_app
-    from providers.exceptions import AuthenticationError
-
-    app = create_app()
-
-    @app.get("/raise_provider")
-    async def _raise_provider():
-        raise AuthenticationError("bad key")
-
-    api_app_mod = importlib.import_module("api.app")
-    settings = _app_settings(
-        messaging_platform="telegram",
-        telegram_bot_token=None,
-        allowed_telegram_user_id=None,
-        discord_bot_token=None,
-        allowed_discord_channels=None,
-        allowed_dir="",
-        claude_workspace="./agent_workspace",
+@pytest.mark.asyncio
+async def test_runtime_startup_logs_admin_url_without_printed_server_banner():
+    settings = _settings(
+        messaging_platform="none",
         host="127.0.0.1",
-        port=8082,
-        log_file="server.log",
+        port=9099,
     )
+    manager = ProviderRuntimeManager(settings)
+    runtime = ApplicationRuntime(
+        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
+    )
+    uvicorn_logger = MagicMock()
+
     with (
-        patch.object(api_app_mod, "get_settings", return_value=settings),
-        patch.object(ProviderRegistry, "cleanup", new=AsyncMock()),
+        patch("builtins.print") as printed,
+        patch.object(manager, "start_model_list_refresh") as start_refresh,
+        patch.object(manager, "close", new=AsyncMock()),
+        patch(
+            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            return_value=None,
+        ),
+        patch.object(logging, "getLogger", return_value=uvicorn_logger) as get_logger,
     ):
-        with TestClient(app) as client:
-            resp = client.get("/raise_provider")
-        assert resp.status_code == 401
-    body = resp.json()
+        await runtime.start()
+        uvicorn_logger.info.assert_not_called()
+        runtime.http_started()
+        await runtime.close()
+
+    printed.assert_not_called()
+    start_refresh.assert_called_once()
+    get_logger.assert_any_call("uvicorn.error")
+    uvicorn_logger.info.assert_called_once_with(
+        "Admin UI: %s (local-only)",
+        "http://127.0.0.1:9099/admin",
+    )
+
+
+def test_create_app_application_error_handler_returns_anthropic_format():
+    app = create_test_app(_settings(log_api_error_tracebacks=False))
+
+    @app.get("/raise_application")
+    async def _raise_application():
+        raise InvalidRequestError("bad request")
+
+    response = TestClient(app).get("/raise_application")
+
+    assert response.status_code == 400
+    body = response.json()
     assert body["type"] == "error"
-    assert body["error"]["type"] == "authentication_error"
+    assert body["error"]["type"] == "invalid_request_error"
+    assert body["request_id"] == response.headers["request-id"]
+    assert "x-should-retry" not in response.headers
 
 
-def test_create_app_provider_error_default_logs_exclude_provider_message():
-    """Provider errors must not log exc.message by default."""
-    from api.app import create_app
-    from providers.exceptions import AuthenticationError
-
-    app = create_app()
+def test_application_error_handler_does_not_log_error_message():
+    app = create_test_app(_settings(log_api_error_tracebacks=False))
     secret = "provider-upstream-secret-detail"
 
-    @app.get("/raise_provider_secret")
-    async def _raise():
-        raise AuthenticationError(secret)
+    @app.get("/raise_application_secret")
+    async def _raise_application_secret():
+        raise InvalidRequestError(secret)
 
-    api_app_mod = importlib.import_module("api.app")
-    settings = _app_settings(
-        messaging_platform="telegram",
-        telegram_bot_token=None,
-        allowed_telegram_user_id=None,
-        discord_bot_token=None,
-        allowed_discord_channels=None,
-        allowed_dir="",
-        claude_workspace="./agent_workspace",
-        host="127.0.0.1",
-        port=8082,
-        log_file="server.log",
-        log_api_error_tracebacks=False,
+    with patch("free_claude_code.api.app.logger.error") as log_error:
+        response = TestClient(app).get("/raise_application_secret")
+
+    assert response.status_code == 400
+    blob = " ".join(
+        str(value) for call in log_error.call_args_list for value in call.args
     )
-    with (
-        patch.object(api_app_mod, "get_settings", return_value=settings),
-        patch.object(ProviderRegistry, "cleanup", new=AsyncMock()),
-        patch.object(api_app_mod.logger, "error") as log_err,
-    ):
-        with TestClient(app) as client:
-            resp = client.get("/raise_provider_secret")
-        assert resp.status_code == 401
-
-    blob = " ".join(str(a) for c in log_err.call_args_list for a in c.args)
-    blob += repr([c.kwargs for c in log_err.call_args_list])
     assert secret not in blob
-    assert "authentication_error" in blob
+    log_error.assert_not_called()
 
 
-def test_create_app_general_exception_handler_returns_500():
-    from api.app import create_app
-
-    app = create_app()
+def test_create_app_general_exception_handler_returns_correlated_500():
+    app = create_test_app(_settings(log_api_error_tracebacks=False))
 
     @app.get("/raise_general")
     async def _raise_general():
         raise RuntimeError("boom")
 
-    api_app_mod = importlib.import_module("api.app")
-    settings = _app_settings(
-        messaging_platform="telegram",
-        telegram_bot_token=None,
-        allowed_telegram_user_id=None,
-        discord_bot_token=None,
-        allowed_discord_channels=None,
-        allowed_dir="",
-        claude_workspace="./agent_workspace",
-        host="127.0.0.1",
-        port=8082,
-        log_file="server.log",
-    )
-    with (
-        patch.object(api_app_mod, "get_settings", return_value=settings),
-        patch.object(ProviderRegistry, "cleanup", new=AsyncMock()),
-    ):
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.get("/raise_general")
-        assert resp.status_code == 500
-        body = resp.json()
-        assert body["type"] == "error"
-        assert body["error"]["type"] == "api_error"
+    response = TestClient(app, raise_server_exceptions=False).get("/raise_general")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "api_error"
+    assert body["request_id"] == response.headers["request-id"]
 
 
-def test_create_app_general_exception_default_logs_exclude_exception_message():
-    """Unhandled errors must not log exception text by default (may echo user content)."""
-    from api.app import create_app
-
-    app = create_app()
-
+def test_general_exception_default_log_excludes_exception_message():
+    app = create_test_app(_settings(log_api_error_tracebacks=False))
     secret = "user-provided-secret-token-xyzzy"
 
     @app.get("/raise_secret")
     async def _raise_secret():
         raise ValueError(secret)
 
-    api_app_mod = importlib.import_module("api.app")
-    settings = _app_settings(
-        messaging_platform="telegram",
-        telegram_bot_token=None,
-        allowed_telegram_user_id=None,
-        discord_bot_token=None,
-        allowed_discord_channels=None,
-        allowed_dir="",
-        claude_workspace="./agent_workspace",
-        host="127.0.0.1",
-        port=8082,
-        log_file="server.log",
-        log_api_error_tracebacks=False,
-    )
-    with (
-        patch.object(api_app_mod, "get_settings", return_value=settings),
-        patch.object(ProviderRegistry, "cleanup", new=AsyncMock()),
-        patch.object(api_app_mod.logger, "error") as log_err,
-    ):
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.get("/raise_secret")
-        assert resp.status_code == 500
+    with patch("free_claude_code.api.app.logger.error") as log_error:
+        response = TestClient(app, raise_server_exceptions=False).get("/raise_secret")
 
-    flattened: list[str] = []
-    for call in log_err.call_args_list:
-        flattened.extend(str(arg) for arg in call.args)
-        flattened.append(repr(call.kwargs))
-    blob = " ".join(flattened)
+    assert response.status_code == 500
+    blob = " ".join(
+        str(value) for call in log_error.call_args_list for value in call.args
+    )
     assert secret not in blob
     assert "ValueError" in blob
 
 
-@pytest.mark.parametrize(
-    "messaging_enabled", [True, False], ids=["with_platform", "no_platform"]
-)
-def test_app_lifespan_sets_state_and_cleans_up(tmp_path, messaging_enabled):
-    from api.app import create_app
-
-    app = create_app()
-
-    settings = _app_settings(
-        messaging_platform="telegram",
-        telegram_bot_token="token" if messaging_enabled else None,
-        allowed_telegram_user_id="123",
-        discord_bot_token=None,
-        allowed_discord_channels=None,
-        allowed_dir=str(tmp_path / "workspace"),
-        claude_workspace=str(tmp_path / "data"),
-        host="127.0.0.1",
-        port=8082,
-        log_file=str(tmp_path / "server.log"),
+@pytest.mark.asyncio
+async def test_runtime_startup_schedules_catalog_without_a_network_barrier():
+    settings = _settings(messaging_platform="none")
+    manager = ProviderRuntimeManager(settings)
+    runtime = ApplicationRuntime(
+        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
     )
+    events: list[str] = []
 
-    fake_platform = MagicMock()
-    fake_platform.name = "fake"
-    fake_platform.on_message = MagicMock()
-    fake_platform.start = AsyncMock()
-    fake_platform.stop = AsyncMock()
+    def start_refresh() -> None:
+        events.append("background")
 
-    session_store = MagicMock()
-    session_store.get_all_trees.return_value = [{"t": 1}] if messaging_enabled else []
-    session_store.get_node_mapping.return_value = {"n": "t"}
-    session_store.sync_from_tree_data = MagicMock()
-
-    fake_queue = MagicMock()
-    fake_queue.cleanup_stale_nodes.return_value = 1
-    fake_queue.to_dict.return_value = {
-        "trees": [{"t": 1}],
-        "node_to_tree": {"n": "t"},
-    }
-
-    cli_manager = MagicMock()
-    cli_manager.stop_all = AsyncMock()
-
-    api_app_mod = importlib.import_module("api.app")
-
-    registry_cleanup = AsyncMock()
     with (
-        patch.object(api_app_mod, "get_settings", return_value=settings),
-        patch.object(ProviderRegistry, "cleanup", new=registry_cleanup),
+        patch.object(
+            manager,
+            "start_model_list_refresh",
+            side_effect=start_refresh,
+        ) as refresh,
+        patch.object(manager, "close", new=AsyncMock()),
         patch(
-            "messaging.platforms.factory.create_messaging_platform",
-            return_value=fake_platform if messaging_enabled else None,
-        ) as create_platform,
-        patch("messaging.session.SessionStore", return_value=session_store),
-        patch("cli.manager.CLISessionManager", return_value=cli_manager),
-        patch(
-            "messaging.trees.queue_manager.TreeQueueManager.from_dict",
-            return_value=fake_queue,
+            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            return_value=None,
         ),
-        TestClient(app),
     ):
-        pass
+        await runtime.start()
+        await runtime.close()
 
-    if messaging_enabled:
-        create_platform.assert_called_once()
-        fake_platform.on_message.assert_called_once()
-        fake_platform.start.assert_awaited_once()
-        fake_platform.stop.assert_awaited_once()
-        cli_manager.stop_all.assert_awaited_once()
-        assert getattr(app.state, "message_handler", None) is not None
-        session_store.sync_from_tree_data.assert_called_once_with(
-            [{"t": 1}],
-            {"n": "t"},
+    refresh.assert_called_once()
+    assert events == ["background"]
+
+
+def test_startup_failure_message_preserves_existing_concise_contract():
+    quiet = _settings(log_api_error_tracebacks=False)
+    verbose = _settings(log_api_error_tracebacks=True)
+
+    assert startup_failure_message(quiet, RuntimeError("secret")) == (
+        "Server startup failed: exc_type=RuntimeError"
+    )
+    assert startup_failure_message(verbose, RuntimeError("visible")) == (
+        "RuntimeError: visible"
+    )
+    assert (
+        startup_failure_message(
+            quiet,
+            ApplicationUnavailableError("configured model is unavailable"),
         )
-    else:
-        fake_platform.start.assert_not_awaited()
-        fake_platform.stop.assert_not_awaited()
-        cli_manager.stop_all.assert_not_awaited()
-        assert getattr(app.state, "messaging_platform", "missing") is None
-
-    registry_cleanup.assert_awaited_once()
-
-
-def test_app_lifespan_cleanup_continues_if_platform_stop_raises(tmp_path):
-    from api.app import create_app
-
-    app = create_app()
-
-    settings = _app_settings(
-        messaging_platform="telegram",
-        telegram_bot_token="token",
-        allowed_telegram_user_id="123",
-        discord_bot_token=None,
-        allowed_discord_channels=None,
-        allowed_dir=str(tmp_path / "workspace"),
-        claude_workspace=str(tmp_path / "data"),
-        host="127.0.0.1",
-        port=8082,
-        log_file=str(tmp_path / "server.log"),
+        == "configured model is unavailable"
     )
 
-    fake_platform = MagicMock()
-    fake_platform.name = "fake"
-    fake_platform.on_message = MagicMock()
-    fake_platform.start = AsyncMock()
-    fake_platform.stop = AsyncMock(side_effect=RuntimeError("stop failed"))
 
-    session_store = MagicMock()
-    session_store.get_all_trees.return_value = []
-    session_store.get_node_mapping.return_value = {}
-    session_store.sync_from_tree_data = MagicMock()
+@pytest.mark.asyncio
+async def test_runtime_asgi_app_starts_and_closes_owner_once():
+    runtime = MagicMock(spec=ApplicationRuntime)
+    runtime.settings = _settings()
+    runtime.start = AsyncMock()
+    runtime.close = AsyncMock(return_value=True)
+    app = RuntimeASGIApp(AsyncMock(), runtime)
+    received = iter(
+        [
+            {"type": "lifespan.startup"},
+            {"type": "lifespan.shutdown"},
+        ]
+    )
+    sent: list[dict[str, str]] = []
 
-    cli_manager = MagicMock()
-    cli_manager.stop_all = AsyncMock()
+    async def receive():
+        return next(received)
 
-    api_app_mod = importlib.import_module("api.app")
-    registry_cleanup = AsyncMock()
+    async def send(message):
+        sent.append(message)
+
+    await app({"type": "lifespan"}, receive, send)
+
+    runtime.start.assert_awaited_once()
+    runtime.close.assert_awaited_once()
+    assert sent == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.shutdown.complete"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_asgi_app_reports_incomplete_owned_shutdown() -> None:
+    runtime = MagicMock(spec=ApplicationRuntime)
+    runtime.settings = _settings()
+    runtime.start = AsyncMock()
+    runtime.close = AsyncMock(return_value=False)
+    app = RuntimeASGIApp(AsyncMock(), runtime)
+    received = iter(
+        [
+            {"type": "lifespan.startup"},
+            {"type": "lifespan.shutdown"},
+        ]
+    )
+    sent: list[dict[str, str]] = []
+
+    async def receive():
+        return next(received)
+
+    async def send(message):
+        sent.append(message)
+
+    await app({"type": "lifespan"}, receive, send)
+
+    assert sent == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.shutdown.failed", "message": ""},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_asgi_app_reports_concise_startup_failure():
+    runtime = MagicMock(spec=ApplicationRuntime)
+    runtime.settings = _settings(log_api_error_tracebacks=False)
+    runtime.start = AsyncMock(side_effect=RuntimeError("secret"))
+    runtime.close = AsyncMock()
+    app = RuntimeASGIApp(AsyncMock(), runtime)
+    sent: list[dict[str, str]] = []
+
+    async def receive():
+        return {"type": "lifespan.startup"}
+
+    async def send(message):
+        sent.append(message)
+
+    await app({"type": "lifespan"}, receive, send)
+
+    assert sent == [
+        {
+            "type": "lifespan.startup.failed",
+            "message": "Server startup failed: exc_type=RuntimeError",
+        }
+    ]
+    runtime.close.assert_not_awaited()
+
+
+def test_bootstrap_configures_default_log_and_publishes_only_services(tmp_path):
+    log_path = tmp_path / "server.log"
+    settings = _settings()
+
     with (
-        patch.object(api_app_mod, "get_settings", return_value=settings),
-        patch.object(ProviderRegistry, "cleanup", new=registry_cleanup),
         patch(
-            "messaging.platforms.factory.create_messaging_platform",
-            return_value=fake_platform,
+            "free_claude_code.runtime.bootstrap.server_log_path",
+            return_value=log_path,
         ),
-        patch("messaging.session.SessionStore", return_value=session_store),
-        patch("cli.manager.CLISessionManager", return_value=cli_manager),
-        TestClient(app),
+        patch("free_claude_code.runtime.bootstrap.configure_logging") as configure,
     ):
-        pass
+        asgi_app = build_asgi_app(settings)
 
-    fake_platform.stop.assert_awaited_once()
-    cli_manager.stop_all.assert_awaited_once()
-    registry_cleanup.assert_awaited_once()
+    configure.assert_called_once_with(
+        Path(log_path),
+        level=settings.log_level,
+        verbose_third_party=settings.log_raw_api_payloads,
+    )
+    api_app = cast(FastAPI, asgi_app.app)
+    assert set(api_app.state._state) == {"services"}
 
 
-def test_app_lifespan_messaging_import_error_no_crash(tmp_path, caplog):
-    """Messaging import failure logs warning and continues without crash."""
-    from api.app import create_app
+def test_bootstrap_app_transparently_exposes_fastapi_interface() -> None:
+    with patch("free_claude_code.runtime.bootstrap.configure_logging"):
+        asgi_app = build_asgi_app(_settings())
 
-    app = create_app()
+    api_app = cast(FastAPI, asgi_app.app)
+    assert asgi_app.router is api_app.router
+    assert asgi_app.routes is api_app.routes
+    assert asgi_app.state is api_app.state
+    assert asgi_app.openapi == api_app.openapi
 
-    settings = _app_settings(
-        messaging_platform="telegram",
-        telegram_bot_token="token",
-        allowed_telegram_user_id="123",
-        discord_bot_token=None,
-        allowed_discord_channels=None,
-        allowed_dir=str(tmp_path / "workspace"),
-        claude_workspace=str(tmp_path / "data"),
-        host="127.0.0.1",
-        port=8082,
-        log_file=str(tmp_path / "server.log"),
+
+def test_bootstrap_wires_the_codex_catalog_publisher() -> None:
+    publisher = MagicMock()
+
+    with (
+        patch("free_claude_code.runtime.bootstrap.configure_logging"),
+        patch(
+            "free_claude_code.runtime.bootstrap.CodexModelCatalogPublisher",
+            return_value=publisher,
+        ) as publisher_type,
+    ):
+        asgi_app = build_asgi_app(_settings())
+
+    manager = asgi_app.runtime.provider_manager
+    manager.cache_model_infos(
+        "nvidia_nim",
+        {ProviderModelInfo("published-model")},
     )
 
-    api_app_mod = importlib.import_module("api.app")
-    registry_cleanup = AsyncMock()
-    with (
-        patch.object(api_app_mod, "get_settings", return_value=settings),
-        patch.object(ProviderRegistry, "cleanup", new=registry_cleanup),
-        patch(
-            "messaging.platforms.factory.create_messaging_platform",
-            side_effect=ImportError("discord not installed"),
-        ),
-        TestClient(app),
-    ):
-        pass
-
-    assert getattr(app.state, "messaging_platform", None) is None
-    registry_cleanup.assert_awaited_once()
+    publisher_type.assert_called_once_with()
+    publisher.publish.assert_not_called()
+    assert manager._model_catalog_publisher is publisher
 
 
-def test_app_lifespan_platform_start_exception_cleanup_still_runs(tmp_path):
-    """Exception during platform.start() logs error, cleanup still runs."""
-    from api.app import create_app
+def test_bootstrap_honors_process_log_file_override(monkeypatch, tmp_path):
+    log_path = tmp_path / "custom.log"
+    monkeypatch.setenv("LOG_FILE", str(log_path))
 
-    app = create_app()
+    with patch("free_claude_code.runtime.bootstrap.configure_logging") as configure:
+        build_asgi_app(_settings())
 
-    settings = _app_settings(
-        messaging_platform="telegram",
-        telegram_bot_token="token",
-        allowed_telegram_user_id="123",
-        discord_bot_token=None,
-        allowed_discord_channels=None,
-        allowed_dir=str(tmp_path / "workspace"),
-        claude_workspace=str(tmp_path / "data"),
-        host="127.0.0.1",
-        port=8082,
-        log_file=str(tmp_path / "server.log"),
+    assert configure.call_args.args[0] == log_path
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_constructs_fresh_runtime_owned_transcribers() -> None:
+    settings = _settings(voice_note_enabled=True, whisper_device="cpu")
+
+    first = await _create_transcriber(settings)
+    second = await _create_transcriber(settings)
+
+    assert isinstance(first, TranscriptionService)
+    assert isinstance(second, TranscriptionService)
+    assert first is not second
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_constructs_isolated_runtime_resource_graphs(
+    monkeypatch,
+) -> None:
+    settings = _settings(
+        model="nvidia_nim/test-model",
+        nvidia_nim_api_key="test-key",
+        voice_note_enabled=True,
+        whisper_device="cpu",
     )
 
-    fake_platform = MagicMock()
-    fake_platform.name = "fake"
-    fake_platform.on_message = MagicMock()
-    fake_platform.start = AsyncMock(side_effect=RuntimeError("start failed"))
-    fake_platform.stop = AsyncMock()
+    with patch("free_claude_code.runtime.bootstrap.configure_logging"):
+        first = build_asgi_app(settings)
+        second = build_asgi_app(settings)
 
-    session_store = MagicMock()
-    session_store.get_all_trees.return_value = []
-    session_store.get_node_mapping.return_value = {}
-    session_store.sync_from_tree_data = MagicMock()
+    monkeypatch.setattr(
+        NvidiaNimProvider, "list_model_infos", AsyncMock(return_value=frozenset())
+    )
+    first_lease = await first.runtime.provider_manager.acquire()
+    second_lease = await second.runtime.provider_manager.acquire()
+    try:
+        first_provider = await first_lease.resolve_provider("nvidia_nim")
+        second_provider = await second_lease.resolve_provider("nvidia_nim")
 
-    cli_manager = MagicMock()
-    cli_manager.stop_all = AsyncMock()
-
-    api_app_mod = importlib.import_module("api.app")
-    registry_cleanup = AsyncMock()
-    with (
-        patch.object(api_app_mod, "get_settings", return_value=settings),
-        patch.object(ProviderRegistry, "cleanup", new=registry_cleanup),
-        patch(
-            "messaging.platforms.factory.create_messaging_platform",
-            return_value=fake_platform,
-        ),
-        patch("messaging.session.SessionStore", return_value=session_store),
-        patch("cli.manager.CLISessionManager", return_value=cli_manager),
-        TestClient(app),
-    ):
-        pass
-
-    registry_cleanup.assert_awaited_once()
+        assert isinstance(first_provider, NvidiaNimProvider)
+        assert isinstance(second_provider, NvidiaNimProvider)
+        assert first_provider._admission is not second_provider._admission
+        assert first.runtime._transcriber is second.runtime._transcriber is None
+        assert first.runtime._transcriber_factory is not None
+        assert second.runtime._transcriber_factory is not None
+        first_voice = await first.runtime._transcriber_factory(settings)
+        second_voice = await second.runtime._transcriber_factory(settings)
+        assert first_voice is not None and second_voice is not None
+        assert first_voice is not second_voice
+        await first_voice.close()
+        await second_voice.close()
+    finally:
+        await first_lease.release()
+        await second_lease.release()
+        await first.runtime.close()
+        await second.runtime.close()
 
 
-def test_app_lifespan_flush_pending_save_exception_warning_only(tmp_path):
-    """Session store flush exception on shutdown is logged as warning, no crash."""
-    from api.app import create_app
-
-    app = create_app()
-
-    settings = _app_settings(
-        messaging_platform="telegram",
-        telegram_bot_token="token",
-        allowed_telegram_user_id="123",
-        discord_bot_token=None,
-        allowed_discord_channels=None,
-        allowed_dir=str(tmp_path / "workspace"),
-        claude_workspace=str(tmp_path / "data"),
-        host="127.0.0.1",
-        port=8082,
-        log_file=str(tmp_path / "server.log"),
+@pytest.mark.asyncio
+async def test_bootstrap_selects_nvidia_transcriber_without_loading_riva() -> None:
+    settings = _settings(
+        voice_note_enabled=True,
+        whisper_device="nvidia_nim",
+        whisper_model="openai/whisper-large-v3",
+        nvidia_nim_api_key="nvapi-test",
     )
 
-    fake_platform = MagicMock()
-    fake_platform.name = "fake"
-    fake_platform.on_message = MagicMock()
-    fake_platform.start = AsyncMock()
-    fake_platform.stop = AsyncMock()
+    assert isinstance((await _create_transcriber(settings)), NvidiaNimTranscriber)
 
-    session_store = MagicMock()
-    session_store.get_all_trees.return_value = []
-    session_store.get_node_mapping.return_value = {}
-    session_store.sync_from_tree_data = MagicMock()
-    session_store.flush_pending_save = MagicMock(side_effect=OSError("disk full"))
 
-    cli_manager = MagicMock()
-    cli_manager.stop_all = AsyncMock()
-
-    api_app_mod = importlib.import_module("api.app")
-    registry_cleanup = AsyncMock()
-    with (
-        patch.object(api_app_mod, "get_settings", return_value=settings),
-        patch.object(ProviderRegistry, "cleanup", new=registry_cleanup),
-        patch(
-            "messaging.platforms.factory.create_messaging_platform",
-            return_value=fake_platform,
-        ),
-        patch("messaging.session.SessionStore", return_value=session_store),
-        patch("cli.manager.CLISessionManager", return_value=cli_manager),
-        TestClient(app),
-    ):
-        pass
-
-    session_store.flush_pending_save.assert_called_once()
-    registry_cleanup.assert_awaited_once()
+@pytest.mark.asyncio
+async def test_bootstrap_disables_transcription_as_one_owned_resource() -> None:
+    assert (await _create_transcriber(_settings(voice_note_enabled=False))) is None

@@ -1,28 +1,27 @@
-from __future__ import annotations
-
 import re
 from pathlib import Path
 
-from messaging.platforms.factory import create_messaging_platform
-from providers.base import BaseProvider
-from providers.deepseek import DeepSeekProvider
-from providers.llamacpp import LlamaCppProvider
-from providers.lmstudio import LMStudioProvider
-from providers.nvidia_nim import NvidiaNimProvider
-from providers.ollama import OllamaProvider
-from providers.open_router import OpenRouterProvider
-from smoke.features import FEATURE_INVENTORY, README_FEATURES, feature_ids
-
-VALID_SOURCE = {"readme", "public_surface"}
-
-
-def test_every_readme_feature_has_inventory_entry() -> None:
-    missing = sorted(set(README_FEATURES) - feature_ids(source="readme"))
-    extra_readme = sorted(feature_ids(source="readme") - set(README_FEATURES))
-    assert not missing, f"README features missing inventory entries: {missing}"
-    assert not extra_readme, (
-        f"README inventory entries not in README_FEATURES: {extra_readme}"
-    )
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from free_claude_code.messaging.platforms.factory import create_messaging_components
+from free_claude_code.providers.base import BaseProvider
+from free_claude_code.providers.cloudflare import CloudflareProvider
+from free_claude_code.providers.deepseek import DeepSeekProvider
+from free_claude_code.providers.gemini import GeminiProvider
+from free_claude_code.providers.github_copilot.provider import GitHubCopilotProvider
+from free_claude_code.providers.groq import GroqProvider
+from free_claude_code.providers.kilo import KiloProvider
+from free_claude_code.providers.lmstudio import LMStudioProvider
+from free_claude_code.providers.mistral import MistralProvider
+from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
+from free_claude_code.providers.open_router import OpenRouterProvider
+from free_claude_code.providers.openai_chat import (
+    OPENAI_CHAT_PROFILES,
+    OpenAIChatProvider,
+)
+from free_claude_code.providers.openai_codex.provider import OpenAICodexProvider
+from free_claude_code.providers.opencode import OpenCodeProvider
+from free_claude_code.providers.vertex import VertexProvider
+from smoke.features import FEATURE_INVENTORY
 
 
 def test_feature_inventory_is_unique_and_decision_complete() -> None:
@@ -31,7 +30,6 @@ def test_feature_inventory_is_unique_and_decision_complete() -> None:
     assert "claude_pick" not in ids
 
     for feature in FEATURE_INVENTORY:
-        assert feature.source in VALID_SOURCE, feature
         assert feature.title.strip(), feature
         assert feature.skip_policy.strip(), feature
         assert feature.pytest_contract_tests, feature
@@ -65,19 +63,32 @@ def test_product_coverage_is_not_satisfied_by_prereq_probes() -> None:
             assert all("_e2e" in name for name in feature.product_e2e_tests), feature
 
 
-def test_provider_and_platform_registries_include_advertised_builtins() -> None:
-    provider_classes = {
+def test_provider_and_platform_registries_include_builtins() -> None:
+    specialized_provider_classes = {
+        "openai": OpenAICodexProvider,
+        "github_copilot": GitHubCopilotProvider,
+        "opencode_zen": OpenCodeProvider,
+        "opencode_go": OpenCodeProvider,
         "nvidia_nim": NvidiaNimProvider,
         "open_router": OpenRouterProvider,
+        "mistral": MistralProvider,
         "deepseek": DeepSeekProvider,
+        "kilo": KiloProvider,
+        "cloudflare": CloudflareProvider,
         "lmstudio": LMStudioProvider,
-        "llamacpp": LlamaCppProvider,
-        "ollama": OllamaProvider,
+        "groq": GroqProvider,
+        "gemini": GeminiProvider,
+        "vertex": VertexProvider,
     }
-    for provider_class in provider_classes.values():
+    assert set(OPENAI_CHAT_PROFILES).isdisjoint(specialized_provider_classes)
+    assert set(PROVIDER_CATALOG) == (
+        set(OPENAI_CHAT_PROFILES) | set(specialized_provider_classes)
+    )
+    assert issubclass(OpenAIChatProvider, BaseProvider)
+    for provider_class in specialized_provider_classes.values():
         assert issubclass(provider_class, BaseProvider)
 
-    assert create_messaging_platform("not-a-platform") is None
+    assert create_messaging_components("not-a-platform") is None
 
 
 def _collect_test_names(root: Path) -> set[str]:

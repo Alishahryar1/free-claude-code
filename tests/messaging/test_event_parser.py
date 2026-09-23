@@ -1,4 +1,4 @@
-from messaging.event_parser import parse_cli_event
+from free_claude_code.messaging.event_parser import parse_cli_event
 
 
 def test_parse_cli_event_assistant_content():
@@ -135,9 +135,14 @@ def test_parse_cli_event_exit_success():
 def test_parse_cli_event_exit_failure():
     event = {"type": "exit", "code": 1, "stderr": "fatal error"}
     results = parse_cli_event(event)
-    assert len(results) == 2
-    assert results[0] == {"type": "error", "message": "fatal error"}
-    assert results[1] == {"type": "complete", "status": "failed"}
+    assert results == [
+        {
+            "type": "error",
+            "message": "fatal error",
+            "source": "exit",
+            "exit_code": 1,
+        }
+    ]
 
 
 def test_parse_cli_event_invalid_input():

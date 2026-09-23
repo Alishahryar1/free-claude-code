@@ -1,10 +1,11 @@
 import os
+import subprocess
 from unittest.mock import patch
 
 
 def test_process_registry_register_pid_zero_noop():
     """register_pid(0) is a no-op (early return)."""
-    from cli import process_registry as pr
+    from free_claude_code.cli import process_registry as pr
 
     before = len(pr._pids)
     pr.register_pid(0)
@@ -13,7 +14,7 @@ def test_process_registry_register_pid_zero_noop():
 
 def test_process_registry_unregister_pid_zero_noop():
     """unregister_pid(0) is a no-op."""
-    from cli import process_registry as pr
+    from free_claude_code.cli import process_registry as pr
 
     pr.register_pid(99999)
     pr.unregister_pid(0)
@@ -23,7 +24,7 @@ def test_process_registry_unregister_pid_zero_noop():
 
 def test_process_registry_ensure_atexit_idempotent():
     """Second call to ensure_atexit_registered is idempotent."""
-    from cli import process_registry as pr
+    from free_claude_code.cli import process_registry as pr
 
     pr.ensure_atexit_registered()
     pr.ensure_atexit_registered()
@@ -32,7 +33,7 @@ def test_process_registry_ensure_atexit_idempotent():
 
 def test_process_registry_kill_all_exception_logged_no_raise(monkeypatch):
     """Exception in os.kill/taskkill is logged but does not raise."""
-    from cli import process_registry as pr
+    from free_claude_code.cli import process_registry as pr
 
     monkeypatch.setattr(pr, "_pids", {99999})
     monkeypatch.setattr(os, "name", "posix", raising=False)
@@ -46,14 +47,14 @@ def test_process_registry_kill_all_exception_logged_no_raise(monkeypatch):
 
 
 def test_process_registry_register_unregister_does_not_crash():
-    from cli import process_registry as pr
+    from free_claude_code.cli import process_registry as pr
 
     pr.register_pid(12345)
     pr.unregister_pid(12345)
 
 
 def test_process_registry_kill_all_best_effort_empty_is_noop():
-    from cli import process_registry as pr
+    from free_claude_code.cli import process_registry as pr
 
     # Ensure no exception on empty set
     pr.kill_all_best_effort()
@@ -62,7 +63,7 @@ def test_process_registry_kill_all_best_effort_empty_is_noop():
 def test_process_registry_kill_all_best_effort_windows_noop_when_taskkill_missing(
     monkeypatch,
 ):
-    from cli import process_registry as pr
+    from free_claude_code.cli import process_registry as pr
 
     # Simulate windows path in a stable way.
     monkeypatch.setattr(pr, "_pids", {12345})
@@ -76,3 +77,16 @@ def test_process_registry_kill_all_best_effort_windows_noop_when_taskkill_missin
 
     monkeypatch.setattr(subprocess, "run", _boom)
     pr.kill_all_best_effort()
+
+
+def test_process_registry_kill_pid_tree_windows_uses_taskkill(monkeypatch):
+    from free_claude_code.cli import process_registry as pr
+
+    calls = []
+    monkeypatch.setattr(os, "name", "nt", raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append((a, kw)))
+
+    pr.kill_pid_tree_best_effort(12345)
+
+    assert calls
+    assert calls[0][0][0] == ["taskkill", "/PID", "12345", "/T", "/F"]

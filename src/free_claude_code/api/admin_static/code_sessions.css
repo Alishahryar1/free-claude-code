@@ -1,0 +1,109 @@
+.code-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.code-folder {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+.code-notice {
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+.code-notice:empty {
+  display: none;
+}
+.code-tool,
+.code-prompt {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  background: var(--panel);
+}
+.code-tool summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.code-item-detail,
+.code-prompt pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 10px 0;
+}
+.code-item[data-kind="tool"] .code-prose {
+  white-space: pre-wrap;
+  font-family: monospace;
+}
+.code-prompt {
+  margin: 12px 0;
+}
+.code-prompt fieldset {
+  border: 0;
+  padding: 0;
+  margin: 12px 0;
+  min-width: 0;
+}
+.code-prompt legend {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.code-field {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+.code-field small {
+  color: var(--muted);
+}
+.code-folder-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.code-folder-row input {
+  min-width: 0;
+}
+.code-field input:not([type="checkbox"]):not([type="radio"]),
+.code-field select,
+.code-dialog input,
+.code-dialog select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--input);
+  color: inherit;
+  padding: 8px;
+  font: inherit;
+}
+.code-choice {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.code-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: 90dvh;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  color: var(--text);
+  padding: 24px;
+}
+.code-dialog::backdrop {
+  background: #0008;
+}
+.code-dialog h3 {
+  margin-top: 0;
+}
+.code-dialog .code-actions {
+  justify-content: flex-end;
+  margin-top: 20px;
+}

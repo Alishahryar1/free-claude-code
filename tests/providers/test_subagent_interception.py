@@ -1,54 +1,32 @@
 import json
-from unittest.mock import MagicMock
 
-import pytest
+from free_claude_code.providers.openai_chat.stream_output import (
+    AnthropicChatStreamOutput,
+)
+from free_claude_code.providers.openai_chat.tool_calls import (
+    iter_heuristic_tool_use_events,
+)
 
-from config.nim import NimSettings
-from core.anthropic import ContentBlockManager
-from providers.base import ProviderConfig
-from providers.nvidia_nim import NvidiaNimProvider
 
-
-@pytest.mark.asyncio
-async def test_task_tool_interception():
-    # Setup provider
-    config = ProviderConfig(api_key="test")
-    provider = NvidiaNimProvider(config, nim_settings=NimSettings())
-
-    # Mock request and sse builder with real ContentBlockManager
-    request = MagicMock()
-    request.model = "test-model"
-
-    sse = MagicMock()
-    sse.blocks = ContentBlockManager()
-
-    # Tool call data (Task tool)
-    tc = {
-        "index": 0,
+def test_task_tool_interception() -> None:
+    output = AnthropicChatStreamOutput(
+        message_id="msg_test",
+        model="test-model",
+        input_tokens=1,
+    )
+    tool_use = {
+        "type": "tool_use",
         "id": "tool_123",
-        "function": {
-            "name": "Task",
-            "arguments": json.dumps(
-                {
-                    "description": "test task",
-                    "prompt": "do something",
-                    "run_in_background": True,
-                }
-            ),
+        "name": "Task",
+        "input": {
+            "description": "test task",
+            "prompt": "do something",
+            "run_in_background": True,
         },
     }
 
-    # Call the method (consume generator to trigger side effects)
-    list(provider._process_tool_call(tc, sse))
-
-    # Find the emit_tool_delta call and check args
-    calls = sse.emit_tool_delta.call_args_list
-    assert len(calls) > 0
-    args_passed = json.loads(calls[0][0][1])
+    events = list(iter_heuristic_tool_use_events(output, tool_use))
+    delta = next(event for event in events if '"type": "input_json_delta"' in event)
+    payload = json.loads(delta.split("data: ", 1)[1])
+    args_passed = json.loads(payload["delta"]["partial_json"])
     assert args_passed["run_in_background"] is False
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(test_task_tool_interception())

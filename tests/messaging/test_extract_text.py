@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.anthropic import extract_text_from_content
+from free_claude_code.core.anthropic import extract_text_from_content
 
 
 class TestExtractTextFromContent:

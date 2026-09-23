@@ -1,1 +1,0 @@
-"""Neutral shared application core."""

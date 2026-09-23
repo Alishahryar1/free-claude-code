@@ -1,4 +1,4 @@
-from messaging.rendering.profiles import build_rendering_profile
+from free_claude_code.messaging.rendering.profiles import build_rendering_profile
 
 
 def test_discord_rendering_profile_has_plain_parse_mode():

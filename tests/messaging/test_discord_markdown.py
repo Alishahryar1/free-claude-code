@@ -1,6 +1,6 @@
 """Tests for messaging/rendering/discord_markdown.py."""
 
-from messaging.rendering.discord_markdown import (
+from free_claude_code.messaging.rendering.discord_markdown import (
     discord_bold,
     discord_code_inline,
     escape_discord,
@@ -9,7 +9,7 @@ from messaging.rendering.discord_markdown import (
     format_status_discord,
     render_markdown_to_discord,
 )
-from messaging.rendering.markdown_tables import (
+from free_claude_code.messaging.rendering.markdown_tables import (
     _is_gfm_table_header_line,
     normalize_gfm_tables,
 )

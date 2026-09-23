@@ -2,7 +2,9 @@
 
 from copy import deepcopy
 
-from providers.nvidia_nim.request import clone_body_without_reasoning_budget
+from free_claude_code.providers.nvidia_nim.retry import (
+    clone_body_without_reasoning_budget,
+)
 
 
 def test_clone_body_without_reasoning_budget_strips_top_level_and_nested():

@@ -1,28 +1,10 @@
 """Skip helpers for expected live-smoke environment gaps."""
 
-from __future__ import annotations
-
 import httpx
 import pytest
 
-from core.anthropic.stream_contracts import SSEEvent
-
-UPSTREAM_UNAVAILABLE_MARKERS = (
-    "connection refused",
-    "connecterror",
-    "connect timeout",
-    "readtimeout",
-    "server disconnected",
-    "service unavailable",
-    "temporary failure",
-    "timed out",
-    "upstream provider",
-)
-
-
-def is_upstream_unavailable_text(text: str) -> bool:
-    normalized = text.lower()
-    return any(marker in normalized for marker in UPSTREAM_UNAVAILABLE_MARKERS)
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent, text_content
+from smoke.lib.outcomes import is_upstream_unavailable_text
 
 
 def skip_upstream_unavailable(reason: str) -> None:
@@ -50,6 +32,10 @@ def skip_if_upstream_unavailable_exception(exc: Exception) -> None:
 
 
 def skip_if_upstream_unavailable_events(events: list[SSEEvent]) -> None:
+    text = text_content(events)
+    if is_upstream_unavailable_text(text):
+        skip_upstream_unavailable(text[:500])
+
     for event in events:
         if getattr(event, "event", None) != "error":
             continue

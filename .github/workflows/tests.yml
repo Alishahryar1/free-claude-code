@@ -1,51 +1,136 @@
+# Branch protection: require every status check this workflow reports, for example:
+#   Ban suppressions and legacy annotations
+#   ruff-format, ruff-check, ty, pytest, playwright
+# GitHub may prefix with the workflow name (e.g. "CI / ruff-format"); use the names the branch protection UI offers after a run.
+
 name: CI
 
+env:
+  CI_UV_VERSION: "0.12.13"
+  UV_MALWARE_CHECK: "1"
+  UV_PREVIEW_FEATURES: "malware-check"
+  UV_CACHE_DIR: /tmp/.uv-cache
+  UV_PYTHON_INSTALL_DIR: /tmp/uv-python
+  UV_PYTHON_PREFERENCE: only-managed
+
 on:
-  push:
-    branches: [main, master]
   pull_request:
-    branches: [main, master]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  checks:
+  no-suppressions-or-legacy-annotations:
+    name: Ban suppressions and legacy annotations
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           fetch-depth: 1
 
-      - name: "Fail on type: ignore (no suppressions allowed)"
+      - name: "Fail on type ignores and legacy future annotations"
         run: |
-          if grep -rE '# type: ignore|# ty: ignore' --include='*.py' . --exclude-dir=.venv --exclude-dir=.git; then
-            echo "::error::type: ignore / ty: ignore comments are not allowed. Fix the underlying type errors instead."
+          if grep -rE '# type: ignore|# ty: ignore|from __future__ import annotations' --include='*.py' . --exclude-dir=.venv --exclude-dir=.git; then
+            echo "::error::type: ignore / ty: ignore comments and legacy future annotations are not allowed. Fix the underlying type/import issue instead."
             exit 1
           fi
           exit 0
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+  quality:
+    name: ${{ matrix.id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: ruff-format
+            run: uv run ruff format --check
+          - id: ruff-check
+            run: uv run ruff check
+          - id: ty
+            run: uv run ty check
+          - id: pytest
+            run: uv run pytest -v --tb=short
+          - id: playwright
+            run: >-
+              uv run pytest e2e -v --tb=short
+              --tracing=retain-on-failure --screenshot=only-on-failure
+              --full-page-screenshot --output=test-results
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          version: "0.10.4"
-          enable-cache: true
-          cache-python: true
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 1
 
-      - name: Format check
-        run: uv run ruff format --check
+      - name: Read Python version
+        id: python
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < .python-version)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Style check
-        run: uv run ruff check
+      - name: Restore Python
+        id: python-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.UV_PYTHON_INSTALL_DIR }}
+          key: uv-python-v1-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.python.outputs.version }}-uv-${{ env.CI_UV_VERSION }}
 
-      - name: Type check
-        run: uv run ty check
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: ${{ env.CI_UV_VERSION }}
+          enable-cache: false
 
-      - name: Run tests
-        run: uv run pytest -v --tb=short
+      - name: Install Python
+        if: steps.python-cache.outputs.cache-hit != 'true'
+        run: uv python install "${{ steps.python.outputs.version }}"
+
+      - name: Fingerprint dependencies
+        id: dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv export \
+            --locked \
+            --no-emit-workspace \
+            --no-header \
+            --no-annotate \
+            --output-file "$RUNNER_TEMP/uv-ci-dependencies.txt"
+          echo "hash=$(sha256sum "$RUNNER_TEMP/uv-ci-dependencies.txt" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore uv cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.UV_CACHE_DIR }}
+          key: uv-deps-v1-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.python.outputs.version }}-uv-${{ env.CI_UV_VERSION }}-${{ steps.dependencies.outputs.hash }}
+          restore-keys: |
+            uv-deps-v1-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.python.outputs.version }}-uv-${{ env.CI_UV_VERSION }}-
+
+      - name: Install Chromium
+        if: matrix.id == 'playwright'
+        run: uv run playwright install --with-deps chromium
+
+      - name: Run
+        run: ${{ matrix.run }}
+
+      - name: Upload Playwright failure artifacts
+        if: failure() && matrix.id == 'playwright'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: playwright-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

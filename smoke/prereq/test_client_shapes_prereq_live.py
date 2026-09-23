@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 
 from smoke.lib.config import SmokeConfig, auth_headers
@@ -33,10 +31,6 @@ def test_vscode_and_jetbrains_shaped_requests(
     assert vscode.json()["content"][0]["text"] == "Quota check passed."
 
     jetbrains_headers = auth_headers()
-    token = smoke_config.settings.anthropic_auth_token
-    if token:
-        jetbrains_headers.pop("x-api-key", None)
-        jetbrains_headers["authorization"] = f"Bearer {token}"
     jetbrains_headers["user-agent"] = "JetBrains-ACP smoke"
     jetbrains = post_json(
         smoke_server,

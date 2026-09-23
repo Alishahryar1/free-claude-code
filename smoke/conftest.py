@@ -1,12 +1,23 @@
-from __future__ import annotations
-
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
-from smoke.lib.config import SmokeConfig, auth_headers
+from smoke.lib.config import ProviderModel, SmokeConfig, auth_headers
 from smoke.lib.report import SmokeReport
 from smoke.lib.server import RunningServer, start_server
+
+DISABLED_PROVIDER_MODEL = ProviderModel(
+    provider="smoke_disabled",
+    full_model="smoke_disabled/smoke-disabled",
+    source="smoke_disabled",
+)
+
+
+def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    if "provider_model" in metafunc.fixturenames:
+        config = SmokeConfig.load()
+        metafunc.parametrize("provider_model", provider_model_params(config))
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -72,6 +83,44 @@ def smoke_server(smoke_config: SmokeConfig) -> Iterator[RunningServer]:
 @pytest.fixture
 def smoke_headers() -> dict[str, str]:
     return auth_headers()
+
+
+def provider_model_params(config: SmokeConfig) -> list[Any]:
+    """Return provider params grouped for pytest-xdist ``--dist=loadgroup``."""
+    if not config.live:
+        return [_disabled_provider_param("set FCC_LIVE_SMOKE=1 to run provider smoke")]
+
+    models = config.provider_smoke_models()
+    if not models:
+        return [_disabled_provider_param("missing_env: no configured provider smoke")]
+
+    return [
+        pytest.param(
+            model,
+            id=provider_model_id(model),
+            marks=pytest.mark.xdist_group(provider_xdist_group(model)),
+        )
+        for model in models
+    ]
+
+
+def _disabled_provider_param(reason: str) -> Any:
+    return pytest.param(
+        DISABLED_PROVIDER_MODEL,
+        id=provider_model_id(DISABLED_PROVIDER_MODEL),
+        marks=(
+            pytest.mark.skip(reason=reason),
+            pytest.mark.xdist_group(provider_xdist_group(DISABLED_PROVIDER_MODEL)),
+        ),
+    )
+
+
+def provider_model_id(provider_model: ProviderModel) -> str:
+    return provider_model.provider
+
+
+def provider_xdist_group(provider_model: ProviderModel) -> str:
+    return f"provider:{provider_model.provider}"
 
 
 _REPORT: SmokeReport | None = None

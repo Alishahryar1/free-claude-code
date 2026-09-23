@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import math
 import os
 import wave
@@ -7,13 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from messaging.transcription import transcribe_audio
+from free_claude_code.messaging.transcription import TranscriptionService
+from free_claude_code.messaging.voice import Transcriber
+from free_claude_code.providers.nvidia_nim.voice import NvidiaNimTranscriber
 from smoke.lib.config import SmokeConfig
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("voice")]
 
 
-def test_voice_transcription_backend_when_explicitly_enabled(
+@pytest.mark.asyncio
+async def test_voice_transcription_backend_when_explicitly_enabled(
     smoke_config: SmokeConfig, tmp_path: Path
 ) -> None:
     if not smoke_config.settings.voice_note_enabled:
@@ -23,16 +24,27 @@ def test_voice_transcription_backend_when_explicitly_enabled(
 
     wav_path = tmp_path / "smoke-tone.wav"
     _write_tone_wav(wav_path)
+    transcriber: Transcriber
+    if smoke_config.settings.whisper_device == "nvidia_nim":
+        api_key = smoke_config.settings.nvidia_nim_api_key
+        if api_key is None:
+            pytest.skip("NVIDIA_NIM_API_KEY is required")
+        transcriber = NvidiaNimTranscriber(
+            model=smoke_config.settings.whisper_model,
+            api_key=api_key,
+        )
+    else:
+        transcriber = TranscriptionService(
+            model=smoke_config.settings.whisper_model,
+            device=smoke_config.settings.whisper_device,
+            huggingface_api_key=smoke_config.settings.huggingface_api_key,
+        )
     try:
-        t_kw: dict[str, str] = {
-            "whisper_model": smoke_config.settings.whisper_model,
-            "whisper_device": smoke_config.settings.whisper_device,
-        }
-        if smoke_config.settings.whisper_device == "nvidia_nim":
-            t_kw["nvidia_nim_api_key"] = smoke_config.settings.nvidia_nim_api_key
-        text = transcribe_audio(wav_path, "audio/wav", **t_kw)
+        text = await transcriber.transcribe(wav_path)
     except ImportError as exc:
         pytest.skip(str(exc))
+    finally:
+        await transcriber.close()
     assert isinstance(text, str)
     assert text.strip()
 

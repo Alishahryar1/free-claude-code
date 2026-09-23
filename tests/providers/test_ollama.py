@@ -1,269 +1,248 @@
-"""Tests for Ollama native Anthropic provider."""
+"""Tests for the local and Cloud Ollama OpenAI-compatible providers."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
-from providers.base import ProviderConfig
-from providers.ollama import OLLAMA_DEFAULT_BASE, OllamaProvider
-from tests.stream_contract import assert_canonical_stream_error_envelope
+from free_claude_code.config.provider_catalog import (
+    OLLAMA_CLOUD_DEFAULT_BASE,
+    OLLAMA_DEFAULT_BASE,
+)
+from free_claude_code.core.anthropic.stream_contracts import (
+    parse_sse_text,
+    thinking_content,
+)
+from free_claude_code.providers.openai_chat import OpenAIChatProvider
+from tests.providers.request_factory import make_messages_request
+from tests.providers.support import (
+    REASONING_OFF,
+    SDKStreamDouble,
+    immediate_admission,
+    make_provider_config,
+    profiled_provider,
+    reasoning_for,
+)
+
+OLLAMA_MODEL = "llama3.1:8b"
+OLLAMA_CLOUD_MODEL = "qwen3-coder:480b"
 
 
-class MockMessage:
-    def __init__(self, role, content):
-        self.role = role
-        self.content = content
-
-
-class MockRequest:
-    def __init__(self, **kwargs):
-        self.model = "llama3.1:8b"
-        self.messages = [MockMessage("user", "Hello")]
-        self.max_tokens = 100
-        self.temperature = 0.5
-        self.top_p = 0.9
-        self.system = "System prompt"
-        self.stop_sequences = None
-        self.stream = True
-        self.tools = []
-        self.tool_choice = None
-        self.extra_body = {}
-        self.thinking = MagicMock()
-        self.thinking.enabled = True
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    def model_dump(self, exclude_none=True):
-        return {
-            "model": self.model,
-            "messages": [{"role": m.role, "content": m.content} for m in self.messages],
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "system": self.system,
-            "stream": self.stream,
-            "tools": self.tools,
-            "tool_choice": self.tool_choice,
-            "extra_body": self.extra_body,
-            "thinking": {"enabled": self.thinking.enabled} if self.thinking else None,
-        }
-
-
-@pytest.fixture
-def ollama_config():
-    return ProviderConfig(
-        api_key="ollama",
-        base_url="http://localhost:11434",
-        rate_limit=10,
-        rate_window=60,
+def _provider(base_url: str = OLLAMA_DEFAULT_BASE) -> OpenAIChatProvider:
+    return profiled_provider(
+        "ollama",
+        make_provider_config(api_key="ollama", base_url=base_url),
+        admission=immediate_admission(),
     )
 
 
-@pytest.fixture(autouse=True)
-def mock_rate_limiter():
-    """Mock the global rate limiter to prevent waiting."""
-    with patch("providers.anthropic_messages.GlobalRateLimiter") as mock:
-        instance = mock.get_scoped_instance.return_value
-        instance.wait_if_blocked = AsyncMock(return_value=False)
-
-        async def _passthrough(fn, *args, **kwargs):
-            return await fn(*args, **kwargs)
-
-        instance.execute_with_retry = AsyncMock(side_effect=_passthrough)
-        yield instance
-
-
-@pytest.fixture
-def ollama_provider(ollama_config):
-    return OllamaProvider(ollama_config)
-
-
-def test_init(ollama_config):
-    """Test provider initialization."""
-    with patch("httpx.AsyncClient"):
-        provider = OllamaProvider(ollama_config)
-        assert provider._base_url == "http://localhost:11434"
-        assert provider._provider_name == "OLLAMA"
-        assert provider._api_key == "ollama"
-
-
-def test_init_uses_default_base_url():
-    """Test that provider uses default root URL when not configured."""
-    config = ProviderConfig(api_key="ollama", base_url=None)
-    with patch("httpx.AsyncClient"):
-        provider = OllamaProvider(config)
-        assert provider._base_url == OLLAMA_DEFAULT_BASE
-
-
-def test_init_uses_configurable_timeouts():
-    """Test that provider passes configurable read/write/connect timeouts to client."""
-    config = ProviderConfig(
-        api_key="ollama",
-        base_url="http://localhost:11434",
-        http_read_timeout=600.0,
-        http_write_timeout=15.0,
-        http_connect_timeout=5.0,
-    )
-    with patch("httpx.AsyncClient") as mock_client:
-        OllamaProvider(config)
-        call_kwargs = mock_client.call_args[1]
-        timeout = call_kwargs["timeout"]
-        assert timeout.read == 600.0
-        assert timeout.write == 15.0
-        assert timeout.connect == 5.0
-
-
-def test_init_base_url_strips_trailing_slash():
-    """Config with base_url trailing slash is stored without it."""
-    config = ProviderConfig(
-        api_key="ollama",
-        base_url="http://localhost:11434/",
-        rate_limit=10,
-        rate_window=60,
-    )
-    with patch("httpx.AsyncClient"):
-        provider = OllamaProvider(config)
-        assert provider._base_url == "http://localhost:11434"
-
-
-def test_init_uses_default_api_key():
-    """Test that provider uses default API key when not configured."""
-    config = ProviderConfig(
-        base_url="http://localhost:11434",
-        api_key="",
-        rate_limit=10,
-        rate_window=60,
-    )
-    with patch("httpx.AsyncClient"):
-        provider = OllamaProvider(config)
-        assert provider._api_key == "ollama"
-
-
-@pytest.mark.asyncio
-async def test_stream_response(ollama_provider):
-    """Test streaming native Anthropic response."""
-    req = MockRequest()
-
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-
-    async def mock_aiter_lines():
-        yield "event: message_start"
-        yield 'data: {"type":"message_start","message":{}}'
-        yield ""
-        yield "event: content_block_delta"
-        yield 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello World"}}'
-        yield ""
-        yield "event: message_stop"
-        yield 'data: {"type":"message_stop"}'
-        yield ""
-
-    mock_response.aiter_lines = mock_aiter_lines
-
-    with (
-        patch.object(
-            ollama_provider._client, "build_request", return_value=MagicMock()
-        ) as mock_build,
-        patch.object(
-            ollama_provider._client,
-            "send",
-            new_callable=AsyncMock,
-            return_value=mock_response,
+def _cloud_provider() -> OpenAIChatProvider:
+    return profiled_provider(
+        "ollama_cloud",
+        make_provider_config(
+            api_key="ollama-cloud-key",
+            base_url=OLLAMA_CLOUD_DEFAULT_BASE,
         ),
-    ):
-        events = [event async for event in ollama_provider.stream_response(req)]
-
-    mock_build.assert_called_once()
-    args, kwargs = mock_build.call_args
-    assert args[0] == "POST"
-    assert args[1] == "/v1/messages"
-    assert kwargs["json"]["model"] == "llama3.1:8b"
-    assert kwargs["json"]["stream"] is True
-    assert "extra_body" not in kwargs["json"]
-    assert kwargs["json"]["thinking"] == {"type": "enabled"}
-    assert len(events) == 9
-    assert events[0] == "event: message_start\n"
-
-
-@pytest.mark.asyncio
-async def test_build_request_body_omits_thinking_when_disabled(ollama_config):
-    """Global disable suppresses provider-side thinking."""
-    provider = OllamaProvider(
-        ollama_config.model_copy(update={"enable_thinking": False})
+        admission=immediate_admission(),
     )
-    req = MockRequest()
 
-    body = provider._build_request_body(req)
 
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ("http://localhost:11434", "http://localhost:11434/v1"),
+        ("http://localhost:11434/", "http://localhost:11434/v1"),
+        ("http://localhost:11434/v1", "http://localhost:11434/v1"),
+    ],
+)
+def test_init_normalizes_openai_base_url(configured: str, expected: str) -> None:
+    with patch(
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
+    ) as openai_client:
+        provider = _provider(configured)
+
+    assert provider._provider_name == "OLLAMA"
+    assert provider._base_url == expected
+    assert provider._api_key == "ollama"
+    assert openai_client.call_args.kwargs["base_url"] == expected
+
+
+def test_cloud_init_uses_fixed_openai_endpoint_and_api_key() -> None:
+    with patch(
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
+    ) as openai_client:
+        provider = _cloud_provider()
+
+    assert provider._provider_name == "OLLAMA_CLOUD"
+    assert provider._base_url == OLLAMA_CLOUD_DEFAULT_BASE
+    assert provider._api_key == "ollama-cloud-key"
+    assert openai_client.call_args.kwargs["base_url"] == OLLAMA_CLOUD_DEFAULT_BASE
+    assert openai_client.call_args.kwargs["api_key"] == "ollama-cloud-key"
+
+
+def test_build_request_body_uses_openai_chat_shape() -> None:
+    body = _provider()._chat._build_request_body(make_messages_request(OLLAMA_MODEL))
+
+    assert body["model"] == OLLAMA_MODEL
+    assert body["messages"][0]["role"] == "system"
+    assert "reasoning_effort" not in body
     assert "thinking" not in body
-    assert body["model"] == "llama3.1:8b"
+    assert "extra_body" not in body
 
 
-def test_build_request_body_disabled_thinking_strips_assistant_thinking_blocks(
-    ollama_config,
-):
-    """Prior assistant thinking/redacted blocks are removed when policy is off."""
-    provider = OllamaProvider(
-        ollama_config.model_copy(update={"enable_thinking": False})
+def test_cloud_build_request_body_forwards_client_reasoning_effort() -> None:
+    request = make_messages_request(
+        OLLAMA_CLOUD_MODEL, output_config={"effort": "high"}
     )
-    req = MockRequest(
-        system=None,
+    body = _cloud_provider()._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
+
+    assert body["model"] == OLLAMA_CLOUD_MODEL
+    assert body["reasoning_effort"] == "high"
+
+
+def test_cloud_build_request_body_replays_thinking_in_ollama_reasoning_field() -> None:
+    request = make_messages_request(
+        OLLAMA_CLOUD_MODEL,
         messages=[
-            MockMessage("user", "hi"),
-            MockMessage(
-                "assistant",
-                [
-                    {"type": "thinking", "thinking": "t"},
-                    {"type": "redacted_thinking", "data": "opaque"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Inspect the repository."},
+                    {
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": "read_file",
+                        "input": {"path": "README.md"},
+                    },
                 ],
-            ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "content": "contents",
+                    }
+                ],
+            },
         ],
     )
-    body = provider._build_request_body(req, thinking_enabled=False)
-    assert body["messages"][1]["content"] == ""
+
+    body = _cloud_provider()._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
+
+    assistant = next(
+        message for message in body["messages"] if message["role"] == "assistant"
+    )
+    assert assistant["reasoning"] == "Inspect the repository."
+    assert "reasoning_content" not in assistant
+
+
+@pytest.mark.parametrize("provider", [_provider, _cloud_provider])
+def test_replay_is_independent_of_disabled_current_turn_reasoning(provider) -> None:
+    request = make_messages_request(
+        OLLAMA_CLOUD_MODEL,
+        messages=[
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Hidden plan."},
+                    {"type": "text", "text": "Visible answer."},
+                ],
+            },
+            {"role": "user", "content": "Continue."},
+        ],
+    )
+
+    body = provider()._chat._build_request_body(request, reasoning=REASONING_OFF)
+    assistant = next(
+        message for message in body["messages"] if message["role"] == "assistant"
+    )
+
+    assert body["reasoning_effort"] == "none"
+    assert assistant["reasoning"] == "Hidden plan."
+    assert "reasoning_content" not in assistant
+    assert assistant["content"] == "Visible answer."
 
 
 @pytest.mark.asyncio
-async def test_stream_error_status_code(ollama_provider):
-    """Non-200 status code is yielded as an SSE API error."""
-    req = MockRequest()
-    mock_response = MagicMock()
-    mock_response.status_code = 500
-    mock_response.aread = AsyncMock(return_value=b"Internal Server Error")
-    mock_response.raise_for_status = MagicMock(
-        side_effect=httpx.HTTPStatusError(
-            "Internal Server Error", request=MagicMock(), response=mock_response
+async def test_stream_messages_uses_shared_openai_chat_provider() -> None:
+    provider = _provider()
+    chunk = MagicMock()
+    chunk.choices = [
+        MagicMock(
+            delta=MagicMock(
+                content="Hello from Ollama",
+                reasoning_content=None,
+                tool_calls=None,
+            ),
+            finish_reason="stop",
         )
-    )
+    ]
+    chunk.usage = MagicMock(prompt_tokens=8, completion_tokens=4)
 
-    with (
-        patch.object(
-            ollama_provider._client, "build_request", return_value=MagicMock()
-        ),
-        patch.object(
-            ollama_provider._client,
-            "send",
-            new_callable=AsyncMock,
-            return_value=mock_response,
-        ),
-    ):
-        events = [
-            event
-            async for event in ollama_provider.stream_response(req, request_id="REQ")
-        ]
+    async def stream():
+        yield chunk
 
-    assert_canonical_stream_error_envelope(
-        events, user_message_substr="Provider API request failed"
-    )
-    assert "REQ" in "".join(events)
+    with patch.object(
+        provider._client.chat.completions,
+        "create",
+        new_callable=AsyncMock,
+        return_value=SDKStreamDouble(stream()),
+    ) as create:
+        output = "".join(
+            [
+                event
+                async for event in provider.stream_messages(
+                    make_messages_request(OLLAMA_MODEL)
+                )
+            ]
+        )
+
+    assert create.call_args.kwargs["stream"] is True
+    assert create.call_args.kwargs["model"] == OLLAMA_MODEL
+    assert "Hello from Ollama" in output
+    assert parse_sse_text(output)[-1].event == "message_stop"
 
 
 @pytest.mark.asyncio
-async def test_cleanup(ollama_provider):
-    """Test that cleanup closes the client."""
-    ollama_provider._client.aclose = AsyncMock()
+async def test_cloud_stream_maps_ollama_reasoning_delta_to_anthropic_thinking() -> None:
+    client = _cloud_provider()
+    chunk = MagicMock()
+    chunk.choices = [
+        MagicMock(
+            delta=MagicMock(
+                content="Final answer",
+                reasoning="Working it out",
+                tool_calls=None,
+            ),
+            finish_reason="stop",
+        )
+    ]
+    chunk.usage = MagicMock(prompt_tokens=8, completion_tokens=4)
 
-    await ollama_provider.cleanup()
+    async def stream():
+        yield chunk
 
-    ollama_provider._client.aclose.assert_called_once()
+    with patch.object(
+        client._client.chat.completions,
+        "create",
+        new_callable=AsyncMock,
+        return_value=SDKStreamDouble(stream()),
+    ):
+        output = "".join(
+            [
+                event
+                async for event in client.stream_messages(
+                    make_messages_request(OLLAMA_CLOUD_MODEL)
+                )
+            ]
+        )
+
+    events = parse_sse_text(output)
+    assert thinking_content(events) == "Working it out"
+    assert "Final answer" in output
+    assert events[-1].event == "message_stop"

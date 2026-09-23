@@ -1,14 +1,13 @@
 """Tests for cli/ module."""
 
 import asyncio
-import json
 import os
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from messaging.event_parser import parse_cli_event
+from free_claude_code.messaging.event_parser import parse_cli_event
 
 # --- Existing Parser Tests ---
 
@@ -119,18 +118,20 @@ class TestCLIParser:
         assert result[0]["status"] == "success"
 
     def test_parse_exit_failure(self):
-        """Test parsing exit event with failure returns error then complete."""
+        """Test parsing exit event with failure returns an error only."""
         event = {"type": "exit", "code": 1}
         result = parse_cli_event(event)
-        # Non-zero exit now returns error first, then complete
-        assert len(result) == 2
-        assert result[0]["type"] == "error"
+        assert len(result) == 1
+        assert result[0] == {
+            "type": "error",
+            "message": "Process exited with code 1",
+            "source": "exit",
+            "exit_code": 1,
+        }
         assert (
             "exit" in result[0]["message"].lower()
             or "code" in result[0]["message"].lower()
         )
-        assert result[1]["type"] == "complete"
-        assert result[1]["status"] == "failed"
 
     def test_parse_invalid_event(self):
         """Test parsing returns empty list for unrecognized event."""
@@ -146,60 +147,63 @@ class TestCLIParser:
 # --- CLI Session Tests ---
 
 
-class TestCLISession:
-    """Test CLISession."""
+class TestManagedClaudeSession:
+    """Test ManagedClaudeSession."""
 
     def test_session_init(self):
-        """Test CLISession initialization."""
-        from cli.session import CLISession
+        """Test ManagedClaudeSession initialization."""
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession(
+        session = ManagedClaudeSession(
             workspace_path="/tmp/test",
-            api_url="http://localhost:8082/v1",
+            proxy_root_url="http://localhost:8082",
             allowed_dirs=["/home/user/projects"],
+            auth_token="freecc",
         )
         assert session.workspace == os.path.normpath(os.path.abspath("/tmp/test"))
-        assert session.api_url == "http://localhost:8082/v1"
+        assert session.proxy_root_url == "http://localhost:8082"
         assert not session.is_busy
 
     def test_session_extract_session_id(self):
         """Test session ID extraction from various event formats."""
-        from cli.session import CLISession
-
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        from free_claude_code.cli.managed.claude import (
+            extract_managed_claude_session_id,
+        )
 
         # Direct session_id field
-        assert session._extract_session_id({"session_id": "abc123"}) == "abc123"
-        assert session._extract_session_id({"sessionId": "abc123"}) == "abc123"
+        assert extract_managed_claude_session_id({"session_id": "abc123"}) == "abc123"
+        assert extract_managed_claude_session_id({"sessionId": "abc123"}) == "abc123"
 
         # Nested in init
         assert (
-            session._extract_session_id({"init": {"session_id": "nested123"}})
+            extract_managed_claude_session_id({"init": {"session_id": "nested123"}})
             == "nested123"
         )
 
         # Nested in result
         assert (
-            session._extract_session_id({"result": {"session_id": "res123"}})
+            extract_managed_claude_session_id({"result": {"session_id": "res123"}})
             == "res123"
         )
 
         # Conversation id
         assert (
-            session._extract_session_id({"conversation": {"id": "conv123"}})
+            extract_managed_claude_session_id({"conversation": {"id": "conv123"}})
             == "conv123"
         )
 
         # No session ID
-        assert session._extract_session_id({"type": "message"}) is None
-        assert session._extract_session_id("not a dict") is None
+        assert extract_managed_claude_session_id({"type": "message"}) is None
+        assert extract_managed_claude_session_id("not a dict") is None
 
     @pytest.mark.asyncio
     async def test_start_task_basic_flow(self):
         """Test start_task running a basic command flow."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         # Mock subprocess
         mock_process = AsyncMock()
@@ -241,9 +245,11 @@ class TestCLISession:
     @pytest.mark.asyncio
     async def test_start_task_with_session_resume(self):
         """Test resuming an existing session."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [
@@ -268,9 +274,11 @@ class TestCLISession:
     @pytest.mark.asyncio
     async def test_start_task_with_session_resume_and_fork(self):
         """Test resuming an existing session and forking."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b""]  # Immediate EOF
@@ -295,9 +303,11 @@ class TestCLISession:
     @pytest.mark.asyncio
     async def test_start_task_process_failure_with_stderr(self):
         """Test process exit with error code and stderr output."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b""]  # No stdout
@@ -323,9 +333,11 @@ class TestCLISession:
     @pytest.mark.asyncio
     async def test_start_task_stderr_while_stdout_streams(self):
         """Stderr is drained concurrently so stdout streaming is not blocked."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [
@@ -350,9 +362,98 @@ class TestCLISession:
         assert events[-1]["code"] == 0
 
     @pytest.mark.asyncio
+    async def test_start_task_ignores_benign_claude_connectors_stderr(self):
+        """Known Claude diagnostics on stderr are not surfaced as task failures."""
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
+
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
+
+        mock_process = AsyncMock()
+        mock_process.stdout.read.side_effect = [
+            b'{"type": "message", "content": "Hi"}\n',
+            b"",
+        ]
+        mock_process.stderr.read.side_effect = [
+            b"claude.ai connectors are disabled in this environment\n",
+            b"",
+        ]
+        mock_process.wait.return_value = 0
+
+        with patch(
+            "asyncio.create_subprocess_exec", new_callable=AsyncMock
+        ) as mock_exec:
+            mock_exec.return_value = mock_process
+
+            events = [e async for e in session.start_task("Hello")]
+
+        assert [e for e in events if e.get("type") == "error"] == []
+        assert events[-1] == {"type": "exit", "code": 0, "stderr": None}
+
+    @pytest.mark.asyncio
+    async def test_start_task_mixed_stderr_reports_only_fatal_lines(self):
+        """Benign stderr diagnostics are filtered without hiding real failures."""
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
+
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
+
+        mock_process = AsyncMock()
+        mock_process.stdout.read.side_effect = [b""]
+        mock_process.stderr.read.side_effect = [
+            (b"claude.ai connectors are disabled in this environment\nFatal error\n"),
+            b"",
+        ]
+        mock_process.wait.return_value = 1
+
+        with patch(
+            "asyncio.create_subprocess_exec", new_callable=AsyncMock
+        ) as mock_exec:
+            mock_exec.return_value = mock_process
+
+            events = [e async for e in session.start_task("Hello")]
+
+        assert len(events) == 2
+        assert events[0] == {"type": "error", "error": {"message": "Fatal error"}}
+        assert events[1] == {"type": "exit", "code": 1, "stderr": "Fatal error"}
+
+    @pytest.mark.asyncio
+    async def test_start_task_nonzero_with_only_benign_stderr_has_no_stderr_error(
+        self,
+    ):
+        """A benign stderr line is not duplicated as the process failure reason."""
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
+
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
+
+        mock_process = AsyncMock()
+        mock_process.stdout.read.side_effect = [b""]
+        mock_process.stderr.read.side_effect = [
+            b"claude.ai connectors are disabled in this environment\n",
+            b"",
+        ]
+        mock_process.wait.return_value = 1
+
+        with patch(
+            "asyncio.create_subprocess_exec", new_callable=AsyncMock
+        ) as mock_exec:
+            mock_exec.return_value = mock_process
+
+            events = [e async for e in session.start_task("Hello")]
+
+        assert events == [{"type": "exit", "code": 1, "stderr": None}]
+
+    @pytest.mark.asyncio
     async def test_drain_stderr_bounded_retains_cap_but_drains_to_eof(self):
         """Oversized stderr is fully drained so the pipe cannot deadlock; capture is bounded."""
-        from cli.session import _MAX_STDERR_CAPTURE_BYTES, CLISession
+        from free_claude_code.cli.managed.session import (
+            _MAX_STDERR_CAPTURE_BYTES,
+            ManagedClaudeSession,
+        )
 
         total_len = _MAX_STDERR_CAPTURE_BYTES + 100_000
         remaining: dict[str, int] = {"n": total_len}
@@ -369,7 +470,7 @@ class TestCLISession:
         class _FakeProcess:
             stderr = _FakeStderr()
 
-        out = await CLISession._drain_stderr_bounded(
+        out = await ManagedClaudeSession._drain_stderr_bounded(
             cast(asyncio.subprocess.Process, _FakeProcess())
         )
         assert len(out) == _MAX_STDERR_CAPTURE_BYTES
@@ -379,9 +480,11 @@ class TestCLISession:
     @pytest.mark.asyncio
     async def test_stop_session(self):
         """Test stopping the session process."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = MagicMock()
         mock_process.returncode = None  # Running
@@ -390,18 +493,23 @@ class TestCLISession:
 
         session.process = mock_process
 
-        stopped = await session.stop()
+        with patch(
+            "free_claude_code.cli.managed.session.kill_pid_tree_best_effort"
+        ) as kill_tree:
+            stopped = await session.stop()
 
         assert stopped is True
-        mock_process.terminate.assert_called_once()
+        kill_tree.assert_called_once_with(mock_process.pid)
         mock_process.wait.assert_called()
 
     @pytest.mark.asyncio
     async def test_stop_session_timeout_force_kill(self):
         """Test force kill if terminate times out."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = MagicMock()
         mock_process.returncode = None
@@ -417,18 +525,23 @@ class TestCLISession:
 
         session.process = mock_process
 
-        stopped = await session.stop()
+        with patch(
+            "free_claude_code.cli.managed.session.kill_pid_tree_best_effort"
+        ) as kill_tree:
+            stopped = await session.stop()
 
         assert stopped is True
-        mock_process.terminate.assert_called()
+        kill_tree.assert_called_once_with(mock_process.pid)
         mock_process.kill.assert_called()
 
     @pytest.mark.asyncio
     async def test_start_task_split_buffer(self):
         """Test handling of JSON split across chunks."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         # Split json: {"type": "mess... age"}
@@ -455,9 +568,11 @@ class TestCLISession:
     @pytest.mark.asyncio
     async def test_start_task_remnant_buffer(self):
         """Test handling of buffer remnant at EOF (no newline at end)."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [
@@ -480,12 +595,13 @@ class TestCLISession:
             assert events[0]["content"] == "Remnant"
 
     @pytest.mark.asyncio
-    async def test_start_task_non_v1_url(self):
-        """Test start_task with a non-v1 URL."""
-        from cli.session import CLISession
+    async def test_start_task_targets_proxy_root(self):
+        """Test start_task passes the configured proxy root to Claude Code."""
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        # URL not ending in /v1
-        session = CLISession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b""]
@@ -505,12 +621,76 @@ class TestCLISession:
             assert env["ANTHROPIC_BASE_URL"] == "http://localhost:8082"
 
     @pytest.mark.asyncio
+    async def test_start_task_sets_proxy_auth_token(self):
+        """Test start_task forwards configured proxy auth to Claude Code."""
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
+
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="proxy-token"
+        )
+
+        mock_process = AsyncMock()
+        mock_process.stdout.read.side_effect = [b""]
+        mock_process.stderr.read.return_value = b""
+        mock_process.wait.return_value = 0
+
+        with (
+            patch.dict(os.environ, {"ANTHROPIC_API_KEY": "official-key"}, clear=False),
+            patch(
+                "asyncio.create_subprocess_exec", new_callable=AsyncMock
+            ) as mock_exec,
+        ):
+            mock_exec.return_value = mock_process
+            async for _ in session.start_task("test"):
+                pass
+
+            env = mock_exec.call_args.kwargs["env"]
+            assert env["ANTHROPIC_AUTH_TOKEN"] == "proxy-token"
+            assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+            assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "190000"
+            assert env["DISABLE_TELEMETRY"] == "1"
+            assert "ANTHROPIC_API_KEY" not in env
+            assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env
+
+    @pytest.mark.asyncio
+    async def test_start_task_uses_sentinel_when_proxy_auth_blank(self):
+        """Test start_task does not leak inherited Claude auth into proxy calls."""
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
+
+        session = ManagedClaudeSession(
+            "/tmp",
+            "http://localhost:8082",
+            auth_token="freecc",
+        )
+
+        mock_process = AsyncMock()
+        mock_process.stdout.read.side_effect = [b""]
+        mock_process.stderr.read.return_value = b""
+        mock_process.wait.return_value = 0
+
+        with (
+            patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": "stale"}, clear=False),
+            patch(
+                "asyncio.create_subprocess_exec", new_callable=AsyncMock
+            ) as mock_exec,
+        ):
+            mock_exec.return_value = mock_process
+            async for _ in session.start_task("test"):
+                pass
+
+            env = mock_exec.call_args.kwargs["env"]
+            assert env["ANTHROPIC_AUTH_TOKEN"] == "freecc"
+
+    @pytest.mark.asyncio
     async def test_start_task_allowed_dirs(self):
         """Test start_task includes allowed dirs in command."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession(
-            "/tmp", "http://localhost:8082/v1", allowed_dirs=["/dir1", "/dir2"]
+        session = ManagedClaudeSession(
+            "/tmp",
+            "http://localhost:8082",
+            allowed_dirs=["/dir1", "/dir2"],
+            auth_token="freecc",
         )
 
         mock_process = AsyncMock()
@@ -531,41 +711,13 @@ class TestCLISession:
             assert os.path.normpath("/dir2") in cmd
 
     @pytest.mark.asyncio
-    async def test_start_task_plans_directory(self):
-        """Test start_task includes --settings plansDirectory when plans_directory set."""
-        from cli.session import CLISession
-
-        session = CLISession(
-            "/tmp",
-            "http://localhost:8082/v1",
-            plans_directory="./agent_workspace/plans",
-        )
-
-        mock_process = AsyncMock()
-        mock_process.stdout.read.side_effect = [b""]
-        mock_process.stderr.read.return_value = b""
-        mock_process.wait.return_value = 0
-
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock
-        ) as mock_exec:
-            mock_exec.return_value = mock_process
-            async for _ in session.start_task("test"):
-                pass
-
-            cmd = mock_exec.call_args[0]
-            assert "--settings" in cmd
-            settings_idx = cmd.index("--settings")
-            assert settings_idx + 1 < len(cmd)
-            settings = json.loads(cmd[settings_idx + 1])
-            assert settings["plansDirectory"] == "./agent_workspace/plans"
-
-    @pytest.mark.asyncio
     async def test_start_task_json_error(self):
-        """Test handling of non-JSON output from CLI."""
-        from cli.session import CLISession
+        """Test handling of non-JSON output from free_claude_code.cli."""
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b"Not valid json\n", b""]
@@ -585,32 +737,37 @@ class TestCLISession:
     @pytest.mark.asyncio
     async def test_stop_exception(self):
         """Test exception handling during stop."""
-        from cli.session import CLISession
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = CLISession("/tmp", "http://localhost:8082/v1")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = MagicMock()
         mock_process.returncode = None
-        # Raise exception on terminate
-        mock_process.terminate.side_effect = RuntimeError("Permission denied")
 
         session.process = mock_process
 
-        stopped = await session.stop()
+        with patch(
+            "free_claude_code.cli.managed.session.kill_pid_tree_best_effort",
+            side_effect=RuntimeError("Permission denied"),
+        ):
+            stopped = await session.stop()
         assert stopped is False
 
 
-class TestCLISessionManager:
-    """Test CLISessionManager."""
+class TestManagedClaudeSessionManager:
+    """Test ManagedClaudeSessionManager."""
 
     @pytest.mark.asyncio
     async def test_manager_create_session(self):
         """Test creating a new session."""
-        from cli.manager import CLISessionManager
+        from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
-        manager = CLISessionManager(
+        manager = ManagedClaudeSessionManager(
             workspace_path="/tmp/test",
-            api_url="http://localhost:8082/v1",
+            proxy_root_url="http://localhost:8082",
+            auth_token="freecc",
         )
 
         session, sid, is_new = await manager.get_or_create_session()
@@ -621,11 +778,12 @@ class TestCLISessionManager:
     @pytest.mark.asyncio
     async def test_manager_reuse_session(self):
         """Test reusing an existing session."""
-        from cli.manager import CLISessionManager
+        from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
-        manager = CLISessionManager(
+        manager = ManagedClaudeSessionManager(
             workspace_path="/tmp/test",
-            api_url="http://localhost:8082/v1",
+            proxy_root_url="http://localhost:8082",
+            auth_token="freecc",
         )
 
         # Create first session
@@ -640,11 +798,12 @@ class TestCLISessionManager:
     @pytest.mark.asyncio
     async def test_manager_stats(self):
         """Test manager stats."""
-        from cli.manager import CLISessionManager
+        from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
-        manager = CLISessionManager(
+        manager = ManagedClaudeSessionManager(
             workspace_path="/tmp/test",
-            api_url="http://localhost:8082/v1",
+            proxy_root_url="http://localhost:8082",
+            auth_token="freecc",
         )
 
         stats = manager.get_stats()

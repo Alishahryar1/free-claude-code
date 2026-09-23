@@ -1,12 +1,11 @@
 """Small JSON report writer for smoke runs."""
 
-from __future__ import annotations
-
 import json
 import time
 from dataclasses import asdict, dataclass
 
 from .config import SmokeConfig, redacted
+from .outcomes import classify_outcome
 
 
 @dataclass(slots=True)
@@ -60,44 +59,3 @@ class SmokeReport:
             "outcomes": [asdict(outcome) for outcome in self.outcomes],
         }
         path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-
-
-def classify_outcome(*, nodeid: str, outcome: str, detail: str) -> str:
-    """Classify smoke outcomes for triage reports."""
-    if outcome == "passed":
-        return "passed"
-
-    text = f"{nodeid}\n{detail}".lower()
-    if outcome == "skipped":
-        if any(
-            marker in text
-            for marker in (
-                "upstream_unavailable",
-                "connection refused",
-                "connecterror",
-                "readtimeout",
-                "timed out",
-                "not reachable",
-            )
-        ):
-            return "upstream_unavailable"
-        return "missing_env"
-
-    if "harness_bug" in text:
-        return "harness_bug"
-    if "missing_env" in text:
-        return "missing_env"
-    if any(
-        marker in text
-        for marker in (
-            "upstream_unavailable",
-            "connection refused",
-            "connecterror",
-            "readtimeout",
-            "timed out",
-            "not reachable",
-            "upstream provider",
-        )
-    ):
-        return "upstream_unavailable"
-    return "product_failure"

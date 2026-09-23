@@ -1,35 +1,43 @@
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from messaging.handler import ClaudeMessageHandler
-from messaging.trees.data import MessageState
+from free_claude_code.messaging.models import MessageScope
+from free_claude_code.messaging.trees import MessageState
+from free_claude_code.messaging.workflow import MessagingWorkflow
+
+_SCOPE = MessageScope(platform="telegram", chat_id="chat_1")
 
 
 @pytest.fixture
 def handler_integration(mock_platform, mock_cli_manager, mock_session_store):
-    # Use real TreeQueueManager
-    handler = ClaudeMessageHandler(mock_platform, mock_cli_manager, mock_session_store)
-    return handler
+    return MessagingWorkflow(mock_platform, mock_cli_manager, mock_session_store)
 
 
-async def mock_async_gen(events):
-    for e in events:
-        yield e
+async def _events(events):
+    for event in events:
+        yield event
+
+
+async def _wait_for_idle(handler: MessagingWorkflow) -> None:
+    for _ in range(100):
+        if handler.tree_queue.task_count() == 0:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("messaging claims did not finish")
 
 
 @pytest.mark.asyncio
 async def test_full_conversation_flow_single_user(
-    handler_integration, mock_platform, mock_cli_manager, incoming_message_factory
-):
-    # 1. First message
-    msg1 = incoming_message_factory(text="message 1", message_id="m1")
-    mock_platform.queue_send_message.return_value = "s1"
-
-    # Mock CLI session for m1
-    mock_session1 = MagicMock()
-    mock_session1.start_task.return_value = mock_async_gen(
+    handler_integration,
+    mock_platform,
+    mock_cli_manager,
+    incoming_message_factory,
+) -> None:
+    mock_platform.queue_send_message = AsyncMock(side_effect=["s1", "s2"])
+    root_session = MagicMock()
+    root_session.start_task.return_value = _events(
         [
             {"type": "session_info", "session_id": "sess1"},
             {
@@ -39,36 +47,8 @@ async def test_full_conversation_flow_single_user(
             {"type": "exit", "code": 0, "stderr": None},
         ]
     )
-    mock_cli_manager.get_or_create_session.return_value = (
-        mock_session1,
-        "pending_1",
-        True,
-    )
-
-    await handler_integration.handle_message(msg1)
-
-    # Wait for processing
-    tree = handler_integration.tree_queue.get_tree_for_node("m1")
-    for _ in range(10):
-        if tree.get_node("m1").state.value == MessageState.COMPLETED.value:
-            break
-        await asyncio.sleep(0.01)
-
-    assert tree.get_node("m1").state.value == MessageState.COMPLETED.value
-    assert tree.get_node("m1").session_id == "sess1"
-    mock_session1.start_task.assert_called_with(
-        "message 1", session_id=None, fork_session=False
-    )
-
-    # 2. Reply to m1
-    msg2 = incoming_message_factory(
-        text="message 2", message_id="m2", reply_to_message_id="m1"
-    )
-    mock_platform.queue_send_message.return_value = "s2"
-
-    # Mock CLI session for m2
-    mock_session2 = MagicMock()
-    mock_session2.start_task.return_value = mock_async_gen(
+    reply_session = MagicMock()
+    reply_session.start_task.return_value = _events(
         [
             {"type": "session_info", "session_id": "sess2"},
             {
@@ -78,110 +58,106 @@ async def test_full_conversation_flow_single_user(
             {"type": "exit", "code": 0, "stderr": None},
         ]
     )
-    mock_cli_manager.get_or_create_session.reset_mock()
-    mock_cli_manager.get_or_create_session.return_value = (
-        mock_session2,
-        "pending_2",
-        True,
+    mock_cli_manager.get_or_create_session.side_effect = [
+        (root_session, "pending_1", True),
+        (reply_session, "pending_2", True),
+    ]
+
+    await handler_integration.handle_message(
+        incoming_message_factory(text="message 1", message_id="m1")
     )
+    await _wait_for_idle(handler_integration)
+    root = await handler_integration.tree_queue.get_node(_SCOPE, "m1")
+    assert root is not None
+    assert root.state is MessageState.COMPLETED
+    assert root.session_id == "sess1"
 
-    await handler_integration.handle_message(msg2)
-
-    # Wait for processing
-    for _ in range(10):
-        if tree.get_node("m2").state.value == MessageState.COMPLETED.value:
-            break
-        await asyncio.sleep(0.01)
-
-    assert tree.get_node("m2").state.value == MessageState.COMPLETED.value
-    assert tree.get_node("m2").parent_id == "m1"
-    mock_cli_manager.get_or_create_session.assert_called_with(session_id=None)
-    mock_session2.start_task.assert_called_with(
+    await handler_integration.handle_message(
+        incoming_message_factory(
+            text="message 2",
+            message_id="m2",
+            reply_to_message_id="m1",
+        )
+    )
+    await _wait_for_idle(handler_integration)
+    reply = await handler_integration.tree_queue.get_node(_SCOPE, "m2")
+    assert reply is not None
+    assert reply.state is MessageState.COMPLETED
+    assert reply.parent_id == "m1"
+    mock_cli_manager.get_or_create_session.assert_called_with(session_id="sess1")
+    reply_session.start_task.assert_called_with(
         "message 2", session_id="sess1", fork_session=True
     )
 
 
 @pytest.mark.asyncio
 async def test_error_propagation_chain(
-    handler_integration, mock_platform, mock_cli_manager, incoming_message_factory
-):
-    msg1 = incoming_message_factory(text="m1", message_id="m1")
-    mock_platform.queue_send_message.return_value = "s1"
+    handler_integration,
+    mock_platform,
+    mock_cli_manager,
+    incoming_message_factory,
+) -> None:
+    started = asyncio.Event()
+    release_error = asyncio.Event()
 
-    mock_session1 = MagicMock()
-    mock_session1.start_task.return_value = mock_async_gen(
-        [{"type": "error", "error": {"message": "failed"}}]
+    async def failing_events():
+        started.set()
+        await release_error.wait()
+        yield {"type": "error", "error": {"message": "failed"}}
+
+    session = MagicMock()
+    session.start_task.return_value = failing_events()
+    mock_cli_manager.get_or_create_session.return_value = (session, "sess1", False)
+    mock_platform.queue_send_message = AsyncMock(side_effect=["s1", "s2"])
+
+    await handler_integration.handle_message(
+        incoming_message_factory(text="m1", message_id="m1")
     )
-    mock_cli_manager.get_or_create_session.return_value = (
-        mock_session1,
-        "sess1",
-        False,
+    await started.wait()
+    await handler_integration.handle_message(
+        incoming_message_factory(text="m2", message_id="m2", reply_to_message_id="m1")
     )
+    release_error.set()
+    await _wait_for_idle(handler_integration)
 
-    await handler_integration.handle_message(msg1)
-    tree = handler_integration.tree_queue.get_tree_for_node("m1")
-
-    msg2 = incoming_message_factory(
-        text="m2", message_id="m2", reply_to_message_id="m1"
+    root = await handler_integration.tree_queue.get_node(_SCOPE, "m1")
+    child = await handler_integration.tree_queue.get_node(_SCOPE, "m2")
+    assert root is not None and root.state is MessageState.ERROR
+    assert child is not None and child.state is MessageState.ERROR
+    rendered = "\n".join(
+        call.args[2] for call in mock_platform.queue_edit_message.call_args_list
     )
-    await handler_integration.handle_message(msg2)
-
-    # Wait for m1 to fail
-    for _ in range(20):
-        if tree.get_node("m1").state.value == MessageState.ERROR.value:
-            break
-        await asyncio.sleep(0.01)
-
-    # Give a tiny bit of time for propagation and skipping in processor
-    await asyncio.sleep(0.05)
-
-    assert tree.get_node("m1").state.value == MessageState.ERROR.value
-    assert tree.get_node("m2").state.value == MessageState.ERROR.value
-    assert "Parent failed" in tree.get_node("m2").error_message
+    assert "Parent task failed" in rendered
 
 
 @pytest.mark.asyncio
-async def test_concurrent_replies_to_different_trees(
-    handler_integration, mock_platform, mock_cli_manager, incoming_message_factory
-):
-    msg1 = incoming_message_factory(text="t1", message_id="t1")
-    msg2 = incoming_message_factory(text="t2", message_id="t2")
-
-    mock_session1 = MagicMock()
-    mock_session1.start_task.return_value = mock_async_gen(
-        [{"type": "exit", "code": 0}]
-    )
-    mock_session2 = MagicMock()
-    mock_session2.start_task.return_value = mock_async_gen(
-        [{"type": "exit", "code": 0}]
-    )
-
+async def test_different_trees_process_independently(
+    handler_integration,
+    mock_platform,
+    mock_cli_manager,
+    incoming_message_factory,
+) -> None:
+    session_one = MagicMock()
+    session_one.start_task.return_value = _events([{"type": "exit", "code": 0}])
+    session_two = MagicMock()
+    session_two.start_task.return_value = _events([{"type": "exit", "code": 0}])
     mock_cli_manager.get_or_create_session.side_effect = [
-        (mock_session1, "s1", False),
-        (mock_session2, "s2", False),
+        (session_one, "s1", False),
+        (session_two, "s2", False),
     ]
+    mock_platform.queue_send_message = AsyncMock(side_effect=["status-t1", "status-t2"])
 
-    await handler_integration.handle_message(msg1)
-    await handler_integration.handle_message(msg2)
-
-    # Wait for both
-    for _ in range(20):
-        node1 = handler_integration.tree_queue.get_node("t1")
-        node2 = handler_integration.tree_queue.get_node("t2")
-        if (
-            node1
-            and node2
-            and node1.state.value == MessageState.COMPLETED.value
-            and node2.state.value == MessageState.COMPLETED.value
-        ):
-            break
-        await asyncio.sleep(0.01)
-
-    assert (
-        handler_integration.tree_queue.get_node("t1").state.value
-        == MessageState.COMPLETED.value
+    await asyncio.gather(
+        handler_integration.handle_message(
+            incoming_message_factory(text="t1", message_id="t1")
+        ),
+        handler_integration.handle_message(
+            incoming_message_factory(text="t2", message_id="t2")
+        ),
     )
-    assert (
-        handler_integration.tree_queue.get_node("t2").state.value
-        == MessageState.COMPLETED.value
-    )
+    await _wait_for_idle(handler_integration)
+
+    node_one = await handler_integration.tree_queue.get_node(_SCOPE, "t1")
+    node_two = await handler_integration.tree_queue.get_node(_SCOPE, "t2")
+    assert node_one is not None and node_one.state is MessageState.COMPLETED
+    assert node_two is not None and node_two.state is MessageState.COMPLETED

@@ -1,0 +1,57 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Inter, ui-sans-serif, system-ui, Segoe UI, Arial", "background": "transparent", "primaryTextColor": "#172033", "lineColor": "#718096"}}}%%
+flowchart LR
+    claudeClient(["Claude Code<br/>CLI / VS Code / JetBrains / Bots"])
+    codexClient(["Codex CLI<br/>VS Code extension"])
+    messagesApi["Anthropic API<br/>/v1/messages, /v1/models"]
+    responsesApi["OpenAI Responses API<br/>/v1/responses"]
+
+    subgraph proxy["Free Claude Code Proxy :8082"]
+        admin["Local Admin UI<br/>keys, models, status"]
+        config[("Managed Config<br/>~/.fcc/.env")]
+        convert["Responses Converter<br/>OpenAI to Anthropic"]
+        router{"Model Router<br/>Opus / Sonnet / Haiku"}
+        optimize["Request Optimizations<br/>cheap local probes"]
+        normalize["Protocol Normalizer<br/>streaming, tools, thinking"]
+        adapters["Provider Adapters<br/>Anthropic + OpenAI-compatible"]
+    end
+
+    subgraph hosted["Hosted Providers"]
+        nim(["NVIDIA NIM"])
+        kimi(["Kimi"])
+        wafer(["Wafer"])
+        openrouter(["OpenRouter"])
+        deepseek(["DeepSeek"])
+    end
+
+    subgraph local["Local Providers"]
+        lmstudio(["LM Studio"])
+        llamacpp(["llama.cpp"])
+        ollama(["Ollama"])
+    end
+
+    claudeClient -->|"Anthropic Messages"| messagesApi
+    codexClient -->|"OpenAI Responses"| responsesApi
+    messagesApi --> router
+    responsesApi --> convert
+    convert --> router
+    admin --> config
+    config --> router
+    router --> optimize
+    optimize --> normalize
+    normalize --> adapters
+    adapters --> hosted
+    adapters --> local
+
+    classDef client fill:#efe7ff,stroke:#7c3aed,stroke-width:2px,color:#2e1065;
+    classDef api fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#172554;
+    classDef proxy fill:#ecfeff,stroke:#0891b2,stroke-width:2px,color:#164e63;
+    classDef config fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f;
+    classDef transform fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d;
+    classDef provider fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#7c2d12;
+
+    class claudeClient,codexClient client;
+    class messagesApi,responsesApi api;
+    class admin,router proxy;
+    class config config;
+    class convert,optimize,normalize,adapters transform;
+    class nim,kimi,wafer,openrouter,deepseek,lmstudio,llamacpp,ollama provider;

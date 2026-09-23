@@ -1,659 +1,597 @@
-"""Tests for config/settings.py and config/nim.py"""
+"""Contracts for pure Settings and canonical source composition."""
+
+from enum import Enum
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
 
-from config.constants import (
+from free_claude_code.application.routing import ModelRouter
+from free_claude_code.config import loader
+from free_claude_code.config.constants import (
     ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MODEL,
     HTTP_CONNECT_TIMEOUT_DEFAULT,
 )
-from config.nim import NimSettings
-
-
-class TestSettings:
-    """Test Settings configuration."""
-
-    def test_settings_loads(self):
-        """Ensure Settings can be instantiated."""
-        from config.settings import Settings
-
-        settings = Settings()
-        assert settings is not None
-
-    def test_default_values(self, monkeypatch):
-        """Test default values are set and have correct types."""
-        from config.settings import Settings
-
-        monkeypatch.delenv("MODEL", raising=False)
-        monkeypatch.delenv("HTTP_READ_TIMEOUT", raising=False)
-        monkeypatch.delenv("HTTP_CONNECT_TIMEOUT", raising=False)
-        monkeypatch.setitem(Settings.model_config, "env_file", ())
-        settings = Settings()
-        assert settings.model == "nvidia_nim/z-ai/glm4.7"
-        assert isinstance(settings.provider_rate_limit, int)
-        assert isinstance(settings.provider_rate_window, int)
-        assert isinstance(settings.nim.temperature, float)
-        assert isinstance(settings.fast_prefix_detection, bool)
-        assert isinstance(settings.enable_model_thinking, bool)
-        assert settings.http_read_timeout == 120.0
-        assert settings.http_connect_timeout == HTTP_CONNECT_TIMEOUT_DEFAULT
-        assert settings.enable_web_server_tools is False
-        assert settings.log_raw_api_payloads is False
-        assert settings.log_raw_sse_events is False
-        assert settings.debug_platform_edits is False
-        assert settings.debug_subagent_stack is False
-
-    def test_get_settings_cached(self):
-        """Test get_settings returns cached instance."""
-        from config.settings import get_settings
-
-        s1 = get_settings()
-        s2 = get_settings()
-        assert s1 is s2  # Same object (cached)
-
-    def test_empty_string_to_none_for_optional_int(self):
-        """Test that empty string converts to None for optional int fields."""
-        from config.settings import Settings
-
-        # Settings should handle NVIDIA_NIM_SEED="" gracefully
-        settings = Settings()
-        assert settings.nim.seed is None or isinstance(settings.nim.seed, int)
-
-    def test_model_setting(self):
-        """Test model setting exists and is a string."""
-        from config.settings import Settings
-
-        settings = Settings()
-        assert isinstance(settings.model, str)
-        assert len(settings.model) > 0
-
-    def test_base_url_constant(self):
-        """Test NVIDIA_NIM_DEFAULT_BASE is a constant."""
-        from providers.nvidia_nim import NVIDIA_NIM_DEFAULT_BASE
-
-        assert NVIDIA_NIM_DEFAULT_BASE == "https://integrate.api.nvidia.com/v1"
-
-    def test_lm_studio_base_url_from_env(self, monkeypatch):
-        """LM_STUDIO_BASE_URL env var is loaded into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("LM_STUDIO_BASE_URL", "http://custom:5678/v1")
-        settings = Settings()
-        assert settings.lm_studio_base_url == "http://custom:5678/v1"
-
-    def test_ollama_base_url_defaults_to_root(self, monkeypatch):
-        """OLLAMA_BASE_URL defaults to the Anthropic-compatible Ollama root URL."""
-        from config.settings import Settings
-
-        monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
-        monkeypatch.setitem(Settings.model_config, "env_file", ())
-        settings = Settings()
-        assert settings.ollama_base_url == "http://localhost:11434"
-
-    def test_ollama_base_url_rejects_v1_suffix(self, monkeypatch):
-        """OLLAMA_BASE_URL must not include /v1 for native Anthropic messages."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-        with pytest.raises(ValidationError, match="without /v1"):
-            Settings()
-
-    def test_provider_rate_limit_from_env(self, monkeypatch):
-        """PROVIDER_RATE_LIMIT env var is loaded into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("PROVIDER_RATE_LIMIT", "20")
-        settings = Settings()
-        assert settings.provider_rate_limit == 20
-
-    def test_provider_rate_window_from_env(self, monkeypatch):
-        """PROVIDER_RATE_WINDOW env var is loaded into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("PROVIDER_RATE_WINDOW", "30")
-        settings = Settings()
-        assert settings.provider_rate_window == 30
-
-    def test_http_read_timeout_from_env(self, monkeypatch):
-        """HTTP_READ_TIMEOUT env var is loaded into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("HTTP_READ_TIMEOUT", "600")
-        settings = Settings()
-        assert settings.http_read_timeout == 600.0
-
-    def test_http_write_timeout_from_env(self, monkeypatch):
-        """HTTP_WRITE_TIMEOUT env var is loaded into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("HTTP_WRITE_TIMEOUT", "20")
-        settings = Settings()
-        assert settings.http_write_timeout == 20.0
-
-    def test_http_connect_timeout_from_env(self, monkeypatch):
-        """HTTP_CONNECT_TIMEOUT env var is loaded into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("HTTP_CONNECT_TIMEOUT", "5")
-        settings = Settings()
-        assert settings.http_connect_timeout == 5.0
-
-    def test_http_connect_timeout_default_matches_shared_constant(
-        self, monkeypatch
-    ) -> None:
-        """Default must match config.constants (and README / .env.example)."""
-        from config.settings import Settings
-
-        monkeypatch.delenv("HTTP_CONNECT_TIMEOUT", raising=False)
-        monkeypatch.setitem(Settings.model_config, "env_file", ())
-        settings = Settings()
-        assert settings.http_connect_timeout == HTTP_CONNECT_TIMEOUT_DEFAULT
-        assert HTTP_CONNECT_TIMEOUT_DEFAULT == 10.0
-
-    def test_enable_model_thinking_from_env(self, monkeypatch):
-        """ENABLE_MODEL_THINKING env var is loaded into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("ENABLE_MODEL_THINKING", "false")
-        settings = Settings()
-        assert settings.enable_model_thinking is False
-
-    def test_per_model_thinking_from_env(self, monkeypatch):
-        """Per-model thinking env vars are loaded into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("ENABLE_OPUS_THINKING", "true")
-        monkeypatch.setenv("ENABLE_SONNET_THINKING", "false")
-        monkeypatch.setenv("ENABLE_HAIKU_THINKING", "false")
-        settings = Settings()
-        assert settings.enable_opus_thinking is True
-        assert settings.enable_sonnet_thinking is False
-        assert settings.enable_haiku_thinking is False
-
-    def test_empty_per_model_thinking_inherits_model_default(self, monkeypatch):
-        """Blank per-model thinking env vars are treated as unset."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("ENABLE_MODEL_THINKING", "false")
-        monkeypatch.setenv("ENABLE_OPUS_THINKING", "")
-        settings = Settings()
-        assert settings.enable_opus_thinking is None
-        assert settings.resolve_thinking("claude-opus-4-20250514") is False
-
-    def test_resolve_thinking_uses_model_tiers(self, monkeypatch):
-        """resolve_thinking applies tier override then fallback."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("ENABLE_MODEL_THINKING", "false")
-        monkeypatch.setenv("ENABLE_OPUS_THINKING", "true")
-        monkeypatch.setenv("ENABLE_HAIKU_THINKING", "false")
-        settings = Settings()
-        assert settings.resolve_thinking("claude-opus-4-20250514") is True
-        assert settings.resolve_thinking("claude-sonnet-4-20250514") is False
-        assert settings.resolve_thinking("claude-haiku-4-20250514") is False
-        assert settings.resolve_thinking("unknown-model") is False
-
-    def test_anthropic_auth_token_from_env_without_dotenv_key(self, monkeypatch):
-        """ANTHROPIC_AUTH_TOKEN env var is loaded when dotenv does not define it."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "process-token")
-        monkeypatch.setitem(Settings.model_config, "env_file", ())
-        settings = Settings()
-        assert settings.anthropic_auth_token == "process-token"
-        assert settings.uses_process_anthropic_auth_token() is True
-
-    def test_empty_dotenv_anthropic_auth_token_overrides_process_env(
-        self, monkeypatch, tmp_path
-    ):
-        """An explicit empty .env token disables auth despite stale shell tokens."""
-        from config.settings import Settings
-
-        env_file = tmp_path / ".env"
-        env_file.write_text("ANTHROPIC_AUTH_TOKEN=\n", encoding="utf-8")
-        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "stale-client-token")
-        monkeypatch.setitem(Settings.model_config, "env_file", (env_file,))
-
-        settings = Settings()
-        assert settings.anthropic_auth_token == ""
-        assert settings.uses_process_anthropic_auth_token() is False
-
-    def test_dotenv_anthropic_auth_token_overrides_process_env(
-        self, monkeypatch, tmp_path
-    ):
-        """A configured .env token is the server token even with a stale shell token."""
-        from config.settings import Settings
-
-        env_file = tmp_path / ".env"
-        env_file.write_text(
-            'ANTHROPIC_AUTH_TOKEN="server-token"\n',
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "stale-client-token")
-        monkeypatch.setitem(Settings.model_config, "env_file", (env_file,))
-
-        settings = Settings()
-        assert settings.anthropic_auth_token == "server-token"
-        assert settings.uses_process_anthropic_auth_token() is False
-
-    def test_removed_nim_enable_thinking_raises(self, monkeypatch):
-        """NIM_ENABLE_THINKING now fails fast with a migration message."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("NIM_ENABLE_THINKING", "false")
-        with pytest.raises(ValidationError, match="ENABLE_MODEL_THINKING"):
-            Settings()
-
-    def test_removed_enable_thinking_raises(self, monkeypatch):
-        """ENABLE_THINKING now fails fast with a migration message."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("ENABLE_THINKING", "false")
-        with pytest.raises(ValidationError, match="ENABLE_MODEL_THINKING"):
-            Settings()
-
-
-# --- NimSettings Validation Tests ---
-class TestNimSettingsValidBounds:
-    """Test that valid values within bounds are accepted."""
-
-    @pytest.mark.parametrize("top_k", [-1, 0, 1, 100])
-    def test_top_k_valid(self, top_k):
-        """top_k >= -1 should be accepted."""
-        s = NimSettings(top_k=top_k)
-        assert s.top_k == top_k
-
-    @pytest.mark.parametrize("temp", [0.0, 0.5, 1.0, 2.0])
-    def test_temperature_valid(self, temp):
-        s = NimSettings(temperature=temp)
-        assert s.temperature == temp
-
-    @pytest.mark.parametrize("top_p", [0.0, 0.5, 1.0])
-    def test_top_p_valid(self, top_p):
-        s = NimSettings(top_p=top_p)
-        assert s.top_p == top_p
-
-    def test_max_tokens_valid(self):
-        s = NimSettings(max_tokens=1)
-        assert s.max_tokens == 1
-
-    def test_min_tokens_valid(self):
-        s = NimSettings(min_tokens=0)
-        assert s.min_tokens == 0
-
-    @pytest.mark.parametrize("penalty", [-2.0, 0.0, 2.0])
-    def test_presence_penalty_valid(self, penalty):
-        s = NimSettings(presence_penalty=penalty)
-        assert s.presence_penalty == penalty
-
-    @pytest.mark.parametrize("penalty", [-2.0, 0.0, 2.0])
-    def test_frequency_penalty_valid(self, penalty):
-        s = NimSettings(frequency_penalty=penalty)
-        assert s.frequency_penalty == penalty
-
-    @pytest.mark.parametrize("min_p", [0.0, 0.5, 1.0])
-    def test_min_p_valid(self, min_p):
-        s = NimSettings(min_p=min_p)
-        assert s.min_p == min_p
-
-
-class TestNimSettingsInvalidBounds:
-    """Test that out-of-range values raise ValidationError."""
-
-    @pytest.mark.parametrize("top_k", [-2, -100])
-    def test_top_k_below_lower_bound(self, top_k):
-        with pytest.raises((ValidationError, ValueError)):
-            NimSettings(top_k=top_k)
-
-    def test_temperature_negative(self):
-        with pytest.raises(ValidationError):
-            NimSettings(temperature=-0.1)
-
-    @pytest.mark.parametrize("top_p", [-0.1, 1.1])
-    def test_top_p_out_of_range(self, top_p):
-        with pytest.raises(ValidationError):
-            NimSettings(top_p=top_p)
-
-    @pytest.mark.parametrize("penalty", [-2.1, 2.1])
-    def test_presence_penalty_out_of_range(self, penalty):
-        with pytest.raises(ValidationError):
-            NimSettings(presence_penalty=penalty)
-
-    @pytest.mark.parametrize("penalty", [-2.1, 2.1])
-    def test_frequency_penalty_out_of_range(self, penalty):
-        with pytest.raises(ValidationError):
-            NimSettings(frequency_penalty=penalty)
-
-    @pytest.mark.parametrize("min_p", [-0.1, 1.1])
-    def test_min_p_out_of_range(self, min_p):
-        with pytest.raises(ValidationError):
-            NimSettings(min_p=min_p)
-
-    @pytest.mark.parametrize("max_tokens", [0, -1])
-    def test_max_tokens_too_low(self, max_tokens):
-        with pytest.raises(ValidationError):
-            NimSettings(max_tokens=max_tokens)
-
-    def test_min_tokens_negative(self):
-        with pytest.raises(ValidationError):
-            NimSettings(min_tokens=-1)
-
-
-class TestNimSettingsValidators:
-    """Test custom field validators in NimSettings."""
-
-    def test_default_max_tokens_matches_shared_constant(self):
-        assert NimSettings().max_tokens == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-
-    @pytest.mark.parametrize(
-        "seed_val,expected",
-        [("", None), (None, None), ("42", 42), (42, 42)],
-        ids=["empty_str", "none", "str_42", "int_42"],
+from free_claude_code.config.env_files import dotenv_values_from_file
+from free_claude_code.config.loader import (
+    ConfigSource,
+    ManagedConfigStore,
+    clear_settings_cache,
+    compose_settings_snapshot,
+    get_settings,
+)
+from free_claude_code.config.model_refs import (
+    configured_chat_model_refs,
+    parse_model_name,
+    parse_provider_type,
+)
+from free_claude_code.config.nim import NimSettings
+from free_claude_code.config.paths import (
+    managed_env_path,
+    messaging_state_dir_path,
+    server_log_path,
+)
+from free_claude_code.config.reasoning import ReasoningPreference
+from free_claude_code.config.settings import Settings
+
+
+@pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
+@pytest.mark.parametrize("tier", ["FABLE", "OPUS", "SONNET", "HAIKU"])
+def test_retirement_normalizes_sources_without_resurrecting_overrides(source, tier):
+    retired = {
+        "MODEL": "github_models/openai/old",
+        f"MODEL_{tier}": "github_models/vendor/opus",
+        "MODEL_FALLBACKS": "github_models/old",
+        f"REASONING_{tier}": "off",
+    }
+    managed = {
+        "MODEL": "groq/managed",
+        f"MODEL_{tier}": "groq/tier",
+        "MODEL_FALLBACKS": "groq/backup",
+    }
+    snapshot = compose_settings_snapshot(
+        retired if source is ConfigSource.MANAGED else managed,
+        retired if source is ConfigSource.PROCESS else {},
     )
-    def test_parse_optional_int(self, seed_val, expected):
-        s = NimSettings(seed=seed_val)
-        assert s.seed == expected
-
-    @pytest.mark.parametrize(
-        "stop_val,expected",
-        [("", None), ("STOP", "STOP"), (None, None)],
-        ids=["empty_str", "valid", "none"],
+    assert snapshot.settings.model == DEFAULT_MODEL
+    assert getattr(snapshot.settings, f"model_{tier.lower()}") is None
+    assert (
+        getattr(snapshot.settings, f"reasoning_{tier.lower()}")
+        is ReasoningPreference.OFF
     )
-    def test_parse_optional_str_stop(self, stop_val, expected):
-        s = NimSettings(stop=stop_val)
-        assert s.stop == expected
-
-    @pytest.mark.parametrize(
-        "chat_template_val,expected",
-        [("", None), ("template", "template")],
-        ids=["empty_str", "valid"],
+    assert snapshot.settings.model_fallbacks is None
+    expected = (
+        ConfigSource.PROCESS if source is ConfigSource.PROCESS else ConfigSource.DEFAULT
     )
-    def test_parse_optional_str_chat_template(self, chat_template_val, expected):
-        s = NimSettings(chat_template=chat_template_val)
-        assert s.chat_template == expected
-
-    def test_extra_forbid_rejects_unknown_field(self):
-        """NimSettings with extra='forbid' rejects unknown fields."""
-        from typing import Any, cast
-
-        with pytest.raises(ValidationError):
-            NimSettings(**cast(Any, {"unknown_field": "value"}))
-
-    def test_enable_thinking_field_removed(self):
-        """NimSettings no longer accepts the removed thinking toggle."""
-        from typing import Any, cast
-
-        with pytest.raises(ValidationError):
-            NimSettings(**cast(Any, {"enable_thinking": True}))
+    assert snapshot.sources["model"] is expected
+    assert snapshot.sources[f"model_{tier.lower()}"] is expected
+    assert snapshot.sources["model_fallbacks"] is expected
+    assert retired["MODEL"] == "github_models/openai/old"
 
 
-class TestSettingsOptionalStr:
-    """Test Settings parse_optional_str validator."""
-
-    def test_empty_telegram_token_to_none(self, monkeypatch):
-        from config.settings import Settings
-
-        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
-        s = Settings()
-        assert s.telegram_bot_token is None
-
-    def test_valid_telegram_token_preserved(self, monkeypatch):
-        from config.settings import Settings
-
-        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "abc123")
-        s = Settings()
-        assert s.telegram_bot_token == "abc123"
-
-    def test_empty_allowed_user_id_to_none(self, monkeypatch):
-        from config.settings import Settings
-
-        monkeypatch.setenv("ALLOWED_TELEGRAM_USER_ID", "")
-        s = Settings()
-        assert s.allowed_telegram_user_id is None
-
-    def test_discord_bot_token_from_env(self, monkeypatch):
-        from config.settings import Settings
-
-        monkeypatch.setenv("DISCORD_BOT_TOKEN", "discord_token_123")
-        s = Settings()
-        assert s.discord_bot_token == "discord_token_123"
-
-    def test_empty_discord_bot_token_to_none(self, monkeypatch):
-        from config.settings import Settings
-
-        monkeypatch.setenv("DISCORD_BOT_TOKEN", "")
-        s = Settings()
-        assert s.discord_bot_token is None
-
-    def test_allowed_discord_channels_from_env(self, monkeypatch):
-        from config.settings import Settings
-
-        monkeypatch.setenv("ALLOWED_DISCORD_CHANNELS", "111,222,333")
-        s = Settings()
-        assert s.allowed_discord_channels == "111,222,333"
-
-    def test_messaging_platform_from_env(self, monkeypatch):
-        from config.settings import Settings
-
-        monkeypatch.setenv("MESSAGING_PLATFORM", "discord")
-        s = Settings()
-        assert s.messaging_platform == "discord"
-
-    def test_whisper_device_auto_rejected(self, monkeypatch):
-        """WHISPER_DEVICE=auto raises ValidationError (auto removed)."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("WHISPER_DEVICE", "auto")
-        with pytest.raises(ValidationError, match="whisper_device"):
-            Settings()
-
-    @pytest.mark.parametrize("device", ["cpu", "cuda"])
-    def test_whisper_device_valid(self, monkeypatch, device):
-        """Valid whisper_device values are accepted."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("WHISPER_DEVICE", device)
-        s = Settings()
-        assert s.whisper_device == device
+def test_retirement_preserves_effective_default_order_and_process_environment(
+    monkeypatch,
+):
+    monkeypatch.delenv("MODEL", raising=False)
+    monkeypatch.setenv("MODEL_OPUS", "github_models/opus")
+    snapshot = compose_settings_snapshot(
+        {
+            "MODEL": "groq/default",
+            "MODEL_OPUS": "groq/managed-tier",
+            "MODEL_FALLBACKS": "groq/first, github_models/old, deepseek/last",
+        },
+        dict(loader.os.environ),
+    )
+    assert snapshot.settings.model == "groq/default"
+    assert snapshot.settings.model_opus is None
+    assert snapshot.sources["model_opus"] is ConfigSource.PROCESS
+    assert snapshot.settings.model_fallbacks == ("groq/first", "deepseek/last")
+    assert loader.os.environ["MODEL_OPUS"] == "github_models/opus"
 
 
-class TestPerModelMapping:
-    """Test per-model fields and resolve_model()."""
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"MODEL": "github_models/"},
+        {"MODEL": "other/unknown"},
+        {"MODEL_FALLBACKS": "github_models/old,groq/a,groq/a"},
+        {"MODEL_FALLBACKS": "github_models/old,,groq/a"},
+        {"MODEL_FALLBACKS": "github_models/old,"},
+        {"MODEL_FALLBACKS": ",github_models/old"},
+        {"MODEL_FALLBACKS": "github_models/old, "},
+        {"MODEL_FALLBACKS": "github_models/old,github_models/"},
+    ],
+)
+def test_retirement_does_not_hide_invalid_configuration(values):
+    with pytest.raises(ValidationError):
+        compose_settings_snapshot(values, {})
 
-    def test_model_fields_default_none(self):
-        """Per-model fields default to None."""
-        from config.settings import Settings
 
-        s = Settings()
-        assert s.model_opus is None
-        assert s.model_sonnet is None
-        assert s.model_haiku is None
+def test_direct_settings_still_reject_retired_provider():
+    with pytest.raises(ValidationError):
+        Settings(MODEL="github_models/openai/old")
 
-    def test_model_opus_from_env(self, monkeypatch):
-        """MODEL_OPUS env var is loaded."""
-        from config.settings import Settings
 
-        monkeypatch.setenv("MODEL_OPUS", "open_router/deepseek/deepseek-r1")
-        s = Settings()
-        assert s.model_opus == "open_router/deepseek/deepseek-r1"
+def test_settings_defaults_are_valid_and_nonempty() -> None:
+    settings = Settings()
 
-    @pytest.mark.parametrize("env_var", ["MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"])
-    def test_empty_model_override_env_is_unset(self, monkeypatch, env_var):
-        """Empty per-model override env vars are treated as unset."""
-        from config.settings import Settings
+    assert settings.provider_rate_limit == 1
+    assert settings.provider_rate_window == 2
+    assert settings.provider_max_concurrency == 2
+    assert settings.provider_progress_timeout == 600.0
+    assert settings.http_read_timeout == 120.0
+    assert settings.http_write_timeout == 10.0
+    assert settings.http_connect_timeout == HTTP_CONNECT_TIMEOUT_DEFAULT
+    assert settings.voice_note_enabled is True
+    assert settings.whisper_device == "cpu"
+    assert settings.whisper_model == "base"
+    assert settings.enable_web_server_tools is True
+    assert settings.proxy_auth_enabled is False
+    assert settings.proxy_auth_token == "freecc"
+    assert [
+        name for name, value in settings if isinstance(value, str) and not value
+    ] == []
+    assert [
+        name
+        for name, field in Settings.model_fields.items()
+        if field.get_default(call_default_factory=True) == ""
+    ] == []
 
-        monkeypatch.setenv(env_var, "")
-        s = Settings()
-        assert getattr(s, env_var.lower()) is None
-        assert (
-            s.resolve_model(f"claude-{env_var.removeprefix('MODEL_').lower()}-4")
-            == s.model
-        )
 
-    @pytest.mark.parametrize(
-        "env_vars,expected_model,expected_haiku",
-        [
+def test_every_external_setting_has_one_explicit_alias() -> None:
+    aliases = [
+        field.validation_alias
+        for name, field in Settings.model_fields.items()
+        if name != "nim"
+    ]
+    assert all(isinstance(alias, str) for alias in aliases)
+    assert len(aliases) == len(set(aliases))
+    assert Settings.model_fields["nim"].validation_alias is None
+
+
+def test_direct_settings_construction_performs_no_environment_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MODEL", "deepseek/process-model")
+    monkeypatch.setenv("PROVIDER_RATE_LIMIT", "99")
+
+    settings = Settings()
+
+    assert settings.model.startswith("nvidia_nim/")
+    assert settings.provider_rate_limit == 1
+
+
+@pytest.mark.parametrize(
+    ("key", "attribute", "value", "expected"),
+    [
+        ("MODEL", "model", "deepseek/deepseek-chat", "deepseek/deepseek-chat"),
+        ("PROVIDER_RATE_LIMIT", "provider_rate_limit", "20", 20),
+        (
+            "PROVIDER_PROGRESS_TIMEOUT",
+            "provider_progress_timeout",
+            "900",
+            900.0,
+        ),
+        ("HTTP_READ_TIMEOUT", "http_read_timeout", "600", 600.0),
+        ("FCC_OPEN_BROWSER", "open_admin_browser", "false", False),
+        ("REASONING_POLICY", "reasoning_policy", "off", ReasoningPreference.OFF),
+        ("GROQ_API_KEY", "groq_api_key", " secret ", "secret"),
+        ("OPENROUTER_PROXY", "open_router_proxy", " http://proxy ", "http://proxy"),
+    ],
+)
+def test_process_values_are_parsed_at_the_loader_boundary(
+    key: str,
+    attribute: str,
+    value: str,
+    expected: object,
+) -> None:
+    snapshot = compose_settings_snapshot({}, {key: value})
+
+    assert getattr(snapshot.settings, attribute) == expected
+    assert snapshot.sources[attribute] is ConfigSource.PROCESS
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        0.0,
+        -1.0,
+        float("inf"),
+        float("-inf"),
+        float("nan"),
+        float(1 << 64),
+    ],
+)
+def test_provider_progress_timeout_must_be_representable(value: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings(provider_progress_timeout=value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["0", "-1", "inf", "-inf", "nan", str(1 << 64)],
+)
+def test_loader_rejects_invalid_provider_progress_timeout(value: str) -> None:
+    with pytest.raises(ValidationError):
+        compose_settings_snapshot({}, {"PROVIDER_PROGRESS_TIMEOUT": value})
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "GROQ_API_KEY",
+        "OPENROUTER_PROXY",
+        "MODEL_OPUS",
+        "TELEGRAM_BOT_TOKEN",
+        "ALLOWED_DIR",
+    ],
+)
+def test_optional_blank_process_values_normalize_to_none(key: str) -> None:
+    snapshot = compose_settings_snapshot({}, {key: "  "})
+    attribute = next(
+        name
+        for name, field in Settings.model_fields.items()
+        if field.validation_alias == key
+    )
+
+    assert getattr(snapshot.settings, attribute) is None
+
+
+def test_blank_required_process_value_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="MODEL"):
+        compose_settings_snapshot({}, {"MODEL": " "})
+
+
+@pytest.mark.parametrize("process_token", ["", "  ", "terminal-token"])
+def test_process_auth_token_cannot_override_retained_default(
+    process_token: str,
+) -> None:
+    snapshot = compose_settings_snapshot({}, {"ANTHROPIC_AUTH_TOKEN": process_token})
+
+    assert snapshot.settings.proxy_auth_token == "freecc"
+    assert snapshot.sources["proxy_auth_token"] is ConfigSource.DEFAULT
+
+
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_auth_checkbox_does_not_change_retained_token(enabled: str) -> None:
+    snapshot = compose_settings_snapshot(
+        {"PROXY_AUTH_ENABLED": enabled, "ANTHROPIC_AUTH_TOKEN": "managed-token"},
+        {"ANTHROPIC_AUTH_TOKEN": "terminal-token"},
+    )
+    assert snapshot.settings.proxy_auth_enabled is (enabled == "true")
+    assert snapshot.settings.proxy_auth_token == "managed-token"
+
+
+def test_process_precedence_and_managed_token_exception() -> None:
+    snapshot = compose_settings_snapshot(
+        {
+            "MODEL": "deepseek/managed",
+            "ANTHROPIC_AUTH_TOKEN": "managed-token",
+        },
+        {
+            "MODEL": "groq/process",
+            "ANTHROPIC_AUTH_TOKEN": "stale-process-token",
+        },
+    )
+
+    assert snapshot.settings.model == "groq/process"
+    assert snapshot.sources["model"] is ConfigSource.PROCESS
+    assert snapshot.settings.proxy_auth_token == "managed-token"
+    assert snapshot.sources["proxy_auth_token"] is ConfigSource.MANAGED
+
+
+def test_get_settings_is_cached_and_creates_managed_schema() -> None:
+    clear_settings_cache()
+
+    first = get_settings()
+    second = get_settings()
+
+    assert first is second
+
+
+def _write_managed_config(text: str) -> Path:
+    path = managed_env_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_repair_invalid_managed_provider_proxies_removes_all_eligible_values() -> None:
+    invalid_openai = "invalid://user:leaked-secret@proxy.example:8080"
+    managed = _write_managed_config(
+        "\n".join(
             (
-                {"MODEL": "nvidia_nim/meta/llama3-70b-instruct"},
-                "nvidia_nim/meta/llama3-70b-instruct",
-                None,
-            ),
-            (
-                {
-                    "MODEL": "open_router/anthropic/claude-3-opus",
-                    "MODEL_HAIKU": "open_router/anthropic/claude-3-haiku",
-                },
-                "open_router/anthropic/claude-3-opus",
-                "open_router/anthropic/claude-3-haiku",
-            ),
-            ({"MODEL": "deepseek/deepseek-chat"}, "deepseek/deepseek-chat", None),
-            ({"MODEL": "lmstudio/qwen2.5-7b"}, "lmstudio/qwen2.5-7b", None),
-            ({"MODEL": "llamacpp/local-model"}, "llamacpp/local-model", None),
-            ({"MODEL": "ollama/llama3.1"}, "ollama/llama3.1", None),
-        ],
+                "FCC_CONFIG_SCHEMA=1",
+                "MODEL=nvidia_nim/test-model",
+                "OPENROUTER_PROXY=http://proxy.example:notaport",
+                "GROQ_PROXY=https://proxy.example:8443",
+                f"OPENAI_PROXY={invalid_openai}",
+                "PRESERVE_UNKNOWN=present",
+                "",
+            )
+        )
     )
-    def test_settings_models_from_env(
-        self, env_vars, expected_model, expected_haiku, monkeypatch
+
+    removed = ManagedConfigStore().repair_invalid_provider_proxies({})
+
+    values = dotenv_values_from_file(managed)
+    assert removed == ("OPENROUTER_PROXY", "OPENAI_PROXY")
+    assert "OPENROUTER_PROXY" not in values
+    assert "OPENAI_PROXY" not in values
+    assert values["GROQ_PROXY"] == "https://proxy.example:8443"
+    assert values["MODEL"] == "nvidia_nim/test-model"
+    assert values["PRESERVE_UNKNOWN"] == "present"
+    assert list(managed.parent.glob(f".{managed.name}.*.tmp")) == []
+
+
+def test_repair_valid_managed_provider_proxy_leaves_file_unchanged() -> None:
+    managed = _write_managed_config(
+        "# Keep this exact text on a no-op.\n"
+        "FCC_CONFIG_SCHEMA=1\n"
+        "OPENAI_PROXY=https://proxy.example:8443\n"
+    )
+    baseline = managed.read_bytes()
+
+    assert ManagedConfigStore().repair_invalid_provider_proxies({}) == ()
+    assert managed.read_bytes() == baseline
+
+
+def test_repair_without_managed_file_is_a_noop() -> None:
+    managed = managed_env_path()
+
+    assert ManagedConfigStore().repair_invalid_provider_proxies({}) == ()
+    assert not managed.exists()
+
+
+@pytest.mark.parametrize("process_value", ("", "invalid://process-proxy"))
+def test_repair_preserves_process_owned_managed_proxy(
+    process_value: str,
+) -> None:
+    invalid_openai = "invalid://managed-proxy"
+    managed = _write_managed_config(
+        "FCC_CONFIG_SCHEMA=1\n"
+        f"OPENAI_PROXY={invalid_openai}\n"
+        "OPENROUTER_PROXY=invalid://unshadowed\n"
+    )
+    process = {"OPENAI_PROXY": process_value, "KEEP_PROCESS": "unchanged"}
+    baseline_process = dict(process)
+
+    assert ManagedConfigStore().repair_invalid_provider_proxies(process) == (
+        "OPENROUTER_PROXY",
+    )
+
+    values = dotenv_values_from_file(managed)
+    assert values["OPENAI_PROXY"] == invalid_openai
+    assert "OPENROUTER_PROXY" not in values
+    assert process == baseline_process
+
+
+def test_repair_propagates_atomic_write_failure_without_changing_source() -> None:
+    managed = _write_managed_config(
+        "FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY=invalid://managed-proxy\n"
+    )
+    baseline = managed.read_bytes()
+
+    with (
+        patch.object(
+            loader,
+            "atomic_write_managed_config",
+            side_effect=OSError("disk full"),
+        ),
+        pytest.raises(OSError, match="disk full"),
     ):
-        """Test environment variables override model defaults."""
-        from config.settings import Settings
+        ManagedConfigStore().repair_invalid_provider_proxies({})
 
-        for k, v in env_vars.items():
-            monkeypatch.setenv(k, v)
+    assert managed.read_bytes() == baseline
 
-        s = Settings()
-        assert s.model == expected_model
-        assert s.model_haiku == expected_haiku
 
-    def test_model_sonnet_from_env(self, monkeypatch):
-        """MODEL_SONNET env var is loaded."""
-        from config.settings import Settings
+def test_repair_is_idempotent_and_writes_only_once() -> None:
+    managed = _write_managed_config(
+        "FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY=invalid://managed-proxy\n"
+    )
 
-        monkeypatch.setenv("MODEL_SONNET", "nvidia_nim/meta/llama-3.3-70b-instruct")
-        s = Settings()
-        assert s.model_sonnet == "nvidia_nim/meta/llama-3.3-70b-instruct"
-
-    def test_model_haiku_from_env(self, monkeypatch):
-        """MODEL_HAIKU env var is loaded."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("MODEL_HAIKU", "lmstudio/qwen2.5-7b")
-        s = Settings()
-        assert s.model_haiku == "lmstudio/qwen2.5-7b"
-
-    def test_model_opus_invalid_provider_raises(self, monkeypatch):
-        """MODEL_OPUS with invalid provider prefix raises ValidationError."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("MODEL_OPUS", "bad_provider/some-model")
-        with pytest.raises(ValidationError, match="Invalid provider"):
-            Settings()
-
-    def test_model_opus_no_slash_raises(self, monkeypatch):
-        """MODEL_OPUS without provider prefix raises ValidationError."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("MODEL_OPUS", "noprefix")
-        with pytest.raises(ValidationError, match="provider type"):
-            Settings()
-
-    def test_model_haiku_invalid_provider_raises(self, monkeypatch):
-        """MODEL_HAIKU with invalid provider prefix raises ValidationError."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("MODEL_HAIKU", "invalid/model")
-        with pytest.raises(ValidationError, match="Invalid provider"):
-            Settings()
-
-    def test_resolve_model_opus_override(self):
-        """resolve_model returns model_opus for opus model names."""
-        from config.settings import Settings
-
-        s = Settings()
-        s.model_opus = "open_router/deepseek/deepseek-r1"
-        assert (
-            s.resolve_model("claude-opus-4-20250514")
-            == "open_router/deepseek/deepseek-r1"
+    with patch.object(
+        loader,
+        "atomic_write_managed_config",
+        wraps=loader.atomic_write_managed_config,
+    ) as writer:
+        assert ManagedConfigStore().repair_invalid_provider_proxies({}) == (
+            "OPENAI_PROXY",
         )
-        assert s.resolve_model("claude-3-opus") == "open_router/deepseek/deepseek-r1"
-        assert (
-            s.resolve_model("claude-3-opus-20240229")
-            == "open_router/deepseek/deepseek-r1"
-        )
+        repaired = managed.read_bytes()
+        assert ManagedConfigStore().repair_invalid_provider_proxies({}) == ()
 
-    def test_resolve_model_sonnet_override(self):
-        """resolve_model returns model_sonnet for sonnet model names."""
-        from config.settings import Settings
+    assert writer.call_count == 1
+    assert managed.read_bytes() == repaired
 
-        s = Settings()
-        s.model_sonnet = "nvidia_nim/meta/llama-3.3-70b-instruct"
-        assert (
-            s.resolve_model("claude-sonnet-4-20250514")
-            == "nvidia_nim/meta/llama-3.3-70b-instruct"
-        )
-        assert (
-            s.resolve_model("claude-3-5-sonnet-20241022")
-            == "nvidia_nim/meta/llama-3.3-70b-instruct"
-        )
 
-    def test_resolve_model_haiku_override(self):
-        """resolve_model returns model_haiku for haiku model names."""
-        from config.settings import Settings
+def test_repair_propagates_malformed_managed_config() -> None:
+    managed = _write_managed_config('FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY="unterminated\n')
+    baseline = managed.read_bytes()
 
-        s = Settings()
-        s.model_haiku = "lmstudio/qwen2.5-7b"
-        assert s.resolve_model("claude-3-haiku-20240307") == "lmstudio/qwen2.5-7b"
-        assert s.resolve_model("claude-3-5-haiku-20241022") == "lmstudio/qwen2.5-7b"
-        assert s.resolve_model("claude-haiku-4-20250514") == "lmstudio/qwen2.5-7b"
+    with pytest.raises(ValueError, match="Could not parse configuration file"):
+        ManagedConfigStore().repair_invalid_provider_proxies({})
 
-    def test_resolve_model_fallback_when_override_not_set(self):
-        """resolve_model falls back to MODEL when model override is None."""
-        from config.settings import Settings
+    assert managed.read_bytes() == baseline
 
-        s = Settings()
-        s.model = "nvidia_nim/fallback-model"
-        # No model overrides set
-        assert s.resolve_model("claude-opus-4-20250514") == "nvidia_nim/fallback-model"
-        assert (
-            s.resolve_model("claude-sonnet-4-20250514") == "nvidia_nim/fallback-model"
-        )
-        assert s.resolve_model("claude-3-haiku-20240307") == "nvidia_nim/fallback-model"
 
-    def test_resolve_model_unknown_model_falls_back(self):
-        """resolve_model falls back to MODEL for unrecognized model names."""
-        from config.settings import Settings
+def test_repair_propagates_config_lock_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    managed = _write_managed_config(
+        "FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY=invalid://managed-proxy\n"
+    )
+    baseline = managed.read_bytes()
 
-        s = Settings()
-        s.model = "nvidia_nim/fallback-model"
-        s.model_opus = "open_router/opus-model"
-        assert s.resolve_model("claude-2.1") == "nvidia_nim/fallback-model"
-        assert s.resolve_model("some-unknown-model") == "nvidia_nim/fallback-model"
+    class UnavailableLock:
+        def __init__(self, _path: Path) -> None:
+            pass
 
-    def test_resolve_model_case_insensitive(self):
-        """Model classification is case-insensitive."""
-        from config.settings import Settings
+        def acquire(self, *, wait: bool, timeout: float) -> bool:
+            assert wait is True
+            assert timeout == 10.0
+            return False
 
-        s = Settings()
-        s.model_opus = "open_router/opus-model"
-        assert s.resolve_model("Claude-OPUS-4") == "open_router/opus-model"
+    monkeypatch.setattr(loader, "InterprocessFileLock", UnavailableLock)
 
-    def test_parse_provider_type(self):
-        """parse_provider_type extracts provider from model string."""
-        from config.settings import Settings
+    with pytest.raises(TimeoutError, match="Could not acquire managed-config lock"):
+        ManagedConfigStore().repair_invalid_provider_proxies({})
 
-        assert Settings.parse_provider_type("nvidia_nim/meta/llama") == "nvidia_nim"
-        assert Settings.parse_provider_type("open_router/deepseek/r1") == "open_router"
-        assert Settings.parse_provider_type("deepseek/deepseek-chat") == "deepseek"
-        assert Settings.parse_provider_type("lmstudio/qwen") == "lmstudio"
-        assert Settings.parse_provider_type("llamacpp/model") == "llamacpp"
-        assert Settings.parse_provider_type("ollama/llama3.1") == "ollama"
+    assert managed.read_bytes() == baseline
 
-    def test_parse_model_name(self):
-        """parse_model_name extracts model name from model string."""
-        from config.settings import Settings
 
-        assert Settings.parse_model_name("nvidia_nim/meta/llama") == "meta/llama"
-        assert Settings.parse_model_name("deepseek/deepseek-chat") == "deepseek-chat"
-        assert Settings.parse_model_name("lmstudio/qwen") == "qwen"
-        assert Settings.parse_model_name("llamacpp/model") == "model"
-        assert Settings.parse_model_name("ollama/llama3.1") == "llama3.1"
+def test_optional_strings_share_one_normalization_rule() -> None:
+    settings = Settings.model_validate(
+        {
+            "GROQ_API_KEY": "  key  ",
+            "OPENROUTER_PROXY": " ",
+            "MODEL_OPUS": "",
+            "ALLOWED_DIR": None,
+        }
+    )
+
+    assert settings.groq_api_key == "key"
+    assert settings.open_router_proxy is None
+    assert settings.model_opus is None
+    assert settings.allowed_dir is None
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", (), []])
+def test_model_fallbacks_empty_values_disable_fallback(value: object) -> None:
+    settings = Settings.model_validate({"MODEL_FALLBACKS": value})
+
+    assert settings.model_fallbacks is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "open_router/vendor/model-a, groq/vendor/model-b ",
+        ("open_router/vendor/model-a", " groq/vendor/model-b "),
+        ["open_router/vendor/model-a", "groq/vendor/model-b"],
+    ],
+)
+def test_model_fallbacks_preserve_order_and_trim_members(value: object) -> None:
+    settings = Settings.model_validate({"MODEL_FALLBACKS": value})
+
+    assert settings.model_fallbacks == (
+        "open_router/vendor/model-a",
+        "groq/vendor/model-b",
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "open_router/vendor/model-a,,groq/vendor/model-b",
+        "open_router/vendor/model-a,open_router/vendor/model-a",
+    ],
+)
+def test_model_fallbacks_reject_blank_and_duplicate_members(value: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"MODEL_FALLBACKS": value})
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["MODEL", "HOST", "WHISPER_MODEL", "LOG_LEVEL", "ANTHROPIC_AUTH_TOKEN"],
+)
+def test_required_strings_reject_blank(field: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate({field: "   "})
+
+
+def test_model_validation_and_routing() -> None:
+    settings = Settings(
+        model="deepseek/fallback",
+        model_opus="open_router/anthropic/claude-opus",
+    )
+
+    router = ModelRouter(settings)
+    assert router.resolve("claude-opus-4").primary.provider_model_ref == (
+        "open_router/anthropic/claude-opus"
+    )
+    assert router.resolve("unknown").primary.provider_model_ref == "deepseek/fallback"
+    with pytest.raises(ValidationError, match="Invalid provider"):
+        Settings(model="unknown/model")
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["MODEL", "MODEL_FABLE", "MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"],
+)
+def test_model_settings_reject_empty_model_suffix(field: str) -> None:
+    with pytest.raises(ValidationError, match="model suffix"):
+        Settings.model_validate({field: "open_router/"})
+
+
+def test_configured_chat_model_refs_are_unique() -> None:
+    settings = Settings(
+        model="deepseek/fallback",
+        model_fable="open_router/anthropic/claude-fable",
+        model_sonnet="deepseek/fallback",
+        model_fallbacks=(
+            "groq/vendor/model-a",
+            "open_router/anthropic/claude-fable",
+            "lmstudio/vendor/model-b",
+        ),
+    )
+
+    refs = configured_chat_model_refs(settings)
+
+    assert [ref.model_ref for ref in refs] == [
+        "deepseek/fallback",
+        "open_router/anthropic/claude-fable",
+        "groq/vendor/model-a",
+        "lmstudio/vendor/model-b",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model_ref", "provider", "model"),
+    [
+        ("nvidia_nim/meta/llama", "nvidia_nim", "meta/llama"),
+        ("open_router/deepseek/r1", "open_router", "deepseek/r1"),
+        ("ollama_cloud/qwen3-coder:480b", "ollama_cloud", "qwen3-coder:480b"),
+    ],
+)
+def test_model_ref_parsing(model_ref: str, provider: str, model: str) -> None:
+    assert parse_provider_type(model_ref) == provider
+    assert parse_model_name(model_ref) == model
+
+
+def test_paths_are_owned_by_fcc_home(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    assert messaging_state_dir_path() == tmp_path / ".fcc" / "agent_workspace"
+    assert server_log_path() == tmp_path / ".fcc" / "logs" / "server.log"
+
+
+def test_nim_settings_keep_request_local_validation() -> None:
+    settings = NimSettings.model_validate(
+        {
+            "max_tokens": "1024",
+            "temperature": "0.5",
+            "seed": "7",
+            "stop": "",
+        }
+    )
+
+    assert settings.max_tokens == 1024
+    assert settings.temperature == 0.5
+    assert settings.seed == 7
+    assert settings.stop is None
+    assert NimSettings().max_tokens == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+    assert NimSettings().top_p == 0.95
+    for unsupported_top_p in (0.0, 0.9, 1.0):
+        with pytest.raises(ValidationError):
+            NimSettings(top_p=unsupported_top_p)
+
+
+def test_settings_defaults_do_not_contain_empty_enum_strings() -> None:
+    for _name, value in Settings():
+        if isinstance(value, Enum):
+            assert value.value

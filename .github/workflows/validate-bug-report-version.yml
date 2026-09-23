@@ -1,0 +1,175 @@
+name: Validate bug report version
+
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: bug-report-version-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  validate:
+    if: contains(github.event.issue.labels.*.name, 'bug')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate FCC version
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const repo = context.repo;
+            const issue_number = context.payload.issue.number;
+            const { data: issue } = await github.rest.issues.get({
+              ...repo,
+              issue_number,
+            });
+            const fieldPattern = "^### FCC version\\r?\\n+\\s*([^\\r\\n]+)";
+            const versionPattern = "(?:^|[^0-9A-Za-z_.])v?([0-9]+\\.[0-9]+\\.[0-9]+)(?![0-9A-Za-z_+-]|\\.[0-9A-Za-z_])";
+            const projectVersionPattern = "^\\s*version\\s*=\\s*([\"'])([0-9]+\\.[0-9]+\\.[0-9]+)\\1\\s*(?:#.*)?$";
+            const match = (issue.body || "").match(new RegExp(fieldPattern, "m"));
+            const fieldValue = match?.[1]?.trim() || "";
+            const versionMatches = [...fieldValue.matchAll(new RegExp(versionPattern, "g"))];
+            const reportedVersion = versionMatches.length === 1 ? versionMatches[0][1] : undefined;
+            const valid = reportedVersion !== undefined || fieldValue === "None";
+            const labelName = "needs-fcc-version";
+            const invalidMarker = "<!-- fcc-version-validator -->";
+            const outdatedMarker = "<!-- fcc-version-outdated -->";
+            const labels = new Set(issue.labels.map((label) => label.name));
+
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { ...repo, issue_number, per_page: 100 },
+            );
+            const managedComment = (marker) => comments.find(
+              (comment) => comment.user?.login === "github-actions[bot]"
+                && comment.body?.includes(marker),
+            );
+            const invalidComment = managedComment(invalidMarker);
+            const outdatedComment = managedComment(outdatedMarker);
+
+            const deleteManagedComment = async (comment) => {
+              if (comment === undefined) return;
+              await github.rest.issues.deleteComment({
+                ...repo,
+                comment_id: comment.id,
+              });
+            };
+
+            const isOlderVersion = (reported, latest) => {
+              const reportedParts = reported.split(".").map((part) => BigInt(part));
+              const latestParts = latest.split(".").map((part) => BigInt(part));
+              for (let index = 0; index < reportedParts.length; index += 1) {
+                if (reportedParts[index] < latestParts[index]) return true;
+                if (reportedParts[index] > latestParts[index]) return false;
+              }
+              return false;
+            };
+
+            const projectVersionFromToml = (pyproject) => {
+              let inProjectSection = false;
+              for (const line of pyproject.split(/\r?\n/)) {
+                const stripped = line.trim();
+                if (stripped === "[project]") {
+                  inProjectSection = true;
+                  continue;
+                }
+                if (inProjectSection && stripped.startsWith("[")) return undefined;
+                if (!inProjectSection) continue;
+                const projectVersion = line.match(new RegExp(projectVersionPattern));
+                if (projectVersion !== null) return projectVersion[2];
+              }
+              return undefined;
+            };
+
+            if (!valid) {
+              await deleteManagedComment(outdatedComment);
+              if (!labels.has(labelName)) {
+                try {
+                  await github.rest.issues.getLabel({ ...repo, name: labelName });
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                  try {
+                    await github.rest.issues.createLabel({
+                      ...repo,
+                      name: labelName,
+                      color: "d4c5f9",
+                      description: "FCC version must contain number.number.number or be None",
+                    });
+                  } catch (createError) {
+                    if (createError.status !== 422) throw createError;
+                  }
+                }
+                await github.rest.issues.addLabels({
+                  ...repo,
+                  issue_number,
+                  labels: [labelName],
+                });
+              }
+              if (invalidComment === undefined) {
+                await github.rest.issues.createComment({
+                  ...repo,
+                  issue_number,
+                  body: `${invalidMarker}\nPlease edit **FCC version** so it contains one \`number.number.number\` value, such as \`1.22.333\`, or is exactly \`None\`. Run \`fcc-server --version\` to find the installed version.`,
+                });
+              }
+              return;
+            }
+
+            if (labels.has(labelName)) {
+              await github.rest.issues.removeLabel({
+                ...repo,
+                issue_number,
+                name: labelName,
+              });
+            }
+            await deleteManagedComment(invalidComment);
+
+            if (reportedVersion === undefined) {
+              await deleteManagedComment(outdatedComment);
+              return;
+            }
+
+            const defaultBranch = context.payload.repository.default_branch;
+            const { data: versionFile } = await github.rest.repos.getContent({
+              ...repo,
+              path: "pyproject.toml",
+              ref: defaultBranch,
+            });
+            if (
+              Array.isArray(versionFile)
+              || versionFile.type !== "file"
+              || versionFile.encoding !== "base64"
+              || !versionFile.content
+            ) {
+              throw new Error(`Could not read pyproject.toml from ${defaultBranch}`);
+            }
+            const pyproject = Buffer.from(versionFile.content, "base64").toString("utf8");
+            const latestVersion = projectVersionFromToml(pyproject);
+            if (latestVersion === undefined) {
+              throw new Error(`Could not read the project version from ${defaultBranch}`);
+            }
+
+            if (!isOlderVersion(reportedVersion, latestVersion)) {
+              await deleteManagedComment(outdatedComment);
+              return;
+            }
+
+            const body = `${outdatedMarker}\nThis report uses FCC \`${reportedVersion}\`, while the current version on \`${defaultBranch}\` is \`${latestVersion}\`. Please [update FCC](${context.payload.repository.html_url}#install), restart FCC, and check whether the issue still occurs. The update may already contain the fix.`;
+            if (outdatedComment === undefined) {
+              await github.rest.issues.createComment({
+                ...repo,
+                issue_number,
+                body,
+              });
+            } else if (outdatedComment.body !== body) {
+              await github.rest.issues.updateComment({
+                ...repo,
+                comment_id: outdatedComment.id,
+                body,
+              });
+            }

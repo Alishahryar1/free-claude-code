@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Free Claude Code Admin</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/admin.css" />
+    <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/code_sessions.css" />
+    <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/session_layout.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <a
+            class="brand-mark"
+            href="https://github.com/Alishahryar1/free-claude-code"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open Free Claude Code on GitHub"
+          >
+            <img src="/admin/assets/__FCC_VERSION__/app-icon.svg" alt="" />
+          </a>
+          <div>
+            <h1>Free Claude Code</h1>
+            <p>Server Control · v__FCC_VERSION__</p>
+          </div>
+        </div>
+        <nav id="sectionNav" class="section-nav" aria-label="Admin views"></nav>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="page-heading">
+            <h2 id="pageTitle">Providers</h2>
+            <span id="startupMessage" class="startup-message" role="status" hidden></span>
+          </div>
+        </header>
+
+        <div id="adminViews" class="admin-views">
+          <section id="view-providers" class="admin-view active" data-view="providers">
+            <div id="providerGroups"></div>
+            <div
+              id="providersSections"
+              class="form-sections"
+              aria-label="Runtime configuration"
+            ></div>
+          </section>
+
+          <section id="view-model_config" class="admin-view" data-view="model_config" hidden>
+            <div
+              id="modelConfigSections"
+              class="form-sections"
+              aria-label="Model configuration"
+            ></div>
+          </section>
+
+          <section id="view-messaging" class="admin-view" data-view="messaging" hidden>
+            <div
+              id="messagingSections"
+              class="form-sections"
+              aria-label="Messaging configuration"
+            ></div>
+          </section>
+
+          <section id="view-integrations" class="admin-view provider-grid" data-view="integrations" hidden>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
+                  <h3>Claude Code in VS Code</h3>
+                  <p>Use FCC's models in the Claude Code extension for VS Code.</p>
+                </div>
+              </div>
+              <p id="claudeIntegrationMessage" class="message-area" role="status" hidden></p>
+              <button id="openClaudeIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+            </article>
+            <dialog id="claudeIntegrationDialog" class="integration-dialog" aria-labelledby="claudeIntegrationTitle" aria-describedby="claudeIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="claudeIntegrationTitle">Claude Code in VS Code</h3>
+                <button id="closeClaudeIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="claudeIntegrationDescription">Will set FCC's URL and token, enable model discovery, skip VS Code login, and complete Claude onboarding.</p>
+              <div class="integration-files">
+                <strong>Files to modify</strong>
+                <ul id="claudeIntegrationFiles"></ul>
+              </div>
+              <button id="confirmClaudeIntegration" class="primary-button" type="button">Connect</button>
+              <p id="claudeIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
+            </dialog>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
+                  <h3>Codex in VS Code and App</h3>
+                  <p>Use FCC's models in the Codex VS Code extension and desktop app.</p>
+                </div>
+              </div>
+              <p id="codexIntegrationMessage" class="message-area" role="status" hidden></p>
+              <button id="openCodexIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+            </article>
+            <dialog id="codexIntegrationDialog" class="integration-dialog" aria-labelledby="codexIntegrationTitle" aria-describedby="codexIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="codexIntegrationTitle">Codex in VS Code and App</h3>
+                <button id="closeCodexIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="codexIntegrationDescription">Configure Codex to use FCC. Your selected model stays unchanged.</p>
+              <div class="integration-files">
+                <strong>Files to modify</strong>
+                <ul id="codexIntegrationFiles"></ul>
+              </div>
+              <button id="confirmCodexIntegration" class="primary-button" type="button">Connect</button>
+              <p id="codexIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
+            </dialog>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
+                  <h3>Claude Code in JetBrains ACP</h3>
+                  <p>Use FCC's models in Claude Code through JetBrains ACP.</p>
+                </div>
+              </div>
+              <p id="jetBrainsIntegrationMessage" class="message-area" role="status" hidden></p>
+              <button id="openJetBrainsIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+            </article>
+            <dialog id="jetBrainsIntegrationDialog" class="integration-dialog" aria-labelledby="jetBrainsIntegrationTitle" aria-describedby="jetBrainsIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="jetBrainsIntegrationTitle">Claude Code in JetBrains ACP</h3>
+                <button id="closeJetBrainsIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="jetBrainsIntegrationDescription">Route Claude Code in JetBrains through your FCC server.</p>
+              <div class="integration-files">
+                <strong>Files to modify</strong>
+                <ul id="jetBrainsIntegrationFiles"></ul>
+              </div>
+              <button id="confirmJetBrainsIntegration" class="primary-button" type="button">Connect</button>
+              <p id="jetBrainsIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
+            </dialog>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
+                  <h3>Claude Code in App</h3>
+                  <p>Use FCC's models in the Claude desktop app.</p>
+                </div>
+              </div>
+              <p id="claudeDesktopIntegrationMessage" class="message-area" role="status" hidden></p>
+              <button id="openClaudeDesktopIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+            </article>
+            <dialog id="claudeDesktopIntegrationDialog" class="integration-dialog" aria-labelledby="claudeDesktopIntegrationTitle" aria-describedby="claudeDesktopIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="claudeDesktopIntegrationTitle">Claude Code in App</h3>
+                <button id="closeClaudeDesktopIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="claudeDesktopIntegrationDescription">Set FCC as Claude Desktop's gateway. Fully quit Claude Desktop before connecting, then reopen it.</p>
+              <div class="integration-files">
+                <strong>Files to modify</strong>
+                <ul id="claudeDesktopIntegrationFiles"></ul>
+              </div>
+              <button id="confirmClaudeDesktopIntegration" class="primary-button" type="button">Connect</button>
+              <p id="claudeDesktopIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
+            </dialog>
+          </section>
+
+          <section id="view-code" class="admin-view" data-view="code" hidden>
+            <div id="codeRoot" class="code-root session-root" aria-live="off"></div>
+          </section>
+        </div>
+      </main>
+
+      <footer class="action-bar">
+        <div class="action-meta">
+          <strong id="dirtyState">No changes</strong>
+          <span id="configPath"></span>
+        </div>
+        <div id="messageArea" class="message-area"></div>
+        <div class="action-buttons">
+          <button id="applyButton" class="primary-button" type="button" disabled>Apply</button>
+        </div>
+      </footer>
+    </div>
+    <dialog id="providerDialog" class="integration-dialog provider-dialog" aria-labelledby="providerDialogTitle">
+      <div class="section-heading">
+        <h3 id="providerDialogTitle"></h3>
+        <button id="closeProviderDialog" class="ghost-button" type="button" aria-label="Close provider settings">&#x2715;</button>
+      </div>
+      <div id="providerDialogBody">
+        <div id="providerDialogActions" class="provider-actions"></div>
+        <div id="providerDialogCheck" class="provider-check-result" role="status" hidden></div>
+        <div id="providerFields" class="field-grid"></div>
+      </div>
+      <div id="providerMessage" class="message-area" role="status"></div>
+      <div class="provider-dialog-footer">
+        <button id="cancelProviderDialog" class="secondary-button" type="button">Cancel</button>
+        <button id="saveProvider" class="primary-button" type="button" disabled>Save</button>
+      </div>
+    </dialog>
+    <script src="/admin/assets/__FCC_VERSION__/form_controls.js"></script>
+    <script src="/admin/assets/__FCC_VERSION__/model_combobox.js"></script>
+    <script src="/admin/assets/__FCC_VERSION__/session_ui.js"></script>
+    <script src="/admin/assets/__FCC_VERSION__/code_sessions.js"></script>
+    <script src="/admin/assets/__FCC_VERSION__/admin.js"></script>
+  </body>
+</html>
