@@ -1,11 +1,13 @@
 """OpenRouter provider implementation."""
 
 import json
+from collections.abc import Mapping
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.reasoning import ReasoningEffort
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
@@ -33,6 +35,35 @@ _REQUEST_POLICY = OpenAIChatRequestPolicy(
 
 class OpenRouterChatBehavior(OpenAIChatBehavior):
     """OpenRouter Chat adaptation without HTTP ownership."""
+
+    def failure_override(self, error: Exception) -> ExecutionFailure | None:
+        if getattr(error, "status_code", None) != 404:
+            return None
+        body = getattr(error, "body", None)
+        if isinstance(body, Mapping) and "error" in body:
+            if any(field in body for field in ("code", "message", "metadata")):
+                return None
+            body = body["error"]
+        if not isinstance(body, Mapping):
+            return None
+        code = body.get("code")
+        if not isinstance(code, int) or code != 404:
+            return None
+        if not isinstance(body.get("message"), str):
+            return None
+        metadata = body.get("metadata")
+        if (
+            not isinstance(metadata, Mapping)
+            or metadata.get("failed_routing_step") != "Filter by Image Support"
+        ):
+            return None
+        return ExecutionFailure(
+            FailureKind.INVALID_REQUEST,
+            400,
+            "No OpenRouter endpoint for this request supports image input. "
+            "Remove the image or choose an image-capable model.",
+            False,
+        )
 
     def reasoning_disable_rejected(self, error: Exception) -> bool:
         detail = extract_upstream_error_detail(error)

@@ -10,6 +10,7 @@ import openai
 from loguru import logger
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import (
     ReasoningEffort,
@@ -27,7 +28,7 @@ from free_claude_code.providers.openai_chat import (
     validate_extra_body_does_not_override_reasoning_fields,
 )
 
-from .tpm import correct_tpm_completion_budget
+from .tpm import correct_tpm_completion_budget, token_limit_message
 
 _GROQ_EFFORTS = (
     (ReasoningEffort.MINIMAL, "low"),
@@ -101,6 +102,18 @@ class GroqChatBehavior(OpenAIChatBehavior):
     def __init__(self) -> None:
         super().__init__(_PROFILE)
         self._model_reasoning_vocabularies: dict[str, frozenset[str]] = {}
+
+    def failure_override(self, error: Exception) -> ExecutionFailure | None:
+        if token_limit_message(error) is None:
+            return None
+        return ExecutionFailure(
+            FailureKind.INVALID_REQUEST,
+            400,
+            "Groq rejected this request because it exceeds the account's token-rate "
+            "allowance. Reduce the request's token budget or use a model/provider "
+            "with a higher allowance.",
+            False,
+        )
 
     def finalize_chat_body(
         self,

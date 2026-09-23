@@ -24,6 +24,7 @@ $FccCommands = @(
     "fcc-grok",
     "fcc-muse",
     "fcc-aider",
+    "fcc-update",
     "fcc-init",
     "free-claude-code"
 )

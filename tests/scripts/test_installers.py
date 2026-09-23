@@ -26,6 +26,7 @@ FCC_COMMANDS = (
     "fcc-grok",
     "fcc-muse",
     "fcc-aider",
+    "fcc-update",
     "fcc-init",
     "free-claude-code",
 )
@@ -190,6 +191,7 @@ if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-grok"
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-muse"
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-aider"
+    cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-update"
     if [ "$FAIL_STEP" != "fcc-missing" ]; then
         cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-codex"
     fi
@@ -2080,6 +2082,7 @@ copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-dsh.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-grok.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-muse.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-aider.cmd" >nul
+copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-update.cmd" >nul
 if not "%FAIL_STEP%"=="fcc-missing" copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-codex.cmd" >nul
 exit /b 0
 :install_aider
