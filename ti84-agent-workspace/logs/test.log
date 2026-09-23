@@ -1,0 +1,4 @@
+To test manually:
+1. Install WabbitEmu: https://wabbit.z80.eu/
+2. Obtain TI-83 Plus/TI-84 Plus ROM file (user responsibility)
+3. Run: wabbitemu -rom <your_rom_file> path/to/game.8xp

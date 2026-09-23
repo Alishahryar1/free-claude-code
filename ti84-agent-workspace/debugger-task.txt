@@ -1,0 +1,5 @@
+Role: debugger
+Description: Debugger Specialist - Tests and identifies bugs
+Game Concept: Create a simple puzzle game
+Target Platform: ti84plus
+Timestamp: Wed Sep 23 19:29:17 UTC 2026

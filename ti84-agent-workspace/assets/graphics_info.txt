@@ -1,0 +1,23 @@
+Graphics Assets for TI-84/Z80 Game
+==================================
+
+Platform: ti84plus
+Resolution: 96x64 (monochrome)
+Color Depth: 1-bit (monochrome)
+
+Asset Requirements:
+- Player character sprites: 4 directions × 2 animation frames
+- Enemy/NPC sprites: varies by game type
+- Background tiles: 8×8 or 16×16 pixel tiles
+- UI elements: buttons, menus, text boxes
+- Special effects: particles, explosions, power-ups
+
+Format:
+- Sprites: 8×8 or 16×16 pixel blocks, monochrome or 16-bit color
+- Tiles: 8×8 pixel blocks for tile-based backgrounds
+- Maps: arrays of tile indices
+
+Next Steps:
+1. Create actual sprite data in assembly format
+2. Implement tilemap renderer
+3. Add animation system

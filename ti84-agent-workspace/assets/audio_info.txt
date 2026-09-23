@@ -1,0 +1,26 @@
+Audio System Design for TI-84/Z80 Game
+=====================================
+
+Platform: ti84plus
+Audio Capability: Built-in beeper (frequency-based)
+
+Sound Requirements:
+- Background music: looping track
+- Sound effects: actions, collisions, UI feedback
+- Voice chips: optional speech (if supported)
+- Volume control: user adjustable
+
+Audio Formats:
+- Beeper: square wave tones at specific frequencies
+- Link port: 8-bit PCM samples at configurable sample rate
+
+Implementation Plan:
+1. Initialize audio subsystem
+2. Load/prepare audio assets
+3. Play background music loop
+4. Trigger sound effects on game events
+5. Handle audio interruptions and prioritization
+
+Tools:
+- Beeper tones: calculated frequencies
+- Sample conversion: audio processing utilities

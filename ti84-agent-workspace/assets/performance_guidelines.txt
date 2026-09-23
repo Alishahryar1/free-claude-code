@@ -1,0 +1,42 @@
+Performance Optimization Guidelines for TI-84/Z80
+=================================================
+
+Target Platform: ti84plus
+CPU Speed: Z80 @ 15MHz
+
+Key Performance Areas:
+1. Game Loop Frequency
+2. Rendering Speed
+3. Collision Detection
+4. AI Processing
+5. Audio Generation
+5. Memory Access Patterns
+
+Optimization Strategies:
+- Loop unrolling for critical sections
+- Lookup tables instead of calculations
+- Bit shifting instead of multiplication/division
+- Sprite caching and reuse
+- Dirty rectangle rendering
+- Fixed-point arithmetic instead of floating-point
+- Minimizing bank switches (if applicable)
+- Using shadow registers for frequent values
+
+Profiling Methods:
+- Emulator performance counters
+- Frame rate measurement
+- Instruction cycle counting
+- Memory access monitoring
+- Interrupt timing analysis
+
+Target Performance Goals:
+- Main game loop: ≤ 16ms (60 FPS) for smooth gameplay
+- Input response: ≤ 8ms for responsive controls
+- Rendering: ≤ 10ms for minimal flicker
+- Audio generation: non-blocking or buffered
+
+Optimization Priority:
+1. Correctness first
+2. Then performance profiling
+3. Then targeted optimizations
+4. Regression testing after each change
