@@ -193,6 +193,7 @@ def test_browser_thread_start_failure_does_not_fail_fcc(monkeypatch, reuse):
 def _run_browser_shutdown_probe(mode, outcome, directory):
     """Run real FCC lifecycle owners with only OS/browser/server dependencies faked."""
     from free_claude_code.cli import desktop, uvicorn_server
+    from free_claude_code.config import paths
     from free_claude_code.runtime import bootstrap
 
     entered = threading.Event()
@@ -203,6 +204,7 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
     patcher.setattr(commands, "load_server_settings", lambda: settings)
     patcher.setattr(desktop, "load_server_settings", lambda: settings)
     patcher.setattr(desktop, "config_dir_path", lambda: Path(directory))
+    patcher.setattr(paths, "config_dir_path", lambda: Path(directory))
 
     def browser(url):
         assert url == "http://127.0.0.1:0/admin"

@@ -9,7 +9,6 @@ LEGACY_XDG_CONFIG_DIRNAME = ".config"
 MESSAGING_STATE_DIRNAME = "agent_workspace"
 FCC_LOGS_DIRNAME = "logs"
 SERVER_LOG_FILENAME = "server.log"
-STARTUP_LOG_FILENAME = "startup.log"
 CODEX_MODEL_CATALOG_FILENAME = "codex-model-catalog.json"
 AUTH_DIRNAME = "auth"
 OPENAI_AUTH_FILENAME = "openai.json"
@@ -90,12 +89,6 @@ def server_log_path() -> Path:
     """Return the canonical server log path."""
 
     return config_dir_path() / FCC_LOGS_DIRNAME / SERVER_LOG_FILENAME
-
-
-def startup_log_path() -> Path:
-    """Return the log holding an auto-started owner's output before its own sink."""
-
-    return config_dir_path() / FCC_LOGS_DIRNAME / STARTUP_LOG_FILENAME
 
 
 def codex_model_catalog_path() -> Path:

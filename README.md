@@ -360,9 +360,8 @@ For terminal use, run `fcc-claude`, `fcc-codex`, `fcc-pi`, `fcc-opencode`,
 If FCC is not running, the launcher starts FCC Desktop on Windows/macOS or
 `fcc-server` in the background on Linux, then waits for it to become ready.
 FCC stays running after the client exits. Desktop keeps its tray/menu-bar controls
-and your Admin browser preference. If automatic startup fails, check
-`~/.fcc/logs/startup.log`, or run `fcc-desktop` (Windows/macOS) or `fcc-server`
-(Linux) manually to diagnose it.
+and your Admin browser preference. If automatic startup fails, run
+`fcc-desktop` (Windows/macOS) or `fcc-server` (Linux) manually to diagnose it.
 
 For editor and app integrations, install the client, start FCC, then open
 **Admin UI → Integrations** and click **Connect** on its card.
