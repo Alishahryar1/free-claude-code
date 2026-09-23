@@ -1,5 +1,6 @@
 """Application workflow for supported local Anthropic web-tool requests."""
 
+import asyncio
 import sys
 import uuid
 from collections.abc import AsyncIterator, Mapping
@@ -20,12 +21,17 @@ from free_claude_code.core.anthropic import (
 from free_claude_code.core.anthropic.server_tool_sse import (
     ServerToolResponseContext,
     server_tool_completion_frames,
+    server_tool_finish_frames,
+    server_tool_message_start_frames,
+    server_tool_result_frames,
     server_tool_start_frames,
+    server_tool_use_frames,
     web_fetch_result_block,
     web_search_result_block,
     web_tool_error_block,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.trace import close_stream_input, trace_event
 from free_claude_code.core.web_tools import WebSearchResult
 
@@ -163,30 +169,26 @@ class WebToolService:
             for chunk in chunks:
                 yield chunk
             return
-        if len(tool_calls) != 1:
-            raise _protocol_failure(
-                "Upstream model returned multiple tool calls for automatic WebSearch.",
-                request_id=request_id,
-            )
-        call = tool_calls[0]
-        if call.get("name") != HIDDEN_WEB_SEARCH_NAME:
-            raise _protocol_failure(
-                "Upstream model returned an unexpected tool for automatic WebSearch.",
-                request_id=request_id,
-            )
-        arguments = call.get("input")
-        if not isinstance(arguments, dict) or set(arguments) != {"query"}:
-            raise _protocol_failure(
-                "Upstream model returned malformed arguments for automatic WebSearch.",
-                request_id=request_id,
-            )
-        raw_query = arguments.get("query")
-        if not isinstance(raw_query, str) or not raw_query.strip():
-            raise _protocol_failure(
-                "Upstream model returned an empty query for automatic WebSearch.",
-                request_id=request_id,
-            )
-        query = raw_query.strip()
+        queries: list[str] = []
+        for call in tool_calls:
+            if call.get("name") != HIDDEN_WEB_SEARCH_NAME:
+                raise _protocol_failure(
+                    "Upstream model returned an unexpected tool for automatic WebSearch.",
+                    request_id=request_id,
+                )
+            arguments = call.get("input")
+            if not isinstance(arguments, dict) or set(arguments) != {"query"}:
+                raise _protocol_failure(
+                    "Upstream model returned malformed arguments for automatic WebSearch.",
+                    request_id=request_id,
+                )
+            raw_query = arguments.get("query")
+            if not isinstance(raw_query, str) or not raw_query.strip():
+                raise _protocol_failure(
+                    "Upstream model returned an empty query for automatic WebSearch.",
+                    request_id=request_id,
+                )
+            queries.append(raw_query.strip())
         provider_usage = _provider_usage(message)
         input_tokens = _integer_field(provider_usage, "input_tokens")
         if input_tokens is None:
@@ -199,24 +201,62 @@ class WebToolService:
             request_id=request_id,
             model=routed.resolved.original_model,
         )
-        local_stream = self._stream_local_tool(
-            tool_name="web_search",
-            tool_input={"query": query},
-            input_tokens=input_tokens,
-            response_model=routed.resolved.original_model,
-            provider_usage=provider_usage,
-            domains=plan.domains,
-        )
-        try:
-            async for frame in local_stream:
-                yield frame
-        finally:
-            await close_stream_input(
-                local_stream,
-                owner="automatic_web_search",
-                source="api",
-                preserved_error=sys.exception(),
+        message_id = f"msg_{uuid.uuid4()}"
+        contexts = [
+            ServerToolResponseContext(
+                message_id=message_id,
+                tool_id=f"srvtoolu_{uuid.uuid4().hex}",
+                model=routed.resolved.original_model,
+                tool_name="web_search",
+                tool_input={"query": query},
+                input_tokens=input_tokens,
+                provider_usage=provider_usage,
             )
+            for query in queries
+        ]
+        executed = min(len(contexts), plan.max_uses or len(contexts))
+        for frame in server_tool_message_start_frames(contexts[0]):
+            yield frame
+
+        limit = asyncio.Semaphore(4)
+
+        async def search_one(
+            context: ServerToolResponseContext,
+        ) -> tuple[JsonObject, str]:
+            async with limit:
+                return await self._search_result(context, plan.domains)
+
+        summaries: list[str] = []
+        async with asyncio.TaskGroup() as group:
+            tasks = [
+                group.create_task(search_one(context))
+                for context in contexts[:executed]
+            ]
+            for index, context in enumerate(contexts):
+                for frame in server_tool_use_frames(context, index=index * 2):
+                    yield frame
+                if index < executed:
+                    result_block, summary = await tasks[index]
+                else:
+                    result_block = web_tool_error_block(
+                        context, error_code="max_uses_exceeded"
+                    )
+                    summary = (
+                        f"Web search limit reached for: {context.tool_input['query']}"
+                    )
+                for frame in server_tool_result_frames(
+                    result_block, index=index * 2 + 1
+                ):
+                    yield frame
+                summaries.append(summary)
+
+        for frame in server_tool_finish_frames(
+            contexts[0],
+            summary="\n\n".join(summaries),
+            index=len(contexts) * 2,
+            request_count=executed,
+        ):
+            yield frame
         trace_event(
             stage="execution",
             event="free_claude_code.api.web_search.automatic_completed",
@@ -247,15 +287,10 @@ class WebToolService:
         for frame in server_tool_start_frames(context):
             yield frame
 
-        try:
-            if tool_name == "web_search":
-                query = tool_input["query"]
-                results = await self._client.search(query)
-                if domains is not None:
-                    results = _filter_results(results, domains)
-                result_block = web_search_result_block(context, results)
-                summary = _search_summary(query, results)
-            else:
+        if tool_name == "web_search":
+            result_block, summary = await self._search_result(context, domains)
+        else:
+            try:
                 fetched = await self._client.fetch(
                     tool_input["url"], egress=self._egress
                 )
@@ -263,18 +298,36 @@ class WebToolService:
                     context, fetched, retrieved_at=datetime.now(UTC).isoformat()
                 )
                 summary = fetched.data
-        except Exception as error:
-            fetch_url = tool_input.get("url") if tool_name == "web_fetch" else None
-            _log_web_tool_failure(tool_name, error, fetch_url=fetch_url)
-            result_block = web_tool_error_block(context)
-            summary = _web_tool_client_error_summary(
-                tool_name, error, verbose=self._verbose_client_errors
-            )
+            except Exception as error:
+                _log_web_tool_failure(tool_name, error, fetch_url=tool_input["url"])
+                result_block = web_tool_error_block(context)
+                summary = _web_tool_client_error_summary(
+                    tool_name, error, verbose=self._verbose_client_errors
+                )
 
         for frame in server_tool_completion_frames(
             context, result_block, summary=summary
         ):
             yield frame
+
+    async def _search_result(
+        self,
+        context: ServerToolResponseContext,
+        domains: WebSearchDomainFilter | None,
+    ) -> tuple[JsonObject, str]:
+        query = context.tool_input["query"]
+        try:
+            results = await self._client.search(query)
+            if domains is not None:
+                results = _filter_results(results, domains)
+            return web_search_result_block(context, results), _search_summary(
+                query, results
+            )
+        except Exception as error:
+            _log_web_tool_failure("web_search", error, fetch_url=None)
+            return web_tool_error_block(context), _web_tool_client_error_summary(
+                "web_search", error, verbose=self._verbose_client_errors
+            )
 
 
 def _search_summary(query: str, results: list[WebSearchResult]) -> str:

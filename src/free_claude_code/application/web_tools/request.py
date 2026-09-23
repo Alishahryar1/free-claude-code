@@ -1,10 +1,17 @@
 """Recognize the narrow Anthropic web-tool requests FCC can execute locally."""
 
+import json
 import re
 from dataclasses import dataclass
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic import MessagesRequest, Tool
+from free_claude_code.core.anthropic.models import (
+    ContentBlockServerToolUse,
+    ContentBlockText,
+    ContentBlockWebSearchToolResult,
+    Message,
+)
 
 WEB_SEARCH_TYPE = "web_search_20250305"
 WEB_FETCH_TYPE = "web_fetch_20250910"
@@ -41,6 +48,7 @@ class AutomaticWebSearchPlan:
 
     request: MessagesRequest
     domains: WebSearchDomainFilter
+    max_uses: int | None
 
 
 def forced_tool_turn_text(request: MessagesRequest) -> str:
@@ -117,10 +125,6 @@ def plan_automatic_web_search(
             "Anthropic web_search is disabled (ENABLE_WEB_SERVER_TOOLS=false). "
             "Enable local web tools or remove web_search from the request."
         )
-    if _has_server_tool_history(request):
-        raise InvalidRequestError(
-            "Automatic web_search does not accept prior Anthropic server-tool history."
-        )
     if tool.name != "web_search":
         raise InvalidRequestError(
             f"Server tool type {WEB_SEARCH_TYPE!r} must use name 'web_search'."
@@ -138,7 +142,7 @@ def plan_automatic_web_search(
             + ", ".join(unsupported)
             + "."
         )
-    _validate_max_uses(options.get("max_uses"))
+    max_uses = _validate_max_uses(options.get("max_uses"))
     allowed = _parse_domains(
         options.get("allowed_domains"), field="web_search.allowed_domains"
     )
@@ -161,12 +165,16 @@ def plan_automatic_web_search(
         },
     )
     translated = request.model_copy(
-        update={"tools": [hidden_tool]},
+        update={
+            "tools": [hidden_tool],
+            "messages": _normalized_search_history(request.messages),
+        },
         deep=True,
     )
     return AutomaticWebSearchPlan(
         request=translated,
         domains=WebSearchDomainFilter(allowed=allowed, blocked=blocked),
+        max_uses=max_uses,
     )
 
 
@@ -190,21 +198,96 @@ def unsupported_server_tool_error(
     return None
 
 
-def _has_server_tool_history(request: MessagesRequest) -> bool:
-    for message in request.messages:
-        if not isinstance(message.content, list):
+_INCOMPLETE_HISTORY = (
+    "Automatic web_search does not accept incomplete or unsupported prior "
+    "Anthropic server-tool history."
+)
+
+
+def _normalized_search_history(messages: list[Message]) -> list[Message]:
+    """Quote completed local search data for every upstream transport."""
+    normalized: list[Message] = []
+    for message in messages:
+        content = message.content
+        if not isinstance(content, list) or not any(
+            getattr(block, "type", None) in _SERVER_HISTORY_TYPES for block in content
+        ):
+            normalized.append(message)
             continue
-        for block in message.content:
-            if getattr(block, "type", None) in _SERVER_HISTORY_TYPES:
-                return True
-    return False
+        if message.role != "assistant":
+            raise InvalidRequestError(_INCOMPLETE_HISTORY)
+
+        uses: dict[str, ContentBlockServerToolUse] = {}
+        results: dict[str, ContentBlockWebSearchToolResult] = {}
+        for block in content:
+            if isinstance(block, ContentBlockServerToolUse):
+                query = block.input.get("query")
+                if (
+                    block.name != "web_search"
+                    or not block.id
+                    or block.id in uses
+                    or set(block.input) != {"query"}
+                    or not isinstance(query, str)
+                    or not query.strip()
+                ):
+                    raise InvalidRequestError(_INCOMPLETE_HISTORY)
+                uses[block.id] = block
+            elif isinstance(block, ContentBlockWebSearchToolResult):
+                if not block.tool_use_id or block.tool_use_id in results:
+                    raise InvalidRequestError(_INCOMPLETE_HISTORY)
+                results[block.tool_use_id] = block
+            elif getattr(block, "type", None) in _SERVER_HISTORY_TYPES:
+                raise InvalidRequestError(_INCOMPLETE_HISTORY)
+        if not uses or uses.keys() != results.keys():
+            raise InvalidRequestError(_INCOMPLETE_HISTORY)
+
+        projected = []
+        for block in content:
+            if isinstance(block, ContentBlockServerToolUse):
+                projected.append(_search_history_text(block, results[block.id]))
+            elif not isinstance(block, ContentBlockWebSearchToolResult):
+                projected.append(block)
+        normalized.append(message.model_copy(update={"content": projected}, deep=True))
+    return normalized
 
 
-def _validate_max_uses(value: object) -> None:
+def _search_history_text(
+    use: ContentBlockServerToolUse, result: ContentBlockWebSearchToolResult
+) -> ContentBlockText:
+    content = result.content
+    if isinstance(content, list):
+        hits: list[dict[str, str]] = []
+        for hit in content:
+            if (
+                not isinstance(hit, dict)
+                or hit.get("type") != "web_search_result"
+                or not isinstance(hit.get("title"), str)
+                or not isinstance(hit.get("url"), str)
+            ):
+                raise InvalidRequestError(_INCOMPLETE_HISTORY)
+            hits.append({"title": hit["title"], "url": hit["url"]})
+        record: dict[str, object] = {"query": use.input["query"], "results": hits}
+    elif (
+        isinstance(content, dict)
+        and content.get("type") == "web_search_tool_result_error"
+        and isinstance(content.get("error_code"), str)
+    ):
+        record = {"query": use.input["query"], "error_code": content["error_code"]}
+    else:
+        raise InvalidRequestError(_INCOMPLETE_HISTORY)
+    return ContentBlockText(
+        type="text",
+        text="[Earlier web search data]\n"
+        + json.dumps(record, ensure_ascii=False, separators=(",", ":")),
+    )
+
+
+def _validate_max_uses(value: object) -> int | None:
     if value is None:
-        return
+        return None
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise InvalidRequestError("web_search.max_uses must be a positive integer.")
+    return value
 
 
 def _parse_domains(value: object, *, field: str) -> tuple[str, ...]:
