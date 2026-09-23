@@ -1923,6 +1923,9 @@ def test_unavailable_feed_shows_reason_and_clears_it_on_recovery(
     page, admin_base_url, code_control
 ):
     async def availability(available):
+        # Startup finishes on its own task and would overwrite these fields
+        # with the ready state if it completed after this test set them.
+        await code_control.service.start()
         code_control.service._accepting = available
         code_control.service._message = (
             None if available else "Code storage is unavailable"
