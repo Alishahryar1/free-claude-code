@@ -21,6 +21,10 @@ class AntigravityChatAdapter:
     def __init__(self, client: AntigravityClient, *, base_url: str) -> None:
         self._client = client
         self.base_url = base_url
+        # FCC fingerprints replay origins from the OpenAI client metadata.
+        # Keep this credential-free: Antigravity authorization is injected by
+        # AntigravityClient directly on the Cloud Code request.
+        self.default_headers: Mapping[str, str] = {}
         self.chat = _ChatResource(self)
         self._project_id: str | None = None
 
