@@ -1,5 +1,6 @@
 """Cloud Code client behavior for the Antigravity provider."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -81,7 +82,7 @@ async def test_load_code_assist_identifies_antigravity_ide(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_generation_envelope_gets_agent_metadata(tmp_path: Path) -> None:
+async def test_generation_envelope_gets_agent_metadata_and_session(tmp_path: Path) -> None:
     requests: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -93,12 +94,23 @@ async def test_generation_envelope_gets_agent_metadata(tmp_path: Path) -> None:
     client = AntigravityClient(auth=manager, base_url="https://example.test", client=http)
 
     await client.generate_content(
-        {"model": "gemini-test", "project": "p", "request": {"contents": []}}
+        {
+            "model": "gemini-test",
+            "project": "p",
+            "request": {
+                "contents": [
+                    {"role": "user", "parts": [{"text": "hello"}]}
+                ]
+            },
+        }
     )
 
     assert requests[0]["userAgent"] == "antigravity"
     assert requests[0]["requestType"] == "agent"
-    assert str(requests[0]["requestId"]).startswith("agent-")
+    assert str(requests[0]["requestId"]).startswith("agent/")
+    request = requests[0]["request"]
+    assert isinstance(request, dict)
+    assert request["sessionId"] == hashlib.sha256(b"hello").hexdigest()[:32]
     await http.aclose()
 
 
