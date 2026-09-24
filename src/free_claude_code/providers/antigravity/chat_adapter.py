@@ -21,6 +21,7 @@ DIAGNOSTIC_REPLACE_CONTENTS_ENV = "ANTIGRAVITY_DIAGNOSTIC_REPLACE_CONTENTS"
 DIAGNOSTIC_REDACT_CONTENT_TEXT_ENV = "ANTIGRAVITY_DIAGNOSTIC_REDACT_CONTENT_TEXT"
 DIAGNOSTIC_REDACT_SYSTEM_TEXT_ENV = "ANTIGRAVITY_DIAGNOSTIC_REDACT_SYSTEM_TEXT"
 DIAGNOSTIC_SYSTEM_SLICE_ENV = "ANTIGRAVITY_DIAGNOSTIC_SYSTEM_SLICE"
+DIAGNOSTIC_SYSTEM_REDACT_RANGE_ENV = "ANTIGRAVITY_DIAGNOSTIC_SYSTEM_REDACT_RANGE"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -139,27 +140,25 @@ def _env_truthy(name: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _diagnostic_system_slice() -> tuple[int, int] | None:
-    raw = os.getenv(DIAGNOSTIC_SYSTEM_SLICE_ENV)
+def _diagnostic_range(name: str) -> tuple[int, int] | None:
+    raw = os.getenv(name)
     if raw is None or not raw.strip():
         return None
     start_text, separator, end_text = raw.strip().partition(":")
     if not separator:
-        raise ValueError(
-            f"{DIAGNOSTIC_SYSTEM_SLICE_ENV} must use START:END character offsets"
-        )
+        raise ValueError(f"{name} must use START:END character offsets")
     try:
         start = int(start_text)
         end = int(end_text)
     except ValueError as error:
-        raise ValueError(
-            f"{DIAGNOSTIC_SYSTEM_SLICE_ENV} must use integer START:END offsets"
-        ) from error
+        raise ValueError(f"{name} must use integer START:END offsets") from error
     if start < 0 or end <= start:
-        raise ValueError(
-            f"{DIAGNOSTIC_SYSTEM_SLICE_ENV} requires 0 <= START < END"
-        )
+        raise ValueError(f"{name} requires 0 <= START < END")
     return start, end
+
+
+def _diagnostic_system_slice() -> tuple[int, int] | None:
+    return _diagnostic_range(DIAGNOSTIC_SYSTEM_SLICE_ENV)
 
 
 def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
@@ -174,12 +173,19 @@ def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
     redact_content_text = _env_truthy(DIAGNOSTIC_REDACT_CONTENT_TEXT_ENV)
     redact_system_text = _env_truthy(DIAGNOSTIC_REDACT_SYSTEM_TEXT_ENV)
     system_slice = _diagnostic_system_slice()
+    system_redact_range = _diagnostic_range(DIAGNOSTIC_SYSTEM_REDACT_RANGE_ENV)
+    if system_slice is not None and system_redact_range is not None:
+        raise ValueError(
+            f"{DIAGNOSTIC_SYSTEM_SLICE_ENV} and "
+            f"{DIAGNOSTIC_SYSTEM_REDACT_RANGE_ENV} cannot be used together"
+        )
     if (
         not disable_system
         and not replace_contents
         and not redact_content_text
         and not redact_system_text
         and system_slice is None
+        and system_redact_range is None
     ):
         return envelope
 
@@ -201,6 +207,18 @@ def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
             "Antigravity diagnostic mode active: system instruction slice=%s:%s",
             system_slice[0],
             system_slice[1],
+        )
+    elif system_redact_range is not None:
+        system_instruction = request.get("systemInstruction")
+        if isinstance(system_instruction, Mapping):
+            start, end = system_redact_range
+            request["systemInstruction"] = _redact_text_range(
+                system_instruction, start, end
+            )
+        _LOGGER.warning(
+            "Antigravity diagnostic mode active: system instruction redacted range=%s:%s",
+            system_redact_range[0],
+            system_redact_range[1],
         )
     elif redact_system_text:
         system_instruction = request.get("systemInstruction")
@@ -242,6 +260,41 @@ def _redact_text_fields(value: Any) -> Any:
     parts = redacted.get("parts")
     if isinstance(parts, list):
         redacted["parts"] = [_redact_text_fields(part) for part in parts]
+    return redacted
+
+
+def _redact_text_range(value: Mapping[str, Any], start: int, end: int) -> dict[str, Any]:
+    """Redact one overall character range while preserving request shape and length."""
+
+    redacted = dict(value)
+    parts = value.get("parts")
+    if not isinstance(parts, list):
+        return redacted
+
+    offset = 0
+    updated_parts: list[Any] = []
+    for raw in parts:
+        if not isinstance(raw, Mapping):
+            updated_parts.append(raw)
+            continue
+        item = dict(raw)
+        text = raw.get("text")
+        if isinstance(text, str):
+            part_start = offset
+            part_end = offset + len(text)
+            overlap_start = max(start, part_start)
+            overlap_end = min(end, part_end)
+            if overlap_start < overlap_end:
+                local_start = overlap_start - part_start
+                local_end = overlap_end - part_start
+                item["text"] = (
+                    text[:local_start]
+                    + ("A" * (local_end - local_start))
+                    + text[local_end:]
+                )
+            offset = part_end
+        updated_parts.append(item)
+    redacted["parts"] = updated_parts
     return redacted
 
 
