@@ -140,6 +140,7 @@ function renderStartup() {
   });
   renderClaudeIntegration();
   renderJetBrainsIntegration();
+  renderDevinIntegration();
   renderCodexIntegration();
   renderClaudeDesktopIntegration();
 }
@@ -287,6 +288,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   if (activeView.id === "integrations") {
     refreshClaudeIntegration();
     refreshJetBrainsIntegration();
+    refreshDevinIntegration();
     refreshCodexIntegration();
     refreshClaudeDesktopIntegration();
   }
@@ -1504,6 +1506,7 @@ function refreshIntegrationUpdates(previous, current) {
   for (const [id, integration, refresh, messageId, message] of [
     ["claude-vscode", claudeIntegration, refreshClaudeIntegration, "claudeIntegrationMessage", "Settings updated. Reload VS Code."],
     ["jetbrains-acp", jetBrainsIntegration, refreshJetBrainsIntegration, "jetBrainsIntegrationMessage", "Settings updated. Reopen JetBrains and start a new chat."],
+    ["devin-acp", devinIntegration, refreshDevinIntegration, "devinIntegrationMessage", "Settings updated. Restart Devin and start a new chat."],
     ["codex", codexIntegration, refreshCodexIntegration, "codexIntegrationMessage", "Settings updated. Restart Codex."],
     ["claude-desktop", claudeDesktopIntegration, refreshClaudeDesktopIntegration, "claudeDesktopIntegrationMessage", "Settings updated. Reopen Claude Desktop."],
   ]) {
@@ -1804,6 +1807,102 @@ jetBrainsIntegrationDialog.addEventListener("click", (event) => {
   const bounds = jetBrainsIntegrationDialog.getBoundingClientRect();
   if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
     jetBrainsIntegrationDialog.close();
+  }
+});
+
+const devinIntegrationDialog = byId("devinIntegrationDialog");
+const devinIntegration = { connected: null, busy: false, paths: null, update: null };
+const devinIntegrationPath = "/admin/api/integrations/devin-acp";
+
+function renderDevinIntegration() {
+  const { connected, paths } = devinIntegration;
+  const busy = devinIntegration.busy || integrationUpdating(devinIntegration, "devin-acp");
+  const action = connected ? "Disconnect" : "Connect";
+  byId("openDevinIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
+  byId("openDevinIntegration").disabled = busy;
+  byId("openDevinIntegration").setAttribute("aria-busy", String(busy));
+  byId("confirmDevinIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmDevinIntegration").disabled = busy || connected === null;
+  byId("openDevinIntegration").className = connected && !busy ? "danger-button" : "primary-button";
+  byId("confirmDevinIntegration").className = connected ? "danger-button" : "primary-button";
+  byId("devinIntegrationDescription").textContent = connected
+    ? "Remove OpenCode (FCC) from Devin. Existing conversations keep running. Finish any registry edits first."
+    : "Requires OpenCode 2 and Devin ACP access. After connecting, enable OpenCode (FCC) in Devin User Settings → Agents and restart Devin. Keep FCC running when using the agent.";
+  const files = byId("devinIntegrationFiles");
+  files.replaceChildren();
+  if (paths) {
+    const targets = [paths.acp_config];
+    targets.forEach((path) => {
+      const item = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = path;
+      item.appendChild(code);
+      files.appendChild(item);
+    });
+  }
+}
+
+async function refreshDevinIntegration(retry = false, { background = false } = {}) {
+  if (!background) integrationMessage("devinIntegrationMessage", "");
+  if (devinIntegration.busy) return;
+  devinIntegration.busy = true;
+  renderDevinIntegration();
+  try {
+    if (retry) await api(`${devinIntegrationPath}/refresh`, { method: "POST" });
+    const result = await api(devinIntegrationPath);
+    devinIntegration.connected = result.connected;
+    devinIntegration.paths = result.paths;
+    devinIntegration.update = result.update;
+    if (result.update?.state === "failed") integrationMessage("devinIntegrationMessage", result.update.message, true);
+    else if (byId("devinIntegrationMessage").classList.contains("error")) integrationMessage("devinIntegrationMessage", "");
+  } catch (error) {
+    devinIntegration.connected = null;
+    devinIntegration.update = null;
+    integrationMessage("devinIntegrationMessage", error.message, true);
+  } finally {
+    devinIntegration.busy = false;
+    renderDevinIntegration();
+    if (devinIntegration.update?.state === "starting") void refreshStartup();
+  }
+}
+
+byId("openDevinIntegration").addEventListener("click", () => {
+  if (devinIntegration.connected === null) {
+    refreshDevinIntegration(devinIntegration.update?.state === "failed");
+    return;
+  }
+  integrationMessage("devinIntegrationDialogMessage", "");
+  devinIntegrationDialog.showModal();
+});
+byId("confirmDevinIntegration").addEventListener("click", async () => {
+  if (byId("confirmDevinIntegration").disabled) return;
+  const disconnect = devinIntegration.connected;
+  devinIntegration.busy = true;
+  renderDevinIntegration();
+  integrationMessage("devinIntegrationDialogMessage", "");
+  integrationMessage("devinIntegrationMessage", "");
+  try {
+    const result = await api(`${devinIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    devinIntegration.connected = result.connected;
+    devinIntegration.update = null;
+    devinIntegrationDialog.close();
+    integrationMessage("devinIntegrationMessage", disconnect
+      ? "Agent removed. Restart Devin to refresh its agent list."
+      : "Agent registered. Enable OpenCode (FCC) in Devin User Settings → Agents, restart Devin, and select it for a new chat.");
+  } catch (error) {
+    integrationMessage("devinIntegrationDialogMessage", error.message, true);
+    integrationMessage("devinIntegrationMessage", error.message, true);
+  } finally {
+    devinIntegration.busy = false;
+    renderDevinIntegration();
+  }
+});
+byId("closeDevinIntegration").addEventListener("click", () => devinIntegrationDialog.close());
+devinIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== devinIntegrationDialog) return;
+  const bounds = devinIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    devinIntegrationDialog.close();
   }
 });
 

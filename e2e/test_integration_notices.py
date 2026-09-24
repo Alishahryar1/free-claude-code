@@ -7,6 +7,7 @@ from playwright.sync_api import expect
         ("claude-vscode", "openClaudeIntegration", "claudeIntegrationMessage"),
         ("codex", "openCodexIntegration", "codexIntegrationMessage"),
         ("jetbrains-acp", "openJetBrainsIntegration", "jetBrainsIntegrationMessage"),
+        ("devin-acp", "openDevinIntegration", "devinIntegrationMessage"),
         (
             "claude-desktop",
             "openClaudeDesktopIntegration",

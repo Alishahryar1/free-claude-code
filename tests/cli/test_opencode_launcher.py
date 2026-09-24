@@ -198,6 +198,8 @@ def test_existing_opencode_process_configuration_is_not_replaced(
     "args, expected",
     [
         ([], ["--standalone"]),
+        (["acp"], ["acp"]),
+        (["run", "acp"], ["run", "acp", "--standalone"]),
         (["run", "hello"], ["run", "hello", "--standalone"]),
         (["models"], ["models", "--standalone"]),
         (["session", "list"], ["session", "list", "--standalone"]),

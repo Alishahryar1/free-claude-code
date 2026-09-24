@@ -1,7 +1,6 @@
 """Installed OpenCode launcher with process-local FCC configuration."""
 
 import json
-import re
 from collections.abc import Sequence
 
 from free_claude_code.harnesses.environment import (
@@ -9,15 +8,12 @@ from free_claude_code.harnesses.environment import (
     require_unset_environment,
 )
 from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
+from free_claude_code.harnesses.opencode import STABLE_VERSION_PATTERN
 from free_claude_code.harnesses.resources import LaunchResources
 
 from .opencode_config import OPENCODE_API_KEY_ENV, build_opencode_config
 from .runner import HarnessSpec, LaunchContext, launch_harness
 
-_VERSION_PATTERN = re.compile(
-    r"(?m)^\s*(?:opencode(?:\s+version)?\s+)?v?"
-    r"2\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?\s*$"
-)
 _PROCESS_CONFIG_KEYS = ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT")
 
 
@@ -28,6 +24,9 @@ def _standalone_args(args: list[str]) -> list[str]:
         for arg in args[:end]
     ):
         raise ValueError("FCC manages OpenCode standalone mode; omit that option.")
+    # ACP already owns a private server and rejects the standalone flag.
+    if args[:1] == ["acp"]:
+        return args
     # OpenCode's flag belongs to the leaf command, before literal positionals.
     return [*args[:end], "--standalone", *args[end:]]
 
@@ -73,7 +72,7 @@ SPEC = HarnessSpec(
     catalog_view="responses",
     compatibility_check=NativeCheck(
         ("--version",),
-        lambda output: _VERSION_PATTERN.search(output) is not None,
+        lambda output: STABLE_VERSION_PATTERN.search(output) is not None,
         "FCC requires stable OpenCode 2.",
     ),
 )

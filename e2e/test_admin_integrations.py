@@ -15,6 +15,7 @@ from free_claude_code.harnesses import claude_integration
         ("codex", "openCodexIntegration"),
         ("claude-desktop", "openClaudeDesktopIntegration"),
         ("jetbrains-acp", "openJetBrainsIntegration"),
+        ("devin-acp", "openDevinIntegration"),
     ],
 )
 @pytest.mark.parametrize("connected", [False, True])
@@ -58,7 +59,7 @@ def test_codex_connect_disconnect_and_modal_paths(
     expect(page.locator("#openClaudeIntegration")).to_be_enabled()
     expect(page.locator("#messageArea")).to_have_text("")
     cards = page.locator("#view-integrations > article")
-    expect(cards).to_have_count(4)
+    expect(cards).to_have_count(5)
     expect(page.locator("#claudeIntegrationStatus")).to_have_count(0)
     expect(page.locator("#openCodexIntegration")).to_be_enabled()
     expect(page.locator("#codexIntegrationStatus")).to_have_count(0)

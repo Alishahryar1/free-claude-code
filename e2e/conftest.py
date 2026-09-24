@@ -30,6 +30,7 @@ from free_claude_code.harnesses import (
     claude_desktop_integration,
     claude_integration,
     codex_integration,
+    devin_acp_integration,
     jetbrains_acp_integration,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
@@ -141,6 +142,9 @@ def admin_base_url(
     """Serve one fully isolated Admin application on an OS-assigned port."""
 
     config_dir = tmp_path / ".fcc"
+    monkeypatch.setattr(
+        devin_acp_integration, "config_path", lambda: tmp_path / "devin/registry.json"
+    )
     monkeypatch.setattr(
         jetbrains_acp_integration,
         "config_path",

@@ -370,6 +370,7 @@ For editor and app integrations, install the client, start FCC, then open
 - **Claude Desktop** — install [Claude Desktop](https://claude.ai/download). Fully quit it before connecting or disconnecting, then reopen it. Disconnect returns to normal Claude sign-in.
 - **Codex in VS Code and App** — install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt) or Codex App.
 - **Claude Code in JetBrains ACP** — install Claude Agent in JetBrains AI Assistant and start it once, then click **Connect** in FCC. Reopen the IDE, select **Claude Code (FCC)**, and start a new chat. After JetBrains updates the agent, restart FCC before starting a new chat. Requires a local IDE in its standard installation locations.
+- **OpenCode in Devin Desktop** — install OpenCode 2 and start FCC, then click **Connect**. In Devin User Settings → Agents, enable **OpenCode (FCC)**, restart Devin, and select it for a new chat. Requires Devin ACP access (Pro, Max, Teams, or enabled Enterprise).
 
 Reload VS Code or restart the app/IDE after connecting. In Codex and Claude Desktop, select an FCC
 model from the model picker. FCC keeps connected integrations up to date when it

@@ -351,6 +351,38 @@ async def refresh_jetbrains_acp(
     return await _integration_response(services.admin.refresh_jetbrains_acp)
 
 
+@router.get("/admin/api/integrations/devin-acp")
+async def devin_acp_status(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.devin_acp_status)
+
+
+@router.post("/admin/api/integrations/devin-acp/connect")
+async def connect_devin_acp(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_devin_acp)
+
+
+@router.post("/admin/api/integrations/devin-acp/disconnect")
+async def disconnect_devin_acp(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_devin_acp)
+
+
+@router.post("/admin/api/integrations/devin-acp/refresh")
+async def refresh_devin_acp(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_devin_acp)
+
+
 @router.get("/admin/api/integrations/codex")
 async def codex_integration_status(
     request: Request,

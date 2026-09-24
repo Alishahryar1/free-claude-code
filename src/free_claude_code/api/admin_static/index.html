@@ -157,6 +157,29 @@
               <button id="confirmClaudeDesktopIntegration" class="primary-button" type="button">Connect</button>
               <p id="claudeDesktopIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
             </dialog>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
+                  <h3>OpenCode in Devin Desktop</h3>
+                  <p>Use FCC's models in OpenCode inside Devin Desktop.</p>
+                </div>
+              </div>
+              <p id="devinIntegrationMessage" class="message-area" role="status" hidden></p>
+              <button id="openDevinIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+            </article>
+            <dialog id="devinIntegrationDialog" class="integration-dialog" aria-labelledby="devinIntegrationTitle" aria-describedby="devinIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="devinIntegrationTitle">OpenCode in Devin Desktop</h3>
+                <button id="closeDevinIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="devinIntegrationDescription">Register OpenCode (FCC) in Devin Desktop.</p>
+              <div class="integration-files">
+                <strong>Files to modify</strong>
+                <ul id="devinIntegrationFiles"></ul>
+              </div>
+              <button id="confirmDevinIntegration" class="primary-button" type="button">Connect</button>
+              <p id="devinIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
+            </dialog>
           </section>
 
           <section id="view-code" class="admin-view" data-view="code" hidden>

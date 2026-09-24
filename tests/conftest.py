@@ -13,6 +13,7 @@ from free_claude_code.harnesses import (
     claude_desktop_integration,
     claude_integration,
     codex_integration,
+    devin_acp_integration,
     jetbrains_acp_integration,
 )
 from tests.providers.support import (
@@ -33,6 +34,9 @@ def _isolate_managed_config(monkeypatch, tmp_path):
     """Keep every test away from real home, checkout, and running-server config."""
 
     config_dir = tmp_path / ".fcc"
+    monkeypatch.setattr(
+        devin_acp_integration, "config_path", lambda: tmp_path / "devin/registry.json"
+    )
     monkeypatch.setattr(
         jetbrains_acp_integration,
         "config_path",
