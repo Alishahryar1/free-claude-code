@@ -18,6 +18,7 @@ class FakeCloudCode:
     def __init__(self) -> None:
         self.envelopes: list[Mapping[str, Any]] = []
         self.closed = False
+        self.auth_revision = 1
 
     async def load_code_assist(self) -> Mapping[str, Any]:
         return {"cloudaicompanionProject": "project-1"}
@@ -100,5 +101,39 @@ async def test_provider_discovers_models_from_antigravity_account(
     try:
         infos = await provider.list_model_infos()
         assert {info.model_id for info in infos} == {"gemini-test"}
+    finally:
+        await provider.cleanup()
+
+
+async def test_provider_passes_fcc_network_settings_to_cloud_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeCloudCode()
+    seen: dict[str, object] = {}
+
+    def construct(**kwargs: object) -> FakeCloudCode:
+        seen.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(provider_module, "AntigravityClient", construct)
+    config = make_provider_config(
+        None,
+        "https://example.test",
+        http_read_timeout=71.0,
+        http_write_timeout=72.0,
+        http_connect_timeout=73.0,
+        proxy="http://proxy.example:8080",
+    )
+    provider = provider_module.AntigravityProvider(
+        config,
+        auth=cast(AntigravityAuthManager, object()),
+        admission=immediate_admission(provider_name="ANTIGRAVITY", max_attempts=1),
+    )
+    try:
+        assert seen["base_url"] == "https://example.test"
+        assert seen["read_timeout"] == 71.0
+        assert seen["write_timeout"] == 72.0
+        assert seen["connect_timeout"] == 73.0
+        assert seen["proxy"] == "http://proxy.example:8080"
     finally:
         await provider.cleanup()
