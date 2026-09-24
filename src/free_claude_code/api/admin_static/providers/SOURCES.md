@@ -8,6 +8,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | Asset | Source |
 | --- | --- |
 | `agnesai.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/agnesai.svg |
+| `ainetcafe.svg` | https://ainetcafe.com/k3/assets/brand/ainetcafe-mark.svg |
 | `azure-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/azure-color.svg |
 | `bedrock-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/bedrock-color.svg |
 | `cerebras-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cerebras-color.svg |

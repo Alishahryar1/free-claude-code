@@ -60,6 +60,7 @@ def _settings(**overrides):
         "siliconflow_api_key": "",
         "nebius_api_key": "",
         "scw_secret_key": "",
+        "ainetcafe_api_key": "",
         "chutes_api_key": "",
         "featherless_api_key": "",
         "wandb_api_key": "",
@@ -593,6 +594,23 @@ def test_scaleway_provider_smoke_uses_documented_agent_model(monkeypatch) -> Non
 
     assert [model.provider for model in models] == ["scaleway"]
     assert models[0].full_model == "scaleway/deepseek/deepseek-v4-flash"
+    assert models[0].source == "provider_default"
+
+
+def test_ainetcafe_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_AINETCAFE", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            ainetcafe_api_key="ainetcafe-key",
+        )
+    )
+
+    models = config.provider_smoke_models()
+
+    assert [model.provider for model in models] == ["ainetcafe"]
+    assert models[0].full_model == "ainetcafe/Kimi-K3"
     assert models[0].source == "provider_default"
 
 

@@ -211,6 +211,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "tool-capable models."
         ),
     },
+    "AINETCAFE_API_KEY": {
+        "label": "ainetcafe API Key",
+        "description": (
+            "ainetcafe API key for Kimi K3 (native MXFP4, tool-capable, image "
+            "input) at microquickjs.com/v1. Create one under Token Management."
+        ),
+    },
     "CHUTES_API_KEY": {
         "label": "Chutes API Key",
         "description": (

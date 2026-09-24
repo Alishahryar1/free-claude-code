@@ -252,6 +252,7 @@ from more than one provider before succeeding.
 | [Poolside AI](https://platform.poolside.ai/) | `POOLSIDE_API_KEY` | `poolside/poolside/laguna-s-2.1` |
 | [LLM7.io](https://dash.llm7.io/) | `LLM7_API_KEY` | `llm7/default` |
 | [Scaleway](https://console.scaleway.com/iam/api-keys) | `SCW_SECRET_KEY` | `scaleway/deepseek/deepseek-v4-flash` |
+| [ainetcafe](https://microquickjs.com/console/token) | `AINETCAFE_API_KEY` | `ainetcafe/Kimi-K3` |
 | [Lightning AI](https://lightning.ai/) | `LIGHTNING_API_KEY` | `lightning/lightning-ai/Qwen3.8-27B` |
 | [Experiential Labs](https://platform.experientiallabs.ai/) | `EXPLABS_API_KEY` | `experiential/union-alpha` |
 | [Ollama Cloud](https://ollama.com/settings/keys) | `OLLAMA_API_KEY` | `ollama_cloud/qwen3-coder:480b` |
