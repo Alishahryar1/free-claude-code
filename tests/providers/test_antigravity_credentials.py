@@ -106,7 +106,6 @@ def test_macos_keychain_uses_agy_service_and_account(monkeypatch: pytest.MonkeyP
             }
         )
 
-    monkeypatch.setattr(credential_module.os, "name", "posix")
     monkeypatch.setattr(credential_module.sys, "platform", "darwin")
     monkeypatch.setattr(credential_module, "_run_credential_command", run)
 
@@ -137,7 +136,6 @@ def test_linux_secret_service_uses_agy_attributes(monkeypatch: pytest.MonkeyPatc
             "eyJ0b2tlbiI6eyJhY2Nlc3NfdG9rZW4iOiJhIiwicmVmcmVzaF90b2tlbiI6InIifX0="
         )
 
-    monkeypatch.setattr(credential_module.os, "name", "posix")
     monkeypatch.setattr(credential_module.sys, "platform", "linux")
     monkeypatch.setattr(credential_module, "_run_credential_command", run)
 
