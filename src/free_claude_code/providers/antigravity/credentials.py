@@ -124,7 +124,7 @@ def _missing_credentials(failures: list[str]) -> AntigravityCredentialError:
 
 
 def _read_platform_credential() -> tuple[Any, str]:
-    if os.name == "nt":
+    if sys.platform == "win32":
         return (
             _read_windows_credential(WINDOWS_CREDENTIAL_TARGET),
             f"windows:{WINDOWS_CREDENTIAL_TARGET}",
@@ -173,7 +173,9 @@ def _run_credential_command(command: list[str]) -> str:
         raise OSError(f"credential command timed out: {command[0]}") from error
     if result.returncode != 0:
         detail = result.stderr.strip() or f"exit status {result.returncode}"
-        raise FileNotFoundError(f"{command[0]} could not read Antigravity credential: {detail}")
+        raise FileNotFoundError(
+            f"{command[0]} could not read Antigravity credential: {detail}"
+        )
     if not result.stdout.strip():
         raise FileNotFoundError(f"{command[0]} returned an empty credential")
     return result.stdout.strip()
