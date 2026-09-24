@@ -107,9 +107,7 @@ def _messages_to_gemini(
     if pending_tool_parts:
         contents.append({"role": "user", "parts": pending_tool_parts})
 
-    system = (
-        {"role": "system", "parts": system_parts} if system_parts else None
-    )
+    system = {"role": "system", "parts": system_parts} if system_parts else None
     return contents, system
 
 
@@ -133,7 +131,13 @@ def _content_parts(content: Any) -> list[dict[str, Any]]:
 
 
 def _image_part(value: Any) -> dict[str, str] | None:
-    url = value if isinstance(value, str) else value.get("url") if isinstance(value, dict) else None
+    url = (
+        value
+        if isinstance(value, str)
+        else value.get("url")
+        if isinstance(value, dict)
+        else None
+    )
     if not isinstance(url, str) or not url.startswith("data:"):
         return None
     metadata, separator, data = url[5:].partition(",")
@@ -232,7 +236,11 @@ def _generation_config(body: dict[str, Any]) -> dict[str, Any]:
     if isinstance(temperature, int | float) and not isinstance(temperature, bool):
         config["temperature"] = temperature
     max_tokens = body.get("max_tokens", body.get("max_completion_tokens"))
-    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0:
+    if (
+        isinstance(max_tokens, int)
+        and not isinstance(max_tokens, bool)
+        and max_tokens > 0
+    ):
         config["maxOutputTokens"] = max_tokens
 
     effort = body.get("reasoning_effort")
@@ -254,6 +262,8 @@ class StreamState:
     saw_tool: bool = False
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    next_tool_index: int = 0
+    finish_reason: str | None = None
 
     def __post_init__(self) -> None:
         if not self.chat_id:
@@ -278,8 +288,15 @@ def gemini_event_chunks(event: dict[str, Any], state: StreamState) -> list[Any]:
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
+        finish_reason = candidate.get("finishReason")
+        if isinstance(finish_reason, str) and finish_reason:
+            state.finish_reason = finish_reason
         content = candidate.get("content")
-        parts = content.get("parts") if isinstance(content, dict) else candidate.get("parts")
+        parts = (
+            content.get("parts")
+            if isinstance(content, dict)
+            else candidate.get("parts")
+        )
         if not isinstance(parts, list):
             continue
         for part in parts:
@@ -288,7 +305,13 @@ def gemini_event_chunks(event: dict[str, Any], state: StreamState) -> list[Any]:
             text = part.get("text")
             if isinstance(text, str) and text:
                 reasoning = text if part.get("thought") is True else None
-                chunks.append(_chunk(state, content=None if reasoning else text, reasoning=reasoning))
+                chunks.append(
+                    _chunk(
+                        state,
+                        content=None if reasoning else text,
+                        reasoning=reasoning,
+                    )
+                )
             function_call = part.get("functionCall")
             if isinstance(function_call, dict):
                 name = function_call.get("name")
@@ -300,11 +323,21 @@ def gemini_event_chunks(event: dict[str, Any], state: StreamState) -> list[Any]:
                 call_id = function_call.get("id")
                 if not isinstance(call_id, str) or not call_id:
                     call_id = f"call_{uuid.uuid4()}"
-                signature = part.get("thoughtSignature") or part.get("thought_signature")
+                signature = part.get("thoughtSignature") or part.get(
+                    "thought_signature"
+                )
                 if isinstance(signature, str) and signature:
                     call_id = f"{call_id}|{signature}"
+                tool_index = state.next_tool_index
+                state.next_tool_index += 1
                 state.saw_tool = True
-                chunks.append(_chunk(state, tool_call=(call_id, name, args)))
+                chunks.append(
+                    _chunk(
+                        state,
+                        tool_call=(call_id, name, args),
+                        tool_index=tool_index,
+                    )
+                )
     return chunks
 
 
@@ -316,7 +349,7 @@ def final_chunk(state: StreamState) -> Any:
         completion_tokens_details=None,
     )
     choice = SimpleNamespace(
-        finish_reason="tool_calls" if state.saw_tool else "stop",
+        finish_reason=_openai_finish_reason(state),
         delta=SimpleNamespace(
             role=None,
             content=None,
@@ -335,12 +368,21 @@ def final_chunk(state: StreamState) -> Any:
     )
 
 
+def _openai_finish_reason(state: StreamState) -> str:
+    if state.saw_tool:
+        return "tool_calls"
+    if (state.finish_reason or "").upper() == "MAX_TOKENS":
+        return "length"
+    return "stop"
+
+
 def _chunk(
     state: StreamState,
     *,
     content: str | None = None,
     reasoning: str | None = None,
     tool_call: tuple[str, str, dict[str, Any]] | None = None,
+    tool_index: int = 0,
 ) -> Any:
     role = None if state.sent_role else "assistant"
     state.sent_role = True
@@ -349,12 +391,14 @@ def _chunk(
         call_id, name, args = tool_call
         tools = [
             SimpleNamespace(
-                index=0,
+                index=tool_index,
                 id=call_id,
                 type="function",
                 function=SimpleNamespace(
                     name=name,
-                    arguments=json.dumps(args, separators=(",", ":"), ensure_ascii=False),
+                    arguments=json.dumps(
+                        args, separators=(",", ":"), ensure_ascii=False
+                    ),
                 ),
             )
         ]
