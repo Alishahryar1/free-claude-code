@@ -8,7 +8,11 @@ from openai import AsyncOpenAI, DefaultAsyncHttpx2Client
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
-from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningControl,
+    ReasoningPolicy,
+)
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -16,6 +20,24 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.model_listing import extract_openai_model_infos
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
+
+_DEFAULT_REASONING_MODELS = (
+    "gpt-5",
+    "gpt-5.2",
+    "gpt-5.4",
+    "gpt-5.5",
+    "gpt-5.6",
+    "gpt-6",
+)
+
+
+def _omit_unsupported_sampling(model: str, reasoning: ReasoningPolicy) -> bool:
+    if reasoning.control is ReasoningControl.OFF:
+        return False
+    return reasoning.requests_reasoning or any(
+        model == family or model.startswith(f"{family}-")
+        for family in _DEFAULT_REASONING_MODELS
+    )
 
 
 class OpenAIAPIProvider(BaseProvider):
@@ -79,6 +101,8 @@ class OpenAIAPIProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
+        if _omit_unsupported_sampling(request.model, reasoning):
+            request = request.model_copy(update={"temperature": None, "top_p": None})
         return self._responses.stream_messages(
             request,
             input_tokens=input_tokens,
@@ -98,6 +122,8 @@ class OpenAIAPIProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[str]:
+        if _omit_unsupported_sampling(request.model, reasoning):
+            request = request.model_copy(update={"temperature": None, "top_p": None})
         return self._responses.stream_responses(
             request,
             input_tokens=input_tokens,

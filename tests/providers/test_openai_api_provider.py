@@ -14,6 +14,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
 )
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.openai_api.provider import OpenAIAPIProvider
 from tests.providers.support import immediate_admission, make_provider_config
 
@@ -119,6 +120,83 @@ async def test_api_key_provider_uses_public_responses_endpoint(
     assert body["max_output_tokens"] == 64
     if ingress == "responses":
         assert body["metadata"] == {"source": "api-key-test"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ingress", ["messages", "responses"])
+@pytest.mark.parametrize(
+    ("model", "effort", "omit_sampling"),
+    [
+        ("gpt-6-astra", "medium", True),
+        ("gpt-6-sol", None, True),
+        ("gpt-5.4", None, True),
+        ("gpt-5.1", "medium", True),
+        ("gpt-6-sol", "none", False),
+        ("gpt-5.1", None, False),
+        ("gpt-4.1", None, False),
+    ],
+)
+async def test_api_key_provider_uses_supported_sampling_for_reasoning_mode(
+    ingress: str, model: str, effort: str | None, omit_sampling: bool
+) -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            text=_complete_stream("hello"),
+            headers={"content-type": "text/event-stream"},
+            request=request,
+        )
+
+    provider = _provider(httpx2.MockTransport(handler))
+    reasoning = (
+        ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM)
+        if effort == "medium"
+        else ReasoningPolicy.off()
+        if effort == "none"
+        else ReasoningPolicy.provider_default()
+    )
+    try:
+        if ingress == "messages":
+            stream = provider.stream_messages(
+                MessagesRequest.model_validate(
+                    {
+                        "model": model,
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "temperature": 0.5,
+                        "top_p": 0.8,
+                    }
+                ),
+                reasoning=reasoning,
+            )
+        else:
+            stream = provider.stream_responses(
+                OpenAIResponsesRequest.model_validate(
+                    {
+                        "model": model,
+                        "input": "hello",
+                        **({"reasoning": {"effort": effort}} if effort else {}),
+                        "temperature": 0.5,
+                        "top_p": 0.8,
+                    }
+                ),
+                reasoning=reasoning,
+            )
+        await _collect(stream)
+    finally:
+        await provider.cleanup()
+
+    assert len(bodies) == 1
+    if effort is not None:
+        assert bodies[0]["reasoning"]["effort"] == effort
+    if omit_sampling:
+        assert "temperature" not in bodies[0]
+        assert "top_p" not in bodies[0]
+    else:
+        assert bodies[0]["temperature"] == 0.5
+        assert bodies[0]["top_p"] == 0.8
 
 
 @pytest.mark.asyncio
