@@ -328,7 +328,8 @@ class StreamState:
 def gemini_event_chunks(event: dict[str, Any], state: StreamState) -> list[Any]:
     """Convert one Cloud Code SSE payload to OpenAI-SDK-like chunk objects."""
 
-    payload = event.get("response") if isinstance(event.get("response"), dict) else event
+    response = event.get("response")
+    payload: dict[str, Any] = response if isinstance(response, dict) else event
     chunks: list[Any] = []
     usage = payload.get("usageMetadata")
     if isinstance(usage, dict):

@@ -10,10 +10,10 @@ from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.reasoning import ReasoningEffort
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.openai_chat.profiles import OpenAIChatProfile
-from free_claude_code.providers.openai_chat.provider import OpenAIChatProvider
-from free_claude_code.providers.openai_chat.reasoning import NamedEffortReasoning
-from free_claude_code.providers.openai_chat.request_policy import (
+from free_claude_code.providers.openai_chat import (
+    NamedEffortReasoning,
+    OpenAIChatProfile,
+    OpenAIChatProvider,
     OpenAIChatRequestPolicy,
 )
 

@@ -9,10 +9,7 @@ from free_claude_code.application.errors import (
 )
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
-from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
-    ProviderAdmissionController,
-)
+from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
@@ -258,16 +255,21 @@ def prepare_provider(
 
     def construct(settings: Settings) -> BaseProvider:
         config = build_provider_config(descriptor, settings)
-        antigravity = provider_id == "antigravity"
-        admission = ProviderAdmissionController(
-            provider_name=provider_id,
-            rate_limit=config.rate_limit,
-            rate_window=config.rate_window,
-            max_concurrency=1 if antigravity else config.max_concurrency,
-            max_attempts=(
-                1 if antigravity else UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
-            ),
-        )
+        if provider_id == "antigravity":
+            admission = ProviderAdmissionController(
+                provider_name=provider_id,
+                rate_limit=config.rate_limit,
+                rate_window=config.rate_window,
+                max_concurrency=1,
+                max_attempts=1,
+            )
+        else:
+            admission = ProviderAdmissionController(
+                provider_name=provider_id,
+                rate_limit=config.rate_limit,
+                rate_window=config.rate_window,
+                max_concurrency=config.max_concurrency,
+            )
         if factory is not None:
             return factory(config, settings, admission)
         return create_openai_chat_provider(provider_id, config, admission)

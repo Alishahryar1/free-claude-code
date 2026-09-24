@@ -33,7 +33,7 @@ def register_antigravity_catalog(module: ModuleType) -> None:
 
     catalog.clear()
     catalog.update(ordered)
-    module.SUPPORTED_PROVIDER_IDS = tuple(catalog.keys())
+    module.__dict__["SUPPORTED_PROVIDER_IDS"] = tuple(catalog.keys())
 
 
 # Run before config.settings imports SUPPORTED_PROVIDER_IDS by value.
