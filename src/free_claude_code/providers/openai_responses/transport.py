@@ -100,14 +100,17 @@ class OpenAIResponsesTransport:
         log_raw_sse_events: bool,
         endpoint_transport: httpx2.AsyncBaseTransport | None = None,
         event_adapter_factory: Callable[[], ResponsesEventAdapter] | None = None,
-        request_body_adapter: Callable[[JsonObject], JsonObject] | None = None,
+        request_correction: Callable[
+            [Exception, JsonObject, JsonObject], JsonObject | None
+        ]
+        | None = None,
         omitted_request_fields: frozenset[str] = frozenset(),
         tool_policy: ResponsesToolPolicy = ResponsesToolPolicy(),
     ) -> None:
         self._client = client
         self._endpoint_transport = endpoint_transport
         self._event_adapter_factory = event_adapter_factory
-        self._request_body_adapter = request_body_adapter
+        self._request_correction = request_correction
         self._omitted_request_fields = omitted_request_fields
         self._tool_policy = tool_policy
         self._admission = admission
@@ -352,8 +355,6 @@ class OpenAIResponsesTransport:
                     endpoint=endpoint.snapshot if endpoint is not None else None,
                 )
                 sent_body = prepare_history(body, origin)
-                if self._request_body_adapter is not None:
-                    sent_body = self._request_body_adapter(sent_body)
                 attempt = await execution.open_attempt(ProviderOperationKind.GENERATION)
                 scope = ProviderAttemptScope(
                     attempt,
@@ -453,6 +454,9 @@ class OpenAIResponsesTransport:
                             body,
                             sent_body=sent_body,
                             reasoning_error=raw_error,
+                            after_common=partial(
+                                self._provider_retry_body, raw_error, body, sent_body
+                            ),
                         ),
                     )
                     if corrected_body is not None:
@@ -526,6 +530,17 @@ class OpenAIResponsesTransport:
         if execution.last_failure is not None:
             raise execution.last_failure
         raise RuntimeError("Responses execution ended without a terminal result.")
+
+    def _provider_retry_body(
+        self,
+        error: Exception,
+        body: JsonObject,
+        sent_body: JsonObject,
+        _used_retry_kinds: set[str],
+    ) -> JsonObject | None:
+        if self._request_correction is None:
+            return None
+        return self._request_correction(error, body, sent_body)
 
     async def _create_sdk_stream(
         self,
