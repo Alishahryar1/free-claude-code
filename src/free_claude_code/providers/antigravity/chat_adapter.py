@@ -18,6 +18,7 @@ PROJECT_ID_ENV = "CLOUDCODE_GCP_PROJECT_ID"
 DIAGNOSTIC_DISABLE_TOOLS_ENV = "ANTIGRAVITY_DIAGNOSTIC_DISABLE_TOOLS"
 DIAGNOSTIC_DISABLE_SYSTEM_ENV = "ANTIGRAVITY_DIAGNOSTIC_DISABLE_SYSTEM"
 DIAGNOSTIC_REPLACE_CONTENTS_ENV = "ANTIGRAVITY_DIAGNOSTIC_REPLACE_CONTENTS"
+DIAGNOSTIC_REDACT_CONTENT_TEXT_ENV = "ANTIGRAVITY_DIAGNOSTIC_REDACT_CONTENT_TEXT"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -145,7 +146,8 @@ def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
 
     disable_system = _env_truthy(DIAGNOSTIC_DISABLE_SYSTEM_ENV)
     replace_contents = _env_truthy(DIAGNOSTIC_REPLACE_CONTENTS_ENV)
-    if not disable_system and not replace_contents:
+    redact_content_text = _env_truthy(DIAGNOSTIC_REDACT_CONTENT_TEXT_ENV)
+    if not disable_system and not replace_contents and not redact_content_text:
         return envelope
 
     updated = dict(envelope)
@@ -162,8 +164,33 @@ def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
         _LOGGER.warning(
             "Antigravity diagnostic mode active: conversation contents replaced"
         )
+    elif redact_content_text:
+        contents = request.get("contents")
+        if isinstance(contents, list):
+            request["contents"] = [_redact_content_text(item) for item in contents]
+        _LOGGER.warning(
+            "Antigravity diagnostic mode active: conversation text redacted"
+        )
     updated["request"] = request
     return updated
+
+
+def _redact_content_text(value: Any) -> Any:
+    """Replace content text with same-length filler while preserving request shape."""
+
+    if isinstance(value, list):
+        return [_redact_content_text(item) for item in value]
+    if not isinstance(value, Mapping):
+        return value
+
+    redacted = dict(value)
+    text = redacted.get("text")
+    if isinstance(text, str):
+        redacted["text"] = "A" * len(text)
+    parts = redacted.get("parts")
+    if isinstance(parts, list):
+        redacted["parts"] = [_redact_content_text(part) for part in parts]
+    return redacted
 
 
 def _log_request_metrics(envelope: Mapping[str, Any]) -> None:
