@@ -56,7 +56,14 @@ class AntigravityProvider(OpenAIChatProvider):
         auth: AntigravityAuthManager,
         admission: ProviderAdmissionController,
     ) -> None:
-        cloud_code = AntigravityClient(auth=auth, base_url=config.base_url)
+        cloud_code = AntigravityClient(
+            auth=auth,
+            base_url=config.base_url,
+            read_timeout=config.http_read_timeout,
+            write_timeout=config.http_write_timeout,
+            connect_timeout=config.http_connect_timeout,
+            proxy=config.proxy,
+        )
         adapter = AntigravityChatAdapter(cloud_code, base_url=config.base_url)
         self._cloud_code = cloud_code
         super().__init__(
