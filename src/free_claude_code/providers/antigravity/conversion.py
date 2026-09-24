@@ -25,6 +25,9 @@ def openai_chat_to_cloudcode(
     tools = _tools_to_gemini(body.get("tools"))
     if tools:
         request["tools"] = tools
+        tool_config = _tool_config(body.get("tool_choice"))
+        if tool_config is not None:
+            request["toolConfig"] = tool_config
 
     generation = _generation_config(body)
     if generation:
@@ -67,7 +70,7 @@ def _messages_to_gemini(
             contents.append({"role": "user", "parts": pending_tool_parts})
             pending_tool_parts = []
 
-        if role == "system":
+        if role in {"system", "developer"}:
             system_parts.extend(_content_parts(raw.get("content")))
             continue
 
@@ -91,7 +94,14 @@ def _messages_to_gemini(
             )
             continue
 
-        parts = _content_parts(raw.get("content"))
+        parts: list[dict[str, Any]] = []
+        if role == "assistant":
+            reasoning = raw.get("reasoning_content")
+            if not isinstance(reasoning, str):
+                reasoning = raw.get("reasoning")
+            if isinstance(reasoning, str) and reasoning:
+                parts.append({"thought": True, "text": reasoning})
+        parts.extend(_content_parts(raw.get("content")))
         if role == "assistant":
             for tool_call in raw.get("tool_calls") or []:
                 part = _assistant_tool_part(tool_call)
@@ -209,6 +219,29 @@ def _tools_to_gemini(value: Any) -> list[dict[str, Any]]:
     return [{"functionDeclarations": declarations}] if declarations else []
 
 
+def _tool_config(value: Any) -> dict[str, Any] | None:
+    mode: str | None = None
+    allowed_names: list[str] | None = None
+    if value == "auto":
+        mode = "AUTO"
+    elif value == "none":
+        mode = "NONE"
+    elif value == "required":
+        mode = "ANY"
+    elif isinstance(value, dict) and value.get("type") == "function":
+        function = value.get("function")
+        name = function.get("name") if isinstance(function, dict) else None
+        if isinstance(name, str) and name:
+            mode = "ANY"
+            allowed_names = [name]
+    if mode is None:
+        return None
+    calling: dict[str, Any] = {"mode": mode}
+    if allowed_names is not None:
+        calling["allowedFunctionNames"] = allowed_names
+    return {"functionCallingConfig": calling}
+
+
 def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
     allowed = {"type", "description", "properties", "items", "required", "enum"}
     cleaned: dict[str, Any] = {}
@@ -230,9 +263,11 @@ def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 def _generation_config(body: dict[str, Any]) -> dict[str, Any]:
     config: dict[str, Any] = {}
-    temperature = body.get("temperature")
-    if isinstance(temperature, int | float) and not isinstance(temperature, bool):
-        config["temperature"] = temperature
+    _copy_number(body, "temperature", config, "temperature")
+    _copy_number(body, "top_p", config, "topP")
+    _copy_number(body, "presence_penalty", config, "presencePenalty")
+    _copy_number(body, "frequency_penalty", config, "frequencyPenalty")
+
     max_tokens = body.get("max_tokens", body.get("max_completion_tokens"))
     if (
         isinstance(max_tokens, int)
@@ -240,6 +275,18 @@ def _generation_config(body: dict[str, Any]) -> dict[str, Any]:
         and max_tokens > 0
     ):
         config["maxOutputTokens"] = max_tokens
+
+    stop = body.get("stop")
+    if isinstance(stop, str) and stop:
+        config["stopSequences"] = [stop]
+    elif isinstance(stop, list):
+        stops = [item for item in stop if isinstance(item, str) and item]
+        if stops:
+            config["stopSequences"] = stops
+
+    seed = body.get("seed")
+    if isinstance(seed, int) and not isinstance(seed, bool):
+        config["seed"] = seed
 
     effort = body.get("reasoning_effort")
     if isinstance(effort, str):
@@ -249,6 +296,14 @@ def _generation_config(body: dict[str, Any]) -> dict[str, Any]:
         elif normalized in {"low", "medium", "high"}:
             config["thinkingConfig"] = {"thinkingLevel": normalized.upper()}
     return config
+
+
+def _copy_number(
+    source: dict[str, Any], source_key: str, target: dict[str, Any], target_key: str
+) -> None:
+    value = source.get(source_key)
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        target[target_key] = value
 
 
 @dataclass(slots=True)
@@ -278,7 +333,9 @@ def gemini_event_chunks(event: dict[str, Any], state: StreamState) -> list[Any]:
     usage = payload.get("usageMetadata")
     if isinstance(usage, dict):
         state.prompt_tokens = _int(usage.get("promptTokenCount"))
-        state.completion_tokens = _int(usage.get("candidatesTokenCount"))
+        state.completion_tokens = _int(
+            usage.get("candidatesTokenCount", usage.get("completionTokenCount"))
+        )
 
     candidates = payload.get("candidates")
     if not isinstance(candidates, list):
@@ -286,7 +343,7 @@ def gemini_event_chunks(event: dict[str, Any], state: StreamState) -> list[Any]:
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
-        finish_reason = candidate.get("finishReason")
+        finish_reason = candidate.get("finishReason") or candidate.get("stopReason")
         if isinstance(finish_reason, str) and finish_reason:
             state.finish_reason = finish_reason
         content = candidate.get("content")
@@ -369,8 +426,19 @@ def final_chunk(state: StreamState) -> Any:
 def _openai_finish_reason(state: StreamState) -> str:
     if state.saw_tool:
         return "tool_calls"
-    if (state.finish_reason or "").upper() == "MAX_TOKENS":
+    reason = (state.finish_reason or "").upper()
+    if reason == "MAX_TOKENS":
         return "length"
+    if reason in {
+        "SAFETY",
+        "RECITATION",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+        "IMAGE_SAFETY",
+        "LANGUAGE",
+    }:
+        return "content_filter"
     return "stop"
 
 
