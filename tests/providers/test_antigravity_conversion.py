@@ -2,6 +2,9 @@
 
 from types import SimpleNamespace
 
+import pytest
+
+from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.providers.antigravity.conversion import (
     StreamState,
     final_chunk,
@@ -77,6 +80,94 @@ def test_chat_body_converts_system_tools_and_generation_config() -> None:
         "seed": 42,
         "thinkingConfig": {"thinkingLevel": "HIGH"},
     }
+
+
+def test_remote_image_url_is_rejected_instead_of_dropped() -> None:
+    with pytest.raises(InvalidRequestError, match="remote image URLs"):
+        openai_chat_to_cloudcode(
+            {
+                "model": "gemini-test",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "describe this"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "https://example.test/image.png"},
+                            },
+                        ],
+                    }
+                ],
+            },
+            project_id="project-1",
+        )
+
+
+def test_data_image_url_is_preserved_as_inline_data() -> None:
+    envelope = openai_chat_to_cloudcode(
+        {
+            "model": "gemini-test",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+                        }
+                    ],
+                }
+            ],
+        },
+        project_id="project-1",
+    )
+
+    assert envelope["request"]["contents"] == [
+        {
+            "role": "user",
+            "parts": [
+                {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}
+            ],
+        }
+    ]
+
+
+def test_tool_schema_preserves_alternatives_and_constraints() -> None:
+    envelope = openai_chat_to_cloudcode(
+        {
+            "model": "gemini-test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "choose",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "value": {
+                                    "anyOf": [
+                                        {"type": "string", "minLength": 2},
+                                        {"type": "integer", "minimum": 1},
+                                    ]
+                                }
+                            },
+                            "required": ["value"],
+                        },
+                    },
+                }
+            ],
+        },
+        project_id="project-1",
+    )
+
+    declaration = envelope["request"]["tools"][0]["functionDeclarations"][0]
+    value = declaration["parameters"]["properties"]["value"]
+    assert value["anyOf"] == [
+        {"type": "string", "minLength": 2},
+        {"type": "integer", "minimum": 1},
+    ]
 
 
 def test_tool_choice_modes_map_to_gemini() -> None:
