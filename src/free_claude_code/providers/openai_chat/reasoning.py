@@ -1,5 +1,6 @@
 """Provider-owned reasoning translations for OpenAI-compatible APIs."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -41,6 +42,7 @@ class NamedEffortReasoning:
     field: str = "reasoning_effort"
     budget_field: str | None = None
     use_extra_body: bool = False
+    model_filter: Callable[[str], bool] | None = None
 
     @property
     def off_field(self) -> tuple[str, ...] | None:
@@ -50,9 +52,21 @@ class NamedEffortReasoning:
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         target = _extra_body(body) if self.use_extra_body else body
+        model = body.get("model")
+        if self.model_filter is not None and (
+            not isinstance(model, str) or not self.model_filter(model)
+        ):
+            target.pop(self.field, None)
+            extra = body.get("extra_body")
+            if isinstance(extra, dict):
+                extra.pop(self.field, None)
+            return
+
         if policy.control is ReasoningControl.OFF:
             if self.disabled_value is not None:
                 target[self.field] = self.disabled_value
+            else:
+                target.pop(self.field, None)
             return
 
         if policy.budget_tokens is not None and self.budget_field is not None:

@@ -10,7 +10,11 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import OPENAI_API_DEFAULT_BASE
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.model_listing import ModelListResponseError
-from free_claude_code.providers.openai_chat import OpenAIChatProvider
+from free_claude_code.providers.openai_chat import (
+    OpenAIChatProvider,
+    is_openai_chat_model,
+    is_openai_reasoning_model,
+)
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     immediate_admission,
@@ -64,11 +68,11 @@ def test_normalizes_base_url_without_v1() -> None:
     assert provider._base_url == "https://api.openai.com/v1"
 
 
-def test_request_uses_modern_token_field_tools_and_reasoning() -> None:
+def test_gpt4o_request_uses_modern_token_field_tools_and_omits_reasoning() -> None:
     request = make_messages_request(
-        _MODEL,
-        temperature=None,
-        top_p=None,
+        "gpt-4o",
+        temperature=0.7,
+        top_p=0.9,
         tools=[
             {
                 "name": "read_file",
@@ -87,18 +91,61 @@ def test_request_uses_modern_token_field_tools_and_reasoning() -> None:
         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
     )
 
-    assert body["model"] == _MODEL
+    assert body["model"] == "gpt-4o"
     assert body["messages"][0] == {"role": "system", "content": "System prompt"}
     assert body["max_completion_tokens"] == 100
     assert "max_tokens" not in body
-    assert body["reasoning_effort"] == "high"
+    assert "reasoning_effort" not in body
+    assert body["temperature"] == 0.7
+    assert body["top_p"] == 0.9
     assert body["tools"][0]["function"]["name"] == "read_file"
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        ReasoningPolicy.off(),
+        ReasoningPolicy.on(effort=ReasoningEffort.MINIMAL),
+        ReasoningPolicy.on(effort=ReasoningEffort.LOW),
+        ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM),
+        ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+        ReasoningPolicy.on(effort=ReasoningEffort.XHIGH),
+        ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+    ],
+)
+def test_gpt4o_omits_reasoning_controls_across_all_policies(
+    policy: ReasoningPolicy,
+) -> None:
+    body = _provider()._chat._build_request_body(
+        make_messages_request(
+            "gpt-4o",
+            temperature=None,
+            top_p=None,
+        ),
+        reasoning=policy,
+    )
+
+    assert "reasoning_effort" not in body
+
+
+def test_gpt4o_preserves_sampling_parameters_and_strips_extra_reasoning() -> None:
+    body = _provider()._chat._build_request_body(
+        make_messages_request(
+            "gpt-4o",
+            temperature=0.8,
+            top_p=0.95,
+        ),
+        reasoning=ReasoningPolicy.off(),
+    )
+
+    assert body["temperature"] == 0.8
+    assert body["top_p"] == 0.95
+    assert "reasoning_effort" not in body
 
 
 @pytest.mark.parametrize(
     ("policy", "expected"),
     [
-        (ReasoningPolicy.off(), "none"),
         (ReasoningPolicy.on(effort=ReasoningEffort.MINIMAL), "low"),
         (ReasoningPolicy.on(effort=ReasoningEffort.LOW), "low"),
         (ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM), "medium"),
@@ -107,13 +154,13 @@ def test_request_uses_modern_token_field_tools_and_reasoning() -> None:
         (ReasoningPolicy.on(effort=ReasoningEffort.MAX), "high"),
     ],
 )
-def test_reasoning_uses_openai_supported_vocabulary(
+def test_reasoning_model_uses_openai_supported_vocabulary(
     policy: ReasoningPolicy,
     expected: str,
 ) -> None:
     body = _provider()._chat._build_request_body(
         make_messages_request(
-            _MODEL,
+            "o3-mini",
             temperature=None,
             top_p=None,
         ),
@@ -121,6 +168,117 @@ def test_reasoning_uses_openai_supported_vocabulary(
     )
 
     assert body["reasoning_effort"] == expected
+
+
+def test_reasoning_model_omits_reasoning_effort_when_disabled() -> None:
+    body = _provider()._chat._build_request_body(
+        make_messages_request(
+            "o3",
+            temperature=None,
+            top_p=None,
+        ),
+        reasoning=ReasoningPolicy.off(),
+    )
+
+    assert "reasoning_effort" not in body
+
+
+def test_reasoning_model_omits_sampling_parameters_and_none_effort() -> None:
+    body = _provider()._chat._build_request_body(
+        make_messages_request(
+            "o3",
+            temperature=0.7,
+            top_p=0.9,
+        ),
+        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM),
+    )
+
+    assert "temperature" not in body
+    assert "top_p" not in body
+    assert body["reasoning_effort"] == "medium"
+
+
+def test_finalize_chat_body_sanitizes_both_top_level_and_extra_body() -> None:
+    behavior = _provider()._behavior
+
+    o3_body = {
+        "model": "o3",
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "reasoning_effort": "none",
+        "extra_body": {
+            "temperature": 0.5,
+            "top_p": 0.8,
+            "reasoning_effort": "none",
+            "custom_field": "kept",
+        },
+    }
+    sanitized_o3 = behavior.finalize_chat_body(o3_body, reasoning=ReasoningPolicy.off())
+    assert "temperature" not in sanitized_o3
+    assert "top_p" not in sanitized_o3
+    assert "reasoning_effort" not in sanitized_o3
+    assert "temperature" not in sanitized_o3["extra_body"]
+    assert "top_p" not in sanitized_o3["extra_body"]
+    assert "reasoning_effort" not in sanitized_o3["extra_body"]
+    assert sanitized_o3["extra_body"]["custom_field"] == "kept"
+
+    gpt4o_body = {
+        "model": "gpt-4o",
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "reasoning_effort": "none",
+        "extra_body": {
+            "reasoning_effort": "none",
+            "custom_field": "kept",
+        },
+    }
+    sanitized_gpt4o = behavior.finalize_chat_body(
+        gpt4o_body, reasoning=ReasoningPolicy.off()
+    )
+    assert sanitized_gpt4o["temperature"] == 0.7
+    assert sanitized_gpt4o["top_p"] == 0.9
+    assert "reasoning_effort" not in sanitized_gpt4o
+    assert "reasoning_effort" not in sanitized_gpt4o["extra_body"]
+    assert sanitized_gpt4o["extra_body"]["custom_field"] == "kept"
+
+
+def test_model_predicates_distinguish_chat_and_reasoning_models() -> None:
+    assert is_openai_chat_model("gpt-4o")
+    assert is_openai_chat_model("gpt-4o-mini")
+    assert is_openai_chat_model("gpt-4.5-preview")
+    assert is_openai_chat_model("o1")
+    assert is_openai_chat_model("o1-mini")
+    assert is_openai_chat_model("o3")
+    assert is_openai_chat_model("o3-mini")
+    assert is_openai_chat_model("o4-preview")
+    assert is_openai_chat_model("chatgpt-4o-latest")
+    assert is_openai_chat_model("ft:gpt-4o:my-org:custom")
+    assert is_openai_chat_model("ft:o3-mini:my-org:custom")
+
+    assert not is_openai_chat_model("text-embedding-3-small")
+    assert not is_openai_chat_model("text-embedding-ada-002")
+    assert not is_openai_chat_model("dall-e-3")
+    assert not is_openai_chat_model("dall-e-2")
+    assert not is_openai_chat_model("tts-1")
+    assert not is_openai_chat_model("tts-1-hd")
+    assert not is_openai_chat_model("whisper-1")
+    assert not is_openai_chat_model("text-moderation-latest")
+    assert not is_openai_chat_model("omni-moderation-latest")
+    assert not is_openai_chat_model("gpt-4o-realtime-preview")
+    assert not is_openai_chat_model("gpt-3.5-turbo-instruct")
+    assert not is_openai_chat_model("babbage-002")
+    assert not is_openai_chat_model("davinci-002")
+
+    assert is_openai_reasoning_model("o1")
+    assert is_openai_reasoning_model("o1-mini")
+    assert is_openai_reasoning_model("o1-preview")
+    assert is_openai_reasoning_model("o3")
+    assert is_openai_reasoning_model("o3-mini")
+    assert is_openai_reasoning_model("o4")
+    assert is_openai_reasoning_model("ft:o1:org:id")
+    assert not is_openai_reasoning_model("gpt-4o")
+    assert not is_openai_reasoning_model("gpt-4o-mini")
+    assert not is_openai_reasoning_model("chatgpt-4o-latest")
 
 
 def test_reasoning_history_replays_as_portable_think_tags() -> None:
@@ -153,10 +311,23 @@ def test_reasoning_history_replays_as_portable_think_tags() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lists_models_from_models_endpoint() -> None:
+async def test_lists_models_from_models_endpoint_filters_non_chat_models() -> None:
     provider = _provider()
     provider._client.get = AsyncMock(
-        return_value={"data": [{"id": "gpt-4o"}, {"id": "o3-mini"}]}
+        return_value={
+            "data": [
+                {"id": "gpt-4o"},
+                {"id": "o3-mini"},
+                {"id": "text-embedding-3-small"},
+                {"id": "dall-e-3"},
+                {"id": "whisper-1"},
+                {"id": "tts-1"},
+                {"id": "omni-moderation-latest"},
+                {"id": "gpt-4o-realtime-preview"},
+                {"id": "gpt-3.5-turbo-instruct"},
+                {"id": "babbage-002"},
+            ]
+        }
     )
 
     model_infos = await provider.list_model_infos()

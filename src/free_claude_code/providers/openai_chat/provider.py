@@ -99,6 +99,7 @@ class OpenAIChatProvider(BaseProvider):
             collection_field=listing.collection_field,
             id_field=listing.id_field,
             aliases_field=listing.aliases_field,
+            id_filter=listing.id_filter,
             required_path_values=listing.required_path_values,
             required_null_field=listing.required_null_field,
             required_sequence_items=listing.required_sequence_items,
@@ -119,6 +120,10 @@ class OpenAIChatProvider(BaseProvider):
             model_info.model_id: model_info for model_info in live_model_infos
         }
         for model_info in model_infos_from_ids(listing.additional_model_ids):
+            if listing.id_filter is not None and not listing.id_filter(
+                model_info.model_id
+            ):
+                continue
             existing = model_infos_by_id.get(model_info.model_id)
             if existing is None:
                 model_infos_by_id[model_info.model_id] = model_info

@@ -44,6 +44,7 @@ def extract_openai_model_infos(
     collection_field: str | None = "data",
     id_field: str = "id",
     aliases_field: str | None = None,
+    id_filter: Callable[[str], bool] | None = None,
     required_path_values: RequiredPathValues = (),
     required_null_field: str | None = None,
     required_sequence_items: tuple[tuple[str, str], ...] = (),
@@ -74,6 +75,8 @@ def extract_openai_model_infos(
                 provider_name,
                 f"expected every {item_location} item to include {id_field}",
             )
+        if id_filter is not None and not id_filter(model_id):
+            continue
         included = True
         for path, allowed_values in required_path_values:
             path_value = _path(item, path)

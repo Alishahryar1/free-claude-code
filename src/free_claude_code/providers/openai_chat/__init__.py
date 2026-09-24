@@ -10,7 +10,13 @@ from .extra_body import (
     validate_extra_body_does_not_override_canonical_fields,
     validate_extra_body_does_not_override_reasoning_fields,
 )
-from .profiles import OPENAI_CHAT_PROFILES, OpenAIChatProfile, OpenAIModelListing
+from .profiles import (
+    OPENAI_CHAT_PROFILES,
+    OpenAIChatProfile,
+    OpenAIModelListing,
+    is_openai_chat_model,
+    is_openai_reasoning_model,
+)
 from .provider import OpenAIChatProvider
 from .reasoning import (
     NO_REASONING,
@@ -65,6 +71,8 @@ __all__ = [
     "build_openai_chat_request_body",
     "create_chat_client",
     "create_openai_chat_provider",
+    "is_openai_chat_model",
+    "is_openai_reasoning_model",
     "openai_v1_base_url",
     "usage_int",
     "validate_extra_body_does_not_override_canonical_fields",
