@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import platform
 import time
 import uuid
@@ -17,6 +18,8 @@ from .credentials import AntigravityCredentialError
 REQUEST_USER_AGENT = "antigravity"
 REQUEST_TYPE = "agent"
 MODEL_CACHE_TTL_SECONDS = 3600.0
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class AntigravityUpstreamError(RuntimeError):
@@ -259,7 +262,12 @@ def _upstream_error(
 ) -> AntigravityUpstreamError:
     raw = response.content if body is None else body
     text = raw.decode("utf-8", errors="replace")
-    preview = text[:1024]
+    preview = " ".join(text[:2048].split())
+    _LOGGER.warning(
+        "Antigravity upstream error: status=%s body=%s",
+        response.status_code,
+        preview or "<empty>",
+    )
     return AntigravityUpstreamError(
         response.status_code,
         f"Antigravity upstream returned {response.status_code}: {preview}",
