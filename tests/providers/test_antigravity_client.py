@@ -7,7 +7,10 @@ import httpx
 import pytest
 
 from free_claude_code.providers.antigravity.auth import AntigravityAuthManager
-from free_claude_code.providers.antigravity.client import AntigravityClient
+from free_claude_code.providers.antigravity.client import (
+    AntigravityClient,
+    AntigravityUpstreamError,
+)
 from free_claude_code.providers.antigravity.credentials import (
     AntigravityCredentialError,
     AntigravityCredentials,
@@ -119,4 +122,29 @@ async def test_expiring_native_token_requires_agy_refresh(tmp_path: Path) -> Non
 
     with pytest.raises(AntigravityCredentialError, match="Refresh the account"):
         await client.fetch_available_models()
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_error_reads_body_before_classification(tmp_path: Path) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            headers={"content-type": "application/json"},
+            content=b'{"error":{"message":"quota exhausted"}}',
+        )
+
+    manager = await connected_manager(tmp_path)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AntigravityClient(auth=manager, base_url="https://example.test", client=http)
+
+    stream = client.stream_generate_content(
+        {"model": "gemini-test", "project": "p", "request": {"contents": []}}
+    )
+    with pytest.raises(AntigravityUpstreamError) as captured:
+        await anext(stream)
+
+    assert captured.value.status_code == 429
+    assert "quota exhausted" in captured.value.body
+    assert "quota exhausted" in str(captured.value)
     await http.aclose()
