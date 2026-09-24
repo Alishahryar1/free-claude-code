@@ -16,6 +16,8 @@ from .conversion import (
 
 PROJECT_ID_ENV = "CLOUDCODE_GCP_PROJECT_ID"
 DIAGNOSTIC_DISABLE_TOOLS_ENV = "ANTIGRAVITY_DIAGNOSTIC_DISABLE_TOOLS"
+DIAGNOSTIC_DISABLE_SYSTEM_ENV = "ANTIGRAVITY_DIAGNOSTIC_DISABLE_SYSTEM"
+DIAGNOSTIC_REPLACE_CONTENTS_ENV = "ANTIGRAVITY_DIAGNOSTIC_REPLACE_CONTENTS"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -67,6 +69,7 @@ class AntigravityChatAdapter:
                 "Antigravity diagnostic mode active: tool declarations disabled"
             )
         envelope = openai_chat_to_cloudcode(create_body, project_id=project_id)
+        envelope = _apply_diagnostic_overrides(envelope)
         _log_request_metrics(envelope)
         source = self._client.stream_generate_content(envelope)
         model = envelope["model"]
@@ -131,6 +134,36 @@ def _env_truthy(name: str) -> bool:
     if value is None:
         return False
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Apply opt-in local diagnostics without logging or persisting prompt content."""
+
+    request_value = envelope.get("request")
+    if not isinstance(request_value, Mapping):
+        return envelope
+
+    disable_system = _env_truthy(DIAGNOSTIC_DISABLE_SYSTEM_ENV)
+    replace_contents = _env_truthy(DIAGNOSTIC_REPLACE_CONTENTS_ENV)
+    if not disable_system and not replace_contents:
+        return envelope
+
+    updated = dict(envelope)
+    request = dict(request_value)
+    if disable_system:
+        request.pop("systemInstruction", None)
+        _LOGGER.warning(
+            "Antigravity diagnostic mode active: system instruction disabled"
+        )
+    if replace_contents:
+        request["contents"] = [
+            {"role": "user", "parts": [{"text": "Sadece TEST_OK yaz."}]}
+        ]
+        _LOGGER.warning(
+            "Antigravity diagnostic mode active: conversation contents replaced"
+        )
+    updated["request"] = request
+    return updated
 
 
 def _log_request_metrics(envelope: Mapping[str, Any]) -> None:
