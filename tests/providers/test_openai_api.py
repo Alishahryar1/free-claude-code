@@ -198,6 +198,22 @@ def test_reasoning_model_omits_sampling_parameters_and_none_effort() -> None:
     assert body["reasoning_effort"] == "medium"
 
 
+def test_gpt5_uses_reasoning_and_omits_sampling_parameters() -> None:
+    body = _provider()._chat._build_request_body(
+        make_messages_request(
+            "gpt-5",
+            temperature=0.7,
+            top_p=0.9,
+        ),
+        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+    )
+
+    assert body["model"] == "gpt-5"
+    assert body["reasoning_effort"] == "high"
+    assert "temperature" not in body
+    assert "top_p" not in body
+
+
 def test_finalize_chat_body_sanitizes_both_top_level_and_extra_body() -> None:
     behavior = _provider()._behavior
 
@@ -275,6 +291,12 @@ def test_model_predicates_distinguish_chat_and_reasoning_models() -> None:
     assert is_openai_reasoning_model("o3")
     assert is_openai_reasoning_model("o3-mini")
     assert is_openai_reasoning_model("o4")
+    assert is_openai_reasoning_model("gpt-5")
+    assert is_openai_reasoning_model("gpt-5-mini")
+    assert is_openai_reasoning_model("gpt-5.1")
+    assert is_openai_reasoning_model("gpt-5.3-codex")
+    assert is_openai_reasoning_model("chatgpt-5")
+    assert is_openai_reasoning_model("ft:gpt-5:org:custom")
     assert is_openai_reasoning_model("ft:o1:org:id")
     assert not is_openai_reasoning_model("gpt-4o")
     assert not is_openai_reasoning_model("gpt-4o-mini")

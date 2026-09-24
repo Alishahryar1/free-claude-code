@@ -248,13 +248,13 @@ def is_openai_chat_model(model_id: str) -> bool:
 
 
 def is_openai_reasoning_model(model: str) -> bool:
-    """Return whether a model ID represents an OpenAI reasoning model (o-series)."""
+    """Return whether a model ID represents an OpenAI reasoning model."""
     lowered = model.strip().lower()
     if "/" in lowered:
         lowered = lowered.split("/")[-1]
-    if lowered.startswith("ft:"):
-        lowered = lowered[3:].split(":")[0]
-    return bool(re.match(r"^o[0-9]", lowered))
+    unprefixed = lowered.removeprefix("ft:")
+    target = unprefixed.split(":")[0] if ":" in unprefixed else unprefixed
+    return bool(re.match(r"^(o[0-9]|gpt-[5-9]|chatgpt-[5-9])", target))
 
 
 def _sanitize_openai_parameters(body: dict[str, Any]) -> None:
