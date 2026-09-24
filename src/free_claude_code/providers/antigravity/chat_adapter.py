@@ -20,6 +20,7 @@ DIAGNOSTIC_DISABLE_SYSTEM_ENV = "ANTIGRAVITY_DIAGNOSTIC_DISABLE_SYSTEM"
 DIAGNOSTIC_REPLACE_CONTENTS_ENV = "ANTIGRAVITY_DIAGNOSTIC_REPLACE_CONTENTS"
 DIAGNOSTIC_REDACT_CONTENT_TEXT_ENV = "ANTIGRAVITY_DIAGNOSTIC_REDACT_CONTENT_TEXT"
 DIAGNOSTIC_REDACT_SYSTEM_TEXT_ENV = "ANTIGRAVITY_DIAGNOSTIC_REDACT_SYSTEM_TEXT"
+DIAGNOSTIC_SYSTEM_SLICE_ENV = "ANTIGRAVITY_DIAGNOSTIC_SYSTEM_SLICE"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -138,6 +139,29 @@ def _env_truthy(name: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _diagnostic_system_slice() -> tuple[int, int] | None:
+    raw = os.getenv(DIAGNOSTIC_SYSTEM_SLICE_ENV)
+    if raw is None or not raw.strip():
+        return None
+    start_text, separator, end_text = raw.strip().partition(":")
+    if not separator:
+        raise ValueError(
+            f"{DIAGNOSTIC_SYSTEM_SLICE_ENV} must use START:END character offsets"
+        )
+    try:
+        start = int(start_text)
+        end = int(end_text)
+    except ValueError as error:
+        raise ValueError(
+            f"{DIAGNOSTIC_SYSTEM_SLICE_ENV} must use integer START:END offsets"
+        ) from error
+    if start < 0 or end <= start:
+        raise ValueError(
+            f"{DIAGNOSTIC_SYSTEM_SLICE_ENV} requires 0 <= START < END"
+        )
+    return start, end
+
+
 def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
     """Apply opt-in local diagnostics without logging or persisting prompt content."""
 
@@ -149,11 +173,13 @@ def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
     replace_contents = _env_truthy(DIAGNOSTIC_REPLACE_CONTENTS_ENV)
     redact_content_text = _env_truthy(DIAGNOSTIC_REDACT_CONTENT_TEXT_ENV)
     redact_system_text = _env_truthy(DIAGNOSTIC_REDACT_SYSTEM_TEXT_ENV)
+    system_slice = _diagnostic_system_slice()
     if (
         not disable_system
         and not replace_contents
         and not redact_content_text
         and not redact_system_text
+        and system_slice is None
     ):
         return envelope
 
@@ -163,6 +189,18 @@ def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
         request.pop("systemInstruction", None)
         _LOGGER.warning(
             "Antigravity diagnostic mode active: system instruction disabled"
+        )
+    elif system_slice is not None:
+        system_instruction = request.get("systemInstruction")
+        if isinstance(system_instruction, Mapping):
+            start, end = system_slice
+            request["systemInstruction"] = _slice_text_fields(
+                system_instruction, start, end
+            )
+        _LOGGER.warning(
+            "Antigravity diagnostic mode active: system instruction slice=%s:%s",
+            system_slice[0],
+            system_slice[1],
         )
     elif redact_system_text:
         system_instruction = request.get("systemInstruction")
@@ -207,6 +245,38 @@ def _redact_text_fields(value: Any) -> Any:
     return redacted
 
 
+def _slice_text_fields(value: Mapping[str, Any], start: int, end: int) -> dict[str, Any]:
+    """Keep only an overall character range across ordered text parts."""
+
+    sliced = dict(value)
+    parts = value.get("parts")
+    if not isinstance(parts, list):
+        return sliced
+
+    offset = 0
+    selected: list[Any] = []
+    for raw in parts:
+        if not isinstance(raw, Mapping):
+            continue
+        text = raw.get("text")
+        if not isinstance(text, str):
+            selected.append(dict(raw))
+            continue
+        part_start = offset
+        part_end = offset + len(text)
+        overlap_start = max(start, part_start)
+        overlap_end = min(end, part_end)
+        if overlap_start < overlap_end:
+            item = dict(raw)
+            item["text"] = text[
+                overlap_start - part_start : overlap_end - part_start
+            ]
+            selected.append(item)
+        offset = part_end
+    sliced["parts"] = selected
+    return sliced
+
+
 def _log_request_metrics(envelope: Mapping[str, Any]) -> None:
     """Log request shape without exposing prompts, tool names, or credentials."""
 
@@ -220,6 +290,15 @@ def _log_request_metrics(envelope: Mapping[str, Any]) -> None:
 
     system_instruction = request.get("systemInstruction")
     system_chars = _text_chars(system_instruction)
+    system_part_chars: list[int] = []
+    if isinstance(system_instruction, Mapping):
+        system_parts = system_instruction.get("parts")
+        if isinstance(system_parts, list):
+            system_part_chars = [
+                len(part["text"])
+                for part in system_parts
+                if isinstance(part, Mapping) and isinstance(part.get("text"), str)
+            ]
 
     tools = request.get("tools")
     tool_items = tools if isinstance(tools, list) else []
@@ -251,15 +330,17 @@ def _log_request_metrics(envelope: Mapping[str, Any]) -> None:
 
     _LOGGER.info(
         "Antigravity request metrics: model=%s project=%s json_bytes=%s "
-        "contents=%s content_text_chars=%s system_chars=%s tools=%s "
-        "tool_json_bytes=%s max_output_tokens=%s thinking_level=%s "
-        "thinking_budget=%s",
+        "contents=%s content_text_chars=%s system_chars=%s system_parts=%s "
+        "system_part_chars=%s tools=%s tool_json_bytes=%s max_output_tokens=%s "
+        "thinking_level=%s thinking_budget=%s",
         envelope.get("model"),
         envelope.get("project"),
         envelope_bytes,
         len(content_items),
         content_text_chars,
         system_chars,
+        len(system_part_chars),
+        system_part_chars,
         tool_count,
         tools_bytes,
         max_output_tokens,
