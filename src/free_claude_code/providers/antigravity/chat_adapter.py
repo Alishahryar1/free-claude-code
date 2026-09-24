@@ -15,6 +15,7 @@ from .conversion import (
 )
 
 PROJECT_ID_ENV = "CLOUDCODE_GCP_PROJECT_ID"
+DIAGNOSTIC_DISABLE_TOOLS_ENV = "ANTIGRAVITY_DIAGNOSTIC_DISABLE_TOOLS"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -57,7 +58,15 @@ class AntigravityChatAdapter:
 
     async def create_stream(self, body: dict[str, Any]) -> _AntigravitySDKStream:
         project_id = await self.project_id()
-        envelope = openai_chat_to_cloudcode(body, project_id=project_id)
+        create_body = body
+        if _env_truthy(DIAGNOSTIC_DISABLE_TOOLS_ENV) and body.get("tools"):
+            create_body = body.copy()
+            create_body.pop("tools", None)
+            create_body.pop("tool_choice", None)
+            _LOGGER.warning(
+                "Antigravity diagnostic mode active: tool declarations disabled"
+            )
+        envelope = openai_chat_to_cloudcode(create_body, project_id=project_id)
         _log_request_metrics(envelope)
         source = self._client.stream_generate_content(envelope)
         model = envelope["model"]
@@ -115,6 +124,13 @@ class _AntigravitySDKStream(AsyncIterator[Any]):
         close = getattr(self._source, "aclose", None)
         if close is not None:
             await close()
+
+
+def _env_truthy(name: str) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _log_request_metrics(envelope: Mapping[str, Any]) -> None:
