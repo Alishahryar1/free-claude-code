@@ -20,9 +20,10 @@ REQUEST_TYPE = "agent"
 class AntigravityUpstreamError(RuntimeError):
     """A Cloud Code request failed."""
 
-    def __init__(self, status_code: int, message: str) -> None:
+    def __init__(self, status_code: int, message: str, *, body: str = "") -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.body = body
 
 
 class AntigravityClient:
@@ -72,7 +73,8 @@ class AntigravityClient:
             stream=True,
         )
         if response.is_error:
-            error = _upstream_error(response)
+            body = await response.aread()
+            error = _upstream_error(response, body=body)
             await response.aclose()
             raise error
         try:
@@ -195,9 +197,14 @@ def _mapping(value: Any, label: str) -> Mapping[str, Any]:
     return value
 
 
-def _upstream_error(response: httpx.Response) -> AntigravityUpstreamError:
-    preview = response.text[:1024]
+def _upstream_error(
+    response: httpx.Response, *, body: bytes | None = None
+) -> AntigravityUpstreamError:
+    raw = response.content if body is None else body
+    text = raw.decode("utf-8", errors="replace")
+    preview = text[:1024]
     return AntigravityUpstreamError(
         response.status_code,
         f"Antigravity upstream returned {response.status_code}: {preview}",
+        body=text,
     )
