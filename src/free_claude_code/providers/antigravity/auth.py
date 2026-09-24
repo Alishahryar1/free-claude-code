@@ -28,6 +28,14 @@ _EXPIRED_CREDENTIAL_MESSAGE = (
     "The native Antigravity token is expired or expiring. "
     "Refresh the account with `agy`, then reconnect in FCC Admin."
 )
+_STALE_CREDENTIAL_MESSAGE = (
+    "The Antigravity account changed while native credentials were loading. "
+    "Retry the request."
+)
+_STATE_SAVE_ERROR_MESSAGE = (
+    "FCC could not save Antigravity connection state. "
+    "Check ~/.fcc permissions and retry."
+)
 
 
 class AntigravityAuthManager:
@@ -93,22 +101,17 @@ class AntigravityAuthManager:
             try:
                 credentials = await run_sync_owned(self._credential_loader)
             except AntigravityCredentialError as error:
-                self._enabled = False
-                self._last_error = str(error)
+                self._disable_with_error_locked(str(error))
                 return self.status()
             if credentials.expires_soon():
-                self._enabled = False
-                self._last_error = _EXPIRED_CREDENTIAL_MESSAGE
+                self._disable_with_error_locked(_EXPIRED_CREDENTIAL_MESSAGE)
                 return self.status()
             revision = self._revision + 1
             try:
                 self._write_state(enabled=True, revision=revision)
             except OSError:
                 self._enabled = False
-                self._last_error = (
-                    "FCC could not save Antigravity connection state. "
-                    "Check ~/.fcc permissions and retry Connect."
-                )
+                self._last_error = _STATE_SAVE_ERROR_MESSAGE
                 return self.status()
             self._enabled = True
             self._revision = revision
@@ -134,6 +137,23 @@ class AntigravityAuthManager:
             self._last_error = None
             return self.status()
 
+    async def invalidate(
+        self,
+        message: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> ConnectedAccountStatus:
+        """Disable the current FCC opt-in without clobbering a newer account state."""
+
+        async with self._operation_lock:
+            self._ensure_open()
+            if expected_revision is not None and self._revision != expected_revision:
+                return self.status()
+            if not self._enabled:
+                return self.status()
+            self._disable_with_error_locked(message)
+            return self.status()
+
     async def close(self) -> None:
         self._closed = True
 
@@ -145,21 +165,34 @@ class AntigravityAuthManager:
             raise AntigravityCredentialError(
                 "Connect the Antigravity account in FCC Admin first."
             )
+        revision = self._revision
         try:
             credentials = await run_sync_owned(self._credential_loader)
-            if credentials.expires_soon():
-                raise AntigravityCredentialError(_EXPIRED_CREDENTIAL_MESSAGE)
-            return credentials
         except AntigravityCredentialError as error:
-            self._enabled = False
-            self._last_error = str(error)
-            try:
-                self._write_state(enabled=False, revision=self._revision + 1)
-            except OSError:
-                pass
-            else:
-                self._revision += 1
+            await self.invalidate(str(error), expected_revision=revision)
             raise
+
+        if self._closed or not self._enabled or self._revision != revision:
+            raise AntigravityCredentialError(_STALE_CREDENTIAL_MESSAGE)
+        if credentials.expires_soon():
+            await self.invalidate(
+                _EXPIRED_CREDENTIAL_MESSAGE,
+                expected_revision=revision,
+            )
+            raise AntigravityCredentialError(_EXPIRED_CREDENTIAL_MESSAGE)
+        return credentials
+
+    def _disable_with_error_locked(self, message: str) -> None:
+        revision = self._revision + 1
+        try:
+            self._write_state(enabled=False, revision=revision)
+        except OSError:
+            self._enabled = False
+            self._last_error = _STATE_SAVE_ERROR_MESSAGE
+            return
+        self._enabled = False
+        self._revision = revision
+        self._last_error = message
 
     def _ensure_open(self) -> None:
         if self._closed:
