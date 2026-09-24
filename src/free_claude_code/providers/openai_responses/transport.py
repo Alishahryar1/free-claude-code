@@ -100,12 +100,14 @@ class OpenAIResponsesTransport:
         log_raw_sse_events: bool,
         endpoint_transport: httpx2.AsyncBaseTransport | None = None,
         event_adapter_factory: Callable[[], ResponsesEventAdapter] | None = None,
+        request_body_adapter: Callable[[JsonObject], JsonObject] | None = None,
         omitted_request_fields: frozenset[str] = frozenset(),
         tool_policy: ResponsesToolPolicy = ResponsesToolPolicy(),
     ) -> None:
         self._client = client
         self._endpoint_transport = endpoint_transport
         self._event_adapter_factory = event_adapter_factory
+        self._request_body_adapter = request_body_adapter
         self._omitted_request_fields = omitted_request_fields
         self._tool_policy = tool_policy
         self._admission = admission
@@ -350,6 +352,8 @@ class OpenAIResponsesTransport:
                     endpoint=endpoint.snapshot if endpoint is not None else None,
                 )
                 sent_body = prepare_history(body, origin)
+                if self._request_body_adapter is not None:
+                    sent_body = self._request_body_adapter(sent_body)
                 attempt = await execution.open_attempt(ProviderOperationKind.GENERATION)
                 scope = ProviderAttemptScope(
                     attempt,

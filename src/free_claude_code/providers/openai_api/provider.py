@@ -1,18 +1,17 @@
 """OpenAI Platform provider using the shared Responses transport."""
 
+import re
 from collections.abc import AsyncIterator, Mapping
+from typing import Literal
 
 import httpx2
 from openai import AsyncOpenAI, DefaultAsyncHttpx2Client
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
-from free_claude_code.core.reasoning import (
-    DEFAULT_REASONING_POLICY,
-    ReasoningControl,
-    ReasoningPolicy,
-)
+from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -21,23 +20,40 @@ from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.model_listing import extract_openai_model_infos
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 
-_DEFAULT_REASONING_MODELS = (
-    "gpt-5",
-    "gpt-5.2",
-    "gpt-5.4",
-    "gpt-5.5",
-    "gpt-5.6",
-    "gpt-6",
-)
+type _SamplingSupport = Literal["never", "none_only"]
+type _DefaultReasoning = Literal["none", "active", "unknown"]
+
+# /models exposes IDs but no sampling capabilities. Unknown IDs pass through.
+_MODEL_SAMPLING: dict[str, tuple[_SamplingSupport, _DefaultReasoning]] = {
+    "gpt-5": ("never", "active"),
+    "gpt-5-mini": ("never", "active"),
+    "gpt-5-nano": ("never", "active"),
+    "gpt-5.1": ("none_only", "none"),
+    "gpt-5.2": ("none_only", "none"),
+    "gpt-5.3-codex": ("never", "unknown"),
+    "gpt-5.4": ("none_only", "none"),
+    "gpt-6-astra": ("never", "unknown"),
+    "gpt-6-sol": ("none_only", "active"),
+    "gpt-6-luna": ("none_only", "active"),
+}
 
 
-def _omit_unsupported_sampling(model: str, reasoning: ReasoningPolicy) -> bool:
-    if reasoning.control is ReasoningControl.OFF:
-        return False
-    return reasoning.requests_reasoning or any(
-        model == family or model.startswith(f"{family}-")
-        for family in _DEFAULT_REASONING_MODELS
-    )
+def _adapt_openai_sampling(body: JsonObject) -> JsonObject:
+    model = body.get("model")
+    if not isinstance(model, str):
+        return body
+    base_model = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model)
+    profile = _MODEL_SAMPLING.get(base_model)
+    if profile is None:
+        return body
+    support, default = profile
+    reasoning = body.get("reasoning")
+    effort = reasoning.get("effort") if isinstance(reasoning, Mapping) else None
+    reasoning_active = effort != "none" if effort is not None else default == "active"
+    if support == "never" or reasoning_active:
+        body.pop("temperature", None)
+        body.pop("top_p", None)
+    return body
 
 
 class OpenAIAPIProvider(BaseProvider):
@@ -78,6 +94,7 @@ class OpenAIAPIProvider(BaseProvider):
             provider_name="OpenAI API",
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
+            request_body_adapter=_adapt_openai_sampling,
         )
 
     async def cleanup(self) -> None:
@@ -101,8 +118,6 @@ class OpenAIAPIProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
-        if _omit_unsupported_sampling(request.model, reasoning):
-            request = request.model_copy(update={"temperature": None, "top_p": None})
         return self._responses.stream_messages(
             request,
             input_tokens=input_tokens,
@@ -122,8 +137,6 @@ class OpenAIAPIProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[str]:
-        if _omit_unsupported_sampling(request.model, reasoning):
-            request = request.model_copy(update={"temperature": None, "top_p": None})
         return self._responses.stream_responses(
             request,
             input_tokens=input_tokens,

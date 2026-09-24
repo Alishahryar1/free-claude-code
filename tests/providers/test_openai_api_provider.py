@@ -48,10 +48,14 @@ def _complete_stream(text: str) -> str:
     )
 
 
-def _provider(handler: httpx2.MockTransport) -> OpenAIAPIProvider:
+def _provider(
+    handler: httpx2.MockTransport, *, max_attempts: int = 1
+) -> OpenAIAPIProvider:
     return OpenAIAPIProvider(
         make_provider_config("platform-key", "https://api.openai.com/v1"),
-        admission=immediate_admission(provider_name="openai_api", max_attempts=1),
+        admission=immediate_admission(
+            provider_name="openai_api", max_attempts=max_attempts
+        ),
         transport=handler,
     )
 
@@ -129,10 +133,20 @@ async def test_api_key_provider_uses_public_responses_endpoint(
     [
         ("gpt-6-astra", "medium", True),
         ("gpt-6-sol", None, True),
-        ("gpt-5.4", None, True),
+        ("gpt-5.2", None, False),
+        ("gpt-5.4", None, False),
+        ("gpt-5.4", "medium", True),
+        ("gpt-5.3-codex", None, True),
         ("gpt-5.1", "medium", True),
         ("gpt-6-sol", "none", False),
         ("gpt-5.1", None, False),
+        ("gpt-5.2-2025-12-11", None, False),
+        ("gpt-5.4-2026-03-05", "medium", True),
+        ("gpt-5.4-pro", None, False),
+        ("gpt-5.4-pro", "medium", False),
+        ("gpt-5.6-sol", None, False),
+        ("future-model", None, False),
+        ("future-model", "medium", False),
         ("gpt-4.1", None, False),
     ],
 )
@@ -197,6 +211,117 @@ async def test_api_key_provider_uses_supported_sampling_for_reasoning_mode(
     else:
         assert bodies[0]["temperature"] == 0.5
         assert bodies[0]["top_p"] == 0.8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ingress", ["messages", "responses"])
+async def test_api_key_provider_uses_wire_mode_for_prefer_off_sampling(
+    ingress: str,
+) -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            text=_complete_stream("hello"),
+            headers={"content-type": "text/event-stream"},
+            request=request,
+        )
+
+    provider = _provider(httpx2.MockTransport(handler))
+    try:
+        if ingress == "messages":
+            stream = provider.stream_messages(
+                MessagesRequest.model_validate(
+                    {
+                        "model": "gpt-6-sol",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "temperature": 0.5,
+                        "top_p": 0.8,
+                    }
+                ),
+                reasoning=ReasoningPolicy.prefer_off(),
+            )
+        else:
+            stream = provider.stream_responses(
+                OpenAIResponsesRequest.model_validate(
+                    {
+                        "model": "gpt-6-sol",
+                        "input": "hello",
+                        "temperature": 0.5,
+                        "top_p": 0.8,
+                    }
+                ),
+                reasoning=ReasoningPolicy.prefer_off(),
+            )
+        await _collect(stream)
+    finally:
+        await provider.cleanup()
+
+    assert len(bodies) == 1
+    if ingress == "messages":
+        assert bodies[0]["reasoning"]["effort"] == "none"
+        assert bodies[0]["temperature"] == 0.5
+        assert bodies[0]["top_p"] == 0.8
+    else:
+        assert "reasoning" not in bodies[0]
+        assert "temperature" not in bodies[0]
+        assert "top_p" not in bodies[0]
+
+
+@pytest.mark.asyncio
+async def test_api_key_provider_rechecks_sampling_after_reasoning_correction() -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        if body.get("reasoning", {}).get("effort") == "none":
+            return httpx2.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "unsupported_value",
+                        "param": "reasoning.effort",
+                        "message": "Value 'none' is not supported",
+                    }
+                },
+                request=request,
+            )
+        return httpx2.Response(
+            200,
+            text=_complete_stream("hello"),
+            headers={"content-type": "text/event-stream"},
+            request=request,
+        )
+
+    provider = _provider(httpx2.MockTransport(handler), max_attempts=2)
+    try:
+        output = await _collect(
+            provider.stream_messages(
+                MessagesRequest.model_validate(
+                    {
+                        "model": "gpt-6-sol",
+                        "messages": [{"role": "user", "content": "hello"}],
+                        "temperature": 0.5,
+                        "top_p": 0.8,
+                    }
+                ),
+                reasoning=ReasoningPolicy.prefer_off(),
+            )
+        )
+    finally:
+        await provider.cleanup()
+
+    assert text_content(parse_sse_text(output)) == "hello"
+    assert len(bodies) == 2
+    assert bodies[0]["reasoning"]["effort"] == "none"
+    assert bodies[0]["temperature"] == 0.5
+    assert bodies[0]["top_p"] == 0.8
+    assert "reasoning" not in bodies[1]
+    assert "temperature" not in bodies[1]
+    assert "top_p" not in bodies[1]
 
 
 @pytest.mark.asyncio
