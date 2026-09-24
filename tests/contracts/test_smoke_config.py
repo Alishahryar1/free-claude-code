@@ -30,6 +30,8 @@ def _settings(**overrides):
         "model_haiku": None,
         "azure_openai_api_key": "",
         "azure_openai_base_url": "",
+        "openai_api_key": "",
+        "openai_base_url": "https://api.openai.com/v1",
         "nvidia_nim_api_key": "",
         "open_router_api_key": "",
         "mistral_api_key": "",
@@ -272,6 +274,25 @@ def test_lightning_smoke_override_accepts_model_with_or_without_prefix(
         assert [model.provider for model in models] == ["lightning"]
         assert models[0].full_model == "lightning/lightning-ai/deepseek-v4-pro"
         assert models[0].source == "FCC_SMOKE_MODEL_LIGHTNING"
+
+
+def test_openai_api_provider_configuration_uses_documented_default_model(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_OPENAI_API", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            openai_api_key="openai-api-key",
+        )
+    )
+
+    assert config.has_provider_configuration("openai_api")
+    models = config.provider_smoke_models()
+    assert [model.provider for model in models] == ["openai_api"]
+    assert models[0].full_model == "openai_api/gpt-4o"
+    assert models[0].source == "provider_default"
 
 
 def test_lightning_is_not_enabled_without_explicit_credential(monkeypatch) -> None:

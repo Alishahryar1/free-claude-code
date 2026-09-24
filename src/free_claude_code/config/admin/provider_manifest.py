@@ -25,6 +25,21 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
         "restart_required": True,
     },
+    "OPENAI_API_KEY": {
+        "label": "OpenAI API Key",
+        "description": (
+            "Standard OpenAI developer platform API key (platform.openai.com/api-keys)."
+        ),
+    },
+    "OPENAI_BASE_URL": {
+        "description": "OpenAI API base URL. Defaults to https://api.openai.com/v1.",
+    },
+    "OPENAI_API_PROXY": {
+        "description": (
+            "Optional proxy used for OpenAI API requests. Changing it restarts FCC."
+        ),
+        "restart_required": True,
+    },
     "AZURE_OPENAI_API_KEY": {
         "description": "API key for the Azure OpenAI resource.",
     },

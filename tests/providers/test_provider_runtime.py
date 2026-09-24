@@ -28,6 +28,7 @@ from free_claude_code.config.provider_catalog import (
     NARAROUTE_DEFAULT_BASE,
     NEBIUS_DEFAULT_BASE,
     OLLAMA_CLOUD_DEFAULT_BASE,
+    OPENAI_API_DEFAULT_BASE,
     POOLSIDE_DEFAULT_BASE,
     PROVIDER_CATALOG,
     QWENCLOUD_CODING_DEFAULT_BASE,
@@ -78,6 +79,8 @@ def _make_settings(**overrides):
     mock.model_haiku = None
     mock.azure_openai_api_key = "test_azure_openai_key"
     mock.azure_openai_base_url = "https://test-resource.openai.azure.com/openai/v1/"
+    mock.openai_api_key = "test_openai_api_key"
+    mock.openai_base_url = OPENAI_API_DEFAULT_BASE
     mock.nvidia_nim_api_key = "test_key"
     mock.open_router_api_key = "test_openrouter_key"
     mock.xai_api_key = "test_xai_key"
@@ -170,6 +173,7 @@ def _make_settings(**overrides):
     mock.kilo_api_key = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
+    mock.openai_api_proxy = None
     mock.xai_proxy = None
     mock.qwencloud_proxy = None
     mock.qwencloud_coding_proxy = None
@@ -295,6 +299,32 @@ async def test_llm7_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.proxy_attr == "llm7_proxy"
     assert config.api_key == "llm7-token"
     assert config.base_url == LLM7_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
+async def test_openai_api_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["openai_api"]
+    settings = _make_settings(
+        openai_api_key="openai-api-token",
+        openai_base_url="https://api.openai.com/v1",
+        openai_api_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider("openai_api", settings)
+
+    assert descriptor.display_name == "OpenAI API"
+    assert descriptor.credential_env == "OPENAI_API_KEY"
+    assert descriptor.credential_attr == "openai_api_key"
+    assert descriptor.credential_url == "https://platform.openai.com/api-keys"
+    assert descriptor.default_base_url == OPENAI_API_DEFAULT_BASE
+    assert descriptor.base_url_attr == "openai_base_url"
+    assert descriptor.proxy_attr == "openai_api_proxy"
+    assert config.api_key == "openai-api-token"
+    assert config.base_url == "https://api.openai.com/v1"
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
@@ -946,6 +976,7 @@ async def test_create_provider_instantiates_each_builtin():
         "chutes": OpenAIChatProvider,
         "featherless": OpenAIChatProvider,
         "azure_openai": OpenAIChatProvider,
+        "openai_api": OpenAIChatProvider,
         "open_router": OpenRouterProvider,
         "mistral": MistralProvider,
         "mistral_codestral": OpenAIChatProvider,

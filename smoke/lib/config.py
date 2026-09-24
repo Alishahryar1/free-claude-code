@@ -51,6 +51,7 @@ SECRET_KEY_PARTS = ("KEY", "TOKEN", "SECRET", "WEBHOOK", "AUTH")
 PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "nvidia_nim": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
     "azure_openai": "azure_openai/gpt-5.1",
+    "openai_api": "openai_api/gpt-4o",
     "open_router": "open_router/nvidia/nemotron-3-super-120b-a12b:free",
     "mistral": "mistral/devstral-small-latest",
     "mistral_codestral": "mistral_codestral/codestral-latest",
