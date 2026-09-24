@@ -1,7 +1,9 @@
 """Async client for the Google Antigravity Cloud Code API."""
 
+import hashlib
 import json
 import platform
+import time
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
@@ -95,14 +97,18 @@ class AntigravityClient:
 
     def prepare_request(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         prepared = dict(payload)
-        prepared.setdefault("requestId", f"agent-{uuid.uuid4()}")
+        prepared.setdefault("requestId", _new_request_id())
         prepared["userAgent"] = REQUEST_USER_AGENT
         prepared["requestType"] = REQUEST_TYPE
+
+        request_value = prepared.get("request")
+        if isinstance(request_value, Mapping):
+            request = dict(request_value)
+            request.setdefault("sessionId", _derive_session_id(request.get("contents")))
+            prepared["request"] = request
         return prepared
 
-    async def _json_request(
-        self, path: str, payload: Mapping[str, Any]
-    ) -> Any:
+    async def _json_request(self, path: str, payload: Mapping[str, Any]) -> Any:
         response = await self._request("POST", path, payload)
         try:
             response.raise_for_status()
@@ -179,6 +185,35 @@ class AntigravityClient:
             },
         )
         return await self._client.send(request, stream=stream)
+
+
+def _new_request_id() -> str:
+    conversation_id = uuid.uuid4()
+    trajectory_id = uuid.uuid4()
+    return f"agent/{conversation_id}/{int(time.time() * 1000)}/{trajectory_id}/1"
+
+
+def _derive_session_id(contents: Any) -> str:
+    if isinstance(contents, list):
+        for message in contents:
+            if not isinstance(message, Mapping):
+                continue
+            if str(message.get("role") or "").lower() != "user":
+                continue
+            parts = message.get("parts")
+            if not isinstance(parts, list):
+                continue
+            texts = [
+                part["text"]
+                for part in parts
+                if isinstance(part, Mapping)
+                and isinstance(part.get("text"), str)
+                and part["text"]
+            ]
+            if texts:
+                digest = hashlib.sha256("\n".join(texts).encode()).hexdigest()
+                return digest[:32]
+    return str(uuid.uuid4())
 
 
 def _platform_user_agent() -> str:
