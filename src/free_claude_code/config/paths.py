@@ -102,3 +102,8 @@ def openai_auth_lock_path() -> Path:
 def github_copilot_auth_path() -> Path:
     """Return FCC connection state; native Copilot retains credentials."""
     return config_dir_path() / AUTH_DIRNAME / "github_copilot.json"
+
+
+def antigravity_auth_path() -> Path:
+    """Return FCC connection state; native Antigravity retains credentials."""
+    return config_dir_path() / AUTH_DIRNAME / "antigravity.json"
