@@ -1,5 +1,6 @@
 """OpenAI-SDK-shaped adapter backed by Antigravity Cloud Code."""
 
+import os
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
@@ -10,6 +11,8 @@ from .conversion import (
     gemini_event_chunks,
     openai_chat_to_cloudcode,
 )
+
+PROJECT_ID_ENV = "CLOUDCODE_GCP_PROJECT_ID"
 
 
 class AntigravityChatAdapter:
@@ -23,11 +26,23 @@ class AntigravityChatAdapter:
 
     async def project_id(self) -> str:
         if self._project_id is None:
+            override = os.getenv(PROJECT_ID_ENV)
+            if override and override.strip():
+                self._project_id = override.strip()
+                return self._project_id
+
             payload = await self._client.load_code_assist()
             project = payload.get("cloudaicompanionProject")
             if not isinstance(project, str) or not project:
+                managed = payload.get("gcpManaged") is True
+                hint = (
+                    f" Set {PROJECT_ID_ENV} to the Cloud Code project ID."
+                    if managed
+                    else ""
+                )
                 raise RuntimeError(
-                    "Antigravity loadCodeAssist did not return cloudaicompanionProject."
+                    "Antigravity loadCodeAssist did not return "
+                    f"cloudaicompanionProject.{hint}"
                 )
             self._project_id = project
         return self._project_id
