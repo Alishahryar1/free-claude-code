@@ -67,6 +67,30 @@ async def test_fetch_available_models_uses_native_bearer_token(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_fetch_available_models_reuses_hour_cache(tmp_path: Path) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={"models": {"gemini-test": {"displayName": "Gemini Test"}}},
+        )
+
+    manager = await connected_manager(tmp_path)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AntigravityClient(auth=manager, base_url="https://example.test", client=http)
+
+    first = await client.fetch_available_models()
+    second = await client.fetch_available_models()
+
+    assert first is second
+    assert calls == 1
+    await http.aclose()
+
+
+@pytest.mark.asyncio
 async def test_load_code_assist_identifies_antigravity_ide(tmp_path: Path) -> None:
     payloads: list[dict[str, object]] = []
 
