@@ -28,6 +28,13 @@ class ServerToolResponseContext:
 
 
 def server_tool_start_frames(context: ServerToolResponseContext) -> Iterator[str]:
+    yield from server_tool_message_start_frames(context)
+    yield from server_tool_use_frames(context, index=0)
+
+
+def server_tool_message_start_frames(
+    context: ServerToolResponseContext,
+) -> Iterator[str]:
     yield format_sse_event(
         "message_start",
         {
@@ -46,11 +53,16 @@ def server_tool_start_frames(context: ServerToolResponseContext) -> Iterator[str
             },
         },
     )
+
+
+def server_tool_use_frames(
+    context: ServerToolResponseContext, *, index: int
+) -> Iterator[str]:
     yield format_sse_event(
         "content_block_start",
         {
             "type": "content_block_start",
-            "index": 0,
+            "index": index,
             "content_block": {
                 "type": SERVER_TOOL_USE,
                 "id": context.tool_id,
@@ -60,7 +72,7 @@ def server_tool_start_frames(context: ServerToolResponseContext) -> Iterator[str
         },
     )
     yield format_sse_event(
-        "content_block_stop", {"type": "content_block_stop", "index": 0}
+        "content_block_stop", {"type": "content_block_stop", "index": index}
     )
 
 
@@ -104,14 +116,16 @@ def web_fetch_result_block(
     }
 
 
-def web_tool_error_block(context: ServerToolResponseContext) -> JsonObject:
+def web_tool_error_block(
+    context: ServerToolResponseContext, *, error_code: str = "unavailable"
+) -> JsonObject:
     search = context.tool_name == "web_search"
     return {
         "type": WEB_SEARCH_TOOL_RESULT if search else WEB_FETCH_TOOL_RESULT,
         "tool_use_id": context.tool_id,
         "content": {
             "type": WEB_SEARCH_TOOL_RESULT_ERROR if search else WEB_FETCH_TOOL_ERROR,
-            "error_code": "unavailable",
+            "error_code": error_code,
         },
     }
 
@@ -122,18 +136,32 @@ def server_tool_completion_frames(
     *,
     summary: str,
 ) -> Iterator[str]:
+    yield from server_tool_result_frames(result_block, index=1)
+    yield from server_tool_finish_frames(context, summary=summary, index=2)
+
+
+def server_tool_result_frames(result_block: JsonObject, *, index: int) -> Iterator[str]:
     yield format_sse_event(
         "content_block_start",
-        {"type": "content_block_start", "index": 1, "content_block": result_block},
+        {"type": "content_block_start", "index": index, "content_block": result_block},
     )
     yield format_sse_event(
-        "content_block_stop", {"type": "content_block_stop", "index": 1}
+        "content_block_stop", {"type": "content_block_stop", "index": index}
     )
+
+
+def server_tool_finish_frames(
+    context: ServerToolResponseContext,
+    *,
+    summary: str,
+    index: int,
+    request_count: int = 1,
+) -> Iterator[str]:
     yield format_sse_event(
         "content_block_start",
         {
             "type": "content_block_start",
-            "index": 2,
+            "index": index,
             "content_block": {"type": "text", "text": ""},
         },
     )
@@ -141,12 +169,12 @@ def server_tool_completion_frames(
         "content_block_delta",
         {
             "type": "content_block_delta",
-            "index": 2,
+            "index": index,
             "delta": {"type": "text_delta", "text": summary},
         },
     )
     yield format_sse_event(
-        "content_block_stop", {"type": "content_block_stop", "index": 2}
+        "content_block_stop", {"type": "content_block_stop", "index": index}
     )
     yield format_sse_event(
         "message_delta",
@@ -158,6 +186,7 @@ def server_tool_completion_frames(
                 summary,
                 context.provider_usage,
                 usage_key=f"{context.tool_name}_requests",
+                request_count=request_count,
             ),
         },
     )
@@ -182,6 +211,7 @@ def _completion_usage(
     provider_usage: Mapping[str, object] | None,
     *,
     usage_key: str,
+    request_count: int,
 ) -> dict[str, object]:
     if provider_usage is None:
         usage: dict[str, object] = {
@@ -192,7 +222,7 @@ def _completion_usage(
         usage = _integer_usage(provider_usage)
         usage.setdefault("input_tokens", input_tokens)
         usage.setdefault("output_tokens", max(1, len(summary) // 4))
-    usage["server_tool_use"] = {usage_key: 1}
+    usage["server_tool_use"] = {usage_key: request_count}
     return usage
 
 
