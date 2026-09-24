@@ -140,7 +140,11 @@ async def test_generation_envelope_gets_agent_metadata_and_session(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_expiring_native_token_requires_agy_refresh(tmp_path: Path) -> None:
-    def expiring() -> AntigravityCredentials:
+    expired = False
+
+    def loader() -> AntigravityCredentials:
+        if not expired:
+            return future_credentials()
         return AntigravityCredentials(
             access_token="old",
             refresh_token="refresh",
@@ -150,9 +154,12 @@ async def test_expiring_native_token_requires_agy_refresh(tmp_path: Path) -> Non
 
     manager = AntigravityAuthManager(
         state_path=tmp_path / "state.json",
-        credential_loader=expiring,
+        credential_loader=loader,
     )
-    await manager.start_login(manager.status().default_login_mode)
+    status = await manager.start_login(manager.status().default_login_mode)
+    assert status.connected
+
+    expired = True
     http = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200)))
     client = AntigravityClient(auth=manager, base_url="https://example.test", client=http)
 
