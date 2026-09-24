@@ -7,11 +7,13 @@ from openai import AsyncOpenAI
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.reasoning import ReasoningEffort
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_chat import (
     NamedEffortReasoning,
+    OpenAIChatBehavior,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
@@ -19,7 +21,7 @@ from free_claude_code.providers.openai_chat import (
 
 from .auth import AntigravityAuthManager
 from .chat_adapter import AntigravityChatAdapter
-from .client import AntigravityClient
+from .client import AntigravityClient, AntigravityUpstreamError
 
 _ANTIGRAVITY_EFFORTS = (
     (ReasoningEffort.MINIMAL, "low"),
@@ -46,6 +48,84 @@ ANTIGRAVITY_PROFILE = OpenAIChatProfile(
 )
 
 
+class AntigravityBehavior(OpenAIChatBehavior):
+    """Keep Cloud Code HTTP status semantics visible to FCC's failure mapper."""
+
+    def failure_override(self, error: Exception) -> ExecutionFailure | None:
+        if not isinstance(error, AntigravityUpstreamError):
+            return None
+
+        status = error.status_code
+        if status == 400:
+            return ExecutionFailure(
+                kind=FailureKind.INVALID_REQUEST,
+                status_code=400,
+                message="Invalid request sent to provider.",
+                retryable=False,
+            )
+        if status == 401:
+            return ExecutionFailure(
+                kind=FailureKind.AUTHENTICATION,
+                status_code=401,
+                message="Provider authentication failed. Check API key.",
+                retryable=False,
+            )
+        if status == 402:
+            return ExecutionFailure(
+                kind=FailureKind.PERMISSION,
+                status_code=402,
+                message=(
+                    "Provider requires payment or additional credits. "
+                    "Add credits or resolve billing."
+                ),
+                retryable=False,
+            )
+        if status == 403:
+            return ExecutionFailure(
+                kind=FailureKind.PERMISSION,
+                status_code=403,
+                message=(
+                    "Provider denied access. Check credential permissions and "
+                    "model access."
+                ),
+                retryable=False,
+            )
+        if status == 413:
+            return ExecutionFailure(
+                kind=FailureKind.INVALID_REQUEST,
+                status_code=413,
+                message="Provider rejected the request as too large.",
+                retryable=False,
+            )
+        if status == 429:
+            return ExecutionFailure(
+                kind=FailureKind.RATE_LIMIT,
+                status_code=429,
+                message="Provider rate limit reached. Please retry shortly.",
+                retryable=True,
+            )
+        if status in {502, 503, 504}:
+            return ExecutionFailure(
+                kind=FailureKind.OVERLOADED,
+                status_code=529,
+                message="Provider is currently overloaded. Please retry.",
+                retryable=True,
+            )
+        if 500 <= status <= 599:
+            return ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=status,
+                message="Provider API request failed.",
+                retryable=True,
+            )
+        return ExecutionFailure(
+            kind=FailureKind.UPSTREAM,
+            status_code=status,
+            message="Provider API request failed.",
+            retryable=False,
+        )
+
+
 class AntigravityProvider(OpenAIChatProvider):
     """Reuse FCC's mature chat conversion around a Cloud Code-backed adapter."""
 
@@ -68,7 +148,7 @@ class AntigravityProvider(OpenAIChatProvider):
         self._cloud_code = cloud_code
         super().__init__(
             config,
-            profile=ANTIGRAVITY_PROFILE,
+            behavior=AntigravityBehavior(ANTIGRAVITY_PROFILE),
             admission=admission,
             client=cast(AsyncOpenAI, adapter),
         )
