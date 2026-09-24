@@ -1,7 +1,5 @@
 """FCC opt-in state over credentials owned by the native Antigravity CLI."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import os

@@ -1,7 +1,5 @@
 """Read Google Antigravity credentials owned by the native ``agy`` CLI."""
 
-from __future__ import annotations
-
 import base64
 import ctypes
 import json
@@ -52,12 +50,7 @@ def native_token_paths() -> tuple[Path, ...]:
     paths: list[Path] = []
     if override:
         paths.append(Path(override).expanduser())
-    paths.extend(
-        (
-            home / ".gemini" / "antigravity-cli" / "antigravity-oauth-token",
-            home / ".gemini" / "oauth_creds.json",
-        )
-    )
+    paths.append(home / ".gemini" / "antigravity-cli" / "antigravity-oauth-token")
     return tuple(dict.fromkeys(paths))
 
 
@@ -301,7 +294,7 @@ def _read_windows_credential(target: str) -> Any:
 
     if not cred_read(target, 1, 0, ctypes.byref(pointer)):
         error = ctypes.get_last_error()
-        if error == 1168:  # ERROR_NOT_FOUND
+        if error == 1168:
             raise FileNotFoundError(target)
         raise OSError(error, f"CredReadW failed for {target!r}")
 

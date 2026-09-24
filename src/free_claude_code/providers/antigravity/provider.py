@@ -1,6 +1,8 @@
 """Native Google Antigravity provider for FCC."""
 
-from __future__ import annotations
+from typing import cast
+
+from openai import AsyncOpenAI
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
@@ -59,7 +61,7 @@ class AntigravityProvider(OpenAIChatProvider):
             config,
             profile=ANTIGRAVITY_PROFILE,
             admission=admission,
-            client=adapter,  # type: ignore[arg-type]
+            client=cast(AsyncOpenAI, adapter),
         )
 
     async def cleanup(self) -> None:

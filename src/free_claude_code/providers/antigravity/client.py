@@ -1,7 +1,5 @@
 """Async client for the Google Antigravity Cloud Code API."""
 
-from __future__ import annotations
-
 import json
 import platform
 import uuid
@@ -187,7 +185,7 @@ def _platform_user_agent() -> str:
     return (
         "antigravity/cli/1.1.13 "
         f"(aidev_client; os_type={platform.system().lower()}; "
-        f"arch={platform.machine().lower()}; auth_method=consumer)"
+        f"arch={platform.machine().lower()}; cl=964361259; auth_method=consumer)"
     )
 
 

@@ -1,8 +1,6 @@
 """OpenAI-SDK-shaped adapter backed by Antigravity Cloud Code."""
 
-from __future__ import annotations
-
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from .client import AntigravityClient
@@ -63,7 +61,7 @@ class _AntigravitySDKStream(AsyncIterator[Any]):
 
     def __init__(
         self,
-        source: AsyncIterator[dict[str, Any]],
+        source: AsyncIterator[Mapping[str, Any]],
         *,
         model: str,
     ) -> None:

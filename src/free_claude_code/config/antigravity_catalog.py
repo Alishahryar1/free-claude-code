@@ -1,7 +1,5 @@
 """Registration for connected providers whose adapters own account credentials."""
 
-from __future__ import annotations
-
 from types import ModuleType
 
 from . import provider_catalog as _provider_catalog
