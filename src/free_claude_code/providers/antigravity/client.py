@@ -40,14 +40,32 @@ class AntigravityClient:
         auth: AntigravityAuthManager,
         base_url: str,
         client: httpx.AsyncClient | None = None,
+        read_timeout: float = 60.0,
+        write_timeout: float = 60.0,
+        connect_timeout: float = 60.0,
+        proxy: str | None = None,
     ) -> None:
         self._auth = auth
         self._base_url = base_url.rstrip("/")
-        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(60.0))
+        timeout = httpx.Timeout(
+            read_timeout,
+            connect=connect_timeout,
+            read=read_timeout,
+            write=write_timeout,
+            pool=connect_timeout,
+        )
+        self._client = client or httpx.AsyncClient(timeout=timeout, proxy=proxy)
         self._owns_client = client is None
         self._models_cache: Mapping[str, Any] | None = None
         self._models_cache_time = 0.0
+        self._models_cache_revision = -1
         self._models_lock = asyncio.Lock()
+
+    @property
+    def auth_revision(self) -> int:
+        """Return the FCC account revision used to invalidate account-scoped caches."""
+
+        return self._auth.status().revision
 
     async def close(self) -> None:
         if self._owns_client:
@@ -61,19 +79,24 @@ class AntigravityClient:
         return _mapping(response, "loadCodeAssist response")
 
     async def fetch_available_models(self) -> Mapping[str, Any]:
+        revision = self.auth_revision
         now = time.monotonic()
         if (
             self._models_cache is not None
+            and self._models_cache_revision == revision
             and now - self._models_cache_time < MODEL_CACHE_TTL_SECONDS
         ):
             return self._models_cache
 
         # Admin/model-picker requests can arrive together. Collapse them into one
-        # expensive Cloud Code fetch and share the result for the next hour.
+        # expensive Cloud Code fetch and share the result for the next hour, but
+        # never across FCC account revisions.
         async with self._models_lock:
+            revision = self.auth_revision
             now = time.monotonic()
             if (
                 self._models_cache is not None
+                and self._models_cache_revision == revision
                 and now - self._models_cache_time < MODEL_CACHE_TTL_SECONDS
             ):
                 return self._models_cache
@@ -81,6 +104,7 @@ class AntigravityClient:
             models = _mapping(response, "fetchAvailableModels response")
             self._models_cache = models
             self._models_cache_time = time.monotonic()
+            self._models_cache_revision = revision
             return models
 
     async def generate_content(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -262,14 +286,13 @@ def _upstream_error(
 ) -> AntigravityUpstreamError:
     raw = response.content if body is None else body
     text = raw.decode("utf-8", errors="replace")
-    preview = " ".join(text[:2048].split())
     _LOGGER.warning(
-        "Antigravity upstream error: status=%s body=%s",
+        "Antigravity upstream error: status=%s body_chars=%s",
         response.status_code,
-        preview or "<empty>",
+        len(text),
     )
     return AntigravityUpstreamError(
         response.status_code,
-        f"Antigravity upstream returned {response.status_code}: {preview}",
+        f"Antigravity upstream returned {response.status_code}.",
         body=text,
     )
