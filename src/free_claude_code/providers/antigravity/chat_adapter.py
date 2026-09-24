@@ -15,13 +15,7 @@ from .conversion import (
 )
 
 PROJECT_ID_ENV = "CLOUDCODE_GCP_PROJECT_ID"
-DIAGNOSTIC_DISABLE_TOOLS_ENV = "ANTIGRAVITY_DIAGNOSTIC_DISABLE_TOOLS"
-DIAGNOSTIC_DISABLE_SYSTEM_ENV = "ANTIGRAVITY_DIAGNOSTIC_DISABLE_SYSTEM"
-DIAGNOSTIC_REPLACE_CONTENTS_ENV = "ANTIGRAVITY_DIAGNOSTIC_REPLACE_CONTENTS"
-DIAGNOSTIC_REDACT_CONTENT_TEXT_ENV = "ANTIGRAVITY_DIAGNOSTIC_REDACT_CONTENT_TEXT"
-DIAGNOSTIC_REDACT_SYSTEM_TEXT_ENV = "ANTIGRAVITY_DIAGNOSTIC_REDACT_SYSTEM_TEXT"
-DIAGNOSTIC_SYSTEM_SLICE_ENV = "ANTIGRAVITY_DIAGNOSTIC_SYSTEM_SLICE"
-DIAGNOSTIC_SYSTEM_REDACT_RANGE_ENV = "ANTIGRAVITY_DIAGNOSTIC_SYSTEM_REDACT_RANGE"
+ANTHROPIC_BILLING_HEADER_PREFIX = "x-anthropic-billing-header:"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -64,16 +58,8 @@ class AntigravityChatAdapter:
 
     async def create_stream(self, body: dict[str, Any]) -> _AntigravitySDKStream:
         project_id = await self.project_id()
-        create_body = body
-        if _env_truthy(DIAGNOSTIC_DISABLE_TOOLS_ENV) and body.get("tools"):
-            create_body = body.copy()
-            create_body.pop("tools", None)
-            create_body.pop("tool_choice", None)
-            _LOGGER.warning(
-                "Antigravity diagnostic mode active: tool declarations disabled"
-            )
-        envelope = openai_chat_to_cloudcode(create_body, project_id=project_id)
-        envelope = _apply_diagnostic_overrides(envelope)
+        envelope = openai_chat_to_cloudcode(body, project_id=project_id)
+        envelope = _strip_anthropic_billing_header(envelope)
         _log_request_metrics(envelope)
         source = self._client.stream_generate_content(envelope)
         model = envelope["model"]
@@ -133,201 +119,57 @@ class _AntigravitySDKStream(AsyncIterator[Any]):
             await close()
 
 
-def _env_truthy(name: str) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return False
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _diagnostic_range(name: str) -> tuple[int, int] | None:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return None
-    start_text, separator, end_text = raw.strip().partition(":")
-    if not separator:
-        raise ValueError(f"{name} must use START:END character offsets")
-    try:
-        start = int(start_text)
-        end = int(end_text)
-    except ValueError as error:
-        raise ValueError(f"{name} must use integer START:END offsets") from error
-    if start < 0 or end <= start:
-        raise ValueError(f"{name} requires 0 <= START < END")
-    return start, end
-
-
-def _diagnostic_system_slice() -> tuple[int, int] | None:
-    return _diagnostic_range(DIAGNOSTIC_SYSTEM_SLICE_ENV)
-
-
-def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
-    """Apply opt-in local diagnostics without logging or persisting prompt content."""
+def _strip_anthropic_billing_header(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Remove Claude Code billing metadata before sending a Cloud Code request."""
 
     request_value = envelope.get("request")
     if not isinstance(request_value, Mapping):
         return envelope
 
-    disable_system = _env_truthy(DIAGNOSTIC_DISABLE_SYSTEM_ENV)
-    replace_contents = _env_truthy(DIAGNOSTIC_REPLACE_CONTENTS_ENV)
-    redact_content_text = _env_truthy(DIAGNOSTIC_REDACT_CONTENT_TEXT_ENV)
-    redact_system_text = _env_truthy(DIAGNOSTIC_REDACT_SYSTEM_TEXT_ENV)
-    system_slice = _diagnostic_system_slice()
-    system_redact_range = _diagnostic_range(DIAGNOSTIC_SYSTEM_REDACT_RANGE_ENV)
-    if system_slice is not None and system_redact_range is not None:
-        raise ValueError(
-            f"{DIAGNOSTIC_SYSTEM_SLICE_ENV} and "
-            f"{DIAGNOSTIC_SYSTEM_REDACT_RANGE_ENV} cannot be used together"
-        )
-    if (
-        not disable_system
-        and not replace_contents
-        and not redact_content_text
-        and not redact_system_text
-        and system_slice is None
-        and system_redact_range is None
-    ):
+    system_value = request_value.get("systemInstruction")
+    if not isinstance(system_value, Mapping):
         return envelope
+
+    raw_parts = system_value.get("parts")
+    if not isinstance(raw_parts, list) or not raw_parts:
+        return envelope
+
+    first_part = raw_parts[0]
+    if not isinstance(first_part, Mapping):
+        return envelope
+    text = first_part.get("text")
+    if not isinstance(text, str) or not text.startswith(ANTHROPIC_BILLING_HEADER_PREFIX):
+        return envelope
+
+    separators = [
+        (position, delimiter)
+        for delimiter in ("\r\n\r\n", "\n\n")
+        if (position := text.find(delimiter)) >= 0
+    ]
+    if not separators:
+        return envelope
+
+    position, delimiter = min(separators, key=lambda item: item[0])
+    remaining = text[position + len(delimiter) :]
 
     updated = dict(envelope)
     request = dict(request_value)
-    if disable_system:
+    system = dict(system_value)
+    parts = list(raw_parts)
+    if remaining:
+        first = dict(first_part)
+        first["text"] = remaining
+        parts[0] = first
+    else:
+        parts.pop(0)
+
+    if parts:
+        system["parts"] = parts
+        request["systemInstruction"] = system
+    else:
         request.pop("systemInstruction", None)
-        _LOGGER.warning(
-            "Antigravity diagnostic mode active: system instruction disabled"
-        )
-    elif system_slice is not None:
-        system_instruction = request.get("systemInstruction")
-        if isinstance(system_instruction, Mapping):
-            start, end = system_slice
-            request["systemInstruction"] = _slice_text_fields(
-                system_instruction, start, end
-            )
-        _LOGGER.warning(
-            "Antigravity diagnostic mode active: system instruction slice=%s:%s",
-            system_slice[0],
-            system_slice[1],
-        )
-    elif system_redact_range is not None:
-        system_instruction = request.get("systemInstruction")
-        if isinstance(system_instruction, Mapping):
-            start, end = system_redact_range
-            request["systemInstruction"] = _redact_text_range(
-                system_instruction, start, end
-            )
-        _LOGGER.warning(
-            "Antigravity diagnostic mode active: system instruction redacted range=%s:%s",
-            system_redact_range[0],
-            system_redact_range[1],
-        )
-    elif redact_system_text:
-        system_instruction = request.get("systemInstruction")
-        if isinstance(system_instruction, Mapping):
-            request["systemInstruction"] = _redact_text_fields(system_instruction)
-        _LOGGER.warning(
-            "Antigravity diagnostic mode active: system instruction text redacted"
-        )
-    if replace_contents:
-        request["contents"] = [
-            {"role": "user", "parts": [{"text": "Sadece TEST_OK yaz."}]}
-        ]
-        _LOGGER.warning(
-            "Antigravity diagnostic mode active: conversation contents replaced"
-        )
-    elif redact_content_text:
-        contents = request.get("contents")
-        if isinstance(contents, list):
-            request["contents"] = [_redact_text_fields(item) for item in contents]
-        _LOGGER.warning(
-            "Antigravity diagnostic mode active: conversation text redacted"
-        )
     updated["request"] = request
     return updated
-
-
-def _redact_text_fields(value: Any) -> Any:
-    """Replace text fields with same-length filler while preserving request shape."""
-
-    if isinstance(value, list):
-        return [_redact_text_fields(item) for item in value]
-    if not isinstance(value, Mapping):
-        return value
-
-    redacted = dict(value)
-    text = redacted.get("text")
-    if isinstance(text, str):
-        redacted["text"] = "A" * len(text)
-    parts = redacted.get("parts")
-    if isinstance(parts, list):
-        redacted["parts"] = [_redact_text_fields(part) for part in parts]
-    return redacted
-
-
-def _redact_text_range(value: Mapping[str, Any], start: int, end: int) -> dict[str, Any]:
-    """Redact one overall character range while preserving request shape and length."""
-
-    redacted = dict(value)
-    parts = value.get("parts")
-    if not isinstance(parts, list):
-        return redacted
-
-    offset = 0
-    updated_parts: list[Any] = []
-    for raw in parts:
-        if not isinstance(raw, Mapping):
-            updated_parts.append(raw)
-            continue
-        item = dict(raw)
-        text = raw.get("text")
-        if isinstance(text, str):
-            part_start = offset
-            part_end = offset + len(text)
-            overlap_start = max(start, part_start)
-            overlap_end = min(end, part_end)
-            if overlap_start < overlap_end:
-                local_start = overlap_start - part_start
-                local_end = overlap_end - part_start
-                item["text"] = (
-                    text[:local_start]
-                    + ("A" * (local_end - local_start))
-                    + text[local_end:]
-                )
-            offset = part_end
-        updated_parts.append(item)
-    redacted["parts"] = updated_parts
-    return redacted
-
-
-def _slice_text_fields(value: Mapping[str, Any], start: int, end: int) -> dict[str, Any]:
-    """Keep only an overall character range across ordered text parts."""
-
-    sliced = dict(value)
-    parts = value.get("parts")
-    if not isinstance(parts, list):
-        return sliced
-
-    offset = 0
-    selected: list[Any] = []
-    for raw in parts:
-        if not isinstance(raw, Mapping):
-            continue
-        text = raw.get("text")
-        if not isinstance(text, str):
-            selected.append(dict(raw))
-            continue
-        part_start = offset
-        part_end = offset + len(text)
-        overlap_start = max(start, part_start)
-        overlap_end = min(end, part_end)
-        if overlap_start < overlap_end:
-            item = dict(raw)
-            item["text"] = text[
-                overlap_start - part_start : overlap_end - part_start
-            ]
-            selected.append(item)
-        offset = part_end
-    sliced["parts"] = selected
-    return sliced
 
 
 def _log_request_metrics(envelope: Mapping[str, Any]) -> None:
