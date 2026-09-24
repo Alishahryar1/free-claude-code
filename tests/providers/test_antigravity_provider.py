@@ -6,8 +6,8 @@ from typing import Any, cast
 import pytest
 
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
-from free_claude_code.providers.antigravity.auth import AntigravityAuthManager
 from free_claude_code.providers.antigravity import provider as provider_module
+from free_claude_code.providers.antigravity.auth import AntigravityAuthManager
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import immediate_admission, make_provider_config
 
@@ -48,7 +48,7 @@ class FakeCloudCode:
         self.closed = True
 
 
-async def _provider(
+def _provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[provider_module.AntigravityProvider, FakeCloudCode]:
     fake = FakeCloudCode()
@@ -69,7 +69,7 @@ async def _provider(
 async def test_provider_reuses_fcc_public_protocol_transports(
     monkeypatch: pytest.MonkeyPatch, wire: str
 ) -> None:
-    provider, fake = await _provider(monkeypatch)
+    provider, fake = _provider(monkeypatch)
     try:
         if wire == "messages":
             stream = provider.stream_messages(
@@ -96,7 +96,7 @@ async def test_provider_reuses_fcc_public_protocol_transports(
 async def test_provider_discovers_models_from_antigravity_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    provider, _fake = await _provider(monkeypatch)
+    provider, _fake = _provider(monkeypatch)
     try:
         infos = await provider.list_model_infos()
         assert {info.model_id for info in infos} == {"gemini-test"}
