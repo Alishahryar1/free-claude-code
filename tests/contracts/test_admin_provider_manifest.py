@@ -2,10 +2,7 @@
 
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY, FIELDS
 from free_claude_code.config.admin.state import ConfigValueState
-from free_claude_code.config.provider_catalog import (
-    PROVIDER_CATALOG,
-    ProviderAuthKind,
-)
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject
 
@@ -113,28 +110,25 @@ def test_openai_proxy_override_applies_to_catalog_proxy_field() -> None:
 
 
 def test_provider_catalog_display_names_are_admin_status_source() -> None:
-    from free_claude_code.config.admin.status import provider_config_status
+    from free_claude_code.config.admin.status import (
+        provider_config_status,
+        provider_kind_for,
+    )
     from free_claude_code.config.admin.values import load_value_state
     from free_claude_code.config.loader import ManagedConfigStore
 
     store = ManagedConfigStore()
     store.initialize()
+    state = load_value_state(store.read())
     status_by_provider = {
         entry["provider_id"]: entry
-        for entry in provider_config_status(load_value_state(store.read()))
+        for entry in provider_config_status(state)
     }
 
     assert set(status_by_provider) == set(PROVIDER_CATALOG)
     for provider_id, desc in PROVIDER_CATALOG.items():
         assert status_by_provider[provider_id]["display_name"] == desc.display_name
-        expected_kind = (
-            "connected_account"
-            if desc.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT
-            else "local"
-            if desc.local
-            else "remote"
-        )
-        assert status_by_provider[provider_id]["kind"] == expected_kind
+        assert status_by_provider[provider_id]["kind"] == provider_kind_for(desc, state)
 
 
 def test_cloudflare_account_id_is_admin_provider_field() -> None:

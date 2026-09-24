@@ -5,11 +5,38 @@ from collections.abc import Mapping
 from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     ProviderAuthKind,
+    ProviderDescriptor,
 )
 from free_claude_code.core.json_types import JsonObject
 
 from .manifest import FIELDS
 from .state import ConfigValueState
+
+
+def provider_kind_for(
+    descriptor: ProviderDescriptor,
+    state: Mapping[str, ConfigValueState],
+) -> str:
+    """Classify a catalog provider into its Admin UI grouping kind.
+
+    ``connected_account`` and ``local`` map to the OAuth and Local provider
+    strips. A remote provider is ``custom`` when the customer pointed it at a
+    non-default endpoint (its configured base URL differs from the catalog
+    default); otherwise it is ``remote`` (the Cloud providers strip).
+    """
+    if descriptor.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT:
+        return "connected_account"
+    if descriptor.local:
+        return "local"
+    if descriptor.base_url_attr is None:
+        return "remote"
+    default = descriptor.default_base_url or ""
+    configured = _value_for_settings_attr(state, descriptor.base_url_attr) or ""
+    if not configured:
+        return "remote"
+    if configured.rstrip("/") != default.rstrip("/"):
+        return "custom"
+    return "remote"
 
 
 def provider_config_status(
@@ -72,10 +99,16 @@ def provider_config_status(
 
         configured = not missing_attrs
         missing_key = descriptor.credential_attr in missing_attrs
+        kind = provider_kind_for(descriptor, state)
+        base_url: str | None = None
+        if descriptor.base_url_attr is not None:
+            base_url = _value_for_settings_attr(state, descriptor.base_url_attr)
+            if base_url is None:
+                base_url = descriptor.default_base_url
         statuses.append(
             {
                 **metadata,
-                "kind": "remote",
+                "kind": kind,
                 "status": (
                     "configured"
                     if configured
@@ -93,6 +126,7 @@ def provider_config_status(
                 "configuration_keys": configuration_keys,
                 "missing_configuration_keys": missing_configuration_keys,
                 "settings_keys": settings_keys,
+                **({"base_url": base_url} if base_url else {}),
             }
         )
     return statuses

@@ -306,6 +306,7 @@ function renderProviders(providerStatus) {
   [
     ["oauth", "OAuth providers"],
     ["cloud", "Cloud providers"],
+    ["custom", "Custom providers"],
     ["local", "Local providers"],
   ].forEach(([kind, label]) => {
     const group = document.createElement("section");
@@ -340,7 +341,7 @@ function renderProviders(providerStatus) {
 function updateProviderCard(provider) {
   const oauth = provider.kind === "connected_account";
   const status = state.authStatuses.get(provider.provider_id);
-  const kind = oauth ? "oauth" : provider.kind === "local" ? "local" : "cloud";
+  const kind = oauth ? "oauth" : provider.kind === "local" ? "local" : provider.kind === "custom" ? "custom" : "cloud";
   const configured = oauth ? status?.connected : provider.status === "configured";
   const subgroup = oauth && configured == null ? "loading" : configured ? "configured" : "unconfigured";
   const grid = byId(`providers-${kind}-${subgroup}`);

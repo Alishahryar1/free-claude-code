@@ -1,6 +1,9 @@
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY
 from free_claude_code.config.admin.state import ConfigValueState
-from free_claude_code.config.admin.status import provider_config_status
+from free_claude_code.config.admin.status import (
+    provider_config_status,
+    provider_kind_for,
+)
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.core.json_types import JsonObject
 
@@ -126,3 +129,57 @@ def test_provider_modals_include_optional_settings_and_shared_credentials() -> N
     for field in FIELD_BY_KEY.values():
         owners = [keys for keys in keys_by_provider.values() if field.key in keys]
         assert bool(owners) == (field.section_id == "providers"), field.key
+
+
+def test_remote_provider_with_default_endpoint_stays_remote() -> None:
+    descriptor = PROVIDER_CATALOG["nvidia_nim"]
+    state = {"NVIDIA_NIM_API_KEY": _value("configured")}
+
+    assert provider_kind_for(descriptor, state) == "remote"
+
+
+def test_provider_pointed_at_custom_endpoint_is_custom() -> None:
+    descriptor = PROVIDER_CATALOG["tokenrouter"]
+    state = {"TOKENROUTER_API_KEY": _value("key")}
+
+    assert provider_kind_for(descriptor, state) == "remote"
+    assert (
+        provider_kind_for(
+            descriptor,
+            {"TOKENROUTER_API_KEY": _value("key"), "TOKENROUTER_BASE_URL": _value("http://localhost:20128/v1")},
+        )
+        == "custom"
+    )
+    assert (
+        provider_kind_for(
+            descriptor,
+            {
+                "TOKENROUTER_API_KEY": _value("key"),
+                "TOKENROUTER_BASE_URL": _value(descriptor.default_base_url),
+            },
+        )
+        == "remote"
+    )
+
+
+def test_custom_status_exposes_base_url() -> None:
+    status = _provider_status(
+        "tokenrouter",
+        {
+            "TOKENROUTER_API_KEY": _value("key"),
+            "TOKENROUTER_BASE_URL": _value("http://localhost:20128/v1"),
+        },
+    )
+
+    assert status["kind"] == "custom"
+    assert status["base_url"] == "http://localhost:20128/v1"
+    assert status["status"] == "configured"
+
+
+def test_local_providers_are_never_custom() -> None:
+    descriptor = PROVIDER_CATALOG["ollama"]
+    state = {
+        "OLLAMA_BASE_URL": _value("http://custom.example:11434"),
+    }
+
+    assert provider_kind_for(descriptor, state) == "local"
