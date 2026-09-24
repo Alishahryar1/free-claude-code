@@ -20,6 +20,7 @@ from .provider_catalog import (
     EXPERIENTIAL_DEFAULT_BASE,
     LIGHTNING_DEFAULT_BASE,
     NARAROUTE_DEFAULT_BASE,
+    OPPER_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
     TOKENROUTER_DEFAULT_BASE,
 )
@@ -208,6 +209,15 @@ class Settings(BaseModel):
     experiential_base_url: NonEmptyString = Field(
         default=EXPERIENTIAL_DEFAULT_BASE,
         validation_alias="EXPLABS_BASE_URL",
+    )
+
+    # ==================== Opper (OpenAI-compatible) ====================
+    opper_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="OPPER_API_KEY"
+    )
+    opper_base_url: NonEmptyString = Field(
+        default=OPPER_DEFAULT_BASE,
+        validation_alias="OPPER_BASE_URL",
     )
 
     # ==================== Fireworks AI Config ====================
@@ -509,6 +519,9 @@ class Settings(BaseModel):
     )
     experiential_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="EXPLABS_PROXY"
+    )
+    opper_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="OPPER_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"

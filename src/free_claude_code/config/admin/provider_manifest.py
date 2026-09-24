@@ -204,6 +204,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "and tool-capable models."
         ),
     },
+    "OPPER_API_KEY": {
+        "label": "Opper API Key",
+        "description": (
+            "Opper gateway key for OpenAI-compatible chat, reasoning and "
+            "tool-capable models across its EU-hosted model pools."
+        ),
+    },
     "SCW_SECRET_KEY": {
         "label": "Scaleway API Key",
         "description": (

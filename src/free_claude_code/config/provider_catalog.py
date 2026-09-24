@@ -86,6 +86,8 @@ LLM7_DEFAULT_BASE = "https://api.llm7.io/v1"
 LIGHTNING_DEFAULT_BASE = "https://lightning.ai/api/v1"
 # Experiential Labs OpenAI-compatible Chat Completions gateway.
 EXPERIENTIAL_DEFAULT_BASE = "https://api.experientiallabs.ai/v1"
+# Opper OpenAI-compatible Chat Completions gateway.
+OPPER_DEFAULT_BASE = "https://api.opper.ai/v3/compat"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -679,6 +681,18 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=EXPERIENTIAL_DEFAULT_BASE,
         base_url_attr="experiential_base_url",
         proxy_attr="experiential_proxy",
+    ),
+    "opper": ProviderDescriptor(
+        provider_id="opper",
+        display_name="Opper",
+        website_url="https://opper.ai/",
+        logo_filename="opper.svg",
+        credential_env="OPPER_API_KEY",
+        credential_url="https://platform.opper.ai/",
+        credential_attr="opper_api_key",
+        default_base_url=OPPER_DEFAULT_BASE,
+        base_url_attr="opper_base_url",
+        proxy_attr="opper_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",
