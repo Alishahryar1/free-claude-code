@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import ModuleType
 
+from . import provider_catalog as _provider_catalog
 from .provider_catalog import ProviderAuthKind, ProviderDescriptor
 
 ANTIGRAVITY_DEFAULT_BASE = "https://daily-cloudcode-pa.googleapis.com"
@@ -35,3 +36,7 @@ def register_antigravity_catalog(module: ModuleType) -> None:
     catalog.clear()
     catalog.update(ordered)
     module.SUPPORTED_PROVIDER_IDS = tuple(catalog.keys())
+
+
+# Run before config.settings imports SUPPORTED_PROVIDER_IDS by value.
+register_antigravity_catalog(_provider_catalog)
