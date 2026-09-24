@@ -3,11 +3,13 @@
 import hashlib
 import json
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
 
 from free_claude_code.providers.antigravity.auth import AntigravityAuthManager
+from free_claude_code.providers.antigravity.chat_adapter import AntigravityChatAdapter
 from free_claude_code.providers.antigravity.client import (
     AntigravityClient,
     AntigravityUpstreamError,
@@ -98,9 +100,7 @@ async def test_generation_envelope_gets_agent_metadata_and_session(tmp_path: Pat
             "model": "gemini-test",
             "project": "p",
             "request": {
-                "contents": [
-                    {"role": "user", "parts": [{"text": "hello"}]}
-                ]
+                "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
             },
         }
     )
@@ -160,3 +160,20 @@ async def test_stream_error_reads_body_before_classification(tmp_path: Path) -> 
     assert "quota exhausted" in captured.value.body
     assert "quota exhausted" in str(captured.value)
     await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_project_override_skips_load_code_assist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NoLoadClient:
+        async def load_code_assist(self) -> dict[str, object]:
+            raise AssertionError("loadCodeAssist should not be called with project override")
+
+    monkeypatch.setenv("CLOUDCODE_GCP_PROJECT_ID", "managed-project")
+    adapter = AntigravityChatAdapter(
+        cast(AntigravityClient, NoLoadClient()),
+        base_url="https://example.test",
+    )
+
+    assert await adapter.project_id() == "managed-project"
