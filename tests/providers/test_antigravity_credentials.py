@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.providers.antigravity import credentials as credential_module
 from free_claude_code.providers.antigravity.credentials import (
     AntigravityCredentialError,
     _decode_json_document,
@@ -89,3 +90,68 @@ def test_missing_session_has_actionable_error(tmp_path: Path) -> None:
 def test_rejects_missing_refresh_token() -> None:
     with pytest.raises(AntigravityCredentialError, match="refresh_token"):
         _parse_credential_document({"access_token": "access"})
+
+
+def test_macos_keychain_uses_agy_service_and_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[list[str]] = []
+
+    def run(command: list[str]) -> str:
+        seen.append(command)
+        return json.dumps(
+            {
+                "token": {
+                    "access_token": "mac-access",
+                    "refresh_token": "mac-refresh",
+                }
+            }
+        )
+
+    monkeypatch.setattr(credential_module.os, "name", "posix")
+    monkeypatch.setattr(credential_module.sys, "platform", "darwin")
+    monkeypatch.setattr(credential_module, "_run_credential_command", run)
+
+    payload, source = credential_module._read_platform_credential()
+
+    assert source == "macos-keychain:gemini/antigravity"
+    assert payload["token"]["access_token"] == "mac-access"
+    assert seen == [
+        [
+            "security",
+            "find-generic-password",
+            "-s",
+            "gemini",
+            "-a",
+            "antigravity",
+            "-w",
+        ]
+    ]
+
+
+def test_linux_secret_service_uses_agy_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[list[str]] = []
+
+    def run(command: list[str]) -> str:
+        seen.append(command)
+        return (
+            "go-keyring-base64:"
+            "eyJ0b2tlbiI6eyJhY2Nlc3NfdG9rZW4iOiJhIiwicmVmcmVzaF90b2tlbiI6InIifX0="
+        )
+
+    monkeypatch.setattr(credential_module.os, "name", "posix")
+    monkeypatch.setattr(credential_module.sys, "platform", "linux")
+    monkeypatch.setattr(credential_module, "_run_credential_command", run)
+
+    payload, source = credential_module._read_platform_credential()
+
+    assert source == "linux-secret-service:gemini/antigravity"
+    assert payload["token"] == {"access_token": "a", "refresh_token": "r"}
+    assert seen == [
+        [
+            "secret-tool",
+            "lookup",
+            "service",
+            "gemini",
+            "username",
+            "antigravity",
+        ]
+    ]
