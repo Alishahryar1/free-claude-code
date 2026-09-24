@@ -132,12 +132,13 @@ def test_gemini_text_reasoning_usage_and_finish_chunks() -> None:
                 },
                 "candidates": [
                     {
+                        "finishReason": "STOP",
                         "content": {
                             "parts": [
                                 {"thought": True, "text": "thinking"},
                                 {"text": "answer"},
                             ]
-                        }
+                        },
                     }
                 ],
             }
@@ -151,6 +152,55 @@ def test_gemini_text_reasoning_usage_and_finish_chunks() -> None:
     assert final.choices[0].finish_reason == "stop"
     assert final.usage.prompt_tokens == 10
     assert final.usage.completion_tokens == 4
+
+
+def test_multiple_tool_calls_keep_distinct_stream_indexes() -> None:
+    state = StreamState(model="gemini-test")
+    chunks = gemini_event_chunks(
+        {
+            "response": {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "functionCall": {
+                                        "id": "call-1",
+                                        "name": "first",
+                                        "args": {"x": 1},
+                                    }
+                                },
+                                {
+                                    "functionCall": {
+                                        "id": "call-2",
+                                        "name": "second",
+                                        "args": {"y": 2},
+                                    }
+                                },
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        state,
+    )
+
+    assert [chunk.choices[0].delta.tool_calls[0].index for chunk in chunks] == [0, 1]
+    assert [chunk.choices[0].delta.tool_calls[0].id for chunk in chunks] == [
+        "call-1",
+        "call-2",
+    ]
+    assert final_chunk(state).choices[0].finish_reason == "tool_calls"
+
+
+def test_max_tokens_finish_reason_maps_to_openai_length() -> None:
+    state = StreamState(model="gemini-test")
+    assert not gemini_event_chunks(
+        {"response": {"candidates": [{"finishReason": "MAX_TOKENS"}]}},
+        state,
+    )
+    assert final_chunk(state).choices[0].finish_reason == "length"
 
 
 def test_final_chunk_uses_tool_calls_finish_reason() -> None:
