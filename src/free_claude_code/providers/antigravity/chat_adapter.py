@@ -25,6 +25,7 @@ class AntigravityChatAdapter:
         # Keep this credential-free: Antigravity authorization is injected by
         # AntigravityClient directly on the Cloud Code request.
         self.default_headers: Mapping[str, str] = {}
+        self.api_key: str | None = None
         self.chat = _ChatResource(self)
         self._project_id: str | None = None
 
