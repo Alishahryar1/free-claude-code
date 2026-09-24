@@ -19,6 +19,10 @@ REQUEST_USER_AGENT = "antigravity"
 REQUEST_TYPE = "agent"
 MODEL_CACHE_TTL_SECONDS = 3600.0
 
+_REJECTED_CREDENTIAL_MESSAGE = (
+    "Antigravity rejected the native `agy` session. "
+    "Sign in with `agy` again, then reconnect in FCC Admin."
+)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -200,6 +204,7 @@ class AntigravityClient:
         # The native CLI may have refreshed the token since our first read.
         await response.aclose()
         credentials = await self._auth.credentials()
+        retry_revision = self._auth.status().revision
         retry = await self._send(
             method,
             path,
@@ -209,10 +214,11 @@ class AntigravityClient:
         )
         if retry.status_code == 401:
             await retry.aclose()
-            raise AntigravityCredentialError(
-                "Antigravity rejected the native `agy` session. "
-                "Sign in with `agy` again, then reconnect in FCC Admin."
+            await self._auth.invalidate(
+                _REJECTED_CREDENTIAL_MESSAGE,
+                expected_revision=retry_revision,
             )
+            raise AntigravityCredentialError(_REJECTED_CREDENTIAL_MESSAGE)
         return retry
 
     async def _send(
