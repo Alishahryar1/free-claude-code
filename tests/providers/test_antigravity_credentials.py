@@ -13,6 +13,7 @@ from free_claude_code.providers.antigravity.credentials import (
     _parse_credential_document,
     load_native_credentials,
 )
+from free_claude_code.providers.failure_policy import provider_authentication_status
 
 
 def test_parses_nested_agy_token_and_rfc3339_expiry() -> None:
@@ -90,6 +91,11 @@ def test_missing_session_has_actionable_error(tmp_path: Path) -> None:
 def test_rejects_missing_refresh_token() -> None:
     with pytest.raises(AntigravityCredentialError, match="refresh_token"):
         _parse_credential_document({"access_token": "access"})
+
+
+def test_credential_errors_are_authentication_failures() -> None:
+    error = AntigravityCredentialError("native session expired")
+    assert provider_authentication_status(error) == 401
 
 
 def test_macos_keychain_uses_agy_service_and_account(monkeypatch: pytest.MonkeyPatch) -> None:
