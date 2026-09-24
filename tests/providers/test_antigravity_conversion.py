@@ -16,6 +16,7 @@ def test_chat_body_converts_system_tools_and_generation_config() -> None:
             "model": "gemini-test",
             "messages": [
                 {"role": "system", "content": "Be useful."},
+                {"role": "developer", "content": "Follow project rules."},
                 {"role": "user", "content": "hello"},
             ],
             "tools": [
@@ -33,6 +34,16 @@ def test_chat_body_converts_system_tools_and_generation_config() -> None:
                     },
                 }
             ],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "lookup"},
+            },
+            "temperature": 0.25,
+            "top_p": 0.8,
+            "presence_penalty": 0.1,
+            "frequency_penalty": 0.2,
+            "stop": ["END"],
+            "seed": 42,
             "max_tokens": 1234,
             "reasoning_effort": "high",
         },
@@ -42,15 +53,74 @@ def test_chat_body_converts_system_tools_and_generation_config() -> None:
     assert envelope["project"] == "project-1"
     assert envelope["model"] == "gemini-test"
     request = envelope["request"]
-    assert request["systemInstruction"]["parts"] == [{"text": "Be useful."}]
+    assert request["systemInstruction"]["parts"] == [
+        {"text": "Be useful."},
+        {"text": "Follow project rules."},
+    ]
     assert request["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
     declaration = request["tools"][0]["functionDeclarations"][0]
     assert declaration["name"] == "lookup"
     assert "additionalProperties" not in declaration["parameters"]
-    assert request["generationConfig"]["maxOutputTokens"] == 1234
-    assert request["generationConfig"]["thinkingConfig"] == {
-        "thinkingLevel": "HIGH"
+    assert request["toolConfig"] == {
+        "functionCallingConfig": {
+            "mode": "ANY",
+            "allowedFunctionNames": ["lookup"],
+        }
     }
+    assert request["generationConfig"] == {
+        "temperature": 0.25,
+        "topP": 0.8,
+        "presencePenalty": 0.1,
+        "frequencyPenalty": 0.2,
+        "maxOutputTokens": 1234,
+        "stopSequences": ["END"],
+        "seed": 42,
+        "thinkingConfig": {"thinkingLevel": "HIGH"},
+    }
+
+
+def test_tool_choice_modes_map_to_gemini() -> None:
+    base = {
+        "model": "gemini-test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {"type": "object"}},
+            }
+        ],
+    }
+    expected = {"auto": "AUTO", "none": "NONE", "required": "ANY"}
+    for choice, mode in expected.items():
+        request = openai_chat_to_cloudcode(
+            {**base, "tool_choice": choice}, project_id="project-1"
+        )["request"]
+        assert request["toolConfig"]["functionCallingConfig"] == {"mode": mode}
+
+
+def test_assistant_reasoning_replays_as_gemini_thought() -> None:
+    envelope = openai_chat_to_cloudcode(
+        {
+            "model": "gemini-test",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "reasoning_content": "prior reasoning",
+                    "content": "prior answer",
+                }
+            ],
+        },
+        project_id="project-1",
+    )
+    assert envelope["request"]["contents"] == [
+        {
+            "role": "model",
+            "parts": [
+                {"thought": True, "text": "prior reasoning"},
+                {"text": "prior answer"},
+            ],
+        }
+    ]
 
 
 def test_thought_signature_round_trips_through_tool_call_id() -> None:
@@ -201,6 +271,15 @@ def test_max_tokens_finish_reason_maps_to_openai_length() -> None:
         state,
     )
     assert final_chunk(state).choices[0].finish_reason == "length"
+
+
+def test_safety_finish_reason_maps_to_content_filter() -> None:
+    state = StreamState(model="gemini-test")
+    assert not gemini_event_chunks(
+        {"response": {"candidates": [{"finishReason": "SAFETY"}]}},
+        state,
+    )
+    assert final_chunk(state).choices[0].finish_reason == "content_filter"
 
 
 def test_final_chunk_uses_tool_calls_finish_reason() -> None:
