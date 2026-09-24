@@ -62,7 +62,7 @@ class OpenAIChatBehavior:
         reasoning: ReasoningPolicy,
     ) -> dict[str, Any]:
         """Apply provider behavior that is independent of client protocol."""
-        return self.profile.finalize_chat_body(body, reasoning=reasoning)
+        return body
 
     def history_scope(self, body: Mapping[str, Any]) -> HistoryScope:
         return self.profile.history_scope

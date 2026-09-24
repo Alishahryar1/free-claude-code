@@ -93,6 +93,23 @@ def test_connected_accounts_have_no_configuration_navigation_contract() -> None:
     assert "missing_configuration_keys" not in status
 
 
+def test_openai_api_key_card_is_independent_of_chatgpt_connection() -> None:
+    missing = _provider_status("openai_api", {})
+    configured = _provider_status(
+        "openai_api", {"OPENAI_API_KEY": _value("platform-key")}
+    )
+
+    assert missing["kind"] == "remote"
+    assert missing["status"] == "missing_key"
+    assert missing["configuration_keys"] == ["OPENAI_API_KEY"]
+    assert missing["settings_keys"] == ["OPENAI_API_KEY", "OPENAI_API_PROXY"]
+    assert configured["status"] == "configured"
+    assert (
+        _provider_status("openai", {"OPENAI_API_KEY": _value("platform-key")})["kind"]
+        == "connected_account"
+    )
+
+
 def test_every_catalog_configuration_attribute_has_an_admin_field() -> None:
     for descriptor in PROVIDER_CATALOG.values():
         for settings_attr in descriptor.configuration_attrs():

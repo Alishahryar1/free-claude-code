@@ -31,7 +31,6 @@ def _settings(**overrides):
         "azure_openai_api_key": "",
         "azure_openai_base_url": "",
         "openai_api_key": "",
-        "openai_base_url": "https://api.openai.com/v1",
         "nvidia_nim_api_key": "",
         "open_router_api_key": "",
         "mistral_api_key": "",

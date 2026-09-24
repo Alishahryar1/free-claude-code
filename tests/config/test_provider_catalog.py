@@ -77,6 +77,19 @@ def test_openai_is_a_connected_account_without_api_key_configuration() -> None:
     assert descriptor.default_base_url == "https://chatgpt.com/backend-api/codex"
 
 
+def test_openai_api_is_a_separate_key_configured_provider() -> None:
+    api = PROVIDER_CATALOG["openai_api"]
+    subscription = PROVIDER_CATALOG["openai"]
+
+    assert api.auth_kind is ProviderAuthKind.CONFIGURATION
+    assert api.credential_env == "OPENAI_API_KEY"
+    assert api.configuration_attrs() == ("openai_api_key",)
+    assert api.proxy_attr == "openai_api_proxy"
+    assert api.default_base_url == "https://api.openai.com/v1"
+    assert subscription.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT
+    assert subscription.credential_env is None
+
+
 def test_copilot_is_connected_without_credential_configuration() -> None:
     descriptor = PROVIDER_CATALOG["github_copilot"]
     assert descriptor.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT

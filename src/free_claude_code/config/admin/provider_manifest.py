@@ -18,25 +18,14 @@ class ProviderFieldOverride(TypedDict, total=False):
 
 
 _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
+    "OPENAI_API_KEY": {
+        "label": "OpenAI API Key",
+        "description": "API key for the OpenAI Platform. Separate from ChatGPT sign-in.",
+    },
     "OPENAI_PROXY": {
         "description": (
             "Optional proxy used for OpenAI sign-in and ChatGPT Codex requests. "
             "Changing it restarts FCC."
-        ),
-        "restart_required": True,
-    },
-    "OPENAI_API_KEY": {
-        "label": "OpenAI API Key",
-        "description": (
-            "Standard OpenAI developer platform API key (platform.openai.com/api-keys)."
-        ),
-    },
-    "OPENAI_BASE_URL": {
-        "description": "OpenAI API base URL. Defaults to https://api.openai.com/v1.",
-    },
-    "OPENAI_API_PROXY": {
-        "description": (
-            "Optional proxy used for OpenAI API requests. Changing it restarts FCC."
         ),
         "restart_required": True,
     },

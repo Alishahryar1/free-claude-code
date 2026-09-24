@@ -1,7 +1,6 @@
 """Declarative profiles for ordinary OpenAI-compatible providers."""
 
-import re
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -93,7 +92,6 @@ class OpenAIModelListing:
     collection_field: str | None = "data"
     id_field: str = "id"
     aliases_field: str | None = None
-    id_filter: Callable[[str], bool] | None = None
     additional_model_ids: tuple[str, ...] = ()
     required_path_values: RequiredPathValues = ()
     required_null_field: str | None = None
@@ -132,9 +130,6 @@ class OpenAIChatProfile:
     structured_reasoning_details: bool = False
     history_scope: HistoryScope = HistoryScope.TOOL_CONTINUATION
     user_agent: str | None = None
-    body_finalizer: (
-        Callable[[dict[str, Any], ReasoningPolicy], dict[str, Any]] | None
-    ) = None
 
     @property
     def provider_name(self) -> str:
@@ -170,17 +165,6 @@ class OpenAIChatProfile:
     ) -> None:
         """Encode resolved reasoning policy after either client translation."""
         self.reasoning.encode(body, policy)
-
-    def finalize_chat_body(
-        self,
-        body: dict[str, Any],
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> dict[str, Any]:
-        """Apply final body adjustments before wire dispatch."""
-        if self.body_finalizer is not None:
-            return self.body_finalizer(body, reasoning)
-        return body
 
     @property
     def request_postprocessors(self) -> tuple[OpenAIChatPostprocessor, ...]:
@@ -218,78 +202,6 @@ def _merge_allowed_cohere_extra_body(body: dict[str, Any], extra_body: Any) -> N
             f"{sorted(_COHERE_EXTRA_BODY_KEYS)}. Unsupported: {unsupported}"
         )
     body.update({str(key): deepcopy(value) for key, value in extra_body.items()})
-
-
-_OPENAI_NON_CHAT_SUBSTRINGS = (
-    "embedding",
-    "dall-e",
-    "tts",
-    "whisper",
-    "moderation",
-    "realtime",
-    "-instruct",
-    "babbage",
-    "davinci",
-)
-
-
-def is_openai_chat_model(model_id: str) -> bool:
-    """Return whether an OpenAI model ID is supported by Chat Completions."""
-    lowered = model_id.strip().lower()
-    if "/" in lowered:
-        lowered = lowered.split("/")[-1]
-    if not lowered:
-        return False
-    if any(sub in lowered for sub in _OPENAI_NON_CHAT_SUBSTRINGS):
-        return False
-    unprefixed = lowered.removeprefix("ft:")
-    target = unprefixed.split(":")[0] if ":" in unprefixed else unprefixed
-    return target.startswith(("gpt-", "chatgpt-", "o1", "o3", "o4", "o5"))
-
-
-def is_openai_reasoning_model(model: str) -> bool:
-    """Return whether a model ID represents an OpenAI reasoning model."""
-    lowered = model.strip().lower()
-    if "/" in lowered:
-        lowered = lowered.split("/")[-1]
-    unprefixed = lowered.removeprefix("ft:")
-    target = unprefixed.split(":")[0] if ":" in unprefixed else unprefixed
-    return bool(re.match(r"^(o[0-9]|gpt-[5-9]|chatgpt-[5-9])", target))
-
-
-def _sanitize_openai_parameters(body: dict[str, Any]) -> None:
-    model = body.get("model")
-    if not isinstance(model, str):
-        return
-    if is_openai_reasoning_model(model):
-        body.pop("temperature", None)
-        body.pop("top_p", None)
-        if body.get("reasoning_effort") == "none":
-            body.pop("reasoning_effort", None)
-        extra_body = body.get("extra_body")
-        if isinstance(extra_body, dict):
-            extra_body.pop("temperature", None)
-            extra_body.pop("top_p", None)
-            if extra_body.get("reasoning_effort") == "none":
-                extra_body.pop("reasoning_effort", None)
-    else:
-        body.pop("reasoning_effort", None)
-        extra_body = body.get("extra_body")
-        if isinstance(extra_body, dict):
-            extra_body.pop("reasoning_effort", None)
-
-
-def _apply_openai_api_request_quirks(
-    body: dict[str, Any], _request: MessagesRequest, _policy: ReasoningPolicy
-) -> None:
-    _sanitize_openai_parameters(body)
-
-
-def _finalize_openai_api_body(
-    body: dict[str, Any], _reasoning: ReasoningPolicy
-) -> dict[str, Any]:
-    _sanitize_openai_parameters(body)
-    return body
 
 
 def _policy(
@@ -544,28 +456,6 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             enabled_value="medium",
         ),
         model_ids_are_routable=False,
-    ),
-    "openai_api": OpenAIChatProfile(
-        _policy(
-            "OPENAI_API",
-            ReasoningReplayMode.THINK_TAGS,
-            include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
-            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-            max_tokens_field="max_completion_tokens",
-        ),
-        NamedEffortReasoning(
-            _LOW_MEDIUM_HIGH,
-            enabled_value="medium",
-            model_filter=is_openai_reasoning_model,
-        ),
-        postprocessors=(_apply_openai_api_request_quirks,),
-        model_listing=OpenAIModelListing(
-            path="/models",
-            id_filter=is_openai_chat_model,
-        ),
-        normalize_base_url=True,
-        body_finalizer=_finalize_openai_api_body,
     ),
     "mistral_codestral": OpenAIChatProfile(
         _policy("CODESTRAL", ReasoningReplayMode.THINK_TAGS),

@@ -39,7 +39,6 @@ CASES = [
         400,
     ),
     ("nebius", "https://api.tokenfactory.nebius.com/v1/models", {"data": []}, 401),
-    ("openai_api", "https://api.openai.com/v1/models", {"data": []}, 401),
     ("scaleway", "https://api.scaleway.ai/v1/models", {"data": []}, 401),
     (
         "vercel",
@@ -199,11 +198,11 @@ async def test_unsupported_shared_credentials_never_send_http(monkeypatch):
     supported = {PROVIDER_CATALOG[row[0]].credential_env for row in CASES}
     all_keys = {d.credential_env for d in PROVIDER_CATALOG.values() if d.credential_env}
     keys = tuple(all_keys - supported)
-    assert len(keys) == 21
+    assert "OPENAI_API_KEY" in keys
     result = await validation.check_credentials(
         Settings.model_construct(), (*keys, "OPENCODE_API_KEY", "MODEL")
     )
-    assert len(result) == 21
+    assert len(result) == len(keys)
     assert all(
         check.status == validation.CredentialStatus.UNVERIFIED for check in result
     )
