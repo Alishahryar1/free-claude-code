@@ -1,13 +1,18 @@
 """OpenAI Platform provider using the shared Responses transport."""
 
+import re
 from collections.abc import AsyncIterator, Mapping
 
 import httpx2
-from openai import AsyncOpenAI, DefaultAsyncHttpx2Client
+from openai import APIError, APIStatusError, AsyncOpenAI, DefaultAsyncHttpx2Client
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.openai_responses import (
+    OpenAIResponsesRequest,
+    ResponsesStreamFailure,
+)
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -16,6 +21,43 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.model_listing import extract_openai_model_infos
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
+
+
+def _sampling_retry_body(
+    error: Exception, body: JsonObject, sent_body: JsonObject
+) -> JsonObject | None:
+    """Omit only a sampling field explicitly rejected on this outbound attempt."""
+    if not isinstance(error, APIError | ResponsesStreamFailure):
+        return None
+    if isinstance(error, APIStatusError) and error.status_code != 400:
+        return None
+    detail = error.body
+    if not isinstance(detail, Mapping):
+        return None
+    param = detail.get("param")
+    if not isinstance(param, str) or param not in {"temperature", "top_p"}:
+        return None
+    if param not in body or param not in sent_body or body[param] != sent_body[param]:
+        return None
+    code = detail.get("code")
+    if code == "unsupported_value":
+        # This code also covers ordinary invalid values. Only default-only
+        # model incompatibility authorizes dropping the caller's setting.
+        message = detail.get("message")
+        if (
+            not isinstance(message, str)
+            or re.fullmatch(
+                rf"Unsupported value: ['\"]{param}['\"] does not support .+ "
+                r"with this model\. Only the default \([^)]+\) value is supported\.",
+                message.strip(),
+                re.IGNORECASE,
+            )
+            is None
+        ):
+            return None
+    elif code != "unsupported_parameter":
+        return None
+    return {key: value for key, value in body.items() if key != param}
 
 
 class OpenAIAPIProvider(BaseProvider):
@@ -56,6 +98,7 @@ class OpenAIAPIProvider(BaseProvider):
             provider_name="OpenAI API",
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
+            request_correction=_sampling_retry_body,
         )
 
     async def cleanup(self) -> None:
