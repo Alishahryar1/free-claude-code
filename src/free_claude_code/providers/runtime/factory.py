@@ -10,7 +10,6 @@ from free_claude_code.application.errors import (
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderAdmissionController
-from free_claude_code.providers.antigravity.catalog import register_antigravity_descriptor
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
@@ -192,8 +191,6 @@ def _load_opencode_go() -> ProviderFactory:
 
     return construct
 
-
-register_antigravity_descriptor(PROVIDER_CATALOG)
 
 _SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
     "nvidia_nim": _load_nvidia_nim,
