@@ -6,6 +6,8 @@ import base64
 import ctypes
 import json
 import os
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 WINDOWS_CREDENTIAL_TARGET = "gemini:antigravity"
+KEYRING_SERVICE = "gemini"
+KEYRING_ACCOUNT = "antigravity"
 GO_KEYRING_BASE64_PREFIX = "go-keyring-base64:"
 TOKEN_PATH_ENV = "ANTIGRAVITY_OAUTH_TOKEN_PATH"
 
@@ -63,20 +67,39 @@ def load_native_credentials(
     """Load credentials without copying or mutating the native ``agy`` session."""
 
     failures: list[str] = []
-    if os.name == "nt":
-        try:
-            payload = _read_windows_credential(WINDOWS_CREDENTIAL_TARGET)
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError, UnicodeError) as error:
-            failures.append(f"Windows Credential Manager: {error}")
-        else:
-            return _parse_credential_document(
-                payload,
-                source=f"windows:{WINDOWS_CREDENTIAL_TARGET}",
-            )
+    paths = token_paths or native_token_paths()
 
-    for path in token_paths or native_token_paths():
+    # An explicit path (argument or environment override) is authoritative. This
+    # also makes tests/headless deployments independent of a desktop keyring.
+    explicit_path = token_paths is not None or bool(os.getenv(TOKEN_PATH_ENV))
+    if explicit_path:
+        credential = _load_file_credentials(paths, failures)
+        if credential is not None:
+            return credential
+        raise _missing_credentials(failures)
+
+    try:
+        payload, source = _read_platform_credential()
+    except FileNotFoundError:
+        pass
+    except (OSError, subprocess.SubprocessError, ValueError, UnicodeError) as error:
+        failures.append(f"OS keyring: {error}")
+    else:
+        try:
+            return _parse_credential_document(payload, source=source)
+        except AntigravityCredentialError as error:
+            failures.append(f"{source}: {error}")
+
+    credential = _load_file_credentials(paths, failures)
+    if credential is not None:
+        return credential
+    raise _missing_credentials(failures)
+
+
+def _load_file_credentials(
+    paths: tuple[Path, ...], failures: list[str]
+) -> AntigravityCredentials | None:
+    for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -89,12 +112,71 @@ def load_native_credentials(
             return _parse_credential_document(payload, source=str(path))
         except (ValueError, AntigravityCredentialError) as error:
             failures.append(f"{path}: {error}")
+    return None
 
+
+def _missing_credentials(failures: list[str]) -> AntigravityCredentialError:
     suffix = f" ({'; '.join(failures)})" if failures else ""
-    raise AntigravityCredentialError(
+    return AntigravityCredentialError(
         "No usable Antigravity CLI session was found. Sign in with `agy` first."
         + suffix
     )
+
+
+def _read_platform_credential() -> tuple[Any, str]:
+    if os.name == "nt":
+        return (
+            _read_windows_credential(WINDOWS_CREDENTIAL_TARGET),
+            f"windows:{WINDOWS_CREDENTIAL_TARGET}",
+        )
+    if sys.platform == "darwin":
+        text = _run_credential_command(
+            [
+                "security",
+                "find-generic-password",
+                "-s",
+                KEYRING_SERVICE,
+                "-a",
+                KEYRING_ACCOUNT,
+                "-w",
+            ]
+        )
+        return _decode_json_document(text), "macos-keychain:gemini/antigravity"
+    if sys.platform.startswith("linux"):
+        text = _run_credential_command(
+            [
+                "secret-tool",
+                "lookup",
+                "service",
+                KEYRING_SERVICE,
+                "username",
+                KEYRING_ACCOUNT,
+            ]
+        )
+        return _decode_json_document(text), "linux-secret-service:gemini/antigravity"
+    raise FileNotFoundError("no supported native keyring backend")
+
+
+def _run_credential_command(command: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=5,
+        )
+    except FileNotFoundError:
+        raise
+    except subprocess.TimeoutExpired as error:
+        raise OSError(f"credential command timed out: {command[0]}") from error
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"exit status {result.returncode}"
+        raise FileNotFoundError(f"{command[0]} could not read Antigravity credential: {detail}")
+    if not result.stdout.strip():
+        raise FileNotFoundError(f"{command[0]} returned an empty credential")
+    return result.stdout.strip()
 
 
 def _parse_credential_document(
