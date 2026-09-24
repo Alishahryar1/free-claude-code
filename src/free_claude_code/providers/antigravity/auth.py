@@ -24,6 +24,11 @@ from .credentials import (
 
 CredentialLoader = Callable[[], AntigravityCredentials]
 
+_EXPIRED_CREDENTIAL_MESSAGE = (
+    "The native Antigravity token is expired or expiring. "
+    "Refresh the account with `agy`, then reconnect in FCC Admin."
+)
+
 
 class AntigravityAuthManager:
     """Own FCC's opt-in while leaving Google credentials under ``agy`` ownership."""
@@ -86,10 +91,14 @@ class AntigravityAuthManager:
             self._ensure_open()
             self._last_error = None
             try:
-                await run_sync_owned(self._credential_loader)
+                credentials = await run_sync_owned(self._credential_loader)
             except AntigravityCredentialError as error:
                 self._enabled = False
                 self._last_error = str(error)
+                return self.status()
+            if credentials.expires_soon():
+                self._enabled = False
+                self._last_error = _EXPIRED_CREDENTIAL_MESSAGE
                 return self.status()
             revision = self._revision + 1
             try:
@@ -137,7 +146,10 @@ class AntigravityAuthManager:
                 "Connect the Antigravity account in FCC Admin first."
             )
         try:
-            return await run_sync_owned(self._credential_loader)
+            credentials = await run_sync_owned(self._credential_loader)
+            if credentials.expires_soon():
+                raise AntigravityCredentialError(_EXPIRED_CREDENTIAL_MESSAGE)
+            return credentials
         except AntigravityCredentialError as error:
             self._enabled = False
             self._last_error = str(error)
