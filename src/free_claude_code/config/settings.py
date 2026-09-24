@@ -71,6 +71,11 @@ class Settings(BaseModel):
         extra="ignore",
     )
 
+    # ==================== OpenAI Platform API ====================
+    openai_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="OPENAI_API_KEY"
+    )
+
     # ==================== Azure OpenAI ====================
     azure_openai_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="AZURE_OPENAI_API_KEY"
@@ -392,6 +397,9 @@ class Settings(BaseModel):
     # ==================== Per-Provider Proxy ====================
     openai_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OPENAI_PROXY"
+    )
+    openai_api_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="OPENAI_API_PROXY"
     )
     xai_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="XAI_PROXY"
