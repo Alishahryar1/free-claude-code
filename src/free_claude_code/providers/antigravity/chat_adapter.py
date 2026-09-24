@@ -29,28 +29,32 @@ class AntigravityChatAdapter:
         self.api_key: str | None = None
         self.chat = _ChatResource(self)
         self._project_id: str | None = None
+        self._project_revision = -1
 
     async def project_id(self) -> str:
-        if self._project_id is None:
-            override = os.getenv(PROJECT_ID_ENV)
-            if override and override.strip():
-                self._project_id = override.strip()
-                return self._project_id
+        override = os.getenv(PROJECT_ID_ENV)
+        if override and override.strip():
+            return override.strip()
 
-            payload = await self._client.load_code_assist()
-            project = payload.get("cloudaicompanionProject")
-            if not isinstance(project, str) or not project:
-                managed = payload.get("gcpManaged") is True
-                hint = (
-                    f" Set {PROJECT_ID_ENV} to the Cloud Code project ID."
-                    if managed
-                    else ""
-                )
-                raise RuntimeError(
-                    "Antigravity loadCodeAssist did not return "
-                    f"cloudaicompanionProject.{hint}"
-                )
-            self._project_id = project
+        revision = self._client.auth_revision
+        if self._project_id is not None and self._project_revision == revision:
+            return self._project_id
+
+        payload = await self._client.load_code_assist()
+        project = payload.get("cloudaicompanionProject")
+        if not isinstance(project, str) or not project:
+            managed = payload.get("gcpManaged") is True
+            hint = (
+                f" Set {PROJECT_ID_ENV} to the Cloud Code project ID."
+                if managed
+                else ""
+            )
+            raise RuntimeError(
+                "Antigravity loadCodeAssist did not return "
+                f"cloudaicompanionProject.{hint}"
+            )
+        self._project_id = project
+        self._project_revision = revision
         return self._project_id
 
     async def create_stream(self, body: dict[str, Any]) -> _AntigravitySDKStream:
