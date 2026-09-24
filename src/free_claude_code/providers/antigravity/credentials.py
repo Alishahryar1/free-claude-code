@@ -22,6 +22,8 @@ TOKEN_PATH_ENV = "ANTIGRAVITY_OAUTH_TOKEN_PATH"
 class AntigravityCredentialError(RuntimeError):
     """The native Antigravity credential could not be loaded safely."""
 
+    status_code = 401
+
 
 @dataclass(frozen=True, slots=True, repr=False)
 class AntigravityCredentials:
