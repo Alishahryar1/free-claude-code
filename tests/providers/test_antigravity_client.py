@@ -91,6 +91,29 @@ async def test_fetch_available_models_reuses_hour_cache(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_model_cache_is_invalidated_after_account_revision(tmp_path: Path) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"models": {f"model-{calls}": {}}})
+
+    manager = await connected_manager(tmp_path)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AntigravityClient(auth=manager, base_url="https://example.test", client=http)
+
+    first = await client.fetch_available_models()
+    await manager.disconnect()
+    await manager.start_login(manager.status().default_login_mode)
+    second = await client.fetch_available_models()
+
+    assert first != second
+    assert calls == 2
+    await http.aclose()
+
+
+@pytest.mark.asyncio
 async def test_load_code_assist_identifies_antigravity_ide(tmp_path: Path) -> None:
     payloads: list[dict[str, object]] = []
 
@@ -105,6 +128,30 @@ async def test_load_code_assist_identifies_antigravity_ide(tmp_path: Path) -> No
     assert (await client.load_code_assist())["project"] == "example"
     assert payloads == [{"metadata": {"ideType": "ANTIGRAVITY"}}]
     await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_project_cache_is_invalidated_after_account_revision() -> None:
+    class RevisionClient:
+        def __init__(self) -> None:
+            self.auth_revision = 1
+            self.calls = 0
+
+        async def load_code_assist(self) -> dict[str, object]:
+            self.calls += 1
+            return {"cloudaicompanionProject": f"project-{self.calls}"}
+
+    fake = RevisionClient()
+    adapter = AntigravityChatAdapter(
+        cast(AntigravityClient, fake),
+        base_url="https://example.test",
+    )
+
+    assert await adapter.project_id() == "project-1"
+    assert await adapter.project_id() == "project-1"
+    fake.auth_revision = 2
+    assert await adapter.project_id() == "project-2"
+    assert fake.calls == 2
 
 
 @pytest.mark.asyncio
@@ -139,6 +186,24 @@ async def test_generation_envelope_gets_agent_metadata_and_session(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_owned_http_client_uses_fcc_timeout_values() -> None:
+    client = AntigravityClient(
+        auth=cast(AntigravityAuthManager, object()),
+        base_url="https://example.test",
+        read_timeout=71.0,
+        write_timeout=72.0,
+        connect_timeout=73.0,
+    )
+    try:
+        assert client._client.timeout.read == 71.0
+        assert client._client.timeout.write == 72.0
+        assert client._client.timeout.connect == 73.0
+        assert client._client.timeout.pool == 73.0
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_expiring_native_token_requires_agy_refresh(tmp_path: Path) -> None:
     expired = False
 
@@ -169,12 +234,17 @@ async def test_expiring_native_token_requires_agy_refresh(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_stream_error_reads_body_before_classification(tmp_path: Path) -> None:
+async def test_stream_error_preserves_body_without_logging_raw_text(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "sensitive-upstream-value"
+
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             429,
             headers={"content-type": "application/json"},
-            content=b'{"error":{"message":"quota exhausted"}}',
+            content=(f'{{"error":{{"message":"quota exhausted {secret}"}}}}').encode(),
         )
 
     manager = await connected_manager(tmp_path)
@@ -188,8 +258,10 @@ async def test_stream_error_reads_body_before_classification(tmp_path: Path) -> 
         await anext(stream)
 
     assert captured.value.status_code == 429
-    assert "quota exhausted" in captured.value.body
-    assert "quota exhausted" in str(captured.value)
+    assert secret in captured.value.body
+    assert secret not in str(captured.value)
+    assert secret not in caplog.text
+    assert "body_chars=" in caplog.text
     await http.aclose()
 
 
