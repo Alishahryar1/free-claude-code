@@ -53,6 +53,19 @@ def _load_open_router() -> ProviderFactory:
     return construct
 
 
+def _load_openai_api() -> ProviderFactory:
+    from free_claude_code.providers.openai_api import OpenAIAPIProvider
+
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return OpenAIAPIProvider(config, admission=admission)
+
+    return construct
+
+
 def _load_mistral() -> ProviderFactory:
     from free_claude_code.providers.mistral import MistralProvider
 
@@ -195,6 +208,7 @@ def _load_opencode_go() -> ProviderFactory:
 _SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
     "nvidia_nim": _load_nvidia_nim,
     "open_router": _load_open_router,
+    "openai_api": _load_openai_api,
     "mistral": _load_mistral,
     "kilo": _load_kilo,
     "deepseek": _load_deepseek,

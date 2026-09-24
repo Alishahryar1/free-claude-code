@@ -185,6 +185,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=OPENAI_CODEX_DEFAULT_BASE,
         proxy_attr="openai_proxy",
     ),
+    "openai_api": ProviderDescriptor(
+        provider_id="openai_api",
+        display_name="OpenAI API",
+        website_url="https://platform.openai.com/",
+        logo_filename="openai.svg",
+        credential_env="OPENAI_API_KEY",
+        credential_url="https://platform.openai.com/api-keys",
+        credential_attr="openai_api_key",
+        default_base_url="https://api.openai.com/v1",
+        proxy_attr="openai_api_proxy",
+    ),
     "github_copilot": ProviderDescriptor(
         provider_id="github_copilot",
         display_name="GitHub Copilot",

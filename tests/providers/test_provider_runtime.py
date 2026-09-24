@@ -55,6 +55,7 @@ from free_claude_code.providers.lmstudio import LMStudioProvider
 from free_claude_code.providers.mistral import MistralProvider
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
+from free_claude_code.providers.openai_api import OpenAIAPIProvider
 from free_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
     OpenAIChatProvider,
@@ -76,6 +77,7 @@ def _make_settings(**overrides):
     mock.model_opus = None
     mock.model_sonnet = None
     mock.model_haiku = None
+    mock.openai_api_key = "test_openai_api_key"
     mock.azure_openai_api_key = "test_azure_openai_key"
     mock.azure_openai_base_url = "https://test-resource.openai.azure.com/openai/v1/"
     mock.nvidia_nim_api_key = "test_key"
@@ -170,6 +172,7 @@ def _make_settings(**overrides):
     mock.kilo_api_key = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
+    mock.openai_api_proxy = None
     mock.xai_proxy = None
     mock.qwencloud_proxy = None
     mock.qwencloud_coding_proxy = None
@@ -933,6 +936,7 @@ async def test_create_provider_instantiates_each_builtin():
     cases = {
         "nvidia_nim": NvidiaNimProvider,
         "openai": OpenAICodexProvider,
+        "openai_api": OpenAIAPIProvider,
         "github_copilot": GitHubCopilotProvider,
         "cline_pass": OpenAIChatProvider,
         "xai": OpenAIChatProvider,
@@ -1004,6 +1008,7 @@ async def test_create_provider_instantiates_each_builtin():
         patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"),
         patch("free_claude_code.providers.github_copilot.provider.AsyncOpenAI"),
         patch("free_claude_code.providers.openai_codex.provider.AsyncOpenAI"),
+        patch("free_claude_code.providers.openai_api.provider.AsyncOpenAI"),
         patch("httpx.AsyncClient"),
         patch(
             "free_claude_code.providers.runtime.factory.ProviderAdmissionController",
