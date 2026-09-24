@@ -27,6 +27,15 @@ def credentials() -> AntigravityCredentials:
     )
 
 
+def expired_credentials() -> AntigravityCredentials:
+    return AntigravityCredentials(
+        access_token="expired",
+        refresh_token="refresh",
+        expires_at=0.0,
+        source="test",
+    )
+
+
 @pytest.mark.asyncio
 async def test_connect_persists_only_safe_opt_in_state(tmp_path: Path) -> None:
     path = tmp_path / "antigravity.json"
@@ -43,6 +52,21 @@ async def test_connect_persists_only_safe_opt_in_state(tmp_path: Path) -> None:
     assert payload == {"schema_version": 1, "enabled": True, "revision": 1}
     assert "access" not in path.read_text(encoding="utf-8")
     assert "refresh" not in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_connect_rejects_expired_native_session(tmp_path: Path) -> None:
+    manager = AntigravityAuthManager(
+        state_path=tmp_path / "antigravity.json",
+        credential_loader=expired_credentials,
+    )
+
+    status = await manager.start_login(DEVICE)
+
+    assert status.state is ConnectedAccountState.ERROR
+    assert not manager.is_connected()
+    assert status.message is not None
+    assert "expired or expiring" in status.message
 
 
 @pytest.mark.asyncio
