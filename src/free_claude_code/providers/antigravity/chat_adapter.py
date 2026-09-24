@@ -1,7 +1,5 @@
 """OpenAI-SDK-shaped adapter backed by Antigravity Cloud Code."""
 
-import json
-import logging
 import os
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
@@ -16,7 +14,6 @@ from .conversion import (
 
 PROJECT_ID_ENV = "CLOUDCODE_GCP_PROJECT_ID"
 ANTHROPIC_BILLING_HEADER_PREFIX = "x-anthropic-billing-header:"
-_LOGGER = logging.getLogger(__name__)
 
 
 class AntigravityChatAdapter:
@@ -60,7 +57,6 @@ class AntigravityChatAdapter:
         project_id = await self.project_id()
         envelope = openai_chat_to_cloudcode(body, project_id=project_id)
         envelope = _strip_anthropic_billing_header(envelope)
-        _log_request_metrics(envelope)
         source = self._client.stream_generate_content(envelope)
         model = envelope["model"]
         assert isinstance(model, str)
@@ -170,92 +166,3 @@ def _strip_anthropic_billing_header(envelope: dict[str, Any]) -> dict[str, Any]:
         request.pop("systemInstruction", None)
     updated["request"] = request
     return updated
-
-
-def _log_request_metrics(envelope: Mapping[str, Any]) -> None:
-    """Log request shape without exposing prompts, tool names, or credentials."""
-
-    request = envelope.get("request")
-    if not isinstance(request, Mapping):
-        return
-
-    contents = request.get("contents")
-    content_items = contents if isinstance(contents, list) else []
-    content_text_chars = sum(_text_chars(item) for item in content_items)
-
-    system_instruction = request.get("systemInstruction")
-    system_chars = _text_chars(system_instruction)
-    system_part_chars: list[int] = []
-    if isinstance(system_instruction, Mapping):
-        system_parts = system_instruction.get("parts")
-        if isinstance(system_parts, list):
-            system_part_chars = [
-                len(part["text"])
-                for part in system_parts
-                if isinstance(part, Mapping) and isinstance(part.get("text"), str)
-            ]
-
-    tools = request.get("tools")
-    tool_items = tools if isinstance(tools, list) else []
-    tool_count = 0
-    for item in tool_items:
-        if not isinstance(item, Mapping):
-            continue
-        declarations = item.get("functionDeclarations")
-        if isinstance(declarations, list):
-            tool_count += len(declarations)
-
-    generation = request.get("generationConfig")
-    max_output_tokens: Any = None
-    thinking_level: Any = None
-    thinking_budget: Any = None
-    if isinstance(generation, Mapping):
-        max_output_tokens = generation.get("maxOutputTokens")
-        thinking = generation.get("thinkingConfig")
-        if isinstance(thinking, Mapping):
-            thinking_level = thinking.get("thinkingLevel")
-            thinking_budget = thinking.get("thinkingBudget")
-
-    envelope_bytes = len(
-        json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    )
-    tools_bytes = len(
-        json.dumps(tool_items, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    )
-
-    _LOGGER.info(
-        "Antigravity request metrics: model=%s project=%s json_bytes=%s "
-        "contents=%s content_text_chars=%s system_chars=%s system_parts=%s "
-        "system_part_chars=%s tools=%s tool_json_bytes=%s max_output_tokens=%s "
-        "thinking_level=%s thinking_budget=%s",
-        envelope.get("model"),
-        envelope.get("project"),
-        envelope_bytes,
-        len(content_items),
-        content_text_chars,
-        system_chars,
-        len(system_part_chars),
-        system_part_chars,
-        tool_count,
-        tools_bytes,
-        max_output_tokens,
-        thinking_level,
-        thinking_budget,
-    )
-
-
-def _text_chars(value: Any) -> int:
-    if isinstance(value, str):
-        return len(value)
-    if isinstance(value, Mapping):
-        total = 0
-        text = value.get("text")
-        if isinstance(text, str):
-            total += len(text)
-        parts = value.get("parts")
-        if isinstance(parts, list):
-            total += sum(_text_chars(part) for part in parts)
-        return total
-    if isinstance(value, list):
-        return sum(_text_chars(item) for item in value)
-    return 0
