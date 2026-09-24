@@ -2,7 +2,7 @@
   <title>Package Manager: uv</title>
   <!-- Bolt artwork from astral-sh/uv assets/badge/v0.json. -->
   <path fill="#555" d="M0 0h145v28H0z"/>
-  <path fill="#261230" d="M145 0h55v28h-55z"/>
+  <path fill="#6a1b9a" d="M145 0h55v28h-55z"/>
   <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="10" letter-spacing="1">
     <text x="72.5" y="18">PACKAGE MANAGER</text>
     <text x="182" y="18">UV</text>
