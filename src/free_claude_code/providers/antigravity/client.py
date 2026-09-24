@@ -1,5 +1,6 @@
 """Async client for the Google Antigravity Cloud Code API."""
 
+import asyncio
 import hashlib
 import json
 import platform
@@ -15,6 +16,7 @@ from .credentials import AntigravityCredentialError
 
 REQUEST_USER_AGENT = "antigravity"
 REQUEST_TYPE = "agent"
+MODEL_CACHE_TTL_SECONDS = 3600.0
 
 
 class AntigravityUpstreamError(RuntimeError):
@@ -40,6 +42,9 @@ class AntigravityClient:
         self._base_url = base_url.rstrip("/")
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(60.0))
         self._owns_client = client is None
+        self._models_cache: Mapping[str, Any] | None = None
+        self._models_cache_time = 0.0
+        self._models_lock = asyncio.Lock()
 
     async def close(self) -> None:
         if self._owns_client:
@@ -53,8 +58,27 @@ class AntigravityClient:
         return _mapping(response, "loadCodeAssist response")
 
     async def fetch_available_models(self) -> Mapping[str, Any]:
-        response = await self._json_request("/v1internal:fetchAvailableModels", {})
-        return _mapping(response, "fetchAvailableModels response")
+        now = time.monotonic()
+        if (
+            self._models_cache is not None
+            and now - self._models_cache_time < MODEL_CACHE_TTL_SECONDS
+        ):
+            return self._models_cache
+
+        # Admin/model-picker requests can arrive together. Collapse them into one
+        # expensive Cloud Code fetch and share the result for the next hour.
+        async with self._models_lock:
+            now = time.monotonic()
+            if (
+                self._models_cache is not None
+                and now - self._models_cache_time < MODEL_CACHE_TTL_SECONDS
+            ):
+                return self._models_cache
+            response = await self._json_request("/v1internal:fetchAvailableModels", {})
+            models = _mapping(response, "fetchAvailableModels response")
+            self._models_cache = models
+            self._models_cache_time = time.monotonic()
+            return models
 
     async def generate_content(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         response = await self._json_request(
