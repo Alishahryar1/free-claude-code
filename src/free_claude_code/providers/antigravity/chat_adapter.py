@@ -19,6 +19,7 @@ DIAGNOSTIC_DISABLE_TOOLS_ENV = "ANTIGRAVITY_DIAGNOSTIC_DISABLE_TOOLS"
 DIAGNOSTIC_DISABLE_SYSTEM_ENV = "ANTIGRAVITY_DIAGNOSTIC_DISABLE_SYSTEM"
 DIAGNOSTIC_REPLACE_CONTENTS_ENV = "ANTIGRAVITY_DIAGNOSTIC_REPLACE_CONTENTS"
 DIAGNOSTIC_REDACT_CONTENT_TEXT_ENV = "ANTIGRAVITY_DIAGNOSTIC_REDACT_CONTENT_TEXT"
+DIAGNOSTIC_REDACT_SYSTEM_TEXT_ENV = "ANTIGRAVITY_DIAGNOSTIC_REDACT_SYSTEM_TEXT"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -147,7 +148,13 @@ def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
     disable_system = _env_truthy(DIAGNOSTIC_DISABLE_SYSTEM_ENV)
     replace_contents = _env_truthy(DIAGNOSTIC_REPLACE_CONTENTS_ENV)
     redact_content_text = _env_truthy(DIAGNOSTIC_REDACT_CONTENT_TEXT_ENV)
-    if not disable_system and not replace_contents and not redact_content_text:
+    redact_system_text = _env_truthy(DIAGNOSTIC_REDACT_SYSTEM_TEXT_ENV)
+    if (
+        not disable_system
+        and not replace_contents
+        and not redact_content_text
+        and not redact_system_text
+    ):
         return envelope
 
     updated = dict(envelope)
@@ -156,6 +163,13 @@ def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
         request.pop("systemInstruction", None)
         _LOGGER.warning(
             "Antigravity diagnostic mode active: system instruction disabled"
+        )
+    elif redact_system_text:
+        system_instruction = request.get("systemInstruction")
+        if isinstance(system_instruction, Mapping):
+            request["systemInstruction"] = _redact_text_fields(system_instruction)
+        _LOGGER.warning(
+            "Antigravity diagnostic mode active: system instruction text redacted"
         )
     if replace_contents:
         request["contents"] = [
@@ -167,7 +181,7 @@ def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
     elif redact_content_text:
         contents = request.get("contents")
         if isinstance(contents, list):
-            request["contents"] = [_redact_content_text(item) for item in contents]
+            request["contents"] = [_redact_text_fields(item) for item in contents]
         _LOGGER.warning(
             "Antigravity diagnostic mode active: conversation text redacted"
         )
@@ -175,11 +189,11 @@ def _apply_diagnostic_overrides(envelope: dict[str, Any]) -> dict[str, Any]:
     return updated
 
 
-def _redact_content_text(value: Any) -> Any:
-    """Replace content text with same-length filler while preserving request shape."""
+def _redact_text_fields(value: Any) -> Any:
+    """Replace text fields with same-length filler while preserving request shape."""
 
     if isinstance(value, list):
-        return [_redact_content_text(item) for item in value]
+        return [_redact_text_fields(item) for item in value]
     if not isinstance(value, Mapping):
         return value
 
@@ -189,7 +203,7 @@ def _redact_content_text(value: Any) -> Any:
         redacted["text"] = "A" * len(text)
     parts = redacted.get("parts")
     if isinstance(parts, list):
-        redacted["parts"] = [_redact_content_text(part) for part in parts]
+        redacted["parts"] = [_redact_text_fields(part) for part in parts]
     return redacted
 
 
