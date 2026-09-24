@@ -234,6 +234,37 @@ async def test_expiring_native_token_requires_agy_refresh(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_rejected_native_session_invalidates_connected_state(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(401, json={"error": {"message": "unauthorized"}})
+
+    manager = AntigravityAuthManager(
+        state_path=path,
+        credential_loader=future_credentials,
+    )
+    await manager.start_login(manager.status().default_login_mode)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AntigravityClient(auth=manager, base_url="https://example.test", client=http)
+
+    with pytest.raises(AntigravityCredentialError, match="rejected"):
+        await client.fetch_available_models()
+
+    assert calls == 2
+    assert not manager.is_connected()
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "enabled": False,
+        "revision": 2,
+    }
+    await http.aclose()
+
+
+@pytest.mark.asyncio
 async def test_stream_error_preserves_body_without_logging_raw_text(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
