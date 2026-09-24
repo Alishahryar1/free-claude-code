@@ -49,7 +49,9 @@ def test_init_normalizes_openai_base_url(configured: str, expected: str) -> None
         )
 
     assert provider._base_url == expected
-    assert openai_client.call_args.kwargs["base_url"] == expected
+    assert openai_client.call_args.kwargs["base_url"] == expected.replace(
+        "localhost", "127.0.0.1"
+    )
 
 
 def test_init_uses_openai_chat_client() -> None:
