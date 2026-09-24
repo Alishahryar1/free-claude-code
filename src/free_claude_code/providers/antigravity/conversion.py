@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
+from free_claude_code.application.errors import InvalidRequestError
+
 
 def openai_chat_to_cloudcode(
     body: dict[str, Any], *, project_id: str
@@ -132,13 +134,11 @@ def _content_parts(content: Any) -> list[dict[str, Any]]:
         if kind == "text" and isinstance(raw.get("text"), str):
             parts.append({"text": raw["text"]})
         elif kind == "image_url":
-            inline = _image_part(raw.get("image_url"))
-            if inline is not None:
-                parts.append({"inlineData": inline})
+            parts.append({"inlineData": _image_part(raw.get("image_url"))})
     return parts
 
 
-def _image_part(value: Any) -> dict[str, str] | None:
+def _image_part(value: Any) -> dict[str, str]:
     url = (
         value
         if isinstance(value, str)
@@ -146,16 +146,23 @@ def _image_part(value: Any) -> dict[str, str] | None:
         if isinstance(value, dict)
         else None
     )
-    if not isinstance(url, str) or not url.startswith("data:"):
-        return None
+    if not isinstance(url, str) or not url:
+        raise InvalidRequestError("Antigravity image_url must contain a URL.")
+    if not url.startswith("data:"):
+        raise InvalidRequestError(
+            "Antigravity does not support remote image URLs. "
+            "Use a base64 data: URL instead."
+        )
     metadata, separator, data = url[5:].partition(",")
     if not separator:
-        return None
+        raise InvalidRequestError("Antigravity image data URL is malformed.")
     mime = metadata.split(";", 1)[0] or "image/jpeg"
     try:
         base64.b64decode(data, validate=True)
-    except ValueError:
-        return None
+    except ValueError as error:
+        raise InvalidRequestError(
+            "Antigravity image data URL contains invalid base64 data."
+        ) from error
     return {"mimeType": mime, "data": data}
 
 
@@ -243,21 +250,47 @@ def _tool_config(value: Any) -> dict[str, Any] | None:
 
 
 def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    allowed = {"type", "description", "properties", "items", "required", "enum"}
-    cleaned: dict[str, Any] = {}
-    for key, value in schema.items():
-        if key not in allowed:
-            continue
-        if key == "properties" and isinstance(value, dict):
-            cleaned[key] = {
-                str(name): _clean_schema(item)
-                for name, item in value.items()
-                if isinstance(item, dict)
-            }
-        elif key == "items" and isinstance(value, dict):
-            cleaned[key] = _clean_schema(value)
-        else:
-            cleaned[key] = value
+    direct_keys = {
+        "type",
+        "format",
+        "description",
+        "nullable",
+        "required",
+        "enum",
+        "minimum",
+        "maximum",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minItems",
+        "maxItems",
+        "minProperties",
+        "maxProperties",
+    }
+    cleaned = {key: value for key, value in schema.items() if key in direct_keys}
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        cleaned["properties"] = {
+            str(name): _clean_schema(item)
+            for name, item in properties.items()
+            if isinstance(item, dict)
+        }
+
+    items = schema.get("items")
+    if isinstance(items, dict):
+        cleaned["items"] = _clean_schema(items)
+
+    alternatives = schema.get("anyOf")
+    if not isinstance(alternatives, list):
+        alternatives = schema.get("oneOf")
+    if isinstance(alternatives, list):
+        cleaned_alternatives = [
+            _clean_schema(item) for item in alternatives if isinstance(item, dict)
+        ]
+        if cleaned_alternatives:
+            cleaned["anyOf"] = cleaned_alternatives
+
     return cleaned
 
 
