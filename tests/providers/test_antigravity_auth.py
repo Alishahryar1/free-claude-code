@@ -1,6 +1,8 @@
 """FCC opt-in behavior for a native Antigravity account."""
 
+import asyncio
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -34,6 +36,14 @@ def expired_credentials() -> AntigravityCredentials:
         expires_at=0.0,
         source="test",
     )
+
+
+async def _wait_until(event: threading.Event) -> None:
+    for _ in range(500):
+        if event.is_set():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out waiting for credential loader")
 
 
 @pytest.mark.asyncio
@@ -144,3 +154,100 @@ async def test_lost_native_session_invalidates_opt_in(tmp_path: Path) -> None:
 
     assert not manager.is_connected()
     assert json.loads(path.read_text(encoding="utf-8"))["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_failed_reconnect_persists_disabled_state(tmp_path: Path) -> None:
+    path = tmp_path / "antigravity.json"
+    available = True
+
+    def loader() -> AntigravityCredentials:
+        if not available:
+            raise AntigravityCredentialError("Native session disappeared.")
+        return credentials()
+
+    manager = AntigravityAuthManager(state_path=path, credential_loader=loader)
+    await manager.start_login(DEVICE)
+    available = False
+
+    status = await manager.start_login(DEVICE)
+
+    assert status.state is ConnectedAccountState.ERROR
+    assert not status.connected
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved == {"schema_version": 1, "enabled": False, "revision": 2}
+
+    restarted = AntigravityAuthManager(state_path=path, credential_loader=credentials)
+    assert not restarted.is_connected()
+    assert restarted.status().revision == 2
+
+
+@pytest.mark.asyncio
+async def test_disconnect_fences_inflight_credential_load(tmp_path: Path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def loader() -> AntigravityCredentials:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return credentials()
+        started.set()
+        if not release.wait(timeout=5):
+            raise AssertionError("credential loader was not released")
+        return credentials()
+
+    manager = AntigravityAuthManager(
+        state_path=tmp_path / "antigravity.json",
+        credential_loader=loader,
+    )
+    await manager.start_login(DEVICE)
+    loading = asyncio.create_task(manager.credentials())
+    await _wait_until(started)
+
+    disconnected = await manager.disconnect()
+    release.set()
+
+    assert disconnected.state is ConnectedAccountState.DISCONNECTED
+    with pytest.raises(AntigravityCredentialError, match="account changed"):
+        await loading
+    assert not manager.is_connected()
+
+
+@pytest.mark.asyncio
+async def test_stale_credential_failure_does_not_disable_reconnect(tmp_path: Path) -> None:
+    path = tmp_path / "antigravity.json"
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def loader() -> AntigravityCredentials:
+        nonlocal calls
+        calls += 1
+        if calls == 1 or calls >= 3:
+            return credentials()
+        started.set()
+        if not release.wait(timeout=5):
+            raise AssertionError("credential loader was not released")
+        raise AntigravityCredentialError("stale native credential failure")
+
+    manager = AntigravityAuthManager(state_path=path, credential_loader=loader)
+    await manager.start_login(DEVICE)
+    loading = asyncio.create_task(manager.credentials())
+    await _wait_until(started)
+
+    await manager.disconnect()
+    reconnected = await manager.start_login(DEVICE)
+    release.set()
+
+    with pytest.raises(AntigravityCredentialError, match="stale native"):
+        await loading
+    assert reconnected.connected
+    assert manager.is_connected()
+    assert manager.status().revision == 3
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "enabled": True,
+        "revision": 3,
+    }
