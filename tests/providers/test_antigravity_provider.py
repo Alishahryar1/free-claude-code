@@ -5,9 +5,12 @@ from typing import Any, cast
 
 import pytest
 
+from free_claude_code.core.failures import FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.antigravity import provider as provider_module
 from free_claude_code.providers.antigravity.auth import AntigravityAuthManager
+from free_claude_code.providers.antigravity.client import AntigravityUpstreamError
+from free_claude_code.providers.failure_policy import classify_provider_failure
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import immediate_admission, make_provider_config
 
@@ -137,3 +140,35 @@ async def test_provider_passes_fcc_network_settings_to_cloud_code(
         assert seen["proxy"] == "http://proxy.example:8080"
     finally:
         await provider.cleanup()
+
+
+@pytest.mark.parametrize(
+    ("upstream_status", "kind", "response_status", "retryable"),
+    [
+        (400, FailureKind.INVALID_REQUEST, 400, False),
+        (402, FailureKind.PERMISSION, 402, False),
+        (429, FailureKind.RATE_LIMIT, 429, True),
+    ],
+)
+async def test_provider_preserves_upstream_status_classification(
+    upstream_status: int,
+    kind: FailureKind,
+    response_status: int,
+    retryable: bool,
+) -> None:
+    behavior = provider_module.AntigravityBehavior(provider_module.ANTIGRAVITY_PROFILE)
+    failure = classify_provider_failure(
+        AntigravityUpstreamError(
+            upstream_status,
+            f"Antigravity upstream returned {upstream_status}.",
+            body='{"error":{"message":"upstream"}}',
+        ),
+        provider_name="ANTIGRAVITY",
+        read_timeout_s=120.0,
+        request_id=None,
+        provider_failure_override=behavior.failure_override,
+    )
+
+    assert failure.kind is kind
+    assert failure.status_code == response_status
+    assert failure.retryable is retryable
