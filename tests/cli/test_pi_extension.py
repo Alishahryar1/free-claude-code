@@ -1,12 +1,10 @@
 """Executable contracts for Pi's bundled TypeScript extension."""
 
 import json
-import os
 import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
-from time import monotonic
 from typing import Literal
 
 import pytest
@@ -15,50 +13,7 @@ from free_claude_code.application.reasoning import client_reasoning_policy
 from free_claude_code.cli.launchers.pi import pi_extension_path
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.providers.github_copilot.types import CopilotEgress
-from tests.cli.node_diagnostics import run_node_diagnostics
 from tests.providers.test_github_copilot_provider import Harness, collect
-
-
-# Temporary hosted Windows timing probe. Remove after identifying the stall.
-def _run_pi_probe(node: str, script: str, *arguments: str):
-    prelude = """
-import { writeSync } from "node:fs";
-function mark(stage) {
-    writeSync(2, JSON.stringify({stage, node: process.version,
-        elapsedMs: performance.now(), at: Date.now()}) + "\\n");
-}
-mark("script-entered");
-process.once("beforeExit", () => mark("before-exit"));
-process.once("exit", () => mark("exit"));
-"""
-    started = monotonic()
-    command = [
-        node,
-        "--experimental-strip-types",
-        "--input-type=module",
-        "--eval",
-        prelude + script + '\nmark("script-complete");',
-        *arguments,
-    ]
-    if phase := os.environ.get("FCC_PI_DIAGNOSTIC_PHASE"):
-        return run_node_diagnostics(command, phase)
-    try:
-        return subprocess.run(
-            command,
-            capture_output=True,
-            check=False,
-            encoding="utf-8",
-            errors="replace",
-            text=True,
-            timeout=10,
-        )
-    except subprocess.TimeoutExpired as exc:
-        print(
-            f"Pi Node probe timed out after {monotonic() - started:.3f}s; "
-            f"stdout={exc.stdout!r}; stderr={exc.stderr!r}",
-            flush=True,
-        )
-        raise
 
 
 def test_pi_sends_current_conversation_id_only_on_fcc_requests() -> None:
@@ -67,24 +22,17 @@ def test_pi_sends_current_conversation_id_only_on_fcc_requests() -> None:
         pytest.skip("Node.js is not installed")
     script = """
 const { default: extension } = await import(process.argv[1]);
-mark("extension-imported");
 const handlers = new Map();
 process.env.FCC_PI_BASE_URL = "http://fcc.invalid";
 process.env.FCC_PI_API_KEY = "test-key";
-globalThis.fetch = async () => {
-    mark("fake-fetch-entered");
-    const response = new Response(JSON.stringify({
-        object: "list",
-        data: [{ id: "opencode_zen/test", provider_model_ref: "opencode_zen/test" }],
-    }));
-    mark("fake-response-created");
-    return response;
-};
+globalThis.fetch = async () => new Response(JSON.stringify({
+    object: "list",
+    data: [{ id: "opencode_zen/test", provider_model_ref: "opencode_zen/test" }],
+}));
 await extension({
     registerProvider() {},
     on(event, handler) { handlers.set(event, handler); },
 });
-mark("extension-registered");
 const results = [];
 for (const [provider, session] of [
     ["free-claude-code", "conversation-a"],
@@ -102,7 +50,21 @@ for (const [provider, session] of [
 }
 console.log(JSON.stringify(results));
 """
-    result = _run_pi_probe(node, script, pi_extension_path().as_uri())
+    result = subprocess.run(
+        [
+            node,
+            "--experimental-strip-types",
+            "--input-type=module",
+            "--eval",
+            script,
+            pi_extension_path().as_uri(),
+        ],
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+        text=True,
+        timeout=10,
+    )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [
         {"x-existing": "preserve", "x-opencode-session": "conversation-a"},
@@ -120,26 +82,19 @@ def _pi_request_payloads(cases: list[dict[str, object]]) -> list[dict[str, objec
 
     script = """
 const { default: extension } = await import(process.argv[1]);
-mark("extension-imported");
 const handlers = new Map();
 let level;
 process.env.FCC_PI_BASE_URL = "http://fcc.invalid";
 process.env.FCC_PI_API_KEY = "test-key";
-globalThis.fetch = async () => {
-    mark("fake-fetch-entered");
-    const response = new Response(JSON.stringify({
-        object: "list",
-        data: [{ id: "github_copilot/gpt-5.6-luna", provider_model_ref: "github_copilot/gpt-5.6-luna" }],
-    }));
-    mark("fake-response-created");
-    return response;
-};
+globalThis.fetch = async () => new Response(JSON.stringify({
+    object: "list",
+    data: [{ id: "github_copilot/gpt-5.6-luna", provider_model_ref: "github_copilot/gpt-5.6-luna" }],
+}));
 await extension({
     registerProvider() {},
     on(event, handler) { handlers.set(event, handler); },
     getThinkingLevel() { return level; },
 });
-mark("extension-registered");
 const results = [];
 for (const entry of JSON.parse(process.argv[2])) {
     level = entry.level;
@@ -150,8 +105,21 @@ for (const entry of JSON.parse(process.argv[2])) {
 }
 console.log(JSON.stringify(results));
 """
-    result = _run_pi_probe(
-        node, script, pi_extension_path().as_uri(), json.dumps(cases)
+    result = subprocess.run(
+        [
+            node,
+            "--experimental-strip-types",
+            "--input-type=module",
+            "--eval",
+            script,
+            pi_extension_path().as_uri(),
+            json.dumps(cases),
+        ],
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+        text=True,
+        timeout=10,
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
@@ -331,13 +299,26 @@ def test_pi_extension_projects_known_capabilities_and_preserves_unknown_defaults
     }
     script = """
 const { projectFccModels } = await import(process.argv[1]);
-mark("extension-imported");
 const payload = JSON.parse(process.argv[2]);
 console.log(JSON.stringify(projectFccModels(payload)));
 """
 
-    result = _run_pi_probe(
-        node, script, pi_extension_path().as_uri(), json.dumps(payload)
+    result = subprocess.run(
+        [
+            node,
+            "--experimental-strip-types",
+            "--input-type=module",
+            "--eval",
+            script,
+            pi_extension_path().as_uri(),
+            json.dumps(payload),
+        ],
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+        errors="replace",
+        text=True,
+        timeout=10,
     )
 
     assert result.returncode == 0, result.stderr

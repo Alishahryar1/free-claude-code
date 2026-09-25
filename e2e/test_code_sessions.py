@@ -435,14 +435,11 @@ def test_pending_child_review_outside_page_survives_refresh_in_both_tabs(
     send(page, "Continue")
     code_control.run(code_control.harness.wait_inputs(2))
 
-    async def more_output():
-        for index in range(55):
-            await connection.text(
-                "turn-2", str(index), f"Output {index}", complete=True
-            )
-        await connection.finish("turn-2")
-
-    code_control.run(more_output())
+    for index in range(55):
+        code_control.run(
+            connection.text("turn-2", str(index), f"Output {index}", complete=True)
+        )
+    code_control.run(connection.finish("turn-2"))
     page.reload()
     second = context.new_page()
     try:
@@ -514,14 +511,11 @@ def test_reobserved_child_review_outside_page_appears_without_refresh(
     code_control.run(code_control.harness.wait_inputs(2))
     replacement = code_control.harness.connections[-1]
 
-    async def more_output():
-        for index in range(55):
-            await replacement.text(
-                "turn-2", str(index), f"Output {index}", complete=True
-            )
-        await replacement.finish("turn-2")
-
-    code_control.run(more_output())
+    for index in range(55):
+        code_control.run(
+            replacement.text("turn-2", str(index), f"Output {index}", complete=True)
+        )
+    code_control.run(replacement.finish("turn-2"))
     page.reload()
     second = context.new_page()
     try:
@@ -1239,6 +1233,7 @@ def test_competing_tabs_keep_the_rejected_draft(
         expect(second.get_by_role("textbox", name="Message", exact=True)).to_have_value(
             "Second tab draft"
         )
+        code_control.run(code_control.harness.wait_inputs(1))
         assert (
             sum(
                 len(connection.inputs)

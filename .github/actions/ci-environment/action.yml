@@ -11,6 +11,9 @@ inputs:
   lookup-only:
     description: Check dependency cache availability without downloading it
     default: "false"
+  prepare-node:
+    description: Prepare the Node runtime used by pytest subprocess contracts.
+    default: "false"
 
 outputs:
   python-path:
@@ -85,6 +88,31 @@ runs:
       env:
         CI_PYTHON: ${{ steps.identity.outputs.python-version }}
       run: uv python install "$CI_PYTHON"
+
+    - name: Prepare Node runtime
+      if: inputs.prepare-node == 'true'
+      shell: bash
+      env:
+        CI_PYTHON: ${{ steps.identity.outputs.python-version }}
+      run: |
+        uv run --no-project --python "$CI_PYTHON" python - <<'PY'
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if node is None:
+            raise RuntimeError("Node is required for pytest subprocess contracts")
+        # Cold executable paging must happen before the timed behavior checks.
+        subprocess.run(
+            [node, "--experimental-strip-types", "--input-type=module", "--eval",
+             "import { stripTypeScriptTypes } from 'node:module'; "
+             "stripTypeScriptTypes('const value: number = 1'); "
+             "await new Response('ready').text(); "
+             "console.log('Node runtime ready:', process.version);"],
+            check=True,
+            timeout=120,
+        )
+        PY
 
     - name: Fingerprint dependencies
       id: dependencies
