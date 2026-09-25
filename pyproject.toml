@@ -127,7 +127,7 @@ skip-magic-trailing-comma = false
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-addopts = "-n auto"
+addopts = "-n auto --dist=worksteal"
 filterwarnings = [
     "error",
     # Starlette's test client uses this deprecated alias, including in 1.6.0.

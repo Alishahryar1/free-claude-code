@@ -382,8 +382,11 @@ def test_background_update_spinner_failure_retry_and_completion(
     expect(button).to_have_text("Retry")
     expect(button).to_be_enabled()
     expect(message).to_have_text(progress["message"])
-    button.click()
-    expect(button).to_be_disabled()
+    with page.expect_response(
+        f"{admin_base_url}/admin/api/integrations/{integration}/refresh"
+    ):
+        button.click()
+        expect(button).to_be_disabled()
     assert retries == ["POST"]
     page.wait_for_function(
         "id => state.startup?.startup?.integrations[id]?.state === 'starting'",
