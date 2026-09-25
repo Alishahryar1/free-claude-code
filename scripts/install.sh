@@ -22,9 +22,7 @@ FCC_MACOS_OWNER_FILE=".free-claude-code-owner"
 FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-update fcc-init free-claude-code"
 
 dry_run=0
-voice_nim=0
 voice_local=0
-voice_all=0
 install_claude=1
 install_codex=1
 install_pi=1
@@ -50,9 +48,7 @@ Usage: install.sh [options]
 Installs or updates Free Claude Code and lets you choose which coding agents to install or verify.
 
 Options:
-  --voice-nim              Install NVIDIA NIM voice transcription support.
   --voice-local            Install local Whisper voice transcription support.
-  --voice-all              Install all voice transcription backends.
   --torch-backend VALUE    Use a uv PyTorch backend, such as cu130. Requires local voice.
   --rtk                    Install and configure RTK for the selected coding agents.
   --dry-run                Print commands without running them.
@@ -1261,14 +1257,8 @@ ensure_uv() {
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --voice-nim)
-                voice_nim=1
-                ;;
             --voice-local)
                 voice_local=1
-                ;;
-            --voice-all)
-                voice_all=1
                 ;;
             --torch-backend)
                 shift
@@ -1300,30 +1290,13 @@ parse_args() {
 }
 
 validate_args() {
-    include_local=$voice_local
-    if [ "$voice_all" -eq 1 ]; then
-        include_local=1
-    fi
-
-    if [ -n "$torch_backend" ] && [ "$include_local" -ne 1 ]; then
-        fail "--torch-backend requires --voice-local or --voice-all."
+    if [ -n "$torch_backend" ] && [ "$voice_local" -ne 1 ]; then
+        fail "--torch-backend requires --voice-local."
     fi
 }
 
 package_spec() {
-    include_nim=$voice_nim
-    include_local=$voice_local
-
-    if [ "$voice_all" -eq 1 ]; then
-        include_nim=1
-        include_local=1
-    fi
-
-    if [ "$include_nim" -eq 1 ] && [ "$include_local" -eq 1 ]; then
-        printf 'free-claude-code[voice,voice_local] @ %s' "$REPO_ARCHIVE_URL"
-    elif [ "$include_nim" -eq 1 ]; then
-        printf 'free-claude-code[voice] @ %s' "$REPO_ARCHIVE_URL"
-    elif [ "$include_local" -eq 1 ]; then
+    if [ "$voice_local" -eq 1 ]; then
         printf 'free-claude-code[voice_local] @ %s' "$REPO_ARCHIVE_URL"
     else
         printf 'free-claude-code @ %s' "$REPO_ARCHIVE_URL"

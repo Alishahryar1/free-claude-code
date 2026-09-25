@@ -1,4 +1,6 @@
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -15,3 +17,18 @@ def test_pyproject_first_party_packages_match_packaged_roots() -> None:
     }
     expected = {"free_claude_code", "smoke"}
     assert configured == expected
+
+
+def test_standard_install_can_load_nim_transcription_client() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from riva.client import Auth, ASRService, RecognitionConfig; "
+            "RecognitionConfig(language_code='en-US', max_alternatives=1)",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

@@ -658,7 +658,7 @@ class Settings(BaseModel):
     )
     # Device: "cpu" | "cuda" | "nvidia_nim"
     # - "cpu"/"cuda": local Whisper (requires voice_local extra: uv sync --extra voice_local)
-    # - "nvidia_nim": NVIDIA NIM Whisper API (requires voice extra: uv sync --extra voice)
+    # - "nvidia_nim": NVIDIA NIM Whisper API (included in the standard installation)
     whisper_device: NonEmptyString = Field(
         default="cpu", validation_alias="WHISPER_DEVICE"
     )

@@ -27,7 +27,7 @@
 
 - **54 ToS-friendly providers. 1.3B+ free tokens every month.** Use free, paid, subscription, and local models from one searchable UI without putting your account at risk. FCC follows provider terms and removes integrations if they stop being allowed.
 - **10 coding agents. One model catalog.** Run [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [OpenCode](https://github.com/anomalyco/opencode), [Cline](https://github.com/cline/cline), [Hermes](https://github.com/NousResearch/hermes-agent), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Grok Build](https://github.com/xai-org/grok-build), [Muse Code](https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2/), or [Aider](https://aider.chat/) with your FCC models.
-- **Keep coding through provider outages.** After retries are exhausted, FCC automatically tries your next configured model without making you restart the turn—across every client.
+- **Keep coding through provider outages.** After retries are exhausted, FCC automatically tries your next configured model without making you restart the turn. This works across every client.
 - **Up to 90% fewer terminal-output tokens.** Optional [RTK](https://github.com/rtk-ai/rtk) filters common command output, while five FCC optimizations handle quota probes, command-prefix detection, titles, suggestions, and filepaths without calling a provider.
 - **Native Code sessions in your browser.** Choose a folder and run Codex in the browser with real-time and background support. Freely switch providers/models in the same session. Support for switching harnesses in the same session coming soon!
 - **Terminal, desktop, IDE, or phone.** Work through native launchers, [VS Code](https://code.visualstudio.com/), [Codex App](https://learn.chatgpt.com/docs/app), [JetBrains](https://www.jetbrains.com/), [Discord](https://discord.com/), or [Telegram](https://telegram.org/).
@@ -131,15 +131,13 @@ OpenCode 2:
 fcc-opencode
 ```
 
-To upgrade from OpenCode 1, rerun the FCC installer with OpenCode selected. It
-upgrades the native installation in `~/.opencode/bin`; for npm or other package
-managers, follow [OpenCode's migration instructions](https://opencode.ai/v2/docs/migrate-v1/)
+To upgrade from OpenCode 1, close OpenCode and rerun the FCC installer with
+OpenCode selected. For npm or other package-manager installations, follow
+[OpenCode's migration instructions](https://opencode.ai/v2/docs/migrate-v1/)
 first. For npm v1, run `npm uninstall -g opencode-ai`, then rerun the FCC installer.
-Close OpenCode before upgrading. OpenCode manages its own data upgrades.
 
-RTK integration is temporarily unavailable for OpenCode 2. The installer saves
-the recognized old RTK plugin outside the plugin directory; customized plugins
-need manual migration. RTK continues to work with the other supported agents.
+RTK integration is temporarily unavailable for OpenCode 2. RTK continues to work
+with the other supported agents.
 
 Use `fcc-opencode` for coding and sessions. Use plain `opencode` for commands
 such as upgrades, service management, ACP, and MCP setup.
@@ -270,26 +268,23 @@ from more than one provider before succeeding.
   and finish signing in through your browser. Restart an already-running agent after connecting.
 - OpenAI API uses a separate Platform API key. Enter it under
   **Providers → Cloud providers → OpenAI API → Configure**. The model list may
-  include IDs that cannot handle coding requests; choose a text-generation model.
+  include IDs that cannot handle coding requests. Choose a text-generation model.
 - GitHub Copilot uses your signed-in GitHub account and subscription. Install
   [Copilot CLI 1.0.83](https://github.com/github/copilot-cli/releases/tag/v1.0.83)
   on PATH, then choose **Providers → OAuth providers → GitHub Copilot → Connect**.
-  FCC reuses the native profile or shows a GitHub device code when sign-in is needed.
-  You can also sign in first with `copilot login --device-code`. Select a concrete
-  `github_copilot/<model-id>` from the discovered list; available models and quotas
-  depend on your subscription and organization policies. Restart an already-running
-  agent after connecting. Disconnect stops FCC use and leaves the native login intact.
-  FCC pins its SDK and CLI compatibility because direct endpoint access is experimental.
+  Finish signing in, then select a `github_copilot/<model-id>` from the model picker.
+  Available models and quotas depend on your subscription and organization policies.
+  Restart an already-running agent after connecting.
 - Azure OpenAI uses the deployment names from your resource. Set
   `AZURE_OPENAI_BASE_URL` to its complete v1 endpoint, such as
   `https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1/`, and select a
   deployment that supports Chat Completions. Enter the deployment name as a
   custom model slug if it does not appear in the model dropdown.
 - Mistral Codestral uses a separate key from Mistral La Plateforme.
-- Kimi Code subscription keys use `kimi_code/`; Kimi API credit keys use
+- Kimi Code subscription keys use `kimi_code/`. Kimi API credit keys use
   `kimi/`. Kimi Code plans are for personal interactive coding-agent use under
   [Kimi's community guidelines](https://www.kimi.com/code/docs/en/kimi-code/community-guidelines.html).
-- QwenCloud Coding Plan keys use `qwencloud_coding/`; QwenCloud Token Plan keys
+- QwenCloud Coding Plan keys use `qwencloud_coding/`. QwenCloud Token Plan keys
   use `qwencloud/`. The keys and endpoints are not interchangeable. Coding Plan
   is for local, personal, interactive coding-agent use under the
   [Coding Plan terms](https://www.alibabacloud.com/help/en/model-studio/coding-plan).
@@ -298,7 +293,7 @@ from more than one provider before succeeding.
 - For Amazon Bedrock, set `BEDROCK_BASE_URL` to the URL for the same region as
   the API key and select one of the listed models.
 - Vertex AI uses Google Application Default Credentials instead of an API key.
-  Locally, run `gcloud auth application-default login` once; service-account
+  Locally, run `gcloud auth application-default login` once. Service-account
   files and attached service accounts also work. Set `VERTEX_PROJECT_ID`, and
   optionally change `VERTEX_LOCATION` from its `global` default.
 - Cloudflare requires both its API token and account ID.
@@ -317,7 +312,7 @@ Start LM Studio's local server, load a tool-capable model, and use the model ide
 
 ### llama.cpp
 
-Start `llama-server` with its OpenAI-compatible Chat Completions API and enough context for the model. Use the local model ID with the `llamacpp/` prefix. `LLAMACPP_BASE_URL` defaults to `http://localhost:8080/v1`; FCC accepts either the server root or an explicit `/v1` suffix.
+Start `llama-server` with its OpenAI-compatible Chat Completions API and enough context for the model. Use the local model ID with the `llamacpp/` prefix. `LLAMACPP_BASE_URL` defaults to `http://localhost:8080/v1`.
 
 ### Ollama
 
@@ -326,16 +321,14 @@ ollama pull llama3.1
 ollama serve
 ```
 
-Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` defaults to `http://localhost:11434`; FCC accepts either the root URL or an explicit `/v1` suffix.
+Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` defaults to `http://localhost:11434`.
 
 </details>
 
 <details>
 <summary><strong>Optional model-tier routing</strong></summary>
 
-`MODEL` is the fallback for every request. Select a model for `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, or `MODEL_HAIKU` to override an individual Claude Code tier; select **None** to use `MODEL`.
-
-For example, route Opus to `nvidia_nim/nvidia/nemotron-3-super-120b-a12b`, Sonnet to `open_router/openrouter/free`, Haiku to `lmstudio/qwen3.5-coder`, and keep `MODEL` on `zai/glm-5.2`.
+`MODEL` is the fallback for every request. Select a model for `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, or `MODEL_HAIKU` to override an individual Claude Code tier. Select **None** to use `MODEL`.
 
 </details>
 
@@ -346,7 +339,7 @@ Open **Admin UI → Model Config → Reasoning** and select the behavior you wan
 
 | Selection | Behavior |
 | --- | --- |
-| **From client** (default) | Use the effort sent by Claude Code, Codex, Pi, OpenCode, Cline, Hermes, DeepSeek Harness, Grok Build, Muse Code, or Aider. If none is sent, keep the provider default. |
+| **From client** (default) | Use the effort sent by your coding agent. If none is sent, keep the provider default. |
 | **Off** | Request reasoning to be disabled. |
 | **Low**, **Medium**, **High**, **X-High**, or **Max** | Override the client with the selected reasoning level. |
 | **Inherit** (Fable, Opus, Sonnet, and Haiku only) | Use the root Reasoning selection. |
@@ -359,25 +352,21 @@ Providers that do not support a selected control retain their own behavior.
 
 ## Connect Your Client
 
-For terminal use, run `fcc-claude`, `fcc-codex`, `fcc-pi`, `fcc-opencode`,
-`fcc-cline`, `fcc-hermes`, `fcc-dsh`, `fcc-grok`, `fcc-muse`, or `fcc-aider`.
-If FCC is not running, the launcher starts FCC Desktop on Windows/macOS or
-`fcc-server` in the background on Linux, then waits for it to become ready.
-FCC stays running after the client exits. Desktop keeps its tray/menu-bar controls
-and your Admin browser preference. If automatic startup fails, run
+If FCC is not running when you start a launcher, it starts FCC Desktop on
+Windows/macOS or `fcc-server` on Linux and waits for it to become ready. FCC
+stays running after the client exits. If automatic startup fails, run
 `fcc-desktop` (Windows/macOS) or `fcc-server` (Linux) manually to diagnose it.
 
 For editor and app integrations, install the client, start FCC, then open
 **Admin UI → Integrations** and click **Connect** on its card.
 
-- **Claude Code in VS Code** — install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code).
-- **Claude Desktop** — install [Claude Desktop](https://claude.ai/download). Fully quit it before connecting or disconnecting, then reopen it. Disconnect returns to normal Claude sign-in.
-- **Codex in VS Code and App** — install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt) or Codex App.
-- **Claude Code in JetBrains ACP** — install Claude Agent in JetBrains AI Assistant and start it once, then click **Connect** in FCC. Reopen the IDE, select **Claude Code (FCC)**, and start a new chat. After JetBrains updates the agent, restart FCC before starting a new chat. Requires a local IDE in its standard installation locations.
+- **Claude Code in VS Code**: Install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code).
+- **Claude Desktop**: Install [Claude Desktop](https://claude.ai/download). Fully quit it before connecting or disconnecting, then reopen it. Disconnect returns to normal Claude sign-in.
+- **Codex in VS Code and App**: Install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt) or Codex App.
+- **Claude Code in JetBrains ACP**: Install Claude Agent in JetBrains AI Assistant and start it once, then click **Connect** in FCC. Reopen the IDE, select **Claude Code (FCC)**, and start a new chat. After JetBrains updates the agent, restart FCC before starting a new chat. Requires a local IDE in its standard installation locations.
 
 Reload VS Code or restart the app/IDE after connecting. In Codex and Claude Desktop, select an FCC
-model from the model picker. FCC keeps connected integrations up to date when it
-starts; reload or restart the client when FCC reports updated settings. Use
+model from the model picker. Reload or restart the client when FCC reports updated settings. Use
 **Disconnect** on the same card to remove the integration.
 
 Run FCC on the same computer and in the same user environment as the client you
@@ -421,32 +410,22 @@ Configure integrations from **Admin UI → Messaging**, then click **Apply**.
 | `/stats` | Show session state. |
 | Standalone `/stop` | Cancel all work. |
 | Reply with `/stop` | Cancel only the selected request while other queued requests continue. |
-| Standalone `/clear` | Reset all FCC state and remove every tracked message in that chat, including user prompts, voice notes, FCC replies, Telegram's online notice, and the clear command itself. |
-| Reply with `/clear` | Delete the selected message and its literal platform reply subtree while preserving its ancestors and siblings. |
+| Standalone `/clear` | Clear all FCC conversations and their messages in this chat. |
+| Reply with `/clear` | Delete the selected message and the chain of replies to it. Keep other conversations. |
 
 <details>
 <summary><strong>Voice notes</strong></summary>
 
-Re-run the installer with the command for your voice backend.
+NVIDIA NIM transcription support is included in every installation. In **Admin UI → Messaging → Voice**, enable voice notes, select `nvidia_nim`, and choose a supported model. Configure your **NVIDIA NIM API key** on the Providers page.
+
+For local Whisper on CPU or CUDA, re-run the installer with the local voice option:
 
 macOS/Linux:
-
-NVIDIA NIM transcription:
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh" | sh -s -- --voice-nim
-```
 
 Local Whisper on CPU or CUDA:
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh" | sh -s -- --voice-local
-```
-
-Both backends:
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh" | sh -s -- --voice-all
 ```
 
 Local Whisper with CUDA 13.0:
@@ -457,22 +436,10 @@ curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main
 
 Windows PowerShell:
 
-NVIDIA NIM transcription:
-
-```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1"))) -VoiceNim
-```
-
 Local Whisper on CPU or CUDA:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1"))) -VoiceLocal
-```
-
-Both backends:
-
-```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1"))) -VoiceAll
 ```
 
 Local Whisper with CUDA 13.0:
@@ -481,7 +448,7 @@ Local Whisper with CUDA 13.0:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1"))) -VoiceLocal -TorchBackend cu130
 ```
 
-Restart `fcc-server`. In **Admin UI → Messaging → Voice**, enable voice notes, select `cpu`, `cuda`, or `nvidia_nim`, and choose the Whisper model. Local gated models need `HUGGINGFACE_API_KEY`; NVIDIA NIM transcription needs `NVIDIA_NIM_API_KEY`.
+After installing local support, restart `fcc-server`. In **Admin UI → Messaging → Voice**, enable voice notes, select `cpu` or `cuda`, and choose the Whisper model. Local gated models need `HUGGINGFACE_API_KEY`.
 
 </details>
 
@@ -497,25 +464,25 @@ Stop all running FCC commands, then run:
 fcc-update
 ```
 
-This runs the same installer as above, including its coding-agent prompts and checks. If you use voice support, pass the same voice options used during installation.
+For local voice support, include `--voice-local` (macOS/Linux) or `-VoiceLocal` (Windows), plus your `--torch-backend` or `-TorchBackend` option if used.
 
 If your installation does not have `fcc-update` yet, run the [installer](#install) once to add it.
 
 ### Muse Code on native Windows
 
-Rerunning FCC's Windows installer with Muse Code selected installs or updates FCC's managed Muse executable. To install or update only Muse Code:
+To install or update only Muse Code:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1")))
 ```
 
-To remove only that managed Muse executable while preserving Muse data and other installations:
+To remove the Muse Code copy installed by FCC, keeping its data:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/uninstall-muse.ps1")))
 ```
 
-FCC's ordinary uninstaller below continues to leave Muse Code installed.
+Uninstalling FCC leaves Muse Code installed.
 
 ### Uninstall
 
@@ -529,8 +496,7 @@ Stop every running FCC command before uninstalling.
 **Keeps**
 
 - uv and Python
-- Claude Code, Codex, Pi, OpenCode, Cline, Hermes, DeepSeek Harness, Grok Build, Muse Code, Aider, and RTK
-- Shared PATH entries
+- Your coding agents and RTK
 
 macOS/Linux:
 
