@@ -90,7 +90,11 @@
     .toast.show { display:block }
     @media (max-width:1000px) { main { grid-template-columns:220px minmax(0,1fr) } .right { display:none } }
     @media (max-width:700px) { main { grid-template-columns:1fr } aside { display:none } header { padding:0 10px } .messages { padding:16px 10px } }
-  </style>
+  
+/* FCC Control Center enhancements */
+.activity-bar{display:none}
+.command-palette{position:fixed;inset:0;background:#000b;z-index:50;display:none;place-items:start center;padding-top:12vh}.command-palette.show{display:grid}.palette{width:min(680px,92vw);background:var(--panel);border:1px solid var(--border);border-radius:9px;box-shadow:0 20px 70px #000b;overflow:hidden}.palette input{width:100%;border:0;border-bottom:1px solid var(--border);background:var(--panel2);color:var(--text);padding:14px;outline:0}.palette-list{max-height:55vh;overflow:auto}.palette-item{display:flex;justify-content:space-between;gap:10px;padding:10px 14px}.palette-item:hover{background:#21262d}.shortcut{color:var(--muted);font-size:11px}.metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.metric{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:9px}.metric b{display:block;font-size:17px}.metric span{color:var(--muted);font-size:10px}.file-editor-wrap{display:grid;grid-template-columns:42px 1fr;height:100%}.line-numbers{background:#0b0f14;color:#484f58;padding:16px 8px;text-align:right;font:12px/1.6 ui-monospace,monospace;overflow:hidden;user-select:none}.diff-add{color:var(--green)}.diff-del{color:var(--red)}.notice{padding:9px;background:#1c2128;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:11px;margin-bottom:9px}
+</style>
 </head>
 <body>
 <div class="app">
@@ -163,6 +167,8 @@
   </main>
 </div>
 
+
+<div id="palette" class="command-palette"><div class="palette"><input id="paletteInput" placeholder="Search commands…"><div id="paletteList" class="palette-list"></div></div></div>
 <div class="toast" id="toast"></div>
 
 <script>
