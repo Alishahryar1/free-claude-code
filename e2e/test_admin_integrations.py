@@ -22,14 +22,18 @@ def test_connection_check_uses_disabled_loading_button(
     page, admin_base_url, integration, button_id, connected
 ):
     pending = []
-    page.route(
-        f"**/admin/api/integrations/{integration}", lambda route: pending.append(route)
-    )
+
+    def hold_check(route):
+        pending.append(route)
+        page.evaluate("window.integrationCheckIntercepted = true")
+
+    page.route(f"**/admin/api/integrations/{integration}", hold_check)
     page.goto(f"{admin_base_url}/admin/integrations")
     button = page.locator(f"#{button_id}")
     for visit in range(2):
         if visit:
             page.get_by_role("button", name="Providers", exact=True).click()
+            page.evaluate("window.integrationCheckIntercepted = false")
             page.get_by_role("button", name="Integrations", exact=True).click()
         expect(button).to_be_disabled()
         expect(button).to_have_text("Loading…")
@@ -42,6 +46,7 @@ def test_connection_check_uses_disabled_loading_button(
             == "integration-spinner"
         )
         expect(page.locator("#view-integrations .status-pill")).to_have_count(0)
+        page.wait_for_function("window.integrationCheckIntercepted === true")
         assert len(pending) == 1
         pending.pop().fulfill(json={"connected": connected, "paths": None})
         expect(button).to_be_enabled()
@@ -269,14 +274,20 @@ def test_save_pending_and_failure_stay_in_modal(page, admin_base_url):
     page.goto(f"{admin_base_url}/admin/integrations")
     page.locator("#openClaudeIntegration").click()
     requests = []
+
+    def hold_save(route):
+        requests.append(route)
+        page.evaluate("window.integrationSaveIntercepted = true")
+
     page.route(
         "**/admin/api/integrations/claude-vscode/connect",
-        lambda route: requests.append(route),
+        hold_save,
     )
     action = page.locator("#confirmClaudeIntegration")
     action.click()
     expect(action).to_be_disabled()
     expect(action).to_have_text("Saving…")
+    page.wait_for_function("window.integrationSaveIntercepted === true")
     requests[0].fulfill(status=503, json={"detail": "Could not save settings."})
     expect(action).to_be_enabled()
     expect(page.locator("#claudeIntegrationDialog")).to_be_visible()
@@ -371,8 +382,11 @@ def test_background_update_spinner_failure_retry_and_completion(
     expect(button).to_have_text("Retry")
     expect(button).to_be_enabled()
     expect(message).to_have_text(progress["message"])
-    button.click()
-    expect(button).to_be_disabled()
+    with page.expect_response(
+        f"{admin_base_url}/admin/api/integrations/{integration}/refresh"
+    ):
+        button.click()
+        expect(button).to_be_disabled()
     assert retries == ["POST"]
     page.wait_for_function(
         "id => state.startup?.startup?.integrations[id]?.state === 'starting'",
@@ -418,7 +432,11 @@ def admin_client_files(request, tmp_path):
 def test_startup_updates_before_opening_integrations(
     admin_client_files, admin_base_url, page, tmp_path
 ):
-    page.goto(f"{admin_base_url}/admin/integrations")
+    page.goto(f"{admin_base_url}/admin")
+    page.wait_for_function(
+        "state.startup?.startup?.integrations['claude-vscode']?.state === 'ready'"
+    )
+    page.get_by_role("button", name="Integrations", exact=True).click()
     button = page.locator("#openClaudeIntegration")
     expect(button).to_have_text("Disconnect")
     expect(page.locator("#claudeIntegrationMessage")).to_be_hidden()

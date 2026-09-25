@@ -116,7 +116,7 @@ printf '%s\n' "$FCC_PS_OUTPUT"
         awk = shutil.which("awk", path=self.env["PATH"])
         if awk is None:
             pytest.skip("awk is required for the POSIX process fallback scenario")
-        shutil.copy2(awk, fallback_bin / "awk")
+        shutil.copy(awk, fallback_bin / "awk")
         self.env["FCC_PS_OUTPUT"] = process_line
         self.env["PATH"] = str(fallback_bin)
 
@@ -515,6 +515,7 @@ class PowerShellUninstallHarness:
 def powershell_uninstall_harness(
     tmp_path: Path,
     request: pytest.FixtureRequest,
+    powershell_module_paths,
 ) -> PowerShellUninstallHarness:
     powershell = request.param
     if powershell is None or os.name != "nt":
@@ -652,6 +653,7 @@ else {
                 [str(bin_dir), str(Path(system_root) / "System32"), system_root]
             ),
             "PATHEXT": ".COM;.EXE;.BAT;.CMD",
+            "PSMODULEPATH": powershell_module_paths[powershell],
             "HOME": str(home),
             "USERPROFILE": str(home),
             "APPDATA": str(app_data),

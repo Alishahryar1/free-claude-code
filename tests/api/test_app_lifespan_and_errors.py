@@ -49,7 +49,7 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner():
     runtime = ApplicationRuntime(
         manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
     )
-    uvicorn_logger = MagicMock()
+    uvicorn_logger = logging.getLogger("uvicorn.error")
 
     with (
         patch("builtins.print") as printed,
@@ -59,17 +59,16 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner():
             "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
             return_value=None,
         ),
-        patch.object(logging, "getLogger", return_value=uvicorn_logger) as get_logger,
+        patch.object(uvicorn_logger, "info") as log_info,
     ):
         await runtime.start()
-        uvicorn_logger.info.assert_not_called()
+        log_info.assert_not_called()
         runtime.http_started()
         await runtime.close()
 
     printed.assert_not_called()
     start_refresh.assert_called_once()
-    get_logger.assert_any_call("uvicorn.error")
-    uvicorn_logger.info.assert_called_once_with(
+    log_info.assert_called_once_with(
         "Admin UI: %s (local-only)",
         "http://127.0.0.1:9099/admin",
     )

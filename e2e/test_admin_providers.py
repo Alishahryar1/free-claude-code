@@ -166,15 +166,25 @@ def test_delayed_startup_status_does_not_replace_a_manual_provider_check(
     snapshot = page.request.get(f"{admin_base_url}/admin/api/status").json()
     startup: list[Route] = []
     manual: list[Route] = []
-    page.route("**/admin/api/status", lambda route: startup.append(route))
+
+    def hold_first_status(route: Route) -> None:
+        # Only the stale snapshot is held. Later refreshes must finish normally.
+        if startup:
+            route.continue_()
+        else:
+            startup.append(route)
+
+    page.route("**/admin/api/status", hold_first_status)
     page.route(
         "**/admin/api/providers/open_router/test", lambda route: manual.append(route)
     )
-    with page.expect_request("**/admin/api/status"):
-        page.evaluate("void refreshStartup()")
+    page.expose_function("startupRequestIntercepted", lambda: bool(startup))
+    page.expose_function("manualRequestIntercepted", lambda: bool(manual))
+    page.evaluate("void refreshStartup()")
+    page.wait_for_function("window.startupRequestIntercepted()")
     dialog = open_provider(page, "open_router")
-    with page.expect_request("**/admin/api/providers/open_router/test"):
-        dialog.get_by_role("button", name="Refresh models", exact=True).click()
+    dialog.get_by_role("button", name="Refresh models", exact=True).click()
+    page.wait_for_function("window.manualRequestIntercepted()")
     expected = "Checking..."
     if manual_result != "pending":
         manual.pop().fulfill(
@@ -192,7 +202,7 @@ def test_delayed_startup_status_does_not_replace_a_manual_provider_check(
     result = page.locator('[data-provider-check-result="open_router"]')
     expect(result).to_have_text(expected)
     with page.expect_response("**/admin/api/status") as response:
-        startup.pop(0).fulfill(json=snapshot)
+        startup[0].fulfill(json=snapshot)
     response.value.finished()
     page.wait_for_function("!state.startupRequest")
     expect(result).to_have_text(expected)

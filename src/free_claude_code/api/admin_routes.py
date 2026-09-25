@@ -39,6 +39,12 @@ router = APIRouter()
 STATIC_DIR = Path(__file__).resolve().parent / "admin_static"
 PACKAGE_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 _ADMIN_ASSET_VERSION_PLACEHOLDER = "__FCC_VERSION__"
+_ADMIN_ASSET_MEDIA_TYPES = {
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+}
 _ADMIN_ASSET_FILENAMES = frozenset(
     {
         "admin.css",
@@ -87,7 +93,8 @@ def _asset_path(filename: str) -> Path:
 
 
 def _asset_response(filename: str) -> FileResponse:
-    return FileResponse(_asset_path(filename))
+    path = _asset_path(filename)
+    return FileResponse(path, media_type=_ADMIN_ASSET_MEDIA_TYPES[path.suffix])
 
 
 def admin_page_response() -> HTMLResponse:
