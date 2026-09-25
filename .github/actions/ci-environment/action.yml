@@ -11,6 +11,9 @@ inputs:
   lookup-only:
     description: Check dependency cache availability without downloading it
     default: "false"
+  sync-dependencies:
+    description: Install the locked project and development dependencies after cache restoration.
+    default: "true"
   prepare-node:
     description: Prepare the Node runtime used by pytest subprocess contracts.
     default: "false"
@@ -142,3 +145,8 @@ runs:
         key: ${{ steps.identity.outputs.dependencies-prefix }}${{ steps.dependencies.outputs.hash }}
         restore-keys: ${{ steps.identity.outputs.dependencies-prefix }}
         lookup-only: ${{ inputs.lookup-only }}
+
+    - name: Install dependencies
+      if: inputs.sync-dependencies == 'true'
+      shell: bash
+      run: uv sync --locked --group dev

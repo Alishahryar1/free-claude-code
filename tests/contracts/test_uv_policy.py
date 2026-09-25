@@ -9,6 +9,7 @@ CI_SETUP = Path(".github/actions/ci-environment/action.yml")
 UV_WORKFLOWS = (
     Path(".github/workflows/tests.yml"),
     Path(".github/workflows/post-merge.yml"),
+    Path(".github/workflows/version-policy.yml"),
 )
 REQUIRED_TEST_RUNNERS = {
     "Linux": "ubuntu-latest",
@@ -94,3 +95,24 @@ def test_uv_workflows_share_managed_python_cache_policy() -> None:
         assert "/tmp/" not in workflow
         assert "uv-deps-v" not in workflow
         assert "uv-python-v" not in workflow
+
+
+def test_shared_setup_installs_dependencies_except_for_post_merge_jobs() -> None:
+    setup = yaml.safe_load(CI_SETUP.read_text(encoding="utf-8"))
+    assert setup["inputs"]["sync-dependencies"]["default"] == "true"
+    sync = next(
+        step
+        for step in setup["runs"]["steps"]
+        if step.get("name") == "Install dependencies"
+    )
+    assert sync["run"] == "uv sync --locked --group dev"
+    assert sync["if"] == "inputs.sync-dependencies == 'true'"
+    for path in UV_WORKFLOWS:
+        jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
+        for job in jobs.values():
+            for step in job["steps"]:
+                if step.get("uses") == "./.github/actions/ci-environment":
+                    assert step["with"].get("sync-dependencies", "true") == (
+                        "false" if path.name == "post-merge.yml" else "true"
+                    )
+                assert step.get("run") != "uv sync --locked --group dev"

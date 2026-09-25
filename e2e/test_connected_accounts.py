@@ -163,6 +163,9 @@ def _open(page: Page, admin_base_url: str) -> None:
 def test_account_modes_wait_for_status_and_recover_after_load_failure(
     page: Page, admin_base_url: str, accounts: _Accounts
 ) -> None:
+    page.expose_function(
+        "pendingAccountStatusCount", lambda: len(accounts.pending_status)
+    )
     accounts.hold_status.add("github_copilot")
     page.goto(f"{admin_base_url}/admin")
     copilot = page.locator('[data-provider="github_copilot"]')
@@ -170,7 +173,7 @@ def test_account_modes_wait_for_status_and_recover_after_load_failure(
     expect(copilot.get_by_role("button", name="Loading…", exact=True)).to_be_disabled()
     expect(copilot.get_by_role("button", name="Connect", exact=True)).to_have_count(0)
     expect(openai.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
-    assert len(accounts.pending_status) == 1
+    page.wait_for_function("async () => await window.pendingAccountStatusCount() === 1")
 
     accounts.pending_status.pop().fulfill(
         status=503, json={"detail": "Account status unavailable."}
@@ -181,7 +184,7 @@ def test_account_modes_wait_for_status_and_recover_after_load_failure(
     expect(copilot.get_by_role("button", name="Connect", exact=True)).to_have_count(0)
     copilot.get_by_role("button", name="Retry", exact=True).click()
     expect(copilot.get_by_role("button", name="Loading…", exact=True)).to_be_disabled()
-    assert len(accounts.pending_status) == 1
+    page.wait_for_function("async () => await window.pendingAccountStatusCount() === 1")
     accounts.hold_status.clear()
     accounts.pending_status.pop().fulfill(json=accounts.statuses["github_copilot"])
 

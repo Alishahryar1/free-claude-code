@@ -46,6 +46,7 @@ jobs:
           uv-version: ${{ env.CI_UV_VERSION }}
           runner-label: ${{ matrix.runner }}
           lookup-only: "true"
+          sync-dependencies: "false"
 
       - name: Save Python
         if: steps.environment.outputs.python-hit != 'true'
@@ -102,6 +103,7 @@ jobs:
           uv-version: ${{ env.CI_UV_VERSION }}
           runner-label: ubuntu-latest
           lookup-only: "true"
+          sync-dependencies: "false"
 
       - name: Detect release
         id: release

@@ -1,0 +1,48 @@
+name: Version policy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+env:
+  CI_UV_VERSION: "0.12.13"
+  UV_MALWARE_CHECK: "1"
+  UV_PREVIEW_FEATURES: "malware-check"
+
+concurrency:
+  group: version-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  version-policy:
+    name: Version policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      # Fetch PR objects as data. Keep the trusted checkout untouched.
+      - name: Fetch compared revisions
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
+
+      - name: Set up CI environment
+        uses: ./.github/actions/ci-environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ubuntu-latest
+
+      - name: Check version policy
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: uv run --locked --group dev python scripts/check_version_policy.py --base "$BASE_SHA" --head "$HEAD_SHA"
+
