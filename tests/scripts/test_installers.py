@@ -1758,18 +1758,44 @@ def test_install_sh_rejects_unparseable_existing_uv(
     assert not any("astral.sh" in call for call in posix_harness.calls())
 
 
+@pytest.mark.parametrize(
+    ("args", "package"),
+    [
+        ((), "free-claude-code @ "),
+        (("--voice-local",), "free-claude-code[voice_local] @ "),
+        (
+            ("--voice-local", "--torch-backend", "cu130"),
+            "free-claude-code[voice_local] @ ",
+        ),
+    ],
+)
 def test_install_sh_voice_flags_only_change_fcc_spec(
     posix_harness: PosixHarness,
+    args: tuple[str, ...],
+    package: str,
 ) -> None:
-    result = posix_harness.run("--voice-all", "--torch-backend", "cu130")
+    result = posix_harness.run(*args)
 
     assert result.returncode == 0, result.stderr
-    assert any(
-        "--torch-backend cu130 free-claude-code[voice,voice_local] @ "
-        "https://github.com/Alishahryar1/free-claude-code/archive/refs/heads/main.zip"
-        in call
+    install_calls = [
+        call
         for call in posix_harness.calls()
-    )
+        if "tool install" in call and "--refresh-package free-claude-code" in call
+    ]
+    assert len(install_calls) == 1
+    assert package in install_calls[0]
+    assert ("--torch-backend cu130" in install_calls[0]) == ("cu130" in args)
+
+
+@pytest.mark.parametrize("flag", ("--voice-nim", "--voice-all"))
+def test_install_sh_rejects_retired_voice_flags_before_mutation(
+    posix_harness: PosixHarness,
+    flag: str,
+) -> None:
+    result = posix_harness.run(flag)
+
+    assert result.returncode != 0
+    assert posix_harness.calls() == []
 
 
 def test_install_sh_rejects_invalid_options_before_mutation(
@@ -3945,18 +3971,53 @@ def test_install_ps1_rejects_unparseable_existing_uv(
     assert not any("astral.sh" in call for call in powershell_harness.calls())
 
 
+@pytest.mark.parametrize(
+    ("args", "package"),
+    [
+        ((), "free-claude-code @ "),
+        (("-VoiceLocal",), "free-claude-code[voice_local] @ "),
+        (
+            ("-VoiceLocal", "-TorchBackend", "cu130"),
+            "free-claude-code[voice_local] @ ",
+        ),
+    ],
+)
 def test_install_ps1_voice_flags_only_change_fcc_spec(
     powershell_harness: PowerShellHarness,
+    args: tuple[str, ...],
+    package: str,
 ) -> None:
-    result = powershell_harness.run("-VoiceAll", "-TorchBackend", "cu130")
+    result = powershell_harness.run(*args)
 
     assert result.returncode == 0, result.stderr
-    assert any(
-        '--torch-backend cu130 "free-claude-code[voice,voice_local] @ '
-        'https://github.com/Alishahryar1/free-claude-code/archive/refs/heads/main.zip"'
-        in call
+    install_calls = [
+        call
         for call in powershell_harness.calls()
-    )
+        if "tool install" in call and "--refresh-package free-claude-code" in call
+    ]
+    assert len(install_calls) == 1
+    assert package in install_calls[0]
+    assert ("--torch-backend cu130" in install_calls[0]) == ("cu130" in args)
+
+
+@pytest.mark.parametrize("flag", ("-VoiceNim", "-VoiceAll"))
+def test_install_ps1_rejects_retired_voice_flags_before_mutation(
+    powershell_harness: PowerShellHarness,
+    flag: str,
+) -> None:
+    result = powershell_harness.run(flag)
+
+    assert result.returncode != 0
+    assert powershell_harness.calls() == []
+
+
+def test_install_ps1_rejects_torch_backend_without_local_voice(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    result = powershell_harness.run("-TorchBackend", "cu130")
+
+    assert result.returncode != 0
+    assert powershell_harness.calls() == []
 
 
 @pytest.mark.parametrize("command_name", FCC_COMMANDS)
