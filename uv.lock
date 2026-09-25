@@ -599,7 +599,7 @@ wheels = [
 
 [[package]]
 name = "free-claude-code"
-version = "6.2.62"
+version = "6.2.63"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -645,6 +645,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-playwright" },
     { name = "pytest-xdist" },
+    { name = "pyyaml" },
     { name = "ruff" },
     { name = "ty" },
 ]
@@ -691,6 +692,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "pytest-playwright", specifier = ">=0.9.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ruff", specifier = ">=0.16.7" },
     { name = "ty", specifier = ">=0.0.80" },
 ]

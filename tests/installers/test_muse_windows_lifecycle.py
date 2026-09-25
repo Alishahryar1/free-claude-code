@@ -25,6 +25,12 @@ def _powershells() -> tuple[str, ...]:
 POWERSHELLS = _powershells()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_modules(powershell, powershell_module_paths, monkeypatch):
+    if os.name == "nt":
+        monkeypatch.setenv("PSMODULEPATH", powershell_module_paths[powershell])
+
+
 def _ps_literal(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 

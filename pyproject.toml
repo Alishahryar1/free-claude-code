@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "free-claude-code"
-version = "6.2.62"
+version = "6.2.63"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -90,6 +90,7 @@ dev = [
     "ruff>=0.16.7",
     "pytest-xdist>=3.8.0",
     "pytest-playwright>=0.9.0",
+    "pyyaml>=6.0.3",
 ]
 
 [tool.ruff]
@@ -126,7 +127,7 @@ skip-magic-trailing-comma = false
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-addopts = "-n auto"
+addopts = "-n auto --dist=worksteal"
 filterwarnings = [
     "error",
     # Starlette's test client uses this deprecated alias, including in 1.6.0.

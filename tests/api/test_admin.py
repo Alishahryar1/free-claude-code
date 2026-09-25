@@ -1,4 +1,5 @@
 import asyncio
+import mimetypes
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -212,6 +213,8 @@ def test_admin_page_uses_installed_version(monkeypatch, tmp_path):
         ("code_sessions.js", "text/javascript"),
         ("session_ui.js", "text/javascript"),
         ("model_combobox.js", "text/javascript"),
+        ("providers/openrouter.svg", "image/svg+xml"),
+        ("providers/lightning.png", "image/png"),
     ),
 )
 def test_admin_versioned_assets_serve_packaged_files(
@@ -220,6 +223,8 @@ def test_admin_versioned_assets_serve_packaged_files(
     filename,
     media_type,
 ):
+    mimetypes.init()
+    monkeypatch.setitem(mimetypes.types_map, Path(filename).suffix, "text/plain")
     asset_path = (
         Path(__file__).resolve().parents[2]
         / "src"

@@ -23,6 +23,7 @@ from free_claude_code.config.loader import (
     clear_settings_cache,
     get_settings,
 )
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
@@ -131,12 +132,28 @@ def admin_client_files():
 
 
 @pytest.fixture
+def provider_load_guard(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    attempted: list[str] = []
+
+    def forbidden(provider_id: str, *_args):
+        attempted.append(provider_id)
+        raise AssertionError(f"Browser fixture loaded real provider: {provider_id}")
+
+    monkeypatch.setattr(
+        "free_claude_code.providers.runtime.runtime._load_constructor", forbidden
+    )
+    yield
+    assert attempted == [], f"Browser fixture loaded real providers: {attempted}"
+
+
+@pytest.fixture
 def admin_base_url(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     code_control: CodeControl,
     admin_client_files,
+    provider_load_guard,
 ) -> Iterator[str]:
     """Serve one fully isolated Admin application on an OS-assigned port."""
 
@@ -202,6 +219,7 @@ def admin_base_url(
 
     provider_secret = "CREDENTIAL[unrecognized-format-987654321]"
     providers: dict[str, BaseProvider] = {
+        "nvidia_nim": _ModelListingProvider(),
         "open_router": _ModelListingProvider(
             frozenset(
                 {
@@ -225,9 +243,17 @@ def admin_base_url(
             error=RuntimeError(f"Provider rejected credential {provider_secret}")
         ),
     }
+
+    async def fixture_provider(provider_id: str, _settings: Settings) -> BaseProvider:
+        if provider_id not in providers:
+            raise AssertionError(f"Missing browser fixture provider: {provider_id}")
+        return providers[provider_id]
+
     manager = ProviderRuntimeManager(
         get_settings(),
-        runtime_factory=lambda snapshot: ProviderRuntime(snapshot, dict(providers)),
+        runtime_factory=lambda snapshot: ProviderRuntime(
+            snapshot, dict(providers), provider_constructor=fixture_provider
+        ),
     )
     runtime = ApplicationRuntime(
         manager,

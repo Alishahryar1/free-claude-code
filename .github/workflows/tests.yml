@@ -1,6 +1,8 @@
 # Branch protection: require every status check this workflow reports, for example:
 #   Ban suppressions and legacy annotations
-#   ruff-format, ruff-check, ty, pytest, playwright
+#   ruff-format, ruff-check, ty
+#   pytest (Linux), pytest (Windows), pytest (macOS)
+#   playwright (Linux), playwright (Windows), playwright (macOS)
 # GitHub may prefix with the workflow name (e.g. "CI / ruff-format"); use the names the branch protection UI offers after a run.
 
 name: CI
@@ -9,9 +11,6 @@ env:
   CI_UV_VERSION: "0.12.13"
   UV_MALWARE_CHECK: "1"
   UV_PREVIEW_FEATURES: "malware-check"
-  UV_CACHE_DIR: /tmp/.uv-cache
-  UV_PYTHON_INSTALL_DIR: /tmp/uv-python
-  UV_PYTHON_PREFERENCE: only-managed
 
 on:
   pull_request:
@@ -53,18 +52,11 @@ jobs:
       matrix:
         include:
           - id: ruff-format
-            run: uv run ruff format --check
+            run: uv run --locked ruff format --check
           - id: ruff-check
-            run: uv run ruff check
+            run: uv run --locked ruff check
           - id: ty
-            run: uv run ty check
-          - id: pytest
-            run: uv run pytest -v --tb=short
-          - id: playwright
-            run: >-
-              uv run pytest e2e -v --tb=short
-              --tracing=retain-on-failure --screenshot=only-on-failure
-              --full-page-screenshot --output=test-results
+            run: uv run --locked ty check
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -72,65 +64,100 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           fetch-depth: 1
 
-      - name: Read Python version
-        id: python
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(tr -d '[:space:]' < .python-version)"
-          test -n "$version"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Restore Python
-        id: python-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Set up CI environment
+        uses: ./.github/actions/ci-environment
         with:
-          path: ${{ env.UV_PYTHON_INSTALL_DIR }}
-          key: uv-python-v1-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.python.outputs.version }}-uv-${{ env.CI_UV_VERSION }}
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ubuntu-latest
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
-        with:
-          version: ${{ env.CI_UV_VERSION }}
-          enable-cache: false
-
-      - name: Install Python
-        if: steps.python-cache.outputs.cache-hit != 'true'
-        run: uv python install "${{ steps.python.outputs.version }}"
-
-      - name: Fingerprint dependencies
-        id: dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          uv export \
-            --locked \
-            --no-emit-workspace \
-            --no-header \
-            --no-annotate \
-            --output-file "$RUNNER_TEMP/uv-ci-dependencies.txt"
-          echo "hash=$(sha256sum "$RUNNER_TEMP/uv-ci-dependencies.txt" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore uv cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ${{ env.UV_CACHE_DIR }}
-          key: uv-deps-v1-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.python.outputs.version }}-uv-${{ env.CI_UV_VERSION }}-${{ steps.dependencies.outputs.hash }}
-          restore-keys: |
-            uv-deps-v1-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.python.outputs.version }}-uv-${{ env.CI_UV_VERSION }}-
-
-      - name: Install Chromium
-        if: matrix.id == 'playwright'
-        run: uv run playwright install --with-deps chromium
+      - name: Install dependencies
+        run: uv sync --locked --group dev
 
       - name: Run
         run: ${{ matrix.run }}
 
+  pytest:
+    name: pytest (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: Linux
+            runner: ubuntu-latest
+          - os: Windows
+            runner: windows-latest
+          - os: macOS
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 1
+
+      - name: Set up CI environment
+        uses: ./.github/actions/ci-environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ${{ matrix.runner }}
+          prepare-node: "true"
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      - name: Run pytest
+        run: uv run --locked pytest -v --tb=short --durations=50
+
+  playwright:
+    name: playwright (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: Linux
+            runner: ubuntu-latest
+          - os: Windows
+            runner: windows-latest
+          - os: macOS
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 1
+
+      - name: Set up CI environment
+        uses: ./.github/actions/ci-environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ${{ matrix.runner }}
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      - name: Install Chromium
+        run: uv run --locked playwright install ${{ matrix.os == 'Linux' && '--with-deps chromium' || 'chromium' }}
+
+      - name: Run Playwright
+        run: >-
+          uv run --locked pytest e2e -v --tb=short
+          --tracing=retain-on-failure --screenshot=only-on-failure
+          --full-page-screenshot --output=test-results
+
       - name: Upload Playwright failure artifacts
-        if: failure() && matrix.id == 'playwright'
+        if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: playwright-results-${{ github.run_id }}-${{ github.run_attempt }}
+          name: playwright-results-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7

@@ -11,7 +11,7 @@ import pytest
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell cache behavior")
 @pytest.mark.parametrize("shell_name", ["powershell", "pwsh"])
 def test_powershell_module_cache_does_not_leak_into_working_directory(
-    tmp_path: Path, shell_name: str
+    tmp_path: Path, shell_name: str, powershell_module_paths
 ) -> None:
     shell = shutil.which(shell_name)
     if shell is None:
@@ -54,6 +54,7 @@ while (-not (Test-Path -LiteralPath $env:FCC_TEST_WATCHED_CACHE) -and [DateTime]
         | {
             "USERPROFILE": str(profile),
             "LOCALAPPDATA": str(local_app_data),
+            "PSMODULEPATH": powershell_module_paths[shell],
             "FCC_TEST_WATCHED_CACHE": str(watched_cache),
         },
         capture_output=True,
