@@ -599,7 +599,7 @@ wheels = [
 
 [[package]]
 name = "free-claude-code"
-version = "6.2.61"
+version = "6.2.62"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -608,12 +608,15 @@ dependencies = [
     { name = "fastapi", extra = ["standard"] },
     { name = "github-copilot-sdk" },
     { name = "google-auth", extra = ["requests"] },
+    { name = "grpcio" },
+    { name = "grpcio-tools" },
     { name = "httpx", extra = ["socks"] },
     { name = "httpx2", extra = ["socks"] },
     { name = "json5" },
     { name = "jsonschema" },
     { name = "loguru" },
     { name = "markdown-it-py" },
+    { name = "nvidia-riva-client" },
     { name = "openai" },
     { name = "pillow", marker = "sys_platform == 'darwin' or sys_platform == 'win32'" },
     { name = "pydantic" },
@@ -628,11 +631,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-voice = [
-    { name = "grpcio" },
-    { name = "grpcio-tools" },
-    { name = "nvidia-riva-client" },
-]
 voice-local = [
     { name = "accelerate" },
     { name = "librosa" },
@@ -660,8 +658,8 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.141.1" },
     { name = "github-copilot-sdk", specifier = "==1.0.13" },
     { name = "google-auth", extras = ["requests"], specifier = ">=2.56.3" },
-    { name = "grpcio", marker = "extra == 'voice'", specifier = ">=1.83.1" },
-    { name = "grpcio-tools", marker = "extra == 'voice'", specifier = ">=1.81.1" },
+    { name = "grpcio", specifier = ">=1.83.1" },
+    { name = "grpcio-tools", specifier = ">=1.81.1" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "httpx2", extras = ["socks"], specifier = ">=2.7.0,<3" },
     { name = "json5", specifier = ">=0.15.0" },
@@ -669,7 +667,7 @@ requires-dist = [
     { name = "librosa", marker = "extra == 'voice-local'", specifier = ">=1.0.0" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "markdown-it-py", specifier = ">=4.2.0" },
-    { name = "nvidia-riva-client", marker = "extra == 'voice'", specifier = ">=2.26.0" },
+    { name = "nvidia-riva-client", specifier = ">=2.26.0" },
     { name = "openai", specifier = ">=3.14.0" },
     { name = "pillow", marker = "sys_platform == 'darwin' or sys_platform == 'win32'", specifier = ">=12.0.0" },
     { name = "pydantic", specifier = ">=2.13.5" },
@@ -684,7 +682,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'voice-local'", specifier = ">=5.17.0" },
     { name = "uvicorn", specifier = ">=0.52.1" },
 ]
-provides-extras = ["voice", "voice-local"]
+provides-extras = ["voice-local"]
 
 [package.metadata.requires-dev]
 dev = [

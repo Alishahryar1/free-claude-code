@@ -66,13 +66,7 @@ class NvidiaNimTranscriber:
                 f"Supported models: {', '.join(_NIM_ASR_MODEL_MAP)}"
             )
         function_id, language_code = model_config
-        try:
-            import riva.client
-        except ImportError as exc:
-            raise ImportError(
-                "NVIDIA NIM transcription requires the voice extra. "
-                "Install with: uv sync --extra voice"
-            ) from exc
+        import riva.client
 
         auth = riva.client.Auth(
             use_ssl=True,

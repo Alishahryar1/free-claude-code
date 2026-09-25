@@ -423,26 +423,16 @@ Configure integrations from **Admin UI → Messaging**, then click **Apply**.
 <details>
 <summary><strong>Voice notes</strong></summary>
 
-Re-run the installer with the command for your voice backend.
+NVIDIA NIM transcription support is included in every installation. In **Admin UI → Messaging → Voice**, enable voice notes, select `nvidia_nim`, and choose a supported model. Configure your **NVIDIA NIM API key** on the Providers page.
+
+For local Whisper on CPU or CUDA, re-run the installer with the local voice option:
 
 macOS/Linux:
-
-NVIDIA NIM transcription:
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh" | sh -s -- --voice-nim
-```
 
 Local Whisper on CPU or CUDA:
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh" | sh -s -- --voice-local
-```
-
-Both backends:
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh" | sh -s -- --voice-all
 ```
 
 Local Whisper with CUDA 13.0:
@@ -453,22 +443,10 @@ curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main
 
 Windows PowerShell:
 
-NVIDIA NIM transcription:
-
-```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1"))) -VoiceNim
-```
-
 Local Whisper on CPU or CUDA:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1"))) -VoiceLocal
-```
-
-Both backends:
-
-```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1"))) -VoiceAll
 ```
 
 Local Whisper with CUDA 13.0:
@@ -477,7 +455,7 @@ Local Whisper with CUDA 13.0:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1"))) -VoiceLocal -TorchBackend cu130
 ```
 
-Restart `fcc-server`. In **Admin UI → Messaging → Voice**, enable voice notes, select `cpu`, `cuda`, or `nvidia_nim`, and choose the Whisper model. Local gated models need `HUGGINGFACE_API_KEY`; NVIDIA NIM transcription needs `NVIDIA_NIM_API_KEY`.
+After installing local support, restart `fcc-server`. In **Admin UI → Messaging → Voice**, enable voice notes, select `cpu` or `cuda`, and choose the Whisper model. Local gated models need `HUGGINGFACE_API_KEY`.
 
 </details>
 
