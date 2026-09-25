@@ -95,6 +95,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "llm7": "llm7/default",
     "lightning": "lightning/lightning-ai/Qwen3.8-27B",
     "experiential": "experiential/union-alpha",
+    "cheaperinference": "cheaperinference/gpt-5.4-mini",
     "agnes": "agnes/agnes-2.0-flash",
     "zenmux": "zenmux/deepseek/deepseek-v4-flash-free",
     "wandb": "wandb/openai/gpt-oss-20b",
