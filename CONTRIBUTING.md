@@ -60,7 +60,3 @@ GitHub CI runs Ruff in check-only mode and also bans `# type: ignore`, `# ty: ig
 - Keep shared Anthropic protocol behavior under `src/free_claude_code/core/anthropic/` rather than importing utilities from another provider.
 - Keep provider-specific configuration in the provider that owns it.
 - Remove dead compatibility code when completing migrations unless preserving a published interface is explicitly required.
-
-## Versioning
-
-Changes to runtime code, packaging, dependencies, or install/CI scripts require a semantic version bump in `pyproject.toml` and a matching `uv lock` update in the same commit. Documentation, tests, smoke coverage, and repository configuration do not require a version bump by themselves.

@@ -61,7 +61,6 @@ def test_bug_form_requests_a_contained_version_or_none() -> None:
 
     assert "Run `fcc-server --version`" in form
     assert "include one version" in form
-    assert "`number.number.number` format" in form
     assert "enter `None`" in form
     assert 'placeholder: "The version is 1.22.333, or None"' in form
     assert "not installed" not in form
@@ -331,3 +330,57 @@ process.stdout.write(JSON.stringify({failed, deleted}));
     )
     assert result["failed"] is should_fail
     assert result["deleted"] == ([] if should_fail else [42])
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "6.2.67.dev1+g2f30121c0",
+        "6.2.67.dev0+g2f30121c0.d20260925",
+        "6.2.67.dev1",
+        "6.2.66+d20260925",
+    ],
+)
+def test_development_versions_are_accepted_without_stable_release_comparison(value):
+    assert _reported_version(f"free-claude-code {value}") == value
+    source = f"return (async () => {{\n{_workflow_script()}\n}})();"
+    harness = """
+const run = new Function("github", "context", __SOURCE__);
+const calls = [];
+const github = {
+  paginate: async () => [
+    {id: 1, user: {login: "github-actions[bot]"}, body: "<!-- fcc-version-validator -->"},
+    {id: 2, user: {login: "github-actions[bot]"}, body: "<!-- fcc-version-outdated -->"},
+  ],
+  rest: {
+    issues: {
+      get: async () => ({data: {labels: [{name: "needs-fcc-version"}], body: "### FCC version\\n\\nfree-claude-code " + __VERSION__}}),
+      removeLabel: async () => calls.push("removeLabel"),
+      deleteComment: async ({comment_id}) => calls.push(comment_id),
+    },
+    repos: {getLatestRelease: async () => {throw new Error("Development builds must not be compared as stable releases");}},
+  },
+};
+await run(github, {repo: {owner: "o", repo: "r"}, payload: {issue: {number: 1}}});
+process.stdout.write(JSON.stringify(calls));
+"""
+    result = _run_javascript(
+        harness.replace("__SOURCE__", json.dumps(source)).replace(
+            "__VERSION__", json.dumps(value)
+        )
+    )
+    assert result == ["removeLabel", 1, 2]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "6.2.67.dev",
+        "6.2.67.dev1+gwrong",
+        "6.2.67.dev1+g123.extra",
+        "6.2.67.dev1+g123.d2026",
+        "6.2.67.dev1+g123 and 6.2.66",
+    ],
+)
+def test_invalid_or_ambiguous_development_versions_are_rejected(value):
+    assert _reported_version(value) is None

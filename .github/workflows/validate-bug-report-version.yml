@@ -30,7 +30,7 @@ jobs:
             });
             const fieldPattern = "^### FCC version\\r?\\n+\\s*([^\\r\\n]+)";
             const releaseVersionPattern = "^v((?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*))$";
-            const versionPattern = "(?:^|[^0-9A-Za-z_.])v?([0-9]+\\.[0-9]+\\.[0-9]+)(?![0-9A-Za-z_+-]|\\.[0-9A-Za-z_])";
+            const versionPattern = "(?:^|[^0-9A-Za-z_.])v?([0-9]+\\.[0-9]+\\.[0-9]+(?:\\.dev[0-9]+(?:\\+g[0-9a-f]+(?:\\.d[0-9]{8})?)?|\\+d[0-9]{8})?)(?![0-9A-Za-z_+-]|\\.[0-9A-Za-z_])";
             const match = (issue.body || "").match(new RegExp(fieldPattern, "m"));
             const fieldValue = match?.[1]?.trim() || "";
             const versionMatches = [...fieldValue.matchAll(new RegExp(versionPattern, "g"))];
@@ -82,7 +82,7 @@ jobs:
                       ...repo,
                       name: labelName,
                       color: "d4c5f9",
-                      description: "FCC version must contain number.number.number or be None",
+                      description: "FCC version must contain one installed version or be None",
                     });
                   } catch (createError) {
                     if (createError.status !== 422) throw createError;
@@ -98,7 +98,7 @@ jobs:
                 await github.rest.issues.createComment({
                   ...repo,
                   issue_number,
-                  body: `${invalidMarker}\nPlease edit **FCC version** so it contains one \`number.number.number\` value, such as \`1.22.333\`, or is exactly \`None\`. Run \`fcc-server --version\` to find the installed version.`,
+                  body: `${invalidMarker}\nPlease edit **FCC version** so it contains one version copied from \`fcc-server --version\`, including any development suffix, or is exactly \`None\`.`,
                 });
               }
               return;
@@ -113,7 +113,8 @@ jobs:
             }
             await deleteManagedComment(invalidComment);
 
-            if (reportedVersion === undefined) {
+            // Checkout versions identify development source, not published releases.
+            if (reportedVersion === undefined || reportedVersion.includes(".dev") || reportedVersion.includes("+")) {
               await deleteManagedComment(outdatedComment);
               return;
             }
