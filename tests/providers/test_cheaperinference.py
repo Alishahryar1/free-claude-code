@@ -236,12 +236,17 @@ async def test_model_catalog_rejects_empty_catalog(
 
 
 @pytest.mark.asyncio
-async def test_model_catalog_uses_documented_url_and_bearer_auth() -> None:
+async def test_model_catalog_requests_streaming_text_models_with_bearer_auth() -> None:
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        return httpx2.Response(200, json={"data": [{"id": _MODEL, "type": "text"}]})
+        models = [{"id": _MODEL, "type": "text"}]
+        if request.url.params.get("streaming") != "true":
+            models.append({"id": "gpt-5.5-pro", "type": "text"})
+        if request.url.params.get("type") != "text":
+            models.append({"id": "image-model", "type": "image"})
+        return httpx2.Response(200, json={"data": models})
 
     async with AsyncOpenAI(
         api_key="wire-cheaperinference-key",
@@ -262,5 +267,7 @@ async def test_model_catalog_uses_documented_url_and_bearer_auth() -> None:
 
     assert model_infos == frozenset({ProviderModelInfo(_MODEL)})
     assert len(requests) == 1
-    assert str(requests[0].url) == "https://api.cheaperinference.com/v1/models"
+    assert str(requests[0].url) == (
+        "https://api.cheaperinference.com/v1/models?type=text&streaming=true"
+    )
     assert requests[0].headers["authorization"] == "Bearer wire-cheaperinference-key"

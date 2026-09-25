@@ -302,7 +302,6 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         "description": (
             "Cheaper Inference OpenAI-compatible gateway API key for "
             "api.cheaperinference.com/v1. "
-            "Each model costs 15\u201360% less than the list price of its lab. "
             "Keys start with ci_live_; create one at cheaperinference.com/signup."
         ),
     },

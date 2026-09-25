@@ -735,6 +735,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         model_listing=OpenAIModelListing(
             path="/models",
+            query_params=(("type", "text"), ("streaming", "true")),
             required_path_values=((("type",), ("text",)),),
             context_window_tokens_path=("context_length",),
             max_output_tokens_path=("max_output_tokens",),
