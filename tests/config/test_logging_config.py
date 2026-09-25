@@ -11,6 +11,16 @@ from free_claude_code.config import logging_config
 from free_claude_code.config.logging_config import configure_logging
 
 
+def test_log_capture_does_not_feed_back_into_interception(caplog, capsys, monkeypatch):
+    monkeypatch.setattr(logging.root, "handlers", [logging_config.InterceptHandler()])
+    with caplog.at_level(logging.WARNING):
+        logger.info("below capture level")
+        logger.warning("capture this once")
+
+    assert [record.getMessage() for record in caplog.records] == ["capture this once"]
+    assert "Logging error" not in capsys.readouterr().err
+
+
 def test_configure_logging_creates_parent_directories(tmp_path) -> None:
     """Nested log path: parent directories are created before truncating."""
     log_file = tmp_path / "nested" / "dir" / "app.log"

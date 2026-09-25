@@ -2273,6 +2273,36 @@ exit /b 76
         return self.log.read_text(encoding="utf-8").splitlines()
 
 
+@pytest.fixture(scope="session")
+def powershell_module_paths(tmp_path_factory):
+    if os.name != "nt":
+        return {}
+    root = tmp_path_factory.mktemp("powershell-modules")
+    paths = {}
+    for shell in _powershells():
+        path = root / Path(shell).stem
+        # A private path avoids Windows PowerShell adding machine-wide module
+        # directories back when it recognizes its default system module path.
+        # Junctions keep the bundled modules intact without copying their DLLs.
+        subprocess.run(
+            [
+                shell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "New-Item -ItemType Junction -Path $env:FCC_TEST_MODULE_PATH "
+                "-Target (Join-Path $PSHOME 'Modules') | Out-Null",
+            ],
+            env=os.environ | {"FCC_TEST_MODULE_PATH": str(path)},
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        paths[shell] = str(path)
+    return paths
+
+
 @pytest.fixture(
     params=_powershells() or (None,),
     ids=lambda path: Path(path).name if path is not None else "unavailable",
@@ -2280,6 +2310,7 @@ exit /b 76
 def powershell_harness(
     tmp_path: Path,
     request: pytest.FixtureRequest,
+    powershell_module_paths,
 ) -> PowerShellHarness:
     powershell = request.param
     if powershell is None or os.name != "nt":
@@ -2630,6 +2661,7 @@ $installer = [scriptblock]::Create($installerSource)
                 [str(bin_dir), str(Path(system_root) / "System32"), system_root]
             ),
             "PATHEXT": ".COM;.EXE;.BAT;.CMD",
+            "PSMODULEPATH": powershell_module_paths[powershell],
             "USERPROFILE": str(home),
             "LOCALAPPDATA": str(local_app_data),
             "APPDATA": str(app_data),
@@ -2662,6 +2694,40 @@ $installer = [scriptblock]::Create($installerSource)
     return PowerShellHarness(
         tmp_path, bin_dir, fixtures, tool_bin, log, env, powershell, wrapper
     )
+
+
+class TestPowerShellModuleIsolation:
+    @pytest.fixture(autouse=True)
+    def unrelated_host_module(self, tmp_path, monkeypatch):
+        modules = tmp_path / "host-modules"
+        module = modules / "FccUnrelated"
+        module.mkdir(parents=True)
+        (module / "FccUnrelated.psd1").write_text(
+            "@{RootModule='FccUnrelated.psm1'; ModuleVersion='1.0.0'; "
+            "FunctionsToExport=@('Get-FccUnrelatedProbe')}",
+            encoding="utf-8",
+        )
+        (module / "FccUnrelated.psm1").write_text(
+            "Add-Content -LiteralPath $env:CALL_LOG -Value 'unrelated-module-import'\n"
+            "function Get-FccUnrelatedProbe { 'unrelated' }\n"
+            "Export-ModuleMember -Function Get-FccUnrelatedProbe\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(
+            "PSMODULEPATH",
+            str(modules) + os.pathsep + os.environ.get("PSMODULEPATH", ""),
+        )
+
+    def test_missing_commands_do_not_load_host_modules(self, powershell_harness):
+        result = powershell_harness.run_functions(
+            """$null = Get-ApplicationCommand 'FccUnrelatedProbe'
+$child = Get-PowerShellExecutable
+& $child -NoProfile -Command 'Get-Command FccUnrelatedProbe -CommandType Application -ErrorAction SilentlyContinue; Get-Item -LiteralPath $env:FAKE_FIXTURES | Out-Null; exit 0'
+if ($LASTEXITCODE -ne 0) { throw 'Child command lookup failed' }
+"""
+        )
+        assert result.returncode == 0, result.stderr
+        assert "unrelated-module-import" not in powershell_harness.calls()
 
 
 @pytest.mark.parametrize("rtk", (False, True, None))

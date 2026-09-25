@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import logging
 import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -260,19 +259,15 @@ def incoming_message_factory():
 
 
 @pytest.fixture(autouse=True)
-def _propagate_loguru_to_caplog():
-    """Route loguru logs to stdlib logging so pytest caplog captures them."""
+def _propagate_loguru_to_caplog(caplog):
+    """Capture Loguru directly without re-entering the stdlib interceptor."""
     from loguru import logger as loguru_logger
 
-    class _PropagateHandler:
-        def write(self, message):
-            record = message.record
-            level = record["level"].no
-            stdlib_level = min(level, logging.CRITICAL)
-            py_logger = logging.getLogger(record["name"])
-            py_logger.log(stdlib_level, record["message"])
-
-    handler_id = loguru_logger.add(_PropagateHandler(), format="{message}")
+    handler_id = loguru_logger.add(
+        caplog.handler,
+        format="{message}",
+        filter=lambda record: record["level"].no >= caplog.handler.level,
+    )
     yield
     with contextlib.suppress(ValueError):
         loguru_logger.remove(
