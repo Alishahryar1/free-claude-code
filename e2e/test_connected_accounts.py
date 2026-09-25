@@ -1,5 +1,7 @@
 """Rendered connected-account flows use provider-owned capabilities and identity."""
 
+import time
+
 import pytest
 from playwright.sync_api import Dialog, Page, Route, expect
 
@@ -54,6 +56,15 @@ class _Accounts:
         self.pending_status: list[Route] = []
         self.hold_login = False
         self.pending_login: list[Route] = []
+
+    def take_pending_status(self, page: Page) -> Route:
+        deadline = time.monotonic() + 5
+        while not self.pending_status:
+            if time.monotonic() >= deadline:
+                pytest.fail("Account status request did not reach the route handler")
+            # Pump Playwright events so the route handler can enqueue the request.
+            page.wait_for_timeout(10)
+        return self.pending_status.pop(0)
 
     def config(self, route: Route) -> None:
         response = route.fetch()
@@ -163,9 +174,6 @@ def _open(page: Page, admin_base_url: str) -> None:
 def test_account_modes_wait_for_status_and_recover_after_load_failure(
     page: Page, admin_base_url: str, accounts: _Accounts
 ) -> None:
-    page.expose_function(
-        "pendingAccountStatusCount", lambda: len(accounts.pending_status)
-    )
     accounts.hold_status.add("github_copilot")
     page.goto(f"{admin_base_url}/admin")
     copilot = page.locator('[data-provider="github_copilot"]')
@@ -173,9 +181,7 @@ def test_account_modes_wait_for_status_and_recover_after_load_failure(
     expect(copilot.get_by_role("button", name="Loading…", exact=True)).to_be_disabled()
     expect(copilot.get_by_role("button", name="Connect", exact=True)).to_have_count(0)
     expect(openai.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
-    page.wait_for_function("async () => await window.pendingAccountStatusCount() === 1")
-
-    accounts.pending_status.pop().fulfill(
+    accounts.take_pending_status(page).fulfill(
         status=503, json={"detail": "Account status unavailable."}
     )
     expect(copilot.locator(".provider-meta")).to_have_text(
@@ -184,9 +190,9 @@ def test_account_modes_wait_for_status_and_recover_after_load_failure(
     expect(copilot.get_by_role("button", name="Connect", exact=True)).to_have_count(0)
     copilot.get_by_role("button", name="Retry", exact=True).click()
     expect(copilot.get_by_role("button", name="Loading…", exact=True)).to_be_disabled()
-    page.wait_for_function("async () => await window.pendingAccountStatusCount() === 1")
+    retry = accounts.take_pending_status(page)
     accounts.hold_status.clear()
-    accounts.pending_status.pop().fulfill(json=accounts.statuses["github_copilot"])
+    retry.fulfill(json=accounts.statuses["github_copilot"])
 
     expect(copilot.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
     expect(copilot.get_by_role("button", name="Use device code")).to_have_count(0)

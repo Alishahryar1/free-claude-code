@@ -1,6 +1,7 @@
 """Isolated browser-test composition for the local Admin UI."""
 
 import asyncio
+import faulthandler
 import socket
 import sys
 import threading
@@ -348,6 +349,7 @@ def admin_base_url(
         listener.close()
         clear_settings_cache()
         if thread.is_alive():
+            faulthandler.dump_traceback(file=sys.stderr)
             pytest.fail("Admin browser-test server did not stop")
 
 
