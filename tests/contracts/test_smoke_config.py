@@ -70,6 +70,7 @@ def _settings(**overrides):
         "llm7_api_key": "",
         "lightning_api_key": "",
         "experiential_api_key": "",
+        "cheaperinference_api_key": "",
         "fireworks_api_key": "",
         "novita_api_key": "",
         "cloudflare_api_token": "",
@@ -334,6 +335,58 @@ def test_experiential_is_not_enabled_without_explicit_credential(
     )
 
     assert not config.has_provider_configuration("experiential")
+    assert config.provider_smoke_models() == []
+
+
+def test_cheaperinference_provider_configuration_uses_default_model(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_CHEAPERINFERENCE", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            cheaperinference_api_key="ci_live_key",
+        )
+    )
+
+    assert config.has_provider_configuration("cheaperinference")
+    models = config.provider_smoke_models()
+    assert [model.provider for model in models] == ["cheaperinference"]
+    assert models[0].full_model == "cheaperinference/gpt-5.4-mini"
+    assert models[0].source == "provider_default"
+
+
+def test_cheaperinference_smoke_override_accepts_model_with_or_without_prefix(
+    monkeypatch,
+) -> None:
+    settings = _settings(
+        model="ollama/llama3.1",
+        ollama_base_url="",
+        cheaperinference_api_key="ci_live_key",
+    )
+    for override in (
+        "claude-sonnet-5",
+        "cheaperinference/claude-sonnet-5",
+    ):
+        monkeypatch.setenv("FCC_SMOKE_MODEL_CHEAPERINFERENCE", override)
+        models = _smoke_config(settings=settings).provider_smoke_models()
+
+        assert [model.provider for model in models] == ["cheaperinference"]
+        assert models[0].full_model == "cheaperinference/claude-sonnet-5"
+        assert models[0].source == "FCC_SMOKE_MODEL_CHEAPERINFERENCE"
+
+
+def test_cheaperinference_is_not_enabled_without_explicit_credential(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_CHEAPERINFERENCE", raising=False)
+    config = _smoke_config(
+        provider_matrix=frozenset({"cheaperinference"}),
+        settings=_settings(ollama_base_url="", cheaperinference_api_key=""),
+    )
+
+    assert not config.has_provider_configuration("cheaperinference")
     assert config.provider_smoke_models() == []
 
 
