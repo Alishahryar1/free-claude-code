@@ -13,7 +13,7 @@ requires-python = ">=3.14.0"
 dependencies = [
     "anyio>=4.15.1",
     "fastapi[standard]>=0.141.1",
-    "uvicorn>=0.52.1",
+    "uvicorn>=0.53.0",
     "httpx[socks]>=0.28.1",
     "httpx2[socks]>=2.7.0,<3",
     "markdown-it-py>=4.2.0",
@@ -22,7 +22,7 @@ dependencies = [
     "tiktoken>=0.13.0",
     "python-telegram-bot>=22.8",
     "discord.py>=2.7.1",
-    "openai>=3.14.0",
+    "openai>=3.18.0",
     "loguru>=0.7.0",
     "aiohttp>=3.14.3",
     "jsonschema>=4.25.0",
@@ -32,9 +32,9 @@ dependencies = [
     "requests[socks]>=2.34.2",
     "pystray>=0.19.5; sys_platform == 'win32' or sys_platform == 'darwin'",
     "Pillow>=12.0.0; sys_platform == 'win32' or sys_platform == 'darwin'",
-    "github-copilot-sdk==1.0.13",
+    "github-copilot-sdk==1.0.14",
     "simplejson>=4.1.2",
-    "grpcio>=1.83.1",
+    "grpcio>=1.84.0",
     "grpcio-tools>=1.81.1",
     "nvidia-riva-client>=2.26.0",
 ]
@@ -87,12 +87,12 @@ explicit = true
 
 [dependency-groups]
 dev = [
-    "packaging>=26.0",
+    "packaging>=26.3",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ty>=0.0.80",
-    "ruff>=0.16.7",
+    "ty>=0.0.83",
+    "ruff>=0.16.8",
     "pytest-xdist>=3.8.0",
     "pytest-playwright>=0.9.0",
     "pyyaml>=6.0.3",
