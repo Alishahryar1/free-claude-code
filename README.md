@@ -27,7 +27,7 @@
 
 - **54 ToS-friendly providers. 1.3B+ free tokens every month.** Use free, paid, subscription, and local models from one searchable UI without putting your account at risk. FCC follows provider terms and removes integrations if they stop being allowed.
 - **10 coding agents. One model catalog.** Run [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [OpenCode](https://github.com/anomalyco/opencode), [Cline](https://github.com/cline/cline), [Hermes](https://github.com/NousResearch/hermes-agent), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Grok Build](https://github.com/xai-org/grok-build), [Muse Code](https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2/), or [Aider](https://aider.chat/) with your FCC models.
-- **Keep coding through provider outages.** After retries are exhausted, FCC automatically tries your next configured model without making you restart the turn—across every client.
+- **Keep coding through provider outages.** After retries are exhausted, FCC automatically tries your next configured model without making you restart the turn. This works across every client.
 - **Up to 90% fewer terminal-output tokens.** Optional [RTK](https://github.com/rtk-ai/rtk) filters common command output, while five FCC optimizations handle quota probes, command-prefix detection, titles, suggestions, and filepaths without calling a provider.
 - **Native Code sessions in your browser.** Choose a folder and run Codex in the browser with real-time and background support. Freely switch providers/models in the same session. Support for switching harnesses in the same session coming soon!
 - **Terminal, desktop, IDE, or phone.** Work through native launchers, [VS Code](https://code.visualstudio.com/), [Codex App](https://learn.chatgpt.com/docs/app), [JetBrains](https://www.jetbrains.com/), [Discord](https://discord.com/), or [Telegram](https://telegram.org/).
@@ -268,7 +268,7 @@ from more than one provider before succeeding.
   and finish signing in through your browser. Restart an already-running agent after connecting.
 - OpenAI API uses a separate Platform API key. Enter it under
   **Providers → Cloud providers → OpenAI API → Configure**. The model list may
-  include IDs that cannot handle coding requests; choose a text-generation model.
+  include IDs that cannot handle coding requests. Choose a text-generation model.
 - GitHub Copilot uses your signed-in GitHub account and subscription. Install
   [Copilot CLI 1.0.83](https://github.com/github/copilot-cli/releases/tag/v1.0.83)
   on PATH, then choose **Providers → OAuth providers → GitHub Copilot → Connect**.
@@ -281,10 +281,10 @@ from more than one provider before succeeding.
   deployment that supports Chat Completions. Enter the deployment name as a
   custom model slug if it does not appear in the model dropdown.
 - Mistral Codestral uses a separate key from Mistral La Plateforme.
-- Kimi Code subscription keys use `kimi_code/`; Kimi API credit keys use
+- Kimi Code subscription keys use `kimi_code/`. Kimi API credit keys use
   `kimi/`. Kimi Code plans are for personal interactive coding-agent use under
   [Kimi's community guidelines](https://www.kimi.com/code/docs/en/kimi-code/community-guidelines.html).
-- QwenCloud Coding Plan keys use `qwencloud_coding/`; QwenCloud Token Plan keys
+- QwenCloud Coding Plan keys use `qwencloud_coding/`. QwenCloud Token Plan keys
   use `qwencloud/`. The keys and endpoints are not interchangeable. Coding Plan
   is for local, personal, interactive coding-agent use under the
   [Coding Plan terms](https://www.alibabacloud.com/help/en/model-studio/coding-plan).
@@ -293,7 +293,7 @@ from more than one provider before succeeding.
 - For Amazon Bedrock, set `BEDROCK_BASE_URL` to the URL for the same region as
   the API key and select one of the listed models.
 - Vertex AI uses Google Application Default Credentials instead of an API key.
-  Locally, run `gcloud auth application-default login` once; service-account
+  Locally, run `gcloud auth application-default login` once. Service-account
   files and attached service accounts also work. Set `VERTEX_PROJECT_ID`, and
   optionally change `VERTEX_LOCATION` from its `global` default.
 - Cloudflare requires both its API token and account ID.
@@ -328,7 +328,7 @@ Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` 
 <details>
 <summary><strong>Optional model-tier routing</strong></summary>
 
-`MODEL` is the fallback for every request. Select a model for `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, or `MODEL_HAIKU` to override an individual Claude Code tier; select **None** to use `MODEL`.
+`MODEL` is the fallback for every request. Select a model for `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, or `MODEL_HAIKU` to override an individual Claude Code tier. Select **None** to use `MODEL`.
 
 </details>
 
@@ -355,10 +355,10 @@ Providers that do not support a selected control retain their own behavior.
 For editor and app integrations, install the client, start FCC, then open
 **Admin UI → Integrations** and click **Connect** on its card.
 
-- **Claude Code in VS Code** — install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code).
-- **Claude Desktop** — install [Claude Desktop](https://claude.ai/download). Fully quit it before connecting or disconnecting, then reopen it. Disconnect returns to normal Claude sign-in.
-- **Codex in VS Code and App** — install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt) or Codex App.
-- **Claude Code in JetBrains ACP** — install Claude Agent in JetBrains AI Assistant and start it once, then click **Connect** in FCC. Reopen the IDE, select **Claude Code (FCC)**, and start a new chat. After JetBrains updates the agent, restart FCC before starting a new chat. Requires a local IDE in its standard installation locations.
+- **Claude Code in VS Code**: Install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code).
+- **Claude Desktop**: Install [Claude Desktop](https://claude.ai/download). Fully quit it before connecting or disconnecting, then reopen it. Disconnect returns to normal Claude sign-in.
+- **Codex in VS Code and App**: Install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt) or Codex App.
+- **Claude Code in JetBrains ACP**: Install Claude Agent in JetBrains AI Assistant and start it once, then click **Connect** in FCC. Reopen the IDE, select **Claude Code (FCC)**, and start a new chat. After JetBrains updates the agent, restart FCC before starting a new chat. Requires a local IDE in its standard installation locations.
 
 Reload VS Code or restart the app/IDE after connecting. In Codex and Claude Desktop, select an FCC
 model from the model picker. Reload or restart the client when FCC reports updated settings. Use
