@@ -1,4 +1,4 @@
-"""Require a version increase exactly when a PR changes release inputs."""
+"""Require one version increment exactly when a PR changes release inputs."""
 
 import argparse
 import subprocess
@@ -47,7 +47,9 @@ def version_at(revision: str) -> str:
     value = project["version"]
     if not isinstance(value, str):
         raise ValueError("Project version must be a string")
-    Version(value)
+    parsed = Version(value)
+    if value != f"{parsed.major}.{parsed.minor}.{parsed.micro}":
+        raise ValueError("Project version must use the format MAJOR.MINOR.PATCH")
     lock = root_package(tomllib.loads(blob(revision, "uv.lock") or ""))
     if lock["version"] != value:
         raise ValueError("pyproject.toml and uv.lock versions must agree")
@@ -88,9 +90,17 @@ def check(base: str, head: str) -> None:
         release_paths.append(path)
     print(f"FCC version: {old} -> {new}")
     print("Release changes: " + (", ".join(release_paths) or "none"))
-    if release_paths and Version(new) <= Version(old):
+    previous = Version(old)
+    allowed = {
+        f"{previous.major}.{previous.minor}.{previous.micro + 1}",
+        f"{previous.major}.{previous.minor + 1}.0",
+        f"{previous.major + 1}.0.0",
+    }
+    if release_paths and new not in allowed:
         raise ValueError(
-            "Version must increase beyond the target branch for release changes"
+            "Version must increase by exactly one patch, minor, or major increment "
+            "from the target branch, resetting lower components to zero. "
+            f"Allowed versions: {', '.join(sorted(allowed))}"
         )
     if not release_paths and new != old:
         raise ValueError("Version must stay unchanged without release changes")

@@ -130,6 +130,50 @@ def test_version_only_change_does_not_justify_itself(history):
 
 
 @pytest.mark.parametrize(
+    "value,allowed",
+    [
+        ("1.2.4", True),
+        ("1.3.0", True),
+        ("2.0.0", True),
+        ("1.2.5", False),
+        ("1.4.0", False),
+        ("3.0.0", False),
+        ("1.3.1", False),
+        ("2.1.0", False),
+        ("2.0.1", False),
+        ("1.2.4rc1", False),
+        ("1.2.4.post1", False),
+        ("1.2.4.dev1", False),
+        ("1.2.4+local", False),
+        ("1!1.2.4", False),
+        ("1.2.4.0", False),
+        ("v1.2.4", False),
+        ("01.2.4", False),
+    ],
+)
+def test_release_requires_exactly_one_version_increment(history, value, allowed):
+    repo, base = history
+    version(repo, value)
+    write(repo, "src/file.py", "changed\n")
+    commit(repo)
+    result = check(repo, base)
+    assert (result.returncode == 0) is allowed, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("final_version,allowed", [("1.2.4", True), ("1.2.5", False)])
+def test_multiple_pr_commits_share_one_bump(history, final_version, allowed):
+    repo, base = history
+    version(repo, "1.2.4")
+    write(repo, "src/file.py", "first change\n")
+    commit(repo)
+    version(repo, final_version)
+    write(repo, "src/file.py", "second change\n")
+    commit(repo)
+    result = check(repo, base)
+    assert (result.returncode == 0) is allowed, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
     "value,lock", [("1.2.2", None), ("1.2.4", "1.2.3"), ("invalid", None)]
 )
 def test_invalid_or_inconsistent_versions_fail(history, value, lock):
