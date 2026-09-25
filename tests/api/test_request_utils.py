@@ -582,6 +582,26 @@ class TestGetTokenCount:
         assert image_cost(tool_result) == image_cost(user_message)
         assert image_cost(tool_result) < 1_000
 
+    @pytest.mark.parametrize("data", [12345, ["a"], {"x": 1}])
+    def test_tool_result_image_with_non_string_data_gets_the_flat_cost(self, data):
+        """Tool-result content is not validated, so image data can be any JSON value.
+
+        A number used to reach ``len()`` and turn count_tokens into an HTTP 500.
+        """
+        image = {"type": "image", "source": {"type": "base64", "data": data}}
+        msg = MagicMock()
+        msg.content = [{"type": "tool_result", "tool_use_id": "t1", "content": [image]}]
+        no_data = MagicMock()
+        no_data.content = [
+            {
+                "type": "tool_result",
+                "tool_use_id": "t1",
+                "content": [{"type": "image", "source": {"type": "base64"}}],
+            }
+        ]
+
+        assert get_token_count([msg]) == get_token_count([no_data])
+
     @pytest.mark.parametrize(
         "parts",
         [

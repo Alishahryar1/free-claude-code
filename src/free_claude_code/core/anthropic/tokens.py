@@ -12,11 +12,15 @@ from .models import Message, SystemContent, Tool
 
 
 def _image_tokens(block: Any) -> int:
-    """Estimate one image block from its base64 size, or a flat cost without data."""
+    """Estimate one image block from its base64 size, or a flat cost without data.
+
+    Tool-result content is not validated, so ``data`` can be any JSON value there;
+    only a string has a meaningful size, anything else gets the flat cost.
+    """
     source = get_block_attr(block, "source")
     if isinstance(source, dict):
         data = source.get("data") or source.get("base64") or ""
-        if data:
+        if isinstance(data, str) and data:
             return max(85, len(data) // 3000)
     return 765
 
