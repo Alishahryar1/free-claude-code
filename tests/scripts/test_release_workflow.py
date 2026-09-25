@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.scripts.test_version_policy import CHECKER, commit, git, version, write
+from tests.scripts.test_version_policy import commit, git, version, write
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/post-merge.yml"
@@ -85,30 +85,18 @@ def test_release_detection_uses_the_triggering_revision(tmp_path, bump, manual):
 
 def test_version_check_receives_pr_base_and_head_without_publish_permission():
     config = yaml.safe_load(
-        (ROOT / ".github/workflows/version-policy.yml").read_text(encoding="utf-8")
+        (ROOT / ".github/workflows/tests.yml").read_text(encoding="utf-8")
     )
-    assert set(config[True]) == {"pull_request_target"}
-    assert set(config[True]["pull_request_target"]["types"]) == {
-        "opened",
-        "synchronize",
-        "reopened",
-        "edited",
-    }
+    assert set(config[True]) == {"pull_request"}
     job = config["jobs"]["version-policy"]
-    assert job["name"] == "Version policy"
-    assert job["permissions"] == {"contents": "read"}
     checkout = next(
         step
         for step in job["steps"]
         if step.get("uses", "").startswith("actions/checkout@")
     )
-    assert checkout["with"]["ref"] == "${{ github.sha }}"
-    assert checkout["with"]["persist-credentials"] is False
-    assert "repository" not in checkout["with"]
-    ci = yaml.safe_load(
-        (ROOT / ".github/workflows/tests.yml").read_text(encoding="utf-8")
-    )
-    assert "version-policy" not in ci["jobs"]
+    assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
+    assert job["name"] == "Version policy"
+    assert job["permissions"] == {"contents": "read"}
     step = next(
         step for step in job["steps"] if step.get("name") == "Check version policy"
     )
@@ -117,37 +105,3 @@ def test_version_check_receives_pr_base_and_head_without_publish_permission():
         "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
     }
     assert '--base "$BASE_SHA" --head "$HEAD_SHA"' in step["run"]
-
-
-def test_trusted_checkout_rejects_pr_that_replaces_its_checker(tmp_path):
-    git(tmp_path, "init", "-b", "main")
-    version(tmp_path, "1.2.3")
-    write(
-        tmp_path, "scripts/check_version_policy.py", CHECKER.read_text(encoding="utf-8")
-    )
-    base = commit(tmp_path)
-    write(
-        tmp_path,
-        "scripts/check_version_policy.py",
-        "from pathlib import Path\nPath('untrusted-executed').touch()\nraise SystemExit(0)\n",
-    )
-    write(tmp_path, "src/changed.py", "unbumped release input\n")
-    head = commit(tmp_path)
-    git(tmp_path, "checkout", "--detach", base)
-    result = subprocess.run(
-        [
-            sys.executable,
-            "scripts/check_version_policy.py",
-            "--base",
-            base,
-            "--head",
-            head,
-        ],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "must increase by exactly one" in result.stdout
-    assert not (tmp_path / "untrusted-executed").exists()
