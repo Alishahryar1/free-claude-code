@@ -8,7 +8,7 @@ UV_MINIMUM = "0.12.13"
 CI_SETUP = Path(".github/actions/ci-environment/action.yml")
 UV_WORKFLOWS = (
     Path(".github/workflows/tests.yml"),
-    Path(".github/workflows/dependency-cache.yml"),
+    Path(".github/workflows/post-merge.yml"),
 )
 REQUIRED_TEST_RUNNERS = {
     "Linux": "ubuntu-latest",
