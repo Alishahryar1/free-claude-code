@@ -195,6 +195,11 @@ class Settings(BaseModel):
         default=None, validation_alias="EXPLABS_API_KEY"
     )
 
+    # ==================== Cheaper Inference (OpenAI-compatible) ====================
+    cheaperinference_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="CHEAPER_INFERENCE_API_KEY"
+    )
+
     # ==================== Fireworks AI Config ====================
     fireworks_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_API_KEY"
@@ -497,6 +502,9 @@ class Settings(BaseModel):
     )
     experiential_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="EXPLABS_PROXY"
+    )
+    cheaperinference_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="CHEAPER_INFERENCE_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"

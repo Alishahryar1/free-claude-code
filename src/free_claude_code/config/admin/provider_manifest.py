@@ -297,6 +297,14 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "hex characters; mint one at platform.experientiallabs.ai/settings/api-keys."
         ),
     },
+    "CHEAPER_INFERENCE_API_KEY": {
+        "label": "Cheaper Inference API Key",
+        "description": (
+            "Cheaper Inference OpenAI-compatible gateway API key for "
+            "api.cheaperinference.com/v1. "
+            "Keys start with ci_live_; create one at cheaperinference.com/signup."
+        ),
+    },
 }
 
 

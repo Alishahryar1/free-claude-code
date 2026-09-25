@@ -156,6 +156,7 @@ _PROBES = (
     # https://inference-docs.cerebras.ai/api-reference/models/list-models
     # https://docs.sambanova.ai/docs/api-reference/models/get-environments-available-model-list-metadata
     # https://docs.fireworks.ai/api-reference/list-accounts
+    # https://cheaperinference.com/docs
     _Probe("deepinfra", "https://api.deepinfra.com/v1/me", _identity("uid")),
     _Probe("mistral", "/models", _MODELS),
     _Probe("wandb", "/models", _MODELS),
@@ -167,6 +168,7 @@ _PROBES = (
     ),
     _Probe("cerebras", "/models", _MODELS),
     _Probe("sambanova", "/models", _MODELS),
+    _Probe("cheaperinference", "/models", _MODELS),
     _Probe(
         "fireworks",
         "https://api.fireworks.ai/v1/accounts?pageSize=1",

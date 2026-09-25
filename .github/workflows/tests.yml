@@ -173,6 +173,7 @@ jobs:
       - name: Run Playwright
         run: >-
           uv run --locked pytest e2e -v --tb=short
+          -o faulthandler_timeout=10 --durations=20
           --tracing=retain-on-failure --screenshot=only-on-failure
           --full-page-screenshot --output=test-results
 
