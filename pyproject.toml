@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs>=0.5.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "free-claude-code"
-version = "6.2.67"
+dynamic = ["version"]
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -63,6 +63,9 @@ voice_local = [
     "librosa>=1.0.0",
 ]
 
+[tool.hatch.version]
+source = "vcs"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/free_claude_code"]
 
@@ -72,6 +75,7 @@ packages = ["src/free_claude_code"]
 
 [tool.uv]
 required-version = ">=0.12.13"
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu130" }

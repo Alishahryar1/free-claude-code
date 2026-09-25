@@ -44,6 +44,13 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Fetch canonical release tags
+      shell: bash
+      env:
+        CI_SERVER: ${{ github.server_url }}
+        CI_REPOSITORY: ${{ github.repository }}
+      run: git fetch --prune --no-tags "$CI_SERVER/$CI_REPOSITORY.git" '+refs/tags/*:refs/tags/*'
+
     - name: Prepare cache identity
       id: identity
       shell: bash

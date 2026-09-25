@@ -7,7 +7,7 @@ body:
     id: fcc-version
     attributes:
       label: FCC version
-      description: Run `fcc-server --version` and include one version in `number.number.number` format. If FCC did not install, enter `None`.
+      description: Run `fcc-server --version` and include one version exactly as printed, including any development suffix. If FCC did not install, enter `None`.
       placeholder: "The version is 1.22.333, or None"
     validations:
       required: true

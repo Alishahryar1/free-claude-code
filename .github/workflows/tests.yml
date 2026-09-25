@@ -21,37 +21,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  version-policy:
-    name: Version policy
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          fetch-depth: 0
-
-      - name: Fetch target revision
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
-        run: git fetch --no-tags "https://github.com/$BASE_REPOSITORY.git" "$BASE_SHA"
-
-      - name: Set up CI environment
-        uses: ./.github/actions/ci-environment
-        with:
-          uv-version: ${{ env.CI_UV_VERSION }}
-          runner-label: ubuntu-latest
-
-      - name: Check version policy
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: uv run --locked --group dev python scripts/check_version_policy.py --base "$BASE_SHA" --head "$HEAD_SHA"
-
   no-suppressions-or-legacy-annotations:
     name: Ban suppressions and legacy annotations
     runs-on: ubuntu-latest
@@ -63,7 +32,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: "Fail on type ignores and legacy future annotations"
         run: |
@@ -94,7 +63,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Set up CI environment
         uses: ./.github/actions/ci-environment
@@ -126,7 +95,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Set up CI environment
         uses: ./.github/actions/ci-environment
@@ -159,7 +128,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Set up CI environment
         uses: ./.github/actions/ci-environment
