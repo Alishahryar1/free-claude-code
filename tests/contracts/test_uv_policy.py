@@ -1,12 +1,51 @@
 import tomllib
 from pathlib import Path
 
+import pytest
+import yaml
+
 UV_MINIMUM = "0.12.13"
 CI_SETUP = Path(".github/actions/ci-environment/action.yml")
 UV_WORKFLOWS = (
     Path(".github/workflows/tests.yml"),
     Path(".github/workflows/dependency-cache.yml"),
 )
+REQUIRED_TEST_RUNNERS = {
+    "Linux": "ubuntu-latest",
+    "Windows": "windows-latest",
+    "macOS": "macos-latest",
+}
+
+
+def _assert_required_test_matrix(workflow: dict, suite: str) -> None:
+    job = workflow["jobs"][suite]
+    assert job["name"] == f"{suite} (${{{{ matrix.os }}}})"
+    assert job["runs-on"] == "${{ matrix.runner }}"
+    matrix = job["strategy"]["matrix"]
+    assert not matrix.get("exclude")
+    entries = matrix["include"]
+    assert len(entries) == len(REQUIRED_TEST_RUNNERS)
+    assert {(entry["os"], entry["runner"]) for entry in entries} == set(
+        REQUIRED_TEST_RUNNERS.items()
+    )
+
+
+@pytest.mark.parametrize("suite", ("pytest", "playwright"))
+def test_required_test_matrix_covers_supported_platforms(suite: str) -> None:
+    workflow = yaml.safe_load(UV_WORKFLOWS[0].read_text(encoding="utf-8"))
+    _assert_required_test_matrix(workflow, suite)
+
+
+@pytest.mark.parametrize("suite", ("pytest", "playwright"))
+@pytest.mark.parametrize("os_name", REQUIRED_TEST_RUNNERS)
+def test_required_test_matrix_rejects_missing_platform(
+    suite: str, os_name: str
+) -> None:
+    workflow = yaml.safe_load(UV_WORKFLOWS[0].read_text(encoding="utf-8"))
+    entries = workflow["jobs"][suite]["strategy"]["matrix"]["include"]
+    entries[:] = [entry for entry in entries if entry["os"] != os_name]
+    with pytest.raises(AssertionError):
+        _assert_required_test_matrix(workflow, suite)
 
 
 def test_supported_uv_minimum_is_consistent() -> None:

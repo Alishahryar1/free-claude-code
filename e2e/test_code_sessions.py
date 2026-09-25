@@ -1923,6 +1923,7 @@ def test_unavailable_feed_shows_reason_and_clears_it_on_recovery(
     page, admin_base_url, code_control
 ):
     async def availability(available):
+        await code_control.service.start()
         code_control.service._accepting = available
         code_control.service._message = (
             None if available else "Code storage is unavailable"
