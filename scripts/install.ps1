@@ -12,7 +12,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$RepoArchiveUrl = "https://github.com/Alishahryar1/free-claude-code/archive/refs/heads/main.zip"
 # Windows on ARM emulates x64, whose Python package ecosystem has broader wheel support.
 $PythonRequest = "cpython-3.14.0-windows-x86_64-none"
 $MinUvVersion = "0.12.13"
@@ -1395,9 +1394,9 @@ function Ensure-Uv {
 
 function Get-PackageSpec {
     if ($VoiceLocal) {
-        return "free-claude-code[voice_local] @ $RepoArchiveUrl"
+        return "free-claude-code[voice_local]"
     }
-    return "free-claude-code @ $RepoArchiveUrl"
+    return "free-claude-code"
 }
 
 function Install-FreeClaudeCode {

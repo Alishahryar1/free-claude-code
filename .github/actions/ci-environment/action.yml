@@ -1,0 +1,152 @@
+name: CI environment
+description: Restore managed Python and uv dependencies using the same cache identity on every runner.
+
+inputs:
+  uv-version:
+    description: Pinned uv version
+    required: true
+  runner-label:
+    description: GitHub runner image label
+    required: true
+  lookup-only:
+    description: Check dependency cache availability without downloading it
+    default: "false"
+  sync-dependencies:
+    description: Install the locked project and development dependencies after cache restoration.
+    default: "true"
+  prepare-node:
+    description: Prepare the Node runtime used by pytest subprocess contracts.
+    default: "false"
+
+outputs:
+  python-path:
+    description: Managed Python cache directory
+    value: ${{ steps.identity.outputs.python-path }}
+  python-key:
+    description: Exact managed Python cache key
+    value: ${{ steps.identity.outputs.python-key }}
+  python-hit:
+    description: Whether managed Python was restored from the exact key
+    value: ${{ steps.python-cache.outputs.cache-hit }}
+  dependencies-path:
+    description: uv dependency cache directory
+    value: ${{ steps.identity.outputs.dependencies-path }}
+  dependencies-prefix:
+    description: Compatible dependency cache prefix
+    value: ${{ steps.identity.outputs.dependencies-prefix }}
+  dependencies-key:
+    description: Exact dependency cache key
+    value: ${{ steps.identity.outputs.dependencies-prefix }}${{ steps.dependencies.outputs.hash }}
+  dependencies-hit:
+    description: Whether the exact dependency key exists
+    value: ${{ steps.dependencies-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare cache identity
+      id: identity
+      shell: bash
+      env:
+        CI_TEMP: ${{ runner.temp }}
+        CI_RUNNER: ${{ inputs.runner-label }}
+        CI_OS: ${{ runner.os }}
+        CI_ARCH: ${{ runner.arch }}
+        CI_UV: ${{ inputs.uv-version }}
+      run: |
+        set -euo pipefail
+        version="$(tr -d '[:space:]' < .python-version)"
+        test -n "$version"
+        cache_root="${CI_TEMP//\\//}"
+        identity="$CI_RUNNER-$CI_OS-$CI_ARCH-py-$version-uv-$CI_UV"
+        {
+          echo "UV_CACHE_DIR=$cache_root/fcc-uv-cache"
+          echo "UV_PYTHON_INSTALL_DIR=$cache_root/fcc-uv-python"
+          echo "UV_PYTHON_PREFERENCE=only-managed"
+        } >> "$GITHUB_ENV"
+        {
+          echo "python-version=$version"
+          echo "python-path=$cache_root/fcc-uv-python"
+          echo "python-key=uv-python-v2-$identity"
+          echo "dependencies-path=$cache_root/fcc-uv-cache"
+          echo "dependencies-prefix=uv-deps-v2-$identity-"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore Python
+      id: python-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ${{ steps.identity.outputs.python-path }}
+        key: ${{ steps.identity.outputs.python-key }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+      with:
+        version: ${{ inputs.uv-version }}
+        enable-cache: false
+
+    - name: Install Python
+      if: steps.python-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        CI_PYTHON: ${{ steps.identity.outputs.python-version }}
+      run: uv python install "$CI_PYTHON"
+
+    - name: Prepare Node runtime
+      if: inputs.prepare-node == 'true'
+      shell: bash
+      env:
+        CI_PYTHON: ${{ steps.identity.outputs.python-version }}
+      run: |
+        uv run --no-project --python "$CI_PYTHON" python - <<'PY'
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if node is None:
+            raise RuntimeError("Node is required for pytest subprocess contracts")
+        # Cold executable paging must happen before the timed behavior checks.
+        subprocess.run(
+            [node, "--experimental-strip-types", "--input-type=module", "--eval",
+             "import { stripTypeScriptTypes } from 'node:module'; "
+             "stripTypeScriptTypes('const value: number = 1'); "
+             "await new Response('ready').text(); "
+             "console.log('Node runtime ready:', process.version);"],
+            check=True,
+            timeout=120,
+        )
+        PY
+
+    - name: Fingerprint dependencies
+      id: dependencies
+      shell: bash
+      env:
+        CI_PYTHON: ${{ steps.identity.outputs.python-version }}
+      run: |
+        set -euo pipefail
+        uv export --locked --group dev --no-emit-workspace --no-header --no-annotate \
+          --output-file "$RUNNER_TEMP/uv-ci-dependencies.txt" > /dev/null
+        uv run --no-project --python "$CI_PYTHON" python - <<'PY'
+        import hashlib
+        import os
+        from pathlib import Path
+
+        dependencies = Path(os.environ["RUNNER_TEMP"]) / "uv-ci-dependencies.txt"
+        digest = hashlib.sha256(dependencies.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+            output.write(f"hash={digest}\n")
+        PY
+
+    - name: Restore dependency cache
+      id: dependencies-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ${{ steps.identity.outputs.dependencies-path }}
+        key: ${{ steps.identity.outputs.dependencies-prefix }}${{ steps.dependencies.outputs.hash }}
+        restore-keys: ${{ steps.identity.outputs.dependencies-prefix }}
+        lookup-only: ${{ inputs.lookup-only }}
+
+    - name: Install dependencies
+      if: inputs.sync-dependencies == 'true'
+      shell: bash
+      run: uv sync --locked --group dev
