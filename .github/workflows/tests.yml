@@ -79,7 +79,7 @@ jobs:
   pytest:
     name: pytest (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.os == 'Windows' && 45 || 15 }}
+    timeout-minutes: 15
     permissions:
       contents: read
     strategy:
@@ -110,9 +110,7 @@ jobs:
         run: uv sync --locked --group dev
 
       - name: Run pytest
-        env:
-          FCC_CI_DIAGNOSTICS: "1"
-        run: uv run --locked pytest -v --tb=short --durations=50 --capture=tee-sys -o faulthandler_timeout=60
+        run: uv run --locked pytest -v --tb=short --durations=50
 
   playwright:
     name: playwright (${{ matrix.os }})

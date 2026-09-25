@@ -5,49 +5,9 @@ import subprocess
 import sys
 
 import pytest
-import pytest_asyncio
 
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.runtime.folder_picker import NativeFolderPicker
-
-
-@pytest_asyncio.fixture(autouse=True)
-async def _diagnose_stalled_picker(capsys):
-    if os.environ.get("FCC_CI_DIAGNOSTICS") != "1":
-        yield
-        return
-
-    async def diagnose():
-        await asyncio.sleep(10)
-        # Restore xdist's stderr stream, including its saved Windows descriptor.
-        # This must reach the live log without waiting for the test to finish.
-        with capsys.disabled():
-            output = sys.stderr
-            print(f"PICKER DIAGNOSTICS worker pid={os.getpid()}", file=output)
-            for task in asyncio.all_tasks():
-                task.print_stack(file=output)
-            output.flush()
-            if os.name != "nt":
-                process = await asyncio.create_subprocess_exec(
-                    "ps",
-                    "-axo",
-                    "pid,ppid,pgid,state,command",
-                    stdout=output,
-                    stderr=output,
-                )
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=5)
-                finally:
-                    if process.returncode is None:
-                        process.kill()
-                    await process.wait()
-
-    diagnostic = asyncio.create_task(diagnose())
-    try:
-        yield
-    finally:
-        diagnostic.cancel()
-        await asyncio.gather(diagnostic, return_exceptions=True)
 
 
 class DialogProcess:
