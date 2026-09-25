@@ -1,13 +1,24 @@
 """Token estimation for Anthropic-compatible requests."""
 
 import json
+from typing import Any
 
 from loguru import logger
 
 from free_claude_code.core.token_estimation import estimate_text_tokens
 
-from .content import get_block_attr
+from .content import get_block_attr, get_block_type
 from .models import Message, SystemContent, Tool
+
+
+def _image_tokens(block: Any) -> int:
+    """Estimate one image block from its base64 size, or a flat cost without data."""
+    source = get_block_attr(block, "source")
+    if isinstance(source, dict):
+        data = source.get("data") or source.get("base64") or ""
+        if data:
+            return max(85, len(data) // 3000)
+    return 765
 
 
 def get_token_count(
@@ -50,20 +61,21 @@ def get_token_count(
                     total_tokens += estimate_text_tokens(str(block_id))
                     total_tokens += 15
                 elif b_type == "image":
-                    source = get_block_attr(block, "source")
-                    if isinstance(source, dict):
-                        data = source.get("data") or source.get("base64") or ""
-                        if data:
-                            total_tokens += max(85, len(data) // 3000)
-                        else:
-                            total_tokens += 765
-                    else:
-                        total_tokens += 765
+                    total_tokens += _image_tokens(block)
                 elif b_type == "tool_result":
                     content = get_block_attr(block, "content", "")
                     tool_use_id = get_block_attr(block, "tool_use_id", "")
                     if isinstance(content, str):
                         total_tokens += estimate_text_tokens(content)
+                    elif isinstance(content, list):
+                        # Images returned by a tool (Read on an image, MCP screenshots)
+                        # are priced like top-level images; serializing them would
+                        # count their base64 payload as text.
+                        images = [p for p in content if get_block_type(p) == "image"]
+                        others = [p for p in content if get_block_type(p) != "image"]
+                        total_tokens += sum(_image_tokens(image) for image in images)
+                        if others or not images:
+                            total_tokens += estimate_text_tokens(json.dumps(others))
                     else:
                         total_tokens += estimate_text_tokens(json.dumps(content))
                     total_tokens += estimate_text_tokens(str(tool_use_id))

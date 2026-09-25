@@ -1,5 +1,6 @@
 """Tests for API request detection and token counting helpers."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -548,6 +549,58 @@ class TestGetTokenCount:
         msg.content = [image_block]
         count = get_token_count([msg])
         assert count >= 85
+
+    def test_image_in_tool_result_costs_the_same_as_a_top_level_image(self):
+        """A tool-returned image (Read on a PNG, an MCP screenshot) is priced as an image.
+
+        Serializing it with the rest of the tool result counted its base64 payload as
+        text: a 300 KB screenshot came out near 215k tokens instead of about 100.
+        """
+        image = {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "A" * 300_000,
+            },
+        }
+        text = {"type": "text", "text": "Screenshot captured"}
+
+        def user_message(*blocks):
+            msg = MagicMock()
+            msg.content = list(blocks)
+            return msg
+
+        def tool_result(*parts):
+            return user_message(
+                {"type": "tool_result", "tool_use_id": "t1", "content": list(parts)}
+            )
+
+        def image_cost(wrap):
+            return get_token_count([wrap(text, image)]) - get_token_count([wrap(text)])
+
+        assert image_cost(tool_result) == image_cost(user_message)
+        assert image_cost(tool_result) < 1_000
+
+    @pytest.mark.parametrize(
+        "parts",
+        [
+            [{"type": "text", "text": "line one"}, {"type": "text", "text": "two"}],
+            [],
+        ],
+    )
+    def test_image_free_tool_result_list_is_counted_as_before(self, parts):
+        """Only images leave the serialized payload; image-free results are unchanged."""
+        msg = MagicMock()
+        msg.content = [{"type": "tool_result", "tool_use_id": "t1", "content": parts}]
+
+        with patch(
+            "free_claude_code.core.anthropic.tokens.estimate_text_tokens",
+            side_effect=len,
+        ):
+            count = get_token_count([msg])
+
+        assert count == len(json.dumps(parts)) + len("t1") + 8 + 4
 
     def test_known_payload_structural_overhead(self):
         """Protocol overhead remains separate from plain-text estimation."""
