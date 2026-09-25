@@ -1,122 +1,125 @@
-"""Require one version increment exactly when a PR changes release inputs."""
+"""Validate release intent against changed files and calculate one version bump."""
 
 import argparse
+import json
+import re
 import subprocess
 import tomllib
-
-import tomlkit
-from packaging.version import Version
+from pathlib import Path
 
 RELEASE_FILES = {".python-version", "pyproject.toml", "uv.lock"}
 RELEASE_DIRS = ("assets/", "scripts/", "src/")
+VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+PREFIX = re.compile(r"(patch|minor|major): \S[^\r\n]*")
+RESERVED = re.compile(r"\s*(patch|minor|major)\s*[:\uff1a]", re.IGNORECASE)
 
 
 def git(*args: str) -> str:
     return subprocess.run(
         ["git", *args], check=True, capture_output=True, text=True, encoding="utf-8"
-    ).stdout.strip()
+    ).stdout.rstrip("\r\n")
 
 
-def blob(revision: str, path: str) -> str | None:
-    result = subprocess.run(
-        ["git", "show", f"{revision}:{path}"],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
+def changed_paths(base: str, head: str) -> list[str]:
+    return list(
+        filter(
+            None,
+            git("diff", "--no-renames", "--name-only", "-z", base, head).split("\0"),
+        )
     )
-    return result.stdout if result.returncode == 0 else None
 
 
-def root_package(document: dict) -> dict:
-    entries = [
-        entry
-        for entry in document.get("package", [])
-        if entry.get("name") == "free-claude-code"
-        and entry.get("source") == {"editable": "."}
+def release_paths(paths: list[str]) -> list[str]:
+    return [
+        path for path in paths if path in RELEASE_FILES or path.startswith(RELEASE_DIRS)
     ]
-    if len(entries) != 1:
-        raise ValueError("uv.lock must contain exactly one editable FCC package")
-    return entries[0]
 
 
-def version_at(revision: str) -> str:
-    project = tomllib.loads(blob(revision, "pyproject.toml") or "")["project"]
-    if project["name"] != "free-claude-code":
-        raise ValueError("Project name must be free-claude-code")
-    value = project["version"]
-    if not isinstance(value, str):
-        raise ValueError("Project version must be a string")
-    parsed = Version(value)
-    if value != f"{parsed.major}.{parsed.minor}.{parsed.micro}":
-        raise ValueError("Project version must use the format MAJOR.MINOR.PATCH")
-    lock = root_package(tomllib.loads(blob(revision, "uv.lock") or ""))
-    if lock["version"] != value:
-        raise ValueError("pyproject.toml and uv.lock versions must agree")
-    return value
+def release_kind(title: str, paths: list[str]) -> str | None:
+    match = PREFIX.fullmatch(title)
+    released = release_paths(paths)
+    if not match and RESERVED.match(title):
+        raise ValueError(
+            "Use exactly patch: , minor: , or major: followed by a description"
+        )
+    if released and not match:
+        raise ValueError("Release changes require a patch: , minor: , or major: title")
+    if not released and match:
+        raise ValueError("A non-release PR must not use a release prefix")
+    return match[1] if match else None
 
 
-def without_release_version(text: str | None, path: str) -> str | None:
-    if text is None:
-        return None
-    document = tomlkit.parse(text)
-    if path == "pyproject.toml":
-        document["project"]["version"] = "FCC_VERSION"
-    else:
-        for package in document["package"]:
-            if package["name"] == "free-claude-code" and package.get("source") == {
-                "editable": "."
-            }:
-                package["version"] = "FCC_VERSION"
-    return tomlkit.dumps(document)
+def next_version(previous: str, kind: str) -> str:
+    match = VERSION.fullmatch(previous)
+    if not match:
+        raise ValueError(f"Invalid release version: {previous}")
+    major, minor, patch = map(int, match.groups())
+    if kind == "major":
+        return f"{major + 1}.0.0"
+    if kind == "minor":
+        return f"{major}.{minor + 1}.0"
+    if kind == "patch":
+        return f"{major}.{minor}.{patch + 1}"
+    raise ValueError(f"Invalid release kind: {kind}")
 
 
-def check(base: str, head: str) -> None:
+def check_packaging(head: str) -> None:
+    project = tomllib.loads(git("show", f"{head}:pyproject.toml"))["project"]
+    if (
+        project["name"] != "free-claude-code"
+        or "version" in project
+        or "version" not in project.get("dynamic", [])
+    ):
+        raise ValueError("FCC must declare a dynamic version without project.version")
+    lock = tomllib.loads(git("show", f"{head}:uv.lock"))
+    roots = [
+        p
+        for p in lock["package"]
+        if p["name"] == "free-claude-code" and p.get("source") == {"editable": "."}
+    ]
+    if len(roots) != 1 or "version" in roots[0]:
+        raise ValueError("uv.lock must have one editable FCC package without a version")
+
+
+def check(base: str, head: str, title: str) -> None:
     base = git("rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}")
     head = git("rev-parse", "--verify", "--end-of-options", f"{head}^{{commit}}")
-    ancestor = git("merge-base", base, head)
-    old, new = version_at(base), version_at(head)
-    changed = git("diff", "--no-renames", "--name-only", "-z", ancestor, head).split(
-        "\0"
-    )
-    release_paths = []
-    for path in changed:
-        if path not in RELEASE_FILES and not path.startswith(RELEASE_DIRS):
-            continue
-        if path in {"pyproject.toml", "uv.lock"} and without_release_version(
-            blob(ancestor, path), path
-        ) == without_release_version(blob(head, path), path):
-            continue
-        release_paths.append(path)
-    print(f"FCC version: {old} -> {new}")
-    print("Release changes: " + (", ".join(release_paths) or "none"))
-    previous = Version(old)
-    allowed = {
-        f"{previous.major}.{previous.minor}.{previous.micro + 1}",
-        f"{previous.major}.{previous.minor + 1}.0",
-        f"{previous.major + 1}.0.0",
-    }
-    if release_paths and new not in allowed:
-        raise ValueError(
-            "Version must increase by exactly one patch, minor, or major increment "
-            "from the target branch, resetting lower components to zero. "
-            f"Allowed versions: {', '.join(sorted(allowed))}"
-        )
-    if not release_paths and new != old:
-        raise ValueError("Version must stay unchanged without release changes")
+    paths = changed_paths(git("merge-base", base, head), head)
+    print("Release changes: " + (", ".join(release_paths(paths)) or "none"))
+    kind = release_kind(title, paths)
+    check_packaging(head)
+    print(f"Version policy passed: {kind or 'no release'}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", required=True)
+    parser.add_argument("--base")
     parser.add_argument("--head", required=True)
+    parser.add_argument("--title")
+    parser.add_argument("--pr-json", type=Path)
     args = parser.parse_args()
     try:
-        check(args.base, args.head)
-    except (ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+        if args.pr_json:
+            pr = json.loads(args.pr_json.read_text(encoding="utf-8"))
+            if pr["head"]["sha"] != git(
+                "rev-parse", "--verify", "--end-of-options", f"{args.head}^{{commit}}"
+            ):
+                raise ValueError("PR head changed; use the current policy run")
+            base, title = pr["base"]["sha"], pr["title"]
+        else:
+            base, title = args.base, args.title
+        if not base or title is None:
+            raise ValueError("Provide --pr-json or both --base and --title")
+        check(base, args.head, title)
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        OSError,
+        subprocess.CalledProcessError,
+    ) as error:
         print(f"Version policy failed: {error}")
         return 1
-    print("Version policy passed")
     return 0
 
 

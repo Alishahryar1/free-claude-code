@@ -3,7 +3,6 @@ import re
 import shutil
 import subprocess
 import textwrap
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +61,6 @@ def test_bug_form_requests_a_contained_version_or_none() -> None:
 
     assert "Run `fcc-server --version`" in form
     assert "include one version" in form
-    assert "`number.number.number` format" in form
     assert "enter `None`" in form
     assert 'placeholder: "The version is 1.22.333, or None"' in form
     assert "not installed" not in form
@@ -165,39 +163,21 @@ def test_workflow_owns_one_idempotent_triage_state() -> None:
     assert "comments.find" in workflow
 
 
-def test_workflow_reads_and_compares_the_default_branch_version() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
-    expected = tomllib.loads(pyproject)["project"]["version"]
-    project_pattern = _workflow_pattern("projectVersionPattern")
-    function = _javascript_function("projectVersionFromToml")
-    scoped_project = (
-        "[tool.before]\nversion = \"99.0.0\"\n\n[project]\nversion = '1.2.3'\n"
-    )
-    commented_project = (
-        '[project]\nname = "demo"\nversion = "2.3.4" # current release\n'
-    )
-    missing_project_version = (
-        '[project]\nname = "demo"\n\n[[tool.items]]\nversion = "99.0.0"\n'
-    )
-    script = (
-        f"const projectVersionPattern = {json.dumps(project_pattern)};\n"
-        f"{function}\n"
-        "process.stdout.write(JSON.stringify(["
-        f"projectVersionFromToml({json.dumps(pyproject)}),"
-        f"projectVersionFromToml({json.dumps(scoped_project)}),"
-        f"projectVersionFromToml({json.dumps(commented_project)}),"
-        f"projectVersionFromToml({json.dumps(missing_project_version)})"
-        "]));"
-    )
-
-    assert _run_javascript(script) == [expected, "1.2.3", "2.3.4", None]
-    assert "contents: read" in workflow
-    assert "github.rest.repos.getContent" in workflow
-    assert 'path: "pyproject.toml"' in workflow
-    assert "context.payload.repository.default_branch" in workflow
-    assert 'split(".").map((part) => BigInt(part))' in workflow
-    assert "isOlderVersion(reportedVersion, latestVersion)" in workflow
+@pytest.mark.parametrize(
+    "tag,expected",
+    [
+        ("v1.2.3", "1.2.3"),
+        ("v10.0.0", "10.0.0"),
+        ("1.2.3", None),
+        ("v1.2.3rc1", None),
+        ("v01.2.3", None),
+        ("v1.2.3.4", None),
+    ],
+)
+def test_release_tags_are_exact_stable_versions(tag, expected):
+    pattern = _workflow_pattern("releaseVersionPattern")
+    match = re.fullmatch(pattern, tag)
+    assert (match[1] if match else None) == expected
 
 
 def test_outdated_version_comment_is_reconciled_across_edits() -> None:
@@ -248,16 +228,9 @@ const github = {
       },
     },
     repos: {
-      getContent: async (args) => {
-        record("getContent", args);
-        const content = `[tool.before]\nversion = "99.0.0"\n\n[project]\nversion = '${latestVersion}' # current release\n`;
-        return {
-          data: {
-            type: "file",
-            encoding: "base64",
-            content: Buffer.from(content).toString("base64"),
-          },
-        };
+      getLatestRelease: async (args) => {
+        record("getLatestRelease", args);
+        return { data: { tag_name: "v" + latestVersion, draft: false, prerelease: false } };
       },
     },
   },
@@ -301,19 +274,16 @@ process.stdout.write(JSON.stringify({ calls, comments }));
     )
     calls = result["calls"]
     names = [call["name"] for call in calls]
-    content_reads = [call for call in calls if call["name"] == "getContent"]
 
     assert names.count("createComment") == 2
     assert names.count("updateComment") == 1
     assert names.count("deleteComment") == 3
-    assert names.count("getContent") == 4
+    assert names.count("getLatestRelease") == 4
     assert names.count("getIssue") == 6
     assert names.count("getLabel") == 1
     assert names.count("addLabels") == 1
     assert names.count("removeLabel") == 2
     assert "createLabel" not in names
-    assert all(call["args"]["path"] == "pyproject.toml" for call in content_reads)
-    assert all(call["args"]["ref"] == "main" for call in content_reads)
     assert "`17.23.454`" in next(
         call["args"]["body"]
         for call in calls
@@ -330,3 +300,87 @@ process.stdout.write(JSON.stringify({ calls, comments }));
     assert "cancel-in-progress: false" in workflow
     assert "github.rest.issues.update({" not in workflow
     assert 'state: "closed"' not in workflow
+
+
+@pytest.mark.parametrize("status,should_fail", [(404, False), (500, True)])
+def test_release_lookup_distinguishes_no_release_from_failure(status, should_fail):
+    source = f"return (async () => {{\n{_workflow_script()}\n}})();"
+    harness = """
+const run = new Function("github", "context", __SOURCE__);
+const deleted = [];
+const github = {
+  paginate: async () => [{id: 42, user: {login: "github-actions[bot]"}, body: "<!-- fcc-version-outdated -->"}],
+  rest: {
+    issues: {
+      get: async () => ({data: {labels: [], body: "### FCC version\\n\\n1.2.3"}}),
+      deleteComment: async ({comment_id}) => deleted.push(comment_id),
+    },
+    repos: {getLatestRelease: async () => {throw {status: __STATUS__};}},
+  },
+};
+let failed = false;
+try {await run(github, {repo: {owner: "o", repo: "r"}, payload: {issue: {number: 1}}});}
+catch {failed = true;}
+process.stdout.write(JSON.stringify({failed, deleted}));
+"""
+    result = _run_javascript(
+        harness.replace("__SOURCE__", json.dumps(source)).replace(
+            "__STATUS__", str(status)
+        )
+    )
+    assert result["failed"] is should_fail
+    assert result["deleted"] == ([] if should_fail else [42])
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "6.2.67.dev1+g2f30121c0",
+        "6.2.67.dev0+g2f30121c0.d20260925",
+        "6.2.67.dev1",
+        "6.2.66+d20260925",
+    ],
+)
+def test_development_versions_are_accepted_without_stable_release_comparison(value):
+    assert _reported_version(f"free-claude-code {value}") == value
+    source = f"return (async () => {{\n{_workflow_script()}\n}})();"
+    harness = """
+const run = new Function("github", "context", __SOURCE__);
+const calls = [];
+const github = {
+  paginate: async () => [
+    {id: 1, user: {login: "github-actions[bot]"}, body: "<!-- fcc-version-validator -->"},
+    {id: 2, user: {login: "github-actions[bot]"}, body: "<!-- fcc-version-outdated -->"},
+  ],
+  rest: {
+    issues: {
+      get: async () => ({data: {labels: [{name: "needs-fcc-version"}], body: "### FCC version\\n\\nfree-claude-code " + __VERSION__}}),
+      removeLabel: async () => calls.push("removeLabel"),
+      deleteComment: async ({comment_id}) => calls.push(comment_id),
+    },
+    repos: {getLatestRelease: async () => {throw new Error("Development builds must not be compared as stable releases");}},
+  },
+};
+await run(github, {repo: {owner: "o", repo: "r"}, payload: {issue: {number: 1}}});
+process.stdout.write(JSON.stringify(calls));
+"""
+    result = _run_javascript(
+        harness.replace("__SOURCE__", json.dumps(source)).replace(
+            "__VERSION__", json.dumps(value)
+        )
+    )
+    assert result == ["removeLabel", 1, 2]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "6.2.67.dev",
+        "6.2.67.dev1+gwrong",
+        "6.2.67.dev1+g123.extra",
+        "6.2.67.dev1+g123.d2026",
+        "6.2.67.dev1+g123 and 6.2.66",
+    ],
+)
+def test_invalid_or_ambiguous_development_versions_are_rejected(value):
+    assert _reported_version(value) is None

@@ -7,6 +7,11 @@ env:
 
 on:
   workflow_dispatch:
+    inputs:
+      release_commit:
+        description: Full main commit SHA to retry (defaults to this workflow commit)
+        required: false
+        type: string
   push:
     branches: [main]
 
@@ -37,7 +42,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Set up CI environment
         id: environment
@@ -81,21 +86,13 @@ jobs:
     timeout-minutes: 15
     environment: pypi
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 2
-
-      - name: Fetch previous revision
-        env:
-          BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          if [ -n "$BEFORE_SHA" ]; then
-            git fetch --no-tags --depth=1 origin "$BEFORE_SHA"
-          fi
+          fetch-depth: 0
 
       - name: Set up CI environment
         uses: ./.github/actions/ci-environment
@@ -105,38 +102,11 @@ jobs:
           lookup-only: "true"
           sync-dependencies: "false"
 
-      - name: Detect release
-        id: release
-        env:
-          BEFORE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          uv run --no-project --python "$(cat .python-version)" python - <<'PY'
-          import os
-          import subprocess
-          import tomllib
-          from pathlib import Path
-
-          head = os.environ["HEAD_SHA"]
-          before = os.environ.get("BEFORE_SHA") or f"{head}^"
-          def version(revision):
-              result = subprocess.run(
-                  ["git", "show", f"{revision}:pyproject.toml"],
-                  check=True, capture_output=True, text=True,
-              )
-              return tomllib.loads(result.stdout)["project"]["version"]
-          current, previous = version(head), version(before)
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              output.write(f"changed={str(current != previous).lower()}\n")
-          print(f"Release version: {previous} -> {current}")
-          PY
-
-      - name: Build and validate release
-        if: steps.release.outputs.changed == 'true'
-        run: |
-          uv build --no-sources --out-dir "$RUNNER_TEMP/fcc-release"
-          uv run --no-project --python "$(cat .python-version)" python scripts/validate_release.py "$RUNNER_TEMP/fcc-release"
-
       - name: Publish release
-        if: steps.release.outputs.changed == 'true'
-        run: uv publish --trusted-publishing always "$RUNNER_TEMP/fcc-release/"*
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ inputs.release_commit || github.sha }}
+        run: |
+          uv run --no-project --python "$(cat .python-version)" python -m scripts.publish_release \
+            --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT"

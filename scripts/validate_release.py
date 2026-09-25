@@ -2,6 +2,7 @@
 
 import argparse
 import configparser
+import re
 import subprocess
 import tarfile
 import tomllib
@@ -16,11 +17,17 @@ def require_files(names: set[str], expected: set[str]) -> None:
         raise ValueError("Missing release files: " + ", ".join(sorted(missing)))
 
 
-def validate(directory: Path) -> None:
+def validate(directory: Path, version: str) -> None:
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))[
         "project"
     ]
-    name, version = project["name"], project["version"]
+    name = project["name"]
+    if not re.fullmatch(
+        r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version
+    ):
+        raise ValueError("Expected a stable MAJOR.MINOR.PATCH release version")
+    if "version" in project or "version" not in project.get("dynamic", []):
+        raise ValueError("Release source must use dynamic version metadata")
     stem = f"{name.replace('-', '_')}-{version}"
     wheel_path = directory / f"{stem}-py3-none-any.whl"
     sdist_path = directory / f"{stem}.tar.gz"
@@ -90,9 +97,10 @@ def validate(directory: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--version", required=True)
     args = parser.parse_args()
     try:
-        validate(args.directory)
+        validate(args.directory, args.version)
     except (
         ValueError,
         KeyError,

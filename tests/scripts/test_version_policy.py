@@ -1,4 +1,4 @@
-"""Exercise version policy against real, isolated Git history."""
+"""Release intent is validated against committed paths, not edited numbers."""
 
 import os
 import subprocess
@@ -11,7 +11,7 @@ CHECKER = Path(__file__).resolve().parents[2] / "scripts/check_version_policy.py
 
 
 def git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
+    return subprocess.run(
         ["git", "-C", str(repo), *args],
         check=True,
         capture_output=True,
@@ -25,8 +25,7 @@ def git(repo: Path, *args: str) -> str:
             "GIT_COMMITTER_NAME": "Test",
             "GIT_COMMITTER_EMAIL": "test@example.invalid",
         },
-    )
-    return result.stdout.strip()
+    ).stdout.strip()
 
 
 def write(repo: Path, path: str, content: str) -> None:
@@ -35,22 +34,9 @@ def write(repo: Path, path: str, content: str) -> None:
     target.write_text(content, encoding="utf-8")
 
 
-def version(repo: Path, value: str, lock: str | None = None) -> None:
-    write(
-        repo,
-        "pyproject.toml",
-        f'[project]\nname = "free-claude-code"\nversion = "{value}"\n',
-    )
-    write(
-        repo,
-        "uv.lock",
-        f'[[package]]\nname = "free-claude-code"\nversion = "{lock or value}"\nsource = {{ editable = "." }}\n',
-    )
-
-
-def commit(repo: Path) -> str:
+def commit(repo: Path, title: str = "test change") -> str:
     git(repo, "add", ".")
-    git(repo, "commit", "--no-gpg-sign", "-m", "test change")
+    git(repo, "commit", "--no-gpg-sign", "-m", title)
     return git(repo, "rev-parse", "HEAD")
 
 
@@ -58,14 +44,32 @@ def commit(repo: Path) -> str:
 def history(tmp_path):
     git(tmp_path, "init", "-b", "main")
     git(tmp_path, "config", "core.autocrlf", "false")
-    version(tmp_path, "1.2.3")
+    write(
+        tmp_path,
+        "pyproject.toml",
+        '[project]\nname="free-claude-code"\ndynamic=["version"]\n',
+    )
+    write(
+        tmp_path,
+        "uv.lock",
+        '[[package]]\nname="free-claude-code"\nsource={editable="."}\n',
+    )
     write(tmp_path, "src/file.py", "original\n")
     return tmp_path, commit(tmp_path)
 
 
-def check(repo: Path, base: str) -> subprocess.CompletedProcess[str]:
+def check(repo: Path, base: str, title: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(CHECKER), "--base", base, "--head", "HEAD"],
+        [
+            sys.executable,
+            str(CHECKER),
+            "--base",
+            base,
+            "--head",
+            "HEAD",
+            "--title",
+            title,
+        ],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -84,162 +88,125 @@ def check(repo: Path, base: str) -> subprocess.CompletedProcess[str]:
         "uv.lock",
     ],
 )
-@pytest.mark.parametrize("bump", [False, True])
-def test_release_changes_require_increase(history, path, bump):
-    repo, base = history
-    if bump:
-        version(repo, "1.2.4")
-    if path in {"pyproject.toml", "uv.lock"}:
-        with (repo / path).open("a", encoding="utf-8") as stream:
-            stream.write("# non-version change\n")
-    else:
-        write(repo, path, "changed\n")
-    commit(repo)
-    result = check(repo, base)
-    assert (result.returncode == 0) is bump, result.stdout + result.stderr
-    assert path in result.stdout
-
-
 @pytest.mark.parametrize(
-    "path",
+    "title,allowed",
     [
-        "README.md",
-        "tests/test_example.py",
-        ".github/workflows/ci.yml",
-        "scripts-other/a.py",
+        ("patch: Fix it", True),
+        ("minor: Add it", True),
+        ("major: Replace it", True),
+        ("Fix it", False),
     ],
 )
-@pytest.mark.parametrize("bump", [False, True])
-def test_excluded_only_changes_forbid_increase(history, path, bump):
+def test_release_inputs_require_prefix(history, path, title, allowed):
     repo, base = history
-    if bump:
-        version(repo, "1.2.4")
-    write(repo, path, "documentation\n")
+    target = repo / path
+    write(repo, path, (target.read_text() if target.exists() else "") + "\n# change\n")
     commit(repo)
-    result = check(repo, base)
-    assert (result.returncode == 0) is not bump, result.stdout + result.stderr
-
-
-def test_version_only_change_does_not_justify_itself(history):
-    repo, base = history
-    version(repo, "1.2.4")
-    commit(repo)
-    result = check(repo, base)
-    assert result.returncode != 0
-    assert "without release changes" in result.stdout
-
-
-@pytest.mark.parametrize(
-    "value,allowed",
-    [
-        ("1.2.4", True),
-        ("1.3.0", True),
-        ("2.0.0", True),
-        ("1.2.5", False),
-        ("1.4.0", False),
-        ("3.0.0", False),
-        ("1.3.1", False),
-        ("2.1.0", False),
-        ("2.0.1", False),
-        ("1.2.4rc1", False),
-        ("1.2.4.post1", False),
-        ("1.2.4.dev1", False),
-        ("1.2.4+local", False),
-        ("1!1.2.4", False),
-        ("1.2.4.0", False),
-        ("v1.2.4", False),
-        ("01.2.4", False),
-    ],
-)
-def test_release_requires_exactly_one_version_increment(history, value, allowed):
-    repo, base = history
-    version(repo, value)
-    write(repo, "src/file.py", "changed\n")
-    commit(repo)
-    result = check(repo, base)
-    assert (result.returncode == 0) is allowed, result.stdout + result.stderr
-
-
-@pytest.mark.parametrize("final_version,allowed", [("1.2.4", True), ("1.2.5", False)])
-def test_multiple_pr_commits_share_one_bump(history, final_version, allowed):
-    repo, base = history
-    version(repo, "1.2.4")
-    write(repo, "src/file.py", "first change\n")
-    commit(repo)
-    version(repo, final_version)
-    write(repo, "src/file.py", "second change\n")
-    commit(repo)
-    result = check(repo, base)
+    result = check(repo, base, title)
     assert (result.returncode == 0) is allowed, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize(
-    "value,lock", [("1.2.2", None), ("1.2.4", "1.2.3"), ("invalid", None)]
+    "title",
+    ["patch: Missing release", "minor: Missing release", "major: Missing release"],
 )
-def test_invalid_or_inconsistent_versions_fail(history, value, lock):
+def test_nonrelease_changes_forbid_prefix(history, title):
     repo, base = history
-    version(repo, value, lock)
-    write(repo, "src/file.py", "changed\n")
+    write(repo, "README.md", "docs")
     commit(repo)
-    assert check(repo, base).returncode != 0
+    assert check(repo, base, title).returncode != 0
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Patch: Change",
+        " patch: Change",
+        "patch:Change",
+        "patch:  Change",
+        "patch:\tChange",
+        "patch: ",
+        "patch : Change",
+        "major\uff1a Change",
+    ],
+)
+def test_malformed_release_title_rejected(history, title):
+    repo, base = history
+    write(repo, "src/file.py", "change")
+    commit(repo)
+    assert check(repo, base, title).returncode != 0
 
 
 @pytest.mark.parametrize("move", [False, True])
-def test_deleting_or_moving_out_of_release_directory_requires_bump(history, move):
+def test_delete_or_move_out_counts_as_release(history, move):
     repo, base = history
     if move:
-        (repo / "src/file.py").rename(repo / "file with spaces.py")
+        (repo / "src/file.py").rename(repo / "outside.py")
     else:
         (repo / "src/file.py").unlink()
     commit(repo)
-    result = check(repo, base)
-    assert result.returncode != 0
-    assert "src/file.py" in result.stdout
+    assert check(repo, base, "Docs").returncode != 0
+    assert check(repo, base, "patch: Remove file").returncode == 0
 
 
-def test_other_lock_package_version_is_a_release_change(history):
-    repo, _ = history
-    with (repo / "uv.lock").open("a", encoding="utf-8") as stream:
-        stream.write('[[package]]\nname = "other"\nversion = "1.0"\n')
-    base = commit(repo)
-    lock = repo / "uv.lock"
-    lock.write_text(lock.read_text().replace('version = "1.0"', 'version = "2.0"'))
-    commit(repo)
-    result = check(repo, base)
-    assert result.returncode != 0
-    assert "uv.lock" in result.stdout
-
-
-def test_stale_release_cannot_reuse_new_main_version(history):
+def test_unrelated_main_and_dirty_files_do_not_change_pr_classification(history):
     repo, original = history
-    version(repo, "1.2.4")
-    write(repo, "src/main.py", "main change\n")
+    write(repo, "src/main.py", "main")
     base = commit(repo)
-    git(repo, "checkout", "-b", "pr", original)
-    version(repo, "1.2.4")
-    write(repo, "src/pr.py", "pr change\n")
+    git(repo, "checkout", "-b", "docs", original)
+    write(repo, "README.md", "docs")
     commit(repo)
-    result = check(repo, base)
-    assert result.returncode != 0
-    assert "must increase" in result.stdout
+    write(repo, "src/file.py", "uncommitted")
+    assert check(repo, base, "Explain setup").returncode == 0
 
 
-def test_unrelated_main_changes_are_not_attributed_to_docs_pr(history):
-    repo, original = history
-    write(repo, "src/main.py", "main change\n")
-    base = commit(repo)
-    git(repo, "checkout", "-b", "pr", original)
-    write(repo, "README.md", "docs\n")
-    commit(repo)
-    result = check(repo, base)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_checker_reads_commits_not_uncommitted_files(history):
+def test_title_is_data_and_multiple_commits_have_one_intent(history):
     repo, base = history
-    write(repo, "README.md", "docs\n")
+    write(repo, "src/file.py", "one")
     commit(repo)
-    version(repo, "9.9.9")
-    write(repo, "src/file.py", "uncommitted\n")
-    result = check(repo, base)
-    assert result.returncode == 0, result.stdout + result.stderr
+    write(repo, "src/file.py", "two")
+    commit(repo)
+    assert check(repo, base, 'patch: $(echo unsafe) `literal` "quoted"').returncode == 0
+
+
+def test_manual_version_is_rejected(history):
+    repo, base = history
+    write(
+        repo, "pyproject.toml", '[project]\nname="free-claude-code"\nversion="1.2.3"\n'
+    )
+    commit(repo)
+    assert check(repo, base, "patch: Manual version").returncode != 0
+
+
+def test_pr_snapshot_uses_latest_title_and_rejects_stale_head(history, tmp_path):
+    import json
+
+    repo, base = history
+    write(repo, "src/file.py", "change")
+    head = commit(repo)
+    payload = tmp_path / "current-pr.json"
+    payload.write_text(
+        json.dumps(
+            {"head": {"sha": head}, "base": {"sha": base}, "title": "patch: New title"}
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, str(CHECKER), "--head", head, "--pr-json", str(payload)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout
+    payload.write_text(
+        json.dumps(
+            {"head": {"sha": base}, "base": {"sha": base}, "title": "patch: New title"}
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, str(CHECKER), "--head", head, "--pr-json", str(payload)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "head changed" in result.stdout
