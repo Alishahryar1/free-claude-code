@@ -41,10 +41,10 @@ def pytest_addoption(parser) -> None:
 
 def pytest_configure(config: pytest.Config) -> None:
     if float(config.getini("thread_dump_timeout")) > 0:
-        assert sys.__stderr__ is not None
+        # Windows xdist workers preserve stderr here and redirect descriptor 2 to NUL.
         # Keep a stable output descriptor across pytest's per-test capture changes.
         config.stash[_output] = os.fdopen(
-            os.dup(sys.__stderr__.fileno()),
+            os.dup(sys.stderr.fileno()),
             "w",
             encoding="utf-8",
             errors="backslashreplace",
