@@ -4,11 +4,9 @@ env:
   CI_UV_VERSION: "0.12.13"
   UV_MALWARE_CHECK: "1"
   UV_PREVIEW_FEATURES: "malware-check"
-  UV_CACHE_DIR: /tmp/.uv-cache
-  UV_PYTHON_INSTALL_DIR: /tmp/uv-python
-  UV_PYTHON_PREFERENCE: only-managed
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
 
@@ -18,87 +16,57 @@ concurrency:
 
 jobs:
   warm-dependency-cache:
-    name: Warm dependency cache
-    runs-on: ubuntu-latest
+    name: Warm dependency cache (${{ matrix.os }})
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: Linux
+            runner: ubuntu-latest
+          - os: Windows
+            runner: windows-latest
+          - os: macOS
+            runner: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
 
-      - name: Read Python version
-        id: python
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(tr -d '[:space:]' < .python-version)"
-          test -n "$version"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Restore Python
-        id: python-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Set up CI environment
+        id: environment
+        uses: ./.github/actions/ci-environment
         with:
-          path: ${{ env.UV_PYTHON_INSTALL_DIR }}
-          key: uv-python-v1-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.python.outputs.version }}-uv-${{ env.CI_UV_VERSION }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
-        with:
-          version: ${{ env.CI_UV_VERSION }}
-          enable-cache: false
-
-      - name: Install Python
-        if: steps.python-cache.outputs.cache-hit != 'true'
-        run: uv python install "${{ steps.python.outputs.version }}"
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ${{ matrix.runner }}
+          lookup-only: "true"
 
       - name: Save Python
-        if: steps.python-cache.outputs.cache-hit != 'true'
+        if: steps.environment.outputs.python-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: ${{ env.UV_PYTHON_INSTALL_DIR }}
-          key: ${{ steps.python-cache.outputs.cache-primary-key }}
+          path: ${{ steps.environment.outputs.python-path }}
+          key: ${{ steps.environment.outputs.python-key }}
 
-      - name: Fingerprint dependencies
-        id: dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          uv export \
-            --locked \
-            --no-emit-workspace \
-            --no-header \
-            --no-annotate \
-            --output-file "$RUNNER_TEMP/uv-ci-dependencies.txt"
-          echo "hash=$(sha256sum "$RUNNER_TEMP/uv-ci-dependencies.txt" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-
-      - name: Check for exact uv cache
-        id: exact-cache
+      - name: Restore compatible dependency cache
+        if: steps.environment.outputs.dependencies-hit != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: ${{ env.UV_CACHE_DIR }}
-          key: uv-deps-v1-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.python.outputs.version }}-uv-${{ env.CI_UV_VERSION }}-${{ steps.dependencies.outputs.hash }}
-          lookup-only: true
+          path: ${{ steps.environment.outputs.dependencies-path }}
+          key: ${{ steps.environment.outputs.dependencies-key }}
+          restore-keys: ${{ steps.environment.outputs.dependencies-prefix }}
 
-      - name: Restore compatible uv cache
-        if: steps.exact-cache.outputs.cache-hit != 'true'
-        id: uv-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ${{ env.UV_CACHE_DIR }}
-          key: uv-deps-v1-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.python.outputs.version }}-uv-${{ env.CI_UV_VERSION }}-${{ steps.dependencies.outputs.hash }}
-          restore-keys: |
-            uv-deps-v1-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.python.outputs.version }}-uv-${{ env.CI_UV_VERSION }}-
+      - name: Warm dependency cache
+        if: steps.environment.outputs.dependencies-hit != 'true'
+        run: uv sync --locked --group dev --no-install-workspace
 
-      - name: Warm uv cache
-        if: steps.exact-cache.outputs.cache-hit != 'true'
-        run: uv sync --locked --no-install-workspace
-
-      - name: Save uv cache
-        if: steps.exact-cache.outputs.cache-hit != 'true'
+      - name: Save dependency cache
+        if: steps.environment.outputs.dependencies-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: ${{ env.UV_CACHE_DIR }}
-          key: ${{ steps.uv-cache.outputs.cache-primary-key }}
+          path: ${{ steps.environment.outputs.dependencies-path }}
+          key: ${{ steps.environment.outputs.dependencies-key }}
