@@ -131,15 +131,13 @@ OpenCode 2:
 fcc-opencode
 ```
 
-To upgrade from OpenCode 1, rerun the FCC installer with OpenCode selected. It
-upgrades the native installation in `~/.opencode/bin`; for npm or other package
-managers, follow [OpenCode's migration instructions](https://opencode.ai/v2/docs/migrate-v1/)
+To upgrade from OpenCode 1, close OpenCode and rerun the FCC installer with
+OpenCode selected. For npm or other package-manager installations, follow
+[OpenCode's migration instructions](https://opencode.ai/v2/docs/migrate-v1/)
 first. For npm v1, run `npm uninstall -g opencode-ai`, then rerun the FCC installer.
-Close OpenCode before upgrading. OpenCode manages its own data upgrades.
 
-RTK integration is temporarily unavailable for OpenCode 2. The installer saves
-the recognized old RTK plugin outside the plugin directory; customized plugins
-need manual migration. RTK continues to work with the other supported agents.
+RTK integration is temporarily unavailable for OpenCode 2. RTK continues to work
+with the other supported agents.
 
 Use `fcc-opencode` for coding and sessions. Use plain `opencode` for commands
 such as upgrades, service management, ACP, and MCP setup.
@@ -274,12 +272,9 @@ from more than one provider before succeeding.
 - GitHub Copilot uses your signed-in GitHub account and subscription. Install
   [Copilot CLI 1.0.83](https://github.com/github/copilot-cli/releases/tag/v1.0.83)
   on PATH, then choose **Providers → OAuth providers → GitHub Copilot → Connect**.
-  FCC reuses the native profile or shows a GitHub device code when sign-in is needed.
-  You can also sign in first with `copilot login --device-code`. Select a concrete
-  `github_copilot/<model-id>` from the discovered list; available models and quotas
-  depend on your subscription and organization policies. Restart an already-running
-  agent after connecting. Disconnect stops FCC use and leaves the native login intact.
-  FCC pins its SDK and CLI compatibility because direct endpoint access is experimental.
+  Finish signing in, then select a `github_copilot/<model-id>` from the model picker.
+  Available models and quotas depend on your subscription and organization policies.
+  Restart an already-running agent after connecting.
 - Azure OpenAI uses the deployment names from your resource. Set
   `AZURE_OPENAI_BASE_URL` to its complete v1 endpoint, such as
   `https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1/`, and select a
@@ -317,7 +312,7 @@ Start LM Studio's local server, load a tool-capable model, and use the model ide
 
 ### llama.cpp
 
-Start `llama-server` with its OpenAI-compatible Chat Completions API and enough context for the model. Use the local model ID with the `llamacpp/` prefix. `LLAMACPP_BASE_URL` defaults to `http://localhost:8080/v1`; FCC accepts either the server root or an explicit `/v1` suffix.
+Start `llama-server` with its OpenAI-compatible Chat Completions API and enough context for the model. Use the local model ID with the `llamacpp/` prefix. `LLAMACPP_BASE_URL` defaults to `http://localhost:8080/v1`.
 
 ### Ollama
 
@@ -326,7 +321,7 @@ ollama pull llama3.1
 ollama serve
 ```
 
-Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` defaults to `http://localhost:11434`; FCC accepts either the root URL or an explicit `/v1` suffix.
+Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` defaults to `http://localhost:11434`.
 
 </details>
 
@@ -334,8 +329,6 @@ Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` 
 <summary><strong>Optional model-tier routing</strong></summary>
 
 `MODEL` is the fallback for every request. Select a model for `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, or `MODEL_HAIKU` to override an individual Claude Code tier; select **None** to use `MODEL`.
-
-For example, route Opus to `nvidia_nim/nvidia/nemotron-3-super-120b-a12b`, Sonnet to `open_router/openrouter/free`, Haiku to `lmstudio/qwen3.5-coder`, and keep `MODEL` on `zai/glm-5.2`.
 
 </details>
 
@@ -346,7 +339,7 @@ Open **Admin UI → Model Config → Reasoning** and select the behavior you wan
 
 | Selection | Behavior |
 | --- | --- |
-| **From client** (default) | Use the effort sent by Claude Code, Codex, Pi, OpenCode, Cline, Hermes, DeepSeek Harness, Grok Build, Muse Code, or Aider. If none is sent, keep the provider default. |
+| **From client** (default) | Use the effort sent by your coding agent. If none is sent, keep the provider default. |
 | **Off** | Request reasoning to be disabled. |
 | **Low**, **Medium**, **High**, **X-High**, or **Max** | Override the client with the selected reasoning level. |
 | **Inherit** (Fable, Opus, Sonnet, and Haiku only) | Use the root Reasoning selection. |
@@ -359,10 +352,6 @@ Providers that do not support a selected control retain their own behavior.
 
 ## Connect Your Client
 
-For terminal use, start `fcc-server`, then run `fcc-claude`, `fcc-codex`,
-`fcc-pi`, `fcc-opencode`, `fcc-cline`, `fcc-hermes`, `fcc-dsh`, `fcc-grok`,
-`fcc-muse`, or `fcc-aider`.
-
 For editor and app integrations, install the client, start FCC, then open
 **Admin UI → Integrations** and click **Connect** on its card.
 
@@ -372,8 +361,7 @@ For editor and app integrations, install the client, start FCC, then open
 - **Claude Code in JetBrains ACP** — install Claude Agent in JetBrains AI Assistant and start it once, then click **Connect** in FCC. Reopen the IDE, select **Claude Code (FCC)**, and start a new chat. After JetBrains updates the agent, restart FCC before starting a new chat. Requires a local IDE in its standard installation locations.
 
 Reload VS Code or restart the app/IDE after connecting. In Codex and Claude Desktop, select an FCC
-model from the model picker. FCC keeps connected integrations up to date when it
-starts; reload or restart the client when FCC reports updated settings. Use
+model from the model picker. Reload or restart the client when FCC reports updated settings. Use
 **Disconnect** on the same card to remove the integration.
 
 Run FCC on the same computer and in the same user environment as the client you
@@ -417,8 +405,8 @@ Configure integrations from **Admin UI → Messaging**, then click **Apply**.
 | `/stats` | Show session state. |
 | Standalone `/stop` | Cancel all work. |
 | Reply with `/stop` | Cancel only the selected request while other queued requests continue. |
-| Standalone `/clear` | Reset all FCC state and remove every tracked message in that chat, including user prompts, voice notes, FCC replies, Telegram's online notice, and the clear command itself. |
-| Reply with `/clear` | Delete the selected message and its literal platform reply subtree while preserving its ancestors and siblings. |
+| Standalone `/clear` | Clear all FCC conversations and their messages in this chat. |
+| Reply with `/clear` | Delete the selected message and the chain of replies to it. Keep other conversations. |
 
 <details>
 <summary><strong>Voice notes</strong></summary>
@@ -471,25 +459,25 @@ Stop all running FCC commands, then run:
 fcc-update
 ```
 
-This runs the same installer as above, including its coding-agent prompts and checks. If you use voice support, pass the same voice options used during installation.
+For local voice support, include `--voice-local` (macOS/Linux) or `-VoiceLocal` (Windows), plus your `--torch-backend` or `-TorchBackend` option if used.
 
 If your installation does not have `fcc-update` yet, run the [installer](#install) once to add it.
 
 ### Muse Code on native Windows
 
-Rerunning FCC's Windows installer with Muse Code selected installs or updates FCC's managed Muse executable. To install or update only Muse Code:
+To install or update only Muse Code:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1")))
 ```
 
-To remove only that managed Muse executable while preserving Muse data and other installations:
+To remove the Muse Code copy installed by FCC, keeping its data:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/uninstall-muse.ps1")))
 ```
 
-FCC's ordinary uninstaller below continues to leave Muse Code installed.
+Uninstalling FCC leaves Muse Code installed.
 
 ### Uninstall
 
@@ -503,8 +491,7 @@ Stop every running FCC command before uninstalling.
 **Keeps**
 
 - uv and Python
-- Claude Code, Codex, Pi, OpenCode, Cline, Hermes, DeepSeek Harness, Grok Build, Muse Code, Aider, and RTK
-- Shared PATH entries
+- Your coding agents and RTK
 
 macOS/Linux:
 
