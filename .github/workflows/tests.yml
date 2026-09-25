@@ -110,7 +110,9 @@ jobs:
         run: uv sync --locked --group dev
 
       - name: Run pytest
-        run: uv run --locked pytest -v --tb=short --durations=50
+        env:
+          FCC_CI_DIAGNOSTICS: "1"
+        run: uv run --locked pytest -v --tb=short --durations=50 --capture=tee-sys -o faulthandler_timeout=60
 
   playwright:
     name: playwright (${{ matrix.os }})

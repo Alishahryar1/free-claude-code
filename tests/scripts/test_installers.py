@@ -9,7 +9,9 @@ import sys
 import tarfile
 import zipfile
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
+from time import perf_counter
 
 import pytest
 
@@ -2184,6 +2186,8 @@ exit /b 76
 
     def run(self, *args: str, fail_step: str = "") -> subprocess.CompletedProcess[str]:
         env = self.env | {"FAIL_STEP": fail_step}
+        if env.get("FCC_PROFILE_INSTALLER") == "1":
+            return self._run_profiled(args, env)
         return subprocess.run(
             [
                 self.powershell,
@@ -2198,6 +2202,49 @@ exit /b 76
             capture_output=True,
             text=True,
             env=env,
+        )
+
+    def _run_profiled(
+        self, args: tuple[str, ...], env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        command = [
+            self.powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.wrapper),
+            *args,
+        ]
+        started = perf_counter()
+        rows: list[tuple[float, str]] = [(0, "Process launch")]
+        with subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+        ) as process:
+            assert process.stdout is not None
+            rows.extend(
+                (perf_counter() - started, line)
+                for line in process.stdout
+                if line.strip()
+            )
+            returncode = process.wait()
+        rows.append((perf_counter() - started, "Process exit"))
+        gaps = sorted(
+            ((right[0] - left[0], left[1], right[1]) for left, right in pairwise(rows)),
+            reverse=True,
+        )
+        report = {
+            "shell": self.powershell,
+            "elapsed": rows[-1][0],
+            "largest_gaps": gaps[:20],
+        }
+        print("INSTALLER PROFILE " + json.dumps(report), file=sys.stderr, flush=True)
+        return subprocess.CompletedProcess(
+            command, returncode, "".join(row[1] for row in rows[1:-1]), ""
         )
 
     def run_functions(
@@ -3114,9 +3161,20 @@ def test_install_ps1_does_not_use_uv_install_directory_for_aider(
 
 def test_install_ps1_fresh_install_is_verified(
     powershell_harness: PowerShellHarness,
+    capsys,
 ) -> None:
     (powershell_harness.bin_dir / "opencode.cmd").unlink()
-    result = powershell_harness.run()
+    if os.environ.get("FCC_CI_DIAGNOSTICS") == "1":
+        powershell_harness.env["FCC_PROFILE_INSTALLER"] = "1"
+        wrapper = powershell_harness.wrapper
+        wrapper.write_text(
+            wrapper.read_text(encoding="utf-8").replace(
+                "& $installer @args", "Set-PSDebug -Trace 1\n& $installer @args"
+            ),
+            encoding="utf-8",
+        )
+    with capsys.disabled():
+        result = powershell_harness.run()
 
     assert result.returncode == 0, result.stderr
     assert "Free Claude Code is installed and verified." in result.stdout
