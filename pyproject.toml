@@ -4,9 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "free-claude-code"
-version = "6.2.60"
+version = "6.2.62"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.14.0"
 dependencies = [
     "anyio>=4.15.1",

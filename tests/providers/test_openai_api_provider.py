@@ -47,10 +47,14 @@ def _complete_stream(text: str) -> str:
     )
 
 
-def _provider(handler: httpx2.MockTransport) -> OpenAIAPIProvider:
+def _provider(
+    handler: httpx2.MockTransport, *, max_attempts: int = 1
+) -> OpenAIAPIProvider:
     return OpenAIAPIProvider(
         make_provider_config("platform-key", "https://api.openai.com/v1"),
-        admission=immediate_admission(provider_name="openai_api", max_attempts=1),
+        admission=immediate_admission(
+            provider_name="openai_api", max_attempts=max_attempts
+        ),
         transport=handler,
     )
 
