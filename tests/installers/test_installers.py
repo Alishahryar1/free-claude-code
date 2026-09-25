@@ -2157,6 +2157,11 @@ class PowerShellHarness:
     def add_client(self, name: str) -> None:
         _write_executable(self.bin_dir / f"{name}.cmd", _batch_client(name))
 
+    def add_installed_clients(self, *, except_for: tuple[str, ...] = ()) -> None:
+        for name in CODING_AGENTS:
+            if name not in except_for:
+                self.add_client(name)
+
     def add_unrelated_pi(self) -> None:
         _write_executable(self.bin_dir / "pi.cmd", _batch_client("unrelated-pi"))
 
@@ -3282,6 +3287,7 @@ def test_install_ps1_fresh_install_is_verified(
 def test_install_ps1_discovers_grok_in_custom_bin_directory(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     custom_grok_bin = powershell_harness.root / "custom-grok-bin"
     powershell_harness.env["GROK_BIN_DIR"] = str(custom_grok_bin)
 
@@ -3315,6 +3321,7 @@ def test_install_ps1_preserves_upstream_managed_harness_without_parsing_version(
     client: str,
     install_call: str,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     _write_executable(
         powershell_harness.bin_dir / f"{client}.cmd",
         _batch_client(client, version_output="opaque upstream version output"),
@@ -3333,6 +3340,7 @@ def test_install_ps1_preserves_upstream_managed_harness_without_parsing_version(
 def test_install_ps1_delegates_compatible_external_muse_without_adopting_it(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     powershell_harness.add_client("muse")
 
     result = powershell_harness.run_functions(
@@ -3354,6 +3362,7 @@ def test_install_ps1_stops_when_muse_install_fails(
     powershell_harness: PowerShellHarness,
     failure: str,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Muse", fail_step=failure
     )
@@ -3368,6 +3377,7 @@ def test_install_ps1_stops_when_grok_install_fails(
     powershell_harness: PowerShellHarness,
     failure: str,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Grok", fail_step=failure
     )
@@ -3380,6 +3390,7 @@ def test_install_ps1_stops_when_grok_install_fails(
 def test_install_ps1_stops_when_aider_install_fails(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Aider", fail_step="aider-install"
     )
@@ -3454,6 +3465,7 @@ def test_install_ps1_checks_existing_aider_in_custom_uv_tool_bin_before_installi
 def test_install_ps1_rejects_broken_existing_aider_without_replacing_it(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     powershell_harness.add_client("aider")
 
     result = powershell_harness.run_functions(
@@ -3470,6 +3482,7 @@ def test_install_ps1_rejects_broken_existing_aider_without_replacing_it(
 def test_install_ps1_preserves_exact_dsh_preview(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     powershell_harness.add_client("dsh")
 
     result = powershell_harness.run_functions(
@@ -3488,6 +3501,7 @@ def test_install_ps1_replaces_mismatched_dsh_preview(
     powershell_harness: PowerShellHarness,
     interactive: bool,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
         _batch_client("dsh").replace("0.1.0-rc.8", "0.1.0-rc.7"),
         encoding="utf-8",
@@ -3509,6 +3523,7 @@ def test_install_ps1_replaces_mismatched_dsh_preview(
 def test_install_ps1_rejects_exact_dsh_on_unsupported_node(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     powershell_harness.add_client("dsh")
     (powershell_harness.bin_dir / "node.cmd").write_text(
         _batch_client("node").replace("node 22.19.0", "node 23.9.0"),
@@ -3531,6 +3546,7 @@ def test_install_ps1_rejects_incompatible_node_for_selected_dsh(
     powershell_harness: PowerShellHarness,
     node_version: str,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
         _batch_client("dsh").replace("0.1.0-rc.8", "0.1.0-rc.7"),
         encoding="utf-8",
@@ -3552,6 +3568,8 @@ def test_install_ps1_rejects_incompatible_node_for_selected_dsh(
 def test_install_ps1_noninteractive_skips_dsh_without_node(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_installed_clients(except_for=("dsh",))
+    powershell_harness.add_uv("0.12.13")
     (powershell_harness.bin_dir / "node.cmd").unlink()
     (powershell_harness.bin_dir / "npm.cmd").unlink()
 
@@ -3567,6 +3585,7 @@ def test_install_ps1_noninteractive_skips_dsh_without_node(
 def test_install_ps1_stops_when_selected_dsh_install_fails(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Dsh", fail_step="dsh-install"
     )
@@ -3579,6 +3598,7 @@ def test_install_ps1_stops_when_selected_dsh_install_fails(
 def test_install_ps1_rejects_unsupported_hermes_architecture_before_download(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     powershell_harness.env["PROCESSOR_ARCHITECTURE"] = "MIPS"
     powershell_harness.env["PROCESSOR_ARCHITEW6432"] = "MIPS"
 
@@ -3651,6 +3671,7 @@ def test_install_ps1_preserves_existing_rtk_and_configures_selected_agents(
 def test_install_ps1_prepares_custom_claude_config_directory_for_rtk(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     powershell_harness.add_rtk()
     custom_config = powershell_harness.root / "custom-claude"
     powershell_harness.env["CLAUDE_CONFIG_DIR"] = str(custom_config)
@@ -3667,6 +3688,7 @@ def test_install_ps1_prepares_custom_claude_config_directory_for_rtk(
 def test_install_ps1_rejects_conflicting_rtk_command(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     powershell_harness.add_unrelated_rtk()
 
     result = powershell_harness.run_functions(
@@ -3736,6 +3758,8 @@ Install-Rtk
 def test_install_ps1_stops_if_windows_icon_export_fails(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_installed_clients()
+    powershell_harness.add_uv("0.12.13")
     result = powershell_harness.run(fail_step="desktop-icon-export")
 
     assert result.returncode != 0
@@ -3747,6 +3771,7 @@ def test_install_ps1_stops_if_windows_icon_export_fails(
 def test_install_ps1_preserves_unowned_desktop_shortcut(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     desktop_shortcut = (
         Path(powershell_harness.env["USERPROFILE"]) / "Desktop" / "Free Claude Code.lnk"
     )
@@ -3843,6 +3868,7 @@ def test_install_ps1_discovers_custom_pi_npm_prefix(
 def test_install_ps1_continues_when_pi_is_not_installed(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_installed_clients(except_for=("pi",))
     result = powershell_harness.run(fail_step="pi-skip")
 
     assert result.returncode == 0, result.stderr
@@ -3858,6 +3884,7 @@ def test_install_ps1_continues_when_pi_is_not_installed(
 def test_install_ps1_continues_when_unrelated_pi_is_unchanged(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_installed_clients(except_for=("pi",))
     powershell_harness.add_unrelated_pi()
 
     result = powershell_harness.run(fail_step="pi-skip")
@@ -3874,6 +3901,7 @@ def test_install_ps1_continues_when_unrelated_pi_is_unchanged(
 def test_install_ps1_continues_when_pi_resolution_changes_to_unrelated_command(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_installed_clients(except_for=("pi",))
     powershell_harness.add_unrelated_pi()
     npm_prefix = powershell_harness.root / "custom-npm"
     powershell_harness.add_npm_prefix(npm_prefix)
@@ -4027,6 +4055,9 @@ def test_install_ps1_stops_without_success_on_each_failure(
     powershell_harness: PowerShellHarness,
     failure: str,
 ) -> None:
+    if failure in {"fcc-install", "path-update", "fcc-missing", "fcc-verify"}:
+        powershell_harness.add_installed_clients()
+        powershell_harness.add_uv("0.12.13")
     if failure in {"opencode-download", "opencode-archive"}:
         (powershell_harness.bin_dir / "opencode.cmd").unlink()
     # Full workflows cover each phase's abort; component cases cover its details.
@@ -4050,6 +4081,7 @@ def test_install_ps1_stops_without_success_on_each_failure(
         }[failure.split("-", 1)[0]]
         setup = '$script:OriginalOpenCode = Get-ApplicationCommand "opencode"\nAdd-KnownBinDirectories\n'
         if component != "Ensure-Uv":
+            powershell_harness.add_uv("0.12.13")
             setup += "Ensure-Uv\n"
         result = powershell_harness.run_functions(setup + component, fail_step=failure)
         assert "Installer scenario completed." not in result.stdout
@@ -4100,6 +4132,7 @@ def test_install_ps1_dry_run_never_executes_commands(
 def test_install_ps1_rejects_broken_existing_client_without_replacing_it(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     powershell_harness.add_client("claude")
 
     result = powershell_harness.run_functions(
@@ -4143,6 +4176,7 @@ def test_install_ps1_voice_flags_only_change_fcc_spec(
     args: tuple[str, ...],
     package: str,
 ) -> None:
+    powershell_harness.add_uv("0.12.13")
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nInstall-FreeClaudeCode", *args
     )
@@ -4185,7 +4219,13 @@ def test_install_ps1_rejects_running_fcc_before_mutation(
 ) -> None:
     powershell_harness.env["FCC_RUNNING_COMMAND"] = command_name
 
-    result = powershell_harness.run()
+    # One full workflow checks placement before mutation; the other names test
+    # the same guard's exact process matching without repeating startup.
+    result = (
+        powershell_harness.run()
+        if command_name == "fcc-server"
+        else powershell_harness.run_functions("Assert-NoFccProcessesRunning")
+    )
 
     assert result.returncode != 0
     assert powershell_harness.calls() == []
@@ -4217,7 +4257,7 @@ def test_install_ps1_ignores_similarly_named_process(
 ) -> None:
     powershell_harness.env["FCC_RUNNING_COMMAND"] = "fcc-server-helper"
 
-    result = powershell_harness.run()
+    result = powershell_harness.run_functions("Assert-NoFccProcessesRunning")
 
     assert result.returncode == 0, result.stderr
 
@@ -4546,13 +4586,10 @@ def _assert_native_opencode_migration(
 ) -> None:
     binary = _prepare_native_opencode_v1(harness)
     original = binary.read_bytes()
-    result = (
-        harness.run_functions(
-            '$script:OriginalOpenCode = Get-ApplicationCommand "opencode"\nAdd-KnownBinDirectories\nEnsure-OpenCode'
-        )
-        if isinstance(harness, PowerShellHarness)
-        else harness.run()
-    )
+    if isinstance(harness, PowerShellHarness):
+        harness.add_installed_clients(except_for=("opencode",))
+        harness.add_uv("0.12.13")
+    result = harness.run()
     assert result.returncode == 0, result.stderr
     assert binary.read_bytes() != original
     assert any(
@@ -4772,7 +4809,13 @@ def _assert_opencode_starting_late_blocks_mutation(
     plugin.write_bytes(contents)
     harness.env["FCC_RUNNING_COMMAND"] = command
     harness.env["FCC_RUNNING_PHASE"] = phase
-    result = harness.run()
+    result = (
+        harness.run_functions(
+            '$script:OriginalOpenCode = Get-ApplicationCommand "opencode"\nAdd-KnownBinDirectories\nEnsure-OpenCode'
+        )
+        if isinstance(harness, PowerShellHarness)
+        else harness.run()
+    )
     assert Path(harness.env["FCC_PROCESS_MARKER"]).exists()
     assert result.returncode != 0
     assert "Close OpenCode" in result.stderr
@@ -4897,7 +4940,13 @@ def _assert_opencode_validates_current_path(
     plugin.write_bytes(contents)
 
     # The external v2 wins initially; adding the native directory puts it first.
-    result = harness.run()
+    result = (
+        harness.run_functions(
+            '$script:OriginalOpenCode = Get-ApplicationCommand "opencode"\nAdd-KnownBinDirectories\nEnsure-OpenCode'
+        )
+        if isinstance(harness, PowerShellHarness)
+        else harness.run()
+    )
     assert native.read_bytes() == original
     assert not any("opencode.ai" in call for call in harness.calls())
     if native_version.startswith("1."):
