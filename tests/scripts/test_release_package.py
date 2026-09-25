@@ -20,7 +20,7 @@ def release(tmp_path):
     repo.mkdir()
     git(repo, "init")
     files = {
-        "pyproject.toml": '[project]\nname="free-claude-code"\nversion="1.2.3"\n[project.scripts]\nfcc-server="free_claude_code.cli:serve"\n[project.gui-scripts]\nfcc-desktop="free_claude_code.desktop:launch"\n',
+        "pyproject.toml": '[project]\nname="free-claude-code"\ndynamic=["version"]\n[project.scripts]\nfcc-server="free_claude_code.cli:serve"\n[project.gui-scripts]\nfcc-desktop="free_claude_code.desktop:launch"\n',
         "README.md": "readme",
         "LICENSE": "license",
         "scripts/update/fcc-update": "#!/bin/sh\n",
@@ -71,7 +71,7 @@ def validate(release, tmp_path):
             info.size = len(data)
             archive.addfile(info, io.BytesIO(data))
     return subprocess.run(
-        [sys.executable, str(VALIDATOR), str(dist)],
+        [sys.executable, str(VALIDATOR), str(dist), "--version", "1.2.3"],
         cwd=repo,
         capture_output=True,
         text=True,

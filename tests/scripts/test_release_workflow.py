@@ -1,25 +1,20 @@
-"""Release decisions and workflow permissions are explicit contracts."""
+"""Workflow events, checkout identity and publishing privileges are contracts."""
 
-import os
-import subprocess
-import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
-from tests.scripts.test_version_policy import commit, git, version, write
-
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = ROOT / ".github/workflows/post-merge.yml"
 
 
-def workflow():
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+def load(name):
+    return yaml.safe_load(
+        (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+    )
 
 
-def test_post_merge_serializes_runs_and_separates_publish_permissions():
-    config = workflow()
+def test_post_merge_serializes_and_limits_publish_permissions():
+    config = load("post-merge.yml")
     assert config["concurrency"] == {
         "group": "post-merge-main",
         "cancel-in-progress": False,
@@ -27,7 +22,7 @@ def test_post_merge_serializes_runs_and_separates_publish_permissions():
     }
     assert len(config["jobs"]) == 2
     cache = config["jobs"]["warm-dependency-cache"]
-    assert {entry["os"] for entry in cache["strategy"]["matrix"]["include"]} == {
+    assert {e["os"] for e in cache["strategy"]["matrix"]["include"]} == {
         "Linux",
         "Windows",
         "macOS",
@@ -35,73 +30,67 @@ def test_post_merge_serializes_runs_and_separates_publish_permissions():
     publish = config["jobs"]["publish"]
     assert "needs" not in publish
     assert publish["environment"] == "pypi"
-    assert publish["permissions"] == {"contents": "read", "id-token": "write"}
+    assert publish["permissions"] == {"contents": "write", "id-token": "write"}
     assert cache["permissions"] == {"contents": "read"}
     for job in (cache, publish):
         assert job["if"] == "github.ref == 'refs/heads/main'"
         checkout = next(
-            step
-            for step in job["steps"]
-            if step.get("uses", "").startswith("actions/checkout@")
+            s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")
         )
         assert checkout["with"]["ref"] == "${{ github.sha }}"
-    for name in ("Build and validate release", "Publish release"):
-        step = next(step for step in publish["steps"] if step.get("name") == name)
-        assert step["if"] == "steps.release.outputs.changed == 'true'"
+        assert checkout["with"]["fetch-depth"] == 0
+    step = next(s for s in publish["steps"] if s.get("name") == "Publish release")
+    assert step["env"]["RELEASE_COMMIT"] == "${{ inputs.release_commit || github.sha }}"
+    assert "-m scripts.publish_release" in step["run"]
 
 
-@pytest.mark.parametrize("bump", [False, True])
-@pytest.mark.parametrize("manual", [False, True])
-def test_release_detection_uses_the_triggering_revision(tmp_path, bump, manual):
-    git(tmp_path, "init", "-b", "main")
-    version(tmp_path, "1.2.3")
-    before = commit(tmp_path)
-    version(tmp_path, "1.2.4" if bump else "1.2.3")
-    write(tmp_path, "README.md", "changed\n")
-    head = commit(tmp_path)
-    # A later checkout/commit must not change the queued run's release decision.
-    version(tmp_path, "9.0.0")
-    commit(tmp_path)
-    steps = workflow()["jobs"]["publish"]["steps"]
-    run = next(step["run"] for step in steps if step.get("id") == "release")
-    source = run.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
-    output = tmp_path / "outputs"
-    result = subprocess.run(
-        [sys.executable, "-c", source],
-        cwd=tmp_path,
-        env=os.environ
-        | {
-            "BEFORE_SHA": "" if manual else before,
-            "HEAD_SHA": head,
-            "GITHUB_OUTPUT": str(output),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert output.read_text().strip() == f"changed={str(bump).lower()}"
-
-
-def test_version_check_receives_pr_base_and_head_without_publish_permission():
-    config = yaml.safe_load(
-        (ROOT / ".github/workflows/tests.yml").read_text(encoding="utf-8")
-    )
-    assert set(config[True]) == {"pull_request"}
-    job = config["jobs"]["version-policy"]
+def test_title_edits_only_trigger_the_separate_required_check():
+    policy = load("version-policy.yml")
+    tests = load("tests.yml")
+    assert set(policy[True]) == {"pull_request"}
+    assert set(policy[True]["pull_request"]["types"]) == {
+        "opened",
+        "synchronize",
+        "reopened",
+        "edited",
+        "ready_for_review",
+    }
+    assert tests[True]["pull_request"] is None
+    assert policy["concurrency"]["group"] != tests["concurrency"]["group"]
+    assert "version-policy" not in tests["jobs"]
+    job = policy["jobs"]["version-policy"]
+    assert job["name"] == "Version policy"
+    assert job["permissions"] == {"contents": "read", "pull-requests": "read"}
     checkout = next(
-        step
-        for step in job["steps"]
-        if step.get("uses", "").startswith("actions/checkout@")
+        s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")
     )
     assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
-    assert job["name"] == "Version policy"
-    assert job["permissions"] == {"contents": "read"}
-    step = next(
-        step for step in job["steps"] if step.get("name") == "Check version policy"
+    assert checkout["with"]["fetch-depth"] == 0
+    current = next(
+        s for s in job["steps"] if s.get("name") == "Read current pull request"
     )
-    assert step["env"] == {
-        "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
-        "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
-    }
-    assert '--base "$BASE_SHA" --head "$HEAD_SHA"' in step["run"]
+    assert 'gh api "repos/$PR_REPOSITORY/pulls/$PR_NUMBER"' in current["run"]
+    check = next(s for s in job["steps"] if s.get("name") == "Check version policy")
+    assert "--pr-json" in check["run"]
+    assert "title" not in check["env"]
+
+
+def test_all_project_setup_jobs_have_history_and_fetch_canonical_tags():
+    for filename in ("tests.yml", "version-policy.yml", "post-merge.yml"):
+        for job in load(filename)["jobs"].values():
+            if any(
+                s.get("uses") == "./.github/actions/ci-environment"
+                for s in job["steps"]
+            ):
+                checkout = next(
+                    s
+                    for s in job["steps"]
+                    if s.get("uses", "").startswith("actions/checkout@")
+                )
+                assert checkout["with"]["fetch-depth"] == 0
+    setup = yaml.safe_load(
+        (ROOT / ".github/actions/ci-environment/action.yml").read_text()
+    )
+    fetch = setup["runs"]["steps"][0]
+    assert fetch["env"]["CI_REPOSITORY"] == "${{ github.repository }}"
+    assert 'git fetch --tags "$CI_SERVER/$CI_REPOSITORY.git"' in fetch["run"]

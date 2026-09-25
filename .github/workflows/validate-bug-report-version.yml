@@ -29,8 +29,8 @@ jobs:
               issue_number,
             });
             const fieldPattern = "^### FCC version\\r?\\n+\\s*([^\\r\\n]+)";
+            const releaseVersionPattern = "^v((?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*))$";
             const versionPattern = "(?:^|[^0-9A-Za-z_.])v?([0-9]+\\.[0-9]+\\.[0-9]+)(?![0-9A-Za-z_+-]|\\.[0-9A-Za-z_])";
-            const projectVersionPattern = "^\\s*version\\s*=\\s*([\"'])([0-9]+\\.[0-9]+\\.[0-9]+)\\1\\s*(?:#.*)?$";
             const match = (issue.body || "").match(new RegExp(fieldPattern, "m"));
             const fieldValue = match?.[1]?.trim() || "";
             const versionMatches = [...fieldValue.matchAll(new RegExp(versionPattern, "g"))];
@@ -68,22 +68,6 @@ jobs:
                 if (reportedParts[index] > latestParts[index]) return false;
               }
               return false;
-            };
-
-            const projectVersionFromToml = (pyproject) => {
-              let inProjectSection = false;
-              for (const line of pyproject.split(/\r?\n/)) {
-                const stripped = line.trim();
-                if (stripped === "[project]") {
-                  inProjectSection = true;
-                  continue;
-                }
-                if (inProjectSection && stripped.startsWith("[")) return undefined;
-                if (!inProjectSection) continue;
-                const projectVersion = line.match(new RegExp(projectVersionPattern));
-                if (projectVersion !== null) return projectVersion[2];
-              }
-              return undefined;
             };
 
             if (!valid) {
@@ -134,24 +118,17 @@ jobs:
               return;
             }
 
-            const defaultBranch = context.payload.repository.default_branch;
-            const { data: versionFile } = await github.rest.repos.getContent({
-              ...repo,
-              path: "pyproject.toml",
-              ref: defaultBranch,
-            });
-            if (
-              Array.isArray(versionFile)
-              || versionFile.type !== "file"
-              || versionFile.encoding !== "base64"
-              || !versionFile.content
-            ) {
-              throw new Error(`Could not read pyproject.toml from ${defaultBranch}`);
+            let release;
+            try {
+              ({ data: release } = await github.rest.repos.getLatestRelease(repo));
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await deleteManagedComment(outdatedComment);
+              return;
             }
-            const pyproject = Buffer.from(versionFile.content, "base64").toString("utf8");
-            const latestVersion = projectVersionFromToml(pyproject);
-            if (latestVersion === undefined) {
-              throw new Error(`Could not read the project version from ${defaultBranch}`);
+            const latestVersion = release.tag_name.match(new RegExp(releaseVersionPattern))?.[1];
+            if (!latestVersion || release.draft || release.prerelease) {
+              throw new Error("Latest release must have a stable vMAJOR.MINOR.PATCH tag");
             }
 
             if (!isOlderVersion(reportedVersion, latestVersion)) {
@@ -159,7 +136,7 @@ jobs:
               return;
             }
 
-            const body = `${outdatedMarker}\nThis report uses FCC \`${reportedVersion}\`, while the current version on \`${defaultBranch}\` is \`${latestVersion}\`. Please [update FCC](${context.payload.repository.html_url}#install), restart FCC, and check whether the issue still occurs. The update may already contain the fix.`;
+            const body = `${outdatedMarker}\nThis report uses FCC \`${reportedVersion}\`, while the latest published version is \`${latestVersion}\`. Please [update FCC](${context.payload.repository.html_url}#update), restart FCC, and check whether the issue still occurs. The update may already contain the fix.`;
             if (outdatedComment === undefined) {
               await github.rest.issues.createComment({
                 ...repo,

@@ -9,6 +9,7 @@ CI_SETUP = Path(".github/actions/ci-environment/action.yml")
 UV_WORKFLOWS = (
     Path(".github/workflows/tests.yml"),
     Path(".github/workflows/post-merge.yml"),
+    Path(".github/workflows/version-policy.yml"),
 )
 REQUIRED_TEST_RUNNERS = {
     "Linux": "ubuntu-latest",

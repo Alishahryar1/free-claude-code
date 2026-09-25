@@ -9,6 +9,12 @@ Thanks for helping improve Free Claude Code. Keep changes focused, test the beha
 - For bugs, include every model mapping, the active model when the failure occurred, the complete error, and reproducible steps.
 - Add focused tests for behavior changes and relevant edge cases.
 
+## Pull Request Titles
+
+Changes to `assets/`, `scripts/`, `src/`, `.python-version`, `pyproject.toml`, or `uv.lock` require a title starting with `patch: `, `minor: `, or `major: ` followed by a description. Use exactly one space after the colon.
+
+PRs without changes to those paths must not use a release prefix. Do not edit version numbers. Publishing calculates the version after merge, creates its Git tag, and publishes to PyPI and GitHub Releases.
+
 ## Development Setup
 
 Install [uv](https://docs.astral.sh/uv/) and Python 3.14, then run directly from the checkout:
