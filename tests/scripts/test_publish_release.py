@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from itertools import pairwise
 from pathlib import Path
 from typing import TypedDict
 
@@ -40,6 +41,7 @@ class Asset(TypedDict):
 
 
 class Release(TypedDict):
+    id: int
     tag_name: str
     draft: bool
     prerelease: bool
@@ -51,6 +53,7 @@ class FakeRemote:
         self.repo = repo
         self.releases: dict[str, Release] = {
             "v1.2.3": {
+                "id": 1,
                 "tag_name": "v1.2.3",
                 "draft": False,
                 "prerelease": False,
@@ -73,16 +76,34 @@ class FakeRemote:
                 return ""
             return git(Path(cwd or self.repo), *args[1:])
         if args[:2] == ["gh", "api"]:
-            return json.dumps([list(self.releases.values())])
-        if args[:3] == ["gh", "release", "create"]:
-            tag = args[3]
-            self.releases[tag] = {
-                "tag_name": tag,
-                "draft": True,
-                "prerelease": False,
-                "assets": [],
-            }
-        elif args[:3] == ["gh", "release", "upload"]:
+            endpoint = next(arg for arg in args if arg.startswith("repos/"))
+            fields = dict(
+                field.split("=", 1)
+                for flag, field in pairwise(args)
+                if flag in {"-f", "-F"}
+            )
+            if endpoint.endswith("?per_page=100"):
+                return json.dumps([list(self.releases.values())])
+            if endpoint.endswith("/generate-notes"):
+                assert fields["previous_tag_name"] in self.releases
+                return json.dumps({"body": "Generated release notes"})
+            if endpoint.endswith("/releases"):
+                assert fields["draft"] == "true"
+                assert fields["body"] == "Generated release notes"
+                tag = fields["tag_name"]
+                self.releases[tag] = {
+                    "id": len(self.releases) + 1,
+                    "tag_name": tag,
+                    "draft": True,
+                    "prerelease": False,
+                    "assets": [],
+                }
+                return json.dumps(self.releases[tag])
+            release_id = int(endpoint.rsplit("/", 1)[1])
+            return json.dumps(
+                next(r for r in self.releases.values() if r["id"] == release_id)
+            )
+        if args[:3] == ["gh", "release", "upload"]:
             tag = args[3]
             for filename in args[4:]:
                 file = Path(filename)
@@ -153,6 +174,31 @@ def test_nonrelease_never_allocates_or_builds(releases):
     remote.publisher().publish(head)
     assert remote.builds == 0
     assert not any(c[:2] == ["git", "push"] for c in remote.calls)
+
+
+@pytest.mark.parametrize("existing_draft", [False, True])
+def test_stale_release_list_does_not_block_staging(
+    releases, monkeypatch, existing_draft
+):
+    _, remote = releases
+    head = remote.advance()
+    if existing_draft:
+        remote.fail = "stage"
+        with pytest.raises(RuntimeError, match="interrupted staging"):
+            remote.publisher().publish(head)
+    listed = json.dumps([list(remote.releases.values())])
+
+    def stale_listing(args, *, cwd=None):
+        if args[:2] == ["gh", "api"] and any(
+            arg.endswith("/releases?per_page=100") for arg in args
+        ):
+            return listed
+        return remote.command(args, cwd=cwd)
+
+    monkeypatch.setattr(publishing, "command", stale_listing)
+    remote.publisher().publish(head)
+    assert not remote.releases["v1.2.4"]["draft"]
+    assert set(remote.uploaded) == set(publishing.distribution_names("1.2.4"))
 
 
 @pytest.mark.parametrize("failure", ["stage", "publish", "finalize"])
