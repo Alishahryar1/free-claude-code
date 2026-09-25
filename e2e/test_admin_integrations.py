@@ -432,7 +432,11 @@ def admin_client_files(request, tmp_path):
 def test_startup_updates_before_opening_integrations(
     admin_client_files, admin_base_url, page, tmp_path
 ):
-    page.goto(f"{admin_base_url}/admin/integrations")
+    page.goto(f"{admin_base_url}/admin")
+    page.wait_for_function(
+        "state.startup?.startup?.integrations['claude-vscode']?.state === 'ready'"
+    )
+    page.get_by_role("button", name="Integrations", exact=True).click()
     button = page.locator("#openClaudeIntegration")
     expect(button).to_have_text("Disconnect")
     expect(page.locator("#claudeIntegrationMessage")).to_be_hidden()
