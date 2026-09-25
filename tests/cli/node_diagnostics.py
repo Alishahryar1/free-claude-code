@@ -4,6 +4,8 @@ import ctypes
 import json
 import os
 import subprocess
+import sys
+from contextlib import contextmanager
 from ctypes import wintypes
 from itertools import count
 from pathlib import Path
@@ -14,6 +16,8 @@ _compared = False
 
 
 def _cpu_seconds(pid: int) -> dict:
+    if sys.platform != "win32":
+        return {}
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
     kernel.OpenProcess.restype = wintypes.HANDLE
@@ -61,13 +65,59 @@ def _cpu_seconds(pid: int) -> dict:
         kernel.CloseHandle(handle)
 
 
+@contextmanager
+def _startup_trace(directory: Path, phase: str, label: str):
+    target = "test_pi_sends_current_conversation_id_only_on_fcc_requests"
+    if not (
+        os.environ.get("GITHUB_ACTIONS") == "true"
+        and phase == "parallel"
+        and label == "original"
+        and target in os.environ.get("PYTEST_CURRENT_TEST", "")
+    ):
+        yield
+        return
+    # Only this test owns the recording. Never cancel an existing recorder if
+    # starting our session fails. ETW records OS activity, not a process-memory dump.
+    subprocess.run(
+        ["wpr.exe", "-start", "GeneralProfile", "-filemode"],
+        check=True,
+        timeout=30,
+    )
+    stopped = False
+    try:
+        yield
+    finally:
+        try:
+            subprocess.run(
+                [
+                    "wpr.exe",
+                    "-stop",
+                    str(directory / "node-first-launch.etl"),
+                    "FCC Node startup diagnosis",
+                    "-skipPdbGen",
+                    "-compress",
+                ],
+                check=True,
+                timeout=120,
+            )
+            stopped = True
+        finally:
+            if not stopped:
+                subprocess.run(["wpr.exe", "-cancel"], check=False, timeout=30)
+
+
 def _observe(command: list[str], phase: str, label: str):
-    directory = Path("test-results/node-diagnostics")
+    directory = (
+        Path(os.environ.get("RUNNER_TEMP", ".smoke-results")) / "fcc-node-diagnostics"
+    )
     directory.mkdir(parents=True, exist_ok=True)
     worker = os.environ.get("PYTEST_XDIST_WORKER", "serial")
     path = directory / f"{phase}-{worker}-{next(_sequence)}-{label}.jsonl"
-    started = monotonic()
-    with path.open("w", encoding="utf-8", buffering=1) as log:
+    with (
+        _startup_trace(directory, phase, label),
+        path.open("w", encoding="utf-8", buffering=1) as log,
+    ):
+        started = monotonic()
 
         def record(event: str, **fields) -> None:
             log.write(
@@ -121,6 +171,11 @@ def _observe(command: list[str], phase: str, label: str):
                 exceeded_original_timeout=waited > 10,
                 stdout=stdout,
                 stderr=stderr,
+            )
+            print(
+                f"Node diagnostic {phase}/{label}: exit={process.returncode}, "
+                f"communicate={waited:.3f}s, stderr={stderr!r}",
+                flush=True,
             )
     print(f"Node diagnostic {phase}/{label}: {elapsed:.3f}s, log={path}", flush=True)
     return subprocess.CompletedProcess(

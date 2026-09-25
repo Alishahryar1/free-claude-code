@@ -117,7 +117,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: node-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results/node-diagnostics/
+          path: ${{ runner.temp }}/fcc-node-diagnostics/
           if-no-files-found: error
           retention-days: 7
 
