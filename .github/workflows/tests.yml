@@ -109,8 +109,17 @@ jobs:
         run: uv sync --locked --group dev
 
       - name: Run pytest
-        # Temporary Windows diagnostic: remove --exitfirst before final full-suite validation.
-        run: uv run --locked pytest -v --tb=short --durations=50 ${{ matrix.os == 'Windows' && '--exitfirst' || '' }}
+        # Temporary Windows diagnostic: remove the wrapper before final full-suite validation.
+        run: uv run --locked ${{ matrix.os == 'Windows' && 'python .github/scripts/diagnose_windows_pytest.py' || 'pytest -v --tb=short --durations=50' }}
+
+      - name: Upload Node diagnostic measurements
+        if: ${{ !cancelled() && matrix.os == 'Windows' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: node-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/node-diagnostics/
+          if-no-files-found: error
+          retention-days: 7
 
   playwright:
     name: playwright (${{ matrix.os }})
