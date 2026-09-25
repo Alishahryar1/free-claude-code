@@ -86,6 +86,8 @@ LLM7_DEFAULT_BASE = "https://api.llm7.io/v1"
 LIGHTNING_DEFAULT_BASE = "https://lightning.ai/api/v1"
 # Experiential Labs OpenAI-compatible Chat Completions gateway.
 EXPERIENTIAL_DEFAULT_BASE = "https://api.experientiallabs.ai/v1"
+# Cheaper Inference OpenAI-compatible Chat Completions gateway.
+CHEAPERINFERENCE_DEFAULT_BASE = "https://api.cheaperinference.com/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -686,6 +688,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="experiential_api_key",
         default_base_url=EXPERIENTIAL_DEFAULT_BASE,
         proxy_attr="experiential_proxy",
+    ),
+    "cheaperinference": ProviderDescriptor(
+        provider_id="cheaperinference",
+        display_name="Cheaper Inference",
+        website_url="https://cheaperinference.com/",
+        logo_filename="cheaperinference.svg",
+        credential_env="CHEAPER_INFERENCE_API_KEY",
+        credential_url="https://cheaperinference.com/signup",
+        credential_attr="cheaperinference_api_key",
+        default_base_url=CHEAPERINFERENCE_DEFAULT_BASE,
+        proxy_attr="cheaperinference_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",
