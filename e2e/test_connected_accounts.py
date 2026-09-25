@@ -343,6 +343,7 @@ def test_oauth_card_follows_model_discovery_without_replacing_settings(
         data["cached_models"][provider_id] = (
             ["model-a", "model-b"] if phase == "ready" else []
         )
+        data["cached_models"]["open_router"] = data["cached_models"][provider_id]
         route.fulfill(json=data)
 
     page.route("**/admin/api/status", status)
@@ -351,6 +352,7 @@ def test_oauth_card_follows_model_discovery_without_replacing_settings(
     other = page.locator('[data-provider-check-result="open_router"]')
     expect(card.get_by_role("button", name="Disconnect", exact=True)).to_be_enabled()
     expect(card.locator(".provider-meta")).to_have_text("Checking models…")
+    expect(other).to_have_text("Checking models…")
     expect(card.locator(".provider-meta")).to_have_css(
         "color", other.evaluate("element => getComputedStyle(element).color")
     )
@@ -359,11 +361,13 @@ def test_oauth_card_follows_model_discovery_without_replacing_settings(
     proxy.fill("http://pending-proxy:8080")
     proxy.evaluate("input => input.setSelectionRange(7, 14)")
     phase = outcome
-    expect(card.locator(".provider-meta")).to_have_text(
+    expected_message = (
         "2 models available"
         if outcome == "ready"
         else "Could not load models. Check the provider's settings and retry."
     )
+    expect(card.locator(".provider-meta")).to_have_text(expected_message)
+    expect(other).to_have_text(expected_message)
     expect(card.locator(".provider-meta")).to_have_css(
         "color", other.evaluate("element => getComputedStyle(element).color")
     )
