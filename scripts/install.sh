@@ -1,7 +1,6 @@
 #!/bin/sh
 set -eu
 
-REPO_ARCHIVE_URL="https://github.com/Alishahryar1/free-claude-code/archive/refs/heads/main.zip"
 PYTHON_VERSION="3.14.0"
 MIN_UV_VERSION="0.12.13"
 CLAUDE_INSTALL_URL="https://claude.ai/install.sh"
@@ -1297,9 +1296,9 @@ validate_args() {
 
 package_spec() {
     if [ "$voice_local" -eq 1 ]; then
-        printf 'free-claude-code[voice_local] @ %s' "$REPO_ARCHIVE_URL"
+        printf '%s' 'free-claude-code[voice_local]'
     else
-        printf 'free-claude-code @ %s' "$REPO_ARCHIVE_URL"
+        printf '%s' 'free-claude-code'
     fi
 }
 

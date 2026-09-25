@@ -838,8 +838,7 @@ def test_install_sh_fresh_install_is_verified(posix_harness: PosixHarness) -> No
     assert any(
         call.startswith(
             "uv:tool install --force --refresh-package free-claude-code "
-            "--python 3.14.0 free-claude-code @ "
-            "https://github.com/Alishahryar1/free-claude-code/archive/refs/heads/main.zip"
+            "--python 3.14.0 free-claude-code"
         )
         for call in calls
     )
@@ -1761,11 +1760,11 @@ def test_install_sh_rejects_unparseable_existing_uv(
 @pytest.mark.parametrize(
     ("args", "package"),
     [
-        ((), "free-claude-code @ "),
-        (("--voice-local",), "free-claude-code[voice_local] @ "),
+        ((), "free-claude-code"),
+        (("--voice-local",), "free-claude-code[voice_local]"),
         (
             ("--voice-local", "--torch-backend", "cu130"),
-            "free-claude-code[voice_local] @ ",
+            "free-claude-code[voice_local]",
         ),
     ],
 )
@@ -3188,8 +3187,7 @@ def test_install_ps1_fresh_install_is_verified(
         call.startswith(
             "uv:tool install --force --refresh-package free-claude-code "
             "--python cpython-3.14.0-windows-x86_64-none "
-            '"free-claude-code @ '
-            'https://github.com/Alishahryar1/free-claude-code/archive/refs/heads/main.zip"'
+            "free-claude-code"
         )
         for call in calls
     )
@@ -4105,11 +4103,11 @@ def test_install_ps1_rejects_unparseable_existing_uv(
 @pytest.mark.parametrize(
     ("args", "package"),
     [
-        ((), "free-claude-code @ "),
-        (("-VoiceLocal",), "free-claude-code[voice_local] @ "),
+        ((), "free-claude-code"),
+        (("-VoiceLocal",), "free-claude-code[voice_local]"),
         (
             ("-VoiceLocal", "-TorchBackend", "cu130"),
-            "free-claude-code[voice_local] @ ",
+            "free-claude-code[voice_local]",
         ),
     ],
 )
@@ -4218,7 +4216,7 @@ def test_installers_use_native_clients_and_single_python_selection() -> None:
         assert "git --version" not in text
         assert (
             "https://github.com/Alishahryar1/free-claude-code/archive/refs/heads/main.zip"
-            in text
+            not in text
         )
         assert "python install" not in text
         assert "--refresh-package" in text
