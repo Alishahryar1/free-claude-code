@@ -255,12 +255,6 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "TokenRouter OpenAI-compatible gateway API key for api.tokenrouter.com/v1."
         ),
     },
-    "TOKENROUTER_BASE_URL": {
-        "description": (
-            "TokenRouter OpenAI-compatible Chat Completions base URL. "
-            "Defaults to https://api.tokenrouter.com/v1."
-        ),
-    },
     "NARAROUTE_API_KEY": {
         "label": "NaraRoute API Key",
         "description": (
@@ -268,23 +262,11 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Keys begin with sk-nry-; create one at router.bynara.id/keys."
         ),
     },
-    "NARAROUTE_BASE_URL": {
-        "description": (
-            "NaraRoute OpenAI-compatible Chat Completions base URL. "
-            "Defaults to https://router.bynara.id/v1."
-        ),
-    },
     "LIGHTNING_API_KEY": {
         "label": "Lightning AI API Key",
         "description": (
             "Lightning AI Model APIs key for the OpenAI-compatible endpoint at "
             "lightning.ai/api/v1. Create one on lightning.ai under Model APIs."
-        ),
-    },
-    "LIGHTNING_BASE_URL": {
-        "description": (
-            "Lightning AI OpenAI-compatible Chat Completions base URL. "
-            "Defaults to https://lightning.ai/api/v1."
         ),
     },
     "AGNES_API_KEY": {
@@ -313,12 +295,6 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Experiential Labs OpenAI-compatible gateway API key for "
             "api.experientiallabs.ai/v1. Keys look like xpl_ followed by 40 "
             "hex characters; mint one at platform.experientiallabs.ai/settings/api-keys."
-        ),
-    },
-    "EXPLABS_BASE_URL": {
-        "description": (
-            "Experiential Labs OpenAI-compatible Chat Completions base URL. "
-            "Defaults to https://api.experientiallabs.ai/v1."
         ),
     },
 }

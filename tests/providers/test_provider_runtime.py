@@ -22,10 +22,8 @@ from free_claude_code.config.provider_catalog import (
     FEATHERLESS_DEFAULT_BASE,
     HUGGINGFACE_DEFAULT_BASE,
     KIMI_CODE_DEFAULT_BASE,
-    LIGHTNING_DEFAULT_BASE,
     LLM7_DEFAULT_BASE,
     MINIMAX_DEFAULT_BASE,
-    NARAROUTE_DEFAULT_BASE,
     NEBIUS_DEFAULT_BASE,
     OLLAMA_CLOUD_DEFAULT_BASE,
     POOLSIDE_DEFAULT_BASE,
@@ -36,7 +34,6 @@ from free_claude_code.config.provider_catalog import (
     SILICONFLOW_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
     TOGETHER_DEFAULT_BASE,
-    TOKENROUTER_DEFAULT_BASE,
     VERCEL_AI_GATEWAY_DEFAULT_BASE,
     WANDB_INFERENCE_DEFAULT_BASE,
     XAI_DEFAULT_BASE,
@@ -105,9 +102,7 @@ def _make_settings(**overrides):
     mock.cohere_api_key = "test_cohere_key"
     mock.zai_api_key = "test_zai_key"
     mock.tokenrouter_api_key = "test_tokenrouter_key"
-    mock.tokenrouter_base_url = TOKENROUTER_DEFAULT_BASE
     mock.nararoute_api_key = "test_nararoute_key"
-    mock.nararoute_base_url = NARAROUTE_DEFAULT_BASE
     mock.agnes_api_key = "test_agnes_key"
     mock.zenmux_api_key = "test_zenmux_key"
     mock.wandb_api_key = "test_wandb_key"
@@ -118,9 +113,7 @@ def _make_settings(**overrides):
     mock.poolside_api_key = "test_poolside_key"
     mock.llm7_api_key = "test_llm7_key"
     mock.lightning_api_key = "test_lightning_key"
-    mock.lightning_base_url = LIGHTNING_DEFAULT_BASE
     mock.experiential_api_key = "test_experiential_key"
-    mock.experiential_base_url = EXPERIENTIAL_DEFAULT_BASE
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -307,7 +300,6 @@ async def test_experiential_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["experiential"]
     settings = _make_settings(
         experiential_api_key="experiential-token",
-        experiential_base_url="https://custom.experientiallabs.example/v1",
         experiential_proxy="http://proxy.test:8080",
     )
 
@@ -323,10 +315,10 @@ async def test_experiential_provider_config_uses_key_base_and_proxy() -> None:
         == "https://platform.experientiallabs.ai/settings/api-keys"
     )
     assert descriptor.default_base_url == EXPERIENTIAL_DEFAULT_BASE
-    assert descriptor.base_url_attr == "experiential_base_url"
+    assert descriptor.base_url_attr is None
     assert descriptor.proxy_attr == "experiential_proxy"
     assert config.api_key == "experiential-token"
-    assert config.base_url == "https://custom.experientiallabs.example/v1"
+    assert config.base_url == EXPERIENTIAL_DEFAULT_BASE
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
