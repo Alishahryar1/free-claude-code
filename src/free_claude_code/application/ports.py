@@ -37,6 +37,7 @@ class ProviderPort(Protocol):
         response_model: str,
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]: ...
 
 

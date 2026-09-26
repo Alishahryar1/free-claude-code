@@ -815,9 +815,17 @@ async def test_generation_lease_keeps_its_model_metadata_after_replacement() -> 
     await lease.resolve_provider("open_router")
 
     await manager.replace(
-        _settings("nvidia_nim/two"),
+        first_settings,
         commit=AsyncMock(),
     )
+
+    factory.runtimes[-1].provider.list_model_infos.return_value = frozenset(
+        {ProviderModelInfo("old-model", max_output_tokens=16384)}
+    )
+    new_lease = await manager.acquire()
+    await new_lease.resolve_provider("open_router")
+    new_info = new_lease.model_info("open_router", "old-model")
+    assert new_info is not None and new_info.max_output_tokens == 16384
 
     assert lease.model_info("open_router", "old-model") == ProviderModelInfo(
         "open_router/old-model",
@@ -825,6 +833,7 @@ async def test_generation_lease_keeps_its_model_metadata_after_replacement() -> 
         max_output_tokens=4_096,
     )
     await lease.release()
+    await new_lease.release()
     await manager.close()
 
 

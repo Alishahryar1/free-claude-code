@@ -393,6 +393,7 @@ class FakeProvider(BaseProvider):
         response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         if False:
             yield ""

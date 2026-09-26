@@ -1,6 +1,15 @@
 """Custom endpoint configuration through the real Admin Apply flow."""
 
+import pytest
 from playwright.sync_api import Page, expect
+
+
+@pytest.fixture(autouse=True)
+def no_page_errors(page: Page):
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    yield
+    assert errors == []
 
 
 def add_provider(page: Page, name: str) -> str:
@@ -16,6 +25,7 @@ def add_provider(page: Page, name: str) -> str:
         has=page.get_by_text(name, exact=True)
     )
     expect(card).to_be_visible()
+    expect(page.locator("#addCustomProvider")).to_be_focused()
     provider_id = card.get_attribute("data-provider")
     assert provider_id is not None
     return provider_id
@@ -38,6 +48,7 @@ def test_custom_provider_save_rename_and_remove_preserve_unrelated_draft(
     page.locator("#saveProvider").click()
     expect(dialog).not_to_be_visible()
     expect(card.locator(".provider-title")).to_have_text("Renamed gateway")
+    expect(card.get_by_role("button", name="Edit", exact=True)).to_be_focused()
     card.get_by_role("button", name="Edit", exact=True).click()
     dialog.get_by_role("button", name="Remove provider", exact=True).click()
     expect(dialog).not_to_be_visible()
@@ -90,3 +101,22 @@ def test_custom_dialog_cancel_and_format_changes(page: Page, admin_base_url: str
     expect(dialog).not_to_be_visible()
     expect(page.locator("#providers-custom .provider-card")).to_have_count(0)
     expect(page.locator("#addCustomProvider")).to_be_focused()
+
+
+def test_duplicate_custom_provider_keeps_failed_save_draft(
+    page: Page, admin_base_url: str
+):
+    page.goto(admin_base_url + "/admin")
+    add_provider(page, "Gateway")
+    page.get_by_role("button", name="Add provider", exact=True).click()
+    dialog = page.locator("#providerDialog")
+    dialog.get_by_label("Name", exact=True).fill("Gateway")
+    dialog.get_by_label("Base URL", exact=True).fill("https://another.example/v1")
+    page.locator("#saveProvider").click()
+    expect(page.locator("#providerMessage")).to_contain_text("already exists")
+    expect(dialog).to_be_visible()
+    expect(dialog.get_by_label("Base URL", exact=True)).to_have_value(
+        "https://another.example/v1"
+    )
+    expect(page.locator("#saveProvider")).to_be_enabled()
+    expect(page.locator("#providers-custom .provider-card")).to_have_count(1)

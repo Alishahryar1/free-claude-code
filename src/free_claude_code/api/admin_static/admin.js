@@ -1366,15 +1366,16 @@ async function apply(providerId = null, customAction = null) {
     showMessage(applied ? `Applied, but could not reload settings: ${error.message}` : `Could not apply settings: ${error.message}`, "error");
   } finally {
     setApplying(false);
-    if (applied && mutation?.action === "delete") byId("addCustomProvider")?.focus();
     if (rejectedField) {
       if (!providerId) navigateToView("providers");
       rejectedField.closest(".settings-section")?.classList.add("show-advanced");
       rejectedField.scrollIntoView({ block: "center", behavior: "instant" });
       rejectedField.focus();
     } else if (providerId && applied) {
-      const focus = document.querySelector(`[data-provider="${providerId}"] [data-provider-settings]`) || (wasCustom ? byId("addCustomProvider") : null);
-  focus?.focus({ preventScroll: true });
+      const focus = mutation && mutation.action !== "update"
+        ? byId("addCustomProvider")
+        : document.querySelector(`[data-provider="${providerId}"] [data-provider-settings]`);
+      focus?.focus({ preventScroll: true });
     }
   }
 }

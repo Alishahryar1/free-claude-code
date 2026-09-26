@@ -4,6 +4,7 @@ import asyncio
 import json
 import sys
 from collections.abc import AsyncIterator, Callable, Mapping
+from dataclasses import replace
 from functools import partial
 from typing import cast
 
@@ -103,26 +104,31 @@ class AnthropicMessagesTransport:
         self._read_timeout_s = read_timeout_s
         self._capabilities = capabilities
 
+    def _effective_capabilities(
+        self, model_info: ProviderModelInfo | None
+    ) -> MessagesModelCapabilities:
+        if model_info is None or model_info.max_output_tokens is None:
+            return self._capabilities
+        cap = model_info.max_output_tokens
+        if self._capabilities.max_output_tokens is not None:
+            cap = min(cap, self._capabilities.max_output_tokens)
+        return replace(self._capabilities, max_output_tokens=cap)
+
     def _messages_body(
         self,
         request: MessagesRequest,
         reasoning: ReasoningPolicy,
-        model_info: ProviderModelInfo | None = None,
+        capabilities: MessagesModelCapabilities,
+        preserve_native_controls: bool,
     ) -> PreparedMessagesRequest:
         validate_history(request.model_dump(mode="json"))
-        request, reasoning = prepare_messages_reasoning(
-            request,
-            reasoning,
-            model_info=model_info,
-            can_disable=True,
-            normal_max_tokens=DEFAULT_MESSAGES_OUTPUT_TOKENS,
-        )
         try:
             options = resolve_messages_options(
                 model=request.model,
                 max_tokens=request.max_tokens,
                 reasoning=reasoning,
-                capabilities=self._capabilities,
+                capabilities=capabilities,
+                preserve_native_controls=preserve_native_controls,
                 thinking=request.thinking,
                 output_effort=request.output_config.get("effort")
                 if request.output_config
@@ -133,7 +139,10 @@ class AnthropicMessagesTransport:
             raise InvalidRequestError(str(error)) from error
 
     def _responses_body(
-        self, request: OpenAIResponsesRequest, reasoning: ReasoningPolicy
+        self,
+        request: OpenAIResponsesRequest,
+        reasoning: ReasoningPolicy,
+        capabilities: MessagesModelCapabilities,
     ) -> ResponsesMessagesRequest:
         validate_history(request.model_dump(mode="json"))
         try:
@@ -141,7 +150,7 @@ class AnthropicMessagesTransport:
                 model=request.model,
                 max_tokens=request.max_output_tokens,
                 reasoning=reasoning,
-                capabilities=self._capabilities,
+                capabilities=capabilities,
                 output_effort=request.reasoning.get("effort")
                 if request.reasoning
                 else None,
@@ -159,7 +168,11 @@ class AnthropicMessagesTransport:
         response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         model_info: ProviderModelInfo | None = None,
+        preserve_native_controls: bool = False,
     ) -> AsyncIterator[str]:
+        capabilities = self._effective_capabilities(model_info)
+        if preserve_native_controls:
+            reasoning = ReasoningPolicy.provider_default()
         prepared_request, wire_reasoning = prepare_messages_reasoning(
             request,
             reasoning,
@@ -167,13 +180,15 @@ class AnthropicMessagesTransport:
             can_disable=True,
             normal_max_tokens=DEFAULT_MESSAGES_OUTPUT_TOKENS,
         )
-        prepared = self._messages_body(prepared_request, wire_reasoning)
+        prepared = self._messages_body(
+            prepared_request, wire_reasoning, capabilities, preserve_native_controls
+        )
         correction = (
             ReasoningCorrection(
                 (("thinking",),),
                 "max_tokens",
                 DEFAULT_MESSAGES_OUTPUT_TOKENS,
-                self._capabilities.max_output_tokens,
+                capabilities.max_output_tokens,
             )
             if reasoning.control is ReasoningControl.PREFER_OFF
             and wire_reasoning.control is ReasoningControl.OFF
@@ -198,8 +213,11 @@ class AnthropicMessagesTransport:
         request_id: str | None = None,
         response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
-        prepared = self._responses_body(request, reasoning)
+        prepared = self._responses_body(
+            request, reasoning, self._effective_capabilities(model_info)
+        )
         return self._stream(
             prepared.body,
             betas=(),

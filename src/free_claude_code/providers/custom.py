@@ -241,6 +241,8 @@ class CustomProvider(BaseProvider):
                 response_model=response_model,
                 reasoning=reasoning,
                 model_info=model_info,
+                preserve_native_controls=self._definition.reasoning_format
+                == "provider_default",
             )
         transport = self._chat if self._chat is not None else self._responses
         assert transport is not None
@@ -263,6 +265,7 @@ class CustomProvider(BaseProvider):
         response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         reasoning = (
             responses_reasoning_policy(request.reasoning)
@@ -290,6 +293,7 @@ class CustomProvider(BaseProvider):
                 request_id=request_id,
                 response_model=response_model,
                 reasoning=reasoning,
+                model_info=model_info,
             )
         transport = self._chat if self._chat is not None else self._responses
         assert transport is not None

@@ -60,6 +60,7 @@ class FakeProvider:
         response_model: str,
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         raise AssertionError("Messages test provider received a Responses request")
         yield ""
@@ -112,6 +113,7 @@ class ResponsesFakeProvider:
         response_model: str,
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         self.stream_calls.append(
             {
@@ -334,8 +336,13 @@ def _routed_request(
 
 
 @pytest.mark.asyncio
-async def test_fallback_receives_its_own_cached_capability_in_stream():
+@pytest.mark.parametrize("ingress", ["messages", "responses"])
+@pytest.mark.parametrize("unknown_fallback", [False, True])
+async def test_fallback_receives_its_own_cached_capability_in_stream(
+    ingress, unknown_fallback
+):
     seen = []
+    resolved = set()
 
     class MetadataProvider(ControlledProvider):
         async def stream_messages(self, request, input_tokens=0, **kwargs):
@@ -343,33 +350,45 @@ async def test_fallback_receives_its_own_cached_capability_in_stream():
             async for event in super().stream_messages(request, input_tokens, **kwargs):
                 yield event
 
+        stream_responses = stream_messages
+
     primary_info = ProviderModelInfo(
         "provider/provider-model", reasoning_capability=ReasoningCapability.NONE
     )
-    fallback_info = ProviderModelInfo(
-        "fallback/fallback-model", reasoning_capability=ReasoningCapability.REQUIRED
+    fallback_info = (
+        ProviderModelInfo(
+            "fallback/fallback-model", reasoning_capability=ReasoningCapability.REQUIRED
+        )
+        if not unknown_fallback
+        else None
     )
     primary = MetadataProvider(
         [ExecutionFailure(FailureKind.UNAVAILABLE, 503, "unavailable", True)]
     )
     fallback = MetadataProvider(["verdict"])
     providers = {"provider": primary, "fallback": fallback}
+
+    async def resolve(name):
+        resolved.add(name)
+        return providers[name]
+
+    def lookup(provider_id, model_id):
+        assert provider_id in resolved
+        return {
+            "provider/provider-model": primary_info,
+            "fallback/fallback-model": fallback_info,
+        }.get(f"{provider_id}/{model_id}")
+
     executor = ProviderExecutor(
-        AsyncMock(side_effect=lambda name: providers[name]),
+        resolve,
         progress_timeout_seconds=10,
-        model_info_lookup=lambda provider_id, model_id: next(
-            (
-                info
-                for info in (primary_info, fallback_info)
-                if info.model_id == f"{provider_id}/{model_id}"
-            ),
-            None,
-        ),
+        model_info_lookup=lookup,
     )
+    route = _routed_request if ingress == "messages" else _routed_responses_request
     output = [
         event
-        async for event in executor.stream_messages(
-            _routed_request(_target("fallback", "fallback-model")),
+        async for event in getattr(executor, f"stream_{ingress}")(
+            route(_target("fallback", "fallback-model")),
             raw_log_payload={},
             request_id="capability-fallback",
         )

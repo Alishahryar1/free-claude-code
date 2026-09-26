@@ -1,9 +1,12 @@
+import asyncio
 import json
 
 import httpx
 import httpx2
 import pytest
 
+from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
@@ -15,6 +18,228 @@ from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.mark.parametrize(
+    "thinking",
+    [
+        None,
+        {"type": "adaptive", "display": "omitted"},
+        {"type": "enabled", "budget_tokens": 1536},
+    ],
+)
+async def test_native_default_preserves_controls_without_advertised_support(thinking):
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=completion("anthropic_messages"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    instance = provider(
+        definition(api_format="anthropic_messages"), messages_handler=reply
+    )
+    request = MessagesRequest(
+        model="m",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": "Hello"}],
+        thinking=thinking,
+        output_config={
+            "effort": "high",
+            "format": {"type": "json_schema", "schema": {"type": "object"}},
+        },
+    )
+    before = request.model_dump()
+    try:
+        assert [
+            item
+            async for item in instance.stream_messages(
+                request, reasoning=ReasoningPolicy.off()
+            )
+        ]
+        assert bodies[0].get("thinking") == thinking
+        assert bodies[0]["output_config"] == request.output_config
+        assert request.model_dump() == before
+    finally:
+        await instance.cleanup()
+
+
+@pytest.mark.parametrize("ingress", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "limit,cap,expected",
+    [(2048, 4096, 2048), (8192, 4096, 4096), (None, 4096, 4096), (8192, None, 8192)],
+)
+async def test_messages_egress_obeys_request_model_limit(ingress, limit, cap, expected):
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=completion("anthropic_messages"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    instance = provider(
+        definition(api_format="anthropic_messages"), messages_handler=reply
+    )
+    info = ProviderModelInfo("m", max_output_tokens=cap) if cap else None
+    try:
+        if ingress == "messages":
+            request = MessagesRequest(
+                model="m",
+                max_tokens=limit,
+                messages=[{"role": "user", "content": "Hello"}],
+            )
+            stream = instance.stream_messages(request, model_info=info)
+        else:
+            request = OpenAIResponsesRequest(
+                model="m",
+                max_output_tokens=limit,
+                input="Hello",
+                reasoning={"effort": "high"},
+            )
+            stream = instance.stream_responses(request, model_info=info)
+        before = request.model_dump()
+        assert [item async for item in stream]
+        assert bodies[0]["max_tokens"] == expected
+        assert "thinking" not in bodies[0]
+        assert "effort" not in bodies[0].get("output_config", {})
+        assert request.model_dump() == before
+    finally:
+        await instance.cleanup()
+
+
+@pytest.mark.parametrize("ingress", ["messages", "responses"])
+@pytest.mark.parametrize("exact", [False, True])
+@pytest.mark.parametrize("cap", [1024, 4096])
+async def test_manual_preset_respects_cap_before_resolving_budget(ingress, exact, cap):
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=completion("anthropic_messages"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    instance = provider(
+        definition(api_format="anthropic_messages", reasoning_format="messages_manual"),
+        messages_handler=reply,
+    )
+    policy = (
+        ReasoningPolicy.on(budget_tokens=4096)
+        if exact
+        else ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
+    )
+    info = ProviderModelInfo("m", max_output_tokens=cap)
+
+    async def consume():
+        if ingress == "messages":
+            stream = instance.stream_messages(
+                MessagesRequest(
+                    model="m",
+                    max_tokens=8192,
+                    messages=[{"role": "user", "content": "Hello"}],
+                ),
+                reasoning=policy,
+                model_info=info,
+            )
+        else:
+            stream = instance.stream_responses(
+                OpenAIResponsesRequest(
+                    model="m", max_output_tokens=8192, input="Hello"
+                ),
+                reasoning=policy,
+                model_info=info,
+            )
+        return [item async for item in stream]
+
+    try:
+        if exact or cap == 1024:
+            with pytest.raises(InvalidRequestError, match="below max_tokens"):
+                await consume()
+            assert not bodies
+        else:
+            assert await consume()
+            assert bodies[0]["max_tokens"] == cap
+            assert 1024 <= bodies[0]["thinking"]["budget_tokens"] < cap
+    finally:
+        await instance.cleanup()
+
+
+@pytest.mark.parametrize(
+    "thinking,error",
+    [
+        ({"type": "enabled"}, "budget"),
+        ({"type": "enabled", "budget_tokens": 6000}, "below max_tokens"),
+    ],
+)
+async def test_native_default_does_not_invent_or_shrink_exact_budget(thinking, error):
+    bodies = []
+    instance = provider(
+        definition(api_format="anthropic_messages"),
+        messages_handler=lambda request: bodies.append(request),
+    )
+    try:
+        with pytest.raises(InvalidRequestError, match=error):
+            stream = instance.stream_messages(
+                MessagesRequest(
+                    model="m",
+                    max_tokens=8192,
+                    thinking=thinking,
+                    messages=[{"role": "user", "content": "Hello"}],
+                ),
+                model_info=ProviderModelInfo("m", max_output_tokens=4096),
+            )
+            [item async for item in stream]
+        assert not bodies
+    finally:
+        await instance.cleanup()
+
+
+async def test_concurrent_models_keep_independent_limits():
+    bodies = []
+    both_started = asyncio.Event()
+
+    async def reply(request):
+        bodies.append(json.loads(request.content))
+        if len(bodies) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=2)
+        return httpx.Response(
+            200,
+            text=completion("anthropic_messages"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    instance = provider(
+        definition(api_format="anthropic_messages"), messages_handler=reply
+    )
+
+    async def call(model, cap):
+        stream = instance.stream_messages(
+            MessagesRequest(
+                model=model,
+                max_tokens=8192,
+                messages=[{"role": "user", "content": "Hello"}],
+            ),
+            model_info=ProviderModelInfo(model, max_output_tokens=cap),
+        )
+        return [item async for item in stream]
+
+    try:
+        await asyncio.gather(call("small", 2048), call("large", 6000))
+        assert {body["model"]: body["max_tokens"] for body in bodies} == {
+            "small": 2048,
+            "large": 6000,
+        }
+    finally:
+        await instance.cleanup()
 
 
 def definition(**changes):
