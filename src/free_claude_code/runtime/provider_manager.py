@@ -21,6 +21,7 @@ from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.token_estimation import initialize_token_estimation
 from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.base import BaseProvider
+from free_claude_code.providers.model_listing import model_infos_from_ids
 from free_claude_code.providers.runtime.discovery import (
     _provider_query_failure_reason,
     model_cache_provider_ids_for_settings,
@@ -64,6 +65,12 @@ class _ProviderGeneration:
     file_state: str = "starting"
 
     def __post_init__(self) -> None:
+        for definition in self.settings.custom_providers:
+            if definition.model_ids:
+                self.cache.cache_model_infos(
+                    definition.provider_id, model_infos_from_ids(definition.model_ids)
+                )
+                self.initialized.add(definition.provider_id)
         self.drained.set()
 
     def snapshot(self) -> ModelCatalogSnapshot:
@@ -259,6 +266,10 @@ class ProviderRuntimeManager:
     async def _discover_provider(
         self, generation: _ProviderGeneration, provider_id: str
     ) -> ProviderModelRefreshResult:
+        definition = generation.settings.custom_provider(provider_id)
+        if definition is not None and definition.model_ids:
+            generation.initialized.add(provider_id)
+            return ProviderModelRefreshResult(refreshed_provider_ids=(provider_id,))
         try:
             provider = await generation.runtime.resolve_provider(provider_id)
             infos = await provider.list_model_infos()
@@ -531,15 +542,21 @@ class ProviderRuntimeManager:
             assert candidate_runtime is not None
             async with self._publication_lock:
                 previous = self._current
+                cache = previous.cache.copy(
+                    model_cache_provider_ids_for_settings(
+                        settings, self._connected_provider_ids()
+                    )
+                )
+                for definition in settings.custom_providers:
+                    old = previous.settings.custom_provider(definition.provider_id)
+                    if old is None or not definition.same_inventory(old):
+                        cache.remove_provider(definition.provider_id)
+                        cache.add_provider(definition.provider_id)
                 candidate = _ProviderGeneration(
                     generation_id=candidate_id,
                     settings=settings,
                     runtime=candidate_runtime,
-                    cache=previous.cache.copy(
-                        model_cache_provider_ids_for_settings(
-                            settings, self._connected_provider_ids()
-                        )
-                    ),
+                    cache=cache,
                 )
                 self._current = candidate
                 self._catalog_revision += 1

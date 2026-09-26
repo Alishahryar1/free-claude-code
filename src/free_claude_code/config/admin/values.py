@@ -2,6 +2,7 @@
 
 from enum import Enum
 
+from free_claude_code.config.custom_providers import REASONING_FORMATS
 from free_claude_code.config.loader import ConfigSource, ManagedConfigSnapshot
 from free_claude_code.core.json_types import JsonObject
 
@@ -112,4 +113,14 @@ def load_config_response(snapshot: ManagedConfigSnapshot) -> JsonObject:
         "fields": fields,
         "paths": {"managed": str(snapshot.path)},
         "provider_status": provider_config_status(state),
+        "custom_providers": [
+            item.model_dump(mode="json")
+            | {"api_key": MASKED_SECRET if item.api_key else None}
+            for item in snapshot.settings.custom_providers
+        ],
+        "custom_providers_locked": snapshot.sources["custom_providers"]
+        == ConfigSource.PROCESS,
+        "custom_reasoning_formats": {
+            key: list(values) for key, values in REASONING_FORMATS.items()
+        },
     }

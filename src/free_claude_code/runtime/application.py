@@ -27,6 +27,7 @@ from free_claude_code.application.errors import (
 )
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.application.ports import StopResult
+from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.persistence import (
     PreparedAdminUpdate,
 )
@@ -334,6 +335,7 @@ class ApplicationRuntime:
     async def apply_admin_config(
         self,
         updates: Mapping[str, ConfigInputValue],
+        custom_provider: CustomProviderMutation | None = None,
     ) -> JsonObject:
         """Apply one validated config update without splitting runtime ownership."""
         caller = asyncio.current_task()
@@ -344,7 +346,9 @@ class ApplicationRuntime:
                 raise ApplicationUnavailableError(
                     "Configuration runtime is shutting down."
                 )
-            prepared = await self._configuration.prepare(updates, self.settings)
+            prepared = await self._configuration.prepare(
+                updates, self.settings, custom_provider
+            )
             if not prepared.valid:
                 return prepared.applied_response() | {"credential_checks": []}
             assert prepared.settings is not None

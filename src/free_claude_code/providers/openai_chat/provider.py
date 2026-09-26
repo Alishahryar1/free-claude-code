@@ -233,6 +233,7 @@ class OpenAIChatProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         return self._chat.stream_responses(
             request,

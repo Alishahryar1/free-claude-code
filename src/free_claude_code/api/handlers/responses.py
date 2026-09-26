@@ -17,7 +17,7 @@ from free_claude_code.api.response_streams import (
 )
 from free_claude_code.application.errors import ApplicationError, InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor
-from free_claude_code.application.ports import ProviderResolver
+from free_claude_code.application.ports import ModelInfoLookup, ProviderResolver
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.diagnostics import safe_exception_message
@@ -43,6 +43,7 @@ class ResponsesHandler:
         provider_executor: ProviderExecutor | None = None,
         generation_id: int | None = None,
         request_headers: Mapping[str, str] | None = None,
+        model_info_lookup: ModelInfoLookup | None = None,
     ) -> None:
         self._settings = settings
         self._model_router = model_router or ModelRouter(settings)
@@ -52,6 +53,7 @@ class ResponsesHandler:
             generation_id=generation_id,
             log_raw_payloads=settings.log_raw_api_payloads,
             request_headers=request_headers,
+            model_info_lookup=model_info_lookup,
         )
 
     async def create(

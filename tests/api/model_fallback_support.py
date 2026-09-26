@@ -238,6 +238,7 @@ class ControlledFallbackProvider:
         response_model: str | None = None,
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         del input_tokens, request_id, reasoning
         if self._validation_error is not None:

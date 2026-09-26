@@ -7,6 +7,7 @@ from free_claude_code.application.errors import (
     ApplicationUnavailableError,
     UnknownProviderError,
 )
+from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderAdmissionController
@@ -249,12 +250,31 @@ if (
 def prepare_provider(
     provider_id: str,
     provider_loaders: Mapping[str, Callable[[], ProviderFactory]],
+    custom_definition: CustomProviderDefinition | None = None,
 ) -> Callable[[Settings], BaseProvider]:
     """Load implementation modules in a worker; return a loop-owned constructor."""
 
     # The SDK lazily imports these on first client resource access. Keep that
     # work in this loader, before constructing clients on their owner loop.
     importlib.import_module("openai.resources")
+    if custom_definition is not None:
+        from free_claude_code.providers.custom import CustomProvider
+
+        from .config import build_custom_provider_config
+
+        def construct_custom(settings: Settings) -> BaseProvider:
+            config = build_custom_provider_config(custom_definition, settings)
+            admission = ProviderAdmissionController(
+                provider_name=provider_id,
+                rate_limit=config.rate_limit,
+                rate_window=config.rate_window,
+                max_concurrency=config.max_concurrency,
+            )
+            return CustomProvider(
+                config, definition=custom_definition, admission=admission
+            )
+
+        return construct_custom
     descriptor = PROVIDER_CATALOG.get(provider_id)
     if descriptor is None:
         raise UnknownProviderError.for_provider(provider_id, PROVIDER_CATALOG)

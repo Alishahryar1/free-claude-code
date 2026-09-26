@@ -86,6 +86,7 @@ class FakeProvider:
         response_model: str | None = None,
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         self.responses_requests.append(request)
         self.stream_kwargs.append(

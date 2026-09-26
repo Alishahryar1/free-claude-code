@@ -2,10 +2,12 @@ import json
 from collections.abc import AsyncIterator
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import DEFAULT_MODEL
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import ReasoningReplayMode
@@ -24,12 +26,47 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
 )
-from tests.api.support import create_test_app
+from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.test_custom_provider import completion, definition
+from tests.providers.test_custom_provider import provider as custom_provider
 
 _PUBLIC_MODEL = "nvidia_nim/test-model"
 _UPSTREAM_MODEL = "test-model"
 _RESPONSE_ID = "resp_test"
+
+
+def test_responses_route_carries_generation_model_limit_to_messages_egress():
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=completion("anthropic_messages"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    config = definition(api_format="anthropic_messages")
+    instance = custom_provider(config, messages_handler=reply)
+    app = create_test_app(
+        Settings(custom_providers=(config,)), providers={config.provider_id: instance}
+    )
+    provider_manager_for_app(app).cache_model_infos(
+        config.provider_id, {ProviderModelInfo("m", max_output_tokens=4096)}
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": f"{config.provider_id}/m",
+                "input": "Hello",
+                "max_output_tokens": 8192,
+            },
+        )
+    assert response.status_code == 200
+    assert "response.completed" in response.text
+    assert bodies[0]["max_tokens"] == 4096
 
 
 class FakeProvider:

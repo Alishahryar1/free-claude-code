@@ -1,6 +1,7 @@
 """Provider configuration construction from neutral catalog metadata."""
 
 from free_claude_code.application.errors import ApplicationUnavailableError
+from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.provider_catalog import ProviderDescriptor
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.base import ProviderConfig
@@ -86,6 +87,24 @@ def build_provider_config(
         http_write_timeout=settings.http_write_timeout,
         http_connect_timeout=settings.http_connect_timeout,
         proxy=proxy,
+        log_raw_sse_events=settings.log_raw_sse_events,
+        log_api_error_tracebacks=settings.log_api_error_tracebacks,
+    )
+
+
+def build_custom_provider_config(
+    definition: CustomProviderDefinition, settings: Settings
+) -> ProviderConfig:
+    return ProviderConfig(
+        api_key=definition.api_key.get_secret_value() if definition.api_key else None,
+        base_url=definition.base_url,
+        proxy=None,
+        rate_limit=settings.provider_rate_limit,
+        rate_window=settings.provider_rate_window,
+        max_concurrency=settings.provider_max_concurrency,
+        http_read_timeout=settings.http_read_timeout,
+        http_write_timeout=settings.http_write_timeout,
+        http_connect_timeout=settings.http_connect_timeout,
         log_raw_sse_events=settings.log_raw_sse_events,
         log_api_error_tracebacks=settings.log_api_error_tracebacks,
     )

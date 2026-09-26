@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 from .constants import DEFAULT_MODEL, HTTP_CONNECT_TIMEOUT_DEFAULT
+from .custom_providers import CustomProviderDefinition, decode_custom_providers
 from .model_refs import parse_model_fallbacks
 from .nim import NimSettings
 from .provider_catalog import (
@@ -50,9 +51,6 @@ def _validate_model_ref(value: str) -> str:
             f"Valid providers: {', '.join(SUPPORTED_PROVIDER_IDS)}. "
             "Format: provider_type/model/name"
         )
-    if provider not in SUPPORTED_PROVIDER_IDS:
-        supported = ", ".join(f"'{item}'" for item in SUPPORTED_PROVIDER_IDS)
-        raise ValueError(f"Invalid provider: '{provider}'. Supported: {supported}")
     if not model:
         raise ValueError("Model reference must include a non-empty model suffix.")
     return value
@@ -65,7 +63,48 @@ class Settings(BaseModel):
         validate_default=True,
         populate_by_name=True,
         extra="ignore",
+        hide_input_in_errors=True,
     )
+
+    custom_providers: Annotated[
+        tuple[CustomProviderDefinition, ...], BeforeValidator(decode_custom_providers)
+    ] = Field(default=(), validation_alias="FCC_CUSTOM_PROVIDERS")
+
+    @property
+    def provider_ids(self) -> tuple[str, ...]:
+        return (
+            *SUPPORTED_PROVIDER_IDS,
+            *(item.provider_id for item in self.custom_providers),
+        )
+
+    def custom_provider(self, provider_id: str) -> CustomProviderDefinition | None:
+        return next(
+            (item for item in self.custom_providers if item.provider_id == provider_id),
+            None,
+        )
+
+    @model_validator(mode="after")
+    def validate_provider_references(self) -> Settings:
+        ids = [item.provider_id for item in self.custom_providers]
+        names = [item.display_name.casefold() for item in self.custom_providers]
+        if len(ids) != len(set(ids)) or len(names) != len(set(names)):
+            raise ValueError("Custom provider names and IDs must be unique")
+        for field in (
+            "model",
+            "model_fable",
+            "model_opus",
+            "model_sonnet",
+            "model_haiku",
+            "model_fallbacks",
+        ):
+            value = getattr(self, field)
+            refs = value if isinstance(value, tuple) else (value,) if value else ()
+            for ref in refs:
+                if ref.partition("/")[0] not in self.provider_ids:
+                    raise ValueError(
+                        f"{field.upper()}: Invalid provider in model reference"
+                    )
+        return self
 
     # ==================== OpenAI Platform API ====================
     openai_api_key: OptionalNonEmptyString = Field(

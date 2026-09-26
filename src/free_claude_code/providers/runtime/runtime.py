@@ -18,11 +18,17 @@ type ProviderLoader = Callable[[], ProviderFactory]
 
 
 def _load_constructor(
-    provider_id: str, provider_loaders: Mapping[str, ProviderLoader]
+    provider_id: str, provider_loaders: Mapping[str, ProviderLoader], settings: Settings
 ) -> Callable[[Settings], BaseProvider]:
     from .factory import prepare_provider
 
-    return prepare_provider(provider_id, provider_loaders)
+    return prepare_provider(
+        provider_id,
+        provider_loaders,
+        settings.custom_provider(provider_id)
+        if provider_id.startswith("custom_")
+        else None,
+    )
 
 
 async def create_provider(
@@ -32,7 +38,7 @@ async def create_provider(
     provider_loaders: Mapping[str, ProviderLoader] | None = None,
 ) -> BaseProvider:
     constructor = await run_sync_owned(
-        partial(_load_constructor, provider_id, provider_loaders or {})
+        partial(_load_constructor, provider_id, provider_loaders or {}, settings)
     )
     return constructor(settings)
 
