@@ -11,8 +11,9 @@ from free_claude_code.application.code_sessions import CodeService
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.logging_config import configure_logging
 from free_claude_code.config.paths import (
-    code_database_path,
     code_lock_path,
+    fcc_database_path,
+    legacy_code_database_path,
     server_log_path,
 )
 from free_claude_code.config.settings import Settings
@@ -73,7 +74,11 @@ def build_asgi_app(
         model_catalog_publisher=CodexModelCatalogPublisher(),
     )
     code_service = CodeService(
-        SQLiteCodeStore(code_database_path(), code_lock_path()),
+        SQLiteCodeStore(
+            fcc_database_path(),
+            code_lock_path(),
+            legacy_database_path=legacy_code_database_path(),
+        ),
         CodexHarnessFactory(provider_manager),
     )
     runtime = ApplicationRuntime(

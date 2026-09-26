@@ -25,6 +25,8 @@ from free_claude_code.application.code_sessions.models import (
 )
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
+from .sqlite_database import initialize_database
+
 _JSON_FIELDS = frozenset(
     {"raw", "form", "error_details", "request_id", "native_permission_defaults"}
 )
@@ -299,58 +301,16 @@ def _write_prompt(connection: sqlite3.Connection, prompt: CodePrompt) -> None:
     )
 
 
-def _migrate_prompt_entries(connection: sqlite3.Connection) -> None:
-    """Give old prompts a permanent run-end position without rewriting history."""
-    for row in connection.execute(
-        "SELECT * FROM code_prompts ORDER BY rowid"
-    ).fetchall():
-        prompt = _record(CodePrompt, row)
-        run = connection.execute(
-            "SELECT id FROM code_runs WHERE session_id = ? AND native_turn_id = ?",
-            (prompt.session_id, prompt.native_turn_id),
-        ).fetchone()
-        if run is None and prompt.native_item_id is not None:
-            matches = connection.execute(
-                "SELECT DISTINCT run_id AS id FROM code_items WHERE session_id = ? AND native_item_id = ?",
-                (prompt.session_id, prompt.native_item_id),
-            ).fetchall()
-            if len(matches) == 1:
-                run = matches[0]
-        if run is None:
-            run = connection.execute(
-                "SELECT id FROM code_runs WHERE session_id = ? ORDER BY ordinal DESC LIMIT 1",
-                (prompt.session_id,),
-            ).fetchone()
-        if run is None:
-            raise CodeUnavailableError("A saved prompt has no saved conversation turn.")
-        sequence = connection.execute(
-            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM code_items WHERE session_id = ?",
-            (prompt.session_id,),
-        ).fetchone()[0]
-        _insert(
-            connection,
-            "code_items",
-            CodeItem(
-                id=prompt.id,
-                session_id=prompt.session_id,
-                run_id=run["id"],
-                sequence=sequence,
-                kind="prompt",
-                complete=True,
-            ),
-        )
-    connection.execute("CREATE TABLE code_prompts_new" + _PROMPT_COLUMNS)
-    connection.execute("INSERT INTO code_prompts_new SELECT * FROM code_prompts")
-    connection.execute("DROP TABLE code_prompts")
-    connection.execute("ALTER TABLE code_prompts_new RENAME TO code_prompts")
-    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-        raise CodeUnavailableError("Code session history has an invalid record link.")
-    connection.execute("PRAGMA user_version = 1")
-
-
 class SQLiteCodeStore:
-    def __init__(self, database_path: Path, lock_path: Path) -> None:
+    def __init__(
+        self,
+        database_path: Path,
+        lock_path: Path,
+        *,
+        legacy_database_path: Path | None = None,
+    ) -> None:
         self._path = database_path
+        self._legacy_path = legacy_database_path
         self._lock = InterprocessFileLock(lock_path)
         self._started = False
         self._lifecycle = asyncio.Lock()
@@ -371,14 +331,28 @@ class SQLiteCodeStore:
             self._started = True
 
     def _initialize(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         if not self._lock.acquire():
             raise CodeUnavailableError(
                 "Code sessions is already owned by another FCC server."
             )
-        if os.name != "nt":
-            self._path.parent.chmod(0o700)
-        self._execute(self._initialize_schema)
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            if os.name != "nt":
+                self._path.parent.chmod(0o700)
+            initialize_database(self._path, self._legacy_path)
+        except sqlite3.IntegrityError as exc:
+            raise CodeConflictError(
+                "Saved Code history conflicts with its schema."
+            ) from exc
+        except sqlite3.Error as exc:
+            raise CodeUnavailableError(
+                f"Code storage initialization failed: {exc}"
+            ) from exc
+        except OSError as exc:
+            raise CodeUnavailableError(
+                "Code database files could not be initialized or moved."
+            ) from exc
+        self._execute(self._recover)
         if os.name != "nt":
             for path in (
                 self._path,
@@ -412,30 +386,7 @@ class SQLiteCodeStore:
             raise CodeUnavailableError("Code session storage is closed.")
         return await anyio.to_thread.run_sync(self._execute, operation)
 
-    def _initialize_schema(self, connection: sqlite3.Connection) -> None:
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.executescript(_SCHEMA)
-        connection.execute("BEGIN IMMEDIATE")
-        if connection.execute("PRAGMA user_version").fetchone()[0] == 0:
-            _migrate_prompt_entries(connection)
-        if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
-            for table in ("code_sessions", "code_runs"):
-                connection.execute(
-                    f"ALTER TABLE {table} ADD COLUMN mode TEXT NOT NULL DEFAULT 'config' "
-                    "CHECK(mode IN ('config','ask','auto_review','full_access'))"
-                )
-            connection.execute(
-                "ALTER TABLE code_sessions ADD COLUMN native_permission_defaults TEXT "
-                "CHECK(native_permission_defaults IS NULL OR "
-                "(json_valid(native_permission_defaults) AND json_type(native_permission_defaults) = 'object'))"
-            )
-            connection.execute("PRAGMA user_version = 2")
-        if connection.execute("PRAGMA user_version").fetchone()[0] == 2:
-            connection.execute(
-                "ALTER TABLE code_sessions ADD COLUMN context_used_tokens INTEGER "
-                "CHECK(context_used_tokens IS NULL OR context_used_tokens >= 0)"
-            )
-            connection.execute("PRAGMA user_version = 3")
+    def _recover(self, connection: sqlite3.Connection) -> None:
         connection.execute(
             "UPDATE code_runs SET status = 'interrupted', finished_at = ?, error = ? "
             "WHERE status IN ('preparing','running','stopping')",
@@ -735,51 +686,3 @@ class SQLiteCodeStore:
             connection.execute("DELETE FROM code_sessions WHERE id = ?", (session_id,))
 
         await self._run(operation)
-
-
-_PROMPT_COLUMNS = """(
-    session_id TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE, id TEXT NOT NULL,
-    generation TEXT NOT NULL, request_id TEXT NOT NULL, native_turn_id TEXT, native_item_id TEXT,
-    kind TEXT NOT NULL, form TEXT NOT NULL, raw TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('pending','answering','resolved','expired')), response_id TEXT, error TEXT,
-    PRIMARY KEY(session_id,id), UNIQUE(session_id,generation,request_id), UNIQUE(session_id,response_id),
-    FOREIGN KEY(session_id,id) REFERENCES code_items(session_id,id) ON DELETE CASCADE
-)"""
-
-_SCHEMA = (
-    """
-CREATE TABLE IF NOT EXISTS code_sessions(
-    id TEXT PRIMARY KEY NOT NULL, cwd TEXT NOT NULL, model TEXT NOT NULL, reasoning_effort TEXT,
-    harness TEXT NOT NULL CHECK(harness = 'codex'), title TEXT NOT NULL, title_search TEXT NOT NULL,
-    cwd_search TEXT NOT NULL, auto_title INTEGER NOT NULL CHECK(auto_title IN (0,1)), native_thread_id TEXT,
-    native_may_have_input INTEGER NOT NULL CHECK(native_may_have_input IN (0,1)),
-    revision INTEGER NOT NULL CHECK(revision > 0), status TEXT NOT NULL CHECK(status IN ('ready','deleting','delete_uncertain')),
-    error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS code_sessions_recent ON code_sessions(updated_at DESC, id DESC);
-CREATE TABLE IF NOT EXISTS code_runs(
-    session_id TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE, id TEXT NOT NULL,
-    ordinal INTEGER NOT NULL CHECK(ordinal > 0), text TEXT NOT NULL, model TEXT NOT NULL, reasoning_effort TEXT,
-    status TEXT NOT NULL CHECK(status IN ('preparing','running','stopping','completed','interrupted','failed')),
-    submission_started INTEGER NOT NULL CHECK(submission_started IN (0,1)), native_turn_id TEXT,
-    stop_requested INTEGER NOT NULL CHECK(stop_requested IN (0,1)), error TEXT, error_details TEXT NOT NULL,
-    created_at INTEGER NOT NULL, finished_at INTEGER,
-    PRIMARY KEY(session_id,id), UNIQUE(session_id,ordinal), UNIQUE(session_id,native_turn_id)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS code_one_active_run ON code_runs(session_id)
-    WHERE status IN ('preparing','running','stopping');
-CREATE TABLE IF NOT EXISTS code_items(
-    session_id TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE, id TEXT NOT NULL,
-    run_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK(sequence > 0), native_turn_id TEXT, native_item_id TEXT,
-    kind TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL, detail TEXT NOT NULL,
-    complete INTEGER NOT NULL CHECK(complete IN (0,1)), raw TEXT NOT NULL,
-    PRIMARY KEY(session_id,id), FOREIGN KEY(session_id,run_id) REFERENCES code_runs(session_id,id) ON DELETE CASCADE,
-    UNIQUE(session_id,sequence), UNIQUE(session_id,native_turn_id,native_item_id)
-);
-CREATE INDEX IF NOT EXISTS code_items_run ON code_items(session_id,run_id,sequence);
-CREATE TABLE IF NOT EXISTS code_deleted(id TEXT PRIMARY KEY NOT NULL);
-"""
-    + "CREATE TABLE IF NOT EXISTS code_prompts"
-    + _PROMPT_COLUMNS
-    + ";"
-)
