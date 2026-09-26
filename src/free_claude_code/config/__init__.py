@@ -1,5 +1,6 @@
 """Configuration management."""
 
+from . import antigravity_catalog as antigravity_catalog
 from .loader import clear_settings_cache, get_settings
 from .settings import Settings
 

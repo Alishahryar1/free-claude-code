@@ -220,7 +220,7 @@ _SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
     "opencode_zen": _load_opencode_zen,
     "opencode_go": _load_opencode_go,
 }
-_INJECTED_PROVIDER_IDS = {"openai", "github_copilot"}
+_INJECTED_PROVIDER_IDS = {"openai", "github_copilot", "antigravity"}
 
 
 def _required_setting(settings: Settings, attr_name: str) -> str:
@@ -269,12 +269,21 @@ def prepare_provider(
 
     def construct(settings: Settings) -> BaseProvider:
         config = build_provider_config(descriptor, settings)
-        admission = ProviderAdmissionController(
-            provider_name=provider_id,
-            rate_limit=config.rate_limit,
-            rate_window=config.rate_window,
-            max_concurrency=config.max_concurrency,
-        )
+        if provider_id == "antigravity":
+            admission = ProviderAdmissionController(
+                provider_name=provider_id,
+                rate_limit=config.rate_limit,
+                rate_window=config.rate_window,
+                max_concurrency=1,
+                max_attempts=1,
+            )
+        else:
+            admission = ProviderAdmissionController(
+                provider_name=provider_id,
+                rate_limit=config.rate_limit,
+                rate_window=config.rate_window,
+                max_concurrency=config.max_concurrency,
+            )
         if factory is not None:
             return factory(config, settings, admission)
         return create_openai_chat_provider(provider_id, config, admission)

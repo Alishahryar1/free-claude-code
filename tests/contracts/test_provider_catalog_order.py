@@ -4,6 +4,7 @@ from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     SUPPORTED_PROVIDER_IDS,
 )
+from free_claude_code.config.settings import Settings
 
 _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "nvidia_nim",
@@ -13,6 +14,7 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "openai",
     "openai_api",
     "github_copilot",
+    "antigravity",
     "xai",
     "qwencloud",
     "qwencloud_coding",
@@ -69,3 +71,8 @@ def test_provider_catalog_key_order_matches_canonical_plan() -> None:
 
     assert tuple(PROVIDER_CATALOG.keys()) == _EXPECTED_PROVIDER_ORDER
     assert SUPPORTED_PROVIDER_IDS == _EXPECTED_PROVIDER_ORDER
+
+
+def test_settings_accept_antigravity_model_reference() -> None:
+    settings = Settings(model="antigravity/gemini-test")
+    assert settings.model == "antigravity/gemini-test"
