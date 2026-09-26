@@ -1,5 +1,6 @@
 """Provider model-list response parsing helpers."""
 
+import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, TypeIs
@@ -7,8 +8,14 @@ from typing import Any, TypeIs
 from free_claude_code.application.model_metadata import (
     ProviderModelInfo as _ProviderModelInfo,
 )
+from free_claude_code.application.model_metadata import (
+    ProviderModelPricing as _ProviderModelPricing,
+)
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningCapability
+
+# Well-known capability flags providers may expose as booleans on the model item.
+_CAPABILITY_FLAGS = ("vision", "tools", "thinking", "fim", "streaming")
 
 type ModelListScalar = str | bool
 type RequiredPathValues = tuple[
@@ -60,7 +67,13 @@ def extract_openai_model_infos(
     max_output_tokens_path: tuple[str, ...] | None = None,
     context_window_tokens_resolver: ModelTokenLimitResolver | None = None,
 ) -> frozenset[_ProviderModelInfo]:
-    """Extract routable IDs from an OpenAI-compatible model-list response."""
+    """Extract routable IDs and optional metadata from a model-list response.
+
+    Beyond the required id, this captures optional upstream metadata
+    (context window, output-token limit, pricing, capability flags) so the
+    proxy can surface it to clients. Providers that return only ids still
+    produce valid metadata with all optional fields unset.
+    """
     model_infos: dict[str, _ProviderModelInfo] = {}
     item_location = collection_field or "root-array"
     for item in model_list_items(
@@ -151,6 +164,14 @@ def extract_openai_model_infos(
             if values is not None:
                 supports_thinking = thinking_tag in values
 
+        if (
+            supports_thinking is None
+            and tags_field is None
+            and thinking_boolean_path is None
+            and thinking_sequence_path is None
+        ):
+            supports_thinking = _infer_thinking(item)
+
         input_modalities = _input_modalities(
             item,
             sequence_path=input_modalities_path,
@@ -176,6 +197,8 @@ def extract_openai_model_infos(
             input_modalities=input_modalities,
             context_window_tokens=context_window_tokens,
             max_output_tokens=max_output_tokens,
+            capabilities=_capabilities(item),
+            pricing=_pricing(item),
         )
         model_infos.setdefault(model_id, model_info)
         if aliases_field is not None:
@@ -200,6 +223,57 @@ def extract_openai_model_infos(
     if not model_infos:
         raise _malformed(provider_name, "response did not include any model ids")
     return frozenset(model_infos.values())
+
+
+def _infer_thinking(item: Any) -> bool | None:
+    """Infer thinking support from capability flags or supported_parameters."""
+    thinking = _field(item, "thinking")
+    if isinstance(thinking, bool):
+        return thinking
+    supported = _field(item, "supported_parameters")
+    if _is_sequence(supported):
+        return "reasoning" in {p for p in supported if isinstance(p, str)}
+    return None
+
+
+def _capabilities(item: Any) -> tuple[str, ...]:
+    """Collect capability flags the upstream item explicitly marks as true.
+
+    Returns an empty tuple when the upstream item exposes no capability
+    metadata, so a bare ``/models`` list yields the same (metadata-less)
+    ProviderModelInfo as before. "chat" is only included once at least one
+    explicit capability flag is present.
+    """
+    caps = tuple(name for name in _CAPABILITY_FLAGS if _field(item, name) is True)
+    if not caps:
+        return ()
+    return ("chat", *caps)
+
+
+def _pricing(item: Any) -> _ProviderModelPricing | None:
+    """Extract per-1K-token pricing when the upstream item advertises it."""
+    raw = _field(item, "pricing")
+    if not isinstance(raw, Mapping):
+        return None
+    input_price = _to_float(raw.get("input"))
+    if input_price is None:
+        input_price = _to_float(raw.get("prompt"))
+    output_price = _to_float(raw.get("output"))
+    if output_price is None:
+        output_price = _to_float(raw.get("completion"))
+    if input_price is None and output_price is None:
+        return None
+    return _ProviderModelPricing(input=input_price, output=output_price)
+
+
+def _to_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        result = float(value)
+        if math.isfinite(result) and result >= 0.0:
+            return result
+    return None
 
 
 def extract_tool_capable_model_infos(
