@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -15,6 +16,9 @@ from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.anthropic_messages.request_policy import (
+    MessagesModelCapabilities,
+)
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
@@ -45,7 +49,10 @@ from tests.providers.support import immediate_admission
     ],
     ids=["mandatory", "param", "loc"],
 )
-async def test_tolerant_classifier_corrects_required_reasoning(stream_error, error):
+@pytest.mark.parametrize("cap", [None, 4096])
+async def test_tolerant_classifier_corrects_required_reasoning(
+    stream_error, error, cap
+):
     bodies = []
 
     def handler(request):
@@ -79,11 +86,12 @@ async def test_tolerant_classifier_corrects_required_reasoning(stream_error, err
                 ),
                 endpoint_context=Endpoint(),
                 reasoning=ReasoningPolicy.prefer_off(),
+                model_info=ProviderModelInfo("route", max_output_tokens=cap),
             )
         ]
     assert "<severity>0</severity>" in "".join(output)
     assert len(bodies) == 2
-    assert bodies[0]["max_tokens"] == 8192
+    assert [body["max_tokens"] for body in bodies] == [cap or 8192, cap or 8192]
     assert "thinking" not in bodies[1]
 
 
@@ -243,7 +251,9 @@ def _events(text: str = "hello", stop: str = "end_turn") -> list[JsonObject]:
 
 
 def _transport(
-    client: httpx.AsyncClient, admission: ProviderAdmissionController | None = None
+    client: httpx.AsyncClient,
+    admission: ProviderAdmissionController | None = None,
+    capabilities: MessagesModelCapabilities = MessagesModelCapabilities(),
 ) -> AnthropicMessagesTransport:
     return AnthropicMessagesTransport(
         client=client,
@@ -251,7 +261,44 @@ def _transport(
         provider_name="TEST",
         replay_scope="test/messages",
         read_timeout_s=3,
+        capabilities=capabilities,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "profile_cap,model_cap,expected",
+    [(2048, 4096, 2048), (4096, 2048, 2048), (4096, None, 4096)],
+)
+async def test_model_metadata_cannot_relax_declared_profile_cap(
+    profile_cap, model_cap, expected
+):
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=Wire([_sse(*_events())]),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        transport = _transport(
+            client,
+            capabilities=MessagesModelCapabilities(max_output_tokens=profile_cap),
+        )
+        assert [
+            item
+            async for item in transport.stream_responses(
+                OpenAIResponsesRequest(
+                    model="native", input="hi", max_output_tokens=8192
+                ),
+                endpoint_context=Endpoint(),
+                model_info=ProviderModelInfo("native", max_output_tokens=model_cap),
+            )
+        ]
+    assert bodies[0]["max_tokens"] == expected
 
 
 def _stream(
@@ -308,7 +355,7 @@ async def test_fragmented_messages_http_keeps_native_path_and_public_identity(
         )
         assert not client.is_closed
     assert wire.closed and len(requests) == 1
-    assert requests[0].url.path == "/v1/messages"
+    assert requests[0].url.path == ("/v1/messages" if versioned_base else "/messages")
     assert requests[0].headers["Authorization"] == "Bearer original"
     assert requests[0].headers["anthropic-version"] == "2023-06-01"
     assert requests[0].headers.get_list("anthropic-version") == ["2023-06-01"]

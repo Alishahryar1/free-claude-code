@@ -13,10 +13,6 @@ from free_claude_code.config.model_refs import (
     parse_model_name,
     parse_provider_type,
 )
-from free_claude_code.config.provider_catalog import (
-    PROVIDER_CATALOG,
-    SUPPORTED_PROVIDER_IDS,
-)
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest, TokenCountRequest
@@ -149,10 +145,11 @@ class ModelRouter:
         )
         return tuple(target for target in configured if target != primary)
 
-    @staticmethod
-    def _validate_provider_id(provider_id: str) -> None:
-        if provider_id not in PROVIDER_CATALOG:
-            raise UnknownProviderError.for_provider(provider_id, PROVIDER_CATALOG)
+    def _validate_provider_id(self, provider_id: str) -> None:
+        if provider_id not in self._settings.provider_ids:
+            raise UnknownProviderError.for_provider(
+                provider_id, self._settings.provider_ids
+            )
 
     def _direct_provider_model(
         self, model_name: str
@@ -173,13 +170,15 @@ class ModelRouter:
                 decoded.force_reasoning_off if decoded is not None else False,
             )
         if decoded is not None:
-            if decoded.provider_id not in SUPPORTED_PROVIDER_IDS:
-                if model_name.partition("/")[0] in {
+            if decoded.provider_id not in self._settings.provider_ids:
+                if decoded.provider_id.startswith("custom_") or model_name.partition(
+                    "/"
+                )[0] in {
                     DESKTOP_MODEL_PREFIX,
                     DESKTOP_NO_THINKING_PREFIX,
                 }:
                     raise UnknownProviderError.for_provider(
-                        decoded.provider_id, PROVIDER_CATALOG
+                        decoded.provider_id, self._settings.provider_ids
                     )
                 return None, None, False
             return (
@@ -191,7 +190,11 @@ class ModelRouter:
         provider_id, separator, provider_model = model_name.partition("/")
         if not separator:
             return None, None, False
-        if provider_id not in SUPPORTED_PROVIDER_IDS:
+        if provider_id not in self._settings.provider_ids:
+            if provider_id.startswith("custom_"):
+                raise UnknownProviderError.for_provider(
+                    provider_id, self._settings.provider_ids
+                )
             return None, None, False
         if not provider_model:
             return None, None, False

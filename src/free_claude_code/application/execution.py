@@ -248,6 +248,9 @@ class ProviderExecutor:
                 response_model=routed.resolved.original_model,
                 reasoning=routed.reasoning,
                 request_headers=self._request_headers,
+                model_info=self._model_info_lookup(
+                    target.provider_id, target.provider_model
+                ),
             )
 
         raw_input = routed.request.input

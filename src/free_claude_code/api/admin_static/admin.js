@@ -11,6 +11,8 @@ const state = {
   authStatuses: new Map(),
   providerChecks: new Map(),
   providerId: null,
+  customProvider: null,
+  modelLabels: new Map(),
   localStatusRequest: null,
   startup: null,
   startupRequest: null,
@@ -209,7 +211,10 @@ async function load({ providersOnly = false } = {}) {
   state.startupRequest = null;
   showMessage("Loading admin config");
   const config = await api("/admin/api/config");
+  config.custom_providers ||= [];
+  config.provider_status.push(...config.custom_providers.map((provider) => ({ ...provider, kind: "custom", status: "configured", settings_keys: [], missing_configuration_keys: [] })));
   state.config = config;
+  window.CodeSessions.setProviderNames(config.custom_providers);
   state.startup = null;
   state.fields = new Map(config.fields.map((field) => [field.key, field]));
   if (!providersOnly) renderNav();
@@ -334,6 +339,25 @@ function renderProviders(providerStatus) {
     });
     container.appendChild(group);
   });
+  const custom = document.createElement("section");
+  custom.className = "provider-strip";
+  custom.dataset.providerGroup = "custom";
+  const heading = document.createElement("h3");
+  heading.textContent = "Custom providers";
+  const add = authButton("Add provider", () => openCustomProviderDialog(), "primary-button");
+  add.id = "addCustomProvider";
+  add.disabled = !!state.config.custom_providers_locked;
+  const empty = document.createElement("p");
+  empty.textContent = "No custom providers yet.";
+  empty.hidden = state.config.custom_providers.length > 0;
+  const grid = document.createElement("div");
+  grid.className = "provider-grid";
+  grid.id = "providers-custom";
+  const header = document.createElement("div");
+  header.className = "strip-header";
+  header.append(heading, add);
+  custom.append(header, empty, grid);
+  container.appendChild(custom);
   providerStatus.forEach(updateProviderCard);
 }
 
@@ -343,7 +367,7 @@ function updateProviderCard(provider) {
   const kind = oauth ? "oauth" : provider.kind === "local" ? "local" : "cloud";
   const configured = oauth ? status?.connected : provider.status === "configured";
   const subgroup = oauth && configured == null ? "loading" : configured ? "configured" : "unconfigured";
-  const grid = byId(`providers-${kind}-${subgroup}`);
+  const grid = byId(provider.kind === "custom" ? "providers-custom" : `providers-${kind}-${subgroup}`);
   let card = document.querySelector(`[data-provider="${provider.provider_id}"]`);
   if (!card) {
     card = document.createElement("article");
@@ -362,12 +386,12 @@ function updateProviderCard(provider) {
   website.rel = "noopener noreferrer";
   const logo = document.createElement("img");
   logo.className = "provider-logo";
-  logo.src = new URL(`providers/${provider.logo_filename}`, adminAssetBase);
+  if (provider.logo_filename) logo.src = new URL(`providers/${provider.logo_filename}`, adminAssetBase);
   logo.alt = "";
   logo.width = 20;
   logo.height = 20;
   website.append(name, logo);
-  title.appendChild(website);
+  title.appendChild(provider.kind === "custom" ? name : website);
   const meta = document.createElement("span");
   meta.className = "provider-meta";
   meta.hidden = !oauth;
@@ -378,7 +402,7 @@ function updateProviderCard(provider) {
   const actions = document.createElement("div");
   actions.className = "provider-actions";
   if (oauth) populateConnectedAccountActions(provider, status, actions);
-  if (provider.settings_keys?.length) {
+  if (provider.kind === "custom" || provider.settings_keys?.length) {
     const edit = oauth || configured;
     const settings = authButton(edit ? "Edit" : "Configure", () => openProviderDialog(provider.provider_id), edit ? "secondary-button" : "primary-button");
     settings.dataset.providerSettings = "true";
@@ -401,6 +425,8 @@ function updateProviderCard(provider) {
 }
 
 function openProviderDialog(providerId) {
+  if (connectedAccountDescriptor(providerId)?.kind === "custom") return openCustomProviderDialog(providerId);
+  state.customProvider = null;
   state.providerId = providerId;
   const provider = connectedAccountDescriptor(providerId);
   byId("providerDialogTitle").textContent = connectedAccountName(provider);
@@ -429,7 +455,70 @@ function openProviderDialog(providerId) {
   first?.focus();
 }
 
+const CUSTOM_LABELS = {
+  provider_default: "Provider default", openai_effort: "OpenAI effort", limited_effort: "Limited effort (low / medium / high)",
+  reasoning_object: "Reasoning object", thinking: "Thinking on/off", chat_template: "Chat-template thinking",
+  native_responses: "Native reasoning", messages_manual: "Token-budget thinking", messages_adaptive: "Adaptive thinking",
+};
+
+function openCustomProviderDialog(providerId = null) {
+  const provider = state.config.custom_providers.find((item) => item.provider_id === providerId) || {
+    display_name: "", base_url: "", api_key: null, api_format: "openai_chat", reasoning_format: "provider_default", reasoning_history_format: "disabled", model_ids: [],
+  };
+  state.providerId = providerId || "__custom_new__";
+  state.customProvider = provider;
+  byId("providerDialogTitle").textContent = providerId ? provider.display_name : "Add provider";
+  byId("providerMessage").textContent = "";
+  byId("providerDialogCheck").hidden = true;
+  const fields = byId("providerFields");
+  fields.replaceChildren();
+  const formats = (state.config.custom_reasoning_formats || {})[provider.api_format] || ["provider_default"];
+  const definitions = [
+    ["display_name", "Name", "string", [], ""],
+    ["base_url", "Base URL", "string", [], "Include the API path, for example https://gateway.example/v1."],
+    ["api_key", "API key", "secret", [], "Optional for endpoints that do not require a key."],
+    ["api_format", "API format", "select", [["openai_chat", "Chat Completions"], ["openai_responses", "Responses"], ["anthropic_messages", "Anthropic Messages"]], "Select the API exposed by your endpoint."],
+    ["reasoning_format", "Reasoning format", "select", formats.map((value) => [value, CUSTOM_LABELS[value]]), "How FCC sends reasoning controls. Provider default leaves computation to the upstream."],
+    ["reasoning_history_format", "Reasoning history format", "select", [["disabled", "Text context"], ["reasoning_content", "reasoning_content"], ["reasoning", "reasoning"], ["think_tags", "Think tags"]], "How previous reasoning is sent to a Chat Completions endpoint."],
+    ["model_ids", "Model IDs", "textarea", [], "Optional, one upstream model ID per line. Leave empty to discover models automatically."],
+  ];
+  for (const [key, label, type, options, description] of definitions) {
+    fields.appendChild(renderField({ key, label, type, options: options.map(([value, label]) => ({value, label})), description,
+      value: key === "model_ids" ? provider.model_ids.join("\n") : provider[key], nullable: key === "api_key", secret: key === "api_key",
+      configured: key === "api_key" && !!provider.api_key, locked: !!state.config.custom_providers_locked, source: "managed_env" }));
+  }
+  const format = byId("field-api_format");
+  const reasoning = byId("field-reasoning_format");
+  const history = byId("field-reasoning_history_format");
+  history.closest(".field").hidden = format.value !== "openai_chat";
+  format.addEventListener("change", () => {
+    const allowed = state.config.custom_reasoning_formats[format.value];
+    const previous = reasoning.value;
+    reasoning.replaceChildren(...allowed.map((value) => option(value, CUSTOM_LABELS[value])));
+    reasoning.value = allowed.includes(previous) ? previous : "provider_default";
+    history.closest(".field").hidden = format.value !== "openai_chat";
+    if (format.value !== "openai_chat") history.value = "disabled";
+    updateDirtyState();
+  });
+  const actions = byId("providerDialogActions");
+  actions.replaceChildren();
+  if (providerId && !state.config.custom_providers_locked) {
+    if (!provider.model_ids.length) actions.appendChild(authButton("Refresh models", (button) => testProvider(providerId, button), "secondary-button"));
+    actions.appendChild(authButton("Remove provider", () => apply(providerId, "delete"), "danger-button"));
+    const modelConfig = document.createElement("a");
+    modelConfig.href = "/admin/model_config";
+    modelConfig.textContent = "Model Config";
+    modelConfig.addEventListener("click", (event) => { event.preventDefault(); byId("providerDialog").close(); navigateToView("model_config"); });
+    actions.appendChild(modelConfig);
+  }
+  byId("saveProvider").hidden = false;
+  updateDirtyState();
+  byId("providerDialog").showModal();
+  byId("field-display_name").focus();
+}
+
 function renderProviderDialogActions(provider) {
+  if (state.customProvider) return;
   if (state.providerId !== provider.provider_id) return;
   const actions = byId("providerDialogActions");
   actions.replaceChildren();
@@ -855,6 +944,7 @@ function renderField(field) {
 }
 
 function inputForField(field) {
+  if (field.type === "textarea") { const input = document.createElement("textarea"); input.rows = 3; input.value = field.value || ""; return input; }
   if (field.type === "boolean") {
     const input = document.createElement("input");
     input.type = "checkbox";
@@ -914,6 +1004,7 @@ function createModelCombobox(input, field) {
   return new window.FccModelCombobox(input, {
     listboxId: `model-options-${field.key}`,
     label: field.label,
+    displayValue: (value) => state.modelLabels.get(value) || value,
     values: () =>
       field.type === "optional_model"
         ? ["None", ...state.modelOptions]
@@ -1219,14 +1310,22 @@ function showRestartNotice() {
   }
 }
 
-async function apply(providerId = null) {
+async function apply(providerId = null, customAction = null) {
   if (state.applying) return;
   if (state.restart) {
     await reconnectAfterRestart();
     return;
   }
   const values = changedValues(providerId ? byId("providerFields") : byId("adminViews"));
-  if (!Object.keys(values).length) return;
+  const custom = providerId && state.customProvider;
+  let mutation = null;
+  if (custom) {
+    const action = customAction || (custom.provider_id ? "update" : "create");
+    if ("model_ids" in values) values.model_ids = values.model_ids.split(/\r?\n/).map((id) => id.trim()).filter(Boolean);
+    mutation = { action, values: action === "delete" ? {} : values };
+    if (custom.provider_id) mutation.provider_id = custom.provider_id;
+  }
+  if (!Object.keys(values).length && mutation?.action !== "delete") return;
   const checkingKeys = Object.keys(values).some((key) => {
     const field = state.fields.get(key);
     return field?.secret && field.section === "providers" && values[key] !== null;
@@ -1238,7 +1337,7 @@ async function apply(providerId = null) {
   try {
     const result = await api("/admin/api/config/apply", {
       method: "POST",
-      body: JSON.stringify({ values }),
+      body: JSON.stringify(mutation ? { custom_provider: mutation } : { values }),
     });
     const checks = result.credential_checks || [];
     if (!result.applied) {
@@ -1273,7 +1372,10 @@ async function apply(providerId = null) {
       rejectedField.scrollIntoView({ block: "center", behavior: "instant" });
       rejectedField.focus();
     } else if (providerId && applied) {
-      document.querySelector(`[data-provider="${providerId}"] [data-provider-settings]`)?.focus({ preventScroll: true });
+      const focus = mutation && mutation.action !== "update"
+        ? byId("addCustomProvider")
+        : document.querySelector(`[data-provider="${providerId}"] [data-provider-settings]`);
+      focus?.focus({ preventScroll: true });
     }
   }
 }
@@ -1385,7 +1487,7 @@ async function loadModelOptions(refresh = false) {
   const result = await api("/admin/api/models" + (refresh ? "/refresh" : ""), {
     method: refresh ? "POST" : "GET",
   });
-  if (request === state.modelOptionsRequest && config === state.config) setModelOptions(result.models);
+  if (request === state.modelOptionsRequest && config === state.config) { state.modelLabels = new Map(Object.entries(result.model_labels || {})); setModelOptions(result.models); }
   if (refresh && window.CodeSessions) await window.CodeSessions.refresh();
   return result;
 }
@@ -1459,6 +1561,8 @@ byId("providerDialog").addEventListener("click", (event) => {
 byId("providerDialog").addEventListener("close", () => {
   if (byId("providerDialog").open) return;
   const providerId = state.providerId;
+  const wasCustom = !!state.customProvider;
+  state.customProvider = null;
   state.providerId = null;
   byId("providerFields").replaceChildren();
   updateDirtyState();
