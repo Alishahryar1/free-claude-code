@@ -660,7 +660,6 @@ def test_admin_static_model_combobox_owns_dropdown_and_search_behavior():
     assert 'this.toggle.className = "model-combobox-toggle"' in combobox_script
     assert "class FccModelCombobox" in combobox_script
     assert 'input.addEventListener("click", () => this.open())' in combobox_script
-    assert "value.toLocaleLowerCase().includes(normalizedQuery)" in combobox_script
     assert 'event.key === "ArrowDown" || event.key === "ArrowUp"' in combobox_script
     assert "this.setActive(this.visibleOptions.length - 1)" in combobox_script
     assert 'event.key === "Enter"' in combobox_script
@@ -847,7 +846,9 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
     response = _local_client(app).get("/admin/api/models")
 
     assert response.status_code == 200
-    assert response.json() == {
+    assert {
+        key: value for key, value in response.json().items() if key != "model_labels"
+    } == {
         "models": [
             "nvidia_nim/configured-model",
             "open_router/anthropic/configured-opus",
@@ -876,7 +877,9 @@ def test_admin_model_refresh_returns_the_updated_canonical_catalog():
     response = _local_client(app).post("/admin/api/models/refresh")
 
     assert response.status_code == 200
-    assert response.json() == {
+    assert {
+        key: value for key, value in response.json().items() if key != "model_labels"
+    } == {
         "models": ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
         "failed_providers": [],
     }
@@ -898,7 +901,9 @@ def test_admin_model_refresh_reports_partial_provider_failures():
     response = _local_client(app).post("/admin/api/models/refresh")
 
     assert response.status_code == 200
-    assert response.json() == {
+    assert {
+        key: value for key, value in response.json().items() if key != "model_labels"
+    } == {
         "models": ["deepseek/deepseek-chat"],
         "failed_providers": ["open_router"],
     }

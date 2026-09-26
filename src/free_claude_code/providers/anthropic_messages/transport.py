@@ -299,7 +299,7 @@ class AnthropicMessagesTransport:
                         dict.fromkeys([*filter(None, existing.split(",")), *betas])
                     )
                 base_url = endpoint.base_url.rstrip("/")
-                path = "/messages" if base_url.endswith("/v1") else "/v1/messages"
+                path = "/messages"
                 response = scope.retain(
                     await self._client.send(
                         self._client.build_request(

@@ -4,6 +4,7 @@ import asyncio
 import sys
 from collections.abc import AsyncIterator, Mapping
 from contextlib import suppress
+from dataclasses import replace
 
 import httpx
 import httpx2
@@ -58,7 +59,11 @@ class _MessagesEndpoint:
     async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
         snapshot = await self._context.endpoint(force_refresh=force_refresh)
         self._client.cookies.clear()
-        return snapshot
+        base_url = snapshot.base_url.rstrip("/")
+        return replace(
+            snapshot,
+            base_url=base_url if base_url.endswith("/v1") else base_url + "/v1",
+        )
 
 
 class GitHubCopilotProvider(BaseProvider):

@@ -7,7 +7,6 @@ from loguru import logger
 
 from free_claude_code.application.errors import UnknownProviderError
 from free_claude_code.application.ports import ProviderPort, RequestRuntimeLease
-from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 
 from .ports import ApiServices
@@ -36,7 +35,7 @@ async def resolve_provider(
         logger.error(
             "Unknown provider_type: '{}'. Supported: {}",
             provider_type,
-            ", ".join(f"'{key}'" for key in PROVIDER_CATALOG),
+            ", ".join(f"'{key}'" for key in lease.settings.provider_ids),
         )
         raise
     if should_log_init:

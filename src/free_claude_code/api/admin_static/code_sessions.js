@@ -2,6 +2,7 @@
   "use strict";
   const UI = window.SessionUI;
   const modelComboboxes = new Set();
+  let providerNames = new Map();
   let modelControl,
     reasoningControl,
     providerControl,
@@ -1282,7 +1283,7 @@
     const providers = [...new Set(catalog.map((model) => model.provider_id))];
     if (provider && !providers.includes(provider)) providers.push(provider);
     providerControl.update(
-      providers.map((value) => [value, value]),
+      providers.map((value) => [value, providerNames.get(value) || value]),
       provider,
     );
     providerControl.select.disabled = disabled;
@@ -1661,6 +1662,9 @@
   }
   window.addEventListener("pagehide", deactivate);
   window.CodeSessions = {
+    setProviderNames(providers) {
+      providerNames = new Map(providers.map((provider) => [provider.provider_id, provider.display_name]));
+    },
     initialize(client) {
       api = client;
       root = document.getElementById("codeRoot");

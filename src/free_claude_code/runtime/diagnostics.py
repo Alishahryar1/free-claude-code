@@ -135,7 +135,7 @@ def classified_settings() -> set[str]:
         set(RUNTIME_FIELDS + ROUTING_FIELDS + REASONING_FIELDS + WEB_FIELDS)
         | EXCLUDED_FIELDS
         | URL_FIELDS
-        | {"nim", "vertex_location"}
+        | {"nim", "vertex_location", "custom_providers"}
     )
 
 
@@ -179,6 +179,18 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
         if name == "vertex":
             row["location"] = settings.vertex_location
         providers[name] = row
+    for definition in settings.custom_providers:
+        providers[definition.provider_id] = {
+            "display_name": definition.display_name,
+            "configured": True,
+            "referenced": definition.provider_id in referenced,
+            "base_url": _url_summary(definition.base_url),
+            "api_key_configured": bool(definition.api_key),
+            "api_format": definition.api_format,
+            "reasoning_format": definition.reasoning_format,
+            "reasoning_history_format": definition.reasoning_history_format,
+            "model_ids": list(definition.model_ids),
+        }
     runtime = {name: getattr(settings, name) for name in RUNTIME_FIELDS}
     runtime["telegram_proxy"] = _url_summary(settings.telegram_proxy_url)
     runtime["nim"] = {name: getattr(settings.nim, name) for name in NIM_FIELDS}

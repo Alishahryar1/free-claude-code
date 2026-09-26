@@ -12,6 +12,7 @@ from free_claude_code.application.connected_accounts import (
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.application.ports import RequestRuntimePort, TaskController
 from free_claude_code.application.web_tools.ports import WebToolsPort
+from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.state import ConfigInputValue, ValueState
 from free_claude_code.core.json_types import JsonObject
 
@@ -20,7 +21,9 @@ class AdminRuntimePort(Protocol):
     """Runtime operations exposed by the local Admin API."""
 
     async def apply_admin_config(
-        self, updates: Mapping[str, ConfigInputValue]
+        self,
+        updates: Mapping[str, ConfigInputValue],
+        custom_provider: CustomProviderMutation | None = None,
     ) -> JsonObject: ...
 
     async def admin_config(self) -> JsonObject: ...

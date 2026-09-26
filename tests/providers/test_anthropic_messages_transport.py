@@ -308,7 +308,7 @@ async def test_fragmented_messages_http_keeps_native_path_and_public_identity(
         )
         assert not client.is_closed
     assert wire.closed and len(requests) == 1
-    assert requests[0].url.path == "/v1/messages"
+    assert requests[0].url.path == ("/v1/messages" if versioned_base else "/messages")
     assert requests[0].headers["Authorization"] == "Bearer original"
     assert requests[0].headers["anthropic-version"] == "2023-06-01"
     assert requests[0].headers.get_list("anthropic-version") == ["2023-06-01"]

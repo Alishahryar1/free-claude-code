@@ -78,7 +78,10 @@ class ProviderModelCache:
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         """Return cached provider models with user-selectable prefixed ids."""
         infos: list[ProviderModelInfo] = []
-        for provider_id in SUPPORTED_PROVIDER_IDS:
+        for provider_id in (
+            *SUPPORTED_PROVIDER_IDS,
+            *sorted(self._available_provider_ids.difference(SUPPORTED_PROVIDER_IDS)),
+        ):
             provider_infos = self._model_infos_by_provider.get(provider_id, {})
             infos.extend(
                 replace(info, model_id=f"{provider_id}/{info.model_id}")
