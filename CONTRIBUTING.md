@@ -11,18 +11,17 @@ Thanks for helping improve Free Claude Code. Keep changes focused, test the beha
 
 ## Pull Request Titles
 
-Changes to `assets/`, `scripts/`, `src/`, `.python-version`, `pyproject.toml`, or `uv.lock` require a title starting with `patch: `, `minor: `, or `major: ` followed by a description. Use exactly one space after the colon.
+Changes to `assets/`, `scripts/`, `src/`, `pyproject.toml`, or `uv.lock` require a title starting with `patch: `, `minor: `, or `major: ` followed by a description. Use exactly one space after the colon.
 
 PRs without changes to those paths must not use a release prefix. Do not edit version numbers. Publishing calculates the version after merge, creates its Git tag, and publishes to PyPI and GitHub Releases.
 
 ## Development Setup
 
-Install [uv](https://docs.astral.sh/uv/) and Python 3.14, then run directly from the checkout:
+Install [uv](https://docs.astral.sh/uv/), then run directly from the checkout. uv automatically installs the Python version required by the project.
 
 ```bash
 git clone https://github.com/Alishahryar1/free-claude-code.git
 cd free-claude-code
-uv python install 3.14.0
 uv run fcc-server
 ```
 

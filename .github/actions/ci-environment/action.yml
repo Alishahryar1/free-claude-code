@@ -65,7 +65,7 @@ runs:
         CI_UV: ${{ inputs.uv-version }}
       run: |
         set -euo pipefail
-        version="$(sed -nE 's/^requires-python[[:space:]]*=[[:space:]]*"==([0-9]+\.[0-9]+\.[0-9]+)"[[:space:]]*$/\1/p' pyproject.toml)"
+        version="$(python -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["requires-python"].removeprefix("=="))')"
         [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected an exact requires-python pin in pyproject.toml' >&2; exit 1; }
         cache_root="${CI_TEMP//\\//}"
         identity="$CI_RUNNER-$CI_OS-$CI_ARCH-py-$version-uv-$CI_UV"

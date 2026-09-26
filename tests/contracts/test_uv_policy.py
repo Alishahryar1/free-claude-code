@@ -1,4 +1,8 @@
+import os
 import re
+import shutil
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -17,6 +21,58 @@ REQUIRED_TEST_RUNNERS = {
     "Windows": "windows-latest",
     "macOS": "macos-latest",
 }
+
+
+@pytest.mark.parametrize(
+    "requirement, valid",
+    [
+        ('"==3.14.7"', True),
+        ("'==3.14.7'", True),
+        ('"==3.14.7" # Python runtime', True),
+        ('">=3.14.7"', False),
+    ],
+)
+def test_ci_python_identity_parses_toml(
+    tmp_path: Path, requirement: str, valid: bool
+) -> None:
+    setup = yaml.safe_load(CI_SETUP.read_text(encoding="utf-8"))
+    step = next(step for step in setup["runs"]["steps"] if step.get("id") == "identity")
+    (tmp_path / "pyproject.toml").write_text(
+        f"[project]\nrequires-python = {requirement}\n", encoding="utf-8"
+    )
+    bash = shutil.which("bash")
+    if sys.platform == "win32":
+        git = shutil.which("git")
+        assert git is not None
+        bash = str(Path(git).resolve().parent.parent / "bin" / "bash.exe")
+    assert bash is not None
+    env = {
+        **os.environ,
+        "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+        "CI_TEMP": tmp_path.as_posix(),
+        "CI_RUNNER": "test-runner",
+        "CI_OS": "test-os",
+        "CI_ARCH": "X64",
+        "CI_UV": UV_MINIMUM,
+        "GITHUB_ENV": "github-env",
+        "GITHUB_OUTPUT": "github-output",
+    }
+    result = subprocess.run(
+        [bash, "-c", step["run"]],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if valid:
+        assert result.returncode == 0, result.stderr
+        output = (tmp_path / "github-output").read_text(encoding="utf-8")
+        assert "python-version=3.14.7\n" in output
+        assert f"py-3.14.7-uv-{UV_MINIMUM}" in output
+    else:
+        assert result.returncode != 0
+        assert not (tmp_path / "github-output").exists()
 
 
 def test_installer_python_requests_match_package_requirement() -> None:
