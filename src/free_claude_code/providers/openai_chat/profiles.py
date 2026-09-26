@@ -97,6 +97,7 @@ class OpenAIModelListing:
     required_null_field: str | None = None
     required_sequence_items: tuple[tuple[str, str], ...] = ()
     exclude_missing_sequence_fields: bool = False
+    optional_sequence_items: tuple[tuple[str, str], ...] = ()
     tags_field: str | None = None
     thinking_tag: str = "reasoning"
     non_thinking_tag: str | None = None
@@ -739,6 +740,18 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             required_path_values=((("type",), ("text",)),),
             context_window_tokens_path=("context_length",),
             max_output_tokens_path=("max_output_tokens",),
+        ),
+    ),
+    "orcarouter": OpenAIChatProfile(
+        _policy(
+            "ORCAROUTER",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(_LOW_MEDIUM_HIGH, enabled_value="medium"),
+        model_listing=OpenAIModelListing(
+            path="/models",
+            optional_sequence_items=(("supported_endpoint_types", "openai"),),
         ),
     ),
     "ollama_cloud": OpenAIChatProfile(

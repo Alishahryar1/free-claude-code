@@ -16,6 +16,14 @@ from free_claude_code.harnesses.config_file import atomic_write_text
 _ENV = "claudeCode.environmentVariables"
 _LOGIN = "claudeCode.disableLoginPrompt"
 _ONBOARDING = "hasCompletedOnboarding"
+# Fields every FCC-managed connection carries, whatever their current values.
+_MANAGED_ENVIRONMENT = frozenset(
+    {
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+    }
+)
 
 
 def settings_path() -> Path:
@@ -119,9 +127,27 @@ def refresh_connected(
     path = path.resolve()
     values = claude_proxy_values(proxy_root_url, auth_token)
     document, entries = _read(path, set(values))
-    if not _connected(document, entries, values):
+    if document.get(_LOGIN) is not True:
+        return False
+    environment = {entry["name"]: entry["value"] for entry in entries}
+    # Recognize an FCC-managed connection, whatever its current values: all of
+    # FCC's fields must be present and the saved endpoint must target this
+    # proxy (loopback aliasing and a legacy canonical /v1 suffix allowed).
+    # Anything else — a foreign gateway or an unmanaged file — is untouched.
+    if not _MANAGED_ENVIRONMENT.issubset(environment) or not _own_proxy_url(
+        environment.get("ANTHROPIC_BASE_URL"), values["ANTHROPIC_BASE_URL"]
+    ):
         return False
     return _connect(path, state_path.resolve(), document, entries, values)
+
+
+def _own_proxy_url(saved_url: object, current_url: str) -> bool:
+    """Match this proxy across equivalent loopback names and a legacy /v1 suffix."""
+    if same_proxy_url(saved_url, current_url):
+        return True
+    return isinstance(saved_url, str) and same_proxy_url(
+        saved_url.removesuffix("/v1"), current_url.removesuffix("/v1")
+    )
 
 
 def configure(
