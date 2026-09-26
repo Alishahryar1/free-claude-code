@@ -73,7 +73,16 @@ def test_codex_connect_waits_for_catalog_and_recovers_from_publication_error(
         route.fulfill(json=data)
 
     page.route("**/admin/api/status", status)
-    page.goto(f"{admin_base_url}/admin/integrations")
+    with (
+        page.expect_response(
+            "**/admin/api/integrations/claude-vscode"
+        ) as claude_status,
+        page.expect_response("**/admin/api/integrations/codex") as codex_status,
+    ):
+        page.goto(f"{admin_base_url}/admin/integrations")
+    claude_status.value.finished()
+    codex_status.value.finished()
+    page.wait_for_function("state.startup?.startup?.catalog_file === 'starting'")
     connect = page.locator("#openCodexIntegration")
     expect(connect).to_be_disabled()
     expect(connect).to_have_attribute("aria-busy", "true")

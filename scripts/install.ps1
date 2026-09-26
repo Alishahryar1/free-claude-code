@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 # Windows on ARM emulates x64, whose Python package ecosystem has broader wheel support.
-$PythonRequest = "cpython-3.14.0-windows-x86_64-none"
+$PythonRequest = "cpython-3.14.7-windows-x86_64-none"
 $MinUvVersion = "0.12.13"
 $ClaudeInstallUrl = "https://claude.ai/install.ps1"
 $CodexInstallUrl = "https://chatgpt.com/codex/install.ps1"

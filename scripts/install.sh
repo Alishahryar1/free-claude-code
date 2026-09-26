@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-PYTHON_VERSION="3.14.0"
+PYTHON_VERSION="3.14.7"
 MIN_UV_VERSION="0.12.13"
 CLAUDE_INSTALL_URL="https://claude.ai/install.sh"
 CODEX_INSTALL_URL="https://chatgpt.com/codex/install.sh"
