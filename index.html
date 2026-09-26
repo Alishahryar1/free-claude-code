@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FCC Agent Console</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg:#0d1117; --panel:#161b22; --panel2:#0f141b; --border:#30363d;
+      --text:#e6edf3; --muted:#8b949e; --accent:#2f81f7; --green:#3fb950;
+      --red:#f85149; --yellow:#d29922; --input:#0d1117;
+    }
+    * { box-sizing:border-box }
+    body { margin:0; min-height:100vh; background:var(--bg); color:var(--text);
+      font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    button,input,textarea { font:inherit }
+    button { cursor:pointer }
+    .app { display:grid; grid-template-rows:58px 1fr; min-height:100vh }
+    header { border-bottom:1px solid var(--border); display:flex; align-items:center;
+      padding:0 18px; gap:14px; background:var(--panel); }
+    .logo { width:34px;height:34px;border-radius:8px;background:var(--accent);display:grid;
+      place-items:center;font-weight:800;color:white }
+    .brand { font-weight:700;font-size:16px }
+    .sub { color:var(--muted);font-size:12px }
+    .spacer { flex:1 }
+    .status { display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px }
+    .dot { width:8px;height:8px;border-radius:50%;background:var(--muted) }
+    .dot.online { background:var(--green); box-shadow:0 0 8px #3fb95066 }
+    .dot.busy { background:var(--yellow) }
+    .dot.error { background:var(--red) }
+    .settings-btn { border:1px solid var(--border);background:transparent;color:var(--text);
+      border-radius:6px;padding:7px 10px }
+    main { display:grid; grid-template-columns:280px minmax(0,1fr) 320px; min-height:0 }
+    aside,.right { background:var(--panel); min-height:0 }
+    aside { border-right:1px solid var(--border); padding:16px }
+    .right { border-left:1px solid var(--border); padding:16px; overflow:auto }
+    .section-title { text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+      font-size:11px;font-weight:700;margin:4px 0 10px }
+    .workspace { border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--panel2);margin-bottom:18px }
+    .workspace strong { display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+    .workspace small { color:var(--muted);display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis }
+    .new-task { width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:7px;
+      background:var(--accent);color:white;font-weight:600;margin-bottom:18px }
+    .history { display:flex;flex-direction:column;gap:5px }
+    .history button { text-align:left;border:1px solid transparent;background:transparent;color:var(--text);
+      padding:9px;border-radius:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+    .history button:hover { background:#21262d }
+    .history .active { background:#21262d;border-color:var(--border) }
+    .center { min-width:0;display:grid;grid-template-rows:auto 1fr auto; }
+    .toolbar { padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px }
+    .toolbar-title { font-weight:650 }
+    .pill { padding:3px 8px;border:1px solid var(--border);border-radius:999px;color:var(--muted);font-size:11px }
+    .messages { overflow:auto;padding:24px;display:flex;flex-direction:column;gap:18px }
+    .welcome { max-width:760px;margin:8vh auto;text-align:center }
+    .welcome h1 { font-size:28px;margin:0 0 8px }
+    .welcome p { color:var(--muted);margin:0 }
+    .message { max-width:900px;width:100%;margin:0 auto;display:flex;gap:12px }
+    .avatar { flex:0 0 30px;height:30px;border-radius:7px;background:#21262d;display:grid;place-items:center;font-size:12px;font-weight:700 }
+    .message.user .avatar { background:var(--accent) }
+    .bubble { min-width:0;flex:1 }
+    .meta { color:var(--muted);font-size:11px;margin-bottom:5px }
+    .content { white-space:pre-wrap;word-break:break-word }
+    .composer { border-top:1px solid var(--border);padding:14px 16px;background:var(--panel) }
+    .composer-inner { max-width:900px;margin:auto;border:1px solid var(--border);border-radius:9px;
+      background:var(--input);overflow:hidden }
+    textarea { display:block;width:100%;min-height:86px;max-height:260px;resize:vertical;border:0;outline:0;
+      background:transparent;color:var(--text);padding:12px }
+    .compose-footer { display:flex;align-items:center;padding:8px;gap:8px;border-top:1px solid var(--border) }
+    .hint { color:var(--muted);font-size:11px;flex:1 }
+    .run { border:0;background:var(--accent);color:white;border-radius:6px;padding:8px 15px;font-weight:650 }
+    .run:disabled { opacity:.5;cursor:not-allowed }
+    .stop { border:1px solid var(--border);background:transparent;color:var(--red);border-radius:6px;padding:8px 12px;display:none }
+    .stop.show { display:block }
+    .field { margin-bottom:13px }
+    label { display:block;color:var(--muted);font-size:12px;margin-bottom:6px }
+    input,select { width:100%;background:var(--input);border:1px solid var(--border);color:var(--text);
+      border-radius:6px;padding:8px;outline:none }
+    input:focus,textarea:focus,select:focus { border-color:var(--accent) }
+    .save { width:100%;border:1px solid var(--border);background:#21262d;color:var(--text);
+      border-radius:6px;padding:8px;margin-top:2px }
+    .card { border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px;background:var(--panel2) }
+    .kv { display:flex;justify-content:space-between;gap:10px;margin:7px 0;color:var(--muted) }
+    .kv strong { color:var(--text);font-weight:500;text-align:right;overflow:hidden;text-overflow:ellipsis }
+    .log { background:#090d12;border:1px solid var(--border);border-radius:7px;padding:9px;
+      font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;max-height:260px;overflow:auto }
+    .empty { color:var(--muted);font-size:12px }
+    .toast { position:fixed;right:18px;bottom:18px;background:#21262d;border:1px solid var(--border);
+      border-radius:7px;padding:10px 13px;display:none;max-width:380px;box-shadow:0 8px 30px #0008 }
+    .toast.show { display:block }
+    @media (max-width:1000px) { main { grid-template-columns:220px minmax(0,1fr) } .right { display:none } }
+    @media (max-width:700px) { main { grid-template-columns:1fr } aside { display:none } header { padding:0 10px } .messages { padding:16px 10px } }
+  
+/* FCC Control Center enhancements */
+.activity-bar{display:none}
+.command-palette{position:fixed;inset:0;background:#000b;z-index:50;display:none;place-items:start center;padding-top:12vh}.command-palette.show{display:grid}.palette{width:min(680px,92vw);background:var(--panel);border:1px solid var(--border);border-radius:9px;box-shadow:0 20px 70px #000b;overflow:hidden}.palette input{width:100%;border:0;border-bottom:1px solid var(--border);background:var(--panel2);color:var(--text);padding:14px;outline:0}.palette-list{max-height:55vh;overflow:auto}.palette-item{display:flex;justify-content:space-between;gap:10px;padding:10px 14px}.palette-item:hover{background:#21262d}.shortcut{color:var(--muted);font-size:11px}.metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.metric{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:9px}.metric b{display:block;font-size:17px}.metric span{color:var(--muted);font-size:10px}.file-editor-wrap{display:grid;grid-template-columns:42px 1fr;height:100%}.line-numbers{background:#0b0f14;color:#484f58;padding:16px 8px;text-align:right;font:12px/1.6 ui-monospace,monospace;overflow:hidden;user-select:none}.diff-add{color:var(--green)}.diff-del{color:var(--red)}.notice{padding:9px;background:#1c2128;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:11px;margin-bottom:9px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">F</div>
+    <div>
+      <div class="brand">Free Claude Code</div>
+      <div class="sub">Agent Console</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">Not connected</span></div>
+    <button class="settings-btn" id="settingsBtn">Settings</button>
+  </header>
+
+  <main>
+    <aside>
+      <button class="new-task" id="newTaskBtn">＋ New task</button>
+      <div class="section-title">Workspace</div>
+      <div class="workspace">
+        <strong id="workspaceName">No workspace selected</strong>
+        <small id="workspacePath">Set a path in Settings</small>
+      </div>
+      <div class="section-title">Recent tasks</div>
+      <div id="history" class="history"></div>
+    </aside>
+
+    <section class="center">
+      <div class="toolbar">
+        <span class="toolbar-title">Agent task</span>
+        <span id="taskPill" class="pill">idle</span>
+      </div>
+
+      <div id="messages" class="messages">
+        <div class="welcome" id="welcome">
+          <h1>What should the agent do?</h1>
+          <p>Describe a coding task. FCC will send it to your configured Agent Gateway.</p>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="composer-inner">
+          <textarea id="prompt" placeholder="Example: Inspect the Minecraft renderer, fix the build errors, run the tests, and report what changed."></textarea>
+          <div class="compose-footer">
+            <span class="hint">Ctrl/⌘ + Enter to run</span>
+            <button class="stop" id="stopBtn">Stop</button>
+            <button class="run" id="runBtn">Run task</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="right">
+      <div class="section-title">Task details</div>
+      <div class="card">
+        <div class="kv"><span>Status</span><strong id="detailStatus">Idle</strong></div>
+        <div class="kv"><span>Task ID</span><strong id="detailId">—</strong></div>
+        <div class="kv"><span>Started</span><strong id="detailStarted">—</strong></div>
+        <div class="kv"><span>Finished</span><strong id="detailFinished">—</strong></div>
+      </div>
+
+      <div class="section-title">Live events</div>
+      <div id="log" class="log">Waiting for a task…</div>
+
+      <div class="section-title" style="margin-top:18px">Connection</div>
+      <div class="card">
+        <div class="kv"><span>Gateway</span><strong id="gatewayDisplay">—</strong></div>
+        <div class="kv"><span>Workspace</span><strong id="workspaceDisplay">—</strong></div>
+      </div>
+    </aside>
+  </main>
+</div>
+
+
+<div id="palette" class="command-palette"><div class="palette"><input id="paletteInput" placeholder="Search commands…"><div id="paletteList" class="palette-list"></div></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = id => document.getElementById(id);
+  const state = {
+    config: JSON.parse(localStorage.getItem("fcc-config") || "{}"),
+    taskId: null,
+    eventSource: null,
+    started: null,
+    finished: null,
+    tasks: JSON.parse(localStorage.getItem("fcc-history") || "[]")
+  };
+
+  const defaultConfig = {
+    gatewayUrl: location.origin,
+    token: "",
+    workspace: ""
+  };
+
+  state.config = { ...defaultConfig, ...state.config };
+
+  function saveConfig() {
+    localStorage.setItem("fcc-config", JSON.stringify(state.config));
+    refreshConnectionUI();
+  }
+
+  function toast(message) {
+    const el = $("toast");
+    el.textContent = message;
+    el.classList.add("show");
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => el.classList.remove("show"), 3500);
+  }
+
+  function setStatus(status, text) {
+    $("statusDot").className = "dot " + (status || "");
+    $("statusText").textContent = text;
+    $("taskPill").textContent = status || "idle";
+    $("detailStatus").textContent = text;
+  }
+
+  function refreshConnectionUI() {
+    const url = state.config.gatewayUrl || "—";
+    $("gatewayDisplay").textContent = url;
+    $("workspaceDisplay").textContent = state.config.workspace || "—";
+    $("workspaceName").textContent = state.config.workspace
+      ? state.config.workspace.split("/").filter(Boolean).pop() || state.config.workspace
+      : "No workspace selected";
+    $("workspacePath").textContent = state.config.workspace || "Set a path in Settings";
+  }
+
+  function headers() {
+    const h = { "Content-Type": "application/json" };
+    if (state.config.token) h.Authorization = "Bearer " + state.config.token;
+    return h;
+  }
+
+  function api(path, options = {}) {
+    const base = (state.config.gatewayUrl || location.origin).replace(/\/+$/, "");
+    return fetch(base + path, { ...options, headers: { ...headers(), ...(options.headers || {}) } });
+  }
+
+  async function checkGateway() {
+    try {
+      const r = await api("/agent/tasks", { method: "GET" });
+      if (r.ok) setStatus("", "Gateway connected");
+      else if (r.status === 401 || r.status === 403) setStatus("error", "Authentication required");
+      else setStatus("error", "Gateway returned " + r.status);
+    } catch {
+      setStatus("error", "Gateway unreachable");
+    }
+  }
+
+  function addMessage(role, content) {
+    $("welcome").style.display = "none";
+    const row = document.createElement("div");
+    row.className = "message " + role;
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.textContent = role === "user" ? "You" : "FCC";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = role === "user" ? "You" : "Agent";
+    const body = document.createElement("div");
+    body.className = "content";
+    body.textContent = content;
+    bubble.append(meta, body);
+    row.append(avatar, bubble);
+    $("messages").appendChild(row);
+    $("messages").scrollTop = $("messages").scrollHeight;
+    return body;
+  }
+
+  function appendLog(text) {
+    const log = $("log");
+    if (log.textContent === "Waiting for a task…") log.textContent = "";
+    log.textContent += (log.textContent ? "\n" : "") + text;
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function renderHistory() {
+    const container = $("history");
+    container.innerHTML = "";
+    if (!state.tasks.length) {
+      const e = document.createElement("div");
+      e.className = "empty";
+      e.textContent = "No tasks yet.";
+      container.appendChild(e);
+      return;
+    }
+    state.tasks.slice(0, 20).forEach(t => {
+      const b = document.createElement("button");
+      b.className = t.id === state.taskId ? "active" : "";
+      b.title = t.prompt;
+      b.textContent = t.prompt || t.id;
+      b.onclick = () => {
+        $("prompt").value = t.prompt || "";
+        state.taskId = t.id;
+        $("detailId").textContent = t.id;
+      };
+      container.appendChild(b);
+    });
+  }
+
+  function addHistory(task) {
+    state.tasks = [task, ...state.tasks.filter(x => x.id !== task.id)].slice(0, 20);
+    localStorage.setItem("fcc-history", JSON.stringify(state.tasks));
+    renderHistory();
+  }
+
+  function closeEvents() {
+    if (state.eventSource) {
+      state.eventSource.close();
+      state.eventSource = null;
+    }
+  }
+
+  function connectEvents(taskId) {
+    closeEvents();
+    const base = (state.config.gatewayUrl || location.origin).replace(/\/+$/, "");
+    const url = base + "/agent/tasks/" + encodeURIComponent(taskId) + "/events";
+
+    // EventSource cannot set Authorization headers. Prefer token query support only
+    // if your gateway explicitly implements it. Otherwise SSE will use the
+    // gateway's same-origin/session authentication.
+    let eventUrl = url;
+    if (state.config.token && state.config.sseTokenInQuery === true) {
+      eventUrl += "?token=" + encodeURIComponent(state.config.token);
+    }
+
+    const es = new EventSource(eventUrl);
+    state.eventSource = es;
+
+    es.onopen = () => {
+      appendLog("[connected to event stream]");
+      setStatus("busy", "Task running");
+    };
+
+    es.onmessage = e => handleEventData(e.data);
+
+    ["task", "status", "output", "message", "error", "done"].forEach(type => {
+      es.addEventListener(type, e => handleEventData(e.data, type));
+    });
+
+    es.onerror = () => {
+      appendLog("[event stream closed or unavailable]");
+      if (state.eventSource === es) state.eventSource = null;
+    };
+  }
+
+  function handleEventData(raw, eventType) {
+    let data;
+    try { data = JSON.parse(raw); } catch { data = { type: eventType || "message", data: raw }; }
+    const type = data.type || eventType || "message";
+    const text = data.message ?? data.output ?? data.text ?? data.data ?? raw;
+    appendLog("[" + type + "] " + String(text));
+
+    if (type === "done" || type === "completed" || type === "success") finishTask("Completed");
+    if (type === "error" || type === "failed") finishTask("Failed");
+    if (type === "stopped" || type === "cancelled") finishTask("Stopped");
+  }
+
+  function finishTask(label) {
+    state.finished = new Date();
+    $("detailFinished").textContent = state.finished.toLocaleTimeString();
+    setStatus(label === "Completed" ? "online" : "error", label);
+    $("runBtn").disabled = false;
+    $("stopBtn").classList.remove("show");
+    closeEvents();
+  }
+
+  async function runTask() {
+    const prompt = $("prompt").value.trim();
+    if (!prompt) return toast("Enter a task first.");
+
+    if (!state.config.gatewayUrl) return toast("Set the Agent Gateway URL in Settings.");
+
+    closeEvents();
+    state.started = new Date();
+    state.finished = null;
+    $("detailStarted").textContent = state.started.toLocaleTimeString();
+    $("detailFinished").textContent = "—";
+    $("log").textContent = "";
+    addMessage("user", prompt);
+    setStatus("busy", "Submitting task…");
+    $("runBtn").disabled = true;
+    $("stopBtn").classList.add("show");
+
+    const payload = {
+      prompt,
+      working_directory: state.config.workspace || undefined
+    };
+
+    try {
+      const response = await api("/agent/tasks", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || ("HTTP " + response.status));
+      }
+
+      state.taskId = data.task_id || data.id;
+      $("detailId").textContent = state.taskId || "—";
+      addHistory({ id: state.taskId, prompt, created_at: Date.now() });
+      appendLog("[task created] " + (state.taskId || "unknown"));
+
+      if (state.taskId) connectEvents(state.taskId);
+      else {
+        if (data.output || data.message) addMessage("agent", data.output || data.message);
+        finishTask("Completed");
+      }
+    } catch (err) {
+      appendLog("[error] " + err.message);
+      addMessage("agent", "Task could not be started: " + err.message);
+      finishTask("Failed");
+    }
+  }
+
+  async function stopTask() {
+    if (!state.taskId) return;
+    try {
+      const r = await api("/agent/tasks/" + encodeURIComponent(state.taskId) + "/stop", {
+        method: "POST",
+        body: "{}"
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      appendLog("[stop requested]");
+      setStatus("busy", "Stopping…");
+    } catch (e) {
+      toast("Could not stop task: " + e.message);
+    }
+  }
+
+  function openSettings() {
+    const modal = document.createElement("div");
+    modal.style.cssText = "position:fixed;inset:0;background:#0009;display:grid;place-items:center;padding:20px;z-index:20";
+    modal.innerHTML = `
+      <div style="width:min(560px,100%);background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;box-shadow:0 20px 70px #000b">
+        <h2 style="margin:0 0 16px">FCC Connection</h2>
+        <div class="field"><label>Agent Gateway URL</label><input id="sGateway" placeholder="http://127.0.0.1:8000"></div>
+        <div class="field"><label>Bearer token</label><input id="sToken" type="password" placeholder="AGENT_GATEWAY_TOKEN"></div>
+        <div class="field"><label>Workspace / working directory</label><input id="sWorkspace" placeholder="/workspaces/your-repo"></div>
+        <div class="field"><label style="display:flex;gap:8px;align-items:center"><input id="sSse" type="checkbox" style="width:auto"> Allow token in SSE query string (only if your gateway explicitly supports it)</label></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="sCancel" class="settings-btn">Cancel</button>
+          <button id="sSave" class="run">Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    $("sGateway").value = state.config.gatewayUrl;
+    $("sToken").value = state.config.token;
+    $("sWorkspace").value = state.config.workspace;
+    $("sSse").checked = state.config.sseTokenInQuery === true;
+    $("sCancel").onclick = () => modal.remove();
+    $("sSave").onclick = () => {
+      state.config.gatewayUrl = $("sGateway").value.trim().replace(/\/+$/, "") || location.origin;
+      state.config.token = $("sToken").value;
+      state.config.workspace = $("sWorkspace").value.trim();
+      state.config.sseTokenInQuery = $("sSse").checked;
+      saveConfig();
+      modal.remove();
+      checkGateway();
+      toast("Settings saved.");
+    };
+  }
+
+  $("runBtn").onclick = runTask;
+  $("stopBtn").onclick = stopTask;
+  $("settingsBtn").onclick = openSettings;
+  $("newTaskBtn").onclick = () => {
+    closeEvents();
+    state.taskId = null;
+    $("detailId").textContent = "—";
+    $("detailStarted").textContent = "—";
+    $("detailFinished").textContent = "—";
+    $("prompt").value = "";
+    $("log").textContent = "Waiting for a task…";
+    $("runBtn").disabled = false;
+    $("stopBtn").classList.remove("show");
+    setStatus("", "Ready");
+    $("prompt").focus();
+  };
+
+  $("prompt").addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      runTask();
+    }
+  });
+
+  refreshConnectionUI();
+  renderHistory();
+  checkGateway();
+})();
+</script>
+</body>
+</html>
