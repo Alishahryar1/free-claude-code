@@ -37,6 +37,8 @@ jobs:
               if (doctor.length) {
                 if (doctor.length !== 1) return { valid: false };
                 let text = doctor[0].replace(/^FCC doctor output\r?\n/, "").trim();
+                const details = text.match(/^<details>\s*<summary>[^<>\r\n]*<\/summary>\s*([\s\S]*?)\s*<\/details>$/);
+                if (details) text = details[1].trim();
                 const fence = text.match(/^```(?:json)?\r?\n([\s\S]*)\r?\n```$/);
                 if (fence) text = fence[1];
                 let report;
@@ -58,7 +60,25 @@ jobs:
               const reportedVersion = versionMatches.length === 1 ? versionMatches[0][1] : undefined;
               return { valid: reportedVersion !== undefined || fieldValue === "None", reportedVersion };
             };
-            const { reportedVersion, valid } = parseReport(issue.body || "");
+            const collapseDoctorReport = (body) => {
+              const sections = body.split(/(?=^### )/m);
+              const index = sections.findIndex((section) => /^### FCC doctor output\r?\n/.test(section));
+              if (index === -1 || !parseReport(body).valid) return body;
+              const section = sections[index];
+              const text = section.replace(/^### FCC doctor output\r?\n/, "").trim();
+              if (text.startsWith("<details>")) return body;
+              const newline = section.includes("\r\n") ? "\r\n" : "\n";
+              const content = text.startsWith("```") ? text : `\`\`\`json${newline}${text}${newline}\`\`\``;
+              const wrapped = ["<details>", "<summary>FCC doctor output</summary>", "", content, "", "</details>"].join(newline);
+              const start = section.indexOf(text);
+              sections[index] = section.slice(0, start) + wrapped + section.slice(start + text.length);
+              return sections.join("");
+            };
+            const formattedBody = collapseDoctorReport(issue.body || "");
+            if (formattedBody !== (issue.body || "")) {
+              await github.rest.issues.update({ ...repo, issue_number, body: formattedBody });
+            }
+            const { reportedVersion, valid } = parseReport(formattedBody);
             const labelName = "needs-fcc-version";
             const invalidMarker = "<!-- fcc-version-validator -->";
             const outdatedMarker = "<!-- fcc-version-outdated -->";

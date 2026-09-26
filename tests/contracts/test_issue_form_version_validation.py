@@ -77,6 +77,21 @@ def test_bug_forms_require_description_and_post_install_diagnostics() -> None:
     [
         ('### FCC doctor output\n\n```json\n{"version":"1.2.3"}\n```', True, "1.2.3"),
         (
+            '### FCC doctor output\n\n<details>\n<summary>FCC doctor output</summary>\n\n```json\n{"version":"1.2.3"}\n```\n\n</details>',
+            True,
+            "1.2.3",
+        ),
+        (
+            '### FCC doctor output\r\n\r\n<details>\r\n<summary>Diagnostics</summary>\r\n\r\n```json\r\n{"version":"1.2.3"}\r\n```\r\n\r\n</details>',
+            True,
+            "1.2.3",
+        ),
+        (
+            "### FCC doctor output\n\n<details>\n<summary>Diagnostics</summary>\n\n```json\n{invalid}\n```\n\n</details>",
+            False,
+            None,
+        ),
+        (
             '### FCC doctor output\r\n\r\n```json\r\n{"version":"1.2.3"}\r\n```',
             True,
             "1.2.3",
@@ -101,6 +116,12 @@ def test_bug_forms_require_description_and_post_install_diagnostics() -> None:
     ],
 )
 def test_report_parser_uses_the_correct_form_section(body, valid, version):
+    result = _parse_report(body)
+    assert result["valid"] is valid
+    assert result.get("reportedVersion") == version
+
+
+def _parse_report(body):
     patterns = "\n".join(
         f"const {name} = {json.dumps(_workflow_pattern(name))};"
         for name in ("fieldPattern", "versionPattern")
@@ -109,9 +130,71 @@ def test_report_parser_uses_the_correct_form_section(body, valid, version):
     script += (
         f"\nprocess.stdout.write(JSON.stringify(parseReport({json.dumps(body)})));"
     )
-    result = _run_javascript(script)
-    assert result["valid"] is valid
-    assert result.get("reportedVersion") == version
+    return _run_javascript(script)
+
+
+def test_plain_doctor_report_can_be_collapsed_without_changing_its_data(
+    monkeypatch, capsys
+):
+    from free_claude_code.cli import doctor
+
+    copied = []
+    report = {"version": "1.2.3", "model_routing": {"model": "provider/```</details>"}}
+    monkeypatch.setattr(doctor, "collect_report", lambda: report)
+    monkeypatch.setattr(doctor, "copy_text", copied.append)
+    doctor.main([])
+    assert json.loads(capsys.readouterr().out) == report
+    assert json.loads(copied[0]) == report
+    body = "### FCC doctor output\n\n" + copied[0]
+    collapsed = _collapse_report(body)
+    assert collapsed.startswith("### FCC doctor output\n\n<details>\n")
+    assert json.loads(collapsed.split("```json\n", 1)[1].rsplit("```", 1)[0]) == report
+    assert _parse_report(collapsed) == {"valid": True, "reportedVersion": "1.2.3"}
+
+
+def _collapse_report(body):
+    patterns = "\n".join(
+        f"const {name} = {json.dumps(_workflow_pattern(name))};"
+        for name in ("fieldPattern", "versionPattern")
+    )
+    script = (
+        patterns
+        + "\n"
+        + _javascript_function("parseReport")
+        + "\n"
+        + _javascript_function("collapseDoctorReport")
+    )
+    script += f"\nprocess.stdout.write(JSON.stringify(collapseDoctorReport({json.dumps(body)})));"
+    return _run_javascript(script)
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("fenced", [False, True])
+def test_collapsing_only_changes_doctor_section_and_is_idempotent(newline, fenced):
+    report = '{"version":"1.2.3","model":"$&```</details>"}'
+    content = f"```json\n{report}\n```" if fenced else report
+    before = "### Describe the issue\n\nMy description and ![image](https://example.com/image.png)\n\n### FCC doctor output\n\n"
+    after = "\n\n### Other details\n\nKeep this text exactly.\n"
+    body = (before + content + after).replace("\n", newline)
+    collapsed = _collapse_report(body)
+    assert collapsed.startswith(before.replace("\n", newline) + "<details>")
+    assert collapsed.endswith(after.replace("\n", newline))
+    assert report in collapsed
+    assert _collapse_report(collapsed) == collapsed
+    assert _parse_report(collapsed) == {"valid": True, "reportedVersion": "1.2.3"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "### Installation issue\n\nCannot install",
+        "### FCC version\n\n1.2.3",
+        "### FCC doctor output\n\n{invalid}",
+        '### FCC doctor output\n\n{"version":"1.2.3"}\n\n### FCC doctor output\n\n{"version":"1.2.3"}',
+    ],
+)
+def test_collapsing_leaves_other_or_invalid_reports_untouched(body):
+    assert _collapse_report(body) == body
 
 
 @pytest.mark.parametrize(
@@ -248,6 +331,11 @@ const github = {
         record("getIssue", args);
         return { data: liveIssue };
       },
+      update: async (args) => {
+        record("updateIssue", args);
+        liveIssue.body = args.body;
+        return { data: liveIssue };
+      },
       getLabel: async (args) => record("getLabel", args),
       createLabel: async (args) => record("createLabel", args),
       addLabels: async (args) => {
@@ -336,6 +424,7 @@ process.stdout.write(JSON.stringify({ calls, comments }));
     assert names.count("deleteComment") == 3
     assert names.count("getLatestRelease") == 4
     assert names.count("getIssue") == 6
+    assert names.count("updateIssue") == (3 if form == "doctor" else 0)
     assert names.count("getLabel") == 1
     assert names.count("addLabels") == 1
     assert names.count("removeLabel") == 2
@@ -354,7 +443,11 @@ process.stdout.write(JSON.stringify({ calls, comments }));
     )
     assert result["comments"] == []
     assert "cancel-in-progress: false" in workflow
-    assert "github.rest.issues.update({" not in workflow
+    assert all(
+        set(call["args"]) == {"owner", "repo", "issue_number", "body"}
+        for call in calls
+        if call["name"] == "updateIssue"
+    )
     assert 'state: "closed"' not in workflow
 
 
