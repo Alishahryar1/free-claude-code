@@ -374,7 +374,21 @@ def _run_installer_lifecycle(
     source_artifact.write_bytes(payload)
     call_log = tmp_path / "calls.log"
     record = _owner_record(payload, release_version=release_version)
-    record_json = json.dumps(record, separators=(",", ":"))
+    channel = _channel() | {"version": release_version}
+    manifest = _manifest() | {
+        "version": release_version,
+        "artifacts": {
+            "x86_windows": {
+                "url": "https://lookaside.facebook.com/muse/fixture.exe",
+                "checksum": record["sha256"],
+                "size": record["size"],
+            }
+        },
+    }
+    if external_path:
+        external = Path(external_path)
+        external.parent.mkdir(parents=True)
+        external.write_bytes(b"external native fixture")
     script_path = _repo_root() / "scripts" / "install-muse.ps1"
     process_path = os.pathsep.join(
         (str(tmp_path / "process-one"), str(tmp_path / "process-two"))
@@ -382,6 +396,8 @@ def _run_installer_lifecycle(
     user_path = os.pathsep.join(
         (str(tmp_path / "user-one"), str(tmp_path / "user-two"))
     )
+    if external_path:
+        process_path = os.pathsep.join((str(Path(external_path).parent), process_path))
     if empty_path_entries:
         process_path = os.pathsep + process_path + os.pathsep
         user_path = os.pathsep + user_path + os.pathsep
@@ -392,33 +408,23 @@ $env:Path = {_ps_literal(process_path)}
 $DryRun = ${str(dry_run).lower()}
 $script:TestUserPath = {_ps_literal(user_path)}
 function Get-MuseNativeArchitecture {{ return 'X64' }}
-function Resolve-MuseExternalCommand {{
-    if ({_ps_literal(external_path)} -eq '') {{ return $null }}
-    return [pscustomobject] @{{ Source = {_ps_literal(external_path)} }}
+function Invoke-MuseNativeProcess {{
+    param([string] $FilePath, [string[]] $Arguments)
+    $output = if ($FilePath -eq {_ps_literal(external_path)} -and -not ${str(external_compatible).lower()}) {{ "unrelated command" }} else {{ "Muse Code 0.2.1 (0.2.1-R1215.1)" }}
+    return [pscustomobject] @{{ Started = $true; TimedOut = $false; ExitCode = 0; Output = $output }}
 }}
-function Get-MuseVersionProbe {{
-    param([string] $Path)
-    $isExternal = $Path -eq {_ps_literal(external_path)} -and {_ps_literal(external_path)} -ne ''
-    if ($isExternal -and -not ${str(external_compatible).lower()}) {{
-        return [pscustomobject] @{{ Compatible = $false; Version = $null; Reason = 'not Muse Code' }}
+function Invoke-RestMethod {{
+    param([string] $Uri, [string] $Method, [int] $TimeoutSec, [string] $ErrorAction)
+    if ($Uri -eq $script:MuseStableChannelUrl) {{
+        Add-Content -LiteralPath {_ps_literal(call_log)} -Value 'metadata'
+        return (ConvertFrom-Json {_ps_literal(json.dumps(channel))})
     }}
-    return [pscustomobject] @{{ Compatible = $true; Version = [version] '0.2.1'; Reason = '' }}
+    return (ConvertFrom-Json {_ps_literal(json.dumps(manifest))})
 }}
-function Get-MuseReleaseArtifact {{
-    Add-Content -LiteralPath {_ps_literal(call_log)} -Value 'metadata'
-    $record = ConvertFrom-Json {_ps_literal(record_json)}
-    return [pscustomobject] @{{
-        ReleaseVersion = $record.release_version
-        ArtifactKey = $record.artifact_key
-        Url = 'https://lookaside.facebook.com/muse/fixture.exe'
-        Sha256 = $record.sha256
-        Size = [long] $record.size
-    }}
-}}
-function Save-MuseArtifact {{
-    param([string] $Url, [string] $Destination)
+function Invoke-WebRequest {{
+    param([string] $Uri, [string] $OutFile, [int] $TimeoutSec, [switch] $UseBasicParsing, [string] $ErrorAction)
     Add-Content -LiteralPath {_ps_literal(call_log)} -Value 'download'
-    Copy-Item -LiteralPath {_ps_literal(source_artifact)} -Destination $Destination
+    Copy-Item -LiteralPath {_ps_literal(source_artifact)} -Destination $OutFile
 }}
 function Get-MuseUserPathValue {{ return $script:TestUserPath }}
 function Set-MuseUserPathValue {{
@@ -428,11 +434,12 @@ function Set-MuseUserPathValue {{
 }}
 """
     if publish_failure:
-        script += (
-            "function Publish-MuseExecutable { throw 'injected publication failure' }\n"
-        )
-    script += """Invoke-MuseInstaller
-[pscustomobject] @{ UserPath = $script:TestUserPath; ProcessPath = $env:Path } |
+        executable = _managed_paths(local_app_data)[1]
+        script += f"$lock = [IO.File]::Open({_ps_literal(executable)}, 'Open', 'Read', 'Read')\ntry {{\n"
+    script += "Invoke-MuseInstaller\n"
+    if publish_failure:
+        script += "} finally { $lock.Dispose() }\n"
+    script += """[pscustomobject] @{ UserPath = $script:TestUserPath; ProcessPath = $env:Path } |
     ConvertTo-Json -Compress
 """
     result = subprocess.run(
@@ -451,7 +458,7 @@ def test_muse_installer_preserves_compatible_external_installation(
     result, local_app_data, call_log = _run_installer_lifecycle(
         tmp_path,
         powershell,
-        external_path=r"C:\External Muse\muse.exe",
+        external_path=str(tmp_path / "External Muse" / "muse.exe"),
     )
     root, executable, record_path = _managed_paths(local_app_data)
 
@@ -470,12 +477,12 @@ def test_muse_installer_rejects_conflicting_external_command_before_fetch(
     result, local_app_data, call_log = _run_installer_lifecycle(
         tmp_path,
         powershell,
-        external_path=r"C:\Unrelated\muse.exe",
+        external_path=str(tmp_path / "Unrelated" / "muse.exe"),
         external_compatible=False,
     )
 
     assert result.returncode != 0
-    assert r"C:\Unrelated\muse.exe" in result.stderr
+    assert "Unrelated" in result.stderr
     assert "conflict" in result.stderr.lower()
     assert not local_app_data.exists()
     assert not call_log.exists()
@@ -632,7 +639,9 @@ def test_muse_installer_failed_update_keeps_previous_binary_and_record(
     )
 
     assert result.returncode != 0
-    assert "injected publication failure" in result.stderr
+    assert "being used by another process" in " ".join(
+        result.stderr.replace("|", " ").split()
+    )
     assert executable.read_bytes() == old_payload
     assert json.loads(record_path.read_text(encoding="utf-8-sig")) == old_record
 

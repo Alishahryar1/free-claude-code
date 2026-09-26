@@ -110,6 +110,10 @@ function Read-YesNo {
     }
 }
 
+function Get-UserPath {
+    return [Environment]::GetEnvironmentVariable("Path", "User")
+}
+
 function Find-InstalledCodingAgent {
     param([string] $CommandName)
 
@@ -144,7 +148,7 @@ function Find-InstalledCodingAgent {
                 $command = Get-ApplicationCommand $CommandName
             }
             elseif ($CommandName -eq "muse") {
-                $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+                $userPath = Get-UserPath
                 if (-not [string]::IsNullOrWhiteSpace($userPath)) {
                     $env:Path = "$originalPath$([IO.Path]::PathSeparator)$userPath"
                     $command = Get-ApplicationCommand $CommandName
@@ -241,12 +245,18 @@ function Format-Command {
 function Invoke-NativeCommand {
     param(
         [string] $FilePath,
-        [string[]] $Arguments = @()
+        [string[]] $Arguments = @(),
+        [string] $BackgroundName = ""
     )
 
     $commandText = Format-Command -FilePath $FilePath -Arguments $Arguments
     Write-Host "+ $commandText"
     if ($DryRun) {
+        return
+    }
+
+    if ($BackgroundName) {
+        Start-UvInstall -Name $BackgroundName -FilePath $FilePath -Arguments $Arguments
         return
     }
 
@@ -653,24 +663,22 @@ function Ensure-Rtk {
 }
 
 function Configure-RtkForSelectedAgents {
-    if (-not $script:EnableRtk) {
-        return
+    if (-not $script:EnableRtk) { return }
+    Invoke-InstallStep "rtk" { Ensure-Rtk }
+    if (-not $script:InstallResults["rtk"]) { return }
+    if ($script:InstallResults["claude"]) {
+        Invoke-InstallStep "rtk-claude" {
+            Ensure-RtkClaudeConfigDirectory
+            Invoke-RtkCommand -Arguments @("init", "--global", "--auto-patch")
+        }
     }
-
-    Write-Step "Installing and configuring RTK token optimization"
-    Ensure-Rtk
-
-    if ($script:InstallClaudeCode) {
-        Ensure-RtkClaudeConfigDirectory
-        Invoke-RtkCommand -Arguments @("init", "--global", "--auto-patch")
+    if ($script:InstallResults["codex"]) {
+        Invoke-InstallStep "rtk-codex" { Invoke-RtkCommand -Arguments @("init", "--global", "--codex") }
     }
-    if ($script:InstallCodex) {
-        Invoke-RtkCommand -Arguments @("init", "--global", "--codex")
+    if ($script:InstallResults["pi"]) {
+        Invoke-InstallStep "rtk-pi" { Invoke-RtkCommand -Arguments @("init", "--global", "--agent", "pi") }
     }
-    if ($script:InstallPi -and $script:PiAvailable) {
-        Invoke-RtkCommand -Arguments @("init", "--global", "--agent", "pi")
-    }
-    if ($script:InstallCline) {
+    if ($script:InstallResults["cline"]) {
         Write-Host "Optional for each project: cd <project>; `$env:RTK_TELEMETRY_DISABLED='1'; rtk init --agent cline"
     }
 }
@@ -1040,6 +1048,7 @@ function Ensure-Grok {
 }
 
 function Install-Aider {
+    param([switch] $Background)
     $uvPath = "uv"
     if (-not $DryRun) {
         $uvCommand = Get-ApplicationCommand "uv"
@@ -1049,7 +1058,7 @@ function Install-Aider {
         $uvPath = $uvCommand.Source
     }
 
-    Invoke-NativeCommand -FilePath $uvPath -Arguments @(
+    Invoke-NativeCommand -FilePath $uvPath -BackgroundName $(if ($Background) { "aider" } else { "" }) -Arguments @(
         "tool",
         "install",
         "--force",
@@ -1236,59 +1245,44 @@ function Ensure-Dsh {
     Confirm-DshApplication
 }
 
+function Invoke-InstallStep {
+    param([string] $Name, [scriptblock] $Action)
+
+    Write-Step "$Name starting"
+    $script:InstallResults[$Name] = $false
+    try {
+        & $Action
+        if (-not (@($script:UvInstalls | Where-Object { $_.Name -eq $Name -and -not $_.Collected }).Count)) {
+            $script:InstallResults[$Name] = $true
+            Write-Host "$Name done"
+        }
+    }
+    catch [System.Management.Automation.PipelineStoppedException] { throw }
+    catch {
+        $script:InstallFailures += $Name
+        [Console]::Error.WriteLine("${Name} failed: $($_.Exception.Message)")
+    }
+}
+
 function Ensure-SelectedCodingAgents {
-    if ($script:InstallClaudeCode) {
-        Write-Step "Ensuring Claude Code is installed"
-        Ensure-ClaudeCode
+    foreach ($agent in @(
+        @("claude", $script:InstallClaudeCode, { Ensure-ClaudeCode }),
+        @("codex", $script:InstallCodex, { Ensure-Codex }),
+        @("pi", $script:InstallPi, { Ensure-Pi }),
+        @("opencode", $script:InstallOpenCode, { Ensure-OpenCode }),
+        @("cline", $script:InstallCline, { Ensure-Cline }),
+        @("hermes", $script:InstallHermes, { Ensure-Hermes }),
+        @("dsh", $script:InstallDsh, { Ensure-Dsh }),
+        @("grok", $script:InstallGrok, { Ensure-Grok }),
+        @("muse", $script:InstallMuse, { Ensure-Muse })
+    )) {
+        if ($agent[1]) { Invoke-InstallStep $agent[0] $agent[2] }
+        Complete-UvInstalls
+        # Pi can have installed Node even when its own installation failed.
+        if ($agent[0] -eq "pi") { Add-NpmBinDirectories }
     }
-
-    if ($script:InstallCodex) {
-        Write-Step "Ensuring Codex is installed"
-        Ensure-Codex
-    }
-
-    if ($script:InstallPi) {
-        Write-Step "Checking or installing Pi"
-        Ensure-Pi
-    }
-
-    if ($script:InstallOpenCode) {
-        Write-Step "Ensuring OpenCode is installed"
-        Ensure-OpenCode
-    }
-
-    if ($script:InstallCline) {
-        Write-Step "Ensuring Cline CLI is installed"
-        Ensure-Cline
-    }
-
-    if ($script:InstallHermes) {
-        Write-Step "Ensuring Hermes Agent is installed"
-        Ensure-Hermes
-    }
-
-    if ($script:InstallDsh) {
-        Write-Step "Ensuring DeepSeek Harness is installed"
-        Ensure-Dsh
-    }
-
-    if ($script:InstallGrok) {
-        Write-Step "Ensuring Grok Build is installed"
-        Ensure-Grok
-    }
-
-    if ($script:InstallMuse) {
-        Write-Step "Ensuring Muse Code is installed"
-        Ensure-Muse
-    }
-
-    if ($script:InstallAider) {
-        Write-Step "Ensuring Aider is installed"
-        Ensure-Aider
-    }
-
-    if ((-not $script:InstallClaudeCode) -and (-not $script:InstallCodex) -and (-not $script:PiAvailable) -and (-not $script:InstallOpenCode) -and (-not $script:InstallCline) -and (-not $script:InstallHermes) -and (-not $script:InstallDsh) -and (-not $script:InstallGrok) -and (-not $script:MuseAvailable) -and (-not $script:InstallAider)) {
-        throw "No selected coding agent was installed. Re-run the installer and choose at least one."
+    if ($script:InstallPi -and (-not $script:PiAvailable)) {
+        $script:InstallResults["pi"] = $false
     }
 }
 
@@ -1401,6 +1395,7 @@ function Get-PackageSpec {
 }
 
 function Install-FreeClaudeCode {
+    param([switch] $Background)
     Assert-NoFccProcessesRunning
     $packageSpec = Get-PackageSpec
     $arguments = @(
@@ -1425,7 +1420,7 @@ function Install-FreeClaudeCode {
         }
         $uvPath = $uvCommand.Source
     }
-    Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments
+    Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments -BackgroundName $(if ($Background) { "fcc" } else { "" })
 }
 
 function Export-FccDesktopIcon {
@@ -1577,107 +1572,241 @@ function Install-FccDesktopShortcuts {
     }
 }
 
+function ConvertTo-NativeArgument {
+    param([AllowEmptyString()][string] $Argument)
+
+    if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $builder = [Text.StringBuilder]::new()
+    [void] $builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ([int] $character -eq 92) {
+            $backslashes += 1
+            continue
+        }
+        if ([int] $character -eq 34) {
+            for ($index = 0; $index -lt (($backslashes * 2) + 1); $index += 1) {
+                [void] $builder.Append([char] 92)
+            }
+            [void] $builder.Append($character)
+            $backslashes = 0
+            continue
+        }
+        for ($index = 0; $index -lt $backslashes; $index += 1) {
+            [void] $builder.Append([char] 92)
+        }
+        $backslashes = 0
+        [void] $builder.Append($character)
+    }
+    for ($index = 0; $index -lt ($backslashes * 2); $index += 1) {
+        [void] $builder.Append([char] 92)
+    }
+    [void] $builder.Append('"')
+    return $builder.ToString()
+}
+
+function Start-UvInstall {
+    param([string] $Name, [string] $FilePath, [string[]] $Arguments)
+
+    $stdout = Join-Path $script:InstallLogDirectory "$Name.stdout"
+    $stderr = Join-Path $script:InstallLogDirectory "$Name.stderr"
+    $process = Start-Process -FilePath $FilePath -ArgumentList (
+        ($Arguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join " "
+    ) -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    # Hold the native handle even when a short-lived process has already exited.
+    $null = $process.Handle
+    $script:UvInstalls += [pscustomobject] @{
+        Name = $Name; Process = $process; Stdout = $stdout; Stderr = $stderr; Collected = $false
+    }
+    $script:InstallResults[$Name] = $false
+    Write-Host "$Name running in background"
+}
+
+function Complete-UvInstalls {
+    param([switch] $Wait)
+
+    foreach ($work in $script:UvInstalls) {
+        if ($work.Collected) { continue }
+        if ($Wait) { $work.Process.WaitForExit() }
+        if (-not $work.Process.HasExited) { continue }
+        $work.Process.WaitForExit()
+        $work.Collected = $true
+        $script:InstallResults[$work.Name] = $work.Process.ExitCode -eq 0
+        if ($work.Process.ExitCode -eq 0) {
+            Write-Host "$($work.Name) installation done"
+        }
+        else {
+            $script:InstallFailures += $work.Name
+            Write-Warning "$($work.Name) failed with exit code $($work.Process.ExitCode)"
+            Get-Content -LiteralPath $work.Stdout, $work.Stderr | ForEach-Object { [Console]::Error.WriteLine($_) }
+        }
+    }
+}
+
+function Close-UvInstalls {
+    foreach ($work in $script:UvInstalls) {
+        try {
+            if (-not $work.Process.HasExited) {
+                & "$env:SYSTEMROOT\System32\taskkill.exe" /PID $work.Process.Id /T /F *> $null
+                if (-not $work.Process.WaitForExit(5000)) {
+                    Write-Warning "Could not stop $($work.Name) process $($work.Process.Id)"
+                }
+            }
+        }
+        finally { $work.Process.Dispose() }
+    }
+    if ($script:InstallLogDirectory) {
+        Remove-Item -LiteralPath $script:InstallLogDirectory -Recurse -Force
+    }
+}
+
+function Invoke-FccInstaller {
+    $script:InstallFailures = @()
+    $script:InstallResults = @{}
+    $script:UvInstalls = @()
+    $script:InstallLogDirectory = ""
+    if ($RemainingArgs.Count -gt 0) {
+        Show-Usage
+        throw "Unknown option: $($RemainingArgs -join ' ')"
+    }
+
+    if ((-not [string]::IsNullOrWhiteSpace($TorchBackend)) -and (-not $VoiceLocal)) {
+        throw "-TorchBackend requires -VoiceLocal."
+    }
+
+    # Preserve the user's winning command before adding installer search paths.
+    $script:OriginalOpenCode = Get-ApplicationCommand "opencode"
+    Add-KnownBinDirectories
+    $script:InstallCline = [bool] ((Get-ApplicationCommand "cline") -or (Get-ApplicationCommand "npm"))
+    Write-Step "Checking for running Free Claude Code processes"
+    Assert-NoFccProcessesRunning
+
+    if (-not (Test-InteractiveInstaller)) {
+        $hasDsh = [bool] (Get-ApplicationCommand "dsh")
+        $hasDryRunToolchain = [bool] (
+            $DryRun -and
+            (Get-ApplicationCommand "node") -and
+            (Get-ApplicationCommand "npm")
+        )
+        $script:InstallDsh = $hasDsh -or $hasDryRunToolchain -or (Test-DshToolchain)
+    }
+
+    if (Test-InteractiveInstaller) {
+        Write-Step "Choosing coding agents"
+        Select-CodingAgents
+    }
+
+    Write-Step "Ensuring uv $MinUvVersion or newer is installed"
+    Ensure-Uv
+
+    if (-not $DryRun) {
+        $uv = Get-ApplicationCommand "uv"
+        $discoveryPath = $env:Path
+        try {
+            $uvToolBin = Add-UvToolBinDirectory -UvPath $uv.Source
+            $aiderCommand = Get-ApplicationCommand "aider"
+        }
+        finally { $env:Path = $discoveryPath }
+        $script:InstallLogDirectory = Join-Path ([IO.Path]::GetTempPath()) ("fcc-install-" + [guid]::NewGuid().ToString("N"))
+        $null = New-Item -ItemType Directory -Path $script:InstallLogDirectory
+    }
+    try {
+        Invoke-InstallStep "fcc" { Install-FreeClaudeCode -Background:(-not $DryRun) }
+        if ($script:InstallAider) {
+            if ($DryRun) {
+                Invoke-InstallStep "aider" { Ensure-Aider }
+            }
+            elseif ($aiderCommand) {
+                Invoke-InstallStep "aider" { Invoke-NativeCommand -FilePath $aiderCommand.Source -Arguments @("--version") }
+            }
+            else {
+                Invoke-InstallStep "aider" { Install-Aider -Background }
+            }
+        }
+        Ensure-SelectedCodingAgents
+        Configure-RtkForSelectedAgents
+        Complete-UvInstalls -Wait
+        if (-not $DryRun) { Add-PathEntry $uvToolBin }
+        if (@($script:UvInstalls | Where-Object { $_.Name -eq "aider" }).Count -and $script:InstallResults["aider"]) {
+            Invoke-InstallStep "aider" { Confirm-Application -CommandName "aider" -DisplayName "Aider" }
+        }
+        if ($script:InstallResults["fcc"]) {
+            Invoke-InstallStep "fcc" { Configure-AndConfirmFreeClaudeCode }
+        }
+    }
+    finally { Close-UvInstalls }
+
+    if (-not (@("claude", "codex", "pi", "opencode", "cline", "hermes", "dsh", "grok", "muse", "aider") | Where-Object { $script:InstallResults[$_] })) {
+        $script:InstallFailures += "No selected coding agent was installed."
+    }
+    if ($script:InstallFailures.Count) {
+        throw "Installation completed with failures: $($script:InstallFailures -join ', ')"
+    }
+
+    Write-Host ""
+    if ($DryRun) {
+        Write-Host "Dry run complete. No changes were made."
+    }
+    else {
+        Write-Host "Free Claude Code is installed and verified. Open the Free Claude Code desktop shortcut to run it in the background."
+        Write-Host "For terminal use, start the proxy with: fcc-server"
+        if ($script:InstallClaudeCode) {
+            Write-Host "Run Claude Code with: fcc-claude"
+        }
+        if ($script:InstallCodex) {
+            Write-Host "Run Codex with: fcc-codex"
+        }
+        if ($script:PiAvailable) {
+            Write-Host "Run Pi with: fcc-pi"
+        }
+        if ($script:InstallOpenCode) {
+            Write-Host "Run OpenCode with: fcc-opencode"
+        }
+        if ($script:InstallCline) {
+            Write-Host "Run Cline with: fcc-cline"
+        }
+        else {
+            Write-Host "The fcc-cline wrapper is ready after you install Cline CLI."
+        }
+        if ($script:InstallHermes) {
+            Write-Host "Run Hermes Agent with: fcc-hermes"
+        }
+        else {
+            Write-Host "The fcc-hermes wrapper is ready after you install Hermes Agent."
+        }
+        if ($script:InstallDsh) {
+            Write-Host "Run DeepSeek Harness with: fcc-dsh"
+        }
+        else {
+            Write-Host "The fcc-dsh wrapper is ready after you install DeepSeek Harness $DshVersion."
+        }
+        if ($script:InstallGrok) {
+            Write-Host "Run Grok Build with: fcc-grok"
+        }
+        else {
+            Write-Host "The fcc-grok wrapper is ready after you install Grok Build."
+        }
+        if ($script:MuseAvailable) {
+            Write-Host "Run Muse Code with: fcc-muse"
+        }
+        else {
+            Write-Host "The fcc-muse wrapper is ready after you install Muse Code."
+        }
+        if ($script:InstallAider) {
+            Write-Host "Run Aider with: fcc-aider"
+        }
+        else {
+            Write-Host "The fcc-aider wrapper is ready after you install Aider."
+        }
+    }
+}
+
 if ($Help) {
     Show-Usage
     return
 }
 
-if ($RemainingArgs.Count -gt 0) {
-    Show-Usage
-    throw "Unknown option: $($RemainingArgs -join ' ')"
-}
-
-if ((-not [string]::IsNullOrWhiteSpace($TorchBackend)) -and (-not $VoiceLocal)) {
-    throw "-TorchBackend requires -VoiceLocal."
-}
-
-# Preserve the user's winning command before adding installer search paths.
-$script:OriginalOpenCode = Get-ApplicationCommand "opencode"
-Add-KnownBinDirectories
-$script:InstallCline = [bool] ((Get-ApplicationCommand "cline") -or (Get-ApplicationCommand "npm"))
-Write-Step "Checking for running Free Claude Code processes"
-Assert-NoFccProcessesRunning
-
-if (-not (Test-InteractiveInstaller)) {
-    $hasDsh = [bool] (Get-ApplicationCommand "dsh")
-    $hasDryRunToolchain = [bool] (
-        $DryRun -and
-        (Get-ApplicationCommand "node") -and
-        (Get-ApplicationCommand "npm")
-    )
-    $script:InstallDsh = $hasDsh -or $hasDryRunToolchain -or (Test-DshToolchain)
-}
-
-if (Test-InteractiveInstaller) {
-    Write-Step "Choosing coding agents"
-    Select-CodingAgents
-}
-
-Write-Step "Ensuring uv $MinUvVersion or newer is installed"
-Ensure-Uv
-
-Ensure-SelectedCodingAgents
-Configure-RtkForSelectedAgents
-
-Write-Step "Installing or updating Free Claude Code"
-Install-FreeClaudeCode
-
-Write-Step "Configuring PATH and verifying Free Claude Code"
-Configure-AndConfirmFreeClaudeCode
-
-Write-Host ""
-if ($DryRun) {
-    Write-Host "Dry run complete. No changes were made."
-}
-else {
-    Write-Host "Free Claude Code is installed and verified. Open the Free Claude Code desktop shortcut to run it in the background."
-    Write-Host "For terminal use, start the proxy with: fcc-server"
-    if ($script:InstallClaudeCode) {
-        Write-Host "Run Claude Code with: fcc-claude"
-    }
-    if ($script:InstallCodex) {
-        Write-Host "Run Codex with: fcc-codex"
-    }
-    if ($script:PiAvailable) {
-        Write-Host "Run Pi with: fcc-pi"
-    }
-    if ($script:InstallOpenCode) {
-        Write-Host "Run OpenCode with: fcc-opencode"
-    }
-    if ($script:InstallCline) {
-        Write-Host "Run Cline with: fcc-cline"
-    }
-    else {
-        Write-Host "The fcc-cline wrapper is ready after you install Cline CLI."
-    }
-    if ($script:InstallHermes) {
-        Write-Host "Run Hermes Agent with: fcc-hermes"
-    }
-    else {
-        Write-Host "The fcc-hermes wrapper is ready after you install Hermes Agent."
-    }
-    if ($script:InstallDsh) {
-        Write-Host "Run DeepSeek Harness with: fcc-dsh"
-    }
-    else {
-        Write-Host "The fcc-dsh wrapper is ready after you install DeepSeek Harness $DshVersion."
-    }
-    if ($script:InstallGrok) {
-        Write-Host "Run Grok Build with: fcc-grok"
-    }
-    else {
-        Write-Host "The fcc-grok wrapper is ready after you install Grok Build."
-    }
-    if ($script:MuseAvailable) {
-        Write-Host "Run Muse Code with: fcc-muse"
-    }
-    else {
-        Write-Host "The fcc-muse wrapper is ready after you install Muse Code."
-    }
-    if ($script:InstallAider) {
-        Write-Host "Run Aider with: fcc-aider"
-    }
-    else {
-        Write-Host "The fcc-aider wrapper is ready after you install Aider."
-    }
-}
+Invoke-FccInstaller

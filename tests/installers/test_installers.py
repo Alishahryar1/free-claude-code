@@ -4,10 +4,13 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
+import time
 import zipfile
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,18 +64,9 @@ def _write_executable(path: Path, text: str) -> None:
     path.chmod(0o755)
 
 
-def _braced_body(text: str, declaration: str) -> str:
-    start = text.index(declaration)
-    brace_start = text.index("{", start)
-    depth = 0
-    for index, char in enumerate(text[brace_start:], start=brace_start):
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return text[brace_start + 1 : index]
-    raise AssertionError(f"Unclosed function body for {declaration}")
+def _load_ps_installer() -> str:
+    path = str(_repo_root() / "scripts/install.ps1").replace("'", "''")
+    return f". '{path}' -Help > $null\n"
 
 
 def _posix_command(name: str, *, version_output: str | None = None) -> str:
@@ -299,29 +293,37 @@ printf '%s\n' "$FCC_PS_OUTPUT"
             env=env,
         )
 
+    def run_functions(
+        self, body: str, *args: str, fail_step: str = ""
+    ) -> subprocess.CompletedProcess[str]:
+        scenario = self.root / "scenario.sh"
+        scenario.write_text(
+            'load_installer() { set -- --help; . "$FCC_INSTALLER" >/dev/null; }\n'
+            'load_installer\nparse_args "$@"\n' + body + "\n",
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            ["/bin/sh", str(scenario), *args],
+            capture_output=True,
+            text=True,
+            env=self.env
+            | {
+                "FAIL_STEP": fail_step,
+                "FCC_INSTALLER": str(_repo_root() / "scripts/install.sh"),
+            },
+            check=False,
+            timeout=30,
+        )
+
     def run_interactive(
         self,
         answers: str,
         *args: str,
         fail_step: str = "",
     ) -> subprocess.CompletedProcess[str]:
-        source = (_repo_root() / "scripts/install.sh").read_text(encoding="utf-8")
-        source = source.replace(
-            '    step "Choosing coding agents"',
-            "    selection_path_before=$PATH\n"
-            "    selection_opencode_before=$original_opencode_path\n"
-            '    step "Choosing coding agents"',
-        ).replace(
-            "    choose_coding_agents /dev/tty /dev/tty",
-            "    choose_coding_agents /dev/tty /dev/tty\n"
-            '    [ "$PATH" = "$selection_path_before" ] || fail "Selection changed PATH"\n'
-            '    [ "$original_opencode_path" = "$selection_opencode_before" ] || fail "Selection changed original OpenCode"',
-        )
-        installer = self.root / "interactive-installer.sh"
-        installer.write_text(source, encoding="utf-8")
         env = self.env | {
             "FAIL_STEP": fail_step,
-            "FCC_INSTALLER": str(installer),
+            "FCC_INSTALLER": str(_repo_root() / "scripts/install.sh"),
         }
         command = [
             "/bin/sh",
@@ -895,8 +897,8 @@ def test_install_sh_stops_when_selected_hermes_install_fails(
     failure: str,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
-    result = posix_harness.run_interactive(
-        "n\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\n", fail_step=failure
+    result = posix_harness.run_functions(
+        "add_known_bin_directories\nensure_uv\nensure_hermes", fail_step=failure
     )
 
     assert result.returncode != 0
@@ -957,8 +959,8 @@ def test_install_sh_stops_when_grok_install_fails(
     failure: str,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
-    result = posix_harness.run_interactive(
-        "n\nn\nn\nn\nn\nn\nn\ny\nn\nn\nn\n", fail_step=failure
+    result = posix_harness.run_functions(
+        "add_known_bin_directories\nensure_uv\nensure_grok", fail_step=failure
     )
 
     assert result.returncode != 0
@@ -972,8 +974,8 @@ def test_install_sh_stops_when_muse_install_fails(
     failure: str,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
-    result = posix_harness.run_interactive(
-        "n\nn\nn\nn\nn\nn\nn\nn\ny\nn\nn\n", fail_step=failure
+    result = posix_harness.run_functions(
+        "add_known_bin_directories\nensure_uv\nensure_muse", fail_step=failure
     )
 
     assert result.returncode != 0
@@ -985,8 +987,8 @@ def test_install_sh_stops_when_aider_install_fails(
     posix_harness: PosixHarness,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
-    result = posix_harness.run_interactive(
-        "n\nn\nn\nn\nn\nn\nn\nn\nn\ny\nn\n", fail_step="aider-install"
+    result = posix_harness.run_functions(
+        "add_known_bin_directories\nensure_uv\nensure_aider", fail_step="aider-install"
     )
 
     assert result.returncode != 0
@@ -1066,7 +1068,9 @@ def test_install_sh_rejects_broken_existing_aider_without_replacing_it(
 ) -> None:
     posix_harness.add_client("aider")
 
-    result = posix_harness.run(fail_step="aider-verify")
+    result = posix_harness.run_functions(
+        "add_known_bin_directories\nensure_uv\nensure_aider", fail_step="aider-verify"
+    )
 
     assert result.returncode != 0
     calls = posix_harness.calls()
@@ -1119,7 +1123,9 @@ def test_install_sh_rejects_exact_dsh_on_unsupported_node(
         _posix_command("node").replace("node 22.19.0", "node 23.9.0"),
     )
 
-    result = posix_harness.run()
+    result = posix_harness.run_functions(
+        "add_known_bin_directories\nensure_uv\nensure_dsh",
+    )
 
     assert result.returncode != 0
     assert "requires Node.js ^22.19.0 or >=24.0.0" in result.stderr
@@ -1137,7 +1143,9 @@ def test_install_sh_rejects_incompatible_node_for_selected_dsh(
         _posix_command("node").replace("node 22.19.0", f"node {node_version}"),
     )
 
-    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\ny\nn\nn\nn\nn\n")
+    result = posix_harness.run_functions(
+        "add_known_bin_directories\nensure_uv\nensure_dsh"
+    )
 
     assert result.returncode != 0
     assert "Free Claude Code is installed and verified." not in result.stdout
@@ -1163,8 +1171,8 @@ def test_install_sh_stops_when_selected_dsh_install_fails(
     posix_harness: PosixHarness,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
-    result = posix_harness.run_interactive(
-        "n\nn\nn\nn\nn\nn\ny\nn\nn\nn\nn\n", fail_step="dsh-install"
+    result = posix_harness.run_functions(
+        "add_known_bin_directories\nensure_uv\nensure_dsh", fail_step="dsh-install"
     )
 
     assert result.returncode != 0
@@ -1274,7 +1282,9 @@ def test_install_sh_rejects_conflicting_rtk_command(
 ) -> None:
     posix_harness.add_unrelated_rtk()
 
-    result = posix_harness.run("--rtk")
+    result = posix_harness.run_functions(
+        "add_known_bin_directories\nensure_uv\nensure_rtk", "--rtk"
+    )
 
     assert result.returncode != 0
     assert "not a compatible Rust Token Killer installation" in result.stderr
@@ -1300,7 +1310,7 @@ def test_install_sh_stops_when_rtk_setup_fails(
 
     assert result.returncode != 0
     assert "Free Claude Code is installed and verified." not in result.stdout
-    _assert_uv_ready_without_fcc_install(posix_harness.calls())
+    assert "fcc-server:--version" in posix_harness.calls()
 
 
 def test_install_sh_reprompts_then_installs_only_selected_agent(
@@ -1333,12 +1343,16 @@ def test_install_sh_rejects_uninstalled_only_selection(
 
     assert result.returncode != 0
     assert "No selected coding agent was installed." in result.stdout
-    _assert_uv_ready_without_fcc_install(posix_harness.calls())
+    assert "fcc-server:--version" in posix_harness.calls()
 
 
+@pytest.mark.parametrize("existing_aider", [False, True])
 def test_install_sh_creates_native_macos_app_and_desktop_link(
     posix_harness: PosixHarness,
+    existing_aider: bool,
 ) -> None:
+    if existing_aider:
+        posix_harness.add_client("aider")
     posix_harness.env["FAKE_UNAME"] = "Darwin"
     tool_bin = posix_harness.root / "tool's bin"
     posix_harness.env["FAKE_TOOL_BIN"] = str(tool_bin)
@@ -1699,18 +1713,13 @@ def test_install_sh_stops_without_success_on_each_failure(
     forbidden = {
         "claude-download": "claude-install",
         "claude-install": "claude:--version",
-        "claude-verify": "chatgpt.com",
         "codex-download": "codex-install",
         "codex-install": "codex:--version",
-        "codex-verify": "pi.dev",
         "pi-download": "pi-install",
         "pi-install": "pi:--version",
-        "pi-verify": "opencode:--version",
         "opencode-download": "opencode-install",
         "opencode-install": "opencode:--version",
-        "opencode-verify": "npm:install -g cline",
         "cline-install": "cline:--version",
-        "cline-verify": "hermes-agent.nousresearch.com",
         "uv-download": "uv-install",
         "uv-install": "uv:--version",
         "uv-verify": "uv:tool install",
@@ -1737,7 +1746,9 @@ def test_install_sh_rejects_broken_existing_client_without_replacing_it(
 ) -> None:
     posix_harness.add_client("claude")
 
-    result = posix_harness.run(fail_step="claude-verify")
+    result = posix_harness.run_functions(
+        "add_known_bin_directories\nensure_uv\nensure_claude", fail_step="claude-verify"
+    )
 
     assert result.returncode != 0
     calls = posix_harness.calls()
@@ -1877,17 +1888,6 @@ def _powershells() -> tuple[str, ...]:
     return tuple(dict.fromkeys(path for path in candidates if path is not None))
 
 
-def test_install_ps1_waits_for_gui_icon_export() -> None:
-    installer = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
-    body = _braced_body(installer, "function Export-FccDesktopIcon")
-
-    assert "Start-Process" in body
-    assert "-WindowStyle Hidden" in body
-    assert "-Wait" in body
-    assert "-PassThru" in body
-    assert "$process.ExitCode" in body
-
-
 @pytest.mark.parametrize(
     "powershell",
     _powershells() or (None,),
@@ -1900,16 +1900,6 @@ def test_install_ps1_gui_icon_export_completes_before_returning(
     if powershell is None or os.name != "nt":
         pytest.skip("PowerShell GUI process behavior runs on Windows hosts")
 
-    installer = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
-    function_declarations = (
-        "function Format-Argument",
-        "function Format-Command",
-        "function Export-FccDesktopIcon",
-    )
-    functions = "\n".join(
-        f"{declaration} {{{_braced_body(installer, declaration)}}}"
-        for declaration in function_declarations
-    )
     installed_desktop_command = Path(sys.executable).with_name("fcc-desktop.exe")
     desktop_command = tmp_path / "icon-exporter.exe"
     shutil.copy2(installed_desktop_command, desktop_command)
@@ -1922,7 +1912,7 @@ def test_install_ps1_gui_icon_export_completes_before_returning(
         (
             '$ErrorActionPreference = "Stop"',
             "$DryRun = $false",
-            functions,
+            _load_ps_installer(),
             (
                 "Export-FccDesktopIcon "
                 "-DesktopCommand $env:FCC_TEST_DESKTOP_COMMAND "
@@ -2504,11 +2494,8 @@ function Get-Process {
         }
     }
 }
-$installerSource = [IO.File]::ReadAllText($env:FCC_INSTALLER)
-$installerSource = $installerSource.Replace(
-    '[Environment]::GetEnvironmentVariable("Path", "User")',
-    '$env:FCC_TEST_USER_PATH'
-)
+. $env:FCC_INSTALLER @args -Help > $null
+function Get-UserPath { return $env:FCC_TEST_USER_PATH }
 if ($env:FCC_INSTALLER_ANSWERS) {
     $script:InstallerAnswers = (ConvertFrom-Json $env:FCC_INSTALLER_ANSWERS).answers
     $script:InstallerAnswerIndex = 0
@@ -2522,28 +2509,10 @@ if ($env:FCC_INSTALLER_ANSWERS) {
         $script:InstallerAnswerIndex += 1
         return $answer
     }
-    $installerSource = $installerSource.Replace(
-        'return (-not [Console]::IsInputRedirected) -and (-not [Console]::IsOutputRedirected)',
-        'return $true'
-    )
-    $installerSource = $installerSource.Replace(
-        '    Write-Step "Choosing coding agents"',
-        @'
-    $selectionPathBefore = $env:Path
-    $selectionOpenCodeBefore = $script:OriginalOpenCode
-    Write-Step "Choosing coding agents"
-'@
-    ).Replace(
-        '    Select-CodingAgents',
-        @'
-    Select-CodingAgents
-    if ($env:Path -cne $selectionPathBefore) { throw "Selection changed PATH" }
-    if ($script:OriginalOpenCode -ne $selectionOpenCodeBefore) { throw "Selection changed original OpenCode" }
-'@
-    )
+    function Test-InteractiveInstaller { return $true }
 }
-$nativeVersionProbe = '    $output = Read-OpenCodeVersionOutput $OpenCodePath'
-$fakeArchiveVersionProbe = @'
+function Read-OpenCodeVersionOutput {
+    param([string] $OpenCodePath)
     $output = if ([IO.Path]::GetExtension($OpenCodePath) -eq ".exe") {
         Add-Content -LiteralPath $env:CALL_LOG -Value "opencode:--version"
         if ($env:FCC_RUNNING_PHASE -eq "opencode-publish" -and [IO.File]::ReadAllText($OpenCodePath) -ne "old-opencode-v1") {
@@ -2561,24 +2530,14 @@ $fakeArchiveVersionProbe = @'
     else {
         Invoke-Utf8NativeCapture -FilePath $OpenCodePath -Arguments @("--version")
     }
-'@
-$installerSource = $installerSource.Replace($nativeVersionProbe, $fakeArchiveVersionProbe.TrimEnd())
-if ($env:FCC_INSTALLER_SCENARIO) {
-    $tokens = $null
-    $parseErrors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseInput(
-        $installerSource, [ref] $tokens, [ref] $parseErrors
-    )
-    if ($parseErrors.Count) { throw "Invalid installer source: $parseErrors" }
-    $definitions = @($ast.EndBlock.Statements | Where-Object {
-        $_ -is [System.Management.Automation.Language.FunctionDefinitionAst]
-    })
-    if (-not $definitions.Count) { throw "Installer function definitions missing" }
-    $installerSource = $installerSource.Substring(0, $definitions[-1].Extent.EndOffset) +
-        [Environment]::NewLine + [IO.File]::ReadAllText($env:FCC_INSTALLER_SCENARIO)
+    return $output
 }
-$installer = [scriptblock]::Create($installerSource)
-& $installer @args
+if ($env:FCC_INSTALLER_SCENARIO) {
+    . $env:FCC_INSTALLER_SCENARIO
+}
+else {
+    Invoke-FccInstaller
+}
 """,
         encoding="utf-8",
     )
@@ -2953,9 +2912,8 @@ if ($found -and (-not (Test-Path -LiteralPath $found.Source -PathType Leaf))) {
 Write-Output "lookup isolated"
 """)
     else:
-        source = (_repo_root() / "scripts/install.sh").read_text(encoding="utf-8")
         source = (
-            source.split('\nparse_args "$@"\n', 1)[0]
+            'load_installer() { set -- --help; . "$FCC_INSTALLER" > /dev/null; }\nload_installer\n'
             + """
 original_opencode_path=""
 add_known_bin_directories
@@ -2980,7 +2938,8 @@ printf 'lookup isolated\\n'
         installer.write_text(source, encoding="utf-8")
         result = subprocess.run(
             ["/bin/sh", str(installer)],
-            env=harness.env,
+            env=harness.env
+            | {"FCC_INSTALLER": str(_repo_root() / "scripts/install.sh")},
             capture_output=True,
             text=True,
             check=False,
@@ -3014,8 +2973,8 @@ def test_install_ps1_lookup_restores_path_after_exception(
 $script:OriginalOpenCode = $null
 $env:UV_TOOL_BIN_DIR = Join-Path $env:USERPROFILE "exception lookup"
 $pathBefore = $env:Path
-function Get-ApplicationCommand {
-    param([string] $Name)
+function Get-Command {
+    param([string] $Name, $CommandType, $ErrorAction)
     if ($env:Path.Contains($env:UV_TOOL_BIN_DIR)) { throw "query failed after PATH change" }
     return $null
 }
@@ -4039,7 +3998,6 @@ def test_install_ps1_stops_without_success_on_each_failure(
     forbidden = {
         "claude-download": "claude-install",
         "claude-install": "claude:--version",
-        "claude-verify": "chatgpt.com",
         "codex-download": "codex-install",
         "codex-install": "codex:--version",
         "codex-verify": "pi.dev",
@@ -4247,19 +4205,15 @@ def test_install_ps1_uses_x64_python_for_windows_arm_compatibility() -> None:
 def test_install_ps1_rejects_invalid_download_before_execution(
     powershell: str,
 ) -> None:
-    text = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
-    body = _braced_body(text, "function Invoke-DownloadedPowerShellInstaller")
-    script = f"""Set-StrictMode -Version Latest
+    script = f"""{_load_ps_installer()}Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $DryRun = $false
-function Format-Argument {{ param([string] $Value) return $Value }}
 function Invoke-RestMethod {{
     [CmdletBinding()]
     param([string] $Uri, [string] $OutFile)
     [IO.File]::WriteAllText($OutFile, "<style>div#box {{")
 }}
 function Get-PowerShellExecutable {{ throw "invalid installer reached execution" }}
-function Invoke-DownloadedPowerShellInstaller {{{body}}}
 Invoke-DownloadedPowerShellInstaller `
     -Url "https://example.test/install.ps1" `
     -Name "Example"
@@ -4277,11 +4231,10 @@ Invoke-DownloadedPowerShellInstaller `
         "Example installer from 'https://example.test/install.ps1' is not valid PowerShell"
         in result.stderr
     )
-    assert "network proxy or filter" in result.stderr
+    assert "proxy or filter" in result.stderr
     assert "invalid installer reached execution" not in result.stderr
 
 
-@pytest.mark.parametrize("powershell", _powershells())
 @pytest.mark.parametrize(
     ("answers", "expected", "expected_messages"),
     [
@@ -4321,193 +4274,63 @@ Invoke-DownloadedPowerShellInstaller `
     ],
 )
 def test_install_ps1_selects_at_least_one_coding_agent(
-    powershell: str,
+    powershell_harness: PowerShellHarness,
     answers: tuple[str, ...],
     expected: str,
     expected_messages: tuple[str, ...],
 ) -> None:
-    text = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
-    read_yes_no = _braced_body(text, "function Read-YesNo")
-    read_selection = _braced_body(text, "function Read-CodingAgentSelection")
-    select_agents = _braced_body(text, "function Select-CodingAgents")
-    answer_array = ", ".join(repr(answer) for answer in answers)
-    script = f"""Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-$script:Answers = @({answer_array})
+    (powershell_harness.bin_dir / "opencode.cmd").unlink()
+    powershell_harness.env["FCC_INSTALLER_ANSWERS"] = json.dumps({"answers": answers})
+    result = powershell_harness.run_functions("""
 $script:OriginalOpenCode = $null
-$DryRun = $false
-function Get-ApplicationCommand {{ param([string] $Name) return $null }}
-function Find-InstalledCodingAgent {{ param([string] $CommandName) return $null }}
-$script:AnswerIndex = 0
-$script:InstallClaudeCode = $true
-$script:InstallCodex = $true
-$script:InstallPi = $true
-$script:InstallOpenCode = $true
-$script:InstallCline = $false
-$script:InstallHermes = $true
-$script:InstallDsh = $true
-$script:InstallGrok = $true
-$script:InstallMuse = $true
-$script:InstallAider = $true
-$script:EnableRtk = $false
-function Read-Host {{
-    param([string] $Prompt)
-    $answer = $script:Answers[$script:AnswerIndex]
-    $script:AnswerIndex += 1
-    return $answer
-}}
-function Read-YesNo {{{read_yes_no}}}
-function Read-CodingAgentSelection {{{read_selection}}}
-function Select-CodingAgents {{{select_agents}}}
+$pathBefore = $env:Path
 Select-CodingAgents
+if ($env:Path -cne $pathBefore) { throw "Selection changed PATH" }
+if ($script:OriginalOpenCode) { throw "Selection changed original OpenCode" }
 Write-Output "selection:$($script:InstallClaudeCode),$($script:InstallCodex),$($script:InstallPi),$($script:InstallOpenCode),$($script:InstallCline),$($script:InstallHermes),$($script:InstallDsh),$($script:InstallGrok),$($script:InstallMuse),$($script:InstallAider),$($script:EnableRtk)"
-"""
-
-    result = subprocess.run(
-        [powershell, "-NoProfile", "-Command", script],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
+""")
     assert result.returncode == 0, result.stderr
     assert f"selection:{expected}" in result.stdout
     for message in expected_messages:
         assert message in result.stdout
 
 
-@pytest.mark.parametrize("powershell", _powershells())
-def test_install_ps1_runs_only_selected_coding_agents(powershell: str) -> None:
-    text = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
-    body = _braced_body(text, "function Ensure-SelectedCodingAgents")
-    script = f"""Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-$script:InstallClaudeCode = $false
-$script:InstallCodex = $true
-$script:InstallPi = $false
-$script:InstallOpenCode = $false
-$script:InstallCline = $false
-$script:InstallHermes = $false
-$script:InstallDsh = $false
-$script:InstallGrok = $false
-$script:InstallMuse = $false
-$script:InstallAider = $false
-$script:PiAvailable = $false
-$script:MuseAvailable = $false
-$script:Calls = @()
-function Write-Step {{ param([string] $Message) }}
-function Ensure-ClaudeCode {{ $script:Calls += "claude" }}
-function Ensure-Codex {{ $script:Calls += "codex" }}
-function Ensure-Pi {{ $script:Calls += "pi"; $script:PiAvailable = $true }}
-function Ensure-OpenCode {{ $script:Calls += "opencode" }}
-function Ensure-Cline {{ $script:Calls += "cline" }}
-function Ensure-Hermes {{ $script:Calls += "hermes" }}
-function Ensure-Dsh {{ $script:Calls += "dsh" }}
-function Ensure-Grok {{ $script:Calls += "grok" }}
-function Ensure-Muse {{ $script:Calls += "muse"; $script:MuseAvailable = $true }}
-function Ensure-Aider {{ $script:Calls += "aider" }}
-function Ensure-SelectedCodingAgents {{{body}}}
-Ensure-SelectedCodingAgents
-Write-Output "calls:$($script:Calls -join ',')"
-"""
-
-    result = subprocess.run(
-        [powershell, "-NoProfile", "-Command", script],
-        check=False,
-        capture_output=True,
-        text=True,
+def test_install_ps1_runs_only_selected_coding_agents(powershell_harness):
+    powershell_harness.add_client("codex")
+    result = powershell_harness.run_functions(
+        _ps_selected_agents("codex") + "Ensure-SelectedCodingAgents"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "codex:--version" in powershell_harness.calls()
+    assert not any(
+        "--version" in call and not call.startswith("codex:")
+        for call in powershell_harness.calls()
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "calls:codex" in result.stdout
 
-
-@pytest.mark.parametrize("powershell", _powershells())
 def test_install_ps1_configures_rtk_only_for_available_selected_agents(
-    powershell: str,
-) -> None:
-    text = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
-    body = _braced_body(text, "function Configure-RtkForSelectedAgents")
-    script = f"""Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-$script:EnableRtk = $true
-$script:InstallClaudeCode = $false
-$script:InstallCodex = $true
-$script:InstallPi = $true
-$script:InstallOpenCode = $false
-$script:InstallCline = $false
-$script:InstallHermes = $false
-$script:InstallDsh = $false
-$script:InstallGrok = $false
-$script:InstallMuse = $false
-$script:InstallAider = $false
-$script:PiAvailable = $false
-$script:MuseAvailable = $false
-$script:Calls = @()
-function Write-Step {{ param([string] $Message) }}
-function Ensure-Rtk {{ $script:Calls += "ensure" }}
-function Invoke-RtkCommand {{
-    param([string[]] $Arguments)
-    $script:Calls += ($Arguments -join " ")
-}}
-function Configure-RtkForSelectedAgents {{{body}}}
-Configure-RtkForSelectedAgents
-Write-Output "calls:$($script:Calls -join ',')"
-"""
-
-    result = subprocess.run(
-        [powershell, "-NoProfile", "-Command", script],
-        check=False,
-        capture_output=True,
-        text=True,
+    powershell_harness,
+):
+    powershell_harness.add_rtk()
+    result = powershell_harness.run_functions(
+        _ps_selected_agents("codex", "pi")
+        + '$script:EnableRtk = $true\n$script:InstallResults["codex"] = $true\n'
+        + "Configure-RtkForSelectedAgents"
     )
-
     assert result.returncode == 0, result.stderr
-    assert "calls:ensure,init --global --codex" in result.stdout
+    calls = powershell_harness.calls()
+    assert "rtk:init --global --codex:telemetry=1" in calls
+    assert not any("--agent pi" in call or "--auto-patch" in call for call in calls)
 
 
-@pytest.mark.parametrize("powershell", _powershells())
-def test_install_ps1_rejects_uninstalled_only_selection(powershell: str) -> None:
-    text = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
-    body = _braced_body(text, "function Ensure-SelectedCodingAgents")
-    script = f"""Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-$script:InstallClaudeCode = $false
-$script:InstallCodex = $false
-$script:InstallPi = $true
-$script:InstallOpenCode = $false
-$script:InstallCline = $false
-$script:InstallHermes = $false
-$script:InstallDsh = $false
-$script:InstallGrok = $false
-$script:InstallMuse = $false
-$script:InstallAider = $false
-$script:PiAvailable = $false
-$script:MuseAvailable = $false
-function Write-Step {{ param([string] $Message) }}
-function Ensure-ClaudeCode {{ }}
-function Ensure-Codex {{ }}
-function Ensure-Pi {{ }}
-function Ensure-OpenCode {{ }}
-function Ensure-Cline {{ }}
-function Ensure-Hermes {{ }}
-function Ensure-Dsh {{ }}
-function Ensure-Grok {{ }}
-function Ensure-Muse {{ }}
-function Ensure-Aider {{ }}
-function Ensure-SelectedCodingAgents {{{body}}}
-Ensure-SelectedCodingAgents
-"""
-
-    result = subprocess.run(
-        [powershell, "-NoProfile", "-Command", script],
-        check=False,
-        capture_output=True,
-        text=True,
+def test_install_ps1_rejects_uninstalled_only_selection(powershell_harness):
+    (powershell_harness.bin_dir / "opencode.cmd").unlink()
+    result = powershell_harness.run_interactive(
+        ["n", "n", "y", "n", "n", "n", "n", "n", "n", "n", "n"], fail_step="pi-skip"
     )
-
     assert result.returncode != 0
     assert "No selected coding agent was installed." in result.stderr
+    assert "fcc-server:--version" in powershell_harness.calls()
 
 
 def _prepare_native_opencode_v1(harness: PosixHarness | PowerShellHarness) -> Path:
@@ -5054,10 +4877,7 @@ def test_install_ps1_opencode_version_probe_runs_native_command(
         binary,
         f"@echo off\necho opencode v2.0.10\nexit /b {exit_code}\n",
     )
-    text = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
-    body = _braced_body(text, "function Read-OpenCodeVersionOutput")
-    script = f"""$ErrorActionPreference = "Stop"
-function Read-OpenCodeVersionOutput {{{body}}}
+    script = f"""{_load_ps_installer()}$ErrorActionPreference = "Stop"
 Read-OpenCodeVersionOutput $env:TEST_OPENCODE
 """
     result = subprocess.run(
@@ -5076,37 +4896,287 @@ Read-OpenCodeVersionOutput $env:TEST_OPENCODE
         assert result.stdout.strip() == "opencode v2.0.10"
 
 
-@pytest.mark.parametrize("powershell", _powershells())
 def test_install_ps1_falls_back_when_pshome_executable_is_unavailable(
-    tmp_path: Path,
-    powershell: str,
-) -> None:
-    text = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
-    body = _braced_body(text, "function Get-PowerShellExecutable")
-    fallback = tmp_path / "fallback" / "powershell.exe"
-    script = tmp_path / "test-powershell-resolution.ps1"
-    script.write_text(
-        f"""Set-StrictMode -Version Latest
-function Get-ApplicationCommand {{
-    param([string] $Name)
-    return [pscustomobject] @{{ Source = {str(fallback)!r} }}
-}}
-function Get-PowerShellExecutable {{
-{body}
-}}
-$resolved = Get-PowerShellExecutable -PowerShellHome {str(tmp_path / "missing")!r}
-if ($resolved -ne {str(fallback)!r}) {{
-    throw "Unexpected fallback: $resolved"
-}}
-""",
-        encoding="utf-8",
-    )
-
-    result = subprocess.run(
-        [powershell, "-NoProfile", "-File", str(script)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
+    powershell_harness,
+):
+    fallback = powershell_harness.bin_dir / Path(powershell_harness.powershell).name
+    fallback.write_bytes(Path(powershell_harness.powershell).read_bytes())
+    powershell_harness.env["FCC_EXPECTED_SHELL"] = str(fallback)
+    result = powershell_harness.run_functions("""
+$env:Path = Split-Path -Parent $env:FCC_EXPECTED_SHELL
+$resolved = Get-PowerShellExecutable -PowerShellHome (Join-Path $env:USERPROFILE "missing")
+if ($resolved -ne $env:FCC_EXPECTED_SHELL) { throw "Unexpected fallback: $resolved" }
+""")
     assert result.returncode == 0, result.stderr
+
+
+def test_install_ps1_optional_failure_still_finishes_independent_work(
+    powershell_harness,
+):
+    powershell_harness.add_installed_clients()
+    powershell_harness.add_uv("0.12.13")
+    result = powershell_harness.run(fail_step="claude-verify")
+    assert result.returncode != 0
+    calls = powershell_harness.calls()
+    assert "codex:--version" in calls
+    assert "fcc-server:--version" in calls
+    assert "Run Claude Code with:" not in result.stdout
+
+
+def test_install_sh_optional_failure_still_finishes_independent_work(posix_harness):
+    for name in CODING_AGENTS:
+        posix_harness.add_client(name)
+    posix_harness.add_uv("0.12.13")
+    result = posix_harness.run(fail_step="claude-verify")
+    assert result.returncode != 0
+    calls = posix_harness.calls()
+    assert "codex:--version" in calls
+    assert "fcc-server:--version" in calls
+    assert "Run Claude Code with:" not in result.stdout
+
+
+def _ps_selected_agents(*selected: str) -> str:
+    variables = (
+        "ClaudeCode",
+        "Codex",
+        "Pi",
+        "OpenCode",
+        "Cline",
+        "Hermes",
+        "Dsh",
+        "Grok",
+        "Muse",
+        "Aider",
+    )
+    return (
+        "$script:InstallResults = @{}\n$script:InstallFailures = @()\n$script:UvInstalls = @()\n"
+        + "\n".join(
+            f"$script:Install{variable} = ${str(name in selected).lower()}"
+            for name, variable in zip(CODING_AGENTS, variables, strict=True)
+        )
+        + "\n"
+    )
+
+
+def _assert_uv_overlaps_harness_verification(harness):
+    if isinstance(harness, PowerShellHarness):
+        harness.add_installed_clients()
+    else:
+        for name in CODING_AGENTS:
+            harness.add_client(name)
+    harness.add_uv("0.12.13")
+    gate = harness.root / "gate.py"
+    gate.write_text(
+        "import pathlib, sys, time\n"
+        "root = pathlib.Path(__file__).parent\n"
+        "mode = sys.argv[1]\n"
+        "(root / mode).touch()\n"
+        "other = root / ('codex-started' if mode == 'uv-started' else 'uv-started')\n"
+        "deadline = time.monotonic() + 20\n"
+        "while not other.exists():\n"
+        "    if time.monotonic() > deadline: raise RuntimeError('installations did not overlap')\n"
+        "    time.sleep(0.01)\n"
+        "if mode == 'uv-started': print('x' * 200000)\n"
+    )
+    windows = isinstance(harness, PowerShellHarness)
+    suffix = ".cmd" if windows else ""
+    uv = harness.bin_dir / f"uv{suffix}"
+    codex = harness.bin_dir / f"codex{suffix}"
+    if windows:
+        uv_gate = f'if "%1"=="tool" if "%2"=="install" ("{sys.executable}" "{gate}" uv-started || exit /b 99)\n'
+        codex_gate = f'"{sys.executable}" "{gate}" codex-started || exit /b 99\n'
+    else:
+        uv_gate = f'if [ "$1 $2" = "tool install" ]; then "{sys.executable}" "{gate}" uv-started || exit 99; fi\n'
+        codex_gate = f'"{sys.executable}" "{gate}" codex-started || exit 99\n'
+    for command, insertion in ((uv, uv_gate), (codex, codex_gate)):
+        first, rest = command.read_text().split("\n", 1)
+        command.write_text(first + "\n" + insertion + rest)
+    result = harness.run()
+    assert result.returncode == 0, result.stdout[-3000:] + result.stderr
+    assert (harness.root / "uv-started").exists()
+    assert (harness.root / "codex-started").exists()
+    assert "fcc-server:--version" in harness.calls()
+    assert "x" * 100 not in result.stdout
+
+
+def test_install_ps1_uv_overlaps_harness_verification(powershell_harness):
+    _assert_uv_overlaps_harness_verification(powershell_harness)
+
+
+def test_install_sh_uv_overlaps_harness_verification(posix_harness):
+    _assert_uv_overlaps_harness_verification(posix_harness)
+
+
+def test_install_sh_cancellation_cleans_both_process_trees(posix_harness):
+    harness = posix_harness
+    for name in CODING_AGENTS:
+        harness.add_client(name)
+    harness.add_uv("0.12.13")
+    worker = harness.root / "worker.py"
+    worker.write_text(
+        "import os, pathlib, subprocess, sys, time\n"
+        "root = pathlib.Path(__file__).parent\n"
+        "name = sys.argv[1]\n"
+        "(root / (name + '.pid')).write_text(str(os.getpid()))\n"
+        "if name.endswith('-child'):\n"
+        "    time.sleep(60)\n"
+        "else:\n"
+        "    subprocess.run([sys.executable, __file__, name + '-child'], check=True)\n"
+    )
+    uv = harness.bin_dir / "uv"
+    uv.write_text(
+        uv.read_text().replace(
+            "#!/bin/sh\n",
+            '#!/bin/sh\nif [ "$1 ${2:-}" = "tool install" ]; then\n'
+            '    exec "$FCC_TEST_PYTHON" "$FCC_TEST_WORKER" uv\nfi\n',
+            1,
+        )
+    )
+    (harness.bin_dir / "codex").unlink()
+    temporary = harness.root / "temporary"
+    temporary.mkdir()
+    _write_executable(
+        harness.fixtures / "codex-installer.sh",
+        '#!/bin/sh\nexec "$FCC_TEST_PYTHON" "$FCC_TEST_WORKER" foreground\n',
+    )
+    process = subprocess.Popen(
+        ["/bin/sh", str(_repo_root() / "scripts/install.sh")],
+        env=harness.env
+        | {
+            "FCC_TEST_PYTHON": sys.executable,
+            "FCC_TEST_WORKER": str(worker),
+            "TMPDIR": str(temporary),
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while not all(
+            (harness.root / f"{name}-child.pid").exists()
+            for name in ("uv", "foreground")
+        ):
+            assert process.poll() is None, process.communicate()
+            assert time.monotonic() < deadline, "Workers did not start"
+            time.sleep(0.02)
+        process.terminate()
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 143, stdout + stderr
+        assert "installed and verified" not in stdout
+        assert list(temporary.iterdir()) == []
+        for path in harness.root.glob("*.pid"):
+            probe = subprocess.run(
+                ["ps", "-p", path.read_text(), "-o", "stat="],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            # An exited orphan may briefly await reaping by the system init process.
+            assert not probe.stdout.strip() or probe.stdout.startswith("Z"), path.name
+    finally:
+        if sys.platform != "win32":
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        process.communicate(timeout=10)
+
+
+def test_install_ps1_background_arguments_round_trip(powershell_harness):
+    harness = powershell_harness
+    arguments = ["with spaces", 'with"quote', "trailing slash \\", ""]
+    harness.env["FCC_TEST_PYTHON"] = sys.executable
+    result = harness.run_functions(r"""
+$script:InstallResults = @{}
+$script:InstallFailures = @()
+$script:UvInstalls = @()
+$script:InstallLogDirectory = Join-Path $env:USERPROFILE 'worker logs'
+$null = New-Item -ItemType Directory $script:InstallLogDirectory
+try {
+    $arguments = @('-c', 'import json,sys; print(json.dumps(sys.argv[1:]))', 'with spaces', 'with"quote', 'trailing slash \', '')
+    Start-UvInstall -Name fcc -FilePath $env:FCC_TEST_PYTHON -Arguments $arguments
+    Complete-UvInstalls -Wait
+    if (-not $script:InstallResults['fcc']) { throw 'Worker failed' }
+    Write-Output ('arguments:' + [IO.File]::ReadAllText($script:UvInstalls[0].Stdout))
+}
+finally { Close-UvInstalls }
+""")
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = next(
+        line.removeprefix("arguments:")
+        for line in result.stdout.splitlines()
+        if line.startswith("arguments:")
+    )
+    assert json.loads(output) == arguments
+    assert not (Path(harness.env["USERPROFILE"]) / "worker logs").exists()
+
+
+def test_install_ps1_cancellation_cleans_background_descendants(powershell_harness):
+    harness = powershell_harness
+    worker = harness.root / "worker.py"
+    worker.write_text(
+        "import os, pathlib, subprocess, sys, time\n"
+        "root = pathlib.Path(__file__).parent\n"
+        "if len(sys.argv) > 1:\n"
+        "    (root / 'child.pid').write_text(str(os.getpid()))\n"
+        "    time.sleep(60)\n"
+        "else:\n"
+        "    (root / 'parent.pid').write_text(str(os.getpid()))\n"
+        "    subprocess.run([sys.executable, __file__, 'child'], check=True)\n"
+    )
+    harness.env.update(
+        FCC_TEST_PYTHON=sys.executable,
+        FCC_TEST_WORKER=str(worker),
+        FCC_TEST_CHILD=str(harness.root / "child.pid"),
+    )
+    try:
+        result = harness.run_functions("""
+$script:InstallResults = @{}
+$script:InstallFailures = @()
+$script:UvInstalls = @()
+$script:InstallLogDirectory = Join-Path $env:USERPROFILE 'worker logs'
+$null = New-Item -ItemType Directory $script:InstallLogDirectory
+try {
+    Start-UvInstall -Name fcc -FilePath $env:FCC_TEST_PYTHON -Arguments @($env:FCC_TEST_WORKER)
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while (-not (Test-Path $env:FCC_TEST_CHILD)) {
+        if ([DateTime]::UtcNow -gt $deadline) { throw 'Child did not start' }
+        Start-Sleep -Milliseconds 20
+    }
+    Invoke-InstallStep cancelled { throw [System.Management.Automation.PipelineStoppedException]::new() }
+    throw 'Cancellation was swallowed'
+}
+finally { Close-UvInstalls }
+""")
+        assert "cancelled starting" in result.stdout
+        assert "Installer scenario completed." not in result.stdout
+        assert "Cancellation was swallowed" not in result.stderr
+        for name in ("parent", "child"):
+            pid = int((harness.root / f"{name}.pid").read_text())
+            probe = subprocess.run(
+                [
+                    harness.powershell,
+                    "-NoProfile",
+                    "-Command",
+                    f"if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 1 }}",
+                ],
+                capture_output=True,
+                check=False,
+            )
+            assert probe.returncode == 0, f"{name} survived cancellation"
+        assert not (Path(harness.env["USERPROFILE"]) / "worker logs").exists()
+    finally:
+        for name in ("parent", "child"):
+            path = harness.root / f"{name}.pid"
+            if path.exists():
+                subprocess.run(
+                    [
+                        str(Path(os.environ["SYSTEMROOT"]) / "System32/taskkill.exe"),
+                        "/PID",
+                        path.read_text(),
+                        "/T",
+                        "/F",
+                    ],
+                    capture_output=True,
+                    check=False,
+                )

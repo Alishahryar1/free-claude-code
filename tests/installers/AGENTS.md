@@ -16,8 +16,9 @@ These rules apply to installer, uninstaller, and harness lifecycle tests here.
   the shared `powershell_module_paths` fixture for Windows subprocesses, including
   child installers. Inherited host modules can make missing-command discovery scan
   or load unrelated software. `-NoProfile` alone does not isolate module discovery.
-- Preserve the isolated module-analysis cache path from `conftest.py`. Test that
-  cache writes occur inside the temporary directory, not merely that nothing failed.
+- Disable disk module-analysis caching with `PSModuleAnalysisCachePath=NUL` for
+  Windows test processes, including fixture bootstrap and nested children. Test
+  inheritance and command discovery without waiting for background cache writes.
 - Preserve process isolation between scenarios. Do not share mutable shell state
   or user configuration to save startup time. Clean up processes you launch.
 - Diagnose slowness with per-test durations and timings inside subprocesses. Do not
