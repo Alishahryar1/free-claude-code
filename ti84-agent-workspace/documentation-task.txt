@@ -1,0 +1,5 @@
+Role: documentation
+Description: Technical Writer - Creates documentation and guides
+Game Concept: Create a puzzle game
+Target Platform: ti84plus
+Timestamp: Wed Sep 23 19:24:40 UTC 2026

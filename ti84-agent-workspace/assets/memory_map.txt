@@ -1,0 +1,27 @@
+Memory Map for TI-84/Z80 Game Development
+=========================================
+
+Platform: ti84plus
+Total RAM: 32KB
+Total ROM: Varies (128KB-512KB typical)
+
+Memory Allocation Plan:
+- Program Code: 16KB
+- Game Assets: 10KB
+- Stack & Heap: 4KB
+- Display Buffer: 1.5KB
+- System & Safety Margin: 2.5KB
+
+Allocation Strategy:
+1. Place code in lowest RAM addresses
+2. Assets in middle RAM
+3. Stack growing down from high RAM
+4. Heap growing up from stack bottom
+5. Display buffer at known hardware location
+6. Respect system reserved areas
+
+Optimization Techniques:
+- Asset compression (RLE, LZ77)
+- Code optimization (size vs speed)
+- Dynamic loading/unloading
+- Memory pooling for frequent allocations

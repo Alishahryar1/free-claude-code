@@ -1,0 +1,33 @@
+Game Design Document
+===================
+
+Concept: Create a simple puzzle game
+
+Core Mechanics:
+- [To be implemented by programmer agent]
+- Turn-based or real-time gameplay
+- Score system
+- Lives/health system
+
+Win/Lose Conditions:
+- Define victory conditions
+- Define defeat conditions
+
+Controls:
+- Arrow keys: Movement
+- [2nd]: Action/Select
+- [Enter]: Menu/Confirm
+- [Clear]: Cancel/Back
+
+Screen Layout:
+- Play area: [dimensions based on platform]
+- Score display: Top or bottom
+- Lives indicator: Corner
+- Status messages: Temporary popups
+
+Assets Needed:
+- Player sprite
+- Enemy sprites (if applicable)
+- Background tiles
+- UI elements
+- Sound effects

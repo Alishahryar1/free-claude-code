@@ -1,0 +1,5 @@
+Role: programmer
+Description: Z80 Assembly Programmer - Writes and tests game code
+Game Concept: Create a simple puzzle game
+Target Platform: ti84plus
+Timestamp: Wed Sep 23 19:29:17 UTC 2026

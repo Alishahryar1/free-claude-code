@@ -1,0 +1,5 @@
+Role: builder
+Description: Build Engineer - Manages compilation and build process
+Game Concept: Create a simple puzzle game
+Target Platform: ti84plus
+Timestamp: Wed Sep 23 19:29:17 UTC 2026
