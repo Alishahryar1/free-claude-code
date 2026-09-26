@@ -47,8 +47,32 @@ def test_apply_is_the_only_config_action_and_retains_invalid_edits(
 def test_key_rejection_retains_edits_and_restores_focus(
     page: Page, admin_base_url: str
 ):
-    pending: list[Route] = []
-    page.route("**/admin/api/config/apply", lambda route: pending.append(route))
+    request_count = 0
+
+    def reject_key(route: Route) -> None:
+        nonlocal request_count
+        request_count += 1
+        expect(page.locator("#messageArea")).to_have_text("Checking API keys…")
+        expect(page.locator("#view-providers")).to_have_attribute("inert", "")
+        expect(page.locator("#applyButton")).to_be_disabled()
+        submitted = route.request.post_data_json
+        assert isinstance(submitted, dict)
+        assert submitted["values"] == {"MISTRAL_API_KEY": "bad-key"}
+        route.fulfill(
+            json={
+                "applied": False,
+                "errors": ["Rejected key"],
+                "credential_checks": [
+                    {
+                        "key": "MISTRAL_API_KEY",
+                        "status": "rejected",
+                        "message": "Check this API key.",
+                    }
+                ],
+            }
+        )
+
+    page.route("**/admin/api/config/apply", reject_key)
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
     page.get_by_role("button", name="Model Config", exact=True).click()
@@ -58,34 +82,14 @@ def test_key_rejection_retains_edits_and_restores_focus(
     open_provider(page, "mistral")
     key = page.locator("#field-MISTRAL_API_KEY")
     key.fill("bad-key")
-    page.get_by_role("button", name="Save", exact=True).click()
-    expect(page.locator("#messageArea")).to_have_text("Checking API keys…")
-    expect(page.locator("#view-providers")).to_have_attribute("inert", "")
-    expect(page.locator("#applyButton")).to_be_disabled()
-    assert len(pending) == 1
-    submitted = pending[0].request.post_data_json
-    assert isinstance(submitted, dict)
-    assert submitted["values"] == {
-        "MISTRAL_API_KEY": "bad-key",
-    }
-    pending.pop().fulfill(
-        json={
-            "applied": False,
-            "errors": ["Rejected key"],
-            "credential_checks": [
-                {
-                    "key": "MISTRAL_API_KEY",
-                    "status": "rejected",
-                    "message": "Check this API key.",
-                }
-            ],
-        }
-    )
+    with page.expect_response("**/admin/api/config/apply"):
+        page.get_by_role("button", name="Save", exact=True).click()
     expect(key).to_be_focused()
     expect(key).to_have_attribute("aria-invalid", "true")
     expect(page.locator("#field-MISTRAL_API_KEY-error")).to_have_text(
         "Check this API key."
     )
+    assert request_count == 1
     expect(key).to_have_value("bad-key")
     expect(other).to_have_value("open_router/other-edit")
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
