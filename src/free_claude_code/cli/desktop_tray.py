@@ -61,7 +61,7 @@ def _create_icon() -> Image.Image:
         return image.convert("RGBA")
 
 
-def launch() -> None:
+def launch(*, auto_started: bool = False) -> None:
     """Launch the supported native tray adapter."""
 
-    launch_desktop(PystrayDesktopTray)
+    launch_desktop(PystrayDesktopTray, auto_started=auto_started)

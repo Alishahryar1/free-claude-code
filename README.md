@@ -355,6 +355,11 @@ Providers that do not support a selected control retain their own behavior.
 
 ## Connect Your Client
 
+If FCC is not running when you start a launcher, it starts FCC Desktop on
+Windows/macOS or `fcc-server` on Linux and waits for it to become ready. FCC
+stays running after the client exits. If automatic startup fails, run
+`fcc-desktop` (Windows/macOS) or `fcc-server` (Linux) manually to diagnose it.
+
 For editor and app integrations, install the client, start FCC, then open
 **Admin UI → Integrations** and click **Connect** on its card.
 

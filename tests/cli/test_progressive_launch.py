@@ -9,14 +9,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
-from urllib.error import URLError
 
 import pytest
 import uvicorn
 from fastapi import FastAPI
 
 from free_claude_code.cli import commands
-from free_claude_code.cli.launchers import common
 from free_claude_code.cli.server_socket import ServerSockets
 from free_claude_code.cli.uvicorn_server import RuntimeServer
 from free_claude_code.config.settings import Settings
@@ -195,6 +193,7 @@ def test_browser_thread_start_failure_does_not_fail_fcc(monkeypatch, reuse):
 def _run_browser_shutdown_probe(mode, outcome, directory):
     """Run real FCC lifecycle owners with only OS/browser/server dependencies faked."""
     from free_claude_code.cli import desktop, uvicorn_server
+    from free_claude_code.config import paths
     from free_claude_code.runtime import bootstrap
 
     entered = threading.Event()
@@ -205,6 +204,7 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
     patcher.setattr(commands, "load_server_settings", lambda: settings)
     patcher.setattr(desktop, "load_server_settings", lambda: settings)
     patcher.setattr(desktop, "config_dir_path", lambda: Path(directory))
+    patcher.setattr(paths, "config_dir_path", lambda: Path(directory))
 
     def browser(url):
         assert url == "http://127.0.0.1:0/admin"
@@ -363,24 +363,3 @@ def test_external_probe_is_cancelled_before_any_request(monkeypatch):
     monkeypatch.setattr(commands, "open_local_request", request)
     assert not commands.open_admin_when_ready(Settings(), stop_event=stop)
     request.assert_not_called()
-
-
-def test_launcher_retries_starting_http_but_not_refused_socket(monkeypatch):
-    response = MagicMock()
-    response.__enter__.return_value.status = 200
-    request = MagicMock(side_effect=[TimeoutError("starting"), response])
-    monkeypatch.setattr(common, "open_local_request", request)
-    assert common.preflight_proxy("http://127.0.0.1:12345") is None
-    assert request.call_count == 2
-    request.reset_mock(side_effect=True)
-    request.side_effect = URLError(ConnectionRefusedError("refused"))
-    assert common.preflight_proxy("http://127.0.0.1:12345") == "refused"
-    assert request.call_count == 1
-
-
-def test_launcher_http_wait_has_a_finite_budget(monkeypatch):
-    monkeypatch.setattr(common.time, "monotonic", MagicMock(side_effect=[0, 0, 31]))
-    request = MagicMock(side_effect=TimeoutError("still starting"))
-    monkeypatch.setattr(common, "open_local_request", request)
-    assert common.preflight_proxy("http://127.0.0.1:12345") == "still starting"
-    assert request.call_count == 1
