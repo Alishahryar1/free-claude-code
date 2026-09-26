@@ -46,6 +46,13 @@ const VIEW_GROUPS = [
     containerId: "messagingSections",
   },
   {
+    id: "usage",
+    label: "Usage",
+    title: "Usage & Observability",
+    sections: [],
+    containerId: "usageRoot",
+  },
+  {
     id: "integrations",
     label: "Integrations",
     title: "Integrations",
@@ -221,8 +228,8 @@ async function load({ providersOnly = false } = {}) {
   void refreshStartup();
   await Promise.all([
     refreshConnectedAccounts(),
-    hydrateModelOptions(),
     providersOnly ? window.CodeSessions.refresh() : window.CodeSessions.initialize(api),
+    window.UsageDashboard ? window.UsageDashboard.initialize(api) : Promise.resolve(),
   ]);
   if (state.config !== config) return;
   updateDirtyState();
@@ -261,7 +268,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   document.querySelector(".app-shell").classList.toggle("session-active", sessionActive);
   document.querySelector(".main").classList.toggle("session-main", sessionActive);
   document.querySelector(".topbar").hidden = sessionActive;
-  document.querySelector(".action-bar").hidden = sessionActive || activeView.id === "integrations";
+  document.querySelector(".action-bar").hidden = sessionActive || activeView.id === "integrations" || activeView.id === "usage";
 
   document.querySelectorAll(".nav-link").forEach((link) => {
     const selected = link.dataset.view === activeView.id;
@@ -284,6 +291,11 @@ function setActiveView(viewId, { scroll = false } = {}) {
   }
   if (activeView.id === "code") window.CodeSessions.activate(window.location.pathname);
   else window.CodeSessions.deactivate();
+  if (activeView.id === "usage") {
+    if (window.UsageDashboard) window.UsageDashboard.activate();
+  } else {
+    if (window.UsageDashboard) window.UsageDashboard.deactivate();
+  }
   if (activeView.id === "integrations") {
     refreshClaudeIntegration();
     refreshJetBrainsIntegration();

@@ -5,7 +5,7 @@ import json
 import sys
 from collections.abc import AsyncIterator, Callable, Mapping
 from functools import partial
-from typing import cast
+from typing import Any, cast
 
 import httpx
 
@@ -102,6 +102,19 @@ class AnthropicMessagesTransport:
         self._replay_scope = replay_scope
         self._read_timeout_s = read_timeout_s
         self._capabilities = capabilities
+
+    def _record_headers(self, headers: Any) -> None:
+        try:
+            if not headers:
+                return
+            from free_claude_code.application.usage import get_usage_service
+
+            svc = get_usage_service()
+            asyncio.create_task(
+                svc.update_provider_headers(self._provider_name.lower(), dict(headers))
+            )
+        except Exception:
+            pass
 
     def _messages_body(
         self,
@@ -311,6 +324,7 @@ class AnthropicMessagesTransport:
                         stream=True,
                     )
                 )
+                self._record_headers(getattr(response, "headers", None))
                 if not response.is_success:
                     raise await _status_error(response)
                 content_type = response.headers.get("content-type", "")
@@ -339,6 +353,9 @@ class AnthropicMessagesTransport:
             except asyncio.CancelledError, GeneratorExit:
                 raise
             except Exception as raw_error:
+                resp = getattr(raw_error, "response", None)
+                if resp is not None and hasattr(resp, "headers"):
+                    self._record_headers(resp.headers)
                 error = (
                     RetryableProviderProtocolError(str(raw_error))
                     if isinstance(raw_error, NativeMessagesError)

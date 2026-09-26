@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Mapping, MutableMapping
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -45,8 +46,11 @@ def create_test_app(
     restart_callback: RestartCallback | None = None,
     connected_accounts: Mapping[str, ConnectedAccountPort] | None = None,
     code: CodeApplicationPort | None = None,
+    usage: Any = None,
 ) -> FastAPI:
     """Build an API app with explicit in-memory runtime services."""
+    from free_claude_code.application.usage import get_usage_service
+
     store = ManagedConfigStore()
     store.initialize()  # API-only tests do not run the production ASGI lifespan.
     settings = settings or store.read().settings
@@ -87,6 +91,7 @@ def create_test_app(
             tasks=runtime,
             code=code,
             web_tools=StubWebToolsClient(),
+            usage=usage or get_usage_service(),
         )
     )
 
