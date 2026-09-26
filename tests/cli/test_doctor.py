@@ -148,11 +148,18 @@ def test_one_unreadable_integration_does_not_hide_other_sections(monkeypatch):
     assert "private-content" not in json.dumps(report)
 
 
-def test_native_version_probe_works_with_platform_command_shim(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "banner, redirect", [("", ""), ("echo private-banner\n", ""), ("", " >&2")]
+)
+def test_native_version_probe_works_with_platform_command_shim(
+    monkeypatch, tmp_path, banner, redirect
+):
     suffix = ".cmd" if sys.platform == "win32" else ""
     binary = tmp_path / ("doctor-test-harness" + suffix)
     binary.write_text(
-        "@echo off\necho 1.2.3\n" if suffix else "#!/bin/sh\necho 1.2.3\n"
+        ("@echo off\n" if suffix else "#!/bin/sh\n")
+        + banner
+        + f"echo 1.2.3{redirect}\n"
     )
     binary.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
@@ -210,23 +217,27 @@ def test_version_probe_failure_is_bounded_and_sanitized(monkeypatch, failure, st
 
 
 @pytest.mark.parametrize(
-    "name, output, expected",
+    "name, output, stderr, expected",
     [
-        ("claude", "2.1.7 (Claude Code)", "2.1.7"),
-        ("dsh", "0.1.0-rc.8", "0.1.0-rc.8"),
-        ("dsh", "0.1.0-rc.8+build.1", "0.1.0-rc.8+build.1"),
-        ("grok", '{"currentVersion":"1.0.5","path":"secret-path"}', "1.0.5"),
-        ("claude", "unknown secret-output", None),
+        ("claude", "2.1.7 (Claude Code)", "secret-error", "2.1.7"),
+        ("dsh", "0.1.0-rc.8", "secret-error", "0.1.0-rc.8"),
+        ("dsh", "0.1.0-rc.8+build.1", "secret-error", "0.1.0-rc.8+build.1"),
+        (
+            "grok",
+            '{"currentVersion":"1.0.5","path":"secret-path"}',
+            "secret-warning 9.8.7",
+            "1.0.5",
+        ),
+        ("grok", '{"path":"secret-path"}', "secret-warning 9.8.7", None),
+        ("claude", "unknown secret-output", "secret-error", None),
     ],
 )
-def test_probe_returns_only_version(monkeypatch, name, output, expected):
+def test_probe_returns_only_version(monkeypatch, name, output, stderr, expected):
     monkeypatch.setattr(diagnostics.shutil, "which", lambda binary: "stub")
     monkeypatch.setattr(
         diagnostics.subprocess,
         "run",
-        lambda args, **kwargs: subprocess.CompletedProcess(
-            args, 0, output, "secret-error"
-        ),
+        lambda args, **kwargs: subprocess.CompletedProcess(args, 0, output, stderr),
     )
     result = diagnostics.probe_harness(name, ("--version",))
     assert result["version"] == expected

@@ -250,11 +250,9 @@ def probe_harness(binary: str, args: tuple[str, ...]) -> dict[str, Any]:
             output = (
                 payload.get("currentVersion", "") if isinstance(payload, dict) else ""
             )
-        match = (
-            _VERSION.search(output.splitlines()[0])
-            if isinstance(output, str) and output
-            else None
-        )
+        else:
+            output = f"{output}\n{probe.stderr}"
+        match = _VERSION.search(output) if isinstance(output, str) else None
         result["version"] = match[1] if match else None
         result["status"] = "available" if match else "unrecognized_version"
     except subprocess.TimeoutExpired:
