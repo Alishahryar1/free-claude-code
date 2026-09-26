@@ -33,6 +33,13 @@ ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
 
 IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     (
+        "free_claude_code.cli.doctor",
+        "free_claude_code.runtime.diagnostics",
+    ): (
+        "Owner: installed diagnostic command. "
+        "Reason: read-only report composition owns provider and harness inspection."
+    ),
+    (
         "free_claude_code.cli.commands",
         "free_claude_code.runtime.bootstrap",
     ): (

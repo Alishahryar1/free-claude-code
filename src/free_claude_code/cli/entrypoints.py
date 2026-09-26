@@ -23,3 +23,12 @@ def _print_version_if_requested(argv: Sequence[str] | None) -> bool:
         return False
     print(f"free-claude-code {package_version()}")
     return True
+
+
+def doctor(argv: Sequence[str] | None = None) -> None:
+    """Print and copy a local diagnostic report (registered as ``fcc-doctor``)."""
+    if _print_version_if_requested(argv):
+        return
+    from free_claude_code.cli.doctor import main
+
+    main(argv)
