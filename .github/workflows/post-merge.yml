@@ -95,6 +95,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up CI environment
+        id: environment
         uses: ./.github/actions/ci-environment
         with:
           uv-version: ${{ env.CI_UV_VERSION }}
@@ -107,6 +108,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_COMMIT: ${{ inputs.release_commit || github.sha }}
+          CI_PYTHON: ${{ steps.environment.outputs.python-version }}
         run: |
-          uv run --no-project --python "$(cat .python-version)" python -m scripts.publish_release \
+          uv run --no-project --python "$CI_PYTHON" python -m scripts.publish_release \
             --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT"

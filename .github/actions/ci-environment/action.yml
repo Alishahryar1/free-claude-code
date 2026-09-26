@@ -19,6 +19,9 @@ inputs:
     default: "false"
 
 outputs:
+  python-version:
+    description: Exact Python version required by the project
+    value: ${{ steps.identity.outputs.python-version }}
   python-path:
     description: Managed Python cache directory
     value: ${{ steps.identity.outputs.python-path }}
@@ -62,8 +65,8 @@ runs:
         CI_UV: ${{ inputs.uv-version }}
       run: |
         set -euo pipefail
-        version="$(tr -d '[:space:]' < .python-version)"
-        test -n "$version"
+        version="$(sed -nE 's/^requires-python[[:space:]]*=[[:space:]]*"==([0-9]+\.[0-9]+\.[0-9]+)"[[:space:]]*$/\1/p' pyproject.toml)"
+        [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected an exact requires-python pin in pyproject.toml' >&2; exit 1; }
         cache_root="${CI_TEMP//\\//}"
         identity="$CI_RUNNER-$CI_OS-$CI_ARCH-py-$version-uv-$CI_UV"
         {

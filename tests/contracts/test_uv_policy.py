@@ -1,3 +1,4 @@
+import re
 import tomllib
 from pathlib import Path
 
@@ -16,6 +17,23 @@ REQUIRED_TEST_RUNNERS = {
     "Windows": "windows-latest",
     "macOS": "macos-latest",
 }
+
+
+def test_installer_python_requests_match_package_requirement() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    requirement = project["project"]["requires-python"]
+    match = re.fullmatch(r"==([0-9]+\.[0-9]+\.[0-9]+)", requirement)
+    assert match is not None
+    version = match[1]
+    shell = Path("scripts/install.sh").read_text(encoding="utf-8")
+    powershell = Path("scripts/install.ps1").read_text(encoding="utf-8")
+    shell_pin = re.search(r'^PYTHON_VERSION="([^"]+)"', shell, re.MULTILINE)
+    windows_pin = re.search(r'^\$PythonRequest = "([^"]+)"', powershell, re.MULTILINE)
+    assert shell_pin is not None and windows_pin is not None
+    assert shell_pin[1] == version
+    assert windows_pin[1] == f"cpython-{version}-windows-x86_64-none"
+    lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+    assert lock["requires-python"] == requirement
 
 
 def _assert_required_test_matrix(workflow: dict, suite: str) -> None:
