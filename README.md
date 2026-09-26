@@ -508,6 +508,12 @@ Windows PowerShell:
 
 ## Project Links
 
+For a problem after installation, run the command below and paste its output into your bug report. It also copies the JSON to your clipboard when available.
+
+```bash
+fcc-doctor
+```
+
 - [Report bugs or request features](https://github.com/Alishahryar1/free-claude-code/issues)
 - [Contributing guide](CONTRIBUTING.md)
 

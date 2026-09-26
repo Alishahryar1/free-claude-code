@@ -37,10 +37,12 @@ dependencies = [
     "grpcio>=1.84.0",
     "grpcio-tools>=1.81.1",
     "nvidia-riva-client>=2.26.0",
+    "pyperclip>=1.11.0",
 ]
 
 [project.scripts]
 fcc-server = "free_claude_code.cli.entrypoints:serve"
+fcc-doctor = "free_claude_code.cli.entrypoints:doctor"
 fcc-claude = "free_claude_code.cli.launchers.claude:launch"
 fcc-codex = "free_claude_code.cli.launchers.codex:launch"
 fcc-pi = "free_claude_code.cli.launchers.pi:launch"
