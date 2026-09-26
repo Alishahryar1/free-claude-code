@@ -32,6 +32,7 @@ from free_claude_code.messaging.voice import VoiceCancellationResult
 from free_claude_code.messaging.workflow import MessagingWorkflow
 from smoke.lib.child_process import run_captured_text
 from smoke.lib.config import ProviderModel, SmokeConfig, auth_headers
+from smoke.lib.http import conversation_headers
 from smoke.lib.server import RunningServer, start_server
 from smoke.lib.skips import fail_missing_env, skip_if_upstream_unavailable_events
 
@@ -88,6 +89,7 @@ class ConversationDriver:
         self.config = config
         self.messages: list[dict[str, Any]] = []
         self.turns: list[ConversationTurn] = []
+        self._session_id = str(uuid.uuid4())
 
     def ask(
         self,
@@ -120,7 +122,7 @@ class ConversationDriver:
         *,
         headers: dict[str, str] | None = None,
     ) -> ConversationTurn:
-        request_headers = headers or auth_headers()
+        request_headers = conversation_headers(headers, session_id=self._session_id)
         stream_payload = {**payload, "stream": True}
         with httpx.stream(
             "POST",
@@ -148,7 +150,7 @@ class ConversationDriver:
     ) -> dict[str, Any]:
         response = httpx.post(
             f"{self.server.base_url}/v1/messages",
-            headers=auth_headers(),
+            headers=conversation_headers(session_id=self._session_id),
             json=payload,
             timeout=self.config.timeout_s,
         )

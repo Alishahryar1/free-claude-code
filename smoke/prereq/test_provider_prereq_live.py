@@ -8,9 +8,9 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
-from smoke.lib.config import ProviderModel, SmokeConfig, auth_headers
+from smoke.lib.config import ProviderModel, SmokeConfig
 from smoke.lib.e2e import ProviderMatrixDriver
-from smoke.lib.http import collect_message_stream, message_payload
+from smoke.lib.http import collect_message_stream, conversation_headers, message_payload
 from smoke.lib.server import start_server
 from smoke.lib.skips import (
     skip_if_upstream_unavailable_events,
@@ -97,7 +97,7 @@ def test_client_disconnect_mid_stream_does_not_crash_server(
         with httpx.stream(
             "POST",
             f"{server.base_url}/v1/messages",
-            headers=auth_headers(),
+            headers=conversation_headers(),
             json=message_payload(smoke_config.prompt, model="fcc-smoke-default"),
             timeout=smoke_config.timeout_s,
         ) as response:
