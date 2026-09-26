@@ -70,11 +70,14 @@ def read_model_catalog(
     def order(model: CatalogModel):
         provider_id, model_id = split_provider_model_ref(model.provider_model_ref)
         definition = settings.custom_provider(provider_id)
-        return model_order_key(
-            f"{definition.display_name}/{model_id}"
-            if definition
-            else model.provider_model_ref
-        ), model.provider_model_ref
+        name = definition.display_name if definition else provider_id
+        return (
+            name.casefold(),
+            model_id.casefold(),
+            name,
+            model_id,
+            model.provider_model_ref,
+        )
 
     return ModelCatalog(
         models=tuple(
