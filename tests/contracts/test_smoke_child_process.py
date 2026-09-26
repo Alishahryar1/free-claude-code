@@ -1,6 +1,10 @@
 import subprocess
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import httpx
+import pytest
 
 from free_claude_code.config.settings import Settings
 from smoke.lib import child_process
@@ -12,10 +16,11 @@ from smoke.lib.child_process import (
     cmd_python_c,
     run_captured_text,
 )
-from smoke.lib.config import SmokeConfig
+from smoke.lib.config import ProviderModel, SmokeConfig
 from smoke.lib.e2e import ConversationDriver
 from smoke.lib.http import collect_message_stream
 from smoke.lib.server import RunningServer
+from smoke.product import test_provider_product_live as provider_smoke
 
 
 def test_fcc_server_command_uses_cli_entrypoint() -> None:
@@ -114,6 +119,141 @@ def test_conversation_driver_explicitly_requests_sse(
     assert payload["stream"] is False
     assert turn.request["stream"] is True
     assert turn.events[-1].event == "message_stop"
+
+
+def test_smoke_conversation_identity_survives_turns_and_tool_results(
+    monkeypatch, tmp_path: Path
+) -> None:
+    captured = []
+
+    def fake_stream(_method, _url, **kwargs):
+        captured.append(httpx.Headers(kwargs["headers"]))
+        return _FakeStreamResponse()
+
+    monkeypatch.setattr(smoke_e2e.httpx, "stream", fake_stream)
+    server, config = _running_server(tmp_path), _smoke_config(tmp_path)
+    conversation = ConversationDriver(server, config)
+    conversation.ask("First turn")
+    conversation.ask("Second turn")
+    conversation.stream(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool-1",
+                            "content": "done",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    ConversationDriver(server, config).ask("Different conversation")
+
+    assert captured[0]["x-opencode-session"]
+    assert len({h["x-opencode-session"] for h in captured[:3]}) == 1
+    assert captured[3]["x-opencode-session"] != captured[0]["x-opencode-session"]
+    assert all(h["user-agent"].startswith("fcc-smoke/") for h in captured)
+
+
+@pytest.mark.parametrize(
+    "helper", [smoke_http.collect_message_stream, smoke_http.post_json]
+)
+def test_standalone_smoke_requests_identify_themselves_without_changing_auth(
+    monkeypatch, tmp_path: Path, helper
+) -> None:
+    captured = []
+
+    def capture(*args, **kwargs):
+        captured.append(httpx.Headers(kwargs["headers"]))
+        return _FakeStreamResponse()
+
+    monkeypatch.setattr(smoke_http.httpx, "stream", capture)
+    monkeypatch.setattr(smoke_http.httpx, "post", capture)
+    args: list[object] = [_running_server(tmp_path)]
+    if helper is smoke_http.post_json:
+        args.append("/v1/messages")
+    args += [{"messages": []}, _smoke_config(tmp_path)]
+    explicit = {
+        "Authorization": "Bearer explicit",
+        "X-OpenCode-Session": "caller",
+        "User-Agent": "caller/1.0",
+    }
+    helper(*args)
+    helper(*args)
+    helper(*args, headers=explicit)
+    helper(*args, headers={})
+
+    assert captured[0]["x-opencode-session"] != captured[1]["x-opencode-session"]
+    assert captured[0]["user-agent"].startswith("fcc-smoke/")
+    assert captured[2] == httpx.Headers(explicit)
+    assert "authorization" not in captured[3]
+    assert explicit["X-OpenCode-Session"] == "caller"
+
+
+def test_provider_responses_smoke_sends_conversation_identity(monkeypatch, tmp_path):
+    captured = []
+
+    class ResponsesStream(_FakeStreamResponse):
+        def iter_lines(self):
+            return iter(
+                (
+                    "event: response.created",
+                    "data: {}",
+                    "",
+                    "event: response.output_text.delta",
+                    'data: {"delta":"ok"}',
+                    "",
+                    "event: response.completed",
+                    "data: {}",
+                    "",
+                )
+            )
+
+    def capture(*args, **kwargs):
+        captured.append(httpx.Headers(kwargs["headers"]))
+        return ResponsesStream()
+
+    monkeypatch.setattr(
+        provider_smoke,
+        "_server_for_provider",
+        lambda *args: nullcontext(_running_server(tmp_path)),
+    )
+    monkeypatch.setattr(provider_smoke.httpx, "stream", capture)
+    model = ProviderModel("opencode_go", "opencode_go/minimax-m2.7", "test")
+    for _ in range(2):
+        provider_smoke.test_provider_codex_responses_text_e2e(
+            _smoke_config(tmp_path), model
+        )
+    assert captured[0]["x-opencode-session"] != captured[1]["x-opencode-session"]
+    assert all(h["user-agent"].startswith("fcc-smoke/") for h in captured)
+
+
+def test_disconnect_smoke_reuses_identity_for_followup(monkeypatch, tmp_path):
+    captured = []
+
+    def capture(*args, **kwargs):
+        captured.append(httpx.Headers(kwargs["headers"]))
+        return _FakeStreamResponse()
+
+    monkeypatch.setattr(
+        provider_smoke,
+        "_server_for_provider",
+        lambda *args: nullcontext(_running_server(tmp_path)),
+    )
+    monkeypatch.setattr(provider_smoke.httpx, "stream", capture)
+    monkeypatch.setattr(
+        provider_smoke.httpx, "get", lambda *args, **kwargs: httpx.Response(200)
+    )
+    model = ProviderModel("opencode_go", "opencode_go/minimax-m2.7", "test")
+    provider_smoke._scenario_disconnect(_smoke_config(tmp_path), model)
+
+    assert len(captured) == 2
+    assert captured[0]["x-opencode-session"] == captured[1]["x-opencode-session"]
+    assert all(h["user-agent"].startswith("fcc-smoke/") for h in captured)
 
 
 def test_run_captured_text_uses_utf8_replacement(monkeypatch, tmp_path: Path) -> None:

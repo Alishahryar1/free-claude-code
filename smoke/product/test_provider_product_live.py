@@ -9,7 +9,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     SSEEvent,
     parse_sse_lines,
 )
-from smoke.lib.config import ProviderModel, SmokeConfig, auth_headers
+from smoke.lib.config import ProviderModel, SmokeConfig
 from smoke.lib.e2e import (
     ConversationDriver,
     ProviderMatrixDriver,
@@ -19,7 +19,7 @@ from smoke.lib.e2e import (
     echo_tool_schema,
     tool_use_blocks,
 )
-from smoke.lib.http import collect_message_stream
+from smoke.lib.http import collect_message_stream, conversation_headers
 from smoke.lib.skips import (
     skip_if_upstream_unavailable_events,
     skip_if_upstream_unavailable_exception,
@@ -166,7 +166,7 @@ def test_provider_error_e2e(smoke_config: SmokeConfig) -> None:
     ):
         response = client.post(
             f"{server.base_url}/v1/messages",
-            headers=auth_headers(),
+            headers=conversation_headers(),
             json={
                 "model": "fcc-smoke-default",
                 "max_tokens": 32,
@@ -605,11 +605,12 @@ def _scenario_reasoning_tool_continuation(
 def _scenario_disconnect(
     smoke_config: SmokeConfig, provider_model: ProviderModel
 ) -> None:
+    headers = conversation_headers()
     with _server_for_provider(smoke_config, provider_model, "disconnect") as server:
         with httpx.stream(
             "POST",
             f"{server.base_url}/v1/messages",
-            headers=auth_headers(),
+            headers=headers,
             json={
                 "model": "fcc-smoke-default",
                 "max_tokens": 512,
@@ -623,7 +624,7 @@ def _scenario_disconnect(
         health = httpx.get(f"{server.base_url}/health", timeout=5)
         assert health.status_code == 200
         followup = ConversationDriver(server, smoke_config).ask(
-            "Reply with one short sentence."
+            "Reply with one short sentence.", headers=headers
         )
     _assert_provider_product_stream(followup.events)
 
@@ -646,4 +647,4 @@ def _openai_auth_headers(smoke_config: SmokeConfig) -> dict[str, str]:
     token = smoke_config.settings.proxy_auth_token
     if token:
         headers["authorization"] = f"Bearer {token}"
-    return headers
+    return conversation_headers(headers)
