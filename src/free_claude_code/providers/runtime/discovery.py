@@ -4,7 +4,10 @@ import httpx
 
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.config.model_refs import configured_chat_model_refs
-from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from free_claude_code.config.provider_catalog import (
+    PROVIDER_CATALOG,
+    ProviderDescriptor,
+)
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.providers.model_listing import ModelListResponseError
@@ -45,6 +48,29 @@ def model_cache_provider_ids_for_settings(
     available = set(configured) | set(connected_provider_ids)
     return tuple(
         provider_id for provider_id in PROVIDER_CATALOG if provider_id in available
+    )
+
+
+def _self_sufficient_local(descriptor: ProviderDescriptor) -> bool:
+    """Return whether a local server can be probed with zero configuration.
+
+    Keyless locals advertising built-in defaults (Ollama, LM Studio,
+    llama.cpp) expose their OpenAI-compatible model lists without any user
+    settings, so they belong in best-effort discovery (#1296).
+    """
+    return (
+        descriptor.local
+        and descriptor.static_credential is not None
+        and descriptor.default_base_url is not None
+    )
+
+
+def self_sufficient_local_provider_ids() -> tuple[str, ...]:
+    """Return keyless locals that can be probed without any configuration."""
+    return tuple(
+        provider_id
+        for provider_id, descriptor in PROVIDER_CATALOG.items()
+        if _self_sufficient_local(descriptor)
     )
 
 
