@@ -9,7 +9,7 @@ These rules apply to installer, uninstaller, and harness lifecycle tests here.
   and abort ordering between installation phases. Preserve those assertions when
   making tests faster. Prepare unrelated prerequisites as already installed.
 - Keep coverage for both Windows PowerShell and PowerShell 7, plus the applicable
-  POSIX paths. Do not skip coverage or move it out of CI to hide slow tests.
+  POSIX paths. This suite is opt-in and does not run in regular CI.
 - Stub downloads and external installers. Never install real harnesses, use live
   providers, or modify the user's installed tools and configuration in these tests.
 - Give every scenario private files, configuration, PATH, and cache storage. Use
@@ -22,7 +22,7 @@ These rules apply to installer, uninstaller, and harness lifecycle tests here.
   or user configuration to save startup time. Clean up processes you launch.
 - Diagnose slowness with per-test durations and timings inside subprocesses. Do not
   increase timeouts or add sleeps without identifying the operation being delayed.
-- Use `scripts/ci.ps1` for local verification. `PYTEST_ADDOPTS` can select focused
-  cases and enable duration reporting. Run the full relevant suite before pushing.
+- Run these checks explicitly with `FCC_LIVE_SMOKE=1` and
+  `uv run pytest smoke/installers`. Select focused cases when checking a component.
 - Reuse pytest's capture handler for logs. Do not create a logging cycle between
   Python logging and Loguru while adding diagnostics.
