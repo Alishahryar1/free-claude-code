@@ -48,16 +48,17 @@ class SessionState:
         items: Sequence[CodeItem],
         prompts: Sequence[CodePrompt],
         runs: Sequence[CodeRun],
+        *,
+        sequence: int = 0,
     ) -> None:
         self._session = session
         self._run = run
         self._items = {item.id: item for item in items}
         self._prompts = {prompt.id: prompt for prompt in prompts}
         self._runs = {run.id: run for run in runs}
-        self._sequence = max((item.sequence for item in items), default=0)
-        self._known_turns = {run.native_turn_id for run in runs if run.native_turn_id}
-        if run and run.native_turn_id:
-            self._known_turns.add(run.native_turn_id)
+        self._sequence = max(
+            sequence, max((item.sequence for item in items), default=0)
+        )
         self._dirty: set[str] = set()
         self._dirty_characters = 0
         self._review_generations: dict[str, str] = {}
@@ -134,8 +135,6 @@ class SessionState:
             self._runs[run.id] = run
             if self._run is not None and self._run.id == run.id:
                 self._run = run
-            if run.native_turn_id:
-                self._known_turns.add(run.native_turn_id)
         for item in progress.items:
             self._items[item.id] = item
             self._sequence = max(self._sequence, item.sequence)
@@ -145,6 +144,34 @@ class SessionState:
         """The caller holds serialization through saving the complete pending set."""
         self._dirty.clear()
         self._dirty_characters = 0
+
+    def remember_items(
+        self, items: Sequence[CodeItem], runs: Sequence[CodeRun]
+    ) -> None:
+        """Load durable identities needed by one serialized operation."""
+        for item in items:
+            self._items.setdefault(item.id, item)
+        for run in runs:
+            self._runs.setdefault(run.id, run)
+
+    def prune(self) -> None:
+        """Release acknowledged history after its events have been published."""
+        self._prompts = {
+            key: prompt
+            for key, prompt in self._prompts.items()
+            if prompt.status in {"pending", "answering"}
+        }
+        pinned = self._dirty | self._prompts.keys() | self._review_generations.keys()
+        self._items = {
+            key: item
+            for key, item in self._items.items()
+            if key in pinned
+            or (self.busy and self._run and item.run_id == self._run.id)
+        }
+        run_ids = {item.run_id for item in self._items.values()}
+        if self._run is not None:
+            run_ids.add(self._run.id)
+        self._runs = {key: run for key, run in self._runs.items() if key in run_ids}
 
     def discard_deleted_history(self) -> None:
         self._items.clear()
@@ -323,7 +350,7 @@ class SessionState:
             self._session.native_thread_id,
         }
 
-    def matches_turn(self, event: HarnessEvent) -> bool:
+    def matches_turn(self, event: HarnessEvent, *, known_turn: bool) -> bool:
         run = self._run
         return bool(
             run is not None
@@ -335,7 +362,7 @@ class SessionState:
                 or (
                     run.native_turn_id is None
                     and event.kind == "turn_started"
-                    and event.turn_id not in self._known_turns
+                    and not known_turn
                 )
             )
         )
@@ -348,8 +375,9 @@ class SessionState:
         )
 
     def match_history(
-        self, native: NativeThread
+        self, native: NativeThread, runs: Sequence[CodeRun]
     ) -> tuple[tuple[NativeTurn, CodeRun], ...]:
+        saved = {run.id: run for run in runs}
         mapped: dict[str, CodeRun] = {}
         for turn in native.turns:
             identities = {
@@ -359,11 +387,11 @@ class SessionState:
             }
             candidates = [
                 run
-                for run in self._runs.values()
+                for run in saved.values()
                 if run.native_turn_id == turn.id or run.id in identities
             ]
             if len(candidates) > 1 or any(
-                identity not in self._runs for identity in identities
+                identity not in saved for identity in identities
             ):
                 raise CodeUnavailableError(
                     "Codex history contains conflicting turn identities. Saved history was retained."
@@ -382,7 +410,7 @@ class SessionState:
         unmatched = [turn for turn in native.turns if turn.id not in mapped]
         pending = [
             run
-            for run in self._runs.values()
+            for run in saved.values()
             if run.submission_started
             and run.native_turn_id is None
             and run.id not in {value.id for value in mapped.values()}
@@ -410,7 +438,7 @@ class SessionState:
             for turn in native.turns
         )
 
-    def _native_item(self, update: ItemUpdate) -> CodeItem | None:
+    def native_item(self, update: ItemUpdate) -> CodeItem | None:
         return next(
             (
                 item
@@ -424,9 +452,7 @@ class SessionState:
     def stage_item(
         self, update: ItemUpdate, run: CodeRun, *, historical: bool = False
     ) -> tuple[CodeItem, bool]:
-        if update.kind != "subagent_auto_review":
-            self._known_turns.add(update.turn_id)
-        existing = self._native_item(update)
+        existing = self.native_item(update)
         if existing is None and update.kind == "user":
             if update.client_id is not None and update.client_id != run.id:
                 raise CodeUnavailableError(
@@ -475,7 +501,7 @@ class SessionState:
     ) -> tuple[CodeItem | None, bool]:
         if self._run is None:
             return None, False
-        existing = self._native_item(update)
+        existing = self.native_item(update)
         if existing is not None and existing.complete and not update.complete:
             return None, False
         target = self._runs[existing.run_id] if existing else self._run

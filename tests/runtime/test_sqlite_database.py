@@ -116,7 +116,7 @@ def test_historical_database_moves_and_upgrades_without_losing_records(
         assert len(after["code_items"]) == 2
         assert after["code_items"][-1]["kind"] == "prompt"
         with closing(sqlite3.connect(target)) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone() == (4,)
+            assert connection.execute("PRAGMA user_version").fetchone() == (5,)
             assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -153,7 +153,7 @@ def test_orphan_journals_are_not_treated_as_a_fresh_database(
     assert not (tmp_path / "fcc.db").exists()
 
 
-@pytest.mark.parametrize("version", [-1, 5])
+@pytest.mark.parametrize("version", [-1, 6])
 def test_unsupported_version_is_not_moved_or_mutated(tmp_path, version):
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
@@ -297,7 +297,7 @@ def test_current_schema_does_not_execute_historical_migrations(tmp_path, monkeyp
     monkeypatch.setattr(
         sqlite_database,
         "MIGRATIONS",
-        tuple((version, already_applied) for version in (1, 2, 3, 4)),
+        tuple((version, already_applied) for version, _ in sqlite_database.MIGRATIONS),
     )
     initialize_database(target)
 
@@ -311,11 +311,18 @@ def test_messaging_schema_failure_rolls_back_without_changing_code_history(
     migrations = sqlite_database.MIGRATIONS
 
     def fail(connection):
-        migrations[-1][1](connection)
+        migrations[3][1](connection)
         raise sqlite3.DatabaseError("interrupted messaging schema")
 
     with monkeypatch.context() as patch:
-        patch.setattr(sqlite_database, "MIGRATIONS", (*migrations[:-1], (4, fail)))
+        patch.setattr(
+            sqlite_database,
+            "MIGRATIONS",
+            tuple(
+                (version, fail if version == 4 else upgrade)
+                for version, upgrade in migrations
+            ),
+        )
         with pytest.raises(sqlite3.DatabaseError, match="interrupted"):
             initialize_database(target)
     assert snapshot(target) == before

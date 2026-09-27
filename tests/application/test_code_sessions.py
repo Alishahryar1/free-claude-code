@@ -9,6 +9,9 @@ import pytest_asyncio
 from free_claude_code.application.code_sessions import CodeConflictError, CodeService
 from free_claude_code.application.code_sessions import service as service_module
 from free_claude_code.application.code_sessions.models import (
+    CodeItem,
+    CodeRun,
+    CodeSession,
     CodeUnavailableError,
     CodeValidationError,
     HarnessEvent,
@@ -47,6 +50,207 @@ async def code(database_factory, tmp_path):
 async def session_for(code):
     service, _, directory = code
     return await service.create_session(new_id(), str(directory))
+
+
+@pytest.mark.asyncio
+async def test_history_pages_do_not_create_execution_owners(code, monkeypatch):
+    service, harness, directory = code
+    session = await service._store.create(
+        CodeSession(id=new_id(), cwd=str(directory), model=harness.model)
+    )
+    run = CodeRun(id=new_id(), session_id=session.id, text="old", model=harness.model)
+    user = CodeItem(
+        id=run.id, run_id=run.id, session_id=session.id, sequence=1, kind="user"
+    )
+    session, run = await service._store.admit_run(session, run, user, session.revision)
+    await service._store.save_progress(
+        session,
+        session.revision,
+        run=run.model_copy(update={"status": "completed"}),
+        items=tuple(
+            CodeItem(
+                id=new_id(),
+                run_id=run.id,
+                session_id=session.id,
+                sequence=n,
+                kind="text",
+                text="saved" * 100,
+                complete=True,
+            )
+            for n in range(2, 202)
+        ),
+    )
+    monkeypatch.setattr(
+        service._store, "items", AsyncMock(side_effect=AssertionError("full history"))
+    )
+    monkeypatch.setattr(
+        service._store, "runs", AsyncMock(side_effect=AssertionError("all runs"))
+    )
+    page = await service.get_detail(session.id)
+    assert len(page.items) == 50
+    assert page.next_before is not None
+    older = await service.get_detail(session.id, before=page.next_before)
+    assert len(older.items) == 50
+    assert older.items[-1].sequence < page.items[0].sequence
+    assert not service._owners
+    assert not service._gates
+    assert not harness.connections
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_releases_bodies_but_keeps_connection(code):
+    service, harness, _ = code
+    session = await session_for(code)
+    await service.send(
+        session.id, new_id(), session.revision, "Work", expected_epoch=service.epoch
+    )
+    await harness.wait_inputs(1)
+    connection = harness.connections[0]
+    await harness.started.wait()
+    await connection.text("turn-1", "answer", "saved output", complete=True)
+    await connection.finish("turn-1")
+    await service.wait_idle(session.id)
+    owner = service._owners[session.id]
+    assert not owner.state.items
+    assert not owner.state.prompts
+    assert len(owner.state.runs) == 1
+    assert not connection.closed
+    assert any(
+        item.text == "saved output"
+        for item in (await service.get_detail(session.id)).items
+    )
+
+
+@pytest.mark.asyncio
+async def test_many_turns_release_history_and_preserve_prompt_receipts(code):
+    service, harness, _ = code
+    session = await session_for(code)
+    previous_sequence = 0
+    receipts = []
+    for number in range(1, 13):
+        harness.started.clear()
+        await service.send(
+            session.id,
+            new_id(),
+            session.revision,
+            f"Work {number}",
+            expected_epoch=service.epoch,
+        )
+        await harness.started.wait()
+        connection = harness.connections[0]
+        turn = f"turn-{number}"
+        for kind in ("text", "tool", "reasoning"):
+            await connection.text(
+                turn, kind, f"{kind} output {number}", complete=True, kind=kind
+            )
+        await connection.prompt(number, turn)
+        prompt = next(
+            prompt
+            for prompt in (await service.get_detail(session.id)).prompts
+            if prompt.request_id == number
+        )
+        response_id = new_id()
+        await service.answer(session.id, prompt.id, response_id, {"decision": "accept"})
+        await connection.finish(turn)
+        await service.wait_idle(session.id)
+        receipts.append((prompt.id, response_id))
+        detail = await service.get_detail(session.id)
+        assert detail.items[-1].sequence > previous_sequence
+        previous_sequence = detail.items[-1].sequence
+        session = detail.session
+        owner = service._owners[session.id]
+        assert not owner.state.items and not owner.state.prompts
+        assert tuple(owner.state.runs) == (detail.run.id,)
+    assert len(harness.connections) == 1 and not connection.closed
+    for prompt_id, response_id in receipts:
+        receipt = await service.answer(
+            session.id, prompt_id, response_id, {"decision": "accept"}
+        )
+        assert receipt.response_id == response_id
+    assert not service._owners[session.id].state.prompts
+    all_items = await service._store.items(session.id, None, None)
+    assert [item.sequence for item in all_items] == list(range(1, 61))
+
+
+@pytest.mark.asyncio
+async def test_cold_history_gate_serializes_owner_creation_without_blocking_other_sessions(
+    code, monkeypatch
+):
+    service, harness, directory = code
+    sessions = [
+        await service._store.create(
+            CodeSession(id=new_id(), cwd=str(directory), model=harness.model)
+        )
+        for _ in range(2)
+    ]
+    entered, release = asyncio.Event(), asyncio.Event()
+    read = service._store.read_history
+
+    async def gated_read(session_id, *args):
+        if session_id == sessions[0].id:
+            entered.set()
+            await release.wait()
+        return await read(session_id, *args)
+
+    monkeypatch.setattr(service._store, "read_history", gated_read)
+    reading = asyncio.create_task(service.get_detail(sessions[0].id))
+    await entered.wait()
+    changing = asyncio.create_task(
+        service.update_settings(
+            sessions[0].id, sessions[0].revision, {"title": "Updated"}
+        )
+    )
+    cancelled = asyncio.create_task(service.get_detail(sessions[0].id))
+    try:
+        other = await asyncio.wait_for(service.get_detail(sessions[1].id), 2)
+        assert other.session.id == sessions[1].id
+        assert not changing.done() and not service._owners
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+        release.set()
+        before = await reading
+        await changing
+        after = await service.get_detail(sessions[0].id)
+        assert before.session.title != after.session.title == "Updated"
+        assert after.version > before.version
+        assert set(service._gates) == {sessions[0].id}
+        assert service._gates[sessions[0].id].users == 0
+    finally:
+        release.set()
+        await asyncio.gather(reading, changing, cancelled, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_execution_seed_resumes_sequence_without_hydrating_old_transcript(
+    code, monkeypatch
+):
+    service, harness, directory = code
+    session = await service._store.create(
+        CodeSession(id=new_id(), cwd=str(directory), model=harness.model)
+    )
+    run = CodeRun(id=new_id(), session_id=session.id, text="old", model=harness.model)
+    item = CodeItem(
+        id=run.id, run_id=run.id, session_id=session.id, sequence=900, kind="user"
+    )
+    session, run = await service._store.admit_run(session, run, item, session.revision)
+    await service._store.save_progress(
+        session, session.revision, run=run.model_copy(update={"status": "completed"})
+    )
+    monkeypatch.setattr(
+        service._store, "items", AsyncMock(side_effect=AssertionError("full history"))
+    )
+    monkeypatch.setattr(
+        service._store, "prompts", AsyncMock(side_effect=AssertionError("all prompts"))
+    )
+    await service.send(
+        session.id, new_id(), session.revision, "Next", expected_epoch=service.epoch
+    )
+    await harness.started.wait()
+    detail = await service.get_detail(session.id)
+    assert detail.items[-1].sequence == 901
+    assert run.id not in service._owners[session.id].state.runs
+    await harness.connections[0].finish("turn-1")
 
 
 @pytest.mark.asyncio
@@ -2079,7 +2283,7 @@ async def test_review_liveness_flush_includes_pending_output_and_keeps_staging_v
     writes, published = [], []
 
     async def observe_save(session, revision, **values):
-        assert service._owners[session.id].version == before.version + 1
+        assert service._version == before.version + 1
         assert service.cursor == before.cursor
         writes.append(tuple(values["items"]))
         if fail:

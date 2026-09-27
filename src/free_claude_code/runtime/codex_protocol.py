@@ -46,7 +46,10 @@ class _Item:
 class CodexProtocol:
     def __init__(self, generation: str) -> None:
         self.generation = generation
-        self._items: dict[tuple[str, str], _Item] = {}
+        self._items: dict[tuple[str, str, str], _Item] = {}
+
+    def clear(self) -> None:
+        self._items.clear()
 
     def notification(self, method: str, params: JsonObject) -> HarnessEvent | None:
         thread_id = string_value(params.get("threadId")) or None
@@ -74,6 +77,12 @@ class CodexProtocol:
                 context_used_tokens=used,
             )
         if method in {"turn/started", "turn/completed"}:
+            if method == "turn/completed":
+                self._items = {
+                    key: item
+                    for key, item in self._items.items()
+                    if key[:2] != (thread_id, turn_id)
+                }
             status: RunStatus = "completed"
             if turn.get("status") == "interrupted":
                 status = "interrupted"
@@ -152,7 +161,20 @@ class CodexProtocol:
         item_id = string_value(params.get("itemId")) or string_value(raw.get("id"))
         if not item_id:
             return None
-        item = self._items.setdefault((turn_id, item_id), _Item())
+        if method not in {
+            "item/started",
+            "item/completed",
+            "item/agentMessage/delta",
+            "item/reasoning/summaryTextDelta",
+            "item/reasoning/textDelta",
+            "item/reasoning/summaryPartAdded",
+            "item/commandExecution/outputDelta",
+            "item/fileChange/outputDelta",
+            "item/fileChange/patchUpdated",
+            "item/mcpToolCall/progress",
+        }:
+            return None
+        item = self._items.setdefault((thread_id, turn_id, item_id), _Item())
         complete = method == "item/completed"
         delta = string_value(params.get("delta"))
         if method in {"item/started", "item/completed"}:
@@ -209,8 +231,14 @@ class CodexProtocol:
                 item_id = string_value(raw.get("id"))
                 if not turn_id or not item_id:
                     continue
-                accumulated = self._items.setdefault((turn_id, item_id), _Item())
-                accumulated.raw = {**accumulated.raw, **raw}
+                live = self._items.get((thread_id, turn_id, item_id), _Item())
+                accumulated = _Item(
+                    raw={**live.raw, **raw},
+                    text=live.text,
+                    output=live.output,
+                    summary=dict(live.summary),
+                    reasoning=dict(live.reasoning),
+                )
                 items.append(self._project(turn_id, item_id, accumulated, True))
             if turn_id:
                 error = object_value(turn.get("error"))

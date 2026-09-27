@@ -122,7 +122,7 @@ def test_recovery_updates_historical_run_without_replacing_current_run():
             ),
         ),
     )
-    ((turn, recovered),) = state.match_history(native)
+    ((turn, recovered),) = state.match_history(native, (old, current))
     assert turn.id == recovered.native_turn_id == "old-turn"
     assert recovered.status == "failed" and recovered.finished_at == 100
     assert recovered.error == "Connection lost"
@@ -201,16 +201,20 @@ def test_only_new_turn_started_can_bind_an_unacknowledged_submission():
     )
     state = SessionState(base.session, current, (), (), (base.run, current))
     assert not state.matches_turn(
-        HarnessEvent("generation", "native", "turn_started", turn_id="turn")
+        HarnessEvent("generation", "native", "turn_started", turn_id="turn"),
+        known_turn=True,
     )
     assert not state.matches_turn(
-        HarnessEvent("generation", "native", "item", turn_id="new-turn")
+        HarnessEvent("generation", "native", "item", turn_id="new-turn"),
+        known_turn=False,
     )
     assert state.matches_turn(
-        HarnessEvent("generation", "native", "turn_started", turn_id="new-turn")
+        HarnessEvent("generation", "native", "turn_started", turn_id="new-turn"),
+        known_turn=False,
     )
     state.apply_progress(state.bind_turn("new-turn"))
     assert state.matches_turn(
-        HarnessEvent("generation", "native", "item", turn_id="new-turn")
+        HarnessEvent("generation", "native", "item", turn_id="new-turn"),
+        known_turn=False,
     )
     assert not state.accepts_event(HarnessEvent("generation", "other-thread", "notice"))

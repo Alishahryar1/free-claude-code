@@ -2,7 +2,8 @@
 
 import asyncio
 import uuid
-from collections.abc import Coroutine, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,13 +39,34 @@ from .state import SessionProgress, SessionState
 
 
 @dataclass(slots=True)
+class _SessionGate:
+    on_idle: Callable[[], None]
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+    async def __aenter__(self) -> _SessionGate:
+        self.users += 1
+        try:
+            await self.lock.acquire()
+        except BaseException:
+            self.users -= 1
+            self.on_idle()
+            raise
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        self.lock.release()
+        self.users -= 1
+        self.on_idle()
+
+
+@dataclass(slots=True)
 class _SessionRuntime:
     state: SessionState
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    lock: _SessionGate
     finished: asyncio.Event = field(default_factory=asyncio.Event)
     connection: HarnessConnection | None = None
     generation: str | None = None
-    version: int = 0
     job: asyncio.Task[None] | None = None
     flush_task: asyncio.Task[None] | None = None
     interrupt_task: asyncio.Task[None] | None = None
@@ -60,7 +82,8 @@ class CodeService:
         self._store = store
         self._harness = harness
         self._owners: dict[str, _SessionRuntime] = {}
-        self._load_lock = asyncio.Lock()
+        self._gates: dict[str, _SessionGate] = {}
+        self._version = 0
         self._events = EventPublisher()
         self.epoch = str(uuid.uuid4())
         self._commands: set[asyncio.Task] = set()
@@ -168,7 +191,7 @@ class CodeService:
             await asyncio.wait(jobs, timeout=5)
         await asyncio.gather(*(self._close_connection(owner) for owner in owners))
         for owner in owners:
-            async with owner.lock:
+            async with self._locked(owner):
                 if owner.state.busy and not owner.storage_failed:
                     try:
                         await self._finish_locked(
@@ -213,23 +236,44 @@ class CodeService:
         if not self._accepting:
             raise CodeUnavailableError(self._message or "Code sessions is unavailable.")
 
+    def _gate(self, session_id: str) -> _SessionGate:
+        if session_id not in self._gates:
+            self._gates[session_id] = _SessionGate(
+                lambda: self._discard_gate(session_id)
+            )
+        return self._gates[session_id]
+
+    def _discard_gate(self, session_id: str) -> None:
+        gate = self._gates.get(session_id)
+        if gate is not None and not gate.users and session_id not in self._owners:
+            del self._gates[session_id]
+
+    @asynccontextmanager
+    async def _locked(self, owner: _SessionRuntime) -> AsyncIterator[None]:
+        async with owner.lock:
+            try:
+                yield
+            finally:
+                if not owner.storage_failed:
+                    owner.state.prune()
+
     async def _owner(self, session_id: str) -> _SessionRuntime:
         await self._wait_for_store()
         _validate_id(session_id)
-        async with self._load_lock:
+        async with self._gate(session_id) as gate:
             owner = self._owners.get(session_id)
             if owner is None:
-                session = await self._store.get_session(session_id)
-                items = await self._store.items(session_id, None, None)
-                runs = await self._store.runs(session_id)
+                seed = await self._store.execution_seed(session_id)
                 owner = _SessionRuntime(
                     SessionState(
-                        session,
-                        await self._store.latest_run(session_id),
-                        items,
-                        await self._store.prompts(session_id),
-                        runs,
-                    )
+                        seed.session,
+                        seed.run,
+                        seed.items,
+                        seed.prompts,
+                        seed.runs,
+                        sequence=seed.sequence,
+                    ),
+                    gate,
                 )
                 if not owner.state.busy:
                     owner.finished.set()
@@ -259,7 +303,7 @@ class CodeService:
             )
         )
         owner = await self._owner(session.id)
-        async with owner.lock:
+        async with self._locked(owner):
             self._publish(owner, "session.updated")
         return session
 
@@ -301,68 +345,33 @@ class CodeService:
         before: tuple[int, int] | None = None,
         include_item_ids: Sequence[str] = (),
     ) -> CodeDetail:
-        owner = await self._owner(session_id)
-        async with owner.lock:
-            self._check_owner(owner)
-            await self._flush_locked(owner)
-            page_before = before
-            if owner.state.busy and owner.state.run:
-                active_start = (owner.state.run.ordinal, 0)
-                page_before = min(before, active_start) if before else active_start
-            page = await self._store.item_page(session_id, page_before, 50)
-            included_ids = {
-                *owner.state.active_review_ids(owner.generation),
-                *include_item_ids,
-            }
-            extra = [
-                item
-                for item in owner.state.items.values()
-                if (
-                    owner.state.busy
-                    and owner.state.run
-                    and item.run_id == owner.state.run.id
-                )
-                or item.id in included_ids
-                or (
-                    item.kind == "prompt"
-                    and owner.state.prompts[item.id].status in {"pending", "answering"}
-                )
-            ]
-            selected = sorted(
-                {item.id: item for item in [*page.items, *extra]}.values(),
-                key=lambda item: (owner.state.runs[item.run_id].ordinal, item.sequence),
-            )
-            prompt_ids = {item.id for item in selected if item.kind == "prompt"}
-            prompts = tuple(
-                prompt
-                for prompt in owner.state.prompts.values()
-                if prompt.id in prompt_ids
+        await self._wait_for_store()
+        _validate_id(session_id)
+        async with self._gate(session_id):
+            owner = self._owners.get(session_id)
+            active_reviews: tuple[str, ...] = ()
+            if owner is not None:
+                self._check_owner(owner)
+                await self._flush_locked(owner)
+                active_reviews = owner.state.active_review_ids(owner.generation)
+                owner.state.prune()
+            snapshot = await self._store.read_history(
+                session_id,
+                before,
+                (*include_item_ids, *active_reviews),
             )
             return CodeDetail(
-                owner.state.session,
-                owner.state.run,
-                tuple(selected),
-                prompts,
+                snapshot.session,
+                snapshot.run,
+                snapshot.items,
+                snapshot.prompts,
                 self.epoch,
-                owner.version,
+                self._version,
                 self.cursor,
-                page.next_before,
-                tuple(
-                    {
-                        run.id: run
-                        for run in (
-                            *page.runs,
-                            *(owner.state.runs[item.run_id] for item in extra),
-                            *((owner.state.run,) if owner.state.run else ()),
-                        )
-                    }.values()
-                ),
-                tuple(
-                    prompt.id
-                    for prompt in owner.state.prompts.values()
-                    if prompt.status in {"pending", "answering"}
-                ),
-                owner.state.active_review_ids(owner.generation),
+                snapshot.next_before,
+                snapshot.runs,
+                snapshot.active_prompt_ids,
+                active_reviews,
             )
 
     async def update_settings(
@@ -375,7 +384,7 @@ class CodeService:
     ) -> CodeSession:
         SessionState.validate_settings_fields(changes)
         owner = await self._owner(session_id)
-        async with owner.lock:
+        async with self._locked(owner):
             self._editable(owner, revision)
             updates = owner.state.settings_updates(changes)
             catalog = (
@@ -417,7 +426,7 @@ class CodeService:
                 "Enter a message of at most 1,000,000 characters."
             )
         owner = await self._owner(session_id)
-        async with owner.lock:
+        async with self._locked(owner):
             previous = await self._store.get_run(session_id, operation_id)
             if previous:
                 owner.state.check_receipt(previous, text)
@@ -432,7 +441,7 @@ class CodeService:
         selection = await self._harness.prepare(
             selected.model, selected.reasoning_effort, selected.mode
         )
-        async with owner.lock:
+        async with self._locked(owner):
             previous = await self._store.get_run(session_id, operation_id)
             if previous:
                 owner.state.check_receipt(previous, text)
@@ -465,7 +474,7 @@ class CodeService:
     ) -> CodeRun:
         _validate_id(operation_id)
         owner = await self._owner(session_id)
-        async with owner.lock:
+        async with self._locked(owner):
             receipt = await self._store.get_run(session_id, operation_id)
             if receipt is None or receipt.session_id != session_id:
                 raise CodeNotFoundError("Code turn not found.")
@@ -493,9 +502,13 @@ class CodeService:
     ) -> CodePrompt:
         _validate_id(response_id)
         owner = await self._owner(session_id)
-        async with owner.lock:
+        async with self._locked(owner):
             self._require_available()
             connection = owner.connection
+            if prompt_id not in owner.state.prompts:
+                saved = await self._store.get_prompt(session_id, prompt_id)
+                if saved is not None:
+                    owner.state.accept_prompt(saved)
             prompt = owner.state.answerable_prompt(
                 prompt_id,
                 response_id,
@@ -523,7 +536,7 @@ class CodeService:
         if await self._store.is_deleted(session_id):
             return None
         owner = await self._owner(session_id)
-        async with owner.lock:
+        async with self._locked(owner):
             self._check_owner(owner)
             if owner.state.session.status != "ready":
                 if owner.state.session.status == "delete_uncertain" and (
@@ -563,7 +576,7 @@ class CodeService:
                 owner.generation = connection.generation
             thread_id = owner.state.session.native_thread_id
             if thread_id is None:
-                async with owner.lock:
+                async with self._locked(owner):
                     if owner.state.run and owner.state.run.stop_requested:
                         await self._finish_locked(owner, "interrupted")
                         return
@@ -577,7 +590,7 @@ class CodeService:
                     native = await connection.create_thread()
             else:
                 native = None
-            async with owner.lock:
+            async with self._locked(owner):
                 if native is not None:
                     await self._commit_progress(
                         owner,
@@ -587,6 +600,7 @@ class CodeService:
                     )
                     owner.loaded_thread_id = native.id
                     await self._recover_locked(owner, native)
+                    native = None
                 run = owner.state.active_run(run_id)
                 if run is None:
                     return
@@ -601,7 +615,7 @@ class CodeService:
                 )
                 assert run is not None and defaults is not None
             turn_id = await connection.start_turn(run.text, selection, run.id, defaults)
-            async with owner.lock:
+            async with self._locked(owner):
                 if owner.state.active_run(run_id) is None:
                     return
                 await self._commit_progress(owner, owner.state.bind_turn(turn_id))
@@ -625,7 +639,12 @@ class CodeService:
     async def _recover_locked(
         self, owner: _SessionRuntime, native: NativeThread
     ) -> None:
-        for turn, run in owner.state.match_history(native):
+        saved_runs = await self._store.runs(owner.state.session.id)
+        for turn, run in owner.state.match_history(native, saved_runs):
+            owner.state.remember_items(
+                await self._store.run_items(owner.state.session.id, run.id),
+                (run,),
+            )
             for item in turn.items:
                 self._update_item(owner, item, run, historical=True)
             items = owner.state.pending_items
@@ -639,6 +658,7 @@ class CodeService:
                 runs=[run.model_dump(mode="json")],
                 items=[item.model_dump(mode="json") for item in items],
             )
+            owner.state.prune()
 
     def _schedule_interrupt(self, owner: _SessionRuntime) -> None:
         run, connection = owner.state.run, owner.connection
@@ -671,7 +691,7 @@ class CodeService:
             return
         except Exception:
             pass
-        async with owner.lock:
+        async with self._locked(owner):
             if (
                 owner.connection is not connection
                 or owner.state.run is None
@@ -681,7 +701,7 @@ class CodeService:
                 return
             self._detach_connection_locked(owner)
         await connection.close()
-        async with owner.lock:
+        async with self._locked(owner):
             if owner.state.run and owner.state.run.id == run.id and owner.state.busy:
                 await self._finish_locked(
                     owner,
@@ -696,14 +716,14 @@ class CodeService:
         if connection is None:
             return
         try:
-            async with owner.lock:
+            async with self._locked(owner):
                 if (
                     owner.generation != prompt.generation
                     or owner.state.pending_answer(prompt.id, prompt.generation) is None
                 ):
                     return
             await connection.respond(prompt.request_id, response)
-            async with owner.lock:
+            async with self._locked(owner):
                 if owner.generation == prompt.generation:
                     resolved = owner.state.resolve_answer(prompt.id, prompt.generation)
                     if resolved is not None:
@@ -713,7 +733,7 @@ class CodeService:
                         )
                         self._publish_prompt(owner, resolved)
         except CodeConflictError:
-            async with owner.lock:
+            async with self._locked(owner):
                 expired = owner.state.expire_answer(prompt.id)
                 if expired is not None:
                     await self._commit_progress(
@@ -733,7 +753,7 @@ class CodeService:
 
     async def _event(self, owner: _SessionRuntime, event: HarnessEvent) -> None:
         try:
-            async with owner.lock:
+            async with self._locked(owner):
                 if (
                     owner.deleted
                     or event.generation != owner.generation
@@ -747,7 +767,17 @@ class CodeService:
                         self._publish(owner, "session.updated")
                     return
                 run = owner.state.run
-                matches = owner.state.matches_turn(event)
+                known_turn = False
+                if (
+                    event.kind == "turn_started"
+                    and event.turn_id is not None
+                    and run is not None
+                    and run.native_turn_id is None
+                ):
+                    known_turn = await self._store.has_native_turn(
+                        owner.state.session.id, event.turn_id
+                    )
+                matches = owner.state.matches_turn(event, known_turn=known_turn)
                 if (
                     event.kind in {"turn_started", "turn_completed"}
                     and matches
@@ -770,13 +800,14 @@ class CodeService:
                     and event.item.kind == "subagent_auto_review"
                     and run is not None
                 ):
+                    await self._remember_native_item(owner, event.item)
                     item, changed = owner.state.stage_review(
                         event.item, event.generation
                     )
                     if item is None:
                         return
                     if changed:
-                        owner.version += 1
+                        self._version += 1
                     await self._flush_locked(owner)
                 elif (
                     event.kind == "item"
@@ -784,6 +815,7 @@ class CodeService:
                     and matches
                     and run is not None
                 ):
+                    await self._remember_native_item(owner, event.item)
                     self._update_item(owner, event.item, run)
                     if event.item.complete or owner.state.dirty_characters >= 4096:
                         await self._flush_locked(owner)
@@ -793,7 +825,13 @@ class CodeService:
                     request = event.prompt
                     if request.turn_id is not None and not matches:
                         return
-                    if owner.state.has_prompt(request, event.generation):
+                    if owner.state.has_prompt(
+                        request, event.generation
+                    ) or await self._store.has_prompt_request(
+                        owner.state.session.id,
+                        event.generation,
+                        request.request_id,
+                    ):
                         return
                     await self._flush_locked(owner)
                     progress = owner.state.prepare_prompt(request, event.generation)
@@ -840,6 +878,21 @@ class CodeService:
                     type(exc).__name__,
                 )
 
+    async def _remember_native_item(
+        self, owner: _SessionRuntime, update: ItemUpdate
+    ) -> None:
+        if owner.state.native_item(update) is not None:
+            return
+        saved = await self._store.get_native_item(
+            owner.state.session.id, update.turn_id, update.item_id
+        )
+        if saved is not None:
+            run = owner.state.runs.get(saved.run_id)
+            if run is None:
+                run = await self._store.get_run(owner.state.session.id, saved.run_id)
+            assert run is not None
+            owner.state.remember_items((saved,), (run,))
+
     def _update_item(
         self,
         owner: _SessionRuntime,
@@ -850,12 +903,12 @@ class CodeService:
     ) -> None:
         _, changed = owner.state.stage_item(update, run, historical=historical)
         if changed:
-            owner.version += 1
+            self._version += 1
 
     async def _flush_later(self, owner: _SessionRuntime) -> None:
         await asyncio.sleep(0.25)
         try:
-            async with owner.lock:
+            async with self._locked(owner):
                 if not owner.deleted and not owner.storage_failed:
                     await self._flush_locked(owner)
         except Exception as exc:
@@ -948,11 +1001,11 @@ class CodeService:
         return connection
 
     async def _close_connection(self, owner: _SessionRuntime) -> None:
-        async with owner.lock:
+        async with self._locked(owner):
             connection = self._detach_connection_locked(owner)
         if connection is not None:
             await connection.close()
-        async with owner.lock:
+        async with self._locked(owner):
             if not owner.deleted and not owner.storage_failed:
                 try:
                     if (
@@ -975,7 +1028,7 @@ class CodeService:
         *,
         interrupted: bool = False,
     ) -> None:
-        async with owner.lock:
+        async with self._locked(owner):
             if (
                 owner.state.run is None
                 or owner.state.run.id != run_id
@@ -984,7 +1037,7 @@ class CodeService:
                 return
         try:
             await self._close_connection(owner)
-            async with owner.lock:
+            async with self._locked(owner):
                 if (
                     owner.state.run
                     and owner.state.run.id == run_id
@@ -1035,12 +1088,11 @@ class CodeService:
                     pass
             native_complete = True
             await self._close_connection(owner)
-            async with owner.lock:
+            async with self._locked(owner):
                 await self._store.delete(owner.state.session.id)
                 owner.deleted = True
                 owner.state.discard_deleted_history()
                 self._publish(owner, "session.deleted")
-            async with self._load_lock:
                 if self._owners.get(owner.state.session.id) is owner:
                     del self._owners[owner.state.session.id]
         except Exception as exc:
@@ -1048,7 +1100,7 @@ class CodeService:
             status = (
                 "ready" if isinstance(exc, CodeConflictError) else "delete_uncertain"
             )
-            async with owner.lock:
+            async with self._locked(owner):
                 progress = owner.state.deletion_failed(status, _error_message(exc))
                 try:
                     await self._commit_progress(owner, progress)
@@ -1080,12 +1132,12 @@ class CodeService:
             "session": owner.state.session.model_dump(mode="json"),
             "run": owner.state.run.model_dump(mode="json") if owner.state.run else None,
             "active_review_ids": list(owner.state.active_review_ids(owner.generation)),
-            "version": owner.version,
+            "version": self._version,
             "epoch": self.epoch,
         }
 
     def _publish(self, owner: _SessionRuntime, event: str, **data: JsonValue) -> None:
-        owner.version += 1
+        self._version += 1
         payload = self._summary(owner)
         for key, value in data.items():
             payload[key] = value

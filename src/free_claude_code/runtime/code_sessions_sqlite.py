@@ -7,7 +7,10 @@ from collections.abc import Callable, Sequence
 from contextlib import closing
 
 from free_claude_code.application.code_sessions.models import (
+    ACTIVE_RUN_STATUSES,
     CodeConflictError,
+    CodeExecutionSeed,
+    CodeHistory,
     CodeItem,
     CodeItemPage,
     CodeNotFoundError,
@@ -98,6 +101,80 @@ def _session(connection: sqlite3.Connection, session_id: str) -> CodeSession:
     if row is None:
         raise CodeNotFoundError("Code session not found.")
     return _record(CodeSession, row)
+
+
+def _by_ids[T: Record](
+    connection: sqlite3.Connection,
+    model: type[T],
+    session_id: str,
+    ids: Sequence[str],
+) -> tuple[T, ...]:
+    tables: dict[type[Record], str] = {
+        CodeItem: "code_items",
+        CodeRun: "code_runs",
+        CodePrompt: "code_prompts",
+    }
+    table = tables[model]
+    records: list[T] = []
+    unique = tuple(dict.fromkeys(ids))
+    for start in range(0, len(unique), 500):
+        batch = unique[start : start + 500]
+        records.extend(
+            _record(model, row)
+            for row in connection.execute(
+                f"SELECT * FROM {table} WHERE session_id = ? AND id IN ({','.join('?' for _ in batch)})",
+                (session_id, *batch),
+            )
+        )
+    return tuple(records)
+
+
+def _latest_run(connection: sqlite3.Connection, session_id: str) -> CodeRun | None:
+    row = connection.execute(
+        "SELECT * FROM code_runs WHERE session_id = ? ORDER BY ordinal DESC LIMIT 1",
+        (session_id,),
+    ).fetchone()
+    return _record(CodeRun, row) if row else None
+
+
+def _active_prompts(
+    connection: sqlite3.Connection, session_id: str
+) -> tuple[CodePrompt, ...]:
+    return tuple(
+        _record(CodePrompt, row)
+        for row in connection.execute(
+            "SELECT * FROM code_prompts WHERE session_id = ? AND status IN ('pending', 'answering') ORDER BY id",
+            (session_id,),
+        )
+    )
+
+
+def _item_page(
+    connection: sqlite3.Connection,
+    session_id: str,
+    before: tuple[int, int] | None,
+    limit: int | None,
+) -> CodeItemPage:
+    parameters: list[object] = [session_id]
+    query = "SELECT i.*, r.ordinal AS run_ordinal FROM code_items i JOIN code_runs r ON (r.session_id, r.id) = (i.session_id, i.run_id) WHERE i.session_id = ?"
+    if before:
+        query += " AND (r.ordinal, i.sequence) < (?, ?)"
+        parameters.extend(before)
+    query += " ORDER BY r.ordinal DESC, i.sequence DESC"
+    if limit is not None:
+        query += " LIMIT ?"
+        parameters.append(limit + 1)
+    rows = connection.execute(query, parameters).fetchall()
+    selected = rows if limit is None else rows[:limit]
+    runs = _by_ids(connection, CodeRun, session_id, [row["run_id"] for row in selected])
+    last = (
+        selected[-1] if selected and limit is not None and len(rows) > limit else None
+    )
+    return CodeItemPage(
+        tuple(_record(CodeItem, row) for row in reversed(selected)),
+        tuple(sorted(runs, key=lambda run: run.ordinal)),
+        (last["run_ordinal"], last["sequence"]) if last else None,
+    )
 
 
 def _idle(connection: sqlite3.Connection, session_id: str) -> None:
@@ -470,38 +547,150 @@ class SQLiteCodeStore:
     ) -> CodeItemPage:
         def operation(connection: sqlite3.Connection) -> CodeItemPage:
             connection.execute("BEGIN")
-            parameters: list[object] = [session_id]
-            query = "SELECT i.*, r.ordinal AS run_ordinal FROM code_items i JOIN code_runs r ON (r.session_id, r.id) = (i.session_id, i.run_id) WHERE i.session_id = ?"
-            if before:
-                query += " AND (r.ordinal, i.sequence) < (?, ?)"
-                parameters.extend(before)
-            query += " ORDER BY r.ordinal DESC, i.sequence DESC"
-            if limit is not None:
-                query += " LIMIT ?"
-                parameters.append(limit + 1)
-            rows = connection.execute(query, parameters).fetchall()
-            selected = rows if limit is None else rows[:limit]
-            run_ids = {row["run_id"] for row in selected}
-            runs = tuple(
-                _record(CodeRun, row)
+            return _item_page(connection, session_id, before, limit)
+
+        return await self._run(operation)
+
+    async def read_history(
+        self,
+        session_id: str,
+        before: tuple[int, int] | None,
+        include_item_ids: Sequence[str],
+    ) -> CodeHistory:
+        def operation(connection: sqlite3.Connection) -> CodeHistory:
+            connection.execute("BEGIN")
+            session = _session(connection, session_id)
+            run = _latest_run(connection, session_id)
+            active = run is not None and run.status in ACTIVE_RUN_STATUSES
+            boundary = before
+            if active and run is not None:
+                start = (run.ordinal, 0)
+                boundary = min(before, start) if before else start
+            page = _item_page(connection, session_id, boundary, 50)
+            active_prompts = _active_prompts(connection, session_id)
+            extras = _by_ids(
+                connection,
+                CodeItem,
+                session_id,
+                (*include_item_ids, *(prompt.id for prompt in active_prompts)),
+            )
+            items = {item.id: item for item in (*page.items, *extras)}
+            if active and run is not None:
                 for row in connection.execute(
-                    "SELECT * FROM code_runs WHERE session_id = ? ORDER BY ordinal",
-                    (session_id,),
+                    "SELECT * FROM code_items WHERE session_id = ? AND run_id = ?",
+                    (session_id, run.id),
+                ):
+                    item = _record(CodeItem, row)
+                    items[item.id] = item
+            run_ids = {item.run_id for item in items.values()}
+            if run is not None:
+                run_ids.add(run.id)
+            runs = _by_ids(connection, CodeRun, session_id, tuple(run_ids))
+            ordinals = {run.id: run.ordinal for run in runs}
+            selected = tuple(
+                sorted(
+                    items.values(),
+                    key=lambda item: (ordinals[item.run_id], item.sequence),
                 )
-                if row["id"] in run_ids
             )
-            last = (
-                selected[-1]
-                if selected and limit is not None and len(rows) > limit
-                else None
+            prompts = _by_ids(
+                connection,
+                CodePrompt,
+                session_id,
+                [item.id for item in selected if item.kind == "prompt"],
             )
-            return CodeItemPage(
-                tuple(_record(CodeItem, row) for row in reversed(selected)),
-                runs,
-                (last["run_ordinal"], last["sequence"]) if last else None,
+            return CodeHistory(
+                session,
+                run,
+                selected,
+                prompts,
+                tuple(sorted(runs, key=lambda run: run.ordinal)),
+                tuple(prompt.id for prompt in active_prompts),
+                page.next_before,
             )
 
         return await self._run(operation)
+
+    async def execution_seed(self, session_id: str) -> CodeExecutionSeed:
+        def operation(connection: sqlite3.Connection) -> CodeExecutionSeed:
+            connection.execute("BEGIN")
+            session = _session(connection, session_id)
+            run = _latest_run(connection, session_id)
+            sequence = connection.execute(
+                "SELECT coalesce(max(sequence), 0) FROM code_items WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()[0]
+            prompts = _active_prompts(connection, session_id)
+            items = _by_ids(
+                connection, CodeItem, session_id, [prompt.id for prompt in prompts]
+            )
+            ids = {item.run_id for item in items}
+            if run is not None:
+                ids.add(run.id)
+            return CodeExecutionSeed(
+                session,
+                run,
+                sequence,
+                items,
+                prompts,
+                _by_ids(connection, CodeRun, session_id, tuple(ids)),
+            )
+
+        return await self._run(operation)
+
+    async def get_native_item(
+        self, session_id: str, turn_id: str, item_id: str
+    ) -> CodeItem | None:
+        def operation(connection: sqlite3.Connection) -> CodeItem | None:
+            row = connection.execute(
+                "SELECT * FROM code_items WHERE session_id = ? AND native_turn_id = ? AND native_item_id = ?",
+                (session_id, turn_id, item_id),
+            ).fetchone()
+            return _record(CodeItem, row) if row else None
+
+        return await self._run(operation)
+
+    async def run_items(self, session_id: str, run_id: str) -> tuple[CodeItem, ...]:
+        return await self._run(
+            lambda connection: tuple(
+                _record(CodeItem, row)
+                for row in connection.execute(
+                    "SELECT * FROM code_items WHERE session_id = ? AND run_id = ? ORDER BY sequence",
+                    (session_id, run_id),
+                )
+            )
+        )
+
+    async def get_prompt(self, session_id: str, prompt_id: str) -> CodePrompt | None:
+        return await self._run(
+            lambda connection: next(
+                iter(_by_ids(connection, CodePrompt, session_id, (prompt_id,))), None
+            )
+        )
+
+    async def has_prompt_request(
+        self, session_id: str, generation: str, request_id: str | int
+    ) -> bool:
+        return await self._run(
+            lambda connection: (
+                connection.execute(
+                    "SELECT 1 FROM code_prompts WHERE session_id = ? AND generation = ? AND request_id = ?",
+                    (session_id, generation, json.dumps(request_id)),
+                ).fetchone()
+                is not None
+            )
+        )
+
+    async def has_native_turn(self, session_id: str, turn_id: str) -> bool:
+        return await self._run(
+            lambda connection: (
+                connection.execute(
+                    "SELECT 1 FROM code_runs WHERE session_id = ? AND native_turn_id = ?",
+                    (session_id, turn_id),
+                ).fetchone()
+                is not None
+            )
+        )
 
     async def prompts(self, session_id: str) -> tuple[CodePrompt, ...]:
         return await self._run(

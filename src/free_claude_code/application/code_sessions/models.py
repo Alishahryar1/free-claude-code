@@ -115,6 +115,27 @@ class CodeItemPage:
     next_before: tuple[int, int] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CodeHistory:
+    session: CodeSession
+    run: CodeRun | None
+    items: tuple[CodeItem, ...]
+    prompts: tuple[CodePrompt, ...]
+    runs: tuple[CodeRun, ...]
+    active_prompt_ids: tuple[str, ...]
+    next_before: tuple[int, int] | None
+
+
+@dataclass(frozen=True, slots=True)
+class CodeExecutionSeed:
+    session: CodeSession
+    run: CodeRun | None
+    sequence: int
+    items: tuple[CodeItem, ...]
+    prompts: tuple[CodePrompt, ...]
+    runs: tuple[CodeRun, ...]
+
+
 class CodeModel(Record):
     id: str
     display_name: str

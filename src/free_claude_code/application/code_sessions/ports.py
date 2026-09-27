@@ -9,6 +9,8 @@ from free_claude_code.core.json_types import JsonObject
 from .models import (
     CodeCatalog,
     CodeDetail,
+    CodeExecutionSeed,
+    CodeHistory,
     CodeItem,
     CodeItemPage,
     CodeMode,
@@ -86,6 +88,37 @@ class HarnessFactory(Protocol):
 
 
 class CodeStore(Protocol):
+    async def execution_seed(self, session_id: str) -> CodeExecutionSeed: ...
+
+    async def read_history(
+        self,
+        session_id: str,
+        before: tuple[int, int] | None,
+        include_item_ids: Sequence[str],
+    ) -> CodeHistory: ...
+
+    async def get_native_item(
+        self,
+        session_id: str,
+        turn_id: str,
+        item_id: str,
+    ) -> CodeItem | None: ...
+
+    async def run_items(self, session_id: str, run_id: str) -> tuple[CodeItem, ...]: ...
+
+    async def get_prompt(
+        self, session_id: str, prompt_id: str
+    ) -> CodePrompt | None: ...
+
+    async def has_prompt_request(
+        self,
+        session_id: str,
+        generation: str,
+        request_id: str | int,
+    ) -> bool: ...
+
+    async def has_native_turn(self, session_id: str, turn_id: str) -> bool: ...
+
     async def start(self) -> None: ...
 
     async def close(self) -> None: ...
