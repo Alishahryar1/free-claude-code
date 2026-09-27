@@ -173,18 +173,19 @@ def test_delayed_startup_status_does_not_replace_a_manual_provider_check(
             route.continue_()
         else:
             startup.append(route)
+            page.evaluate("window.startupRequests = (window.startupRequests || 0) + 1")
+
+    def hold_manual(route: Route) -> None:
+        manual.append(route)
+        page.evaluate("window.manualRequests = (window.manualRequests || 0) + 1")
 
     page.route("**/admin/api/status", hold_first_status)
-    page.route(
-        "**/admin/api/providers/open_router/test", lambda route: manual.append(route)
-    )
-    page.expose_function("startupRequestIntercepted", lambda: bool(startup))
-    page.expose_function("manualRequestIntercepted", lambda: bool(manual))
+    page.route("**/admin/api/providers/open_router/test", hold_manual)
     page.evaluate("void refreshStartup()")
-    page.wait_for_function("window.startupRequestIntercepted()")
+    page.wait_for_function("window.startupRequests >= 1")
     dialog = open_provider(page, "open_router")
     dialog.get_by_role("button", name="Refresh models", exact=True).click()
-    page.wait_for_function("window.manualRequestIntercepted()")
+    page.wait_for_function("window.manualRequests >= 1")
     expected = "Checking..."
     if manual_result != "pending":
         manual.pop().fulfill(

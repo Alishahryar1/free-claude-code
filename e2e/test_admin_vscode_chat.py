@@ -68,22 +68,25 @@ def test_failed_update_has_actionable_retry(page, admin_base_url, status_read_fa
         progress.update(state="ready", message=None)
         route.fulfill(json={"update": dict(progress)})
 
-    page.route("**/admin/api/status", startup)
-    page.route("**/admin/api/integrations/vscode-chat", status)
-    page.route("**/admin/api/integrations/vscode-chat/refresh", retry)
-    page.goto(f"{admin_base_url}/admin/integrations")
-    main = page.locator("#openVSCodeChatIntegration")
-    secondary = page.locator("#retryVSCodeChatIntegration")
-    if status_read_failed:
-        expect(main).to_have_text("Retry")
-        action = main
-    else:
+    try:
+        page.route("**/admin/api/status", startup)
+        page.route("**/admin/api/integrations/vscode-chat", status)
+        page.route("**/admin/api/integrations/vscode-chat/refresh", retry)
+        page.goto(f"{admin_base_url}/admin/integrations")
+        main = page.locator("#openVSCodeChatIntegration")
+        secondary = page.locator("#retryVSCodeChatIntegration")
+        if status_read_failed:
+            expect(main).to_have_text("Retry")
+            action = main
+        else:
+            expect(main).to_have_text("Disconnect")
+            expect(secondary).to_be_visible()
+            action = secondary
+        with page.expect_response("**/admin/api/integrations/vscode-chat/refresh"):
+            action.click()
+        assert retries == ["POST"]
         expect(main).to_have_text("Disconnect")
-        expect(secondary).to_be_visible()
-        action = secondary
-    with page.expect_response("**/admin/api/integrations/vscode-chat/refresh"):
-        action.click()
-    assert retries == ["POST"]
-    expect(main).to_have_text("Disconnect")
-    expect(secondary).to_be_hidden()
-    expect(page.locator("#vscodeChatIntegrationMessage")).to_be_hidden()
+        expect(secondary).to_be_hidden()
+        expect(page.locator("#vscodeChatIntegrationMessage")).to_be_hidden()
+    finally:
+        page.unroute_all(behavior="wait")

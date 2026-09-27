@@ -23,10 +23,11 @@ def test_connection_check_uses_disabled_loading_button(
 ):
     pending = []
 
-    page.expose_function("integrationCheckPending", lambda: bool(pending))
-    page.route(
-        f"**/admin/api/integrations/{integration}", lambda route: pending.append(route)
-    )
+    def hold_check(route):
+        pending.append(route)
+        page.evaluate("window.integrationChecks = (window.integrationChecks || 0) + 1")
+
+    page.route(f"**/admin/api/integrations/{integration}", hold_check)
     page.goto(f"{admin_base_url}/admin/integrations")
     button = page.locator(f"#{button_id}")
     for visit in range(2):
@@ -44,7 +45,9 @@ def test_connection_check_uses_disabled_loading_button(
             == "integration-spinner"
         )
         expect(page.locator("#view-integrations .status-pill")).to_have_count(0)
-        page.wait_for_function("async () => await window.integrationCheckPending()")
+        page.wait_for_function(
+            "count => window.integrationChecks >= count", arg=visit + 1
+        )
         assert len(pending) == 1
         pending.pop().fulfill(
             json={

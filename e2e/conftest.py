@@ -1,7 +1,6 @@
 """Isolated browser-test composition for the local Admin UI."""
 
 import asyncio
-import faulthandler
 import socket
 import sys
 import threading
@@ -14,6 +13,7 @@ import uvicorn
 from playwright.sync_api import Page
 
 from e2e.code_support import CodeControl
+from e2e.server_shutdown import join_server
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -352,12 +352,9 @@ def admin_base_url(
         yield f"http://127.0.0.1:{port}"
     finally:
         server.should_exit = True
-        thread.join(timeout=5.0)
+        join_server(thread, code_control, request)
         listener.close()
         clear_settings_cache()
-        if thread.is_alive():
-            faulthandler.dump_traceback(file=sys.stderr)
-            pytest.fail("Admin browser-test server did not stop")
 
 
 @pytest.fixture(autouse=True)
