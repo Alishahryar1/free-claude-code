@@ -67,8 +67,9 @@ def create_test_app(
     else:
         manager = ApiTestRuntime(
             settings,
-            runtime_factory=lambda snapshot: ProviderRuntime(
+            runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
                 snapshot,
+                admission_registry,
                 dict(providers),
             ),
             connected_provider_ids=connected_provider_ids,

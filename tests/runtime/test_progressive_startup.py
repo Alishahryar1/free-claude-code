@@ -47,13 +47,15 @@ async def test_http_and_admin_serve_while_selected_catalog_is_held():
 
     provider.list_model_infos = AsyncMock(side_effect=list_models)
 
-    async def construct(_provider_id, _settings):
+    async def construct(_provider_id, _settings, _admission_registry):
         return provider
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings: ProviderRuntime(
-            settings, provider_constructor=construct
+        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
+            settings,
+            admission_registry,
+            provider_constructor=construct,
         ),
     )
     runtime = ApplicationRuntime(
@@ -94,13 +96,15 @@ async def test_independent_provider_and_cancelled_waiter_share_initialization():
         return_value=frozenset({ProviderModelInfo("one")})
     )
 
-    async def construct(provider_id, _settings):
+    async def construct(provider_id, _settings, _admission_registry):
         return slow if provider_id == "groq" else fast
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings: ProviderRuntime(
-            settings, provider_constructor=construct
+        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
+            settings,
+            admission_registry,
+            provider_constructor=construct,
         ),
     )
     manager.start_model_list_refresh()
@@ -153,7 +157,7 @@ async def test_failed_discovery_construction_recovers_in_same_generation(refresh
     )
     attempts = 0
 
-    async def construct(_id, _settings):
+    async def construct(_id, _settings, _admission_registry):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -162,8 +166,10 @@ async def test_failed_discovery_construction_recovers_in_same_generation(refresh
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings: ProviderRuntime(
-            settings, provider_constructor=construct
+        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
+            settings,
+            admission_registry,
+            provider_constructor=construct,
         ),
     )
     generation = manager.current_generation_id
@@ -193,7 +199,7 @@ async def test_recovery_wait_uses_remaining_budget_without_orphaning_waiter(
     attempts = 0
     construction = None
 
-    async def construct(_id, _settings):
+    async def construct(_id, _settings, _admission_registry):
         nonlocal attempts, construction
         attempts += 1
         if attempts == 1:
@@ -205,8 +211,10 @@ async def test_recovery_wait_uses_remaining_budget_without_orphaning_waiter(
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings: ProviderRuntime(
-            settings, provider_constructor=construct
+        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
+            settings,
+            admission_registry,
+            provider_constructor=construct,
         ),
     )
     wait = InitializationWait(1 if cancel else 0.01)
@@ -269,7 +277,7 @@ async def test_late_retired_discovery_cannot_replace_current_metadata():
     entered, release = asyncio.Event(), asyncio.Event()
     providers = []
 
-    def factory(settings):
+    def factory(settings, admission_registry):
         provider = MagicMock(spec=BaseProvider)
         providers.append(provider)
         ordinal = len(providers)
@@ -282,10 +290,14 @@ async def test_late_retired_discovery_cannot_replace_current_metadata():
 
         provider.list_model_infos = AsyncMock(side_effect=models)
 
-        async def construct(_provider_id, _settings):
+        async def construct(_provider_id, _settings, _admission_registry):
             return provider
 
-        return ProviderRuntime(settings, provider_constructor=construct)
+        return ProviderRuntime(
+            settings,
+            admission_registry,
+            provider_constructor=construct,
+        )
 
     manager = ProviderRuntimeManager(_settings(), runtime_factory=factory)
     old = await manager.acquire()
@@ -326,13 +338,15 @@ async def test_complete_catalog_publication_preserves_prior_file_until_all_attem
 
     provider.list_model_infos = AsyncMock(side_effect=models)
 
-    async def construct(_provider_id, _settings):
+    async def construct(_provider_id, _settings, _admission_registry):
         return provider
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings: ProviderRuntime(
-            settings, provider_constructor=construct
+        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
+            settings,
+            admission_registry,
+            provider_constructor=construct,
         ),
         model_catalog_publisher=CodexModelCatalogPublisher(path),
     )
@@ -360,7 +374,7 @@ async def test_catalog_wait_follows_replacement(
     entered, release = asyncio.Event(), asyncio.Event()
     count = 0
 
-    def runtime(settings):
+    def runtime(settings, admission_registry):
         nonlocal count
         count += 1
         old = count == 1
@@ -374,10 +388,14 @@ async def test_catalog_wait_follows_replacement(
 
         provider.list_model_infos = AsyncMock(side_effect=models)
 
-        async def construct(_id, _settings):
+        async def construct(_id, _settings, _admission_registry):
             return provider
 
-        return ProviderRuntime(settings, provider_constructor=construct)
+        return ProviderRuntime(
+            settings,
+            admission_registry,
+            provider_constructor=construct,
+        )
 
     path = tmp_path / "catalog.json"
     manager = ProviderRuntimeManager(
@@ -442,13 +460,15 @@ async def test_catalog_waiter_exit_preserves_shared_discovery(
 
     provider.list_model_infos = AsyncMock(side_effect=models)
 
-    async def construct(_id, _settings):
+    async def construct(_id, _settings, _admission_registry):
         return provider
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings: ProviderRuntime(
-            settings, provider_constructor=construct
+        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
+            settings,
+            admission_registry,
+            provider_constructor=construct,
         ),
     )
     wait = InitializationWait(1 if cancel else 0.01)

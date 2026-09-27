@@ -35,7 +35,10 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
 
     def build(settings, restart_callback):
         manager = ProviderRuntimeManager(
-            settings, runtime_factory=lambda snapshot: ProviderRuntime(snapshot, {})
+            settings,
+            runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
+                snapshot, admission_registry, {}
+            ),
         )
         monkeypatch.setattr(manager, "start_model_list_refresh", lambda: None)
         monkeypatch.setattr(manager, "_start_pass", lambda *args, **kwargs: None)

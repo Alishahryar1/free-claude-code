@@ -31,8 +31,6 @@ def together_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-together-key",
             base_url=TOGETHER_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="together"),
     )

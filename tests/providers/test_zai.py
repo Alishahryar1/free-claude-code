@@ -33,8 +33,6 @@ def zai_provider(request: pytest.FixtureRequest):
         make_provider_config(
             api_key="test_zai_key",
             base_url=_ZAI_BASES[provider_id],
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )

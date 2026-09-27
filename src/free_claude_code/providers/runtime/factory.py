@@ -11,6 +11,7 @@ from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
@@ -251,7 +252,7 @@ def prepare_provider(
     provider_id: str,
     provider_loaders: Mapping[str, Callable[[], ProviderFactory]],
     custom_definition: CustomProviderDefinition | None = None,
-) -> Callable[[Settings], BaseProvider]:
+) -> Callable[[Settings, ProviderAdmissionRegistry], BaseProvider]:
     """Load implementation modules in a worker; return a loop-owned constructor."""
 
     # The SDK lazily imports these on first client resource access. Keep that
@@ -262,14 +263,11 @@ def prepare_provider(
 
         from .config import build_custom_provider_config
 
-        def construct_custom(settings: Settings) -> BaseProvider:
+        def construct_custom(
+            settings: Settings, admission_registry: ProviderAdmissionRegistry
+        ) -> BaseProvider:
             config = build_custom_provider_config(custom_definition, settings)
-            admission = ProviderAdmissionController(
-                provider_name=provider_id,
-                rate_limit=config.rate_limit,
-                rate_window=config.rate_window,
-                max_concurrency=config.max_concurrency,
-            )
+            admission = admission_registry.get(provider_id)
             return CustomProvider(
                 config, definition=custom_definition, admission=admission
             )
@@ -287,14 +285,11 @@ def prepare_provider(
         )
     factory = loader() if loader is not None else None
 
-    def construct(settings: Settings) -> BaseProvider:
+    def construct(
+        settings: Settings, admission_registry: ProviderAdmissionRegistry
+    ) -> BaseProvider:
         config = build_provider_config(descriptor, settings)
-        admission = ProviderAdmissionController(
-            provider_name=provider_id,
-            rate_limit=config.rate_limit,
-            rate_window=config.rate_window,
-            max_concurrency=config.max_concurrency,
-        )
+        admission = admission_registry.get(provider_id)
         if factory is not None:
             return factory(config, settings, admission)
         return create_openai_chat_provider(provider_id, config, admission)

@@ -71,9 +71,6 @@ def _openai_provider(
         make_provider_config(
             api_key="",
             base_url="https://chatgpt.com/backend-api/codex",
-            rate_limit=100,
-            rate_window=1,
-            max_concurrency=2,
         ),
         auth=_FakeOpenAIAuth(),
         admission=ProviderAdmissionController(

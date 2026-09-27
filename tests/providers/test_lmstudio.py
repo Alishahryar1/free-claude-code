@@ -49,8 +49,6 @@ def lmstudio_config():
     return make_provider_config(
         api_key="lm-studio",
         base_url=LMSTUDIO_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 

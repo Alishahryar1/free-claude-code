@@ -45,8 +45,6 @@ def siliconflow_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-siliconflow-key",
             base_url=SILICONFLOW_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="siliconflow"),
     )
@@ -235,8 +233,6 @@ async def test_model_catalog_uses_documented_endpoint_query_and_auth() -> None:
             make_provider_config(
                 api_key="wire-siliconflow-key",
                 base_url=SILICONFLOW_DEFAULT_BASE,
-                rate_limit=10,
-                rate_window=60,
             ),
             admission=immediate_admission(provider_name="siliconflow"),
         )

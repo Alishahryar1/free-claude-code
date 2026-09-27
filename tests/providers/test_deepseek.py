@@ -40,8 +40,6 @@ def deepseek_config():
     return make_provider_config(
         api_key="test_deepseek_key",
         base_url=DEEPSEEK_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 
@@ -368,8 +366,6 @@ def test_build_request_body_encodes_reasoning_off():
         make_provider_config(
             api_key="k",
             base_url=DEEPSEEK_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
         ),
         admission=immediate_admission(),
     )
@@ -689,8 +685,6 @@ def test_thinking_off_preserves_historical_reasoning():
         make_provider_config(
             api_key="k",
             base_url=DEEPSEEK_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
         ),
         admission=immediate_admission(),
     )
@@ -718,8 +712,6 @@ def test_thinking_off_still_replays_required_tool_reasoning():
         make_provider_config(
             api_key="k",
             base_url=DEEPSEEK_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
         ),
         admission=immediate_admission(),
     )
@@ -866,8 +858,6 @@ def test_vision_model_strips_user_document():
         make_provider_config(
             api_key="k",
             base_url=DEEPSEEK_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
         ),
         admission=immediate_admission(),
     )
@@ -903,8 +893,6 @@ def test_startup_rejects_mcp_servers():
         make_provider_config(
             api_key="k",
             base_url=DEEPSEEK_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
         ),
         admission=immediate_admission(),
     )
@@ -922,8 +910,6 @@ def test_startup_rejects_listed_server_tools_in_tools_list():
         make_provider_config(
             api_key="k",
             base_url=DEEPSEEK_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
         ),
         admission=immediate_admission(),
     )
@@ -959,8 +945,6 @@ def test_startup_preserves_completed_server_tool_history():
         make_provider_config(
             api_key="k",
             base_url=DEEPSEEK_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
         ),
         admission=immediate_admission(),
     )

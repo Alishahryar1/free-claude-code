@@ -35,8 +35,6 @@ def lightning_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-lightning-key",
             base_url=LIGHTNING_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="lightning", max_attempts=1),
     )

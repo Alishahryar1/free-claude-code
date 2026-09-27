@@ -25,8 +25,6 @@ def wafer_config():
     return make_provider_config(
         api_key="test-wafer-key",
         base_url=WAFER_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 

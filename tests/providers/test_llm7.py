@@ -36,8 +36,6 @@ def llm7_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-llm7-key",
             base_url=LLM7_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="llm7", max_attempts=1),
     )

@@ -32,8 +32,6 @@ def chutes_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-chutes-key",
             base_url=CHUTES_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="chutes"),
     )

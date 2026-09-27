@@ -44,6 +44,8 @@ from free_claude_code.config.provider_catalog import (
     ZENMUX_DEFAULT_BASE,
 )
 from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.cloudflare import CloudflareProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
@@ -261,7 +263,11 @@ async def test_poolside_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("poolside", settings)
+        provider = await create_provider(
+            "poolside",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "Poolside AI"
     assert descriptor.credential_env == "POOLSIDE_API_KEY"
@@ -286,7 +292,11 @@ async def test_llm7_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("llm7", settings)
+        provider = await create_provider(
+            "llm7",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "LLM7.io"
     assert descriptor.credential_env == "LLM7_API_KEY"
@@ -311,7 +321,11 @@ async def test_experiential_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("experiential", settings)
+        provider = await create_provider(
+            "experiential",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "Experiential Labs"
     assert descriptor.credential_env == "EXPLABS_API_KEY"
@@ -339,7 +353,11 @@ async def test_cheaperinference_provider_config_uses_key_base_and_proxy() -> Non
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("cheaperinference", settings)
+        provider = await create_provider(
+            "cheaperinference",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "Cheaper Inference"
     assert descriptor.credential_env == "CHEAPER_INFERENCE_API_KEY"
@@ -365,7 +383,11 @@ async def test_orcarouter_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("orcarouter", settings)
+        provider = await create_provider(
+            "orcarouter",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "OrcaRouter"
     assert descriptor.credential_env == "ORCAROUTER_API_KEY"
@@ -390,7 +412,11 @@ async def test_xai_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("xai", settings)
+        provider = await create_provider(
+            "xai",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "xAI (Grok)"
     assert descriptor.credential_env == "XAI_API_KEY"
@@ -410,7 +436,11 @@ async def test_qwencloud_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("qwencloud", settings)
+        provider = await create_provider(
+            "qwencloud",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "QwenCloud Token Plan"
     assert descriptor.credential_env == "QWENCLOUD_API_KEY"
@@ -430,7 +460,11 @@ async def test_cline_pass_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("cline_pass", settings)
+        provider = await create_provider(
+            "cline_pass",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "ClinePass"
     assert descriptor.credential_env == "CLINE_API_KEY"
@@ -454,7 +488,11 @@ async def test_qwencloud_coding_provider_config_uses_key_base_and_proxy() -> Non
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("qwencloud_coding", settings)
+        provider = await create_provider(
+            "qwencloud_coding",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "QwenCloud Coding Plan"
     assert descriptor.credential_env == "QWENCLOUD_CODING_API_KEY"
@@ -474,7 +512,11 @@ async def test_together_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("together", settings)
+        provider = await create_provider(
+            "together",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "Together AI"
     assert descriptor.credential_env == "TOGETHER_API_KEY"
@@ -494,7 +536,11 @@ async def test_deepinfra_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("deepinfra", settings)
+        provider = await create_provider(
+            "deepinfra",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "DeepInfra"
     assert descriptor.credential_env == "DEEPINFRA_API_KEY"
@@ -514,7 +560,11 @@ async def test_siliconflow_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("siliconflow", settings)
+        provider = await create_provider(
+            "siliconflow",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "SiliconFlow"
     assert descriptor.credential_env == "SILICONFLOW_API_KEY"
@@ -535,7 +585,11 @@ async def test_nebius_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("nebius", settings)
+        provider = await create_provider(
+            "nebius",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "Nebius Token Factory"
     assert descriptor.credential_env == "NEBIUS_API_KEY"
@@ -559,7 +613,11 @@ async def test_scaleway_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("scaleway", settings)
+        provider = await create_provider(
+            "scaleway",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "Scaleway"
     assert descriptor.credential_env == "SCW_SECRET_KEY"
@@ -581,7 +639,11 @@ async def test_chutes_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("chutes", settings)
+        provider = await create_provider(
+            "chutes",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "Chutes"
     assert descriptor.credential_env == "CHUTES_API_KEY"
@@ -605,7 +667,11 @@ async def test_featherless_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("featherless", settings)
+        provider = await create_provider(
+            "featherless",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "Featherless AI"
     assert descriptor.credential_env == "FEATHERLESS_API_KEY"
@@ -627,7 +693,11 @@ async def test_agnes_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("agnes", settings)
+        provider = await create_provider(
+            "agnes",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "Agnes AI"
     assert descriptor.credential_env == "AGNES_API_KEY"
@@ -648,7 +718,11 @@ async def test_zenmux_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("zenmux", settings)
+        provider = await create_provider(
+            "zenmux",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "ZenMux"
     assert descriptor.credential_env == "ZENMUX_API_KEY"
@@ -669,7 +743,11 @@ async def test_wandb_provider_config_uses_key_base_and_proxy() -> None:
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("wandb", settings)
+        provider = await create_provider(
+            "wandb",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "W&B Inference"
     assert descriptor.credential_env == "WANDB_API_KEY"
@@ -752,7 +830,11 @@ async def test_local_provider_factory_resolves_catalog_static_credential(
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider(provider_id, settings)
+        provider = await create_provider(
+            provider_id,
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert config.api_key == expected_api_key
     assert isinstance(provider, OpenAIChatProvider)
@@ -788,7 +870,11 @@ async def test_zai_api_provider_config_uses_shared_key_general_base_and_own_prox
 
     config = build_provider_config(descriptor, settings)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("zai_api", settings)
+        provider = await create_provider(
+            "zai_api",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert descriptor.display_name == "Z.ai API"
     assert descriptor.credential_env == "ZAI_API_KEY"
@@ -840,7 +926,11 @@ async def test_create_cloudflare_provider_uses_account_scoped_base_url():
     )
 
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("cloudflare", settings)
+        provider = await create_provider(
+            "cloudflare",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
 
     assert isinstance(provider, CloudflareProvider)
     assert provider._base_url == (
@@ -851,7 +941,13 @@ async def test_create_cloudflare_provider_uses_account_scoped_base_url():
 @pytest.mark.asyncio
 async def test_opencode_zen_provider_config_uses_explicit_id_and_name():
     with patch("httpx.AsyncClient"):
-        provider = await create_provider("opencode_zen", _make_settings())
+        provider = await create_provider(
+            "opencode_zen",
+            _make_settings(),
+            ProviderAdmissionRegistry(
+                ProviderAdmissionLimits.from_settings(_make_settings())
+            ),
+        )
 
     assert isinstance(provider, OpenCodeProvider)
     assert str(provider._client.base_url).rstrip("/") == "https://opencode.ai/zen/v1"
@@ -863,7 +959,13 @@ async def test_opencode_zen_provider_config_uses_explicit_id_and_name():
 @pytest.mark.asyncio
 async def test_opencode_go_provider_config_uses_correct_base_url_and_name():
     with patch("httpx.AsyncClient"):
-        provider = await create_provider("opencode_go", _make_settings())
+        provider = await create_provider(
+            "opencode_go",
+            _make_settings(),
+            ProviderAdmissionRegistry(
+                ProviderAdmissionLimits.from_settings(_make_settings())
+            ),
+        )
 
     assert isinstance(provider, OpenCodeProvider)
     assert str(provider._client.base_url).rstrip("/") == "https://opencode.ai/zen/go/v1"
@@ -954,7 +1056,13 @@ def test_build_provider_config_cohere_uses_api_key_and_proxy() -> None:
 @pytest.mark.asyncio
 async def test_create_provider_uses_openai_chat_openrouter_by_default():
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = await create_provider("open_router", _make_settings())
+        provider = await create_provider(
+            "open_router",
+            _make_settings(),
+            ProviderAdmissionRegistry(
+                ProviderAdmissionLimits.from_settings(_make_settings())
+            ),
+        )
 
     assert isinstance(provider, OpenRouterProvider)
 
@@ -1062,7 +1170,7 @@ async def test_create_provider_instantiates_each_builtin():
         patch("free_claude_code.providers.openai_api.provider.AsyncOpenAI"),
         patch("httpx.AsyncClient"),
         patch(
-            "free_claude_code.providers.runtime.factory.ProviderAdmissionController",
+            "free_claude_code.providers.admission.ProviderAdmissionController",
             return_value=sentinel_admission,
         ) as admission_factory,
     ):
@@ -1070,6 +1178,9 @@ async def test_create_provider_instantiates_each_builtin():
             provider = await create_provider(
                 provider_id,
                 settings,
+                ProviderAdmissionRegistry(
+                    ProviderAdmissionLimits.from_settings(settings)
+                ),
                 provider_loaders={
                     key: lambda factory=factory: factory
                     for key, factory in injected_factories.items()
@@ -1095,7 +1206,12 @@ async def test_create_provider_instantiates_each_builtin():
 
 @pytest.mark.asyncio
 async def test_provider_runtime_caches_by_provider_id():
-    runtime = ProviderRuntime(_make_settings())
+    runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+    )
 
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         first = await runtime.resolve_provider("nvidia_nim")
@@ -1111,7 +1227,7 @@ async def test_provider_creation_retries_after_shared_failure(cancelled):
     provider = MagicMock(cleanup=AsyncMock())
     attempts = 0
 
-    async def construct(_id, _settings):
+    async def construct(_id, _settings, _admission_registry):
         nonlocal attempts
         attempts += 1
         attempt = attempts
@@ -1123,7 +1239,13 @@ async def test_provider_creation_retries_after_shared_failure(cancelled):
             raise RuntimeError("construction failed")
         return provider
 
-    runtime = ProviderRuntime(_make_settings(), provider_constructor=construct)
+    runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+        provider_constructor=construct,
+    )
     waiting = []
     try:
         for attempt in (1, 2):
@@ -1161,7 +1283,7 @@ async def test_finished_creation_callback_cannot_forget_a_new_retry():
     attempts = 0
     retry = None
 
-    async def construct(_id, _settings):
+    async def construct(_id, _settings, _admission_registry):
         nonlocal attempts, retry
         attempts += 1
         if attempts == 1:
@@ -1172,7 +1294,13 @@ async def test_finished_creation_callback_cannot_forget_a_new_retry():
         await release.wait()
         return provider
 
-    runtime = ProviderRuntime(_make_settings(), provider_constructor=construct)
+    runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+        provider_constructor=construct,
+    )
     later = None
     try:
         with pytest.raises(RuntimeError, match="construction failed"):
@@ -1200,14 +1328,20 @@ async def test_cancelled_acquisition_keeps_construction_available_to_next_caller
     provider = MagicMock(cleanup=AsyncMock())
     attempts = 0
 
-    async def construct(_id, _settings):
+    async def construct(_id, _settings, _admission_registry):
         nonlocal attempts
         attempts += 1
         entered.set()
         await release.wait()
         return provider
 
-    runtime = ProviderRuntime(_make_settings(), provider_constructor=construct)
+    runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+        provider_constructor=construct,
+    )
     first = asyncio.create_task(runtime.resolve_provider("nvidia_nim"))
     second = None
     try:
@@ -1236,13 +1370,19 @@ async def test_abandoned_creation_failure_has_no_unretrieved_exception():
     previous_handler = loop.get_exception_handler()
     errors = []
 
-    async def construct(_id, _settings):
+    async def construct(_id, _settings, _admission_registry):
         entered.set()
         await release.wait()
         failed.set()
         raise RuntimeError("abandoned construction failed")
 
-    runtime = ProviderRuntime(_make_settings(), provider_constructor=construct)
+    runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+        provider_constructor=construct,
+    )
     waiting = asyncio.create_task(runtime.resolve_provider("nvidia_nim"))
     loop.set_exception_handler(lambda _loop, context: errors.append(context))
     try:
@@ -1272,14 +1412,20 @@ async def test_shutdown_drains_construction_that_finishes_during_cancellation():
     entered = asyncio.Event()
     provider = MagicMock(cleanup=AsyncMock())
 
-    async def construct(_id, _settings):
+    async def construct(_id, _settings, _admission_registry):
         entered.set()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             return provider
 
-    runtime = ProviderRuntime(_make_settings(), provider_constructor=construct)
+    runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+        provider_constructor=construct,
+    )
     waiting = asyncio.create_task(runtime.resolve_provider("nvidia_nim"))
     try:
         await entered.wait()
@@ -1297,7 +1443,12 @@ async def test_shutdown_drains_construction_that_finishes_during_cancellation():
 
 @pytest.mark.asyncio
 async def test_provider_runtime_provider_owns_one_admission_controller() -> None:
-    runtime = ProviderRuntime(_make_settings())
+    runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+    )
 
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         first = await runtime.resolve_provider("nvidia_nim")
@@ -1310,8 +1461,18 @@ async def test_provider_runtime_provider_owns_one_admission_controller() -> None
 
 @pytest.mark.asyncio
 async def test_separate_provider_runtimes_never_share_admission_controllers() -> None:
-    first_runtime = ProviderRuntime(_make_settings())
-    second_runtime = ProviderRuntime(_make_settings())
+    first_runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+    )
+    second_runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+    )
 
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         first = await first_runtime.resolve_provider("nvidia_nim")
@@ -1325,7 +1486,12 @@ async def test_separate_provider_runtimes_never_share_admission_controllers() ->
 
 @pytest.mark.asyncio
 async def test_different_providers_have_independent_admission_controllers() -> None:
-    runtime = ProviderRuntime(_make_settings())
+    runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+    )
 
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         nim = await runtime.resolve_provider("nvidia_nim")
@@ -1339,7 +1505,15 @@ async def test_different_providers_have_independent_admission_controllers() -> N
 @pytest.mark.asyncio
 async def test_unknown_provider_raises_unknown_provider_type_error():
     with pytest.raises(UnknownProviderError, match="Unknown provider_type"):
-        (await create_provider("unknown", _make_settings()))
+        (
+            await create_provider(
+                "unknown",
+                _make_settings(),
+                ProviderAdmissionRegistry(
+                    ProviderAdmissionLimits.from_settings(_make_settings())
+                ),
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -1349,7 +1523,13 @@ async def test_provider_runtime_cleanup_runs_all_even_if_one_fails() -> None:
     p1.cleanup = AsyncMock(side_effect=RuntimeError("first"))
     p2 = MagicMock()
     p2.cleanup = AsyncMock()
-    runtime = ProviderRuntime(_make_settings(), {"a": p1, "b": p2})
+    runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+        {"a": p1, "b": p2},
+    )
 
     with pytest.raises(RuntimeError, match="first"):
         await runtime.cleanup()
@@ -1386,6 +1566,9 @@ async def test_cancelled_cleanup_retains_current_and_unvisited_providers() -> No
     third.cleanup = AsyncMock()
     runtime = ProviderRuntime(
         _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
         {"first": first, "second": second, "third": third},
     )
     cleanup_task = asyncio.create_task(runtime.cleanup())
@@ -1417,7 +1600,13 @@ async def test_provider_runtime_cleanup_exceptiongroup_on_multiple_failures() ->
     p1.cleanup = AsyncMock(side_effect=RuntimeError("a"))
     p2 = MagicMock()
     p2.cleanup = AsyncMock(side_effect=RuntimeError("b"))
-    runtime = ProviderRuntime(_make_settings(), {"x": p1, "y": p2})
+    runtime = ProviderRuntime(
+        _make_settings(),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(_make_settings())
+        ),
+        {"x": p1, "y": p2},
+    )
 
     with pytest.raises(ExceptionGroup) as exc_info:
         await runtime.cleanup()

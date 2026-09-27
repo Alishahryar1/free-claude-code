@@ -26,8 +26,6 @@ def cohere_config():
     return make_provider_config(
         api_key="test_cohere_key",
         base_url=COHERE_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 
@@ -147,8 +145,6 @@ def test_build_request_body_maps_reasoning_off_to_none():
         make_provider_config(
             api_key="test_cohere_key",
             base_url=COHERE_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )

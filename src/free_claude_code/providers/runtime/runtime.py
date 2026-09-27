@@ -8,18 +8,21 @@ from typing import TYPE_CHECKING
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.async_tasks import run_sync_owned
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.base import BaseProvider
 
 if TYPE_CHECKING:
     from .factory import ProviderFactory
 
-type ProviderConstructor = Callable[[str, Settings], Awaitable[BaseProvider]]
+type ProviderConstructor = Callable[
+    [str, Settings, ProviderAdmissionRegistry], Awaitable[BaseProvider]
+]
 type ProviderLoader = Callable[[], ProviderFactory]
 
 
 def _load_constructor(
     provider_id: str, provider_loaders: Mapping[str, ProviderLoader], settings: Settings
-) -> Callable[[Settings], BaseProvider]:
+) -> Callable[[Settings, ProviderAdmissionRegistry], BaseProvider]:
     from .factory import prepare_provider
 
     return prepare_provider(
@@ -34,13 +37,14 @@ def _load_constructor(
 async def create_provider(
     provider_id: str,
     settings: Settings,
+    admission_registry: ProviderAdmissionRegistry,
     *,
     provider_loaders: Mapping[str, ProviderLoader] | None = None,
 ) -> BaseProvider:
     constructor = await run_sync_owned(
         partial(_load_constructor, provider_id, provider_loaders or {}, settings)
     )
-    return constructor(settings)
+    return constructor(settings, admission_registry)
 
 
 class ProviderRuntime:
@@ -49,11 +53,13 @@ class ProviderRuntime:
     def __init__(
         self,
         settings: Settings,
+        admission_registry: ProviderAdmissionRegistry,
         providers: MutableMapping[str, BaseProvider] | None = None,
         *,
         provider_constructor: ProviderConstructor = create_provider,
     ) -> None:
         self.settings = settings
+        self._admission_registry = admission_registry
         self._providers = providers if providers is not None else {}
         self._provider_constructor = provider_constructor
         self._creations: dict[str, asyncio.Task[BaseProvider]] = {}
@@ -85,7 +91,9 @@ class ProviderRuntime:
             task.exception()  # Observe failures even when every caller stopped waiting.
 
     async def _construct(self, provider_id: str) -> BaseProvider:
-        provider = await self._provider_constructor(provider_id, self.settings)
+        provider = await self._provider_constructor(
+            provider_id, self.settings, self._admission_registry
+        )
         self._providers[provider_id] = provider
         return provider
 

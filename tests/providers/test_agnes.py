@@ -31,8 +31,6 @@ def agnes_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-agnes-key",
             base_url=AGNES_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="agnes"),
     )
@@ -211,8 +209,6 @@ async def test_model_catalog_uses_documented_endpoint_and_auth() -> None:
             make_provider_config(
                 api_key="wire-agnes-key",
                 base_url=AGNES_DEFAULT_BASE,
-                rate_limit=10,
-                rate_window=60,
             ),
             admission=immediate_admission(provider_name="agnes"),
         )

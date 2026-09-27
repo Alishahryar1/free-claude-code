@@ -20,9 +20,6 @@ class ProviderConfig:
 
     api_key: str | None
     base_url: str
-    rate_limit: int
-    rate_window: int
-    max_concurrency: int
     http_read_timeout: float
     http_write_timeout: float
     http_connect_timeout: float

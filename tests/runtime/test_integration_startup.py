@@ -50,13 +50,13 @@ def runtime():
         return_value=frozenset({ProviderModelInfo("one")})
     )
 
-    async def construct(_id, _settings):
+    async def construct(_id, _settings, _admission_registry):
         return provider
 
     manager = ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda snapshot: ProviderRuntime(
-            snapshot, provider_constructor=construct
+        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
+            snapshot, admission_registry, provider_constructor=construct
         ),
     )
     return ApplicationRuntime(

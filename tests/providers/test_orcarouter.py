@@ -35,8 +35,6 @@ def orcarouter_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-orcarouter-key",
             base_url=ORCAROUTER_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="orcarouter", max_attempts=1),
     )

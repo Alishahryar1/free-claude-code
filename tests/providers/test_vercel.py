@@ -27,8 +27,6 @@ def vercel_config():
     return make_provider_config(
         api_key="test_vercel_key",
         base_url=VERCEL_AI_GATEWAY_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 

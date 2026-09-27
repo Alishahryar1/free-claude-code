@@ -127,8 +127,6 @@ def _make_provider():
     config = make_provider_config(
         api_key="test_key",
         base_url="https://test.api.nvidia.com/v1",
-        rate_limit=10,
-        rate_window=60,
     )
     return NvidiaNimProvider(
         config,

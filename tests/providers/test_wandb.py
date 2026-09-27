@@ -33,8 +33,6 @@ def wandb_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-wandb-key",
             base_url=WANDB_INFERENCE_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="wandb"),
     )
@@ -209,8 +207,6 @@ async def test_model_catalog_uses_documented_endpoint_and_bearer_auth() -> None:
             make_provider_config(
                 api_key="wire-wandb-key",
                 base_url=WANDB_INFERENCE_DEFAULT_BASE,
-                rate_limit=10,
-                rate_window=60,
             ),
             admission=immediate_admission(provider_name="wandb"),
         )

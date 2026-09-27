@@ -92,9 +92,6 @@ def _config() -> ProviderConfig:
     return make_provider_config(
         api_key="",
         base_url="https://chatgpt.com/backend-api/codex",
-        rate_limit=100,
-        rate_window=1,
-        max_concurrency=2,
     )
 
 

@@ -33,8 +33,6 @@ def scaleway_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-scaleway-key",
             base_url=SCALEWAY_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="scaleway"),
     )

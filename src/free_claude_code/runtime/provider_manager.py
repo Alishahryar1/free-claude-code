@@ -20,6 +20,8 @@ from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.token_estimation import initialize_token_estimation
 from free_claude_code.core.trace import trace_event
+from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.model_listing import model_infos_from_ids
 from free_claude_code.providers.runtime.discovery import (
@@ -31,7 +33,9 @@ from free_claude_code.providers.runtime.discovery import (
 from free_claude_code.providers.runtime.model_cache import ProviderModelCache
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
 
-ProviderRuntimeFactory = Callable[[Settings], ProviderRuntime]
+ProviderRuntimeFactory = Callable[
+    [Settings, ProviderAdmissionRegistry], ProviderRuntime
+]
 ConnectedProviderIds = Callable[[], tuple[str, ...]]
 CommitConfig = Callable[[], Awaitable[None]]
 
@@ -157,6 +161,9 @@ class ProviderRuntimeManager:
         model_catalog_publisher: ModelCatalogPublisher | None = None,
     ) -> None:
         self._runtime_factory = runtime_factory
+        self._admission_registry = ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(settings)
+        )
         self._connected_provider_ids = connected_provider_ids
         self._model_catalog_publisher = model_catalog_publisher
         self._catalog_changed: Callable[[], None] | None = None
@@ -174,7 +181,7 @@ class ProviderRuntimeManager:
         self._current = _ProviderGeneration(
             generation_id=1,
             settings=settings,
-            runtime=runtime_factory(settings),
+            runtime=runtime_factory(settings, self._admission_registry),
             cache=ProviderModelCache(
                 model_cache_provider_ids_for_settings(
                     settings, connected_provider_ids()
@@ -527,10 +534,13 @@ class ProviderRuntimeManager:
         async with self._replace_lock:
             self._ensure_open()
             await self._retry_unpublished_cleanup()
+            limits = ProviderAdmissionLimits.from_settings(settings)
             candidate_id = self._next_generation_id
             candidate_runtime: ProviderRuntime | None = None
             try:
-                candidate_runtime = self._runtime_factory(settings)
+                candidate_runtime = self._runtime_factory(
+                    settings, self._admission_registry
+                )
                 await commit()
             except BaseException as exc:
                 trace_event(
@@ -565,6 +575,7 @@ class ProviderRuntimeManager:
                     runtime=candidate_runtime,
                     cache=cache,
                 )
+                self._admission_registry.reconfigure(limits)
                 self._current = candidate
                 self._catalog_revision += 1
                 previous.retired = True
@@ -621,7 +632,20 @@ class ProviderRuntimeManager:
             if not all(generation_results) or not unpublished_closed:
                 raise RuntimeError("One or more provider runtimes failed to close.")
             self._current.cache.clear()
+            self._admission_registry.close()
             self._closed = True
+
+    def _prune_admission(self) -> None:
+        runtimes = (
+            self._current.runtime,
+            *(generation.runtime for generation in self._retired.values()),
+            *self._unpublished,
+        )
+        self._admission_registry.retain_custom(
+            definition.provider_id
+            for runtime in runtimes
+            for definition in runtime.settings.custom_providers
+        )
 
     async def _release(self, generation: _ProviderGeneration) -> None:
         if generation.active_leases <= 0:
@@ -645,6 +669,7 @@ class ProviderRuntimeManager:
             )
             return False
         self._unpublished.discard(runtime)
+        self._prune_admission()
         return True
 
     async def _retry_unpublished_cleanup(self) -> bool:
@@ -696,6 +721,7 @@ class ProviderRuntimeManager:
 
             generation.closed = True
             self._retired.pop(generation.generation_id, None)
+            self._prune_admission()
             trace_event(
                 stage="runtime",
                 event="provider_generation.closed",

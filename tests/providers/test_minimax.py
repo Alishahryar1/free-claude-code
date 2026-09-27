@@ -46,8 +46,6 @@ def minimax_provider():
         make_provider_config(
             api_key="test-minimax-key",
             base_url=MINIMAX_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )

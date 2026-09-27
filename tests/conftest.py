@@ -85,9 +85,6 @@ def provider_config():
     return make_provider_config(
         api_key="test_key",
         base_url="https://test.api.nvidia.com/v1",
-        rate_limit=10,
-        rate_window=60,
-        max_concurrency=5,
         http_read_timeout=300.0,
         http_write_timeout=10.0,
         http_connect_timeout=10.0,
@@ -123,9 +120,6 @@ def lmstudio_provider(provider_config):
     lmstudio_config = make_provider_config(
         api_key="lm-studio",
         base_url="http://localhost:1234/v1",
-        rate_limit=provider_config.rate_limit,
-        rate_window=provider_config.rate_window,
-        max_concurrency=provider_config.max_concurrency,
         http_read_timeout=provider_config.http_read_timeout,
         http_write_timeout=provider_config.http_write_timeout,
         http_connect_timeout=provider_config.http_connect_timeout,
@@ -143,9 +137,6 @@ def llamacpp_provider(provider_config):
     llamacpp_config = make_provider_config(
         api_key="llamacpp",
         base_url="http://localhost:8080/v1",
-        rate_limit=10,
-        rate_window=60,
-        max_concurrency=5,
         http_read_timeout=300.0,
         http_write_timeout=10.0,
         http_connect_timeout=10.0,

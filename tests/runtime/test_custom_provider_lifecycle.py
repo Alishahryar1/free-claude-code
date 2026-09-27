@@ -6,6 +6,8 @@ from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.settings import Settings
+from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
@@ -32,7 +34,12 @@ async def commit():
 
 
 async def test_runtime_constructs_one_custom_owner_lazily():
-    runtime = ProviderRuntime(settings(model_ids=["manual"]))
+    runtime = ProviderRuntime(
+        settings(model_ids=["manual"]),
+        ProviderAdmissionRegistry(
+            ProviderAdmissionLimits.from_settings(settings(model_ids=["manual"]))
+        ),
+    )
     try:
         assert not runtime.is_cached(ID)
         one, two = await asyncio.gather(
@@ -70,8 +77,8 @@ async def test_changed_endpoint_cannot_inherit_catalog_but_rename_can():
         await release.wait()
         return frozenset()
 
-    def blocked(settings):
-        runtime = factory(settings)
+    def blocked(settings, admission_registry):
+        runtime = factory(settings, admission_registry)
         assert isinstance(runtime, FakeRuntime)
         runtime.provider.list_model_infos.side_effect = wait
         return runtime

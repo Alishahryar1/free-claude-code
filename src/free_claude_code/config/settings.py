@@ -584,12 +584,14 @@ class Settings(BaseModel):
         default=None, validation_alias="OLLAMA_CLOUD_PROXY"
     )
     # ==================== Provider Rate Limiting ====================
-    provider_rate_limit: int = Field(default=1, validation_alias="PROVIDER_RATE_LIMIT")
+    provider_rate_limit: int = Field(
+        default=1, gt=0, validation_alias="PROVIDER_RATE_LIMIT"
+    )
     provider_rate_window: int = Field(
-        default=2, validation_alias="PROVIDER_RATE_WINDOW"
+        default=2, gt=0, validation_alias="PROVIDER_RATE_WINDOW"
     )
     provider_max_concurrency: int = Field(
-        default=2, validation_alias="PROVIDER_MAX_CONCURRENCY"
+        default=2, gt=0, validation_alias="PROVIDER_MAX_CONCURRENCY"
     )
     provider_progress_timeout: float = Field(
         default=600.0,

@@ -58,8 +58,6 @@ def _config():
     return make_provider_config(
         api_key="test_opencode_key",
         base_url="https://opencode.ai/zen/v1",
-        rate_limit=100,
-        rate_window=1,
     )
 
 

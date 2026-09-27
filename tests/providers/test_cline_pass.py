@@ -40,8 +40,6 @@ def cline_pass_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-cline-key",
             base_url=CLINE_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="cline_pass"),
     )
@@ -67,8 +65,6 @@ def _provider_with_transport(
             make_provider_config(
                 api_key=api_key,
                 base_url=CLINE_DEFAULT_BASE,
-                rate_limit=10,
-                rate_window=60,
             ),
             admission=immediate_admission(provider_name="cline_pass"),
         )

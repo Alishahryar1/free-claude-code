@@ -56,9 +56,6 @@ class _ModelListingProvider(BaseProvider):
             ProviderConfig(
                 api_key="browser-test",
                 base_url="https://provider.invalid/v1",
-                rate_limit=1_000,
-                rate_window=1,
-                max_concurrency=100,
                 http_read_timeout=1.0,
                 http_write_timeout=1.0,
                 http_connect_timeout=1.0,
@@ -252,15 +249,20 @@ def admin_base_url(
         ),
     }
 
-    async def fixture_provider(provider_id: str, _settings: Settings) -> BaseProvider:
+    async def fixture_provider(
+        provider_id: str, _settings: Settings, _admission_registry
+    ) -> BaseProvider:
         if provider_id not in providers:
             raise AssertionError(f"Missing browser fixture provider: {provider_id}")
         return providers[provider_id]
 
     manager = ProviderRuntimeManager(
         get_settings(),
-        runtime_factory=lambda snapshot: ProviderRuntime(
-            snapshot, dict(providers), provider_constructor=fixture_provider
+        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
+            snapshot,
+            admission_registry,
+            dict(providers),
+            provider_constructor=fixture_provider,
         ),
     )
     runtime = ApplicationRuntime(

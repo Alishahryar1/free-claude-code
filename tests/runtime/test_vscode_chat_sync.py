@@ -35,7 +35,11 @@ async def runtime(request):
 
     manager = ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda s: ProviderRuntime(s, provider_constructor=construct),
+        runtime_factory=lambda s, admission_registry: ProviderRuntime(
+            s,
+            admission_registry,
+            provider_constructor=construct,
+        ),
     )
     app = ApplicationRuntime(
         manager,
