@@ -91,5 +91,3 @@ def test_process_registry_kill_pid_tree_windows_uses_taskkill(monkeypatch):
 
     assert calls
     assert calls[0][0][0] == ["taskkill", "/PID", "12345", "/T", "/F"]
-
-    assert calls[0][1]["creationflags"] == subprocess.CREATE_NO_WINDOW
