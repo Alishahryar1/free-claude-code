@@ -597,14 +597,18 @@ def test_settings_apply_preserves_open_creation_and_picker(
     page, admin_base_url, tmp_path, code_control
 ):
     pending = []
-    page.route("**/admin/api/config/apply", lambda route: pending.append(route))
-    page.expose_function("applyRequestIntercepted", lambda: bool(pending))
+
+    def capture_apply(route):
+        pending.append(route)
+        page.evaluate("window.applyRequestIntercepted = true")
+
+    page.route("**/admin/api/config/apply", capture_apply)
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
     page.locator("#field-PORT").fill("8081")
     page.get_by_role("button", name="Apply", exact=True).click()
     expect(page.locator("#messageArea")).to_have_text("Applying…")
-    page.wait_for_function("window.applyRequestIntercepted()")
+    page.wait_for_function("window.applyRequestIntercepted === true")
     assert len(pending) == 1
     page.get_by_role("button", name="Code sessions", exact=True).click()
     page.get_by_role("button", name="New code session", exact=True).click()
