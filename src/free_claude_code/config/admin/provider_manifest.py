@@ -277,12 +277,6 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "www.orcarouter.ai/console."
         ),
     },
-    "ORCAROUTER_BASE_URL": {
-        "description": (
-            "OrcaRouter OpenAI-compatible Chat Completions base URL. "
-            "Defaults to https://api.orcarouter.ai/v1."
-        ),
-    },
     "AGNES_API_KEY": {
         "label": "Agnes AI API Key",
         "description": (

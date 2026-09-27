@@ -118,7 +118,6 @@ def _make_settings(**overrides):
     mock.experiential_api_key = "test_experiential_key"
     mock.cheaperinference_api_key = "test_cheaperinference_key"
     mock.orcarouter_api_key = "test_orcarouter_key"
-    mock.orcarouter_base_url = ORCAROUTER_DEFAULT_BASE
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -360,7 +359,7 @@ async def test_orcarouter_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["orcarouter"]
     settings = _make_settings(
         orcarouter_api_key="orcarouter-token",
-        orcarouter_base_url=ORCAROUTER_DEFAULT_BASE,
+        orcarouter_base_url="https://unused.example/v1",
         orcarouter_proxy="http://proxy.test:8080",
     )
 
@@ -373,7 +372,7 @@ async def test_orcarouter_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.credential_attr == "orcarouter_api_key"
     assert descriptor.credential_url == "https://www.orcarouter.ai/console"
     assert descriptor.default_base_url == ORCAROUTER_DEFAULT_BASE
-    assert descriptor.base_url_attr == "orcarouter_base_url"
+    assert descriptor.base_url_attr is None
     assert descriptor.proxy_attr == "orcarouter_proxy"
     assert config.api_key == "orcarouter-token"
     assert config.base_url == ORCAROUTER_DEFAULT_BASE

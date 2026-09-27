@@ -18,7 +18,6 @@ from .model_refs import parse_model_fallbacks
 from .nim import NimSettings
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
-    ORCAROUTER_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
 )
 from .reasoning import ReasoningPreference
@@ -243,10 +242,6 @@ class Settings(BaseModel):
     # ==================== OrcaRouter (OpenAI-compatible gateway) ====================
     orcarouter_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="ORCAROUTER_API_KEY"
-    )
-    orcarouter_base_url: NonEmptyString = Field(
-        default=ORCAROUTER_DEFAULT_BASE,
-        validation_alias="ORCAROUTER_BASE_URL",
     )
 
     # ==================== Fireworks AI Config ====================

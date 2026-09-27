@@ -711,7 +711,6 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_url="https://www.orcarouter.ai/console",
         credential_attr="orcarouter_api_key",
         default_base_url=ORCAROUTER_DEFAULT_BASE,
-        base_url_attr="orcarouter_base_url",
         proxy_attr="orcarouter_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
