@@ -83,6 +83,7 @@ def test_process_registry_kill_pid_tree_windows_uses_taskkill(monkeypatch):
     from free_claude_code.cli import process_registry as pr
 
     calls = []
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(os, "name", "nt", raising=False)
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append((a, kw)))
 
@@ -90,3 +91,5 @@ def test_process_registry_kill_pid_tree_windows_uses_taskkill(monkeypatch):
 
     assert calls
     assert calls[0][0][0] == ["taskkill", "/PID", "12345", "/T", "/F"]
+
+    assert calls[0][1]["creationflags"] == subprocess.CREATE_NO_WINDOW
