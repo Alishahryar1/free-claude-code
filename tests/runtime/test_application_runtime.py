@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import free_claude_code.messaging.session.persistence as persistence_module
 from free_claude_code.application.connected_accounts import (
     ConnectedAccountState,
     ConnectedAccountStatus,
@@ -25,8 +24,6 @@ from free_claude_code.messaging.platforms.ports import (
     MessagingPlatformComponents,
     MessagingStartupNotice,
 )
-from free_claude_code.messaging.session import SessionStore
-from free_claude_code.messaging.workflow import MessagingWorkflow
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.credential_validation import (
     CredentialCheck,
@@ -855,92 +852,6 @@ async def test_close_retries_failed_persistence_before_closing_delivery() -> Non
 
 
 @pytest.mark.asyncio
-async def test_close_retries_real_workflow_persistence_without_losing_latest_state(
-    tmp_path: Path,
-) -> None:
-    events: list[str] = []
-    manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
-    runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
-    )
-    messaging = TrackingMessagingRuntime(events)
-    cli_manager = MagicMock()
-    cli_manager.stop_all = AsyncMock()
-    outbound = MagicMock()
-    store_path = tmp_path / "sessions.json"
-    real_replace = persistence_module.os.replace
-    replace_calls = 0
-
-    def fail_first_replace(source: str, target: str) -> None:
-        nonlocal replace_calls
-        replace_calls += 1
-        if replace_calls == 1:
-            raise OSError("replace failed once")
-        real_replace(source, target)
-
-    with patch.object(persistence_module.threading, "Timer"):
-        store = SessionStore(storage_path=str(store_path))
-        store.record_message_id(
-            "telegram",
-            "chat_1",
-            "old",
-            "out",
-            "status",
-        )
-        store.flush_pending_save()
-        store.record_message_id(
-            "telegram",
-            "chat_1",
-            "latest",
-            "out",
-            "status",
-        )
-        workflow = MessagingWorkflow(outbound, cli_manager, store)
-        runtime._messaging_runtime = messaging
-        runtime._messaging_workflow = workflow
-        runtime._cli_manager = cli_manager
-
-        with patch.object(
-            persistence_module.os,
-            "replace",
-            side_effect=fail_first_replace,
-        ):
-            assert await runtime.close() is False
-
-            assert runtime._messaging_runtime is messaging
-            assert runtime._messaging_workflow is workflow
-            assert runtime._cli_manager is cli_manager
-            assert runtime.is_closed is False
-            assert store.dirty is True
-            assert store.get_tracked_message_ids_for_chat("telegram", "chat_1") == [
-                "old",
-                "latest",
-            ]
-            assert SessionStore(
-                storage_path=str(store_path)
-            ).get_tracked_message_ids_for_chat("telegram", "chat_1") == ["old"]
-
-            assert await runtime.close() is True
-
-        assert runtime._messaging_runtime is None
-        assert runtime._messaging_workflow is None
-        assert runtime._cli_manager is None
-        assert runtime.is_closed is True
-        assert store.dirty is False
-        assert SessionStore(
-            storage_path=str(store_path)
-        ).get_tracked_message_ids_for_chat("telegram", "chat_1") == [
-            "old",
-            "latest",
-        ]
-        assert events == [
-            "messaging.quiesce",
-            "messaging.quiesce",
-            "messaging.close",
-        ]
-
-
-@pytest.mark.asyncio
 async def test_cancelled_transcriber_close_retains_ownership() -> None:
     events: list[str] = []
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
@@ -1279,7 +1190,7 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
     )
     workflow = MagicMock()
     workflow.handle_message = AsyncMock()
-    workflow.restore.side_effect = lambda: events.append("workflow.restore")
+    workflow.restore = AsyncMock(side_effect=lambda: events.append("workflow.restore"))
     workflow.repair_restored_statuses = AsyncMock(
         side_effect=lambda: events.append("workflow.repair")
     )
@@ -1294,7 +1205,7 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
             "free_claude_code.cli.managed.ManagedClaudeSessionManager",
             return_value=cli_manager,
         ) as manager_constructor,
-        patch("free_claude_code.messaging.session.SessionStore"),
+        patch.object(runtime, "_messaging_store", AsyncMock()),
         patch(
             "free_claude_code.messaging.workflow.MessagingWorkflow",
             return_value=workflow,

@@ -123,12 +123,12 @@ function renderStartup() {
   const message = byId("startupMessage");
   if (message) {
     const messaging = startup?.messaging;
-    const visible = state.activeView === "messaging" && ["starting", "failed"].includes(messaging?.state);
+    const visible = state.activeView === "messaging" && (["starting", "failed"].includes(messaging?.state) || Boolean(messaging?.warning));
     message.hidden = !visible;
     message.classList.toggle("startup-spinner", visible && messaging.state === "starting");
     message.classList.toggle("error", messaging?.state === "failed");
-    message.textContent = messaging?.state === "failed" ? messaging.message || "Messaging could not start." : "";
-    message.setAttribute("aria-label", "Messaging is starting");
+    message.textContent = messaging?.state === "failed" ? messaging.message || "Messaging could not start." : messaging?.warning || "";
+    message.setAttribute("aria-label", messaging?.state === "starting" ? "Messaging is starting" : "Messaging status");
   }
   if (!startup) return;
   document.querySelectorAll("[data-startup-provider]").forEach((button) => {

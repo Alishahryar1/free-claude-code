@@ -1,6 +1,7 @@
 """Deterministic manager concurrency contracts."""
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -67,6 +68,7 @@ async def test_one_tree_processes_fifo_with_transition_owned_queue_updates() -> 
         process,
         queue_update_callback=capture_queue,
         node_started_callback=capture_started,
+        store=AsyncMock(),
     )
     root = await manager.admit(_incoming("root"), "status-root")
     assert root.claim is not None
@@ -131,7 +133,7 @@ async def test_separate_trees_process_in_parallel() -> None:
             active -= 1
             completed[node_id].set()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await asyncio.gather(
         manager.admit(_incoming("one"), "status-one"),
         manager.admit(_incoming("two"), "status-two"),
@@ -160,7 +162,7 @@ async def test_cancel_all_cancels_active_and_queued_work_across_trees() -> None:
             active_started[node_id].set()
         await asyncio.Event().wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("one"), "status-one")
     await manager.admit(_incoming("two"), "status-two")
     await asyncio.gather(*(event.wait() for event in active_started.values()))
@@ -184,10 +186,10 @@ async def test_cancel_all_cancels_active_and_queued_work_across_trees() -> None:
         "two": CancellationUiOwner.RUNNER,
         "two-child": CancellationUiOwner.WORKFLOW,
     }
-    assert len(result.snapshots) == 2
+    assert len((await manager.snapshot()).trees) == 2
     assert {
         node["state"]
-        for snapshot in result.snapshots
+        for snapshot in (await manager.snapshot()).trees.values()
         for node in snapshot.nodes.values()
     } == {"error"}
     assert set(processed) == {"one", "two"}
@@ -215,7 +217,7 @@ async def test_branch_removal_atomically_unindexes_subtree_and_preserves_sibling
         else:
             unexpected.append(node_id)
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("root"), "status-root")
     await root_started.wait()
     await manager.admit(
@@ -273,7 +275,7 @@ async def test_root_removal_atomically_cancels_and_unindexes_entire_tree() -> No
         root_started.set()
         await asyncio.Event().wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("root"), "status-root")
     await root_started.wait()
     await manager.admit(

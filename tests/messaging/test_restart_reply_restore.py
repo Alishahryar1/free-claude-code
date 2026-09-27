@@ -5,8 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
-from free_claude_code.messaging.session import SessionStore
-from free_claude_code.messaging.trees import TreeIdentity
+from free_claude_code.messaging.trees import MessagingStore, TreeIdentity
 from free_claude_code.messaging.trees.node import MessageNode, MessageState
 from free_claude_code.messaging.trees.runtime import MessageTree
 from free_claude_code.messaging.workflow import MessagingWorkflow
@@ -15,14 +14,10 @@ TELEGRAM_CHAT_1 = MessageScope(platform="telegram", chat_id="chat_1")
 
 
 async def _wait_for_idle(workflow: MessagingWorkflow) -> None:
-    for _ in range(100):
-        if workflow.tree_queue.task_count() == 0:
-            return
-        await asyncio.sleep(0)
-    raise AssertionError("messaging claims did not finish")
+    await asyncio.wait_for(workflow.tree_queue.wait_idle(), timeout=5)
 
 
-async def _write_completed_root(store: SessionStore) -> None:
+async def _write_completed_root(store: MessagingStore) -> None:
     tree = MessageTree(
         MessageNode(
             node_id="A",
@@ -33,11 +28,10 @@ async def _write_completed_root(store: SessionStore) -> None:
             session_id="sess_A",
         )
     )
-    store.save_tree_snapshot(await tree.snapshot())
-    store.flush_pending_save()
+    await store.commit_trees((await tree.snapshot(),))
 
 
-async def _write_interrupted_root(store: SessionStore) -> None:
+async def _write_interrupted_root(store: MessagingStore) -> None:
     tree = MessageTree(
         MessageNode(
             node_id="A",
@@ -47,8 +41,7 @@ async def _write_interrupted_root(store: SessionStore) -> None:
             state=MessageState.IN_PROGRESS,
         )
     )
-    store.save_tree_snapshot(await tree.snapshot())
-    store.flush_pending_save()
+    await store.commit_trees((await tree.snapshot(),))
 
 
 def _successful_session(session_id: str):
@@ -64,16 +57,19 @@ def _successful_session(session_id: str):
 
 @pytest.mark.asyncio
 async def test_reply_to_old_status_message_after_restore_routes_to_parent(
+    messaging_store_factory,
     tmp_path,
     mock_platform,
     mock_cli_manager,
 ) -> None:
     store_path = tmp_path / "sessions.json"
-    await _write_completed_root(SessionStore(storage_path=str(store_path)))
+    await _write_completed_root(
+        await messaging_store_factory(storage_path=str(store_path))
+    )
 
-    restored_store = SessionStore(storage_path=str(store_path))
+    restored_store = await messaging_store_factory(storage_path=str(store_path))
     workflow = MessagingWorkflow(mock_platform, mock_cli_manager, restored_store)
-    workflow.restore()
+    (await workflow.restore())
     mock_platform.queue_send_message = AsyncMock(return_value="status_reply")
     mock_cli_manager.get_or_create_session.return_value = (
         _successful_session("sess_R1"),
@@ -102,6 +98,7 @@ async def test_reply_to_old_status_message_after_restore_routes_to_parent(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wrapped", [False, True])
 async def test_legacy_session_json_restores_through_workflow_and_routes_reply(
+    messaging_store_factory,
     wrapped: bool,
     tmp_path,
     mock_platform,
@@ -145,9 +142,9 @@ async def test_legacy_session_json_restores_through_workflow_and_routes_reply(
     workflow = MessagingWorkflow(
         mock_platform,
         mock_cli_manager,
-        SessionStore(storage_path=str(store_path)),
+        (await messaging_store_factory(storage_path=str(store_path))),
     )
-    workflow.restore()
+    (await workflow.restore())
     mock_platform.queue_send_message = AsyncMock(return_value="status_reply")
     mock_cli_manager.get_or_create_session.return_value = (
         _successful_session("sess_R1"),
@@ -174,30 +171,34 @@ async def test_legacy_session_json_restores_through_workflow_and_routes_reply(
 
 @pytest.mark.asyncio
 async def test_save_tree_snapshot_restores_status_lookup_without_manual_index(
+    messaging_store_factory,
     tmp_path,
     mock_platform,
     mock_cli_manager,
 ) -> None:
     store_path = tmp_path / "sessions.json"
-    await _write_completed_root(SessionStore(storage_path=str(store_path)))
+    await _write_completed_root(
+        await messaging_store_factory(storage_path=str(store_path))
+    )
     workflow = MessagingWorkflow(
         mock_platform,
         mock_cli_manager,
-        SessionStore(storage_path=str(store_path)),
+        (await messaging_store_factory(storage_path=str(store_path))),
     )
-    workflow.restore()
+    (await workflow.restore())
 
     assert await workflow.tree_queue.resolve_node_id(TELEGRAM_CHAT_1, "status_A") == "A"
 
 
 @pytest.mark.asyncio
 async def test_reply_clear_purges_removed_status_mapping_from_persisted_store(
+    messaging_store_factory,
     tmp_path,
     mock_platform,
     mock_cli_manager,
 ) -> None:
     store_path = tmp_path / "sessions.json"
-    store = SessionStore(storage_path=str(store_path))
+    store = await messaging_store_factory(storage_path=str(store_path))
     workflow = MessagingWorkflow(mock_platform, mock_cli_manager, store)
     mock_platform.queue_send_message = AsyncMock(
         side_effect=["root_status", "child_status"]
@@ -238,10 +239,11 @@ async def test_reply_clear_purges_removed_status_mapping_from_persisted_store(
             reply_to_message_id="child",
         )
     )
-    store.flush_pending_save()
 
     identity = TreeIdentity(scope=TELEGRAM_CHAT_1, root_id="root")
-    persisted = SessionStore(storage_path=str(store_path)).load_conversation_snapshot()
+    persisted = await (
+        await messaging_store_factory(storage_path=str(store_path))
+    ).load_conversation_snapshot()
     tree = persisted.get_tree(identity)
     assert tree is not None
     assert tree.lookup_ids() == {"root", "root_status"}
@@ -249,19 +251,22 @@ async def test_reply_clear_purges_removed_status_mapping_from_persisted_store(
 
 @pytest.mark.asyncio
 async def test_restore_repairs_interrupted_status_after_delivery_starts(
+    messaging_store_factory,
     tmp_path,
     mock_platform,
     mock_cli_manager,
 ) -> None:
     store_path = tmp_path / "sessions.json"
-    await _write_interrupted_root(SessionStore(storage_path=str(store_path)))
+    await _write_interrupted_root(
+        await messaging_store_factory(storage_path=str(store_path))
+    )
     workflow = MessagingWorkflow(
         mock_platform,
         mock_cli_manager,
-        SessionStore(storage_path=str(store_path)),
+        (await messaging_store_factory(storage_path=str(store_path))),
         platform_name="telegram",
     )
-    workflow.restore()
+    (await workflow.restore())
 
     await workflow.repair_restored_statuses()
     await workflow.repair_restored_statuses()
@@ -297,16 +302,13 @@ async def test_workflow_close_waits_for_claim_cleanup_before_flushing(
 
     workflow.stop_all_tasks = AsyncMock(side_effect=stop_all)
     workflow.tree_queue.wait_idle = AsyncMock(side_effect=wait_idle)
-    mock_session_store.flush_pending_save.side_effect = lambda: events.append("flush")
 
     close_task = asyncio.create_task(workflow.close())
     await wait_started.wait()
 
     assert events == ["stop", "wait"]
-    mock_session_store.flush_pending_save.assert_not_called()
 
     cleanup_release.set()
     await close_task
 
-    assert events == ["stop", "wait", "flush"]
-    mock_session_store.flush_pending_save.assert_called_once()
+    assert events == ["stop", "wait"]

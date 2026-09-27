@@ -1,6 +1,7 @@
 """Atomic runtime aggregate for one messaging conversation tree."""
 
 import asyncio
+from copy import deepcopy
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -35,6 +36,13 @@ class _ActiveClaim:
     cancellation_requested: bool = False
 
 
+@dataclass
+class TreeCheckpoint:
+    graph: MessageTreeGraph
+    queue: MessageNodeQueue
+    active: _ActiveClaim | None
+
+
 class MessageTree:
     """Own graph, queue, claim identity, and every concurrency invariant."""
 
@@ -55,6 +63,17 @@ class MessageTree:
     @property
     def root_id(self) -> str:
         return self._graph.root_id
+
+    def checkpoint(self) -> TreeCheckpoint:
+        """Copy only runtime data while the manager owns the transition."""
+        return deepcopy(TreeCheckpoint(self._graph, self._queue, self._active))
+
+    def rollback(self, checkpoint: TreeCheckpoint) -> None:
+        self._graph, self._queue, self._active = (
+            checkpoint.graph,
+            checkpoint.queue,
+            checkpoint.active,
+        )
 
     @property
     def identity(self) -> TreeIdentity:

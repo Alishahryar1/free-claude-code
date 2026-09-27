@@ -35,6 +35,7 @@ from .codex_app_server import CodexHarnessFactory
 from .codex_catalog import CodexModelCatalogPublisher
 from .configuration import ConfigurationService
 from .provider_manager import ProviderRuntimeManager
+from .sqlite_database import SQLiteDatabase
 from .web_tools.client import HTTPWebToolsClient
 
 
@@ -73,18 +74,18 @@ def build_asgi_app(
         ),
         model_catalog_publisher=CodexModelCatalogPublisher(),
     )
+    database = SQLiteDatabase(
+        fcc_database_path(), code_lock_path(), legacy_path=legacy_code_database_path()
+    )
     code_service = CodeService(
-        SQLiteCodeStore(
-            fcc_database_path(),
-            code_lock_path(),
-            legacy_database_path=legacy_code_database_path(),
-        ),
+        SQLiteCodeStore(database),
         CodexHarnessFactory(provider_manager),
     )
     runtime = ApplicationRuntime(
         provider_manager,
         configuration=ConfigurationService(ManagedConfigStore()),
         code_service=code_service,
+        database=database,
         transcriber=None,
         transcriber_factory=_create_transcriber,
         restart_callback=restart_callback,

@@ -2,13 +2,9 @@
 
 import asyncio
 import json
-import os
 import sqlite3
 from collections.abc import Callable, Sequence
 from contextlib import closing
-from pathlib import Path
-
-import anyio.to_thread
 
 from free_claude_code.application.code_sessions.models import (
     CodeConflictError,
@@ -23,9 +19,8 @@ from free_claude_code.application.code_sessions.models import (
     Record,
     now_ms,
 )
-from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
-from .sqlite_database import initialize_database
+from .sqlite_database import SQLiteDatabase
 
 _JSON_FIELDS = frozenset(
     {"raw", "form", "error_details", "request_id", "native_permission_defaults"}
@@ -302,16 +297,9 @@ def _write_prompt(connection: sqlite3.Connection, prompt: CodePrompt) -> None:
 
 
 class SQLiteCodeStore:
-    def __init__(
-        self,
-        database_path: Path,
-        lock_path: Path,
-        *,
-        legacy_database_path: Path | None = None,
-    ) -> None:
-        self._path = database_path
-        self._legacy_path = legacy_database_path
-        self._lock = InterprocessFileLock(lock_path)
+    def __init__(self, database: SQLiteDatabase) -> None:
+        self.database = database
+        self._path = database.path
         self._started = False
         self._lifecycle = asyncio.Lock()
 
@@ -319,53 +307,22 @@ class SQLiteCodeStore:
         async with self._lifecycle:
             if self._started:
                 return
-            initialization = asyncio.create_task(
-                anyio.to_thread.run_sync(self._initialize)
-            )
             try:
-                await asyncio.shield(initialization)
-            except BaseException:
-                await asyncio.gather(initialization, return_exceptions=True)
-                self._lock.release()
-                raise
+                await self.database.start()
+                await self.database.work(lambda: self._execute(self._recover))
+            except sqlite3.IntegrityError as exc:
+                raise CodeConflictError(
+                    "Saved Code history conflicts with its schema."
+                ) from exc
+            except (sqlite3.Error, OSError) as exc:
+                raise CodeUnavailableError(
+                    f"Code storage initialization failed: {exc}"
+                ) from exc
             self._started = True
-
-    def _initialize(self) -> None:
-        if not self._lock.acquire():
-            raise CodeUnavailableError(
-                "Code sessions is already owned by another FCC server."
-            )
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            if os.name != "nt":
-                self._path.parent.chmod(0o700)
-            initialize_database(self._path, self._legacy_path)
-        except sqlite3.IntegrityError as exc:
-            raise CodeConflictError(
-                "Saved Code history conflicts with its schema."
-            ) from exc
-        except sqlite3.Error as exc:
-            raise CodeUnavailableError(
-                f"Code storage initialization failed: {exc}"
-            ) from exc
-        except OSError as exc:
-            raise CodeUnavailableError(
-                "Code database files could not be initialized or moved."
-            ) from exc
-        self._execute(self._recover)
-        if os.name != "nt":
-            for path in (
-                self._path,
-                Path(f"{self._path}-wal"),
-                Path(f"{self._path}-shm"),
-            ):
-                if path.exists():
-                    path.chmod(0o600)
 
     async def close(self) -> None:
         async with self._lifecycle:
             self._started = False
-            await anyio.to_thread.run_sync(self._lock.release)
 
     def _execute[T](self, operation: Callable[[sqlite3.Connection], T]) -> T:
         try:
@@ -384,7 +341,7 @@ class SQLiteCodeStore:
     async def _run[T](self, operation: Callable[[sqlite3.Connection], T]) -> T:
         if not self._started:
             raise CodeUnavailableError("Code session storage is closed.")
-        return await anyio.to_thread.run_sync(self._execute, operation)
+        return await self.database.work(lambda: self._execute(operation))
 
     def _recover(self, connection: sqlite3.Connection) -> None:
         connection.execute(

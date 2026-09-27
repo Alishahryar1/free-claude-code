@@ -639,7 +639,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     FeatureCoverage(
         "session_persistence",
         "Session JSON preserves scoped trees and message logs",
-        ("tests/messaging/test_session_store_edge_cases.py",),
+        ("tests/runtime/test_messaging_sqlite.py",),
         (),
         ("test_restart_restore_and_session_persistence_e2e",),
         ("messaging",),

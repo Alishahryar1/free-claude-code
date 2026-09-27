@@ -16,9 +16,8 @@ from .managed_protocols import ManagedClaudeSessionManagerProtocol
 from .node_event_pipeline import handle_session_info_event, process_parsed_cli_event
 from .platforms.ports import OutboundMessenger
 from .safe_diagnostics import format_exception_for_log
-from .session import SessionStore
 from .transcript import RenderCtx, TranscriptBuffer
-from .trees import CancellationReason, NodeClaim, TreeQueueManager, TreeSnapshot
+from .trees import CancellationReason, NodeClaim, TreeQueueManager
 from .ui_updates import ThrottledTranscriptEditor
 
 
@@ -31,7 +30,6 @@ class MessagingNodeRunner:
         platform_name: str,
         outbound: OutboundMessenger,
         cli_manager: ManagedClaudeSessionManagerProtocol,
-        session_store: SessionStore,
         get_tree_queue: Callable[[], TreeQueueManager],
         format_status: Callable[[str, str, str | None], str],
         get_parse_mode: Callable[[], str | None],
@@ -45,7 +43,6 @@ class MessagingNodeRunner:
         self.platform_name = platform_name
         self.outbound = outbound
         self.cli_manager = cli_manager
-        self.session_store = session_store
         self._get_tree_queue = get_tree_queue
         self._format_status = format_status
         self._get_parse_mode = get_parse_mode
@@ -66,23 +63,15 @@ class MessagingNodeRunner:
         )
         return transcript, self._get_render_ctx()
 
-    def _save_snapshot(self, snapshot: TreeSnapshot | None) -> None:
-        """Persist a snapshot returned by the active aggregate manager."""
-        if snapshot is None:
-            return
-        self.session_store.save_tree_snapshot(snapshot)
-
     async def _record_session(self, claim: NodeClaim, session_id: str) -> None:
-        snapshot = await self._get_tree_queue().record_session(claim, session_id)
-        self._save_snapshot(snapshot)
+        await self._get_tree_queue().record_session(claim, session_id)
 
     async def _complete_claim(
         self,
         claim: NodeClaim,
         session_id: str | None,
     ) -> None:
-        snapshot = await self._get_tree_queue().complete_claim(claim, session_id)
-        self._save_snapshot(snapshot)
+        await self._get_tree_queue().complete_claim(claim, session_id)
 
     async def _fail_claim(
         self,
@@ -95,7 +84,6 @@ class MessagingNodeRunner:
             claim,
             propagate=propagate,
         )
-        self._save_snapshot(result.snapshot)
         if child_status_text is None:
             return
         for child in result.affected:

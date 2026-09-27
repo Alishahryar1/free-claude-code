@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
@@ -67,6 +68,8 @@ if TYPE_CHECKING:
     import free_claude_code.cli.managed as cli_managed
     import free_claude_code.messaging.workflow as messaging_workflow_module
 
+    from .messaging_sqlite import SQLiteMessagingStore
+
 from free_claude_code.application.readiness import InitializationWait
 from free_claude_code.core.async_tasks import run_sync_owned
 
@@ -74,6 +77,7 @@ from .configuration import ConfigurationService
 from .folder_picker import NativeFolderPicker
 from .provider_manager import ProviderRuntimeManager
 from .retired_chat import remove_retired_chat_history
+from .sqlite_database import SQLiteDatabase
 
 RestartCallback = Callable[[], None]
 IntegrationAction = Literal["status", "connect", "disconnect", "refresh"]
@@ -184,6 +188,7 @@ class ApplicationRuntime:
         configuration: ConfigurationService,
         transcriber: Transcriber | None,
         code_service: CodeService | None = None,
+        database: SQLiteDatabase | None = None,
         transcriber_factory: Callable[[Settings], Awaitable[Transcriber | None]]
         | None = None,
         restart_callback: RestartCallback | None = None,
@@ -192,6 +197,11 @@ class ApplicationRuntime:
         self.provider_manager = provider_manager
         self._configuration = configuration
         self._code_service = code_service
+        self._database = database
+        self._messaging_store: SQLiteMessagingStore | None = None
+        self._messaging_import_task: asyncio.Task[None] | None = None
+        self._messaging_warning: str | None = None
+        self._messaging_storage_error: Exception | None = None
         self._folder_picker = NativeFolderPicker()
         self._transcriber = transcriber
         self._transcriber_factory = transcriber_factory
@@ -269,6 +279,13 @@ class ApplicationRuntime:
                         name="fcc-retired-chat-cleanup",
                     )
                 )
+                if self._database is not None:
+                    self._messaging_state = "starting"
+                    self._messaging_import_task = asyncio.create_task(
+                        self._initialize_messaging_storage(),
+                        name="fcc-messaging-import",
+                    )
+                    self._startup_tasks.append(self._messaging_import_task)
                 if self._code_service is not None:
                     self._startup_tasks.append(
                         asyncio.create_task(
@@ -864,6 +881,7 @@ class ApplicationRuntime:
                 "messaging": {
                     "state": self._messaging_state,
                     "message": self._messaging_error,
+                    "warning": self._messaging_warning,
                 },
                 "integrations": {
                     "vscode-chat": self._vscode_update.snapshot(),
@@ -1006,12 +1024,15 @@ class ApplicationRuntime:
         return result
 
     async def _start_messaging_if_configured(self) -> None:
+        if self._messaging_import_task is not None:
+            await asyncio.shield(self._messaging_import_task)
         if self.settings.messaging_platform == "none":
+            self._messaging_state = "disabled"
             return
         try:
 
             def load_modules() -> None:
-                for name in ("cli.managed", "messaging.session", "messaging.workflow"):
+                for name in ("cli.managed", "messaging.workflow"):
                     importlib.import_module(f"free_claude_code.{name}")
                 importlib.import_module(
                     f"free_claude_code.messaging.platforms.{self.settings.messaging_platform}"
@@ -1077,12 +1098,36 @@ class ApplicationRuntime:
             log_api_error_tracebacks=settings.log_api_error_tracebacks,
         )
 
+    async def _initialize_messaging_storage(self) -> None:
+        if self._database is None:
+            return
+        try:
+            await self._database.start()
+            from .messaging_import import import_legacy
+            from .messaging_sqlite import SQLiteMessagingStore
+
+            self._messaging_store = SQLiteMessagingStore(
+                self._database,
+                managed_message_cap=self.settings.max_message_log_entries_per_chat,
+            )
+            self._messaging_warning = await import_legacy(
+                self._database, Path(messaging_state_dir_path()) / "sessions.json"
+            )
+            await self._messaging_store.trim()
+        except Exception as exc:
+            self._messaging_storage_error = exc
+            logger.error(
+                "Messaging storage initialization failed: {}", type(exc).__name__
+            )
+            return
+        if self._messaging_warning:
+            logger.warning("{}", self._messaging_warning)
+
     async def _start_messaging_workflow(
         self,
         components: MessagingPlatformComponents,
     ) -> None:
         import free_claude_code.cli.managed as cli_managed
-        import free_claude_code.messaging.session as messaging_session
         import free_claude_code.messaging.workflow as messaging_workflow_module
 
         settings = self.settings
@@ -1093,8 +1138,6 @@ class ApplicationRuntime:
             else os.getcwd()
         )
         await run_sync_owned(partial(os.makedirs, workspace, exist_ok=True))
-        data_path = os.path.abspath(messaging_state_dir_path())
-        await run_sync_owned(partial(os.makedirs, data_path, exist_ok=True))
         allowed_dirs = [workspace] if settings.allowed_dir else []
 
         self._cli_manager = cli_managed.ManagedClaudeSessionManager(
@@ -1105,13 +1148,15 @@ class ApplicationRuntime:
             log_raw_cli_diagnostics=settings.log_raw_cli_diagnostics,
             log_messaging_error_details=settings.log_messaging_error_details,
         )
-        session_store = await run_sync_owned(
-            partial(
-                messaging_session.SessionStore,
-                storage_path=os.path.join(data_path, "sessions.json"),
-                managed_message_cap=settings.max_message_log_entries_per_chat,
-            )
-        )
+        if self._messaging_import_task is not None:
+            await asyncio.shield(self._messaging_import_task)
+        if self._messaging_storage_error is not None:
+            raise ApplicationUnavailableError(
+                "Messaging storage is unavailable."
+            ) from self._messaging_storage_error
+        if self._messaging_store is None:
+            raise ApplicationUnavailableError("Messaging storage is unavailable.")
+        session_store = self._messaging_store
         workflow = messaging_workflow_module.MessagingWorkflow(
             platform_name=components.name,
             outbound=components.outbound,
@@ -1124,7 +1169,7 @@ class ApplicationRuntime:
             log_messaging_error_details=settings.log_messaging_error_details,
         )
         self._messaging_workflow = workflow
-        workflow.restore()
+        await workflow.restore()
         components.runtime.on_message(workflow.handle_message)
         await self._http_ready.wait()
         if self._draining:
@@ -1145,6 +1190,10 @@ class ApplicationRuntime:
             "code_service.close",
             self._code_service.close(),
             log_verbose_errors=verbose,
+        ):
+            return False
+        if self._database is not None and not await best_effort(
+            "database.close", self._database.close()
         ):
             return False
         if not await self._cleanup_transcriber():

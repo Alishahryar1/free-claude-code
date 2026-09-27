@@ -116,7 +116,7 @@ def test_historical_database_moves_and_upgrades_without_losing_records(
         assert len(after["code_items"]) == 2
         assert after["code_items"][-1]["kind"] == "prompt"
         with closing(sqlite3.connect(target)) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone() == (3,)
+            assert connection.execute("PRAGMA user_version").fetchone() == (4,)
             assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -153,7 +153,7 @@ def test_orphan_journals_are_not_treated_as_a_fresh_database(
     assert not (tmp_path / "fcc.db").exists()
 
 
-@pytest.mark.parametrize("version", [-1, 4])
+@pytest.mark.parametrize("version", [-1, 5])
 def test_unsupported_version_is_not_moved_or_mutated(tmp_path, version):
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
@@ -289,6 +289,7 @@ def test_fresh_schema_failure_rolls_back_all_ddl(tmp_path, monkeypatch):
 def test_current_schema_does_not_execute_historical_migrations(tmp_path, monkeypatch):
     target = tmp_path / "fcc.db"
     historical_database(target, 3)
+    initialize_database(target)
 
     def already_applied(connection):
         pytest.fail("An applied migration was executed again")
@@ -296,9 +297,35 @@ def test_current_schema_does_not_execute_historical_migrations(tmp_path, monkeyp
     monkeypatch.setattr(
         sqlite_database,
         "MIGRATIONS",
-        tuple((version, already_applied) for version in (1, 2, 3)),
+        tuple((version, already_applied) for version in (1, 2, 3, 4)),
     )
     initialize_database(target)
+
+
+def test_messaging_schema_failure_rolls_back_without_changing_code_history(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "fcc.db"
+    historical_database(target, 3)
+    before = snapshot(target)
+    migrations = sqlite_database.MIGRATIONS
+
+    def fail(connection):
+        migrations[-1][1](connection)
+        raise sqlite3.DatabaseError("interrupted messaging schema")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite_database, "MIGRATIONS", (*migrations[:-1], (4, fail)))
+        with pytest.raises(sqlite3.DatabaseError, match="interrupted"):
+            initialize_database(target)
+    assert snapshot(target) == before
+    with closing(sqlite3.connect(target)) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (3,)
+        assert not connection.execute(
+            "SELECT name FROM sqlite_schema WHERE name LIKE 'messaging_%'"
+        ).fetchall()
+    initialize_database(target)
+    assert snapshot(target) == before
 
 
 def test_busy_wal_is_not_renamed_and_retries_after_reader_closes(tmp_path, monkeypatch):
@@ -349,7 +376,9 @@ def test_redirected_legacy_storage_is_not_moved(tmp_path, redirect):
 
 
 @pytest.mark.asyncio
-async def test_restart_recovery_runs_after_current_schema_relocation(tmp_path):
+async def test_restart_recovery_runs_after_current_schema_relocation(
+    database_factory, tmp_path
+):
     old, target, lock = (
         tmp_path / "code/code.db",
         tmp_path / "fcc.db",
@@ -363,7 +392,7 @@ async def test_restart_recovery_runs_after_current_schema_relocation(tmp_path):
                 "UPDATE code_runs SET status='running', finished_at=NULL"
             )
             connection.execute("UPDATE code_prompts SET status='answering'")
-        store = SQLiteCodeStore(target, lock, legacy_database_path=old)
+        store = SQLiteCodeStore(database_factory(target, lock, legacy_path=old))
         try:
             await store.start()
             run = await store.get_run("s", "r")
@@ -372,18 +401,21 @@ async def test_restart_recovery_runs_after_current_schema_relocation(tmp_path):
             assert (await store.prompts("s"))[0].status == "expired"
         finally:
             await store.close()
+            await store.database.close()
 
 
 @pytest.mark.asyncio
-async def test_old_owner_blocks_move_and_new_owner_uses_same_lock(tmp_path):
+async def test_old_owner_blocks_move_and_new_owner_uses_same_lock(
+    database_factory, tmp_path
+):
     old, target, lock = (
         tmp_path / "code/code.db",
         tmp_path / "fcc.db",
         tmp_path / "code/code.lock",
     )
     historical_database(old, 3)
-    first = SQLiteCodeStore(old, lock)
-    second = SQLiteCodeStore(target, lock, legacy_database_path=old)
+    first = SQLiteCodeStore(database_factory(old, lock))
+    second = SQLiteCodeStore(database_factory(target, lock, legacy_path=old))
     await first.start()
     try:
         with pytest.raises(CodeUnavailableError, match="another FCC"):
@@ -391,12 +423,15 @@ async def test_old_owner_blocks_move_and_new_owner_uses_same_lock(tmp_path):
         assert old.exists() and not target.exists()
     finally:
         await first.close()
+        await first.database.close()
+    second = SQLiteCodeStore(database_factory(target, lock, legacy_path=old))
     await second.start()
     try:
         assert (await second.get_session("s")).title == "Saved"
         assert lock.exists() and not old.exists()
     finally:
         await second.close()
+        await second.database.close()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission contract")
@@ -416,7 +451,7 @@ async def test_production_startup_keeps_http_available_and_chat_cleanup_independ
     from free_claude_code.config import paths
     from free_claude_code.config.settings import Settings
     from free_claude_code.core.interprocess_lock import InterprocessFileLock
-    from free_claude_code.runtime import bootstrap, code_sessions_sqlite
+    from free_claude_code.runtime import bootstrap
     from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
     from free_claude_code.runtime.retired_chat import remove_retired_chat_history
 
@@ -436,7 +471,7 @@ async def test_production_startup_keeps_http_available_and_chat_cleanup_independ
             raise sqlite3.DatabaseError("injected migration failure")
         initialize_database(*args)
 
-    monkeypatch.setattr(code_sessions_sqlite, "initialize_database", gated_migration)
+    monkeypatch.setattr(sqlite_database, "initialize_database", gated_migration)
     monkeypatch.setattr(bootstrap, "configure_logging", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         ProviderRuntimeManager, "start_model_list_refresh", lambda _: None

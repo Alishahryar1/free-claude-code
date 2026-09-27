@@ -6,7 +6,6 @@ import pytest
 from free_claude_code.messaging.command_context import ReplyClearResult, StopOutcome
 from free_claude_code.messaging.models import MessageScope
 from free_claude_code.messaging.platforms.ports import MessagingStartupNotice
-from free_claude_code.messaging.session import SessionStore
 from free_claude_code.messaging.trees import (
     CancellationReason,
     CancellationResult,
@@ -80,12 +79,7 @@ def _session(events) -> MagicMock:
 
 
 async def _wait_for_idle(workflow: MessagingWorkflow) -> None:
-    for _ in range(200):
-        if workflow.tree_queue.task_count() == 0:
-            await asyncio.sleep(0)
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("messaging workflow did not become idle")
+    await asyncio.wait_for(workflow.tree_queue.wait_idle(), timeout=5)
 
 
 @pytest.fixture
@@ -602,7 +596,6 @@ async def test_new_turn_uses_public_admission_and_persists_exact_snapshot(
     await _wait_for_idle(handler)
 
     assert "Launching" in mock_platform.queue_send_message.call_args.args[1]
-    assert mock_session_store.save_tree_snapshot.call_count >= 2
     view = await handler.tree_queue.get_node(incoming.scope, "node_1")
     assert view is not None
     assert view.state is MessageState.COMPLETED
@@ -776,7 +769,6 @@ async def test_stop_all_applies_immutable_ui_ownership_and_snapshots(
     mock_cli_manager.stop_all.assert_awaited_once()
     assert mock_platform.fire_and_forget.call_count == 1
     assert mock_platform.queue_edit_message.call_args.args[1] == "status_queued"
-    mock_session_store.save_tree_snapshot.assert_called_once_with(snapshot)
 
 
 @pytest.mark.asyncio
@@ -874,7 +866,6 @@ async def test_stop_all_persists_committed_transition_before_cli_shutdown(
         stop_task = asyncio.create_task(handler.stop_all_tasks())
         await shutdown_started.wait()
 
-        mock_session_store.save_tree_snapshot.assert_called_once_with(snapshot)
         stop_task.cancel()
         stop_task.cancel()
         await asyncio.sleep(0)
@@ -922,7 +913,9 @@ async def test_terminal_close_waits_past_interactive_drain_timeout(
         mock_session_store,
         platform_name="telegram",
     )
-    workflow._tree_queue = TreeQueueManager(cancellation_delayed_runner)
+    workflow._tree_queue = TreeQueueManager(
+        cancellation_delayed_runner, store=AsyncMock()
+    )
     await workflow.handle_message(
         incoming_message_factory(text="work", message_id="work_1")
     )
@@ -936,13 +929,11 @@ async def test_terminal_close_waits_past_interactive_drain_timeout(
         mock_cli_manager.stop_all.assert_awaited_once()
         assert close_task.done() is False
         assert workflow.tree_queue.task_count() == 1
-        mock_session_store.flush_pending_save.assert_not_called()
 
         release_cleanup.set()
         await asyncio.wait_for(close_task, timeout=1)
 
         assert workflow.tree_queue.task_count() == 0
-        mock_session_store.flush_pending_save.assert_called_once()
     finally:
         release_cleanup.set()
         if not close_task.done():
@@ -982,7 +973,6 @@ async def test_node_runner_success_uses_claim_and_semantic_completion(
         await handler.node_runner.process_node(claim)
 
     complete_claim.assert_awaited_once_with(claim, "session_1")
-    mock_session_store.save_tree_snapshot.assert_called_once_with(snapshot)
     rendered = mock_platform.queue_edit_message.call_args_list[-1].args[2]
     assert "✅ *Complete*" in rendered
     assert "Hello world" in rendered
@@ -1054,10 +1044,6 @@ async def test_session_info_records_real_session_through_manager(
     )
     record_session.assert_awaited_once_with(claim, "real_session")
     complete_claim.assert_awaited_once_with(claim, "real_session")
-    assert mock_session_store.save_tree_snapshot.call_args_list == [
-        ((record_snapshot,), {}),
-        ((complete_snapshot,), {}),
-    ]
 
 
 @pytest.mark.asyncio
@@ -1147,10 +1133,6 @@ async def test_non_exit_error_defers_child_failure_until_stream_ends(
     assert fail_claim.await_args_list == [
         call(claim, propagate=False),
         call(claim, propagate=True),
-    ]
-    assert mock_session_store.save_tree_snapshot.call_args_list == [
-        call(snapshot),
-        call(snapshot),
     ]
     rendered = "\n".join(
         call.args[2] for call in mock_platform.queue_edit_message.call_args_list
@@ -1602,11 +1584,12 @@ async def test_startup_notice_cancellation_after_receipt_finishes_compensation(
 
 @pytest.mark.asyncio
 async def test_concurrent_global_clear_does_not_wait_for_startup_delivery(
+    messaging_store_factory,
     mock_platform,
     mock_cli_manager,
     tmp_path,
 ) -> None:
-    store = SessionStore(storage_path=str(tmp_path / "sessions.json"))
+    store = await messaging_store_factory(storage_path=str(tmp_path / "sessions.json"))
     workflow = MessagingWorkflow(
         mock_platform,
         mock_cli_manager,
@@ -1638,7 +1621,9 @@ async def test_concurrent_global_clear_does_not_wait_for_startup_delivery(
         release_send.set()
         await asyncio.gather(publish_task, clear_task, return_exceptions=True)
 
-    assert store.get_tracked_message_ids_for_chat(_SCOPE.platform, _SCOPE.chat_id) == []
+    assert (
+        await store.get_tracked_message_ids_for_chat(_SCOPE.platform, _SCOPE.chat_id)
+    ) == []
     mock_platform.queue_delete_messages.assert_awaited_once_with(
         _SCOPE.chat_id,
         ["startup_1"],
@@ -1686,11 +1671,12 @@ async def test_global_stop_does_not_wait_for_or_invalidate_startup_delivery(
 
 @pytest.mark.asyncio
 async def test_global_clear_precedes_concurrent_startup_notice_publication(
+    messaging_store_factory,
     mock_platform,
     mock_cli_manager,
     tmp_path,
 ) -> None:
-    store = SessionStore(storage_path=str(tmp_path / "sessions.json"))
+    store = await messaging_store_factory(storage_path=str(tmp_path / "sessions.json"))
     workflow = MessagingWorkflow(
         mock_platform,
         mock_cli_manager,
@@ -1725,20 +1711,21 @@ async def test_global_clear_precedes_concurrent_startup_notice_publication(
         assert await clear_task == frozenset()
         await publish_task
 
-    assert store.get_tracked_message_ids_for_chat(_SCOPE.platform, _SCOPE.chat_id) == [
-        "msg_123"
-    ]
+    assert (
+        await store.get_tracked_message_ids_for_chat(_SCOPE.platform, _SCOPE.chat_id)
+    ) == ["msg_123"]
     mock_platform.queue_delete_messages.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_clear_command_cannot_evict_startup_notice_at_managed_message_cap(
+    messaging_store_factory,
     mock_platform,
     mock_cli_manager,
     incoming_message_factory,
     tmp_path,
 ) -> None:
-    store = SessionStore(
+    store = await messaging_store_factory(
         storage_path=str(tmp_path / "sessions.json"),
         managed_message_cap=1,
     )
@@ -1749,12 +1736,14 @@ async def test_clear_command_cannot_evict_startup_notice_at_managed_message_cap(
         platform_name="telegram",
         voice_cancellation=mock_platform,
     )
-    store.record_message_id(
-        _SCOPE.platform,
-        _SCOPE.chat_id,
-        "100",
-        "out",
-        "startup",
+    (
+        await store.record_message_id(
+            _SCOPE.platform,
+            _SCOPE.chat_id,
+            "100",
+            "out",
+            "startup",
+        )
     )
     incoming = incoming_message_factory(
         text="/clear",
@@ -1799,7 +1788,6 @@ async def test_clear_chat_is_fully_scoped_to_the_invoking_chat(
     assert handler.get_tree_count() == 1
     assert await handler.tree_queue.get_node(root_2.scope, "200") is not None
     mock_cli_manager.stop_all.assert_not_awaited()
-    mock_session_store.clear_scope.assert_called_once_with(_SCOPE)
 
 
 @pytest.mark.asyncio
@@ -1844,135 +1832,10 @@ async def test_global_clear_cancels_and_deletes_only_current_chat_voices(
 
 
 @pytest.mark.asyncio
-async def test_global_clear_persists_after_tree_detach(
-    handler,
-    mock_cli_manager,
-    mock_session_store,
-) -> None:
-    events: list[str] = []
-
-    async def clear_trees(
-        scope: MessageScope, *, reason: CancellationReason
-    ) -> CancellationResult:
-        assert scope == _SCOPE
-        assert reason is CancellationReason.CLEAR
-        events.append("trees.clear_scope")
-        return CancellationResult()
-
-    mock_session_store.clear_scope.side_effect = lambda scope: events.append(
-        f"store.clear_scope:{scope.chat_id}"
-    )
-
-    with patch.object(handler.tree_queue, "clear_scope", side_effect=clear_trees):
-        result = await handler.clear_chat("telegram", "chat_1")
-
-    assert result == frozenset()
-    assert events == ["trees.clear_scope", "store.clear_scope:chat_1"]
-    mock_cli_manager.stop_all.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_global_clear_finishes_cleanup_before_final_persistence_error_escapes(
-    handler,
-    mock_cli_manager,
-    mock_session_store,
-) -> None:
-    events: list[str] = []
-
-    async def clear_trees(
-        scope: MessageScope, *, reason: CancellationReason
-    ) -> CancellationResult:
-        assert scope == _SCOPE
-        assert reason is CancellationReason.CLEAR
-        events.append("trees.clear_scope")
-        return CancellationResult()
-
-    def fail_final_clear(scope: MessageScope) -> None:
-        assert scope == _SCOPE
-        events.append("store.clear_scope")
-        raise OSError("final clear failure")
-
-    mock_session_store.clear_scope.side_effect = fail_final_clear
-
-    with (
-        patch.object(handler.tree_queue, "clear_scope", side_effect=clear_trees),
-        pytest.raises(OSError, match="final clear failure"),
-    ):
+async def test_global_clear_reports_transaction_failure(handler, mock_session_store):
+    mock_session_store.commit_trees.side_effect = OSError("write failed")
+    with pytest.raises(OSError, match="write failed"):
         await handler.clear_chat("telegram", "chat_1")
-
-    assert events == ["trees.clear_scope", "store.clear_scope"]
-    mock_cli_manager.stop_all.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_global_clear_preserves_tree_and_persistence_failures(
-    handler,
-    mock_cli_manager,
-    mock_session_store,
-) -> None:
-    events: list[str] = []
-    persistence_error = OSError("final clear failure")
-    tree_error = RuntimeError("tree clear failure")
-
-    async def fail_tree_clear(
-        scope: MessageScope, *, reason: CancellationReason
-    ) -> CancellationResult:
-        assert scope == _SCOPE
-        assert reason is CancellationReason.CLEAR
-        events.append("trees.clear_scope")
-        raise tree_error
-
-    def fail_final_clear(scope: MessageScope) -> None:
-        assert scope == _SCOPE
-        events.append("store.clear_scope")
-        raise persistence_error
-
-    mock_session_store.clear_scope.side_effect = fail_final_clear
-
-    with (
-        patch.object(handler.tree_queue, "clear_scope", side_effect=fail_tree_clear),
-        pytest.raises(ExceptionGroup) as raised,
-    ):
-        await handler.clear_chat("telegram", "chat_1")
-
-    assert raised.value.exceptions == (tree_error, persistence_error)
-    assert events == ["trees.clear_scope", "store.clear_scope"]
-    mock_cli_manager.stop_all.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_committed_global_clear_attempts_remaining_steps_after_tree_failure(
-    handler,
-    mock_cli_manager,
-    mock_session_store,
-) -> None:
-    events: list[str] = []
-    tree_error = RuntimeError("tree clear failure")
-
-    async def fail_tree_clear(
-        scope: MessageScope, *, reason: CancellationReason
-    ) -> CancellationResult:
-        assert scope == _SCOPE
-        assert reason is CancellationReason.CLEAR
-        events.append("trees.clear_scope")
-        raise tree_error
-
-    mock_session_store.clear_scope.side_effect = lambda scope: events.append(
-        f"store.clear_scope:{scope.chat_id}"
-    )
-
-    with (
-        patch.object(handler.tree_queue, "clear_scope", side_effect=fail_tree_clear),
-        pytest.raises(RuntimeError, match="tree clear failure") as raised,
-    ):
-        await handler.clear_chat("telegram", "chat_1")
-
-    assert raised.value is tree_error
-    assert events == [
-        "trees.clear_scope",
-        "store.clear_scope:chat_1",
-    ]
-    mock_cli_manager.stop_all.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2010,7 +1873,6 @@ async def test_cancelled_global_clear_finishes_owned_transaction_before_propagat
 
     assert handler._clear_generations[_SCOPE] == 1
     assert handler.get_tree_count() == 0
-    mock_session_store.clear_scope.assert_called_once_with(_SCOPE)
     mock_cli_manager.stop_all.assert_not_awaited()
 
 
@@ -2093,7 +1955,6 @@ async def test_reply_clear_status_preserves_prompt_and_persists_remaining_tree(
     assert cleared_prompt.state is MessageState.ERROR
     assert cleared_prompt.session_id is None
     assert await handler.tree_queue.get_node(root.scope, "100") is not None
-    mock_session_store.save_tree_snapshot.assert_called_once()
     mock_session_store.record_message_id.assert_called_once_with(
         "telegram",
         "chat_1",
@@ -2128,7 +1989,6 @@ async def test_reply_clear_unknown_reports_nothing_to_clear(
         "in",
         "command",
     )
-    mock_session_store.clear_scope.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2157,9 +2017,6 @@ async def test_reply_clear_root_removes_tree_snapshot(
     )
 
     assert set(deleted_ids) == {"100", "101", "150"}
-    mock_session_store.remove_tree_snapshot.assert_called_once_with(
-        TreeIdentity(scope=root.scope, root_id="100")
-    )
     assert handler.get_tree_count() == 0
 
 
@@ -2195,14 +2052,13 @@ async def test_late_cancelled_runner_cannot_save_or_render_after_chat_clear(
 
     await handler.clear_chat("telegram", "chat_1")
 
-    mock_session_store.save_tree_snapshot.assert_not_called()
-    mock_session_store.clear_scope.assert_called_once_with(_SCOPE)
     mock_platform.queue_edit_message.assert_not_awaited()
     assert handler.get_tree_count() == 0
 
 
 @pytest.mark.asyncio
 async def test_global_clear_removes_snapshot_saved_during_detach_window(
+    messaging_store_factory,
     tmp_path,
     mock_platform,
     mock_cli_manager,
@@ -2227,7 +2083,7 @@ async def test_global_clear_removes_snapshot_saved_during_detach_window(
     )
     mock_platform.queue_send_message.return_value = "status-new"
     store_path = tmp_path / "sessions.json"
-    store = SessionStore(storage_path=str(store_path))
+    store = await messaging_store_factory(storage_path=str(store_path))
     workflow = MessagingWorkflow(
         mock_platform,
         mock_cli_manager,
@@ -2258,22 +2114,21 @@ async def test_global_clear_removes_snapshot_saved_during_detach_window(
             release_runner.set()
             await _wait_for_idle(workflow)
 
-            assert not store.load_conversation_snapshot().is_empty
-            store.flush_pending_save()
-            assert (
-                not SessionStore(storage_path=str(store_path))
-                .load_conversation_snapshot()
-                .is_empty
-            )
+            assert not (await store.load_conversation_snapshot()).is_empty
+            assert not (
+                await (
+                    await messaging_store_factory(storage_path=str(store_path))
+                ).load_conversation_snapshot()
+            ).is_empty
             release_id_read.set()
             await clear_task
 
-        assert store.load_conversation_snapshot().is_empty
+        assert (await store.load_conversation_snapshot()).is_empty
         assert (
-            SessionStore(storage_path=str(store_path))
-            .load_conversation_snapshot()
-            .is_empty
-        )
+            await (
+                await messaging_store_factory(storage_path=str(store_path))
+            ).load_conversation_snapshot()
+        ).is_empty
     finally:
         release_runner.set()
         release_id_read.set()

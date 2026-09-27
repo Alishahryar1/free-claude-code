@@ -1,12 +1,18 @@
 """Offline relocation and transactional schema initialization of FCC's database.
 
-The caller must hold the Code owner lock until the store closes. Connections
+The application holds the shared owner lock until both features close. Connections
 opened here never escape initialization, including when migration fails.
 """
 
+import asyncio
+import os
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
+
+from free_claude_code.core.async_tasks import run_sync_owned
+from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
 from .sqlite_migrations import MIGRATIONS
 
@@ -21,6 +27,13 @@ _BASE_COLUMNS = {
     "code_deleted": "id",
 }
 _SIDECARS = ("-wal", "-shm", "-journal")
+_MESSAGING_COLUMNS = {
+    "messaging_trees": "platform chat_id root_id",
+    "messaging_nodes": "platform chat_id root_id node_id parent_id parent_reference_id status_message_id session_id state",
+    "messaging_references": "platform chat_id reference_id node_id kind",
+    "messaging_managed_messages": "sequence platform chat_id message_id ts direction kind",
+    "messaging_legacy_import": "source outcome trees messages skipped cleanup_pending",
+}
 
 
 def _connect(path: Path, *, existing: bool = False) -> sqlite3.Connection:
@@ -47,11 +60,12 @@ def _schema_version(connection: sqlite3.Connection) -> int:
     }
     if version == 0 and not tables:
         return version
-    if tables != _BASE_COLUMNS.keys():
+    columns = _BASE_COLUMNS | (_MESSAGING_COLUMNS if version >= 4 else {})
+    if tables != columns.keys():
         raise sqlite3.DatabaseError(
             "Unrecognized FCC database schema. Saved data was preserved."
         )
-    for table, baseline in _BASE_COLUMNS.items():
+    for table, baseline in columns.items():
         expected = set(baseline.split())
         if version >= 2 and table in ("code_sessions", "code_runs"):
             expected.add("mode")
@@ -161,3 +175,101 @@ def initialize_database(path: Path, legacy_path: Path | None = None) -> None:
                 if connection.in_transaction:
                     connection.execute("ROLLBACK")
                 raise
+
+
+class SQLiteDatabase:
+    """Application-owned initialization and lifetime for both durable features."""
+
+    def __init__(
+        self, path: Path, lock_path: Path, *, legacy_path: Path | None = None
+    ) -> None:
+        self.path = path
+        self._legacy_path = legacy_path
+        self._owner = InterprocessFileLock(lock_path)
+        self._lifecycle = asyncio.Lock()
+        self._started = False
+        self._closing = False
+        self._startup_error: Exception | None = None
+        self._operations: set[asyncio.Task] = set()
+
+    async def start(self) -> None:
+        async with self._lifecycle:
+            if self._started:
+                return
+            if self._closing:
+                raise sqlite3.OperationalError("FCC database is closing")
+            if self._startup_error is not None:
+                raise self._startup_error
+            try:
+                await run_sync_owned(self._initialize)
+            except Exception as exc:
+                self._startup_error = exc
+                self._owner.release()
+                raise
+            except BaseException:
+                self._owner.release()
+                raise
+            self._started = True
+
+    def _initialize(self) -> None:
+        if not self._owner.acquire():
+            raise sqlite3.OperationalError(
+                "FCC storage is already owned by another FCC server"
+            )
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            self.path.parent.chmod(0o700)
+        initialize_database(self.path, self._legacy_path)
+        if os.name != "nt":
+            for path in (self.path, Path(f"{self.path}-wal"), Path(f"{self.path}-shm")):
+                if path.exists():
+                    path.chmod(0o600)
+
+    def execute[T](
+        self, operation: Callable[[sqlite3.Connection], T], *, write: bool = True
+    ) -> T:
+        with closing(_connect(self.path)) as connection:
+            connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+            try:
+                result = operation(connection)
+                connection.execute("COMMIT")
+                return result
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+
+    async def run[T](
+        self, operation: Callable[[sqlite3.Connection], T], *, write: bool = True
+    ) -> T:
+        return await self.work(lambda: self.execute(operation, write=write))
+
+    async def work[T](self, operation: Callable[[], T]) -> T:
+        if not self._started or self._closing:
+            raise sqlite3.OperationalError("FCC storage is closed")
+        task = asyncio.create_task(run_sync_owned(operation))
+        self._operations.add(task)
+        try:
+            # Deliver the result before cancellation can separate SQL commit from
+            # the caller's in-memory publication/rollback.
+            while True:
+                try:
+                    return await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    if task.done():
+                        return task.result()
+        finally:
+            self._operations.discard(task)
+
+    async def close(self) -> None:
+        async with self._lifecycle:
+            self._closing = True
+            if self._operations:
+                drain = asyncio.gather(*self._operations, return_exceptions=True)
+                while not drain.done():
+                    try:
+                        await asyncio.shield(drain)
+                    except asyncio.CancelledError:
+                        continue
+            self._started = False
+            await run_sync_owned(self._owner.release)

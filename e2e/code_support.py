@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from free_claude_code.application.code_sessions import CodeService
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
+from free_claude_code.runtime.sqlite_database import SQLiteDatabase
 from tests.code_sessions_support import FakeHarness
 
 
@@ -13,8 +14,9 @@ class CodeControl:
     def __init__(self, directory):
         self.harness = FakeHarness()
         self.folder_picker = FolderPickerControl()
+        self.database = SQLiteDatabase(directory / "fcc.db", directory / "code.lock")
         self.service = CodeService(
-            SQLiteCodeStore(directory / "code.db", directory / "code.lock"),
+            SQLiteCodeStore(self.database),
             self.harness,
         )
         self.loop: asyncio.AbstractEventLoop | None = None

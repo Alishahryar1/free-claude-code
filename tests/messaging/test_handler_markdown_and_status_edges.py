@@ -243,7 +243,6 @@ async def test_node_runner_process_node_session_limit_marks_error_and_updates_ui
         claim,
         propagate=False,
     )
-    session_store.save_tree_snapshot.assert_called_once_with(snapshot)
 
 
 @pytest.mark.asyncio
@@ -286,7 +285,6 @@ async def test_node_runner_cancellation_marks_error_and_saves_tree():
         claim,
         propagate=False,
     )
-    session_store.save_tree_snapshot.assert_called_once_with(snapshot)
 
 
 @pytest.mark.asyncio
@@ -328,7 +326,6 @@ async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
     )
     cancel_all.assert_awaited_once_with(reason=CancellationReason.STOP)
     cli_manager.stop_all.assert_awaited_once()
-    session_store.save_tree_snapshot.assert_called_once_with(snapshot)
 
 
 @pytest.mark.asyncio

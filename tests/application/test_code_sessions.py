@@ -17,7 +17,12 @@ from free_claude_code.application.code_sessions.models import (
 )
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.codex_protocol import CodexProtocol
-from tests.code_sessions_support import CodexPackets, FakeConnection, FakeHarness
+from tests.code_sessions_support import (
+    CodexPackets,
+    FakeConnection,
+    FakeHarness,
+    close_code_database,
+)
 
 
 def new_id():
@@ -25,15 +30,18 @@ def new_id():
 
 
 @pytest_asyncio.fixture
-async def code(tmp_path):
+async def code(database_factory, tmp_path):
     harness = FakeHarness()
-    store = SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock")
+    store = SQLiteCodeStore(
+        database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+    )
     service = CodeService(store, harness)
     await service.start()
     try:
         yield service, harness, tmp_path
     finally:
         await service.close()
+        await close_code_database(service)
 
 
 async def session_for(code):
@@ -328,7 +336,7 @@ async def test_child_review_stays_with_first_entry_after_next_turn_begins(code):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("closure", ["native", "service"])
 async def test_pending_child_review_becomes_unavailable_when_idle_connection_ends(
-    code, closure
+    database_factory, code, closure
 ):
     service, harness, directory = code
     session = await session_for(code)
@@ -360,8 +368,12 @@ async def test_pending_child_review_becomes_unavailable_when_idle_connection_end
         assert detail.active_review_ids == ()
         assert detail.run.status == "completed"
         await service.close()
+        await close_code_database(service)
         restarted = CodeService(
-            SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+            SQLiteCodeStore(
+                database_factory(directory / "code.db", directory / "code.lock")
+            ),
+            harness,
         )
         await restarted.start()
         try:
@@ -566,7 +578,9 @@ async def test_failure_saving_native_defaults_never_submits_input(code, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_native_reviews_and_notices_keep_identity_order_and_survive_restart(code):
+async def test_native_reviews_and_notices_keep_identity_order_and_survive_restart(
+    database_factory, code
+):
     service, harness, directory = code
     session = await session_for(code)
     await service.send(
@@ -625,8 +639,12 @@ async def test_native_reviews_and_notices_keep_identity_order_and_survive_restar
     assert detail.run.status == "completed"
     assert detail.items[-1].text == "Native warning"
     await service.close()
+    await close_code_database(service)
     restarted = CodeService(
-        SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+        SQLiteCodeStore(
+            database_factory(directory / "code.db", directory / "code.lock")
+        ),
+        harness,
     )
     await restarted.start()
     try:
@@ -751,7 +769,9 @@ async def test_failed_outcome_is_durable_once_after_partial_output_and_older_pag
 
 
 @pytest.mark.asyncio
-async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(code):
+async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(
+    database_factory, code
+):
     service, harness, directory = code
     session = await session_for(code)
     await service.send(
@@ -801,8 +821,12 @@ async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(code)
     assert (await service.get_detail(session.id)).run.error is None
     detail = await service.get_detail(session.id)
     await service.close()
+    await close_code_database(service)
     restarted = CodeService(
-        SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+        SQLiteCodeStore(
+            database_factory(directory / "code.db", directory / "code.lock")
+        ),
+        harness,
     )
     await restarted.start()
     try:
@@ -1022,19 +1046,21 @@ async def test_poorer_native_history_keeps_captured_source_and_reasoning(code):
 
 
 @pytest.mark.asyncio
-async def test_storage_start_failure_is_isolated_to_code(tmp_path):
+async def test_storage_start_failure_is_isolated_to_code(database_factory, tmp_path):
     class BrokenStore(SQLiteCodeStore):
         async def start(self):
             raise CodeUnavailableError("Code disk unavailable")
 
     service = CodeService(
-        BrokenStore(tmp_path / "code.db", tmp_path / "code.lock"), FakeHarness()
+        BrokenStore(database_factory(tmp_path / "code.db", tmp_path / "code.lock")),
+        FakeHarness(),
     )
     try:
         await service.start()
         assert service.availability() == (False, "Code disk unavailable")
     finally:
         await service.close()
+        await close_code_database(service)
 
 
 @pytest.mark.asyncio
@@ -1446,10 +1472,12 @@ async def test_idle_delete_removes_both_histories_and_blocks_late_create(code):
 
 
 @pytest.mark.asyncio
-async def test_restart_preserves_receipt_and_does_not_replay_input(tmp_path):
+async def test_restart_preserves_receipt_and_does_not_replay_input(
+    database_factory, tmp_path
+):
     harness = FakeHarness()
     database, lock = tmp_path / "code.db", tmp_path / "code.lock"
-    first = CodeService(SQLiteCodeStore(database, lock), harness)
+    first = CodeService(SQLiteCodeStore(database_factory(database, lock)), harness)
     await first.start()
     session = await first.create_session(new_id(), str(tmp_path))
     run = await first.send(
@@ -1457,7 +1485,8 @@ async def test_restart_preserves_receipt_and_does_not_replay_input(tmp_path):
     )
     await harness.started.wait()
     await first.close()
-    second = CodeService(SQLiteCodeStore(database, lock), harness)
+    await close_code_database(first)
+    second = CodeService(SQLiteCodeStore(database_factory(database, lock)), harness)
     await second.start()
     try:
         repeat = await second.send(
@@ -1469,6 +1498,7 @@ async def test_restart_preserves_receipt_and_does_not_replay_input(tmp_path):
         assert harness.connections[0].inputs == [(run.id, "once", "provider/model")]
     finally:
         await second.close()
+        await close_code_database(second)
 
 
 @pytest.mark.asyncio
@@ -1498,6 +1528,7 @@ async def test_two_answers_claim_one_native_prompt(code):
 
 @pytest.mark.asyncio
 async def test_prompt_arrival_has_one_durable_position_despite_repeated_native_item(
+    database_factory,
     code,
 ):
     service, harness, directory = code
@@ -1546,8 +1577,12 @@ async def test_prompt_arrival_has_one_durable_position_despite_repeated_native_i
         await connection.text("turn-1", "after", "After approvals", complete=True)
         await connection.finish("turn-1")
         await service.close()
+        await close_code_database(service)
         restored = CodeService(
-            SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+            SQLiteCodeStore(
+                database_factory(directory / "code.db", directory / "code.lock")
+            ),
+            harness,
         )
         await restored.start()
         try:
@@ -1838,7 +1873,9 @@ async def test_catalog_replacement_is_limited_to_selected_entry_and_session(code
 
 
 @pytest.mark.asyncio
-async def test_cancelled_http_admission_still_commits_and_executes_once(tmp_path):
+async def test_cancelled_http_admission_still_commits_and_executes_once(
+    database_factory, tmp_path
+):
     committed = asyncio.Event()
     release = asyncio.Event()
 
@@ -1851,7 +1888,8 @@ async def test_cancelled_http_admission_still_commits_and_executes_once(tmp_path
 
     harness = FakeHarness()
     service = CodeService(
-        GatedStore(tmp_path / "code.db", tmp_path / "code.lock"), harness
+        GatedStore(database_factory(tmp_path / "code.db", tmp_path / "code.lock")),
+        harness,
     )
     await service.start()
     try:
@@ -1884,6 +1922,7 @@ async def test_cancelled_http_admission_still_commits_and_executes_once(tmp_path
     finally:
         release.set()
         await service.close()
+        await close_code_database(service)
 
 
 @pytest.mark.asyncio
@@ -2081,7 +2120,7 @@ async def test_review_liveness_flush_includes_pending_output_and_keeps_staging_v
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native_exists", [False, True])
 async def test_startup_reconciles_persisted_deletion_without_another_native_delete(
-    code, native_exists
+    database_factory, code, native_exists
 ):
     service, harness, directory = code
     session = await idle_native(code)
@@ -2092,10 +2131,14 @@ async def test_startup_reconciles_persisted_deletion_without_another_native_dele
         session.revision,
     )
     await service.close()
+    await close_code_database(service)
     if not native_exists:
         harness.histories.pop(session.native_thread_id)
     restarted = CodeService(
-        SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+        SQLiteCodeStore(
+            database_factory(directory / "code.db", directory / "code.lock")
+        ),
+        harness,
     )
     try:
         await restarted.start()
@@ -2114,7 +2157,7 @@ async def test_startup_reconciles_persisted_deletion_without_another_native_dele
 @pytest.mark.asyncio
 @pytest.mark.parametrize("may_have_input", [False, True])
 async def test_missing_native_history_is_recreated_only_before_possible_input(
-    code, may_have_input
+    database_factory, code, may_have_input
 ):
     service, harness, directory = code
     session = await session_for(code)
@@ -2128,8 +2171,12 @@ async def test_missing_native_history_is_recreated_only_before_possible_input(
         session.revision,
     )
     await service.close()
+    await close_code_database(service)
     restarted = CodeService(
-        SQLiteCodeStore(directory / "code.db", directory / "code.lock"), harness
+        SQLiteCodeStore(
+            database_factory(directory / "code.db", directory / "code.lock")
+        ),
+        harness,
     )
     try:
         await restarted.start()
@@ -2186,3 +2233,4 @@ async def test_cancelled_close_waiter_does_not_cancel_owned_shutdown(code, monke
     finally:
         release.set()
         await service.close()
+        await close_code_database(service)

@@ -1,8 +1,7 @@
 """Tests for messaging/ module."""
 
 import asyncio
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -74,121 +73,6 @@ class TestMessagingPorts:
         assert components.outbound is outbound
 
 
-class TestSessionStore:
-    """Test SessionStore."""
-
-    def test_session_store_init(self, tmp_path):
-        """Test SessionStore initialization."""
-        from free_claude_code.messaging.session import SessionStore
-
-        store = SessionStore(storage_path=str(tmp_path / "sessions.json"))
-        assert store.load_conversation_snapshot().is_empty
-
-    # --- Tree Tests ---
-
-    def test_save_and_get_tree(self, tmp_path):
-        """Test saving and retrieving trees."""
-        from free_claude_code.messaging.models import MessageScope
-        from free_claude_code.messaging.session import SessionStore
-        from free_claude_code.messaging.trees import TreeIdentity, TreeSnapshot
-
-        store = SessionStore(storage_path=str(tmp_path / "sessions.json"))
-        scope = MessageScope(platform="telegram", chat_id="chat")
-
-        tree_data = {
-            "scope": {"platform": scope.platform, "chat_id": scope.chat_id},
-            "root_id": "r1",
-            "nodes": {
-                "r1": {"node_id": "r1", "status_message_id": "s1"},
-                "n1": {"node_id": "n1", "status_message_id": "s2"},
-            },
-        }
-        snapshot = TreeSnapshot.from_json(tree_data)
-        assert snapshot is not None
-        store.save_tree_snapshot(snapshot)
-
-        identity = TreeIdentity(scope=scope, root_id="r1")
-        loaded = store.load_conversation_snapshot().get_tree(identity)
-        assert loaded is not None
-        assert loaded == snapshot
-        assert loaded.lookup_ids() == {"r1", "s1", "n1", "s2"}
-
-    # --- Persistence & Edge Cases ---
-
-    def test_load_existing_file_with_trees(self, tmp_path):
-        """Test loading file with trees (legacy sessions ignored)."""
-        from free_claude_code.messaging.models import MessageScope
-        from free_claude_code.messaging.session import SessionStore
-        from free_claude_code.messaging.trees import TreeIdentity
-
-        data = {
-            "sessions": {},
-            "trees": {
-                "r1": {
-                    "root_id": "r1",
-                    "nodes": {
-                        "r1": {
-                            "node_id": "r1",
-                            "incoming": {
-                                "platform": "telegram",
-                                "chat_id": "chat",
-                            },
-                        }
-                    },
-                }
-            },
-            "node_to_tree": {"r1": "r1"},
-            "message_log": {},
-        }
-
-        p = tmp_path / "sessions.json"
-        with open(p, "w") as f:
-            json.dump(data, f)
-
-        store = SessionStore(storage_path=str(p))
-        identity = TreeIdentity(
-            scope=MessageScope(platform="telegram", chat_id="chat"),
-            root_id="r1",
-        )
-        assert store.load_conversation_snapshot().get_tree(identity) is not None
-
-    def test_load_corrupt_file(self, tmp_path):
-        """Test loading corrupt/invalid json file."""
-        p = tmp_path / "sessions.json"
-        with open(p, "w") as f:
-            f.write("{invalid json")
-
-        from free_claude_code.messaging.session import SessionStore
-
-        # Should log error and start empty, avoiding crash
-        store = SessionStore(storage_path=str(p))
-        assert store.load_conversation_snapshot().is_empty
-
-    def test_save_error_handling(self, tmp_path):
-        """Test error during save."""
-        from free_claude_code.messaging.models import MessageScope
-        from free_claude_code.messaging.session import SessionStore
-        from free_claude_code.messaging.trees import TreeIdentity, TreeSnapshot
-
-        store = SessionStore(storage_path=str(tmp_path / "sessions.json"))
-        scope = MessageScope(platform="telegram", chat_id="chat")
-        snapshot = TreeSnapshot(scope=scope, root_id="r1", nodes={"r1": {}})
-        store.save_tree_snapshot(snapshot)
-
-        with (
-            patch(
-                "free_claude_code.messaging.session.persistence.os.replace",
-                side_effect=OSError("Disk full"),
-            ),
-            pytest.raises(OSError, match="Disk full"),
-        ):
-            store.flush_pending_save()
-
-        assert store.dirty is True
-        identity = TreeIdentity(scope=scope, root_id="r1")
-        assert store.load_conversation_snapshot().get_tree(identity) is not None
-
-
 class TestTreeQueueManager:
     """Test TreeQueueManager."""
 
@@ -198,7 +82,7 @@ class TestTreeQueueManager:
         async def process(_claim):
             return None
 
-        mgr = TreeQueueManager(process)
+        mgr = TreeQueueManager(process, store=AsyncMock())
         assert mgr.get_tree_count() == 0
 
     @pytest.mark.asyncio
@@ -220,7 +104,7 @@ class TestTreeQueueManager:
             platform="test",
         )
 
-        mgr = TreeQueueManager(processor)
+        mgr = TreeQueueManager(processor, store=AsyncMock())
         decision = await mgr.admit(incoming, "status_1")
 
         assert decision.accepted is True
@@ -235,7 +119,7 @@ class TestTreeQueueManager:
         async def process(_claim):
             return None
 
-        mgr = TreeQueueManager(process)
+        mgr = TreeQueueManager(process, store=AsyncMock())
         scope = MessageScope(platform="test", chat_id="1")
         cancelled = await mgr.cancel_node(scope, "nonexistent")
         assert cancelled.effects == ()

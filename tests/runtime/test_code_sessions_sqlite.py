@@ -18,24 +18,26 @@ from free_claude_code.application.code_sessions.models import (
     CodeUnavailableError,
 )
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
+from free_claude_code.runtime.sqlite_database import SQLiteDatabase
 
 
 @pytest.mark.asyncio
 async def test_cancelled_initialization_drains_thread_before_releasing_owner_lock(
+    database_factory,
     tmp_path,
 ):
     entered = threading.Event()
     release = threading.Event()
     initialized = threading.Event()
 
-    class GatedStore(SQLiteCodeStore):
+    class GatedDatabase(SQLiteDatabase):
         def _initialize(self):
             entered.set()
             assert release.wait(5)
             super()._initialize()
             initialized.set()
 
-    store = GatedStore(tmp_path / "code.db", tmp_path / "code.lock")
+    store = SQLiteCodeStore(GatedDatabase(tmp_path / "code.db", tmp_path / "code.lock"))
     starting = asyncio.create_task(store.start())
     await asyncio.to_thread(entered.wait, 3)
     starting.cancel()
@@ -43,7 +45,9 @@ async def test_cancelled_initialization_drains_thread_before_releasing_owner_loc
     with pytest.raises(asyncio.CancelledError):
         await starting
     await asyncio.to_thread(initialized.wait, 3)
-    second = SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock")
+    second = SQLiteCodeStore(
+        database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+    )
     try:
         await second.start()
         session = await second.create(
@@ -52,26 +56,43 @@ async def test_cancelled_initialization_drains_thread_before_releasing_owner_loc
         assert (await second.get_session(session.id)).id == session.id
     finally:
         await store.close()
+        await store.database.close()
         await second.close()
+        await second.database.close()
 
 
 @pytest.mark.asyncio
-async def test_store_has_one_process_owner_and_can_reopen_after_close(tmp_path):
-    first = SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock")
-    second = SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock")
+async def test_store_has_one_process_owner_and_can_reopen_after_close(
+    database_factory, tmp_path
+):
+    first = SQLiteCodeStore(
+        database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+    )
+    second = SQLiteCodeStore(
+        database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+    )
     await first.start()
     try:
         with pytest.raises(CodeUnavailableError, match="another FCC"):
             await second.start()
     finally:
         await first.close()
+        await first.database.close()
+    second = SQLiteCodeStore(
+        database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+    )
     await second.start()
     await second.close()
+    await second.database.close()
 
 
 @pytest.mark.asyncio
-async def test_reused_item_id_cannot_overwrite_another_session(tmp_path):
-    store = SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock")
+async def test_reused_item_id_cannot_overwrite_another_session(
+    database_factory, tmp_path
+):
+    store = SQLiteCodeStore(
+        database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+    )
     await store.start()
     try:
         first, second = [
@@ -99,6 +120,7 @@ async def test_reused_item_id_cannot_overwrite_another_session(tmp_path):
         assert (await store.items(second.id, None, None))[0].text == "second"
     finally:
         await store.close()
+        await store.database.close()
 
 
 async def _admit(store, session, *, run_id=None, text="message", sequence=1):
@@ -122,11 +144,14 @@ async def _admit(store, session, *, run_id=None, text="message", sequence=1):
 
 
 @pytest_asyncio.fixture
-async def store(tmp_path):
-    result = SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock")
+async def store(database_factory, tmp_path):
+    result = SQLiteCodeStore(
+        database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+    )
     await result.start()
     yield result
     await result.close()
+    await result.database.close()
 
 
 async def _session(store):
@@ -212,10 +237,13 @@ async def test_mode_is_guarded_by_sqlite_busy_and_run_immutability(store):
 
 
 @pytest.mark.asyncio
-async def test_version_one_database_gains_mode_without_losing_history(store, tmp_path):
+async def test_version_one_database_gains_mode_without_losing_history(
+    database_factory, store, tmp_path
+):
     session, run = await _admit(store, await _session(store))
     items = await store.items(session.id, None, None)
     await store.close()
+    await store.database.close()
     with closing(sqlite3.connect(tmp_path / "code.db")) as connection, connection:
         connection.execute("ALTER TABLE code_sessions DROP COLUMN mode")
         connection.execute(
@@ -223,16 +251,21 @@ async def test_version_one_database_gains_mode_without_losing_history(store, tmp
         )
         connection.execute("ALTER TABLE code_sessions DROP COLUMN context_used_tokens")
         connection.execute("ALTER TABLE code_runs DROP COLUMN mode")
+        drop_messaging_schema(connection)
         connection.execute("PRAGMA user_version = 1")
     for _ in range(2):
+        store = SQLiteCodeStore(
+            database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+        )
         await store.start()
         saved = await store.get_session(session.id)
         assert saved.mode == "config"
         assert saved.native_permission_defaults is None
-        assert (await store.get_run(session.id, run.id)).mode == "config"
+        saved_run = await store.get_run(session.id, run.id)
+        assert saved_run is not None and saved_run.mode == "config"
         assert await store.items(session.id, None, None) == items
         with closing(sqlite3.connect(tmp_path / "code.db")) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
             with pytest.raises(sqlite3.IntegrityError):
                 connection.execute("UPDATE code_sessions SET mode = 'unknown'")
             with pytest.raises(sqlite3.IntegrityError):
@@ -240,20 +273,28 @@ async def test_version_one_database_gains_mode_without_losing_history(store, tmp
                     "UPDATE code_sessions SET native_permission_defaults = '[]'"
                 )
         await store.close()
+        await store.database.close()
 
 
 @pytest.mark.asyncio
-async def test_version_two_database_gains_nullable_context_usage(store, tmp_path):
+async def test_version_two_database_gains_nullable_context_usage(
+    database_factory, store, tmp_path
+):
     session = await _session(store)
     await store.close()
+    await store.database.close()
     with closing(sqlite3.connect(tmp_path / "code.db")) as connection, connection:
         connection.execute("ALTER TABLE code_sessions DROP COLUMN context_used_tokens")
+        drop_messaging_schema(connection)
         connection.execute("PRAGMA user_version = 2")
     for _ in range(2):
+        store = SQLiteCodeStore(
+            database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+        )
         await store.start()
         assert (await store.get_session(session.id)).context_used_tokens is None
         with closing(sqlite3.connect(tmp_path / "code.db")) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
             column = next(
                 row
                 for row in connection.execute("PRAGMA table_info(code_sessions)")
@@ -266,6 +307,7 @@ async def test_version_two_database_gains_nullable_context_usage(store, tmp_path
                     (session.id,),
                 )
         await store.close()
+        await store.database.close()
 
 
 @pytest.mark.asyncio
@@ -522,6 +564,7 @@ async def _legacy_prompt_database(store, path):
     )
     original = await store.items(session.id, None, None)
     await store.close()
+    await store.database.close()
     cases: list[
         tuple[str | None, str | None, Literal["resolved", "expired", "pending"]]
     ] = [
@@ -556,6 +599,7 @@ async def _legacy_prompt_database(store, path):
         )
         connection.execute("ALTER TABLE code_sessions DROP COLUMN context_used_tokens")
         connection.execute("ALTER TABLE code_runs DROP COLUMN mode")
+        drop_messaging_schema(connection)
         connection.execute("PRAGMA user_version = 0")
         for prompt in prompts:
             connection.execute(
@@ -580,11 +624,14 @@ async def _legacy_prompt_database(store, path):
 
 @pytest.mark.asyncio
 async def test_legacy_prompts_migrate_once_to_run_ends_without_resequencing(
-    store, tmp_path
+    database_factory, store, tmp_path
 ):
     path = tmp_path / "code.db"
     session, old, latest, original, prompts = await _legacy_prompt_database(store, path)
     for _ in range(2):
+        store = SQLiteCodeStore(
+            database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+        )
         await store.start()
         items = await store.items(session.id, None, None)
         assert [item.id for item in items] == [
@@ -614,18 +661,19 @@ async def test_legacy_prompts_migrate_once_to_run_ends_without_resequencing(
             )
             assert saved[prompt.id] == expected
         with closing(sqlite3.connect(path)) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
             assert any(
                 row[2] == "code_items"
                 for row in connection.execute("PRAGMA foreign_key_list(code_prompts)")
             )
         await store.close()
+        await store.database.close()
 
 
 @pytest.mark.asyncio
 async def test_failed_prompt_migration_rolls_back_items_schema_and_version(
-    store, tmp_path
+    database_factory, store, tmp_path
 ):
     path = tmp_path / "code.db"
     _, _, _, original, prompts = await _legacy_prompt_database(store, path)
@@ -637,6 +685,9 @@ async def test_failed_prompt_migration_rolls_back_items_schema_and_version(
             + "' BEGIN SELECT RAISE(ABORT, 'blocked'); END"
         )
     with pytest.raises(CodeConflictError):
+        store = SQLiteCodeStore(
+            database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+        )
         await store.start()
     with closing(sqlite3.connect(path)) as connection, connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
@@ -651,7 +702,21 @@ async def test_failed_prompt_migration_rolls_back_items_schema_and_version(
             for row in connection.execute("PRAGMA foreign_key_list(code_prompts)")
         )
         connection.execute("DROP TRIGGER refuse_second_prompt")
+    store = SQLiteCodeStore(
+        database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+    )
     await store.start()
     assert len(await store.items(prompts[0].session_id, None, None)) == len(
         original
     ) + len(prompts)
+
+
+def drop_messaging_schema(connection):
+    for table in (
+        "messaging_references",
+        "messaging_nodes",
+        "messaging_trees",
+        "messaging_managed_messages",
+        "messaging_legacy_import",
+    ):
+        connection.execute(f"DROP TABLE {table}")

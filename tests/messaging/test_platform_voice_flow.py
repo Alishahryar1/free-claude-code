@@ -511,7 +511,7 @@ async def test_reply_command_cancels_voice_at_tree_admission_commit(
     assert voice_result is True
     await asyncio.sleep(0)
 
-    mock_session_store.save_tree_snapshot.assert_called()
+    mock_session_store.commit_trees.assert_awaited()
     if command == "/clear":
         assert workflow.get_tree_count() == 0
         assert await workflow.tree_queue.resolve_node_id(VOICE_SCOPE, "voice") is None

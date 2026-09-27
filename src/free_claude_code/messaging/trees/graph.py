@@ -248,3 +248,17 @@ class MessageTreeGraph:
         if set(graph.get_descendants(graph.root_id)) != set(graph._nodes):
             raise ValueError("Tree snapshot contains a disconnected branch")
         return graph
+
+
+def normalize_tree_snapshot(snapshot: TreeSnapshot) -> TreeSnapshot:
+    """Validate domain links and return detached records in parent-first order."""
+    graph = MessageTreeGraph.from_snapshot(snapshot)
+    normalized = graph.snapshot()
+    return TreeSnapshot(
+        normalized.scope,
+        normalized.root_id,
+        {
+            node_id: normalized.nodes[node_id]
+            for node_id in graph.get_descendants(graph.root_id)
+        },
+    )

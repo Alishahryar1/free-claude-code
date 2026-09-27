@@ -1,10 +1,12 @@
 import asyncio
 import contextlib
 import os
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 
 from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.loader import clear_settings_cache
@@ -212,16 +214,11 @@ def mock_platform():
 
 @pytest.fixture
 def mock_session_store():
-    from free_claude_code.messaging.session import SessionStore
+    from free_claude_code.messaging.trees import ConversationSnapshot, MessagingStore
 
-    store = MagicMock(spec=SessionStore)
-    store.save_tree = MagicMock()
-    store.get_tree = MagicMock(return_value=None)
-    store.register_node = MagicMock()
-    store.record_message_id = MagicMock()
-    store.get_tracked_message_ids_for_chat = MagicMock(return_value=[])
-    store.forget_tracked_message_ids = MagicMock()
-    store.clear_scope = MagicMock()
+    store = AsyncMock(spec=MessagingStore)
+    store.get_tracked_message_ids_for_chat.return_value = []
+    store.load_conversation_snapshot.return_value = ConversationSnapshot()
     return store
 
 
@@ -279,3 +276,53 @@ def _propagate_loguru_to_caplog(caplog):
         loguru_logger.remove(
             handler_id
         )  # Handler already removed (e.g. by test_logging_config)
+
+
+@pytest_asyncio.fixture
+async def messaging_store_factory(tmp_path):
+    """Real SQLite stores with fixture-owned lifetime and optional old JSON input."""
+    from free_claude_code.runtime.messaging_import import import_legacy
+    from free_claude_code.runtime.messaging_sqlite import SQLiteMessagingStore
+    from free_claude_code.runtime.sqlite_database import SQLiteDatabase
+
+    databases = {}
+
+    async def create(*, storage_path=None, managed_message_cap=None):
+        path = Path(storage_path) if storage_path is not None else tmp_path / "fcc.db"
+        database_path = path.with_suffix(".db")
+        database = databases.get(database_path)
+        first = database is None
+        if first:
+            database = SQLiteDatabase(database_path, database_path.with_suffix(".lock"))
+            await database.start()
+            databases[database_path] = database
+        store = SQLiteMessagingStore(database, managed_message_cap=managed_message_cap)
+        if first and path.suffix == ".json":
+            await import_legacy(database, path)
+            await store.trim()
+        return store
+
+    try:
+        yield create
+    finally:
+        for database in databases.values():
+            await database.close()
+
+
+@pytest_asyncio.fixture
+async def database_factory():
+    """Own database resources for tests that compose individual services."""
+    from free_claude_code.runtime.sqlite_database import SQLiteDatabase
+
+    databases = []
+
+    def create(*args, **kwargs):
+        database = SQLiteDatabase(*args, **kwargs)
+        databases.append(database)
+        return database
+
+    try:
+        yield create
+    finally:
+        for database in reversed(databases):
+            await database.close()

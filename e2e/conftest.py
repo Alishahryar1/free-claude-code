@@ -268,6 +268,7 @@ def admin_base_url(
         configuration=ConfigurationService(ManagedConfigStore()),
         transcriber=None,
         code_service=code_control.service,
+        database=code_control.database,
     )
     monkeypatch.setattr(
         NativeFolderPicker,
