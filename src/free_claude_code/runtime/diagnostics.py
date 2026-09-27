@@ -25,6 +25,7 @@ from free_claude_code.harnesses import (
     jetbrains_acp_integration,
     vscode_chat_integration,
 )
+from free_claude_code.providers.antigravity.auth import AntigravityAuthManager
 from free_claude_code.providers.github_copilot.auth import CopilotAuthManager
 from free_claude_code.providers.openai_codex.auth import saved_connection_state
 from free_claude_code.providers.runtime.config import has_provider_configuration
@@ -332,6 +333,12 @@ def collect_report() -> dict[str, Any]:
         copilot = CopilotAuthManager().status().state.value
         accounts["github_copilot"] = (
             copilot if copilot in {"connected", "disconnected"} else "unavailable"
+        )
+        antigravity = AntigravityAuthManager().status().state.value
+        accounts["antigravity"] = (
+            antigravity
+            if antigravity in {"connected", "disconnected"}
+            else "unavailable"
         )
         report.update(settings_report(settings, accounts))
         report["integrations"] = integration_report(settings)

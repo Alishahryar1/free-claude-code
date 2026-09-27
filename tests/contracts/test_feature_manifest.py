@@ -3,6 +3,7 @@ from pathlib import Path
 
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.messaging.platforms.factory import create_messaging_components
+from free_claude_code.providers.antigravity.provider import AntigravityProvider
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.cloudflare import CloudflareProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
@@ -69,6 +70,7 @@ def test_provider_and_platform_registries_include_builtins() -> None:
         "openai": OpenAICodexProvider,
         "openai_api": OpenAIAPIProvider,
         "github_copilot": GitHubCopilotProvider,
+        "antigravity": AntigravityProvider,
         "opencode_zen": OpenCodeProvider,
         "opencode_go": OpenCodeProvider,
         "nvidia_nim": NvidiaNimProvider,

@@ -64,6 +64,30 @@ def test_collection_does_not_initialize_or_expose_validation_input(monkeypatch):
     assert "secret-value" not in json.dumps(report)
 
 
+@pytest.mark.parametrize(
+    ("enabled", "expected"),
+    [(False, "disconnected"), (True, "connected")],
+)
+def test_antigravity_saved_connection_state_is_reported(
+    monkeypatch, enabled: bool, expected: str
+):
+    store = ManagedConfigStore()
+    store.initialize({})
+    state_path = paths.antigravity_auth_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps({"schema_version": 1, "enabled": enabled, "revision": 1}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(diagnostics, "integration_report", lambda settings: {})
+    monkeypatch.setattr(diagnostics, "harness_report", lambda: {})
+
+    report = diagnostics.collect_report()
+
+    assert report["providers"]["antigravity"]["saved_connection"] == expected
+    assert report["providers"]["antigravity"]["configured"] is enabled
+
+
 def test_complete_report_reads_real_files_without_mutation(
     monkeypatch, tmp_path, capsys
 ):
@@ -114,6 +138,7 @@ def test_complete_report_reads_real_files_without_mutation(
     assert report["model_routing"]["model"] == "openai_api/process"
     assert report["integrations"]["claude-vscode"]["connected"] is True
     assert report["providers"]["github_copilot"]["saved_connection"] == "connected"
+    assert report["providers"]["antigravity"]["saved_connection"] == "disconnected"
     assert report["errors"] == []
     assert all(not item["installed"] for item in report["harnesses"].values())
     for private in (

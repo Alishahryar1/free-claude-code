@@ -222,7 +222,7 @@ _SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
     "opencode_zen": _load_opencode_zen,
     "opencode_go": _load_opencode_go,
 }
-_INJECTED_PROVIDER_IDS = {"openai", "github_copilot"}
+_INJECTED_PROVIDER_IDS = {"openai", "github_copilot", "antigravity"}
 
 
 def _required_setting(settings: Settings, attr_name: str) -> str:

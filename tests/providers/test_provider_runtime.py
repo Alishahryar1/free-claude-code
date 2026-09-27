@@ -46,6 +46,7 @@ from free_claude_code.config.provider_catalog import (
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
+from free_claude_code.providers.antigravity.provider import AntigravityProvider
 from free_claude_code.providers.cloudflare import CloudflareProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
@@ -1095,6 +1096,7 @@ async def test_create_provider_instantiates_each_builtin():
         "openai": OpenAICodexProvider,
         "openai_api": OpenAIAPIProvider,
         "github_copilot": GitHubCopilotProvider,
+        "antigravity": AntigravityProvider,
         "cline_pass": OpenAIChatProvider,
         "xai": OpenAIChatProvider,
         "qwencloud": OpenAIChatProvider,
@@ -1161,6 +1163,11 @@ async def test_create_provider_instantiates_each_builtin():
             auth=auth,
             admission=admission,
         ),
+        "antigravity": lambda config, _settings, admission: AntigravityProvider(
+            config,
+            auth=auth,
+            admission=admission,
+        ),
     }
 
     with (
@@ -1193,12 +1200,21 @@ async def test_create_provider_instantiates_each_builtin():
                 assert provider._responses._admission is sentinel_admission
             else:
                 assert provider._admission is sentinel_admission
-            admission_factory.assert_called_once_with(
-                provider_name=provider_id,
-                rate_limit=7,
-                rate_window=11,
-                max_concurrency=3,
-            )
+            if provider_id == "antigravity":
+                admission_factory.assert_called_once_with(
+                    provider_name=provider_id,
+                    rate_limit=7,
+                    rate_window=11,
+                    max_concurrency=1,
+                    max_attempts=1,
+                )
+            else:
+                admission_factory.assert_called_once_with(
+                    provider_name=provider_id,
+                    rate_limit=7,
+                    rate_window=11,
+                    max_concurrency=3,
+                )
             admission_factory.reset_mock()
 
     assert set(cases) == set(PROVIDER_CATALOG)

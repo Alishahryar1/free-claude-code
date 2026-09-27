@@ -31,12 +31,12 @@ def _status(provider_id: str, *, connected: bool = False) -> JsonObject:
         model_count=14 if connected else 0,
         supported_login_modes=(
             (ConnectedAccountLoginMode.DEVICE,)
-            if provider_id == "github_copilot"
+            if provider_id in {"github_copilot", "antigravity"}
             else (ConnectedAccountLoginMode.BROWSER, ConnectedAccountLoginMode.DEVICE)
         ),
         default_login_mode=(
             ConnectedAccountLoginMode.DEVICE
-            if provider_id == "github_copilot"
+            if provider_id in {"github_copilot", "antigravity"}
             else ConnectedAccountLoginMode.BROWSER
         ),
     ).as_dict()
@@ -123,6 +123,9 @@ class _Accounts:
         request = route.request
         provider_id = request.url.split("/providers/", 1)[1].split("/", 1)[0]
         if request.method == "GET":
+            if provider_id not in self.statuses:
+                route.fulfill(json=_status(provider_id))
+                return
             if provider_id in self.hold_status:
                 self.pending_status.append(route)
                 return
@@ -333,7 +336,7 @@ def test_connected_counts_and_modes_survive_apply_and_disconnect_independently(
         page.locator(
             '[data-provider-group="oauth"] [data-provider-subgroup="unconfigured"] .provider-title strong'
         )
-    ).to_have_text(["GitHub Copilot"])
+    ).to_have_text(["GitHub Copilot", "Google Antigravity"])
     expect(openai.get_by_role("button", name="Disconnect", exact=True)).to_have_class(
         "danger-button"
     )
