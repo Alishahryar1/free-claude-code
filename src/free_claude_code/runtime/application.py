@@ -25,6 +25,7 @@ from free_claude_code.application.errors import (
     ApplicationUnavailableError,
     InvalidRequestError,
 )
+from free_claude_code.application.model_catalog import ModelCatalog, read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.application.ports import StopResult
 from free_claude_code.config.admin.custom_providers import CustomProviderMutation
@@ -48,6 +49,7 @@ from free_claude_code.harnesses import (
     claude_integration,
     codex_integration,
     jetbrains_acp_integration,
+    vscode_chat_integration,
 )
 from free_claude_code.messaging.platforms import factory as messaging_platform_factory
 from free_claude_code.messaging.platforms.factory import MessagingPlatformOptions
@@ -218,6 +220,8 @@ class ApplicationRuntime:
         self._desktop_update = _IntegrationUpdate()
         self._codex_update = _IntegrationUpdate()
         self._jetbrains_update = _IntegrationUpdate()
+        self._vscode_update = _IntegrationUpdate()
+        self._vscode_dirty = False
         self._http_ready = asyncio.Event()
         self._messaging_state = (
             "disabled" if self.settings.messaging_platform == "none" else "starting"
@@ -251,6 +255,10 @@ class ApplicationRuntime:
                         "Application runtime is shutting down."
                     )
                 self.provider_manager.start_model_list_refresh()
+                self.provider_manager.set_catalog_changed_callback(
+                    self._queue_vscode_refresh
+                )
+                self._queue_vscode_refresh()
                 await self.refresh_claude_vscode()
                 await self.refresh_codex_integration()
                 await self.refresh_claude_desktop()
@@ -296,6 +304,7 @@ class ApplicationRuntime:
     def begin_shutdown(self) -> None:
         """Finish indefinite observer responses before the server drains HTTP."""
         self._draining = True
+        self.provider_manager.set_catalog_changed_callback(None)
         self.provider_manager.begin_shutdown()
         self._folder_picker.begin_shutdown()
         if self._code_service is not None:
@@ -429,6 +438,119 @@ class ApplicationRuntime:
 
     async def admin_values(self) -> ValueState:
         return await self._configuration.admin_values()
+
+    async def vscode_chat_status(self) -> JsonObject:
+        return await self._vscode_chat("status")
+
+    async def connect_vscode_chat(self) -> JsonObject:
+        return await self._vscode_chat("connect")
+
+    async def disconnect_vscode_chat(self) -> JsonObject:
+        return await self._vscode_chat("disconnect")
+
+    async def refresh_vscode_chat(self) -> JsonObject:
+        self._check_integration_available()
+        self._queue_vscode_refresh()
+        return {"update": self._vscode_update.snapshot()}
+
+    def _queue_vscode_refresh(self) -> None:
+        if self._draining:
+            return
+        self._vscode_dirty = True
+        update = self._vscode_update
+        if update.task is not None and not update.task.done():
+            return
+        update.state, update.changed, update.message = "starting", False, None
+
+        async def drain() -> None:
+            while self._vscode_dirty:
+                self._vscode_dirty = False
+                try:
+                    result = await self._vscode_chat("refresh")
+                    update.complete(update.changed or result.get("changed") is True)
+                except ApplicationError as exc:
+                    update.state, update.message = "failed", exc.message
+                except Exception as exc:
+                    update.state = "failed"
+                    update.message = "Could not update VS Code models. Retry shortly."
+                    logger.warning(
+                        "VS Code integration update failed: exc_type={}",
+                        type(exc).__name__,
+                    )
+                if self._vscode_dirty:
+                    update.state = "starting"
+
+        update.task = asyncio.create_task(drain(), name="fcc-vscode-models")
+        self._startup_tasks.append(update.task)
+        update.task.add_done_callback(self._startup_tasks.remove)
+
+    async def _vscode_chat(self, action: IntegrationAction) -> JsonObject:
+        try:
+            if action == "refresh":
+                async with self._config_lock:
+                    self._check_integration_available()
+                    status = await run_sync_owned(
+                        lambda: vscode_chat_integration.status(
+                            vscode_chat_integration.config_path()
+                        )
+                    )
+                    if not status["connected"]:
+                        return {"changed": False}
+            while True:
+                snapshot = (
+                    await self.provider_manager.wait_for_catalog()
+                    if action in {"connect", "refresh"}
+                    else None
+                )
+                revision = self.provider_manager.catalog_status()["catalog_revision"]
+                async with self._config_lock:
+                    self._check_integration_available()
+                    if snapshot is not None and (
+                        snapshot.current_settings() is not self.settings
+                        or revision
+                        != self.provider_manager.catalog_status()["catalog_revision"]
+                        or self.provider_manager.catalog_status()["catalog"] != "ready"
+                    ):
+                        continue
+                    catalog = (
+                        read_model_catalog(snapshot) if snapshot is not None else None
+                    )
+                    settings = self.settings
+
+                    def operate(
+                        catalog: ModelCatalog | None = catalog,
+                        settings: Settings = settings,
+                    ) -> JsonObject:
+                        path = vscode_chat_integration.config_path()
+                        changed = False
+                        if action == "disconnect":
+                            vscode_chat_integration.disconnect(path)
+                        elif catalog is not None:
+                            changed = vscode_chat_integration.configure(
+                                path,
+                                local_proxy_root_url(settings),
+                                settings.proxy_auth_token,
+                                catalog.models,
+                                only_existing=action == "refresh",
+                            )
+                        if action == "refresh":
+                            return {"changed": changed}
+                        return vscode_chat_integration.status(path)
+
+                    result = await run_sync_owned(operate)
+                    if action in {"connect", "disconnect"}:
+                        self._vscode_update.complete()
+                    if action == "status":
+                        result["update"] = self._vscode_update.snapshot()
+                    return result
+        except ValueError, UnicodeError:
+            raise InvalidRequestError(
+                "Could not configure VS Code Chat. Check chatLanguageModels.json for invalid JSON or conflicting FCC groups."
+            ) from None
+        except OSError:
+            raise ApplicationUnavailableError(
+                "Could not access chatLanguageModels.json. Finish configuration edits, check file permissions, and retry."
+            ) from None
 
     async def claude_vscode_status(self) -> JsonObject:
         return await self._claude_vscode("status")
@@ -744,6 +866,7 @@ class ApplicationRuntime:
                     "message": self._messaging_error,
                 },
                 "integrations": {
+                    "vscode-chat": self._vscode_update.snapshot(),
                     "claude-vscode": self._claude_update.snapshot(),
                     "claude-desktop": self._desktop_update.snapshot(),
                     "codex": self._codex_update.snapshot(),

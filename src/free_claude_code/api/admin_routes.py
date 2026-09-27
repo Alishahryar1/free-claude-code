@@ -273,6 +273,42 @@ async def claude_vscode_status(
     return await _integration_response(services.admin.claude_vscode_status)
 
 
+@router.get("/admin/api/integrations/vscode-chat")
+async def vscode_chat_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.vscode_chat_status)
+
+
+@router.post("/admin/api/integrations/vscode-chat/connect")
+async def connect_vscode_chat(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_vscode_chat)
+
+
+@router.post("/admin/api/integrations/vscode-chat/disconnect")
+async def disconnect_vscode_chat(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_vscode_chat)
+
+
+@router.post("/admin/api/integrations/vscode-chat/refresh")
+async def refresh_vscode_chat(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_vscode_chat)
+
+
 @router.post("/admin/api/integrations/claude-vscode/connect")
 async def connect_claude_vscode(
     request: Request,

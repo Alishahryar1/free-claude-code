@@ -13,6 +13,7 @@ from free_claude_code.harnesses import (
     claude_integration,
     codex_integration,
     jetbrains_acp_integration,
+    vscode_chat_integration,
 )
 from tests.providers.support import (
     immediate_admission,
@@ -32,6 +33,11 @@ def _isolate_managed_config(monkeypatch, tmp_path):
     """Keep every test away from real home, checkout, and running-server config."""
 
     config_dir = tmp_path / ".fcc"
+    monkeypatch.setattr(
+        vscode_chat_integration,
+        "config_path",
+        lambda: tmp_path / "vscode/chatLanguageModels.json",
+    )
     monkeypatch.setattr(
         jetbrains_acp_integration,
         "config_path",

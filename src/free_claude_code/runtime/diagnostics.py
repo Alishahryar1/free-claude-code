@@ -23,6 +23,7 @@ from free_claude_code.harnesses import (
     claude_integration,
     codex_integration,
     jetbrains_acp_integration,
+    vscode_chat_integration,
 )
 from free_claude_code.providers.github_copilot.auth import CopilotAuthManager
 from free_claude_code.providers.openai_codex.auth import saved_connection_state
@@ -206,6 +207,9 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
 def integration_report(settings: Settings) -> dict[str, Any]:
     url, token = local_proxy_root_url(settings), settings.proxy_auth_token
     readers = {
+        "vscode-chat": lambda: vscode_chat_integration.status(
+            vscode_chat_integration.config_path()
+        ),
         "claude-vscode": lambda: claude_integration.configure(
             claude_integration.settings_path(),
             claude_integration.claude_state_path(),

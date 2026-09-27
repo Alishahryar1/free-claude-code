@@ -33,6 +33,7 @@ from free_claude_code.harnesses import (
     claude_integration,
     codex_integration,
     jetbrains_acp_integration,
+    vscode_chat_integration,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.runtime import ProviderRuntime
@@ -184,6 +185,11 @@ def admin_base_url(
     )
     monkeypatch.setattr(
         codex_integration, "config_path", lambda: tmp_path / ".codex" / "config.toml"
+    )
+    monkeypatch.setattr(
+        vscode_chat_integration,
+        "config_path",
+        lambda: tmp_path / "vscode/chatLanguageModels.json",
     )
     monkeypatch.setattr(
         claude_integration, "claude_state_path", lambda: tmp_path / ".claude.json"

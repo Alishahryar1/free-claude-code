@@ -141,6 +141,7 @@ function renderStartup() {
     renderProviderCheckResult(provider.provider_id);
   });
   renderClaudeIntegration();
+  renderVSCodeChatIntegration();
   renderJetBrainsIntegration();
   renderCodexIntegration();
   renderClaudeDesktopIntegration();
@@ -291,6 +292,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   else window.CodeSessions.deactivate();
   if (activeView.id === "integrations") {
     refreshClaudeIntegration();
+    refreshVSCodeChatIntegration();
     refreshJetBrainsIntegration();
     refreshCodexIntegration();
     refreshClaudeDesktopIntegration();
@@ -1606,6 +1608,7 @@ function integrationUpdating(integration, id) {
 function refreshIntegrationUpdates(previous, current) {
   if (state.activeView !== "integrations") return;
   for (const [id, integration, refresh, messageId, message] of [
+    ["vscode-chat", vscodeChatIntegration, refreshVSCodeChatIntegration, "vscodeChatIntegrationMessage", "Models updated in VS Code."],
     ["claude-vscode", claudeIntegration, refreshClaudeIntegration, "claudeIntegrationMessage", "Settings updated. Reload VS Code."],
     ["jetbrains-acp", jetBrainsIntegration, refreshJetBrainsIntegration, "jetBrainsIntegrationMessage", "Settings updated. Reopen JetBrains and start a new chat."],
     ["codex", codexIntegration, refreshCodexIntegration, "codexIntegrationMessage", "Settings updated. Restart Codex."],
@@ -1710,6 +1713,102 @@ claudeIntegrationDialog.addEventListener("click", (event) => {
   const bounds = claudeIntegrationDialog.getBoundingClientRect();
   if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
     claudeIntegrationDialog.close();
+  }
+});
+
+const vscodeChatIntegrationDialog = byId("vscodeChatIntegrationDialog");
+const vscodeChatIntegration = { connected: null, busy: false, paths: null, update: null };
+const vscodeChatIntegrationPath = "/admin/api/integrations/vscode-chat";
+
+function renderVSCodeChatIntegration() {
+  const { connected, paths } = vscodeChatIntegration;
+  const busy = vscodeChatIntegration.busy || integrationUpdating(vscodeChatIntegration, "vscode-chat");
+  const action = connected ? "Disconnect" : "Connect";
+  byId("openVSCodeChatIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
+  byId("openVSCodeChatIntegration").disabled = busy;
+  byId("openVSCodeChatIntegration").setAttribute("aria-busy", String(busy));
+  byId("confirmVSCodeChatIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmVSCodeChatIntegration").disabled = busy || connected === null;
+  byId("openVSCodeChatIntegration").className = connected && !busy ? "danger-button" : "primary-button";
+  byId("confirmVSCodeChatIntegration").className = connected ? "danger-button" : "primary-button";
+  byId("vscodeChatIntegrationDescription").textContent = connected
+    ? "Remove FCC's model group from VS Code Chat."
+    : "Add FCC models to VS Code Chat. Your selected models stay unchanged.";
+  const files = byId("vscodeChatIntegrationFiles");
+  files.replaceChildren();
+  if (paths) {
+    const targets = [paths.vscode_models];
+    targets.forEach((path) => {
+      const item = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = path;
+      item.appendChild(code);
+      files.appendChild(item);
+    });
+  }
+}
+
+async function refreshVSCodeChatIntegration(retry = false, { background = false } = {}) {
+  if (!background) integrationMessage("vscodeChatIntegrationMessage", "");
+  if (vscodeChatIntegration.busy) return;
+  vscodeChatIntegration.busy = true;
+  renderVSCodeChatIntegration();
+  try {
+    if (retry) await api(`${vscodeChatIntegrationPath}/refresh`, { method: "POST" });
+    const result = await api(vscodeChatIntegrationPath);
+    vscodeChatIntegration.connected = result.connected;
+    vscodeChatIntegration.paths = result.paths;
+    vscodeChatIntegration.update = result.update;
+    if (result.update?.state === "failed") integrationMessage("vscodeChatIntegrationMessage", result.update.message, true);
+    else if (byId("vscodeChatIntegrationMessage").classList.contains("error")) integrationMessage("vscodeChatIntegrationMessage", "");
+  } catch (error) {
+    vscodeChatIntegration.connected = null;
+    vscodeChatIntegration.update = null;
+    integrationMessage("vscodeChatIntegrationMessage", error.message, true);
+  } finally {
+    vscodeChatIntegration.busy = false;
+    renderVSCodeChatIntegration();
+    if (vscodeChatIntegration.update?.state === "starting") void refreshStartup();
+  }
+}
+
+byId("openVSCodeChatIntegration").addEventListener("click", () => {
+  if (vscodeChatIntegration.connected === null) {
+    refreshVSCodeChatIntegration(vscodeChatIntegration.update?.state === "failed");
+    return;
+  }
+  integrationMessage("vscodeChatIntegrationDialogMessage", "");
+  vscodeChatIntegrationDialog.showModal();
+});
+byId("confirmVSCodeChatIntegration").addEventListener("click", async () => {
+  if (byId("confirmVSCodeChatIntegration").disabled) return;
+  const disconnect = vscodeChatIntegration.connected;
+  vscodeChatIntegration.busy = true;
+  renderVSCodeChatIntegration();
+  integrationMessage("vscodeChatIntegrationDialogMessage", "");
+  integrationMessage("vscodeChatIntegrationMessage", "");
+  try {
+    const result = await api(`${vscodeChatIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    vscodeChatIntegration.connected = result.connected;
+    vscodeChatIntegration.update = null;
+    vscodeChatIntegrationDialog.close();
+    integrationMessage("vscodeChatIntegrationMessage", disconnect
+      ? "Settings removed. Reload VS Code to disconnect."
+      : "Models saved. Select an FCC model in VS Code Chat. Reload VS Code if needed.");
+  } catch (error) {
+    integrationMessage("vscodeChatIntegrationDialogMessage", error.message, true);
+    integrationMessage("vscodeChatIntegrationMessage", error.message, true);
+  } finally {
+    vscodeChatIntegration.busy = false;
+    renderVSCodeChatIntegration();
+  }
+});
+byId("closeVSCodeChatIntegration").addEventListener("click", () => vscodeChatIntegrationDialog.close());
+vscodeChatIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== vscodeChatIntegrationDialog) return;
+  const bounds = vscodeChatIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    vscodeChatIntegrationDialog.close();
   }
 });
 

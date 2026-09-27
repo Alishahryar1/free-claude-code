@@ -159,6 +159,7 @@ class ProviderRuntimeManager:
         self._runtime_factory = runtime_factory
         self._connected_provider_ids = connected_provider_ids
         self._model_catalog_publisher = model_catalog_publisher
+        self._catalog_changed: Callable[[], None] | None = None
         self._replace_lock = asyncio.Lock()
         self._publication_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
@@ -185,6 +186,10 @@ class ProviderRuntimeManager:
     @property
     def current_generation_id(self) -> int:
         return self._current.generation_id
+
+    def set_catalog_changed_callback(self, callback: Callable[[], None] | None) -> None:
+        """Register a nonblocking notification for application-owned consumers."""
+        self._catalog_changed = callback
 
     def _ensure_open(self) -> None:
         if self._closing or self._closed:
@@ -513,6 +518,8 @@ class ProviderRuntimeManager:
                 )
             else:
                 generation.file_state = "ready"
+        if self._catalog_changed is not None and not self._closing:
+            self._catalog_changed()
 
     async def replace(
         self, settings: Settings, *, commit: CommitConfig, reason: str = "admin_apply"

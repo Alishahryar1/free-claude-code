@@ -4,6 +4,7 @@ from playwright.sync_api import expect
 
 @pytest.fixture(
     params=[
+        ("vscode-chat", "openVSCodeChatIntegration", "vscodeChatIntegrationMessage"),
         ("claude-vscode", "openClaudeIntegration", "claudeIntegrationMessage"),
         ("codex", "openCodexIntegration", "codexIntegrationMessage"),
         ("jetbrains-acp", "openJetBrainsIntegration", "jetBrainsIntegrationMessage"),
