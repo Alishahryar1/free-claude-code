@@ -16,7 +16,7 @@ from free_claude_code.core.history_replay import (
     encode_replay,
 )
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
-from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.nvidia_nim.client import _PROFILE as NIM_PROFILE
@@ -165,7 +165,6 @@ def _alias_events():
         ("responses", None),
         ("messages", "chat_template"),
         ("responses", "chat_template"),
-        ("messages", "reasoning_budget"),
         ("messages", "reasoning_content"),
     ],
 )
@@ -398,10 +397,8 @@ async def test_build_request_body(provider_config):
     assert body["messages"][0]["content"] == "System prompt"
 
     assert "extra_body" in body
-    ctk = body["extra_body"]["chat_template_kwargs"]
-    assert ctk["thinking"] is True
-    assert ctk["enable_thinking"] is True
-    assert "reasoning_budget" not in ctk
+    assert body["reasoning_effort"] == "high"
+    assert "chat_template_kwargs" not in body["extra_body"]
     assert "reasoning_budget" not in body["extra_body"]
 
 
@@ -454,10 +451,8 @@ def test_responses_request_uses_nim_chat_policy(provider_config):
     assert parameters["properties"] == {"_fcc_arg_type": {"type": "string"}}
     extra_body = body["extra_body"]
     assert isinstance(extra_body, dict)
-    assert extra_body["chat_template_kwargs"] == {
-        "thinking": True,
-        "enable_thinking": True,
-    }
+    assert body["reasoning_effort"] == "high"
+    assert "chat_template_kwargs" not in extra_body
 
 
 @pytest.mark.asyncio
@@ -473,10 +468,8 @@ async def test_build_request_body_encodes_explicit_reasoning_off(
     body = provider._chat._build_request_body(req, reasoning=REASONING_OFF)
 
     extra = body.get("extra_body", {})
-    assert extra["chat_template_kwargs"] == {
-        "thinking": False,
-        "enable_thinking": False,
-    }
+    assert body["reasoning_effort"] == "none"
+    assert "chat_template_kwargs" not in extra
     assert "reasoning_budget" not in extra
 
 
@@ -713,10 +706,7 @@ async def test_stream_messages_retries_without_chat_template(provider_config):
     second_extra = mock_create.call_args_list[1].kwargs["extra_body"]
 
     assert first_extra["chat_template"] == "custom_template"
-    assert first_extra["chat_template_kwargs"] == {
-        "thinking": True,
-        "enable_thinking": True,
-    }
+    assert "chat_template_kwargs" not in first_extra
     assert "reasoning_budget" not in first_extra
 
     assert "chat_template" not in second_extra
@@ -737,7 +727,10 @@ async def test_stream_messages_retries_without_chat_template_kwargs_issue_993(
         nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
-    req = make_request(model="mistralai/mistral-small-4-119b-2603")
+    req = make_request(
+        model="mistralai/mistral-small-4-119b-2603",
+        extra_body={"chat_template_kwargs": {"custom": "value"}},
+    )
 
     mock_chunk = MagicMock()
     mock_chunk.choices = [
@@ -770,10 +763,7 @@ async def test_stream_messages_retries_without_chat_template_kwargs_issue_993(
     second_kwargs = mock_create.call_args_list[1].kwargs
 
     assert "chat_template" not in first_extra
-    assert first_extra["chat_template_kwargs"] == {
-        "thinking": True,
-        "enable_thinking": True,
-    }
+    assert first_extra["chat_template_kwargs"] == {"custom": "value"}
     second_extra = second_kwargs.get("extra_body") or {}
     assert "chat_template" not in second_extra
     assert "chat_template_kwargs" not in second_extra
@@ -1328,95 +1318,6 @@ async def test_stream_messages_task_tool_still_forces_background_false(nim_provi
     deltas = _input_json_deltas(events)
     assert len(deltas) == 1
     assert json.loads(deltas[0])["run_in_background"] is False
-
-
-@pytest.mark.asyncio
-async def test_stream_messages_retries_without_reasoning_budget(nim_provider):
-    req = make_request()
-
-    mock_chunk = MagicMock()
-    mock_chunk.choices = [
-        MagicMock(
-            delta=MagicMock(content="Recovered", reasoning_content=""),
-            finish_reason="stop",
-        )
-    ]
-    mock_chunk.usage = MagicMock(completion_tokens=5)
-
-    async def mock_stream():
-        yield mock_chunk
-
-    error = _make_bad_request_error("Unsupported field: reasoning_budget")
-
-    with patch.object(
-        nim_provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
-
-        events = [
-            e
-            async for e in nim_provider.stream_messages(
-                req,
-                reasoning=ReasoningPolicy.on(effort=ReasoningEffort.XHIGH),
-            )
-        ]
-
-    assert mock_create.await_count == 2
-    first_call = mock_create.await_args_list[0].kwargs
-    second_call = mock_create.await_args_list[1].kwargs
-    assert first_call["extra_body"]["chat_template_kwargs"]["reasoning_budget"] == 4096
-    assert "reasoning_budget" not in second_call["extra_body"]
-    assert "reasoning_budget" not in second_call["extra_body"]["chat_template_kwargs"]
-    assert second_call["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
-    assert any("Recovered" in event for event in events)
-    assert any("message_stop" in event for event in events)
-
-
-@pytest.mark.asyncio
-async def test_stream_messages_retries_without_budget_for_thinking_token_error(
-    nim_provider,
-):
-    req = make_request(model="meta/llama-3.3-70b-instruct")
-
-    mock_chunk = MagicMock()
-    mock_chunk.choices = [
-        MagicMock(
-            delta=MagicMock(content="Recovered", reasoning_content=""),
-            finish_reason="stop",
-        )
-    ]
-    mock_chunk.usage = MagicMock(completion_tokens=5)
-
-    async def mock_stream():
-        yield mock_chunk
-
-    error = _make_internal_server_error(
-        "ValueError: thinking_token_budget is set but reasoning_config is not "
-        "configured. Please set --reasoning-config to use thinking_token_budget."
-    )
-
-    with patch.object(
-        nim_provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
-
-        events = [
-            e
-            async for e in nim_provider.stream_messages(
-                req, reasoning=ReasoningPolicy.on(budget_tokens=77)
-            )
-        ]
-
-    assert mock_create.await_count == 2
-    first_call = mock_create.await_args_list[0].kwargs
-    second_call = mock_create.await_args_list[1].kwargs
-    assert first_call["extra_body"]["chat_template_kwargs"]["reasoning_budget"] == 77
-    assert "reasoning_budget" not in second_call["extra_body"]
-    assert "reasoning_budget" not in second_call["extra_body"]["chat_template_kwargs"]
-    assert second_call["extra_body"]["chat_template_kwargs"]["thinking"] is True
-    assert second_call["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
-    assert any("Recovered" in event for event in events)
-    assert any("message_stop" in event for event in events)
 
 
 @pytest.mark.asyncio
