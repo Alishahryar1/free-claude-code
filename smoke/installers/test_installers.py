@@ -2327,15 +2327,15 @@ Add-Content -LiteralPath $env:CALL_LOG -Value "pi-install"
         encoding="utf-8",
     )
     (fixtures / "hermes-installer.ps1").write_text(
-        r"""param(
-    [switch] $NonInteractive,
-    [switch] $SkipSetup
+        r"""[CmdletBinding(PositionalBinding=$false)]
+param(
+    [switch] $NonInteractive
 )
 if ($env:FAIL_STEP -eq "hermes-install") { exit 65 }
 $bin = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\bin"
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
 Copy-Item (Join-Path $env:FAKE_FIXTURES "hermes-command.cmd") (Join-Path $bin "hermes.cmd") -Force
-Add-Content -LiteralPath $env:CALL_LOG -Value "hermes-install:${NonInteractive}:${SkipSetup}"
+Add-Content -LiteralPath $env:CALL_LOG -Value "hermes-install:${NonInteractive}"
 """,
         encoding="utf-8",
     )
@@ -3173,7 +3173,7 @@ def test_install_ps1_fresh_install_is_verified(
     )
     assert calls.index("npm:install -g cline") < calls.index("cline:--version")
     assert any("hermes-agent.nousresearch.com/install.ps1" in call for call in calls)
-    assert "hermes-install:True:True" in calls
+    assert "hermes-install:True" in calls
     assert calls.index("npm:install -g @deepseek-ai/dsh@0.1.0-rc.8") < calls.index(
         "dsh:--version"
     )
@@ -3251,7 +3251,7 @@ def test_install_ps1_discovers_grok_in_custom_bin_directory(
     ("client", "install_call"),
     [
         ("cline", "npm:install -g cline"),
-        ("hermes", "hermes-install:True:True"),
+        ("hermes", "hermes-install:True"),
         ("grok", "grok-install"),
         (
             "aider",
@@ -3536,6 +3536,16 @@ def test_install_ps1_stops_when_selected_dsh_install_fails(
     assert result.returncode != 0
     assert "Installer scenario completed." not in result.stdout
     _assert_uv_ready_without_fcc_install(powershell_harness.calls())
+
+
+def test_install_ps1_installs_hermes_noninteractively(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    result = powershell_harness.run_functions("Ensure-Hermes")
+
+    assert result.returncode == 0, result.stderr
+    calls = powershell_harness.calls()
+    assert calls.index("hermes-install:True") < calls.index("hermes:--version")
 
 
 def test_install_ps1_rejects_unsupported_hermes_architecture_before_download(

@@ -1006,7 +1006,7 @@ function Install-Hermes {
     Invoke-DownloadedPowerShellInstaller `
         -Url $HermesInstallUrl `
         -Name "Hermes Agent" `
-        -ScriptArguments @("-NonInteractive", "-SkipSetup")
+        -ScriptArguments @("-NonInteractive")
     Add-KnownBinDirectories
 }
 
