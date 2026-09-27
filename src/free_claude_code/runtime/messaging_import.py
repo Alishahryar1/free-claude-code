@@ -156,6 +156,7 @@ def _import_legacy(database: SQLiteDatabase, path: Path) -> str | None:
         if not complete:
             return f"Some previous messaging history could not be restored. Messaging can still be used. The original file was kept at {path}."
     elif not receipt["cleanup_pending"]:
+        # Incomplete-import notices are one-time. The receipt still prevents replay.
         return None
     try:
         if path.is_symlink():

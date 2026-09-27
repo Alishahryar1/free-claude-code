@@ -94,8 +94,8 @@ async def process_parsed_cli_event(
             node_id=claim.node.node_id,
             claude_session_id=captured_session_id,
         )
-        await update_ui(format_status("✅", "Complete"), force=True)
         await complete_claim(captured_session_id)
+        await update_ui(format_status("✅", "Complete"), force=True)
     elif ptype == "error":
         error_msg = parsed.get("message", "Unknown error")
         em = error_msg if isinstance(error_msg, str) else str(error_msg)
@@ -114,7 +114,7 @@ async def process_parsed_cli_event(
                 "HANDLER: Error event received: message_chars={}",
                 text_len_hint(em),
             )
-        await update_ui(format_status("❌", "Error"), force=True)
         await fail_claim(em, "Parent task failed")
+        await update_ui(format_status("❌", "Error"), force=True)
 
     return last_status, had_transcript_events

@@ -503,8 +503,8 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
         "session_persistence",
         "free_claude_code.runtime.messaging_sqlite.SQLiteMessagingStore",
         "scoped tree data and message log",
-        "JSON persistence compatible with existing files",
-        "best-effort flush error logging",
+        "transactional SQLite persistence with one-time legacy JSON import",
+        "storage failures propagate to the owning messaging operation",
         ("tests/runtime/test_messaging_sqlite.py",),
     ),
     CapabilityContract(

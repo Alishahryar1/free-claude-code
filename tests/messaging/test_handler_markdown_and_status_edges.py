@@ -521,6 +521,52 @@ async def test_process_parsed_event_failed_complete_does_not_mark_success():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [{"type": "complete", "status": "success"}, {"type": "error", "message": "failed"}],
+)
+@pytest.mark.parametrize("save_fails", [False, True])
+async def test_terminal_status_waits_for_its_durable_outcome(event, save_fails):
+    from free_claude_code.messaging.trees import MessagingStorageError
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    ui = AsyncMock()
+
+    async def save(*_args):
+        entered.set()
+        await release.wait()
+        if save_fails:
+            raise MessagingStorageError("disk full")
+
+    operation = asyncio.create_task(
+        process_parsed_cli_event(
+            parsed=event,
+            transcript=MagicMock(),
+            update_ui=ui,
+            last_status=None,
+            had_transcript_events=True,
+            claim=_claim(),
+            captured_session_id="session",
+            format_status=lambda *args: " ".join(args),
+            complete_claim=save,
+            fail_claim=save,
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        ui.assert_not_awaited()
+    finally:
+        release.set()
+    if save_fails:
+        with pytest.raises(MessagingStorageError):
+            await operation
+        ui.assert_not_awaited()
+    else:
+        await operation
+        ui.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_handler_update_ui_edit_failure_does_not_crash():
     """When queue_edit_message raises during streaming, node_runner.process_node continues and completes."""
     platform = MagicMock()

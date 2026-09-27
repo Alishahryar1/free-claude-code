@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from free_claude_code.messaging.models import MessageScope
 from free_claude_code.messaging.trees import (
     ConversationSnapshot,
+    MessagingStorageError,
     TreeIdentity,
     TreeSnapshot,
     normalize_tree_snapshot,
@@ -109,7 +110,12 @@ class SQLiteMessagingStore:
             for snapshot in snapshots:
                 write_tree(connection, snapshot)
 
-        await self.database.run(commit)
+        try:
+            await self.database.run(commit)
+        except sqlite3.Error as exc:
+            raise MessagingStorageError(
+                "Messaging history could not be saved."
+            ) from exc
 
     def _trim(
         self, connection: sqlite3.Connection, platform: str, chat_id: str

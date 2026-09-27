@@ -13,6 +13,7 @@ from loguru import logger
 from ..models import IncomingMessage, MessageScope
 from .identity import TreeIdentity
 from .node import MessageNode, MessageState
+from .ports import MessagingStorageError
 from .processor import (
     CancelledTask,
     NodeProcessor,
@@ -101,6 +102,8 @@ class TreeQueueManager:
         self._store = store
         self._repository = _repository or TreeRepository()
         self._lock = asyncio.Lock()
+        self._interrupted: dict[MessageTree, tuple[NodeUiTarget, ...]] = {}
+        self._closing = False
         self._processor = TreeQueueProcessor(
             node_processor,
             claim_failure_callback=self._handle_processor_failure,
@@ -115,15 +118,42 @@ class TreeQueueManager:
         logger.info("TreeQueueManager initialized")
 
     @asynccontextmanager
-    async def _transaction(self) -> AsyncIterator[TreeTransaction]:
+    async def _transaction(
+        self, *, worker: NodeClaim | None = None, allow_closing: bool = False
+    ) -> AsyncIterator[TreeTransaction]:
         async with self._lock:
+            if self._closing and worker is None and not allow_closing:
+                raise RuntimeError("Messaging is shutting down")
             transaction = TreeTransaction(self._repository, self._store)
             try:
                 yield transaction
                 await transaction.commit()
-            except BaseException:
+            except BaseException as exc:
                 await transaction.rollback()
+                if isinstance(exc, MessagingStorageError) and worker is not None:
+                    tree = self._repository.get_tree(worker.identity)
+                    if tree is not None and await tree.owns_claim(worker.claim_id):
+                        self._interrupted.setdefault(
+                            tree, await tree.runnable_targets()
+                        )
                 raise
+            else:
+                for tree in transaction.reconciled:
+                    self._interrupted.pop(tree, None)
+
+    async def _prepare_tree(
+        self, transaction: TreeTransaction, tree: MessageTree, *, removing: bool = False
+    ) -> None:
+        transaction.watch(tree)
+        if tree not in self._interrupted:
+            return
+        if not removing:
+            if self._processor.owns_tree(tree):
+                raise MessagingStorageError(
+                    "This conversation is cleaning up after a storage failure. Try again shortly."
+                )
+            await tree.cancel_all()
+        transaction.reconciled.add(tree)
 
     @property
     def restored_snapshot(self) -> ConversationSnapshot | None:
@@ -152,7 +182,7 @@ class TreeQueueManager:
                     status_message_id,
                 )
             if duplicate_tree is not None:
-                transaction.watch(duplicate_tree)
+                await self._prepare_tree(transaction, duplicate_tree)
                 return await duplicate_tree.enqueue_or_claim(node_id)
 
             tree: MessageTree | None = None
@@ -173,7 +203,7 @@ class TreeQueueManager:
                     )
 
             if tree is not None and resolved_parent is not None:
-                transaction.watch(tree)
+                await self._prepare_tree(transaction, tree)
                 decision = await tree.add_and_enqueue(
                     node_id,
                     scope,
@@ -246,8 +276,10 @@ class TreeQueueManager:
         claim: NodeClaim,
         session_id: str,
     ) -> TreeSnapshot | None:
-        async with self._transaction() as transaction:
+        async with self._transaction(worker=claim) as transaction:
             tree = self._repository.get_tree(claim.identity)
+            if self._closing or tree in self._interrupted:
+                return None
             transaction.watch(tree)
             return (
                 await tree.record_session(claim.claim_id, session_id)
@@ -260,8 +292,10 @@ class TreeQueueManager:
         claim: NodeClaim,
         session_id: str | None,
     ) -> TreeSnapshot | None:
-        async with self._transaction() as transaction:
+        async with self._transaction(worker=claim) as transaction:
             tree = self._repository.get_tree(claim.identity)
+            if self._closing or tree in self._interrupted:
+                return None
             transaction.watch(tree)
             return (
                 await tree.complete_claim(claim.claim_id, session_id)
@@ -283,8 +317,10 @@ class TreeQueueManager:
         *,
         propagate: bool,
     ) -> FailureResult:
-        async with self._transaction() as transaction:
+        async with self._transaction(worker=claim) as transaction:
             tree = self._repository.get_tree(claim.identity)
+            if self._closing or tree in self._interrupted:
+                return FailureResult(affected=(), queue_update=None, snapshot=None)
             transaction.watch(tree)
             result = (
                 await tree.fail_claim(
@@ -304,6 +340,9 @@ class TreeQueueManager:
     ) -> None:
         """Route an escaped runner failure through manager-owned effects."""
         result = await self._fail_claim(claim, propagate=True)
+        self._notify_failure(result)
+
+    def _notify_failure(self, result: FailureResult) -> None:
         if self._unexpected_failure_callback is None:
             return
         try:
@@ -316,13 +355,45 @@ class TreeQueueManager:
 
     async def _finish_claim(self, tree: MessageTree, claim: NodeClaim) -> None:
         """Serialize successor task publication with aggregate detachment."""
-        async with self._transaction() as transaction:
-            tree_is_published = self._repository.get_tree(claim.identity) is tree
-            if tree_is_published:
-                transaction.watch(tree)
-            completion = await tree.finish_and_claim_next(claim.claim_id)
+        try:
+            async with self._transaction(worker=claim) as transaction:
+                if self._closing or tree in self._interrupted:
+                    await tree.retire_claim(claim.claim_id)
+                    targets = self._interrupted.get(tree, ())
+                    if tree in self._interrupted:
+                        self._interrupted[tree] = ()
+                    completion = None
+                else:
+                    tree_is_published = (
+                        self._repository.get_tree(claim.identity) is tree
+                    )
+                    if tree_is_published:
+                        transaction.watch(tree)
+                    completion = await tree.finish_and_claim_next(claim.claim_id)
+                    targets = ()
+        except MessagingStorageError:
+            async with self._lock:
+                await tree.retire_claim(claim.claim_id)
+                targets = self._interrupted.get(tree, ())
+                if tree in self._interrupted:
+                    self._interrupted[tree] = ()
+            completion = None
 
-        if tree_is_published and completion.next_claim is not None:
+        if targets:
+            self._notify_failure(
+                FailureResult(
+                    affected=targets,
+                    queue_update=(),
+                    snapshot=None,
+                    message="Messaging history could not be saved. This conversation was interrupted.",
+                )
+            )
+
+        if (
+            completion is not None
+            and tree_is_published
+            and completion.next_claim is not None
+        ):
             self._processor.launch(
                 tree,
                 completion.next_claim,
@@ -387,7 +458,7 @@ class TreeQueueManager:
             target = await tree.resolve_reply(node_id)
             if target is None:
                 return CancellationResult()
-            transaction.watch(tree)
+            await self._prepare_tree(transaction, tree)
             transition = await tree.cancel_node(target.node_id)
         cancelled_task = (
             self._processor.cancel(transition.active_claim, reason)
@@ -418,7 +489,7 @@ class TreeQueueManager:
         transitions: list[TreeCancellation] = []
         async with self._transaction() as transaction:
             for tree in self._repository.trees():
-                transaction.watch(tree)
+                await self._prepare_tree(transaction, tree)
                 transitions.append(await tree.cancel_all())
         return await self._cancel_committed(transitions, reason)
 
@@ -460,7 +531,7 @@ class TreeQueueManager:
             for tree in self._repository.trees():
                 if tree.identity.scope != scope:
                     continue
-                transaction.watch(tree)
+                await self._prepare_tree(transaction, tree, removing=True)
                 transitions.append(await tree.cancel_all())
                 self._repository.remove_tree(tree.identity)
         return await self._cancel_committed(transitions, reason)
@@ -501,7 +572,9 @@ class TreeQueueManager:
                     tree_matched=False,
                 )
             identity = tree.identity
-            transaction.watch(tree)
+            await self._prepare_tree(
+                transaction, tree, removing=target.reference_id == tree.root_id
+            )
             transition = await tree.remove_message_subtree(target.reference_id)
             lookup_ids = set(transition.removed_message_ids)
             if transition.removed_entire_tree:
@@ -546,6 +619,34 @@ class TreeQueueManager:
 
     def task_count(self) -> int:
         return self._processor.task_count()
+
+    async def shutdown(self) -> CancellationResult:
+        """Stop execution even when saving its interruption fails."""
+        transitions: list[TreeCancellation] = []
+        try:
+            async with self._transaction(allow_closing=True) as transaction:
+                if self._closing:
+                    return CancellationResult()
+                self._closing = True
+                for tree in self._repository.trees():
+                    transaction.watch(tree)
+                    transitions.append(await tree.cancel_all())
+        except MessagingStorageError:
+            logger.warning("Messaging shutdown could not save interrupted state")
+        finally:
+            cancelled = self._processor.cancel_all(CancellationReason.STOP)
+        return CancellationResult(
+            effects=tuple(
+                effect
+                for transition in transitions
+                for effect in self._external_effects(
+                    transition,
+                    cancelled.get(transition.active_claim.claim_id)
+                    if transition.active_claim is not None
+                    else None,
+                )
+            )
+        )
 
     async def wait_idle(self) -> None:
         """Wait until every processor-owned claim has finished cleanup."""

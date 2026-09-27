@@ -281,7 +281,7 @@ async def test_restore_repairs_interrupted_status_after_delivery_starts(
 
 
 @pytest.mark.asyncio
-async def test_workflow_close_waits_for_claim_cleanup_before_flushing(
+async def test_workflow_close_stops_cli_and_waits_for_claim_cleanup(
     mock_platform,
     mock_cli_manager,
     mock_session_store,
@@ -300,7 +300,7 @@ async def test_workflow_close_waits_for_claim_cleanup_before_flushing(
         wait_started.set()
         await cleanup_release.wait()
 
-    workflow.stop_all_tasks = AsyncMock(side_effect=stop_all)
+    mock_cli_manager.stop_all = AsyncMock(side_effect=stop_all)
     workflow.tree_queue.wait_idle = AsyncMock(side_effect=wait_idle)
 
     close_task = asyncio.create_task(workflow.close())

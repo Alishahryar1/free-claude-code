@@ -7,6 +7,10 @@ from .identity import TreeIdentity
 from .snapshot import ConversationSnapshot, TreeSnapshot
 
 
+class MessagingStorageError(RuntimeError):
+    """A messaging transition could not be durably stored."""
+
+
 class MessagingStore(Protocol):
     async def load_conversation_snapshot(self) -> ConversationSnapshot: ...
 

@@ -38,19 +38,26 @@ def test_real_disconnect_failure_keeps_retry_after_reload(
                 ),
             )
         elif status_failure == "startup":
+            marker = tmp_path / ".fcc/claude-desktop-disconnect.json"
+            failed = {"state": "failed", "message": "Startup check failed"}
 
             def failed_update(route):
                 result = route.fetch()
                 body = result.json()
-                if body["disconnect_pending"]:
+                if marker.exists():
                     body["connected"] = None
-                    body["update"] = {
-                        "state": "failed",
-                        "message": "Startup check failed",
-                    }
+                    body["update"] = failed
+                route.fulfill(response=result, json=body)
+
+            def failed_startup(route):
+                result = route.fetch()
+                body = result.json()
+                if marker.exists():
+                    body["startup"]["integrations"]["claude-desktop"] = failed
                 route.fulfill(response=result, json=body)
 
             page.route(endpoint, failed_update)
+            page.route("**/admin/api/status", failed_startup)
         dialog.get_by_role("button", name="Disconnect", exact=True).click()
         expect(
             dialog.get_by_role(

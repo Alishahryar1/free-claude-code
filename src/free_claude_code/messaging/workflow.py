@@ -331,7 +331,12 @@ class MessagingWorkflow:
 
     async def close(self) -> None:
         """Finish every owned task and durable write before releasing delivery."""
-        await self.stop_all_tasks()
+        await self._cancel_all_pending_voices()
+        async with self._state_lock:
+            self._stop_generation += 1
+            result = await self._tree_queue.shutdown()
+            self._apply_cancellation_result(result)
+        await self.cli_manager.stop_all()
         await self._tree_queue.wait_idle()
 
     async def handle_message(self, incoming: IncomingMessage) -> None:
@@ -681,13 +686,13 @@ class MessagingWorkflow:
                 )
 
     def _apply_unexpected_failure(self, result: FailureResult) -> None:
-        """Persist and render a failure that escaped the total node runner."""
+        """Render a failure reported by the execution owner."""
         for target in result.affected:
             self.outbound.fire_and_forget(
                 self.outbound.queue_edit_message(
                     target.scope.chat_id,
                     target.status_message_id,
-                    self.format_status("💥", "Task Failed"),
+                    self.format_status("💥", "Task Failed", result.message),
                     parse_mode=self._parse_mode(),
                 )
             )

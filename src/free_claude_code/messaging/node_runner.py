@@ -17,7 +17,12 @@ from .node_event_pipeline import handle_session_info_event, process_parsed_cli_e
 from .platforms.ports import OutboundMessenger
 from .safe_diagnostics import format_exception_for_log
 from .transcript import RenderCtx, TranscriptBuffer
-from .trees import CancellationReason, NodeClaim, TreeQueueManager
+from .trees import (
+    CancellationReason,
+    MessagingStorageError,
+    NodeClaim,
+    TreeQueueManager,
+)
 from .ui_updates import ThrottledTranscriptEditor
 
 
@@ -346,6 +351,9 @@ class MessagingNodeRunner:
                 claim,
                 propagate=False,
             )
+        except MessagingStorageError:
+            # The processor owns interruption reporting, including queued turns.
+            raise
         except Exception as e:
             trace_event(
                 stage="claude_cli",

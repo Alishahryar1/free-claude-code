@@ -2,14 +2,14 @@ import asyncio
 import json
 import sqlite3
 import threading
-from contextlib import closing
-from unittest.mock import AsyncMock, patch
+from contextlib import closing, suppress
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 import pytest_asyncio
 
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
-from free_claude_code.messaging.trees import TreeQueueManager
+from free_claude_code.messaging.trees import MessagingStorageError, TreeQueueManager
 from free_claude_code.messaging.trees.snapshot import TreeSnapshot
 from free_claude_code.messaging.workflow import MessagingWorkflow
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
@@ -67,8 +67,9 @@ async def test_reference_collision_rolls_back_whole_write(storage):
     original = tree()
     await storage.commit_trees((original,))
     collision = tree(root="status-root")
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(MessagingStorageError) as failure:
         await storage.commit_trees((collision,))
+    assert isinstance(failure.value.__cause__, sqlite3.IntegrityError)
     assert (await storage.load_conversation_snapshot()).trees == {
         original.identity: original
     }
@@ -94,7 +95,7 @@ async def test_import_keeps_valid_data_and_never_replays_after_clear(
     assert source.exists() is damaged
     assert (await storage.load_conversation_snapshot()).trees == {valid.identity: valid}
     await storage.commit_trees((), clear_scope=valid.scope)
-    await import_legacy(storage.database, source)
+    assert await import_legacy(storage.database, source) is None
     assert (await storage.load_conversation_snapshot()).is_empty
 
 
@@ -405,3 +406,223 @@ async def test_restore_does_not_consume_inactive_platform_status_repairs(storage
         target.scope.platform == "discord"
         for target in next_workflow.tree_queue.restored_stale_targets
     )
+
+
+@pytest.mark.parametrize("boundary", ["session", "terminal", "failure", "successor"])
+async def test_worker_write_failure_interrupts_queue_and_new_reply_recovers(
+    storage, boundary
+):
+    started, release = asyncio.Event(), asyncio.Event()
+    processed, interrupted = [], []
+
+    async def process(claim):
+        processed.append(claim.node.node_id)
+        if claim.node.node_id == "root":
+            started.set()
+            await release.wait()
+            if boundary == "session":
+                await manager.record_session(claim, "native")
+            elif boundary == "failure":
+                await manager.fail_claim(claim)
+        await manager.complete_claim(claim, "native")
+
+    manager = TreeQueueManager(
+        process, store=storage, unexpected_failure_callback=interrupted.append
+    )
+    root = await manager.admit(incoming("root"), "status-root")
+    assert root.claim is not None
+    await started.wait()
+    await manager.admit(incoming("child"), "status-child", parent_reference_id="root")
+    condition = {
+        "session": "NEW.node_id='root' AND NEW.session_id='native'",
+        "terminal": "NEW.node_id='root' AND NEW.state='completed'",
+        "failure": "NEW.node_id='root' AND NEW.state='error'",
+        "successor": "NEW.node_id='child' AND NEW.state='in_progress'",
+    }[boundary]
+    await storage.database.run(
+        lambda connection: connection.execute(
+            f"CREATE TRIGGER reject_transition BEFORE UPDATE ON messaging_nodes WHEN {condition} "
+            "BEGIN SELECT RAISE(ABORT, 'test storage failure'); END"
+        )
+    )
+    release.set()
+    await asyncio.wait_for(manager.wait_idle(), 5)
+    assert processed == ["root"]
+    assert manager.task_count() == 0
+    assert interrupted
+    assert "child" in {
+        node.node_id for result in interrupted for node in result.affected
+    }
+    saved = await storage.load_conversation_snapshot()
+    assert (await manager.snapshot()).trees == saved.trees
+    await storage.database.run(
+        lambda connection: connection.execute("DROP TRIGGER reject_transition")
+    )
+    await manager.admit(incoming("later"), "status-later", parent_reference_id="root")
+    await asyncio.wait_for(manager.wait_idle(), 5)
+    assert processed == ["root", "later"]
+    nodes = (
+        (await storage.load_conversation_snapshot()).trees[root.claim.identity].nodes
+    )
+    assert nodes["root"]["state"] == (
+        "completed" if boundary == "successor" else "error"
+    )
+    assert nodes["child"]["state"] == "error"
+    assert nodes["later"]["state"] == "completed"
+
+
+async def test_shutdown_drains_workers_even_when_interruption_cannot_be_saved(
+    storage, mock_platform
+):
+    started, stopped = asyncio.Event(), asyncio.Event()
+    cli = AsyncMock()
+    workflow = MessagingWorkflow(mock_platform, cli, storage, platform_name="telegram")
+
+    async def process(claim):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await manager.fail_claim(claim)
+            stopped.set()
+
+    manager = TreeQueueManager(process, store=storage)
+    workflow._tree_queue = manager
+    await manager.admit(incoming("root"), "status-root")
+    await started.wait()
+    await manager.admit(incoming("child"), "status-child", parent_reference_id="root")
+    execute = storage.database.execute
+    writes = 0
+
+    def broken(operation, *, write=True):
+        nonlocal writes
+        if write:
+            writes += 1
+            raise sqlite3.OperationalError("disk full")
+        return execute(operation, write=write)
+
+    try:
+        with patch.object(storage.database, "execute", broken):
+            await asyncio.wait_for(workflow.close(), 5)
+        assert writes == 1
+        assert stopped.is_set()
+        assert manager.task_count() == 0
+        cli.stop_all.assert_awaited()
+        assert any(
+            call.args[1] == "status-child"
+            for call in mock_platform.queue_edit_message.call_args_list
+        )
+    finally:
+        await manager.shutdown()
+        await manager.wait_idle()
+
+
+async def test_persistent_failure_has_no_retries_and_failed_recovery_keeps_history(
+    storage,
+):
+    started, release = asyncio.Event(), asyncio.Event()
+    processed = []
+    # An outbound failure must not prevent task retirement.
+    notify = Mock(side_effect=RuntimeError("platform unavailable"))
+
+    async def process(claim):
+        processed.append(claim.node.node_id)
+        started.set()
+        await release.wait()
+        await manager.complete_claim(claim, "native")
+
+    manager = TreeQueueManager(
+        process, store=storage, unexpected_failure_callback=notify
+    )
+    root = await manager.admit(incoming("root"), "status-root")
+    await started.wait()
+    await manager.admit(incoming("child"), "status-child", parent_reference_id="root")
+    original = await storage.load_conversation_snapshot()
+    writes = 0
+    execute = storage.database.execute
+
+    def broken(operation, *, write=True):
+        nonlocal writes
+        if write:
+            writes += 1
+            raise sqlite3.OperationalError("disk full")
+        return execute(operation, write=False)
+
+    with patch.object(storage.database, "execute", broken):
+        release.set()
+        await asyncio.wait_for(manager.wait_idle(), 5)
+        assert writes == 1
+        assert processed == ["root"]
+        assert manager.task_count() == 0
+        with pytest.raises(MessagingStorageError):
+            await manager.admit(
+                incoming("new"), "status-new", parent_reference_id="root"
+            )
+        assert writes == 2
+        assert (await manager.snapshot()) == original
+        assert (await storage.load_conversation_snapshot()) == original
+    notify.assert_called_once()
+    await manager.admit(incoming("new"), "status-new", parent_reference_id="root")
+    await asyncio.wait_for(manager.wait_idle(), 5)
+    assert processed == ["root", "new"]
+    nodes = (
+        (await storage.load_conversation_snapshot()).trees[root.claim.identity].nodes
+    )
+    assert nodes["root"]["state"] == nodes["child"]["state"] == "error"
+    assert nodes["new"]["state"] == "completed"
+
+
+async def test_gated_tree_can_be_cleared_and_replaced_before_old_cleanup_finishes(
+    storage, monkeypatch
+):
+    monkeypatch.setattr(
+        "free_claude_code.messaging.trees.manager.CANCEL_TASK_DRAIN_TIMEOUT_S", 0.01
+    )
+    faulted, cleanup_release = asyncio.Event(), asyncio.Event()
+    new_started, new_release = asyncio.Event(), asyncio.Event()
+    claims = []
+
+    async def process(claim):
+        claims.append(claim)
+        if len(claims) == 1:
+            try:
+                with patch.object(
+                    storage.database,
+                    "execute",
+                    side_effect=sqlite3.OperationalError("disk full"),
+                ):
+                    await manager.record_session(claim, "old-session")
+            except MessagingStorageError:
+                faulted.set()
+                while not cleanup_release.is_set():
+                    with suppress(asyncio.CancelledError):
+                        await cleanup_release.wait()
+                # This late update must not affect the same-ID replacement.
+                await manager.complete_claim(claim, "old-session")
+                raise
+        new_started.set()
+        await new_release.wait()
+        await manager.complete_claim(claim, "new-session")
+
+    manager = TreeQueueManager(process, store=storage)
+    old = await manager.admit(incoming("root"), "status-root")
+    assert old.claim is not None
+    await faulted.wait()
+    try:
+        with pytest.raises(MessagingStorageError, match="cleaning up"):
+            await manager.admit(
+                incoming("child"), "status-child", parent_reference_id="root"
+            )
+        await manager.clear_scope(old.claim.identity.scope)
+        replacement = await manager.admit(incoming("root"), "status-root")
+        assert replacement.claim is not None
+        await new_started.wait()
+        assert replacement.claim.claim_id != old.claim.claim_id
+        assert manager.task_count() == 2
+    finally:
+        cleanup_release.set()
+        new_release.set()
+        await asyncio.wait_for(manager.wait_idle(), 5)
+    nodes = (await storage.load_conversation_snapshot()).trees[old.claim.identity].nodes
+    assert list(nodes) == ["root"]
+    assert nodes["root"]["session_id"] == "new-session"

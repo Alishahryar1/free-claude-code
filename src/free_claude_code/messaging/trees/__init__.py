@@ -4,7 +4,7 @@ from .graph import normalize_tree_snapshot
 from .identity import TreeIdentity
 from .manager import TreeQueueManager
 from .node import MessageReferenceKind, MessageState
-from .ports import MessagingStore
+from .ports import MessagingStorageError, MessagingStore
 from .snapshot import ConversationSnapshot, TreeSnapshot
 from .transitions import (
     AdmissionRejection,
@@ -31,6 +31,7 @@ __all__ = [
     "MessageReferenceKind",
     "MessageState",
     "MessageSubtreeRemovalResult",
+    "MessagingStorageError",
     "MessagingStore",
     "NodeClaim",
     "NodeUiTarget",
