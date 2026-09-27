@@ -23,17 +23,15 @@ def test_connection_check_uses_disabled_loading_button(
 ):
     pending = []
 
-    def hold_check(route):
-        pending.append(route)
-        page.evaluate("window.integrationCheckIntercepted = true")
-
-    page.route(f"**/admin/api/integrations/{integration}", hold_check)
+    page.expose_function("integrationCheckPending", lambda: bool(pending))
+    page.route(
+        f"**/admin/api/integrations/{integration}", lambda route: pending.append(route)
+    )
     page.goto(f"{admin_base_url}/admin/integrations")
     button = page.locator(f"#{button_id}")
     for visit in range(2):
         if visit:
             page.get_by_role("button", name="Providers", exact=True).click()
-            page.evaluate("window.integrationCheckIntercepted = false")
             page.get_by_role("button", name="Integrations", exact=True).click()
         expect(button).to_be_disabled()
         expect(button).to_have_text("Loading…")
@@ -46,9 +44,15 @@ def test_connection_check_uses_disabled_loading_button(
             == "integration-spinner"
         )
         expect(page.locator("#view-integrations .status-pill")).to_have_count(0)
-        page.wait_for_function("window.integrationCheckIntercepted === true")
+        page.wait_for_function("async () => await window.integrationCheckPending()")
         assert len(pending) == 1
-        pending.pop().fulfill(json={"connected": connected, "paths": None})
+        pending.pop().fulfill(
+            json={
+                "connected": connected,
+                "paths": None,
+                "update": {"state": "ready", "changed": False, "message": None},
+            }
+        )
         expect(button).to_be_enabled()
         expect(button).to_have_text("Disconnect" if connected else "Connect")
         expect(button).to_have_attribute("aria-busy", "false")
