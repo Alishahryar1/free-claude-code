@@ -7,12 +7,14 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 
+import simplejson
+
 from free_claude_code.core.anthropic.streaming import (
     AnthropicStreamLedger,
     ToolSchema,
     parse_complete_tool_input,
 )
-from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
     ReplayRecord,
@@ -280,6 +282,10 @@ class ChatStreamOutput(ABC):
         self._terminal = True
         return events
 
+    def validate_completion(self) -> None:
+        """Preflight output before batch closure; Responses validates per item."""
+        return None
+
     def finish_failure(self, failure: ExecutionFailure) -> list[str]:
         if self._terminal:
             return []
@@ -362,6 +368,23 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
         for state in self.tool_states.values():
             state.open = False
         return events
+
+    def validate_completion(self) -> None:
+        for _, state in self.started_tool_states():
+            try:
+                arguments = simplejson.loads(
+                    state.content, allow_nan=False, use_decimal=True
+                )
+                if isinstance(arguments, dict):
+                    continue
+            except ValueError:
+                pass
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message="Upstream tool call arguments were not a valid JSON object.",
+                retryable=False,
+            )
 
     def _start_events(self) -> list[str]:
         return [self._ledger.message_start()]

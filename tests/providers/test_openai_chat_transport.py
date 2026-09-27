@@ -24,7 +24,7 @@ from tests.providers.request_factory import make_messages_request
 pytestmark = pytest.mark.asyncio
 
 
-def _transport(client: AsyncOpenAI) -> OpenAIChatTransport:
+def _transport(client: AsyncOpenAI, *, max_attempts: int = 1) -> OpenAIChatTransport:
     return OpenAIChatTransport(
         client=client,
         admission=ProviderAdmissionController(
@@ -32,7 +32,7 @@ def _transport(client: AsyncOpenAI) -> OpenAIChatTransport:
             rate_limit=100,
             rate_window=1,
             max_concurrency=1,
-            max_attempts=1,
+            max_attempts=max_attempts,
         ),
         behavior=OpenAIChatBehavior(
             OpenAIChatProfile(

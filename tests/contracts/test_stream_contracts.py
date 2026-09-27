@@ -117,16 +117,26 @@ def test_enable_thinking_false_suppresses_reasoning_only() -> None:
 
 
 def test_task_tool_parser_preserves_background_argument() -> None:
-    parser = HeuristicToolParser()
-    filtered, detected = parser.feed(
+    from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
+
+    parser = HeuristicToolParser(
+        tool_names=OpenAIToolNameCodec.from_names(["Task"]),
+        schemas={
+            "Task": {
+                "type": "object",
+                "properties": {"run_in_background": {"type": "boolean"}},
+            }
+        },
+    )
+    parts = parser.feed(
         "● <function=Task><parameter=description>Inspect</parameter>"
         "<parameter=run_in_background>true</parameter> trailing"
     )
-    detected.extend(parser.flush())
-    assert "trailing" in filtered
-    task = detected[0]
+    parts.extend(parser.flush())
+    assert "trailing" in "".join(p for p in parts if isinstance(p, str))
+    task = next(p for p in parts if isinstance(p, dict))
     assert task["name"] == "Task"
-    assert task["input"]["run_in_background"] == "true"
+    assert task["input"]["run_in_background"] is True
 
 
 def _interleaved_thinking_text_events(

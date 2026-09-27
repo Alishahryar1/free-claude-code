@@ -920,7 +920,20 @@ class TestStreamingExceptionHandling:
     ):
         """Text-parsed tool calls count as emitted tool output when finalizing."""
         provider = _make_provider()
-        request = _make_request()
+        request = _make_request(
+            tools=[
+                {
+                    "name": "Read",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "limit": {"type": "integer"},
+                        },
+                    },
+                }
+            ]
+        )
         heuristic_tool = (
             "● <function=Read><parameter=path>test.py</parameter>"
             "<parameter=limit>10</parameter>"

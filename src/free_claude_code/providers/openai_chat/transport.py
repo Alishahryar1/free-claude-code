@@ -3,7 +3,14 @@
 import asyncio
 import sys
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+)
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import partial
@@ -155,29 +162,23 @@ def _iter_text_parser_events(
     tool_names: OpenAIToolNameCodec,
 ) -> Iterator[str]:
     """Route visible text through the established heuristic tool parser."""
-    filtered_text, detected_tools = parser.feed(text)
-    if filtered_text:
-        yield from _iter_visible_text_events(output, filtered_text)
-    for tool_use in detected_tools:
-        yield from iter_heuristic_tool_use_events(
-            output,
-            tool_use,
-            tool_names=tool_names,
-        )
+    yield from _iter_text_parts_events(output, parser.feed(text), tool_names=tool_names)
 
 
-def _iter_text_tool_use_events(
+def _iter_text_parts_events(
     output: ChatStreamOutput,
-    tool_uses: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+    parts: Iterable[str | dict[str, Any]],
     *,
     tool_names: OpenAIToolNameCodec,
 ) -> Iterator[str]:
-    for tool_use in tool_uses:
-        yield from iter_heuristic_tool_use_events(
-            output,
-            tool_use,
-            tool_names=tool_names,
-        )
+    for part in parts:
+        if isinstance(part, str):
+            if part:
+                yield from _iter_visible_text_events(output, part)
+        else:
+            yield from iter_heuristic_tool_use_events(
+                output, part, tool_names=tool_names
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,7 +245,13 @@ class _OpenAIChatStreamAssembler:
             },
             enabled=tool_choice_enabled,
         )
-        self._heuristic_parser = HeuristicToolParser()
+        self._heuristic_parser = HeuristicToolParser(
+            tool_names=tool_names,
+            schemas={
+                name: schema.input_schema for name, schema in tool_schemas.items()
+            },
+            enabled=tool_choice_enabled,
+        )
         self._structured_reasoning = (
             StructuredReasoningStream()
             if profile.structured_reasoning_details
@@ -448,12 +455,12 @@ class _OpenAIChatStreamAssembler:
         fallback_text, function_tag_tools = self._function_tag_parser.finish()
         if fallback_text:
             yield from _iter_visible_text_events(self._output, fallback_text)
-        yield from _iter_text_tool_use_events(
+        yield from _iter_text_parts_events(
             self._output,
             function_tag_tools,
             tool_names=self._tool_names,
         )
-        yield from _iter_text_tool_use_events(
+        yield from _iter_text_parts_events(
             self._output,
             self._heuristic_parser.flush(),
             tool_names=self._tool_names,
@@ -488,6 +495,7 @@ class _OpenAIChatStreamAssembler:
             self._tool_argument_aliases,
             self._tool_argument_alias_buffers,
         )
+        self._output.validate_completion()
         yield from self._output.close_all_blocks()
 
         completion = usage_int(self._usage_info, "completion_tokens")
@@ -1116,9 +1124,17 @@ class _OpenAIChatStreamRunner:
                 if scope is not None:
                     await scope.aclose(active_error=sys.exception())
 
-        for event in assembler.prepare_completion():
-            for out_event in hold_event(event):
-                yield out_event
+        try:
+            for event in assembler.prepare_completion():
+                for out_event in hold_event(event):
+                    yield out_event
+        except ExecutionFailure:
+            if recovery.committed:
+                for event in assembler.output.close_unclosed_blocks():
+                    yield event
+            else:
+                recovery.discard()
+            raise
         completion = assembler.completion
         if completion.provider_input_tokens is not None:
             logger.debug(

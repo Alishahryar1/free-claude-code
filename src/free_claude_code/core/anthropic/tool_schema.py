@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from typing import Any
 
 import jsonschema
+from referencing import Registry
+from referencing.exceptions import Unresolvable
 
 
 def schema_type(schema: Mapping[str, Any]) -> str | None:
@@ -92,3 +94,42 @@ def arguments_match_schema(
     except jsonschema.exceptions.ValidationError:
         return False
     return True
+
+
+def prepare_text_tool_input(
+    arguments: Mapping[str, Any],
+    schema: Mapping[str, Any],
+    *,
+    text_parameters: bool,
+) -> dict[str, Any]:
+    """Validate inferred input, decoding only parameters originating as text.
+
+    Invalid or unresolved schemas are not evidence for an executable call.
+    Use local references only, never fetch an untrusted schema over the network.
+    """
+    properties = schema.get("properties")
+    property_schemas = properties if isinstance(properties, Mapping) else {}
+    additional = schema.get("additionalProperties")
+    prepared = dict(arguments)
+    try:
+        validator_type = jsonschema.validators.validator_for(schema)
+        validator_type.check_schema(schema)
+        if text_parameters:
+            for name, value in arguments.items():
+                parameter_schema = property_schemas.get(name)
+                if not isinstance(parameter_schema, Mapping):
+                    parameter_schema = (
+                        additional if isinstance(additional, Mapping) else {}
+                    )
+                prepared[name] = coerce_text_argument(value, parameter_schema)
+        validator_type(schema, registry=Registry()).validate(prepared)
+        json.dumps(prepared, allow_nan=False)
+    except (
+        jsonschema.exceptions.SchemaError,
+        jsonschema.exceptions.ValidationError,
+        Unresolvable,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise ValueError("Invalid text tool candidate") from error
+    return prepared
