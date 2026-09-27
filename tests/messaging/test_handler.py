@@ -1,5 +1,6 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from collections.abc import Callable
+from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -756,16 +757,23 @@ async def test_stop_all_applies_immutable_ui_ownership_and_snapshots(
         effects=(workflow_owned, runner_owned),
         snapshots=(snapshot,),
     )
+
+    async def commit_cancel(*, reason, on_committed):
+        on_committed()
+        return result
+
     with patch.object(
         handler.tree_queue,
         "cancel_all",
-        AsyncMock(return_value=result),
+        AsyncMock(side_effect=commit_cancel),
     ) as cancel_all:
         outcome = await handler.stop_all_tasks()
     await asyncio.sleep(0)
 
     assert outcome == _stop_outcome(2)
-    cancel_all.assert_awaited_once_with(reason=CancellationReason.STOP)
+    cancel_all.assert_awaited_once_with(
+        reason=CancellationReason.STOP, on_committed=ANY
+    )
     mock_cli_manager.stop_all.assert_awaited_once()
     assert mock_platform.fire_and_forget.call_count == 1
     assert mock_platform.queue_edit_message.call_args.args[1] == "status_queued"
@@ -802,10 +810,13 @@ async def test_stop_all_joins_voices_before_tree_transaction_and_deduplicates(
         events.append("voices")
         return (voice,)
 
-    async def cancel_trees(*, reason: CancellationReason) -> CancellationResult:
+    async def cancel_trees(
+        *, reason: CancellationReason, on_committed: Callable[[], None]
+    ) -> CancellationResult:
         assert reason is CancellationReason.STOP
         assert handler._state_lock.locked()
         events.append("trees")
+        on_committed()
         return tree_result
 
     mock_platform.cancel_all_pending_voices.side_effect = cancel_voices
@@ -857,11 +868,15 @@ async def test_stop_all_persists_committed_transition_before_cli_shutdown(
         shutdown_started.set()
         await release_shutdown.wait()
 
+    async def commit_cancel(*, reason, on_committed):
+        on_committed()
+        return result
+
     mock_cli_manager.stop_all.side_effect = block_shutdown
     with patch.object(
         handler.tree_queue,
         "cancel_all",
-        AsyncMock(return_value=result),
+        AsyncMock(side_effect=commit_cancel),
     ):
         stop_task = asyncio.create_task(handler.stop_all_tasks())
         await shutdown_started.wait()
@@ -1688,11 +1703,15 @@ async def test_global_clear_precedes_concurrent_startup_notice_publication(
     release_clear = asyncio.Event()
 
     async def clear_trees(
-        scope: MessageScope, *, reason: CancellationReason
+        scope: MessageScope,
+        *,
+        reason: CancellationReason,
+        on_committed: Callable[[], None],
     ) -> CancellationResult:
         assert reason is CancellationReason.CLEAR
         clear_started.set()
         await release_clear.wait()
+        on_committed()
         return CancellationResult()
 
     with patch.object(workflow.tree_queue, "clear_scope", side_effect=clear_trees):
@@ -1811,11 +1830,15 @@ async def test_global_clear_cancels_and_deletes_only_current_chat_voices(
         return (current,)
 
     async def clear_trees(
-        scope: MessageScope, *, reason: CancellationReason
+        scope: MessageScope,
+        *,
+        reason: CancellationReason,
+        on_committed: Callable[[], None],
     ) -> CancellationResult:
         assert reason is CancellationReason.CLEAR
         assert handler._state_lock.locked()
         events.append("trees")
+        on_committed()
         return CancellationResult()
 
     mock_platform.cancel_pending_voices_in_scope.side_effect = cancel_voices

@@ -138,22 +138,21 @@ class TreeQueueManager:
                         )
                 raise
             else:
-                for tree in transaction.reconciled:
+                for tree in transaction.release_interruptions:
                     self._interrupted.pop(tree, None)
 
-    async def _prepare_tree(
-        self, transaction: TreeTransaction, tree: MessageTree, *, removing: bool = False
+    async def _prepare_admission(
+        self, transaction: TreeTransaction, tree: MessageTree
     ) -> None:
         transaction.watch(tree)
         if tree not in self._interrupted:
             return
-        if not removing:
-            if self._processor.owns_tree(tree):
-                raise MessagingStorageError(
-                    "This conversation is cleaning up after a storage failure. Try again shortly."
-                )
-            await tree.cancel_all()
-        transaction.reconciled.add(tree)
+        if self._processor.owns_tree(tree):
+            raise MessagingStorageError(
+                "This conversation is cleaning up after a storage failure. Try again shortly."
+            )
+        await tree.cancel_all()
+        transaction.release_interruptions.add(tree)
 
     @property
     def restored_snapshot(self) -> ConversationSnapshot | None:
@@ -182,7 +181,7 @@ class TreeQueueManager:
                     status_message_id,
                 )
             if duplicate_tree is not None:
-                await self._prepare_tree(transaction, duplicate_tree)
+                await self._prepare_admission(transaction, duplicate_tree)
                 return await duplicate_tree.enqueue_or_claim(node_id)
 
             tree: MessageTree | None = None
@@ -203,7 +202,7 @@ class TreeQueueManager:
                     )
 
             if tree is not None and resolved_parent is not None:
-                await self._prepare_tree(transaction, tree)
+                await self._prepare_admission(transaction, tree)
                 decision = await tree.add_and_enqueue(
                     node_id,
                     scope,
@@ -358,10 +357,7 @@ class TreeQueueManager:
         try:
             async with self._transaction(worker=claim) as transaction:
                 if self._closing or tree in self._interrupted:
-                    await tree.retire_claim(claim.claim_id)
-                    targets = self._interrupted.get(tree, ())
-                    if tree in self._interrupted:
-                        self._interrupted[tree] = ()
+                    targets = await self._retire_interrupted(tree, claim)
                     completion = None
                 else:
                     tree_is_published = (
@@ -373,10 +369,7 @@ class TreeQueueManager:
                     targets = ()
         except MessagingStorageError:
             async with self._lock:
-                await tree.retire_claim(claim.claim_id)
-                targets = self._interrupted.get(tree, ())
-                if tree in self._interrupted:
-                    self._interrupted[tree] = ()
+                targets = await self._retire_interrupted(tree, claim)
             completion = None
 
         if targets:
@@ -400,6 +393,19 @@ class TreeQueueManager:
                 announce_started=True,
                 queue=completion.queue,
             )
+
+    async def _retire_interrupted(
+        self, tree: MessageTree, claim: NodeClaim
+    ) -> tuple[NodeUiTarget, ...]:
+        """Called under the manager lock, after any intervening stop or clear."""
+        await tree.retire_claim(claim.claim_id)
+        current = set(await tree.runnable_targets())
+        targets = tuple(
+            target for target in self._interrupted.get(tree, ()) if target in current
+        )
+        if tree in self._interrupted:
+            self._interrupted[tree] = ()
+        return targets
 
     @staticmethod
     def _external_effects(
@@ -458,7 +464,7 @@ class TreeQueueManager:
             target = await tree.resolve_reply(node_id)
             if target is None:
                 return CancellationResult()
-            await self._prepare_tree(transaction, tree)
+            transaction.watch(tree)
             transition = await tree.cancel_node(target.node_id)
         cancelled_task = (
             self._processor.cancel(transition.active_claim, reason)
@@ -480,17 +486,21 @@ class TreeQueueManager:
         self,
         *,
         reason: CancellationReason | None = None,
+        on_committed: Callable[[], None] | None = None,
     ) -> CancellationResult:
-        return await _finish_transition(self._cancel_all(reason))
+        """Publish the synchronous commit receipt before cancellation effects."""
+        return await _finish_transition(self._cancel_all(reason, on_committed))
 
     async def _cancel_all(
-        self, reason: CancellationReason | None
+        self, reason: CancellationReason | None, on_committed: Callable[[], None] | None
     ) -> CancellationResult:
         transitions: list[TreeCancellation] = []
         async with self._transaction() as transaction:
             for tree in self._repository.trees():
-                await self._prepare_tree(transaction, tree)
+                transaction.watch(tree)
                 transitions.append(await tree.cancel_all())
+        if on_committed is not None:
+            on_committed()
         return await self._cancel_committed(transitions, reason)
 
     async def _cancel_committed(
@@ -518,12 +528,16 @@ class TreeQueueManager:
         scope: MessageScope,
         *,
         reason: CancellationReason | None = None,
+        on_committed: Callable[[], None] | None = None,
     ) -> CancellationResult:
-        """Atomically detach one chat's trees, then drain their active tasks."""
-        return await _finish_transition(self._clear_scope(scope, reason))
+        """Commit detachment and its receipt before draining active tasks."""
+        return await _finish_transition(self._clear_scope(scope, reason, on_committed))
 
     async def _clear_scope(
-        self, scope: MessageScope, reason: CancellationReason | None
+        self,
+        scope: MessageScope,
+        reason: CancellationReason | None,
+        on_committed: Callable[[], None] | None,
     ) -> CancellationResult:
         transitions: list[TreeCancellation] = []
         async with self._transaction() as transaction:
@@ -531,9 +545,12 @@ class TreeQueueManager:
             for tree in self._repository.trees():
                 if tree.identity.scope != scope:
                     continue
-                await self._prepare_tree(transaction, tree, removing=True)
+                transaction.watch(tree)
                 transitions.append(await tree.cancel_all())
                 self._repository.remove_tree(tree.identity)
+                transaction.release_interruptions.add(tree)
+        if on_committed is not None:
+            on_committed()
         return await self._cancel_committed(transitions, reason)
 
     async def remove_message_subtree(
@@ -572,13 +589,12 @@ class TreeQueueManager:
                     tree_matched=False,
                 )
             identity = tree.identity
-            await self._prepare_tree(
-                transaction, tree, removing=target.reference_id == tree.root_id
-            )
+            transaction.watch(tree)
             transition = await tree.remove_message_subtree(target.reference_id)
             lookup_ids = set(transition.removed_message_ids)
             if transition.removed_entire_tree:
                 self._repository.remove_tree(identity)
+                transaction.release_interruptions.add(tree)
             else:
                 self._repository.unregister_references(identity, lookup_ids)
         cancelled_task = (

@@ -17,7 +17,7 @@ class TreeTransaction:
         self.store = store
         self.before: dict[TreeIdentity, tuple[MessageTree, TreeCheckpoint] | None] = {}
         self.clear_scope: MessageScope | None = None
-        self.reconciled: set[MessageTree] = set()
+        self.release_interruptions: set[MessageTree] = set()
 
     def watch(self, tree: MessageTree | None) -> None:
         if tree is not None and tree.identity not in self.before:

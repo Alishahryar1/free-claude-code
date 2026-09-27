@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -312,7 +312,12 @@ async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
         ),
         snapshots=(snapshot,),
     )
-    cancel_all = AsyncMock(return_value=result)
+
+    async def commit_cancel(*, reason, on_committed):
+        on_committed()
+        return result
+
+    cancel_all = AsyncMock(side_effect=commit_cancel)
     with patch.object(
         handler.tree_queue,
         "cancel_all",
@@ -324,7 +329,9 @@ async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
         status_feedback_scopes=frozenset({_SCOPE}),
         fallback_required=False,
     )
-    cancel_all.assert_awaited_once_with(reason=CancellationReason.STOP)
+    cancel_all.assert_awaited_once_with(
+        reason=CancellationReason.STOP, on_committed=ANY
+    )
     cli_manager.stop_all.assert_awaited_once()
 
 

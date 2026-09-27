@@ -511,9 +511,14 @@ class MessagingWorkflow:
         for voice in voice_results:
             self.render_voice_stopped(voice)
         async with self._state_lock:
-            self._stop_generation += 1
+
+            def publish_stop() -> None:
+                self._stop_generation += 1
+
             logger.info("Cancelling tree queue tasks...")
-            result = await self._tree_queue.cancel_all(reason=CancellationReason.STOP)
+            result = await self._tree_queue.cancel_all(
+                reason=CancellationReason.STOP, on_committed=publish_stop
+            )
             logger.info("Cancelled {} nodes", len(result.effects))
             self._apply_cancellation_result(result)
             logger.info("Stopping all CLI sessions...")
@@ -548,13 +553,14 @@ class MessagingWorkflow:
             delete_message_ids.update(
                 await self._tree_queue.get_message_ids_for_chat(platform, chat_id)
             )
-            # All fallible/cancellable reads precede the commit boundary. Once
-            # the scope generation advances, state removal is one-way work.
-            self._clear_generations[clear_scope] = (
-                self._clear_generations.get(clear_scope, 0) + 1
-            )
+
+            def publish_clear() -> None:
+                self._clear_generations[clear_scope] = (
+                    self._clear_generations.get(clear_scope, 0) + 1
+                )
+
             await self._tree_queue.clear_scope(
-                clear_scope, reason=CancellationReason.CLEAR
+                clear_scope, reason=CancellationReason.CLEAR, on_committed=publish_clear
             )
             return frozenset(delete_message_ids)
 

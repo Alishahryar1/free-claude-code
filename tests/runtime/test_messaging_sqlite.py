@@ -581,6 +581,7 @@ async def test_gated_tree_can_be_cleared_and_replaced_before_old_cleanup_finishe
     faulted, cleanup_release = asyncio.Event(), asyncio.Event()
     new_started, new_release = asyncio.Event(), asyncio.Event()
     claims = []
+    notifications = []
 
     async def process(claim):
         claims.append(claim)
@@ -604,7 +605,9 @@ async def test_gated_tree_can_be_cleared_and_replaced_before_old_cleanup_finishe
         await new_release.wait()
         await manager.complete_claim(claim, "new-session")
 
-    manager = TreeQueueManager(process, store=storage)
+    manager = TreeQueueManager(
+        process, store=storage, unexpected_failure_callback=notifications.append
+    )
     old = await manager.admit(incoming("root"), "status-root")
     assert old.claim is not None
     await faulted.wait()
@@ -626,3 +629,4 @@ async def test_gated_tree_can_be_cleared_and_replaced_before_old_cleanup_finishe
     nodes = (await storage.load_conversation_snapshot()).trees[old.claim.identity].nodes
     assert list(nodes) == ["root"]
     assert nodes["root"]["session_id"] == "new-session"
+    assert not notifications
