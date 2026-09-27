@@ -7,11 +7,6 @@ from typing import Any
 from free_claude_code.core.history_replay import reasoning_context
 
 
-def clone_body_without_reasoning_budget(body: dict[str, Any]) -> dict[str, Any] | None:
-    """Clone a request body and strip only reasoning_budget fields."""
-    return _clone_strip_extra_body(body, _strip_reasoning_budget_fields)
-
-
 def clone_body_without_chat_template(body: dict[str, Any]) -> dict[str, Any] | None:
     """Clone a request body and strip NIM chat-template control fields."""
     return _clone_strip_extra_body(body, _strip_chat_template_fields)
@@ -40,17 +35,6 @@ def _clone_strip_extra_body(
     if not extra_body:
         cloned_body.pop("extra_body", None)
     return cloned_body
-
-
-def _strip_reasoning_budget_fields(extra_body: dict[str, Any]) -> bool:
-    removed = extra_body.pop("reasoning_budget", None) is not None
-    chat_template_kwargs = extra_body.get("chat_template_kwargs")
-    if (
-        isinstance(chat_template_kwargs, dict)
-        and chat_template_kwargs.pop("reasoning_budget", None) is not None
-    ):
-        removed = True
-    return removed
 
 
 def _strip_chat_template_fields(extra_body: dict[str, Any]) -> bool:
