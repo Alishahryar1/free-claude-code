@@ -1615,9 +1615,13 @@ function refreshIntegrationUpdates(previous, current) {
     ["claude-desktop", claudeDesktopIntegration, refreshClaudeDesktopIntegration, "claudeDesktopIntegrationMessage", "Settings updated. Reopen Claude Desktop."],
   ]) {
     const phase = current?.[id]?.state;
+    // Polling can miss a short update. Reconcile state independently of notices.
     if (phase && phase !== "starting" && (
-      previous?.[id]?.state === "starting" || integration.update?.state === "starting"
-    )) void refresh(false, { background: true });
+      previous?.[id]?.state === "starting" || integration.update?.state !== phase
+    )) {
+      if (integration.busy) state.startupAgain = true;
+      else void refresh(false, { background: true });
+    }
     if (previous?.[id]?.state === "starting" && phase === "ready" && current[id].changed === true) {
       integrationMessage(messageId, message);
     }

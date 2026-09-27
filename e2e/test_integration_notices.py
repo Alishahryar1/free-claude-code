@@ -84,6 +84,25 @@ def test_notices_require_a_live_changed_completion(page, notice):
     expect(message).not_to_have_text("Update failed")
 
 
+def test_missed_starting_state_still_reconciles_failure_and_recovery(page, notice):
+    integration, button, message, observe = notice
+    expect(message).to_be_hidden()
+    observe("failed")
+    expect(message).to_have_text("Update failed")
+    expect(button).to_be_enabled()
+    if integration == "vscode-chat":
+        expect(button).to_have_text("Disconnect")
+        expect(page.locator("#retryVSCodeChatIntegration")).to_be_visible()
+    observe("ready", changed=True)
+    expect(message).to_be_hidden()
+    expect(button).to_be_enabled()
+    if integration == "vscode-chat":
+        expect(page.locator("#retryVSCodeChatIntegration")).to_be_hidden()
+    # A repeated settled snapshot must not replay a reload notification.
+    observe("ready", changed=True)
+    expect(message).to_be_hidden()
+
+
 @pytest.mark.parametrize("revisit_while_busy", [False, True])
 def test_busy_status_recovery_preserves_notice_without_replaying_it(
     page, notice, revisit_while_busy
@@ -150,3 +169,31 @@ def test_new_server_and_off_page_completions_stay_quiet(page, notice):
     page.get_by_role("button", name="Integrations", exact=True).click()
     expect(button).to_be_enabled()
     expect(message).to_be_hidden()
+
+
+def test_missed_transition_during_status_read_is_reconciled(page, notice):
+    integration, button, message, observe = notice
+    pending = []
+
+    def hold_status(route):
+        pending.append(route)
+
+    pattern = f"**/admin/api/integrations/{integration}"
+    page.route(pattern, hold_status)
+    page.get_by_role("button", name="Providers", exact=True).click()
+    with page.expect_request(pattern):
+        page.get_by_role("button", name="Integrations", exact=True).click()
+    expect(button).to_be_disabled()
+    page.wait_for_function("!state.startupRequest && state.startupTimer === null")
+    observe("failed")
+    assert len(pending) == 1
+    page.unroute(pattern, hold_status)
+    pending[0].fulfill(
+        json={
+            "connected": True,
+            "paths": None,
+            "update": {"state": "ready", "changed": False, "message": None},
+        }
+    )
+    expect(message).to_have_text("Update failed")
+    expect(button).to_be_enabled()
