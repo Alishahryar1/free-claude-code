@@ -405,7 +405,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     ),
     FeatureCoverage(
         "subagent_control",
-        "Task-like tool output is rendered and controlled as foreground work",
+        "Task arguments are preserved and tool output is rendered in transcripts",
         ("tests/providers/test_subagent_interception.py",),
         (),
         ("test_messaging_subagent_control_e2e",),

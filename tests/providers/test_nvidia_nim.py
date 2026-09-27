@@ -1275,7 +1275,7 @@ async def test_stream_messages_restores_nested_aliased_tool_arguments(nim_provid
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_task_tool_still_forces_background_false(nim_provider):
+async def test_stream_messages_task_tool_preserves_background_true(nim_provider):
     req = make_request(
         tools=[
             tool(
@@ -1317,7 +1317,7 @@ async def test_stream_messages_task_tool_still_forces_background_false(nim_provi
 
     deltas = _input_json_deltas(events)
     assert len(deltas) == 1
-    assert json.loads(deltas[0])["run_in_background"] is False
+    assert json.loads(deltas[0])["run_in_background"] is True
 
 
 @pytest.mark.asyncio

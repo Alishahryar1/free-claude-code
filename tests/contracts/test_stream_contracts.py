@@ -116,7 +116,7 @@ def test_enable_thinking_false_suppresses_reasoning_only() -> None:
     assert text_content(events) == "hello  world"
 
 
-def test_task_tool_arguments_force_foreground_execution() -> None:
+def test_task_tool_parser_preserves_background_argument() -> None:
     parser = HeuristicToolParser()
     filtered, detected = parser.feed(
         "● <function=Task><parameter=description>Inspect</parameter>"
@@ -126,9 +126,7 @@ def test_task_tool_arguments_force_foreground_execution() -> None:
     assert "trailing" in filtered
     task = detected[0]
     assert task["name"] == "Task"
-    if isinstance(task.get("input"), dict):
-        task["input"]["run_in_background"] = False
-    assert task["input"]["run_in_background"] is False
+    assert task["input"]["run_in_background"] == "true"
 
 
 def _interleaved_thinking_text_events(

@@ -285,10 +285,10 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
         "streaming_conversion",
         "subagent_task_control",
         "subagent_control",
-        "free_claude_code.core.anthropic.streaming.AnthropicStreamLedger",
+        "free_claude_code.providers.openai_chat.tool_calls",
         "Task tool call arguments",
-        "run_in_background=false",
-        "invalid JSON flushed as safe object",
+        "arguments preserved with normal alias restoration",
+        "ordinary tool validation and recovery",
         ("tests/providers/test_subagent_interception.py",),
     ),
     CapabilityContract(

@@ -488,7 +488,6 @@ class _OpenAIChatStreamAssembler:
             self._tool_argument_aliases,
             self._tool_argument_alias_buffers,
         )
-        yield from self._tool_calls.flush_task_arg_buffers(self._output)
         yield from self._output.close_all_blocks()
 
         completion = usage_int(self._usage_info, "completion_tokens")
@@ -1552,8 +1551,6 @@ class _OpenAIChatStreamRunner:
             block = output.tool_block_for_tool_index(tool_index)
             emitted_prefix = block.content if block is not None else ""
             repair_prefix = emitted_prefix
-            if not repair_prefix and state.name == "Task" and state.task_arg_buffer:
-                repair_prefix = state.task_arg_buffer
             if not repair_prefix and tool_index in tool_argument_alias_buffers:
                 repair_prefix = tool_argument_alias_buffers[tool_index]
             if (

@@ -1,14 +1,11 @@
 """Chat-source output writers for Anthropic Messages and OpenAI Responses."""
 
-import hashlib
 import json
 import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-
-from loguru import logger
 
 from free_claude_code.core.anthropic.streaming import (
     AnthropicStreamLedger,
@@ -65,8 +62,6 @@ class ChatToolState:
     extra_content: JsonObject | None = None
     started: bool = False
     open: bool = False
-    task_arg_buffer: str = ""
-    task_args_emitted: bool = False
     pre_start_args: str = ""
     argument_parts: list[str] = field(default_factory=list)
 
@@ -258,51 +253,6 @@ class ChatStreamOutput(ABC):
             is not None
             for state in states
         )
-
-    def buffer_task_args(
-        self, tool_index: int, arguments: str
-    ) -> dict[str, object] | None:
-        state = self.tool_states.get(tool_index)
-        if state is None or state.task_args_emitted:
-            return None
-        state.task_arg_buffer += arguments
-        try:
-            parsed = json.loads(state.task_arg_buffer)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(parsed, dict):
-            return None
-        _normalize_task_args(parsed)
-        state.task_args_emitted = True
-        state.task_arg_buffer = ""
-        return parsed
-
-    def flush_task_arg_buffers(self) -> list[tuple[int, str]]:
-        results: list[tuple[int, str]] = []
-        for tool_index, state in self.tool_states.items():
-            if not state.task_arg_buffer or state.task_args_emitted:
-                continue
-            output = "{}"
-            try:
-                parsed = json.loads(state.task_arg_buffer)
-                if isinstance(parsed, dict):
-                    _normalize_task_args(parsed)
-                    output = json.dumps(parsed)
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                digest = hashlib.sha256(
-                    state.task_arg_buffer.encode("utf-8", errors="replace")
-                ).hexdigest()[:16]
-                logger.warning(
-                    "Task args invalid JSON (id={} len={} buffer_sha256_prefix={}): {}",
-                    state.tool_id or "unknown",
-                    len(state.task_arg_buffer),
-                    digest,
-                    exc,
-                )
-            state.task_args_emitted = True
-            state.task_arg_buffer = ""
-            results.append((tool_index, output))
-        return results
 
     def estimate_output_tokens(self) -> int:
         tool_tokens = sum(
@@ -745,8 +695,3 @@ def _responses_usage(usage: ChatStreamUsage) -> dict[str, object]:
         "output_tokens_details": {"reasoning_tokens": reasoning_tokens},
         "total_tokens": usage.input_tokens + usage.output_tokens,
     }
-
-
-def _normalize_task_args(arguments: dict[str, object]) -> None:
-    if arguments.get("run_in_background") is not False:
-        arguments["run_in_background"] = False

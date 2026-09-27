@@ -2415,17 +2415,23 @@ class TestStreamingExceptionHandling:
         )
 
     @pytest.mark.asyncio
-    async def test_incomplete_tool_call_repair_appends_schema_valid_suffix(self):
+    @pytest.mark.parametrize("tool_name", ["echo_smoke", "Task"])
+    async def test_incomplete_tool_call_repair_appends_schema_valid_suffix(
+        self, tool_name
+    ):
         """A truncated tool JSON prefix is repaired append-only before tool_use tail."""
         provider = _make_provider()
         request = _make_request(
             tools=[
                 {
-                    "name": "echo_smoke",
+                    "name": tool_name,
                     "description": "Echo",
                     "input_schema": {
                         "type": "object",
-                        "properties": {"message": {"type": "string"}},
+                        "properties": {
+                            "message": {"type": "string"},
+                            "run_in_background": {"type": "boolean"},
+                        },
                         "required": ["message"],
                         "additionalProperties": False,
                     },
@@ -2433,7 +2439,9 @@ class TestStreamingExceptionHandling:
             ]
         )
         tool_chunk = _make_tool_calls_chunk(
-            name="echo_smoke", arguments='{"message":', tool_id="call_repair"
+            name=tool_name,
+            arguments='{"run_in_background":true,"message":',
+            tool_id="call_repair",
         )
         with (
             patch.object(
@@ -2460,6 +2468,12 @@ class TestStreamingExceptionHandling:
             for event in parsed
         )
         assert not any(event.event == "error" for event in parsed)
+        arguments = [
+            event.data["delta"]["partial_json"]
+            for event in parsed
+            if event.data.get("delta", {}).get("type") == "input_json_delta"
+        ]
+        assert arguments == ['{"run_in_background":true,"message":', '"ok"}']
 
     @pytest.mark.asyncio
     async def test_stream_rate_limit_uses_the_execution_retry_session(self):
@@ -2951,8 +2965,8 @@ class TestProcessToolCall:
         assert later == []
         assert sse.tool_states[0].tool_id == generated_id
 
-    def test_task_tool_forces_background_false(self):
-        """Task tool with run_in_background=true is forced to false."""
+    def test_task_tool_preserves_background_true(self):
+        """Task tool preserves run_in_background=true."""
         provider = _make_provider()
         sse = _make_anthropic_output()
         args = json.dumps({"run_in_background": True, "prompt": "test"})
@@ -2963,11 +2977,11 @@ class TestProcessToolCall:
         }
         events = list(_make_tool_assembler(provider).process_tool_call(tc, sse))
         event_text = "".join(events)
-        # The intercepted args should have run_in_background=false
-        assert "false" in event_text.lower()
+        assert sse.tool_states[0].content == args
+        assert "true" in event_text.lower()
 
-    def test_task_tool_chunked_args_forces_background_false(self):
-        """Chunked Task args are buffered until valid JSON, then forced to false."""
+    def test_task_tool_streams_chunked_args(self):
+        """Chunked Task args stream without changing the requested execution mode."""
         provider = _make_provider()
         sse = _make_anthropic_output()
         tc1 = {
@@ -2984,14 +2998,18 @@ class TestProcessToolCall:
         assembler = _make_tool_assembler(provider)
         events1 = list(assembler.process_tool_call(tc1, sse))
         assert len(events1) > 0
-        assert "false" not in "".join(events1).lower()
+        assert sse.tool_states[0].content == tc1["function"]["arguments"]
 
         events2 = list(assembler.process_tool_call(tc2, sse))
         event_text = "".join(events1 + events2)
-        assert "false" in event_text.lower()
+        assert "true" in event_text.lower()
+        assert json.loads(sse.tool_states[0].content) == {
+            "run_in_background": True,
+            "prompt": "test",
+        }
 
-    def test_task_tool_invalid_json_logs_warning_on_flush(self, caplog):
-        """Invalid JSON args for Task tool emits {} on flush and logs a warning."""
+    def test_task_tool_invalid_json_is_not_replaced(self):
+        """Invalid Task arguments remain available to generic validation and repair."""
         provider = _make_provider()
         sse = _make_anthropic_output()
         tc = {
@@ -3003,11 +3021,7 @@ class TestProcessToolCall:
         events = list(assembler.process_tool_call(tc, sse))
         assert len(events) > 0
 
-        with caplog.at_level("WARNING"):
-            flushed = list(assembler.flush_task_arg_buffers(sse))
-        assert len(flushed) > 0
-        assert "{}" in "".join(flushed)
-        assert any("Task args invalid JSON" in r.message for r in caplog.records)
+        assert sse.tool_states[0].content == "not json"
 
     def test_negative_tool_index_fallback(self):
         """tc_index < 0 uses len(tool_indices) as fallback."""
@@ -3135,7 +3149,7 @@ class TestStreamChunkEdgeCases:
         assert "Connection reset" in error.message
 
     def test_stream_malformed_tool_args_chunked(self):
-        """Chunked tool args that never form valid JSON are flushed with {}."""
+        """Malformed chunks are retained without a Task-specific fallback."""
         provider = _make_provider()
         sse = _make_anthropic_output()
         tc1 = {
@@ -3152,11 +3166,9 @@ class TestStreamChunkEdgeCases:
         assembler = _make_tool_assembler(provider)
         events1 = list(assembler.process_tool_call(tc1, sse))
         events2 = list(assembler.process_tool_call(tc2, sse))
-        flushed = list(assembler.flush_task_arg_buffers(sse))
-
-        event_text = "".join(events1 + events2 + flushed)
+        event_text = "".join(events1 + events2)
         assert "tool_use" in event_text
-        assert "{}" in event_text
+        assert sse.tool_states[0].content == '{"broken": never valid }'
 
 
 @pytest.mark.asyncio
