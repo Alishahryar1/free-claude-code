@@ -1726,7 +1726,13 @@ def test_off_clears_effort_when_reasoning_becomes_unavailable(
 ):
     url = create_session(page, admin_base_url, tmp_path)
     effort = page.locator("#codeReasoning")
-    effort.select_option("high")
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "PATCH" and "/api/code/sessions/" in response.url
+        )
+    ) as changed:
+        effort.select_option("high")
+    assert changed.value.json()["reasoning_effort"] == "high"
     expect(effort).to_be_enabled()
     page.locator("#codeComposer").fill("Preserve this draft")
     code_control.harness.efforts = ("off",)
