@@ -84,6 +84,49 @@ def test_notices_require_a_live_changed_completion(page, notice):
     expect(message).not_to_have_text("Update failed")
 
 
+def test_settled_poll_after_mutation_preserves_next_action(page, notice):
+    integration, button, message, observe = notice
+    observe("ready")
+    page.wait_for_function("!state.startupRequest && state.startupTimer === null")
+    unexpected_reads = []
+
+    def fail_status(route):
+        unexpected_reads.append(route.request)
+        route.fulfill(status=503, json={"detail": "Status unavailable"})
+
+    endpoint = f"**/admin/api/integrations/{integration}"
+    page.route(endpoint, fail_status)
+    dialog = page.get_by_role("dialog")
+    for action, connected in [("Disconnect", False), ("Connect", True)]:
+        page.route(
+            f"{endpoint}/{action.lower()}",
+            lambda route: route.fulfill(
+                json={
+                    "connected": route.request.url.endswith("/connect"),
+                    "disconnect_pending": False,
+                    "paths": None,
+                }
+            ),
+        )
+        button.click()
+        dialog.get_by_role("button", name=action, exact=True).click()
+        expect(dialog).not_to_be_visible()
+        next_action = "Disconnect" if connected else "Connect"
+        expect(button).to_have_text(next_action)
+        button.click()
+        observe("ready")
+        expect(
+            dialog.get_by_role("button", name=next_action, exact=True)
+        ).to_be_enabled()
+        assert not unexpected_reads
+        dialog.get_by_role("button", name="Close", exact=True).click()
+    page.unroute(endpoint, fail_status)
+    observe("failed")
+    expect(message).to_have_text("Update failed")
+    observe("ready")
+    expect(message).to_be_hidden()
+
+
 def test_missed_starting_state_still_reconciles_failure_and_recovery(page, notice):
     integration, button, message, observe = notice
     expect(message).to_be_hidden()
