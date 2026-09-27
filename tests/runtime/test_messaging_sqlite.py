@@ -218,18 +218,37 @@ async def test_invalid_graph_and_invalid_log_entry_do_not_discard_good_records(
 async def test_failed_import_transaction_keeps_source_and_allows_retry(
     storage, tmp_path
 ):
+    from free_claude_code.runtime.messaging_sqlite import write_tree
+
     source = tmp_path / "sessions.json"
-    source.write_text(json.dumps(pending_to_legacy(tree())))
+    source.write_text(
+        json.dumps({"trees": [tree().to_json(), tree(root="second").to_json()]})
+    )
+
+    def fail_second_tree(connection, snapshot):
+        write_tree(connection, snapshot)
+        if snapshot.root_id == "second":
+            raise sqlite3.OperationalError("disk failure")
+
     with (
         patch(
             "free_claude_code.runtime.messaging_import.write_tree",
-            side_effect=sqlite3.OperationalError("disk failure"),
+            side_effect=fail_second_tree,
         ),
         pytest.raises(sqlite3.OperationalError),
     ):
         await import_legacy(storage.database, source)
     assert source.exists()
     assert (await storage.load_conversation_snapshot()).is_empty
+    assert (
+        storage.database.execute(
+            lambda connection: connection.execute(
+                "SELECT count(*) FROM messaging_legacy_import"
+            ).fetchone()[0],
+            write=False,
+        )
+        == 0
+    )
     assert await import_legacy(storage.database, source) is None
     assert not source.exists()
 
@@ -238,6 +257,340 @@ def incoming(node, *, text="prompt"):
     return IncomingMessage(
         platform="telegram", chat_id="chat", message_id=node, user_id="user", text=text
     )
+
+
+def import_receipt(database):
+    return database.execute(
+        lambda connection: dict(
+            connection.execute("SELECT * FROM messaging_legacy_import").fetchone()
+        ),
+        write=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("platform", "\ud800"),
+        ("chat_id", "\ud800"),
+        ("root_id", "\ud800"),
+        ("root_id", "\0root"),
+        ("node_id", "\ud800"),
+        ("node_id", "\0child"),
+        ("status_message_id", "\ud800"),
+        ("status_message_id", "\0status"),
+        ("session_id", "\ud800"),
+    ],
+)
+async def test_import_rejects_storage_invalid_tree_without_reserving_references(
+    storage, tmp_path, field, value
+):
+    before, after = tree(root="before"), tree(root="after")
+    invalid = tree(root=value if field == "root_id" else "bad").to_json()
+    root = invalid["root_id"]
+    child = value if field == "node_id" else "child"
+    invalid["nodes"][child] = {
+        "node_id": child,
+        "parent_id": root,
+        "parent_reference_id": invalid["nodes"][root]["status_message_id"],
+        "status_message_id": "shared-reference",
+        "state": "completed",
+        "session_id": "native-child",
+    }
+    if field in {"platform", "chat_id"}:
+        invalid["scope"][field] = value
+    elif field not in {"root_id", "node_id"}:
+        invalid["nodes"][child][field] = value
+    # A rejected tree must not claim a reference needed by a later valid tree.
+    after.nodes["after"]["status_message_id"] = "shared-reference"
+    source = tmp_path / "sessions.json"
+    original = json.dumps({"trees": [before.to_json(), invalid, after.to_json()]})
+    source.write_text(original)
+
+    assert await import_legacy(storage.database, source)
+    assert (await storage.load_conversation_snapshot()).trees == {
+        before.identity: before,
+        after.identity: after,
+    }
+    assert source.read_text() == original
+    assert import_receipt(storage.database) == {
+        "source": "sessions.json",
+        "outcome": "partial",
+        "trees": 2,
+        "messages": 0,
+        "skipped": 1,
+        "cleanup_pending": 0,
+    }
+    with closing(sqlite3.connect(storage.database.path)) as connection:
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert (
+            connection.execute("SELECT count(*) FROM messaging_references").fetchone()[
+                0
+            ]
+            == 4
+        )
+        assert (
+            connection.execute("SELECT count(*) FROM messaging_trees").fetchone()[0]
+            == 2
+        )
+
+
+@pytest.mark.parametrize("field", ["platform", "chat_id", "message_id", "ts", "kind"])
+@pytest.mark.parametrize("value", ["\ud800", "\0kind"])
+async def test_import_message_storage_validation_and_successful_duplicate_ownership(
+    storage, tmp_path, field, value
+):
+    bad = {"message_id": "same", "direction": "in", "kind": "prompt", "ts": "old"}
+    key = "telegram:chat"
+    if field == "platform":
+        key = f"{value}:chat"
+    elif field == "chat_id":
+        key = f"telegram:{value}"
+    else:
+        bad[field] = value
+    good = {"message_id": "same", "direction": "out", "kind": "notice", "ts": "new"}
+    messages = {key: [bad]}
+    messages.setdefault("telegram:chat", []).extend([good, {**good, "ts": "duplicate"}])
+    source = tmp_path / "sessions.json"
+    source.write_text(json.dumps({"managed_messages": messages}))
+
+    rejected = value == "\ud800" or field == "kind"
+    assert bool(await import_legacy(storage.database, source)) is rejected
+    assert source.exists() is rejected
+    rows = storage.database.execute(
+        lambda connection: [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT platform,chat_id,message_id,ts,direction,kind FROM messaging_managed_messages ORDER BY sequence"
+            )
+        ],
+        write=False,
+    )
+    if rejected:
+        assert rows == [("telegram", "chat", "same", "new", "out", "notice")]
+    else:
+        # NUL is legal in fields without a length CHECK. Preserve accepted text.
+        assert rows[0] == (
+            *key.split(":", 1),
+            bad["message_id"],
+            bad["ts"],
+            "in",
+            bad["kind"],
+        )
+        assert len(rows) == (1 if field == "ts" else 2)
+    receipt = import_receipt(storage.database)
+    assert receipt["messages"] == len(rows)
+    assert receipt["skipped"] == int(rejected)
+
+
+@pytest.mark.parametrize("last_invalid", [False, True])
+async def test_import_last_tree_identity_wins_even_when_unrecoverable(
+    storage, tmp_path, last_invalid
+):
+    first, last = tree(), tree()
+    last.nodes["root"]["session_id"] = "\ud800" if last_invalid else "last-session"
+    source = tmp_path / "sessions.json"
+    source.write_text(json.dumps({"trees": [first.to_json(), last.to_json()]}))
+    assert await import_legacy(storage.database, source)
+    assert (await storage.load_conversation_snapshot()).trees == (
+        {} if last_invalid else {last.identity: last}
+    )
+    assert import_receipt(storage.database)["skipped"] == 1 + int(last_invalid)
+    await storage.commit_trees((tree(root="fresh"),))
+
+
+async def test_partial_import_survives_reopen_and_clear_without_replay(
+    storage, tmp_path
+):
+    source = tmp_path / "sessions.json"
+    source.write_text(
+        json.dumps(
+            {
+                "trees": [tree().to_json()],
+                "managed_messages": {
+                    "telegram:chat": [
+                        {"message_id": "bad", "direction": "in", "kind": "\0"}
+                    ]
+                },
+            }
+        )
+    )
+    assert await import_legacy(storage.database, source)
+    receipt = import_receipt(storage.database)
+    await storage.database.close()
+    for restart in range(2):
+        database = SQLiteDatabase(storage.database.path, tmp_path / "code.lock")
+        await database.start()
+        try:
+            reopened = SQLiteMessagingStore(database)
+            assert await import_legacy(database, source) is None
+            assert import_receipt(database) == receipt
+            assert (await reopened.load_conversation_snapshot()).is_empty is bool(
+                restart
+            )
+            await reopened.commit_trees((), clear_scope=tree().scope)
+        finally:
+            await database.close()
+    assert source.exists()
+
+
+@pytest.mark.parametrize("failure_stage", ["receipt", "commit"])
+async def test_import_outer_failure_rolls_back_released_units(
+    storage, tmp_path, failure_stage
+):
+    from free_claude_code.runtime import sqlite_database
+
+    source = tmp_path / "sessions.json"
+    source.write_text(
+        json.dumps(
+            {
+                "trees": [tree().to_json()],
+                "managed_messages": {
+                    "telegram:chat": [
+                        {"message_id": "one", "direction": "in", "kind": "prompt"}
+                    ]
+                },
+            }
+        )
+    )
+    connect = sqlite_database._connect
+    inserted = []
+
+    def faulting_connect(path, *, existing=False):
+        connection = connect(path, existing=existing)
+
+        def authorize(action, arg1, arg2, database_name, trigger):
+            if action == sqlite3.SQLITE_INSERT:
+                inserted.append(arg1)
+                if failure_stage == "receipt" and arg1 == "messaging_legacy_import":
+                    return sqlite3.SQLITE_DENY
+            if (
+                failure_stage == "commit"
+                and action == sqlite3.SQLITE_TRANSACTION
+                and arg1 == "COMMIT"
+                and "messaging_managed_messages" in inserted
+            ):
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        connection.set_authorizer(authorize)
+        return connection
+
+    with (
+        patch.object(sqlite_database, "_connect", faulting_connect),
+        pytest.raises(sqlite3.DatabaseError),
+    ):
+        await import_legacy(storage.database, source)
+    assert "messaging_nodes" in inserted and "messaging_managed_messages" in inserted
+    assert source.exists()
+    assert (await storage.load_conversation_snapshot()).is_empty
+    assert not await storage.get_tracked_message_ids_for_chat("telegram", "chat")
+    assert (
+        storage.database.execute(
+            lambda connection: connection.execute(
+                "SELECT count(*) FROM messaging_legacy_import"
+            ).fetchone()[0],
+            write=False,
+        )
+        == 0
+    )
+    assert await import_legacy(storage.database, source) is None
+    assert import_receipt(storage.database)["trees"] == 1
+    assert import_receipt(storage.database)["messages"] == 1
+
+
+@pytest.mark.parametrize("platform", ["none", "telegram"])
+async def test_startup_partial_import_preserves_links_scopes_and_code(
+    storage, tmp_path, platform
+):
+    from free_claude_code.application.code_sessions.models import CodeSession
+    from free_claude_code.config.settings import Settings
+    from free_claude_code.runtime.application import ApplicationRuntime
+    from free_claude_code.runtime.configuration import ConfigurationService
+    from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+
+    code = SQLiteCodeStore(storage.database)
+    await code.start()
+    session = await code.create(
+        CodeSession(id="saved-code", cwd=str(tmp_path), model="provider/model")
+    )
+    valid = tree(root="root-\U0001f600\0suffix")
+    parent = valid.root_id
+    for node_id in ("child", "grandchild"):
+        valid.nodes[node_id] = {
+            "node_id": node_id,
+            "status_message_id": f"status-{node_id}",
+            "parent_id": parent,
+            "parent_reference_id": valid.nodes[parent]["status_message_id"],
+            "state": "in_progress",
+            "session_id": "native-\U0001f600",
+        }
+        parent = node_id
+    inactive = tree("discord", root=valid.root_id)
+    conflict = tree(root="status-child")
+    source = tmp_path / "sessions.json"
+    source.write_text(
+        json.dumps(
+            {
+                "trees": [valid.to_json(), conflict.to_json(), inactive.to_json()],
+                "managed_messages": {
+                    "telegram:chat": [
+                        {
+                            "message_id": str(index),
+                            "direction": "in",
+                            "kind": "\0" if index == 0 else "prompt",
+                        }
+                        for index in range(4)
+                    ]
+                },
+            }
+        )
+    )
+    manager = ProviderRuntimeManager(
+        Settings().model_copy(
+            update={
+                "messaging_platform": platform,
+                "max_message_log_entries_per_chat": 2,
+            }
+        )
+    )
+    runtime = ApplicationRuntime(
+        manager,
+        configuration=AsyncMock(spec=ConfigurationService),
+        transcriber=None,
+        database=storage.database,
+    )
+    try:
+        with patch(
+            "free_claude_code.runtime.application.messaging_state_dir_path",
+            return_value=str(tmp_path),
+        ):
+            await runtime._initialize_messaging_storage()
+        assert runtime._messaging_storage_error is None
+        assert runtime._messaging_warning
+        assert (await storage.load_conversation_snapshot()).trees == {
+            valid.identity: valid,
+            inactive.identity: inactive,
+        }
+        assert await storage.get_tracked_message_ids_for_chat("telegram", "chat") == [
+            "2",
+            "3",
+        ]
+        assert import_receipt(storage.database)["skipped"] == 2
+        assert import_receipt(storage.database)["messages"] == 3
+        assert await code.get_session(session.id) == session
+        assert (
+            storage.database.execute(
+                lambda connection: connection.execute(
+                    "PRAGMA foreign_key_check"
+                ).fetchall(),
+                write=False,
+            )
+            == []
+        )
+    finally:
+        await manager.close()
+        await code.close()
 
 
 async def test_failed_admission_never_launches_harness_or_publishes_memory(storage):

@@ -2,7 +2,9 @@
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -62,17 +64,9 @@ def read_legacy(path: Path) -> LegacyData:
             decoded[snapshot.identity] = snapshot
         except KeyError, TypeError, ValueError:
             result.reject()
-    references: set[tuple[str, str, str]] = set()
     for snapshot in decoded.values():
         try:
             normalized = normalize_tree_snapshot(snapshot)
-            scoped = {
-                (snapshot.scope.platform, snapshot.scope.chat_id, reference)
-                for reference in normalized.lookup_ids()
-            }
-            if scoped & references:
-                raise ValueError("Conflicting message references")
-            references.update(scoped)
             result.trees[normalized.identity] = normalized
         except KeyError, TypeError, ValueError:
             result.reject()
@@ -89,14 +83,12 @@ def read_legacy(path: Path) -> LegacyData:
             result.reject()
             continue
         platform, chat_id = chat_key.split(":", 1)
-        seen: set[str] = set()
         for item in items:
             record = _message(platform, chat_id, item)
             if record is None:
                 result.reject()
-            elif record[2] not in seen:
+            else:
                 result.messages.append(record)
-                seen.add(record[2])
     return result
 
 
@@ -122,6 +114,19 @@ async def import_legacy(database: SQLiteDatabase, path: Path) -> str | None:
     return await database.work(lambda: _import_legacy(database, path))
 
 
+def _try_import(connection: sqlite3.Connection, write: Callable[[], object]) -> bool:
+    """Reject one damaged unit without publishing part of a tree or its references."""
+    connection.execute("SAVEPOINT legacy_record")
+    try:
+        write()
+    except sqlite3.IntegrityError, UnicodeEncodeError:
+        connection.execute("ROLLBACK TO legacy_record")
+        connection.execute("RELEASE legacy_record")
+        return False
+    connection.execute("RELEASE legacy_record")
+    return True
+
+
 def _import_legacy(database: SQLiteDatabase, path: Path) -> str | None:
     receipt = database.execute(
         lambda connection: connection.execute(
@@ -132,27 +137,52 @@ def _import_legacy(database: SQLiteDatabase, path: Path) -> str | None:
     warning = None
     if receipt is None:
         data = read_legacy(path)
-        complete = data.outcome in {"complete", "absent"}
 
-        def commit(connection: sqlite3.Connection) -> None:
+        def commit(connection: sqlite3.Connection) -> bool:
+            references: set[tuple[str, str, str]] = set()
+            trees = 0
             for snapshot in data.trees.values():
-                write_tree(connection, snapshot)
-            connection.executemany(
-                "INSERT INTO messaging_managed_messages(platform,chat_id,message_id,ts,direction,kind) VALUES (?,?,?,?,?,?)",
-                data.messages,
-            )
+                scoped = {
+                    (snapshot.scope.platform, snapshot.scope.chat_id, reference)
+                    for reference in snapshot.lookup_ids()
+                }
+                if scoped & references or not _try_import(
+                    connection, partial(write_tree, connection, snapshot)
+                ):
+                    data.reject()
+                    continue
+                references.update(scoped)
+                trees += 1
+            seen: set[tuple[str, str, str]] = set()
+            for record in data.messages:
+                key = record[:3]
+                if key in seen:
+                    continue
+                if not _try_import(
+                    connection,
+                    partial(
+                        connection.execute,
+                        "INSERT INTO messaging_managed_messages(platform,chat_id,message_id,ts,direction,kind) VALUES (?,?,?,?,?,?)",
+                        record,
+                    ),
+                ):
+                    data.reject()
+                    continue
+                seen.add(key)
+            complete = data.outcome in {"complete", "absent"}
             connection.execute(
                 "INSERT INTO messaging_legacy_import VALUES ('sessions.json',?,?,?,?,?)",
                 (
                     data.outcome,
-                    len(data.trees),
-                    len(data.messages),
+                    trees,
+                    len(seen),
                     data.skipped,
                     int(complete),
                 ),
             )
+            return complete
 
-        database.execute(commit)
+        complete = database.execute(commit)
         if not complete:
             return f"Some previous messaging history could not be restored. Messaging can still be used. The original file was kept at {path}."
     elif not receipt["cleanup_pending"]:
