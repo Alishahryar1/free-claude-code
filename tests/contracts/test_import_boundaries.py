@@ -11,6 +11,7 @@ _PACKAGE_ROOT = _REPO_ROOT / "src" / "free_claude_code"
 _PACKAGE_NAME = "free_claude_code"
 
 ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
+    "updater": set(),
     "config": {"core"},
     "core": set(),
     "application": {"config", "core"},

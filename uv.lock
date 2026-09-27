@@ -617,6 +617,7 @@ dependencies = [
     { name = "markdown-it-py" },
     { name = "nvidia-riva-client" },
     { name = "openai" },
+    { name = "packaging" },
     { name = "pillow", marker = "sys_platform == 'darwin' or sys_platform == 'win32'" },
     { name = "pydantic" },
     { name = "pyperclip" },
@@ -640,7 +641,6 @@ voice-local = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "packaging" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -671,6 +671,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=4.2.0" },
     { name = "nvidia-riva-client", specifier = ">=2.26.0" },
     { name = "openai", specifier = ">=3.18.0" },
+    { name = "packaging", specifier = ">=26.3" },
     { name = "pillow", marker = "sys_platform == 'darwin' or sys_platform == 'win32'", specifier = ">=12.0.0" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "pyperclip", specifier = ">=1.11.0" },
@@ -689,7 +690,6 @@ provides-extras = ["voice-local"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "packaging", specifier = ">=26.3" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
