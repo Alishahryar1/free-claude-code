@@ -121,8 +121,7 @@ def test_codex_connect_disconnect_and_modal_paths(
     expect(opener).to_have_css("color", "rgb(239, 68, 68)")
     if width >= 1200:
         buttons = [
-            button.bounding_box()
-            for button in page.locator(".integration-card > button").all()
+            card.get_by_role("button").first.bounding_box() for card in cards.all()
         ]
         for _, row in groupby(range(len(bounds)), key=lambda index: bounds[index]["y"]):
             assert len({buttons[index]["y"] for index in row}) == 1

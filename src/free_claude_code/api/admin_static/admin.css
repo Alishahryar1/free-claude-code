@@ -266,19 +266,27 @@ textarea:focus-visible,
   align-items: flex-start;
   margin-bottom: 0;
 }
-.integration-card > button {
+.integration-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+}
+.integration-card > button,
+.integration-actions > button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   margin-top: auto;
 }
 .integration-card > button,
+.integration-actions > button,
 .provider-card > .provider-actions > button {
   min-height: 38px;
   padding: 6px 14px;
   font-size: 13px;
 }
 .integration-card > button[aria-busy="true"]::before,
+.integration-actions > button[aria-busy="true"]::before,
 button.startup-busy::before,
 .startup-spinner::before {
   content: "";
@@ -293,7 +301,7 @@ button.startup-busy::before,
   to { transform: rotate(360deg); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .integration-card > button[aria-busy="true"]::before { animation: none; }
+  .integration-card button[aria-busy="true"]::before { animation: none; }
 }
 .integration-card h3 { min-height: 2lh; }
 .integration-dialog {

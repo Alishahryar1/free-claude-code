@@ -73,7 +73,10 @@
                 </div>
               </div>
               <p id="vscodeChatIntegrationMessage" class="message-area" role="status" hidden></p>
-              <button id="openVSCodeChatIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+              <div class="integration-actions">
+                <button id="openVSCodeChatIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+                <button id="retryVSCodeChatIntegration" class="secondary-button" type="button" hidden>Retry</button>
+              </div>
             </article>
             <dialog id="vscodeChatIntegrationDialog" class="integration-dialog" aria-labelledby="vscodeChatIntegrationTitle" aria-describedby="vscodeChatIntegrationDescription">
               <div class="section-heading">

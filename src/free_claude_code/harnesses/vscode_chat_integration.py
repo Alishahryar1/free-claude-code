@@ -7,11 +7,25 @@ from typing import cast
 
 import json5
 
-from free_claude_code.application.model_catalog import CatalogModel
+from free_claude_code.application.model_catalog import (
+    CatalogModel,
+    context_window_for_client,
+)
+from free_claude_code.config.constants import (
+    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MODEL_CONTEXT_TOKENS,
+)
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.harnesses.claude_integration import settings_path
-from free_claude_code.harnesses.config_file import atomic_write_text
+from free_claude_code.harnesses.config_file import (
+    atomic_write_text,
+    ensure_private_permissions,
+)
+from free_claude_code.harnesses.model_policy import (
+    DEFAULT_REASONING_LEVEL,
+    reasoning_levels,
+)
 
 _NAME = "Free Claude Code"
 _MARKER = "fccIntegration"
@@ -22,12 +36,16 @@ def config_path() -> Path:
 
 
 def model_entry(model: CatalogModel, proxy_root_url: str) -> JsonObject:
-    context = model.context_window_tokens
-    context = context if context is not None and context >= 2 else 32768
+    context = context_window_for_client(model)
+    context = context if context >= 2 else DEFAULT_MODEL_CONTEXT_TOKENS
     output = model.max_output_tokens
-    output = output if output is not None and output > 0 else 4096
+    output = (
+        output
+        if output is not None and output > 0
+        else ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+    )
     output = min(output, context // 2)
-    return {
+    entry: JsonObject = {
         "id": model.wire_slug,
         "name": model.display_name,
         "url": proxy_root_url.rstrip("/") + "/v1/messages",
@@ -36,6 +54,10 @@ def model_entry(model: CatalogModel, proxy_root_url: str) -> JsonObject:
         "maxInputTokens": context - output,
         "maxOutputTokens": output,
     }
+    if levels := reasoning_levels(model):
+        entry["supportsReasoningEffort"] = list(levels)
+        entry["defaultReasoningEffort"] = DEFAULT_REASONING_LEVEL
+    return entry
 
 
 def _read(path: Path) -> tuple[list[JsonObject], JsonObject | None]:
@@ -75,7 +97,7 @@ def configure(
     *,
     only_existing: bool = False,
 ) -> bool:
-    """Merge the generated group, preserving other groups and user model settings."""
+    """Regenerate FCC models while preserving native preferences in group.settings."""
     path = path.resolve()
     groups, group = _read(path)
     if group is None and only_existing:
@@ -112,8 +134,11 @@ def configure(
     # VS Code treats group apiKey as a secret-store reference, not a raw token.
     group.pop("apiKey", None)
     if json.dumps(groups, allow_nan=False) == before:
+        ensure_private_permissions(path)
         return False
-    atomic_write_text(path, json.dumps(groups, indent=2, allow_nan=False) + "\n")
+    atomic_write_text(
+        path, json.dumps(groups, indent=2, allow_nan=False) + "\n", private=True
+    )
     return True
 
 

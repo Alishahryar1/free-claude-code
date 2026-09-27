@@ -59,15 +59,48 @@ class DiagnosticOutput(io.StringIO):
         self.flushed.set()
 
 
+def _diagnostic_probe():
+    """Trace the real helper in a child the parent can always kill and reap."""
+    from e2e import thread_diagnostics
+
+    current_frames = sys._current_frames
+    print_stack = thread_diagnostics.traceback.print_stack
+
+    def traced_frames():
+        print("diagnostic: acquiring frames", flush=True)
+        frames = current_frames()
+        print("diagnostic: acquired frames", flush=True)
+        return frames
+
+    def traced_stack(frame, *, file):
+        print("diagnostic: formatting stack", flush=True)
+        print_stack(frame, file=file)
+        print("diagnostic: formatted stack", flush=True)
+
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(sys, "_current_frames", traced_frames)
+        patcher.setattr(thread_diagnostics.traceback, "print_stack", traced_stack)
+        output = DiagnosticOutput()
+        with dump_threads_after(0.001, output, "slow-test"):
+            assert output.flushed.wait(5)
+            print("diagnostic: flushed", flush=True)
+            assert "slow-test" in output.getvalue()
+            assert "_diagnostic_probe" in output.getvalue()
+            print("diagnostic: joining", flush=True)
+        print("diagnostic: joined", flush=True)
+        assert not any(t.name == "fcc-test-diagnostics" for t in threading.enumerate())
+
+
 def test_slow_test_reports_stacks_without_interrupting_execution():
-    output = DiagnosticOutput()
-    with dump_threads_after(0.001, output, "slow-test"):
-        assert output.flushed.wait(5)
-        assert "slow-test" in output.getvalue()
-        assert "test_slow_test_reports_stacks_without_interrupting_execution" in (
-            output.getvalue()
-        )
-    assert not any(t.name == "fcc-test-diagnostics" for t in threading.enumerate())
+    script = "import runpy, sys; runpy.run_path(sys.argv[1])['_diagnostic_probe']()"
+    result = subprocess.run(
+        [sys.executable, "-c", script, __file__],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "diagnostic: joined" in result.stdout
 
 
 @pytest.mark.parametrize("fails", [False, True])

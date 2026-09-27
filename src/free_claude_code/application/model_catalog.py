@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+from free_claude_code.config.constants import DEFAULT_MODEL_CONTEXT_TOKENS
 from free_claude_code.config.model_refs import (
     configured_chat_model_refs,
     split_provider_model_ref,
@@ -38,6 +39,14 @@ class ModelCatalog:
 
     models: tuple[CatalogModel, ...]
     default_model_id: str
+
+
+def context_window_for_client(model: CatalogModel) -> int:
+    """Resolve client capacity without changing reported provider metadata."""
+    context = model.context_window_tokens
+    return (
+        context if context is not None and context > 0 else DEFAULT_MODEL_CONTEXT_TOKENS
+    )
 
 
 def model_order_key(provider_model_ref: str) -> tuple[str, str, str, str]:

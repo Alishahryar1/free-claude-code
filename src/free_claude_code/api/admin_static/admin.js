@@ -1723,6 +1723,8 @@ const vscodeChatIntegrationPath = "/admin/api/integrations/vscode-chat";
 function renderVSCodeChatIntegration() {
   const { connected, paths } = vscodeChatIntegration;
   const busy = vscodeChatIntegration.busy || integrationUpdating(vscodeChatIntegration, "vscode-chat");
+  byId("retryVSCodeChatIntegration").hidden = connected === null || vscodeChatIntegration.update?.state !== "failed";
+  byId("retryVSCodeChatIntegration").disabled = busy;
   const action = connected ? "Disconnect" : "Connect";
   byId("openVSCodeChatIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
   byId("openVSCodeChatIntegration").disabled = busy;
@@ -1774,12 +1776,13 @@ async function refreshVSCodeChatIntegration(retry = false, { background = false 
 
 byId("openVSCodeChatIntegration").addEventListener("click", () => {
   if (vscodeChatIntegration.connected === null) {
-    refreshVSCodeChatIntegration(vscodeChatIntegration.update?.state === "failed");
+    refreshVSCodeChatIntegration(true);
     return;
   }
   integrationMessage("vscodeChatIntegrationDialogMessage", "");
   vscodeChatIntegrationDialog.showModal();
 });
+byId("retryVSCodeChatIntegration").addEventListener("click", () => refreshVSCodeChatIntegration(true));
 byId("confirmVSCodeChatIntegration").addEventListener("click", async () => {
   if (byId("confirmVSCodeChatIntegration").disabled) return;
   const disconnect = vscodeChatIntegration.connected;

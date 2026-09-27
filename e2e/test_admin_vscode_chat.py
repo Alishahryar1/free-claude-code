@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from playwright.sync_api import expect
 
 from free_claude_code.harnesses import vscode_chat_integration as vscode
@@ -37,3 +38,52 @@ def test_connect_and_disconnect_native_chat(page, admin_base_url):
     dialog.get_by_role("button", name="Disconnect", exact=True).click()
     expect(button).to_have_text("Connect")
     assert json.loads(path.read_text()) == [other]
+
+
+@pytest.mark.parametrize("status_read_failed", [False, True])
+def test_failed_update_has_actionable_retry(page, admin_base_url, status_read_failed):
+    progress: dict[str, str | bool | None] = {
+        "state": "failed",
+        "changed": False,
+        "message": "Could not update settings.",
+    }
+    retries = []
+
+    def startup(route):
+        response = route.fetch()
+        payload = response.json()
+        payload["startup"]["integrations"]["vscode-chat"] = dict(progress)
+        route.fulfill(response=response, json=payload)
+
+    def status(route):
+        if status_read_failed and progress["state"] == "failed":
+            route.fulfill(status=503, json={"detail": "Could not read settings."})
+        else:
+            route.fulfill(
+                json={"connected": True, "paths": None, "update": dict(progress)}
+            )
+
+    def retry(route):
+        retries.append(route.request.method)
+        progress.update(state="ready", message=None)
+        route.fulfill(json={"update": dict(progress)})
+
+    page.route("**/admin/api/status", startup)
+    page.route("**/admin/api/integrations/vscode-chat", status)
+    page.route("**/admin/api/integrations/vscode-chat/refresh", retry)
+    page.goto(f"{admin_base_url}/admin/integrations")
+    main = page.locator("#openVSCodeChatIntegration")
+    secondary = page.locator("#retryVSCodeChatIntegration")
+    if status_read_failed:
+        expect(main).to_have_text("Retry")
+        action = main
+    else:
+        expect(main).to_have_text("Disconnect")
+        expect(secondary).to_be_visible()
+        action = secondary
+    with page.expect_response("**/admin/api/integrations/vscode-chat/refresh"):
+        action.click()
+    assert retries == ["POST"]
+    expect(main).to_have_text("Disconnect")
+    expect(secondary).to_be_hidden()
+    expect(page.locator("#vscodeChatIntegrationMessage")).to_be_hidden()

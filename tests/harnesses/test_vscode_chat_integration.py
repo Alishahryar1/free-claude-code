@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 from dataclasses import replace
 
 import pytest
@@ -96,12 +98,12 @@ def test_duplicate_markers_fail_but_disconnect_recovers_name_collision(tmp_path)
 @pytest.mark.parametrize(
     "context,output,expected",
     [
-        (None, None, (28672, 4096)),
+        (None, None, (118080, 81920)),
         (8000, None, (4000, 4000)),
         (100000, 20000, (80000, 20000)),
-        (None, 1000, (31768, 1000)),
+        (None, 1000, (199000, 1000)),
         (8192, 8192, (4096, 4096)),
-        (1, 0, (28672, 4096)),
+        (1, 0, (118080, 81920)),
     ],
 )
 def test_token_allocation_and_capabilities(context, output, expected):
@@ -131,6 +133,60 @@ def test_comment_input_and_order_are_preserved_semantically(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("support", [True, None, False])
+def test_native_effort_capability(support):
+    entry = vscode.model_entry(replace(MODEL, supports_reasoning=support), URL)
+    if support is False:
+        assert "supportsReasoningEffort" not in entry
+        assert "defaultReasoningEffort" not in entry
+    else:
+        assert entry["supportsReasoningEffort"] == [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ]
+        assert entry["defaultReasoningEffort"] == "medium"
+
+
+def test_refresh_preserves_native_preferences_and_replaces_generated_capabilities(
+    tmp_path,
+):
+    path = tmp_path / "models.json"
+    removed = replace(MODEL, wire_slug="nim/removed")
+    vscode.configure(path, URL, "old", (MODEL, removed))
+    data = json.loads(path.read_text())
+    preferences = {MODEL.wire_slug: {"reasoningEffort": "high"}}
+    data[0]["settings"] = preferences
+    data[0]["models"][0]["maxOutputTokens"] = 777
+    path.write_text(json.dumps(data))
+    vscode.configure(path, URL, "new", (replace(MODEL, supports_reasoning=False),))
+    saved = json.loads(path.read_text())[0]
+    assert saved["settings"] == preferences
+    assert [m["id"] for m in saved["models"]] == [MODEL.wire_slug]
+    assert saved["models"][0]["maxOutputTokens"] == 81920
+    assert "supportsReasoningEffort" not in saved["models"][0]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions")
+@pytest.mark.parametrize("already_connected", [False, True])
+def test_connect_and_unchanged_refresh_make_existing_file_private(
+    tmp_path, already_connected
+):
+    path = tmp_path / "models.json"
+    path.write_text("[]")
+    if already_connected:
+        vscode.configure(path, URL, "secret", (MODEL,))
+    path.chmod(0o644)
+    before = path.stat().st_mtime_ns
+    assert vscode.configure(path, URL, "secret", (MODEL,)) is not already_connected
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if already_connected:
+        assert path.stat().st_mtime_ns == before
+
+
 @pytest.mark.parametrize(
     "platform,env,tail",
     [
@@ -151,3 +207,82 @@ def test_native_config_paths(tmp_path, monkeypatch, platform, env, tail):
     if env:
         monkeypatch.setenv(env, str(tmp_path))
     assert native_config_path() == tmp_path / tail
+
+
+@pytest.mark.parametrize(
+    "effort,preference,no_thinking,expected",
+    [
+        (effort, "client", False, effort)
+        for effort in (None, "none", "low", "medium", "high", "xhigh", "max")
+    ]
+    + [
+        ("high", "off", False, "none"),
+        ("none", "high", False, "high"),
+        ("high", "high", True, "none"),
+    ],
+)
+def test_native_effort_uses_shared_routing_and_provider_encoders(
+    effort, preference, no_thinking, expected
+):
+    from free_claude_code.application.routing import ModelRouter
+    from free_claude_code.config.settings import Settings
+    from free_claude_code.core.anthropic.models import MessagesRequest
+    from free_claude_code.providers.anthropic_messages.request_policy import (
+        MessagesModelCapabilities,
+        resolve_messages_options,
+    )
+    from free_claude_code.providers.nvidia_nim.request_options import (
+        build_nim_request_body,
+    )
+
+    settings = Settings(REASONING_POLICY=preference)
+    model_id = "nvidia_nim/test"
+    if no_thinking:
+        model_id = "claude-3-freecc-no-thinking/" + model_id
+    entry = vscode.model_entry(replace(MODEL, wire_slug=model_id), URL)
+    request = MessagesRequest.model_validate(
+        {
+            "model": entry["id"],
+            "max_tokens": entry["maxOutputTokens"],
+            "messages": [{"role": "user", "content": "hello"}],
+            **({"output_config": {"effort": effort}} if effort is not None else {}),
+        }
+    )
+    routed = ModelRouter(settings).resolve_messages_request(request)
+    body = build_nim_request_body(
+        routed.request, settings.nim, reasoning=routed.reasoning
+    )
+    assert body.get("reasoning_effort") == expected
+    assert body["max_tokens"] == entry["maxOutputTokens"]
+    native = resolve_messages_options(
+        model=routed.request.model,
+        max_tokens=routed.request.max_tokens,
+        reasoning=routed.reasoning,
+        capabilities=MessagesModelCapabilities(
+            adaptive_thinking="unsupported", supports_output_effort=False
+        ),
+    )
+    assert native.max_tokens == entry["maxOutputTokens"]
+    if routed.reasoning.requests_reasoning:
+        assert native.thinking is not None
+        budget = routed.reasoning.numeric_budget_tokens
+        assert budget is not None
+        assert native.thinking["budget_tokens"] == max(1024, budget)
+    else:
+        assert native.thinking is None or native.thinking["type"] == "disabled"
+
+
+def test_unchanged_permission_repair_failure_is_not_reported_as_success(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "models.json"
+    vscode.configure(path, URL, "secret", (MODEL,))
+    before = path.read_bytes()
+
+    def fail(_path):
+        raise PermissionError("permission repair failed")
+
+    monkeypatch.setattr(vscode, "ensure_private_permissions", fail)
+    with pytest.raises(PermissionError, match="permission repair"):
+        vscode.configure(path, URL, "secret", (MODEL,))
+    assert path.read_bytes() == before

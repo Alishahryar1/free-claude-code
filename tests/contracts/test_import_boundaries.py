@@ -215,6 +215,8 @@ def test_native_model_catalog_has_no_http_formatter_or_decoder_dependency() -> N
         f"{_PACKAGE_NAME}.runtime.codex_app_server",
         f"{_PACKAGE_NAME}.runtime.codex_catalog",
         f"{_PACKAGE_NAME}.harnesses.codex_model_catalog",
+        f"{_PACKAGE_NAME}.harnesses.vscode_chat_integration",
+        f"{_PACKAGE_NAME}.harnesses.model_policy",
     }
     offenders = [
         record.describe()

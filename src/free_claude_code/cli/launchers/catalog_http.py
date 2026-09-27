@@ -89,7 +89,11 @@ def _catalog_candidates(
                 display_name=_nonempty_string(item.get("display_name")) or model_id,
                 supports_reasoning=_optional_boolean(item.get("supportsReasoning")),
                 input_modalities=_input_modalities(item.get("inputModalities")),
-                context_window_tokens=_optional_positive_int(item.get("contextWindow")),
+                context_window_tokens=(
+                    None
+                    if item.get("contextWindowSource") == "default"
+                    else _optional_positive_int(item.get("contextWindow"))
+                ),
                 max_output_tokens=_optional_positive_int(
                     item.get("maxCompletionTokens")
                 ),

@@ -192,11 +192,12 @@ def test_browser_thread_start_failure_does_not_fail_fcc(monkeypatch, reuse):
     browser.assert_not_called()
 
 
-def _run_browser_shutdown_probe(mode, outcome, directory):
+def _run_browser_shutdown_probe(mode, outcome, directory, setup_delay="0"):
     """Run real FCC lifecycle owners with only OS/browser/server dependencies faked."""
     from free_claude_code.cli import desktop, uvicorn_server
     from free_claude_code.runtime import bootstrap
 
+    print("probe: setup", flush=True)
     entered = threading.Event()
     patcher = pytest.MonkeyPatch()
     settings = Settings.model_construct(
@@ -208,6 +209,7 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
 
     def browser(url):
         assert url == "http://127.0.0.1:0/admin"
+        print("probe: browser entered", flush=True)
         entered.set()
         if outcome in {"automatic", "tray", "quit", "timeout"}:
             threading.Event().wait()  # Intentionally never released in this process.
@@ -244,10 +246,10 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
                 if mode == "server":
                     if outcome == "tray":
                         supervisor.request_open_admin()
-                    assert entered.wait(2)
+                    entered.wait()  # The parent process owns the finite lifecycle deadline.
                     supervisor.request_stop()
                 else:
-                    assert supervisor.stop_event.wait(3)
+                    supervisor.stop_event.wait()
 
         patcher.setattr(uvicorn_server, "RuntimeServer", Server)
 
@@ -259,7 +261,7 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
                 setup()
                 if outcome == "tray":
                     self.controller.open_admin()
-                assert entered.wait(2)
+                entered.wait()  # The parent process owns the finite lifecycle deadline.
                 self.controller.quit()
 
             def stop(self):
@@ -305,15 +307,23 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
 
                 def run(self, setup):
                     setup()
-                    assert entered.wait(2)
+                    entered.wait()  # The parent process owns the finite lifecycle deadline.
                     if outcome == "quit":
                         self.controller.quit()
-                    assert self.stopped.wait(6 if outcome == "timeout" else 2)
+                    self.stopped.wait()
 
                 def stop(self):
                     self.stopped.set()
 
             lock = InterprocessFileLock(Path(directory) / "desktop.lock")
+            original_acquire = InterprocessFileLock.acquire
+
+            def acquire(instance):
+                print("probe: acquiring desktop lock", flush=True)
+                threading.Event().wait(float(setup_delay))
+                return original_acquire(instance)
+
+            patcher.setattr(InterprocessFileLock, "acquire", acquire)
             try:
                 if mode == "reuse-desktop":
                     assert lock.acquire()
@@ -339,20 +349,33 @@ def test_reusing_desktop_process_exits_without_owning_browser(tmp_path, mode, ou
     _assert_browser_probe_exits(tmp_path, mode, outcome)
 
 
-def _assert_browser_probe_exits(tmp_path, mode, outcome):
+def test_browser_shutdown_waits_for_slow_healthy_setup(tmp_path):
+    _assert_browser_probe_exits(tmp_path, "reuse-terminal", "quit", setup_delay="2.2")
+
+
+def _assert_browser_probe_exits(tmp_path, mode, outcome, setup_delay="0"):
     script = (
         "import runpy, sys; "
         "runpy.run_path(sys.argv[1])['_run_browser_shutdown_probe'](*sys.argv[2:])"
     )
     # subprocess.run kills and reaps only this disposable child on timeout.
     completed = subprocess.run(
-        [sys.executable, "-c", script, __file__, mode, outcome, str(tmp_path)],
+        [
+            sys.executable,
+            "-c",
+            script,
+            __file__,
+            mode,
+            outcome,
+            str(tmp_path),
+            setup_delay,
+        ],
         capture_output=True,
         text=True,
         timeout=12,
         check=False,
     )
-    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "FCC exited while preserving its resource ownership" in completed.stdout
 
 

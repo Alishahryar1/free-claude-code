@@ -1,3 +1,4 @@
+import json
 import math
 
 import pytest
@@ -37,6 +38,38 @@ def _cache_models(app, provider_id: str, *model_ids: str) -> None:
         provider_id,
         {ProviderModelInfo(model_id) for model_id in model_ids},
     )
+
+
+@pytest.mark.parametrize("view", ["messages", "responses"])
+def test_context_fallback_round_trip_preserves_reported_capabilities(view):
+    from free_claude_code.application.model_catalog import read_model_catalog
+    from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
+    from free_claude_code.cli.launchers.opencode_config import build_opencode_config
+
+    app = create_test_app(_settings(model_opus=None))
+    manager = provider_manager_for_app(app)
+    manager.cache_model_infos(
+        "deepseek", {ProviderModelInfo("known", context_window_tokens=8000)}
+    )
+    before = read_model_catalog(manager)
+    payload = TestClient(app).get(f"/v1/models?view={view}").json()
+    rows = {row["id"]: row for row in payload["data"]}
+    assert rows["deepseek/deepseek-chat"]["contextWindow"] == 200000
+    assert rows["deepseek/deepseek-chat"]["contextWindowSource"] == "default"
+    assert rows["deepseek/known"]["contextWindow"] == 8000
+    assert rows["deepseek/known"]["contextWindowSource"] == "provider"
+    decoded = model_catalog_from_response(payload)
+    assert decoded == before
+    config = build_opencode_config(
+        decoded.models,
+        default_model_id=decoded.default_model_id,
+        proxy_root_url="http://localhost:8082",
+    )
+    models = json.loads(json.dumps(config.file))["providers"]["free-claude-code"][
+        "models"
+    ]
+    assert models["deepseek/deepseek-chat"]["limit"] == {"context": 200000}
+    assert models["deepseek/known"]["limit"] == {"context": 8000, "output": 2000}
 
 
 @pytest.mark.parametrize("view", ["messages", "responses"])
@@ -241,6 +274,8 @@ def test_direct_model_views_exclude_claude_aliases_and_duplicate_variants():
         "provider_model_ref": "deepseek/deepseek-chat",
         "apiBackend": "responses",
         "maxRetries": 0,
+        "contextWindow": 200000,
+        "contextWindowSource": "default",
         "supportsReasoningEffort": True,
         "reasoningEfforts": [
             "none",
@@ -305,7 +340,8 @@ def test_direct_model_views_serialize_known_capabilities_and_omit_unknowns():
     assert "maxCompletionTokens" not in messages["open_router/text-only"]
     assert "supportsReasoning" not in messages["open_router/unknown"]
     assert "inputModalities" not in messages["open_router/unknown"]
-    assert "contextWindow" not in messages["open_router/unknown"]
+    assert messages["open_router/unknown"]["contextWindow"] == 200000
+    assert messages["open_router/unknown"]["contextWindowSource"] == "default"
     assert "maxCompletionTokens" not in messages["open_router/unknown"]
     assert responses["open_router/text-only"]["supportsReasoningEffort"] is False
     assert "reasoningEfforts" not in responses["open_router/text-only"]
@@ -363,7 +399,7 @@ def test_muse_model_catalog_marks_every_routable_model_visible():
         metadata = row["metadata"]["muse-code"]
         assert metadata["is_hidden"] is False
         assert metadata["name"] == row["display_name"]
-        assert "limit" not in metadata
+        assert metadata["limit"] == {"context": 200000}
         original = {key: value for key, value in row.items() if key != "metadata"}
         assert original in responses.json()["data"]
     assert [row["id"] for row in muse.json()["data"]] == [
@@ -411,6 +447,7 @@ def test_muse_catalog_uses_native_metadata_for_known_limits_and_reasoning():
     assert rows["deepseek/deepseek-chat"] == {
         "name": "deepseek/deepseek-chat",
         "is_hidden": False,
+        "limit": {"context": 200000},
     }
 
 

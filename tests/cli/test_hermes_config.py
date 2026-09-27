@@ -84,6 +84,7 @@ def test_hermes_config_pins_responses_catalog_and_fallbacks() -> None:
     assert managed.config["fallback_model"] == []
     assert managed.config["model_overrides"] == {
         "custom": {
+            "future_provider/unknown-model": {"context_window": 200000},
             "nvidia_nim/vendor/model": {
                 "supports_reasoning": True,
                 "supports_vision": True,
@@ -93,6 +94,7 @@ def test_hermes_config_pins_responses_catalog_and_fallbacks() -> None:
             "claude-3-freecc-no-thinking/open_router/plain-model": {
                 "supports_reasoning": False,
                 "supports_vision": False,
+                "context_window": 200000,
                 "max_output_tokens": 4096,
             },
         }

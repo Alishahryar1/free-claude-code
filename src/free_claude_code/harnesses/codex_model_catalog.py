@@ -3,19 +3,17 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from free_claude_code.application.model_catalog import CatalogModel
+from free_claude_code.application.model_catalog import (
+    CatalogModel,
+    context_window_for_client,
+)
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
-
-SUPPORTED_REASONING_LEVELS = {
-    "none": "Turn reasoning off",
-    "low": "Fast responses with lighter reasoning",
-    "medium": "Balances speed and reasoning depth for everyday tasks",
-    "high": "Greater reasoning depth for complex problems",
-    "xhigh": "Extra high reasoning depth for complex problems",
-    "max": "Maximum reasoning effort",
-}
-
+from free_claude_code.harnesses.model_policy import (
+    DEFAULT_REASONING_LEVEL,
+    SUPPORTED_REASONING_LEVELS,
+    reasoning_levels,
+)
 
 CODEX_BASE_INSTRUCTIONS = (
     "You are Codex, a coding agent. Help the user understand, modify, test, "
@@ -37,13 +35,11 @@ def project_codex_models(models: Sequence[CatalogModel]) -> tuple[CodexModel, ..
         CodexModel(
             model=model,
             priority=priority,
-            reasoning_levels=(
-                tuple(SUPPORTED_REASONING_LEVELS)
-                if model.supports_reasoning is not False
-                else ()
-            ),
+            reasoning_levels=reasoning_levels(model),
             default_reasoning_level=(
-                "medium" if model.supports_reasoning is not False else None
+                DEFAULT_REASONING_LEVEL
+                if model.supports_reasoning is not False
+                else None
             ),
         )
         for priority, model in enumerate(models)
@@ -63,11 +59,7 @@ def codex_model_entry(model: CodexModel) -> JsonObject:
     input_modalities = candidate.input_modalities
     if input_modalities is None or ModelInputModality.TEXT not in input_modalities:
         input_modalities = frozenset({ModelInputModality.TEXT})
-    context_window = (
-        candidate.context_window_tokens
-        if candidate.context_window_tokens is not None
-        else 200000
-    )
+    context_window = context_window_for_client(candidate)
     entry: JsonObject = {
         "slug": candidate.wire_slug,
         "display_name": candidate.display_name,

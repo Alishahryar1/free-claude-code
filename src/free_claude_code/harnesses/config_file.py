@@ -6,7 +6,13 @@ import tempfile
 from pathlib import Path
 
 
-def atomic_write_text(path: Path, content: str) -> None:
+def ensure_private_permissions(path: Path) -> None:
+    """Restrict POSIX access; Windows files inherit their profile directory ACL."""
+    if os.name != "nt" and stat.S_IMODE(path.stat().st_mode) != 0o600:
+        path.chmod(0o600)
+
+
+def atomic_write_text(path: Path, content: str, *, private: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -23,7 +29,9 @@ def atomic_write_text(path: Path, content: str) -> None:
             output.write(content)
             output.flush()
             os.fsync(output.fileno())
-        if path.exists():
+        if private and os.name != "nt":
+            ensure_private_permissions(temporary)
+        elif path.exists():
             temporary.chmod(stat.S_IMODE(path.stat().st_mode))
         temporary.replace(path)
     finally:

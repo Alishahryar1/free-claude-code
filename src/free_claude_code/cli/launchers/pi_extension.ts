@@ -3,7 +3,6 @@ import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-codin
 const API_KEY_ENV = "FCC_PI_API_KEY";
 const BASE_URL_ENV = "FCC_PI_BASE_URL";
 const CATALOG_TIMEOUT_MS = 35000;
-const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 16384;
 
 function requireEnvironment(name: string): string {
@@ -53,7 +52,7 @@ function modelDefinition(
 	providerModel: string,
 	supportsReasoning: boolean | undefined,
 	input: ("text" | "image")[] | undefined,
-	contextWindow: number | undefined,
+	contextWindow: number,
 	maxTokens: number | undefined,
 ): ProviderModelConfig {
 	return {
@@ -62,7 +61,7 @@ function modelDefinition(
 		reasoning: supportsReasoning ?? true,
 		input: input ?? ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+		contextWindow,
 		maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
 	};
 }
@@ -78,6 +77,10 @@ export function projectFccModels(payload: unknown): ProviderModelConfig[] {
 		const id = entry.id;
 		const providerModel = entry.provider_model_ref;
 		if (!id.trim() || !providerModel.includes("/") || seen.has(id)) continue;
+		const contextWindow = optionalPositiveInteger(entry.contextWindow);
+		if (contextWindow === undefined) {
+			throw new Error("FCC model context is missing or invalid. Restart the FCC server after updating.");
+		}
 		seen.add(id);
 		models.push(
 			modelDefinition(
@@ -85,7 +88,7 @@ export function projectFccModels(payload: unknown): ProviderModelConfig[] {
 				providerModel,
 				optionalBoolean(entry.supportsReasoning),
 				inputModalities(entry.inputModalities),
-				optionalPositiveInteger(entry.contextWindow),
+				contextWindow,
 				optionalPositiveInteger(entry.maxCompletionTokens),
 			),
 		);

@@ -111,6 +111,7 @@ def test_cline_config_uses_responses_and_only_known_metadata() -> None:
                     },
                     "future_provider/unknown-model": {
                         "name": "Unknown model",
+                        "contextWindow": 200000,
                         "capabilities": ["streaming", "tools", "reasoning"],
                         "supportsReasoning": True,
                         "apiFormat": "openai-responses",

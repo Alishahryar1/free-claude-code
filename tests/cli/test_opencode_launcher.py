@@ -76,10 +76,11 @@ def test_opencode_config_uses_native_responses_and_model_budgets() -> None:
         },
         "future_provider/unknown-model": {
             "name": "Unknown model",
+            "limit": {"context": 200000},
         },
         "future_provider/output-only": {
             "name": "Output-only model",
-            "limit": {"output": 4096},
+            "limit": {"context": 200000, "output": 4096},
         },
     }
     assert config.overlay == {
@@ -120,8 +121,8 @@ def test_opencode_config_uses_native_responses_and_model_budgets() -> None:
         (16384, 1024, {"context": 16384, "output": 1024}, 4096),
         (131072, 65536, {"context": 131072, "output": 65536}, None),
         (200000, None, {"context": 200000, "output": 4096}, None),
-        (None, 4096, {"output": 4096}, None),
-        (None, None, None, None),
+        (None, 4096, {"context": 200000, "output": 4096}, None),
+        (None, None, {"context": 200000}, None),
     ],
 )
 def test_opencode_context_reserves_fit_small_models(

@@ -27,7 +27,7 @@ process.env.FCC_PI_BASE_URL = "http://fcc.invalid";
 process.env.FCC_PI_API_KEY = "test-key";
 globalThis.fetch = async () => new Response(JSON.stringify({
     object: "list",
-    data: [{ id: "opencode_zen/test", provider_model_ref: "opencode_zen/test" }],
+    data: [{ id: "opencode_zen/test", provider_model_ref: "opencode_zen/test", contextWindow: 200000 }],
 }));
 await extension({
     registerProvider() {},
@@ -88,7 +88,7 @@ process.env.FCC_PI_BASE_URL = "http://fcc.invalid";
 process.env.FCC_PI_API_KEY = "test-key";
 globalThis.fetch = async () => new Response(JSON.stringify({
     object: "list",
-    data: [{ id: "github_copilot/gpt-5.6-luna", provider_model_ref: "github_copilot/gpt-5.6-luna" }],
+    data: [{ id: "github_copilot/gpt-5.6-luna", provider_model_ref: "github_copilot/gpt-5.6-luna", contextWindow: 200000 }],
 }));
 await extension({
     registerProvider() {},
@@ -294,6 +294,7 @@ def test_pi_extension_projects_known_capabilities_and_preserves_unknown_defaults
             {
                 "id": "provider/unknown ",
                 "provider_model_ref": "provider/unknown ",
+                "contextWindow": 200000,
             },
         ],
     }
@@ -337,5 +338,5 @@ console.log(JSON.stringify(projectFccModels(payload)));
     assert [(model["contextWindow"], model["maxTokens"]) for model in projected] == [
         (131072, 8192),
         (65536, 16384),
-        (128000, 16384),
+        (200000, 16384),
     ]

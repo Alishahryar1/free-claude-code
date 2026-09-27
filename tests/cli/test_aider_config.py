@@ -59,9 +59,11 @@ def test_aider_config_projects_messages_route_and_canonical_catalog() -> None:
             "litellm_provider": "anthropic",
             "mode": "chat",
             "supports_vision": False,
+            "max_input_tokens": 200000,
             "max_output_tokens": 4096,
         },
         "future_provider/unknown-model": {
+            "max_input_tokens": 200000,
             "litellm_provider": "anthropic",
             "mode": "chat",
         },
