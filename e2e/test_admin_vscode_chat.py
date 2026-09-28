@@ -53,6 +53,7 @@ def test_failed_update_has_actionable_retry(page, admin_base_url, status_read_fa
         response = route.fetch()
         payload = response.json()
         payload["startup"]["integrations"]["vscode-chat"] = dict(progress)
+        payload["startup"]["messaging"]["state"] = "starting"
         route.fulfill(response=response, json=payload)
 
     def status(route):
@@ -74,9 +75,10 @@ def test_failed_update_has_actionable_retry(page, admin_base_url, status_read_fa
         page.route("**/admin/api/integrations/vscode-chat/refresh", retry)
         page.goto(f"{admin_base_url}/admin/integrations")
         # Startup reconciliation can temporarily disable Retry during the click.
-        # Exercise the action after initial polling has settled.
+        # Wait for this integration without waiting for unrelated startup work.
         page.wait_for_function(
-            "state.startup && !state.startupRequest && state.startupTimer === null"
+            "state.startup?.startup?.integrations?.['vscode-chat']?.state === 'failed'"
+            " && !vscodeChatIntegration.busy"
         )
         main = page.locator("#openVSCodeChatIntegration")
         secondary = page.locator("#retryVSCodeChatIntegration")
