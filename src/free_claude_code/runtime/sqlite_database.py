@@ -1,7 +1,7 @@
-"""Offline relocation and transactional schema initialization of FCC's database.
+"""Connection, transaction, and lifetime ownership of FCC's shared database.
 
-The application holds the shared owner lock until both features close. Connections
-opened here never escape initialization, including when migration fails.
+The application holds the owner lock until both features close. Each connection
+is opened, used, and closed within initialization or one synchronous transaction.
 """
 
 import asyncio
@@ -228,6 +228,12 @@ class SQLiteDatabase:
     def execute[T](
         self, operation: Callable[[sqlite3.Connection], T], *, write: bool = True
     ) -> T:
+        """Run one transaction inside an admitted worker, closing its connection.
+
+        Callbacks consume the connection synchronously and return materialized
+        results. They must not begin or finish the outer transaction themselves.
+        Legacy import uses this primitive for several transactions in one worker.
+        """
         with closing(_connect(self.path)) as connection:
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             try:
@@ -242,6 +248,7 @@ class SQLiteDatabase:
     async def run[T](
         self, operation: Callable[[sqlite3.Connection], T], *, write: bool = True
     ) -> T:
+        """Admit and supervise one transaction through committed result delivery."""
         return await self.work(lambda: self.execute(operation, write=write))
 
     async def work[T](self, operation: Callable[[], T]) -> T:

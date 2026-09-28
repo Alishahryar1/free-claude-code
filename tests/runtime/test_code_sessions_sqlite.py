@@ -162,6 +162,159 @@ async def _session(store):
 
 
 @pytest.mark.asyncio
+async def test_closed_database_uses_code_storage_error(store):
+    await store.database.close()
+    with pytest.raises(CodeUnavailableError, match="storage is unavailable") as error:
+        await store.get_session("missing")
+    assert isinstance(error.value.__cause__, sqlite3.OperationalError)
+
+
+@pytest.mark.asyncio
+async def test_code_read_uses_explicit_connection_policy(store, monkeypatch):
+    session = await _session(store)
+    read_session = code_store_module._session
+
+    def observe(connection, session_id):
+        assert connection.autocommit is True
+        assert connection.in_transaction
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert connection.execute("SELECT 1 AS value").fetchone()["value"] == 1
+        return read_session(connection, session_id)
+
+    monkeypatch.setattr(code_store_module, "_session", observe)
+    assert await store.get_session(session.id) == session
+
+
+@pytest.mark.asyncio
+async def test_code_reads_do_not_reserve_writer_while_wal_write_is_open(store):
+    session = await _session(store)
+    with closing(sqlite3.connect(store.database.path, autocommit=True)) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        try:
+            writer.execute(
+                "UPDATE code_sessions SET title = 'uncommitted' WHERE id = ?",
+                (session.id,),
+            )
+            saved = await asyncio.wait_for(store.get_session(session.id), 3)
+            history = await asyncio.wait_for(
+                store.read_history(session.id, None, ()), 3
+            )
+            assert saved == history.session == session
+        finally:
+            writer.execute("ROLLBACK")
+
+
+@pytest.mark.asyncio
+async def test_recovery_rolls_back_runs_when_prompt_expiration_fails(store):
+    session, run = await _admit(store, await _session(store))
+    prompt = CodePrompt(
+        id="prompt",
+        session_id=session.id,
+        generation="g",
+        request_id=1,
+        kind="question",
+        form={},
+        raw={},
+    )
+    item = CodeItem(
+        id=prompt.id,
+        session_id=session.id,
+        run_id=run.id,
+        sequence=2,
+        kind="prompt",
+        complete=True,
+    )
+    await store.save_progress(
+        session, session.revision, items=(item,), prompts=(prompt,)
+    )
+    await store.close()
+    await store.database.run(
+        lambda connection: connection.execute(
+            "CREATE TRIGGER reject_expiration BEFORE UPDATE ON code_prompts "
+            "BEGIN SELECT RAISE(ABORT, 'recovery failure'); END"
+        )
+    )
+    try:
+        with pytest.raises(CodeConflictError) as error:
+            await store.start()
+        assert isinstance(error.value.__cause__, sqlite3.IntegrityError)
+        states = await store.database.run(
+            lambda connection: (
+                connection.execute("SELECT status FROM code_runs").fetchone()[0],
+                connection.execute("SELECT status FROM code_prompts").fetchone()[0],
+            ),
+            write=False,
+        )
+        assert states == (run.status, prompt.status)
+    finally:
+        await store.database.run(
+            lambda connection: connection.execute("DROP TRIGGER reject_expiration")
+        )
+    await store.start()
+    assert (await store.get_run(session.id, run.id)).status == "interrupted"
+    assert (await store.get_prompt(session.id, prompt.id)).status == "expired"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", [False, True])
+async def test_cancelled_code_write_delivers_outcome_before_database_close(
+    store, database_factory, monkeypatch, tmp_path, fail
+):
+    entered, release = threading.Event(), threading.Event()
+    closing_started = asyncio.Event()
+    insert = code_store_module._insert
+    session = CodeSession(id="new", cwd="/work", model="provider/model")
+
+    def blocked(connection, table, record):
+        insert(connection, table, record)
+        entered.set()
+        assert release.wait(5)
+        if fail:
+            raise sqlite3.OperationalError("injected write failure")
+
+    async def close_database():
+        closing_started.set()
+        await store.database.close()
+
+    monkeypatch.setattr(code_store_module, "_insert", blocked)
+    writing = asyncio.create_task(store.create(session))
+    closing_task = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        writing.cancel()
+        closing_task = asyncio.create_task(close_database())
+        await asyncio.wait_for(closing_started.wait(), 3)
+        assert not closing_task.done()
+        with pytest.raises(CodeUnavailableError):
+            await store.get_session(session.id)
+        other = database_factory(store.database.path, tmp_path / "code.lock")
+        with pytest.raises(sqlite3.OperationalError, match="another FCC"):
+            await other.start()
+        release.set()
+        if fail:
+            with pytest.raises(CodeUnavailableError) as error:
+                await writing
+            assert isinstance(error.value.__cause__, sqlite3.OperationalError)
+        else:
+            assert await writing == session
+        await asyncio.wait_for(closing_task, 3)
+        reopened = database_factory(store.database.path, tmp_path / "code.lock")
+        await reopened.start()
+        saved = await reopened.run(
+            lambda connection: connection.execute(
+                "SELECT id FROM code_sessions"
+            ).fetchall(),
+            write=False,
+        )
+        assert [row["id"] for row in saved] == ([] if fail else [session.id])
+    finally:
+        release.set()
+        await asyncio.gather(
+            writing, *([closing_task] if closing_task else []), return_exceptions=True
+        )
+
+
+@pytest.mark.asyncio
 async def test_history_snapshot_decodes_only_selected_records_and_chunks_includes(
     store, monkeypatch
 ):
