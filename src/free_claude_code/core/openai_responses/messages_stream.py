@@ -8,7 +8,10 @@ from dataclasses import replace
 from typing import cast
 
 from free_claude_code.core.anthropic.native import NativeMessagesError
-from free_claude_code.core.anthropic.native_stream import NativeMessagesStreamState
+from free_claude_code.core.anthropic.native_stream import (
+    CompletedMessagesBlock,
+    NativeMessagesStreamState,
+)
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
@@ -17,7 +20,7 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
-from .errors import ResponsesConversionError, openai_error_from_failure
+from .errors import openai_error_from_failure
 from .ids import (
     new_message_item_id,
     new_reasoning_item_id,
@@ -129,7 +132,6 @@ class AnthropicToResponsesStream:
         self._completer = ResponseBlockCompleter(
             self._ledger,
             events=self._events,
-            on_invalid_function_call=self._invalid_function,
         )
 
     @property
@@ -336,13 +338,13 @@ class AnthropicToResponsesStream:
         if isinstance(state, ReasoningBlockState) and kind == "signature_delta":
             return []
         if isinstance(state, ToolBlockState) and kind == "input_json_delta":
-            # The completer emits validated arguments once, after native block stop.
+            # The completer emits the accumulated arguments once, at block stop.
             return []
         raise NativeMessagesError(
             "Responses cannot represent the native content delta."
         )
 
-    def _finish_block(self, index: int, block: JsonObject) -> list[str]:
+    def _finish_block(self, index: int, completed: CompletedMessagesBlock) -> list[str]:
         state = self._ledger.active_block(index)
         if state is None:
             raise NativeMessagesError(
@@ -350,31 +352,31 @@ class AnthropicToResponsesStream:
             )
         if isinstance(state, ReasoningBlockState):
             state.encrypted_content = encode_replay(
-                ReplayRecord(self._replay_origin, block)
+                ReplayRecord(self._replay_origin, completed.body)
             )
         elif isinstance(state, ToolBlockState):
-            arguments = block.get("input")
-            if not isinstance(arguments, Mapping):
-                raise NativeMessagesError("Native tool input must be an object.")
-            if state.kind == "custom" and (
-                set(arguments) != {"input"}
-                or not isinstance(arguments.get("input"), str)
-            ):
-                raise NativeMessagesError(
-                    "Native custom tool input must contain exactly one text input."
-                )
-            state.argument_parts.append(
-                json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
-            )
+            arguments = completed.tool_arguments
+            if arguments is None:
+                raise AssertionError("Completed native tool must retain its arguments.")
+            if state.kind == "custom":
+                try:
+                    wrapper = json.loads(arguments)
+                except (ValueError, RecursionError) as exc:
+                    raise NativeMessagesError(
+                        "Invalid native custom tool wrapper."
+                    ) from exc
+                if (
+                    not isinstance(wrapper, dict)
+                    or set(wrapper) != {"input"}
+                    or not isinstance(wrapper["input"], str)
+                ):
+                    raise NativeMessagesError(
+                        "Native custom tool input must contain exactly one text input."
+                    )
+            state.argument_parts.append(arguments)
         events = self._completer.complete_block(state)
         self._ledger.pop_active_block(index)
         return events
-
-    @staticmethod
-    def _invalid_function(
-        _state: ToolBlockState, error: ResponsesConversionError
-    ) -> list[str]:
-        raise NativeMessagesError("Native tool arguments are invalid.") from error
 
     def terminal_failure(self, failure: ExecutionFailure) -> list[str]:
         """Terminate once without completing partial tools or inventing arguments."""

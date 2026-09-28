@@ -32,7 +32,6 @@ from .streaming.completion import (
     reasoning_output_item,
     tool_item,
 )
-from .streaming.error_mapping import replay_unsafe_function_call_error
 from .streaming.event_builders import ResponseEventBuilder
 from .streaming.ledger import ResponsesOutputLedger
 from .tokens import estimate_responses_input_tokens
@@ -82,7 +81,6 @@ __all__ = [
     "openai_error_type_for_failure",
     "openai_failure_payload",
     "reasoning_output_item",
-    "replay_unsafe_function_call_error",
     "responses_reasoning_config",
     "responses_reasoning_policy",
     "responses_stream_failure_from_event",

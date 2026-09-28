@@ -18,8 +18,6 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import (
     ContentBlockToolUse,
     ContentType,
-    FunctionTagToolParser,
-    HeuristicToolParser,
     ThinkTagParser,
 )
 from free_claude_code.core.anthropic.models import MessagesRequest
@@ -115,7 +113,6 @@ from .tool_calls import (
     CompletedOpenAIToolCall,
     OpenAIToolCallAssembler,
     OpenAIToolCallCollector,
-    iter_heuristic_tool_use_events,
     tool_call_extra_content,
 )
 from .usage import (
@@ -145,39 +142,6 @@ def _iter_visible_text_events(
 ) -> Iterator[str]:
     yield from output.ensure_text_block()
     yield output.emit_text_delta(text)
-
-
-def _iter_text_parser_events(
-    output: ChatStreamOutput,
-    parser: HeuristicToolParser,
-    text: str,
-    *,
-    tool_names: OpenAIToolNameCodec,
-) -> Iterator[str]:
-    """Route visible text through the established heuristic tool parser."""
-    filtered_text, detected_tools = parser.feed(text)
-    if filtered_text:
-        yield from _iter_visible_text_events(output, filtered_text)
-    for tool_use in detected_tools:
-        yield from iter_heuristic_tool_use_events(
-            output,
-            tool_use,
-            tool_names=tool_names,
-        )
-
-
-def _iter_text_tool_use_events(
-    output: ChatStreamOutput,
-    tool_uses: tuple[dict[str, Any], ...] | list[dict[str, Any]],
-    *,
-    tool_names: OpenAIToolNameCodec,
-) -> Iterator[str]:
-    for tool_use in tool_uses:
-        yield from iter_heuristic_tool_use_events(
-            output,
-            tool_use,
-            tool_names=tool_names,
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,7 +188,6 @@ class _OpenAIChatStreamAssembler:
         output_reasoning: bool,
         tool_names: OpenAIToolNameCodec,
         tool_schemas: dict[str, ToolSchema],
-        tool_choice_enabled: bool,
         tool_calls: OpenAIToolCallAssembler,
         extra_reasoning_events: _ExtraReasoningEvents,
     ) -> None:
@@ -237,14 +200,6 @@ class _OpenAIChatStreamAssembler:
         self._tool_calls = tool_calls
         self._extra_reasoning_events = extra_reasoning_events
         self._think_parser = ThinkTagParser()
-        self._function_tag_parser = FunctionTagToolParser.from_schemas(
-            tool_names=tool_names,
-            schemas={
-                name: schema.input_schema for name, schema in tool_schemas.items()
-            },
-            enabled=tool_choice_enabled,
-        )
-        self._heuristic_parser = HeuristicToolParser()
         self._structured_reasoning = (
             StructuredReasoningStream()
             if profile.structured_reasoning_details
@@ -367,11 +322,6 @@ class _OpenAIChatStreamAssembler:
         yield from self._extra_reasoning_events(delta, self._output)
 
         native_tool_calls = delta.tool_calls
-        if native_tool_calls:
-            released_text = self._function_tag_parser.disable()
-            if released_text:
-                yield from _iter_visible_text_events(self._output, released_text)
-
         if delta.content:
             for part in self._think_parser.feed(delta.content):
                 if part.type == ContentType.THINKING:
@@ -380,14 +330,7 @@ class _OpenAIChatStreamAssembler:
                     yield from self._output.ensure_reasoning_block()
                     yield self._output.emit_reasoning_delta(part.content)
                 else:
-                    safe_text = self._function_tag_parser.feed(part.content)
-                    if safe_text:
-                        yield from _iter_text_parser_events(
-                            self._output,
-                            self._heuristic_parser,
-                            safe_text,
-                            tool_names=self._tool_names,
-                        )
+                    yield from _iter_visible_text_events(self._output, part.content)
 
         if native_tool_calls:
             yield from self._output.close_content_blocks()
@@ -436,28 +379,8 @@ class _OpenAIChatStreamAssembler:
                     yield from self._output.ensure_reasoning_block()
                     yield self._output.emit_reasoning_delta(remaining.content)
             else:
-                safe_text = self._function_tag_parser.feed(remaining.content)
-                if safe_text:
-                    yield from _iter_text_parser_events(
-                        self._output,
-                        self._heuristic_parser,
-                        safe_text,
-                        tool_names=self._tool_names,
-                    )
+                yield from _iter_visible_text_events(self._output, remaining.content)
 
-        fallback_text, function_tag_tools = self._function_tag_parser.finish()
-        if fallback_text:
-            yield from _iter_visible_text_events(self._output, fallback_text)
-        yield from _iter_text_tool_use_events(
-            self._output,
-            function_tag_tools,
-            tool_names=self._tool_names,
-        )
-        yield from _iter_text_tool_use_events(
-            self._output,
-            self._heuristic_parser.flush(),
-            tool_names=self._tool_names,
-        )
         yield from self._output.flush_reasoning_replay()
         self._upstream_finished = True
 
@@ -1628,10 +1551,6 @@ class _OpenAIChatStreamRunner:
             output_reasoning=output_reasoning,
             tool_names=self._tool_names,
             tool_schemas=self._tool_schemas,
-            tool_choice_enabled=(
-                bool(self._body.get("tools"))
-                and self._body.get("tool_choice") != "none"
-            ),
             tool_calls=OpenAIToolCallAssembler(
                 reserved_tool_ids=self._reserved_tool_ids,
                 record_extra_content=self._transport._behavior.record_tool_call_extra_content,

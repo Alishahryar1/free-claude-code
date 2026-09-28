@@ -70,19 +70,34 @@ def test_grouped_tool_calls_keep_both_reasoning_records():
     ]
 
 
-def test_quarantined_tool_call_does_not_donate_its_reasoning():
+def test_malformed_tool_call_keeps_its_reasoning_and_error_result():
     messages = _chat(
         [
             {"role": "user", "content": "continue"},
             _reasoning("broken call only", "opaque-broken"),
             _call("broken", "{"),
             _call("valid"),
+            {
+                "type": "function_call_output",
+                "call_id": "broken",
+                "output": "Invalid JSON",
+            },
             {"type": "function_call_output", "call_id": "valid", "output": "17"},
         ]
     )
     assistant = next(message for message in messages if message.get("tool_calls"))
-    assert not assistant.get("reasoning_content")
-    assert "reasoning_details" not in assistant
+    assert assistant["reasoning_content"] == "broken call only"
+    assert [detail["data"] for detail in assistant["reasoning_details"]] == [
+        "opaque-broken"
+    ]
+    assert [
+        (call["id"], call["function"]["arguments"]) for call in assistant["tool_calls"]
+    ] == [("broken", "{"), ("valid", "{}")]
+    assert [
+        (message["tool_call_id"], message["content"])
+        for message in messages
+        if message["role"] == "tool"
+    ] == [("broken", "Invalid JSON"), ("valid", "17")]
 
 
 def test_completed_hosted_tool_history_remains_readable():

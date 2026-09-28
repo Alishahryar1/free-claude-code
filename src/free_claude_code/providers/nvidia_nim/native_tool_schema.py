@@ -1,4 +1,4 @@
-"""JSON Schema helpers for text-emitted Anthropic tool input."""
+"""JSON Schema helpers for NIM model-native tool arguments."""
 
 import json
 from collections.abc import Mapping

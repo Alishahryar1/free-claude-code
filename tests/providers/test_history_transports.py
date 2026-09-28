@@ -178,7 +178,7 @@ async def _harness(protocol, responder=None, *, key="a", chat_provider_factory=N
                 )
         extras = {}
 
-    def stream(wire, history):
+    def stream(wire, history, *, tools=None):
         options: dict[str, Any] = dict(
             input_tokens=0,
             request_id="history-test",
@@ -192,12 +192,14 @@ async def _harness(protocol, responder=None, *, key="a", chat_provider_factory=N
         if wire == "responses":
             return provider.stream_responses(
                 OpenAIResponsesRequest.model_validate(
-                    {"model": "requested", "input": history}
+                    {"model": "requested", "input": history, "tools": tools}
                 ),
                 **options,
             )
         return provider.stream_messages(
-            MessagesRequest.model_validate({"model": "requested", "messages": history}),
+            MessagesRequest.model_validate(
+                {"model": "requested", "messages": history, "tools": tools}
+            ),
             **options,
         )
 
@@ -224,12 +226,13 @@ def _carrier(history, wire):
         return next(
             item["encrypted_content"]
             for item in history
-            if item.get("type") == "reasoning"
+            if item.get("type") == "reasoning" and item.get("encrypted_content")
         )
     return next(
         block.get("signature", block.get("data"))
         for block in history[0]["content"]
         if block["type"] in {"thinking", "redacted_thinking"}
+        and block.get("signature", block.get("data"))
     )
 
 
@@ -516,13 +519,13 @@ def _chat_reasoning_events(deltas):
             "<tool_call>",
             "<function=lookup><parameter=query>x</parameter></function></tool_call>",
             "stop",
-            True,
+            False,
         ),
         (
             "● <function=lookup>",
             "<parameter=query>x</parameter></function>",
             "stop",
-            True,
+            False,
         ),
         ("<", None, "tool_calls", True),
         ("<", "", "length", False),

@@ -3,7 +3,6 @@
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import cast
 
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
@@ -32,6 +31,14 @@ class _Block:
     fragments: dict[str, list[str]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class CompletedMessagesBlock:
+    """Completed metadata and opaque streamed tool input, kept off the wire."""
+
+    body: JsonObject
+    tool_arguments: str | None = None
+
+
 class NativeMessagesStreamState:
     """Validate one upstream lifecycle without rewriting protocol identities."""
 
@@ -45,7 +52,7 @@ class NativeMessagesStreamState:
 
     def accept(
         self, event_type: str, payload: Mapping[str, JsonValue]
-    ) -> JsonObject | None:
+    ) -> CompletedMessagesBlock | None:
         if self.completed:
             raise NativeMessagesError("Messages event arrived after message_stop.")
         try:
@@ -216,21 +223,17 @@ class NativeMessagesStreamState:
             raise NativeMessagesError(
                 "Completed native thinking requires its signature."
             )
-        if block.body["type"] == "tool_use" and block.parts:
-            try:
-                value = cast(JsonValue, json.loads("".join(block.parts)))
-                if not isinstance(value, Mapping):
-                    raise NativeMessagesError(
-                        "Native tool arguments must decode to an object."
-                    )
-                json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
-            except (ValueError, UnicodeError, RecursionError) as exc:
-                raise NativeMessagesError(
-                    "Native tool arguments are incomplete or invalid JSON."
-                ) from exc
-            block.body["input"] = dict(value)
+        arguments = None
+        if block.body["type"] == "tool_use":
+            arguments = (
+                "".join(block.parts)
+                if block.parts
+                else json.dumps(
+                    block.body["input"], ensure_ascii=False, separators=(",", ":")
+                )
+            )
         self._blocks.pop(index)
-        return block.body
+        return CompletedMessagesBlock(block.body, arguments)
 
 
 class NativeMessagesRelay:
@@ -287,10 +290,12 @@ class NativeMessagesRelay:
                 return ""
             if (
                 completed is not None
-                and completed.get("type") == "thinking"
-                and completed.get("signature")
+                and completed.body.get("type") == "thinking"
+                and completed.body.get("signature")
             ):
-                signature = encode_replay(ReplayRecord(self._replay_origin, completed))
+                signature = encode_replay(
+                    ReplayRecord(self._replay_origin, completed.body)
+                )
                 prefix = _event(
                     "content_block_delta",
                     {

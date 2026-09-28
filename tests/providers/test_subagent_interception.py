@@ -1,4 +1,3 @@
-import copy
 import json
 
 import pytest
@@ -17,7 +16,6 @@ from free_claude_code.providers.openai_chat.stream_output import (
 )
 from free_claude_code.providers.openai_chat.tool_calls import (
     OpenAIToolCallAssembler,
-    iter_heuristic_tool_use_events,
 )
 
 
@@ -42,28 +40,6 @@ def _argument_deltas(frames: list[str]) -> list[str]:
         elif event.data.get("delta", {}).get("type") == "input_json_delta":
             parts.append(event.data["delta"]["partial_json"])
     return parts
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"run_in_background": True},
-        {"run_in_background": False},
-        {"run_in_background": None},
-        {"prompt": "inspect"},
-    ],
-)
-def test_heuristic_task_preserves_arguments(output, arguments):
-    tool_use = {
-        "type": "tool_use",
-        "id": "call_task",
-        "name": "Task",
-        "input": {**arguments, "nested": {"items": [1, 2]}},
-    }
-    original = copy.deepcopy(tool_use)
-    frames = list(iter_heuristic_tool_use_events(output, tool_use))
-    assert json.loads("".join(_argument_deltas(frames))) == original["input"]
-    assert tool_use == original
 
 
 @pytest.mark.parametrize("name", ["Task", "ordinary_tool"])
@@ -106,23 +82,12 @@ def test_tool_arguments_stream_without_name_specific_rewrites(output, name, argu
     assert output.tool_states[0].content == arguments
     assert output.tool_states[0].tool_id == "call_task"
     events = parse_sse_text("".join(frames))
-    if isinstance(output, ResponsesChatStreamOutput):
-        valid = arguments in (
-            '{"run_in_background":true,"prompt":"inspect"}',
-            "{}",
-            '{"run_in_background":null}',
-        )
-        assert any(e.event == "response.completed" for e in events) == valid
-        assert any(e.event == "response.failed" for e in events) != valid
-        if valid:
-            assert json.loads("".join(_argument_deltas(frames))) == json.loads(
-                arguments
-            )
-        else:
-            assert not _argument_deltas(frames)
-    else:
-        assert events[-1].event == "message_stop"
-        assert "".join(_argument_deltas(frames)) == arguments
+    assert events[-1].event == (
+        "response.completed"
+        if isinstance(output, ResponsesChatStreamOutput)
+        else "message_stop"
+    )
+    assert "".join(_argument_deltas(frames)) == arguments
 
 
 def test_task_argument_aliases_are_restored_recursively(output):

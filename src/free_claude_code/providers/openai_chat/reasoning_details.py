@@ -28,8 +28,6 @@ class StructuredReasoningStream:
     ) -> Iterator[str]:
         """Emit plaintext once while preserving every opaque reasoning detail."""
         details = _reasoning_details(delta)
-        if native_reasoning is not None:
-            self._native_parts.append(native_reasoning)
         if self._text_source is None:
             if native_reasoning:
                 self._text_source = "native"
@@ -38,6 +36,7 @@ class StructuredReasoningStream:
 
         if self._text_source == "native" and native_reasoning:
             yield from output.ensure_reasoning_block()
+            self._native_parts.append(native_reasoning)
             yield output.emit_reasoning_delta(native_reasoning)
 
         for detail in details:

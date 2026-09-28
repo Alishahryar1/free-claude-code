@@ -117,31 +117,6 @@ class OpenAIToolCallCollector:
         return tuple(completed)
 
 
-def iter_heuristic_tool_use_events(
-    output: ChatStreamOutput,
-    tool_use: dict[str, Any],
-    *,
-    tool_names: OpenAIToolNameCodec | None = None,
-) -> Iterator[str]:
-    """Emit SSE for one heuristic tool_use block."""
-    name = tool_use.get("name")
-    if tool_names is not None and isinstance(name, str):
-        decoded_name = tool_names.decode(name)
-        if decoded_name != name:
-            tool_use = {**tool_use, "name": decoded_name}
-    yield from output.close_content_blocks()
-    tool_index = len(output.tool_states)
-    output.ensure_tool_state(tool_index)
-    output.register_tool_name(tool_index, str(tool_use["name"]))
-    yield output.start_tool_block(
-        tool_index,
-        str(tool_use["id"]),
-        str(tool_use["name"]),
-    )
-    yield output.emit_tool_delta(tool_index, json.dumps(tool_use["input"]))
-    yield from output.stop_tool_block(tool_index)
-
-
 def tool_call_extra_content(tool_call: Any) -> dict[str, Any] | None:
     """Return provider-specific extra tool-call metadata from OpenAI objects."""
     if isinstance(tool_call, dict):

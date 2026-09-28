@@ -35,7 +35,6 @@ from free_claude_code.providers.openai_chat.stream_output import (
 from free_claude_code.providers.openai_chat.tool_calls import (
     OpenAIToolCallAssembler,
     OpenAIToolCallCollector,
-    iter_heuristic_tool_use_events,
 )
 from free_claude_code.providers.openai_chat.transport import (
     _OpenAIChatStreamRunner,
@@ -915,10 +914,8 @@ class TestStreamingExceptionHandling:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("finish_reason", ["tool_calls", "stop"])
-    async def test_heuristic_only_tool_stream_does_not_emit_fallback_text(
-        self, finish_reason
-    ):
-        """Text-parsed tool calls count as emitted tool output when finalizing."""
+    async def test_legacy_tool_markup_remains_visible_text(self, finish_reason):
+        """Legacy markup cannot manufacture executable tool calls."""
         provider = _make_provider()
         request = _make_request()
         heuristic_tool = (
@@ -941,7 +938,7 @@ class TestStreamingExceptionHandling:
             events = await _collect_stream(provider, request)
 
         parsed = parse_sse_text("".join(events))
-        assert any(
+        assert not any(
             event.event == "content_block_start"
             and event.data.get("content_block", {}).get("type") == "tool_use"
             for event in parsed
@@ -954,13 +951,18 @@ class TestStreamingExceptionHandling:
         )
         assert any(
             event.event == "message_delta"
-            and event.data.get("delta", {}).get("stop_reason") == "tool_use"
+            and event.data.get("delta", {}).get("stop_reason") == "end_turn"
             for event in parsed
         )
 
+        assert (
+            "".join(event.data.get("delta", {}).get("text", "") for event in parsed)
+            == heuristic_tool
+        )
+
     @pytest.mark.asyncio
-    async def test_function_tag_tool_stream_becomes_one_anthropic_tool_use(self):
-        """Exact control-only function tags use the established tool lifecycle."""
+    async def test_function_tag_markup_remains_text_beside_reasoning(self):
+        """Function-looking text stays visible after reasoning parsing."""
         provider = _make_provider()
         request = _make_request(
             tools=[
@@ -1017,9 +1019,9 @@ class TestStreamingExceptionHandling:
             and event.data.get("delta", {}).get("type") == "text_delta"
         )
 
-        assert [block["name"] for block in tool_starts] == ["Bash"]
-        assert json.loads(input_json) == {"command": "printf FCC_STEP_TOOL"}
-        assert visible_text == "I will invoke Bash now.\n"
+        assert tool_starts == []
+        assert input_json == ""
+        assert visible_text == raw_call.split("</think>", 1)[1]
         assert any(
             event.event == "content_block_delta"
             and event.data.get("delta", {}).get("type") == "thinking_delta"
@@ -1027,7 +1029,7 @@ class TestStreamingExceptionHandling:
         )
         assert any(
             event.event == "message_delta"
-            and event.data.get("delta", {}).get("stop_reason") == "tool_use"
+            and event.data.get("delta", {}).get("stop_reason") == "end_turn"
             for event in parsed
         )
 
@@ -1133,8 +1135,9 @@ class TestStreamingExceptionHandling:
         assert tool_starts == []
 
     @pytest.mark.asyncio
-    async def test_function_tag_candidate_is_reset_before_early_retry(self):
-        """An abandoned textual candidate cannot leak or duplicate after retry."""
+    @pytest.mark.parametrize("committed", [False, True])
+    async def test_literal_markup_respects_connection_commit_boundary(self, committed):
+        """Literal markup follows ordinary retry and continuation boundaries."""
         provider = _make_provider()
         request = _make_request(
             tools=[
@@ -1149,6 +1152,8 @@ class TestStreamingExceptionHandling:
             ]
         )
         abandoned = "<tool_call>\n<function=Bash>"
+        if committed:
+            abandoned += "x" * 66000
         complete = (
             "<tool_call>\n<function=Bash>\n<parameter=command>\n"
             "printf retry\n</parameter>\n</function>\n</tool_call>"
@@ -1184,8 +1189,10 @@ class TestStreamingExceptionHandling:
         ]
 
         assert mock_create.await_count == 2
-        assert visible_text == ""
-        assert [block["name"] for block in tool_starts] == ["Bash"]
+        assert visible_text == (abandoned + complete if committed else complete)
+        assert tool_starts == []
+
+        assert ("tools" not in mock_create.call_args_list[1].kwargs) == committed
 
     @pytest.mark.asyncio
     async def test_precommit_retry_discards_abandoned_tool_id_candidate(self):
@@ -2513,25 +2520,6 @@ class TestStreamingExceptionHandling:
 class TestProcessToolCall:
     """Tests for OpenAI tool-call assembly."""
 
-    def test_heuristic_tool_use_sse_marks_committed_tool_output(self):
-        """Heuristic tool blocks are emitted content, even without OpenAI tool state."""
-        output = _make_anthropic_output()
-        events = list(
-            iter_heuristic_tool_use_events(
-                output,
-                {
-                    "id": "toolu_heuristic",
-                    "name": "Read",
-                    "input": {"path": "test.py"},
-                },
-            )
-        )
-
-        event_text = "".join(events)
-        assert "tool_use" in event_text
-        assert output.has_emitted_tool_block()
-        assert output.committed_output
-
     def test_tool_call_with_id(self):
         """Tool call with id starts a tool block."""
         provider = _make_provider()
@@ -2855,31 +2843,6 @@ class TestProcessToolCall:
 
         assert calls is not None
         assert calls[0]["function"]["name"] == original
-
-    def test_heuristic_tool_call_restores_original_name(self):
-        """Complete heuristic calls share the same outbound name contract."""
-        original = "mcp__heuristic_output__" + "x" * 70
-        request = _make_request(
-            tools=[{"name": original, "input_schema": {"type": "object"}}]
-        )
-        codec = OpenAIToolNameCodec.from_request(request)
-        sse = _make_anthropic_output()
-
-        events = list(
-            iter_heuristic_tool_use_events(
-                sse,
-                {
-                    "id": "call_heuristic",
-                    "name": codec.encode(original),
-                    "input": {},
-                },
-                tool_names=codec,
-            )
-        )
-
-        event_text = "".join(events)
-        assert original in event_text
-        assert codec.encode(original) not in event_text
 
     def test_tool_call_id_arrives_before_name_still_emits_id_and_name(self):
         """Split-stream tool: id (no name) then name then args; id preserved on start."""

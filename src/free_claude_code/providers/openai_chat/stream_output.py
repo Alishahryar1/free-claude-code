@@ -12,7 +12,7 @@ from free_claude_code.core.anthropic.streaming import (
     ToolSchema,
     parse_complete_tool_input,
 )
-from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
     ReplayRecord,
@@ -34,11 +34,9 @@ from free_claude_code.core.openai_responses import (
     new_response_id,
     openai_error_from_failure,
     reasoning_output_item,
-    replay_unsafe_function_call_error,
     tool_item,
 )
 from free_claude_code.core.token_estimation import estimate_text_tokens
-from free_claude_code.core.trace import trace_event
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +104,9 @@ class ChatStreamOutput(ABC):
 
     def ensure_reasoning_block(self) -> list[str]:
         events: list[str] = []
-        if self._text_started:
+        if self._text_started and self.reasoning_replay_events is not None:
+            events.extend(self.finish_reasoning_group())
+        elif self._text_started:
             events.extend(self._stop_text_block())
             self._text_started = False
         if not self._reasoning_started:
@@ -138,8 +138,10 @@ class ChatStreamOutput(ABC):
         return list(self.reasoning_replay_events(self))
 
     def ensure_text_block(self) -> list[str]:
-        events = self.flush_reasoning_replay()
-        if self._reasoning_started:
+        events: list[str] = []
+        # Opaque reasoning can keep receiving fragments after visible text.
+        # Keep its block open until its complete replay record is available.
+        if self._reasoning_started and self.reasoning_replay_events is None:
             events.extend(self._stop_reasoning_block())
             self._reasoning_started = False
         if not self._text_started:
@@ -153,6 +155,16 @@ class ChatStreamOutput(ABC):
         return self._emit_text_delta(content)
 
     def close_content_blocks(self) -> list[str]:
+        if self.reasoning_replay_events is None:
+            return self._close_content_blocks()
+        events: list[str] = []
+        if self._text_started:
+            events.extend(self._stop_text_block())
+            self._text_started = False
+        return events
+
+    def finish_reasoning_group(self) -> list[str]:
+        """Finish a replay record before a new readable reasoning group starts."""
         events = self.flush_reasoning_replay()
         events.extend(self._close_content_blocks())
         return events
@@ -215,7 +227,7 @@ class ChatStreamOutput(ABC):
         return self._stop_tool_block(tool_index, state)
 
     def close_all_blocks(self) -> list[str]:
-        events = self.close_content_blocks()
+        events = self.finish_reasoning_group()
         for tool_index, state in self.tool_states.items():
             if state.open:
                 events.extend(self.stop_tool_block(tool_index))
@@ -231,7 +243,9 @@ class ChatStreamOutput(ABC):
         return self._content_started
 
     def final_stop_reason(self, fallback: str) -> str:
-        return "tool_use" if self.has_emitted_tool_block() else fallback
+        if self.has_emitted_tool_block():
+            return "tool_use"
+        return "end_turn" if fallback == "tool_use" else fallback
 
     def tool_block_for_tool_index(self, tool_index: int) -> ChatToolState | None:
         state = self.tool_states.get(tool_index)
@@ -452,14 +466,12 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         self._completer = ResponseBlockCompleter(
             self._ledger,
             events=self._events,
-            on_invalid_function_call=self._fail_invalid_function_call,
-            prepare_tool_arguments=tool_adapter.prepare_arguments,
         )
         self._text_state: TextBlockState | None = None
         self._reasoning_state: ReasoningBlockState | None = None
         self._tool_output_states: dict[int, ToolBlockState] = {}
         self._usage: dict[str, object] | None = None
-        self._provisional_error: dict[str, object] | None = None
+        self._conversion_failure: ExecutionFailure | None = None
         self._started = False
 
     def _response_payload(
@@ -629,16 +641,23 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         if output_state is None:
             return []
         self._ledger.pop_active_block(output_state.index)
-        return self._completer.complete_block(output_state)
+        try:
+            return self._completer.complete_block(output_state)
+        except ResponsesConversionError:
+            # Object-valued protocol conversions (such as tool search) cannot
+            # carry opaque malformed JSON. Ordinary function arguments can.
+            self._conversion_failure = ExecutionFailure(
+                FailureKind.UPSTREAM,
+                502,
+                "Provider tool output cannot be represented in the requested protocol.",
+                False,
+            )
+            return []
 
     def _finish_success(self, *, stop_reason: str, usage: ChatStreamUsage) -> list[str]:
         self._usage = _responses_usage(usage)
-        if self._provisional_error is not None:
-            response = self._response_payload(
-                status="failed",
-                error=self._provisional_error,
-            )
-            return [self._events.response_failed(response)]
+        if self._conversion_failure is not None:
+            return self._finish_failure(self._conversion_failure)
         if stop_reason in {"length", "max_tokens"}:
             response = self._response_payload(
                 status="incomplete",
@@ -654,21 +673,6 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
             error=openai_error_from_failure(failure),
         )
         return [self._events.response_failed(response)]
-
-    def _fail_invalid_function_call(
-        self, state: ToolBlockState, exc: ResponsesConversionError
-    ) -> list[str]:
-        trace_event(
-            stage="responses",
-            event="responses.output.function_call_invalid_arguments",
-            source="openai_responses",
-            call_id=state.call_id,
-            tool_name=state.name,
-            error_type=type(exc).__name__,
-        )
-        if self._provisional_error is None:
-            self._provisional_error = replay_unsafe_function_call_error()
-        return []
 
 
 def _responses_usage(usage: ChatStreamUsage) -> dict[str, object]:

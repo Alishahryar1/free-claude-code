@@ -41,30 +41,6 @@ def flatten_responses_tool_name(name: str, *, namespace: str | None = None) -> s
     return f"{combined[:prefix_len]}_{digest}"
 
 
-def parse_arguments(value: Any) -> dict[str, Any]:
-    if value is None or value == "":
-        return {}
-    if isinstance(value, dict):
-        return value
-    if not isinstance(value, str):
-        raise ResponsesConversionError("Responses function_call arguments must be JSON")
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ResponsesConversionError(
-            f"Responses function_call arguments are invalid JSON: {exc.msg}"
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise ResponsesConversionError(
-            "Responses function_call arguments must decode to an object"
-        )
-    return parsed
-
-
-def normalized_function_call_arguments(value: Any) -> str:
-    return json.dumps(parse_arguments(value), separators=(",", ":"))
-
-
 def custom_tool_input_text(value: Any) -> str:
     if value is None:
         return ""

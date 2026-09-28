@@ -269,13 +269,16 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
     ),
     CapabilityContract(
         "streaming_conversion",
-        "heuristic_tools",
-        "heuristic_tool_parser",
-        "free_claude_code.core.anthropic.tools",
-        "textual tool-call output",
+        "native_tools",
+        "native_tool_assembly",
+        "free_claude_code.providers.openai_chat.tool_calls",
+        "native structured tool-call output",
         "structured Anthropic tool_use blocks",
-        "text fallback when malformed",
-        ("tests/providers/test_parsers.py", "tests/contracts/test_stream_contracts.py"),
+        "raw arguments preserved for harness validation",
+        (
+            "tests/providers/test_native_tool_arguments.py",
+            "tests/contracts/test_stream_contracts.py",
+        ),
         (
             "test_live_tool_use_when_configured_model_supports_tools",
             "test_provider_reasoning_tool_continuation_e2e",

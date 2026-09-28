@@ -23,7 +23,6 @@ from free_claude_code.core.openai_chat import (
     image_tool_result_label,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
-from free_claude_code.core.trace import trace_event
 
 from .errors import ResponsesConversionError
 from .models import OpenAIResponsesRequest
@@ -35,7 +34,6 @@ from .tool_adaptation import ResponsesToolAdapter, ResponsesToolPolicy
 from .tools import (
     call_id_from_item,
     optional_str,
-    parse_arguments,
     required_str,
 )
 
@@ -107,7 +105,6 @@ class _ResponsesChatInputBuilder:
         self._structured_reasoning_details = structured_reasoning_details
         self._pending_reasoning = _PendingReasoning()
         self._pending_rich_output_parts: list[dict[str, object]] = []
-        self._quarantined_call_ids: set[str] = set()
         self._discovery_outputs: list[dict[str, object]] = []
 
     def add(self, item: JsonValue, *, source_type: str | None = None) -> None:
@@ -208,19 +205,6 @@ class _ResponsesChatInputBuilder:
         call_id = call_id_from_item(item)
         name = required_str(item.get("name"), "function_call.name")
         raw_arguments = item.get("arguments")
-        try:
-            parse_arguments(raw_arguments)
-        except ResponsesConversionError as exc:
-            self._quarantined_call_ids.add(call_id)
-            self._pending_reasoning.take()
-            trace_event(
-                stage="responses",
-                event="responses.input.function_call_quarantined",
-                source="openai_responses",
-                call_id=call_id,
-                error_type=type(exc).__name__,
-            )
-            return
         arguments = _arguments_text(raw_arguments)
 
         message: dict[str, object] | None = self._last_tool_call_message()
@@ -249,8 +233,6 @@ class _ResponsesChatInputBuilder:
     ) -> None:
         function = source_type != "custom_tool_call_output"
         call_id = call_id_from_item(item)
-        if function and call_id in self._quarantined_call_ids:
-            return
         if not self._pending_reasoning.empty:
             previous = self._last_tool_call_message()
             if previous is not None:
