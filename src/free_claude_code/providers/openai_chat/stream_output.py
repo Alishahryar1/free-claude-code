@@ -1,11 +1,11 @@
 """Chat-source output writers for Anthropic Messages and OpenAI Responses."""
 
-import json
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from free_claude_code.core.anthropic.streaming import (
     AnthropicStreamLedger,
@@ -14,6 +14,7 @@ from free_claude_code.core.anthropic.streaming import (
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import (
+    AssociatedReplayRecord,
     ReplayOrigin,
     ReplayRecord,
     encode_replay,
@@ -37,6 +38,17 @@ from free_claude_code.core.openai_responses import (
     tool_item,
 )
 from free_claude_code.core.token_estimation import estimate_text_tokens
+
+
+class ReasoningReplayLifecycle(Protocol):
+    @property
+    def active(self) -> bool: ...
+
+    def before_reasoning(self, output: ChatStreamOutput) -> Iterator[str]: ...
+
+    def before_content(self, output: ChatStreamOutput) -> Iterator[str]: ...
+
+    def finish(self, output: ChatStreamOutput) -> Iterator[str]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,9 +88,7 @@ class ChatStreamOutput(ABC):
     def __init__(self, *, input_tokens: int) -> None:
         self.input_tokens = input_tokens
         self.replay_origin: ReplayOrigin | None = None
-        self.reasoning_replay_events: (
-            Callable[[ChatStreamOutput], Iterator[str]] | None
-        ) = None
+        self.reasoning_replay: ReasoningReplayLifecycle | None = None
         self.tool_states: dict[int, ChatToolState] = {}
         self._text_parts: list[str] = []
         self._reasoning_parts: list[str] = []
@@ -104,9 +114,9 @@ class ChatStreamOutput(ABC):
 
     def ensure_reasoning_block(self) -> list[str]:
         events: list[str] = []
-        if self._text_started and self.reasoning_replay_events is not None:
-            events.extend(self.finish_reasoning_group())
-        elif self._text_started:
+        if self.reasoning_replay is not None:
+            events.extend(self.reasoning_replay.before_reasoning(self))
+        if self._text_started:
             events.extend(self._stop_text_block())
             self._text_started = False
         if not self._reasoning_started:
@@ -119,31 +129,41 @@ class ChatStreamOutput(ABC):
         self._reasoning_parts.append(content)
         return self._emit_reasoning_delta(content)
 
-    def emit_reasoning_replay(self, native: JsonObject) -> list[str]:
-        data = json.dumps(native["reasoning_details"], separators=(",", ":"))
-        if self.replay_origin is not None:
-            data = encode_replay(ReplayRecord(self.replay_origin, native))
-            if self._reasoning_started:
-                return self._attach_reasoning_replay(data)
-        events = self._close_content_blocks()
-        events.extend(self._emit_opaque_reasoning(data))
-        if data:
-            self._content_started = True
-        return events
+    def begin_reasoning_record(self) -> list[str]:
+        return []
 
-    def flush_reasoning_replay(self) -> list[str]:
-        """Save the complete record when parsed output ends a reasoning block."""
-        if self.reasoning_replay_events is None:
-            return []
-        return list(self.reasoning_replay_events(self))
+    def pause_reasoning_record(self, group_id: str, record: ReplayRecord) -> list[str]:
+        return []
 
-    def ensure_text_block(self) -> list[str]:
-        events: list[str] = []
-        # Opaque reasoning can keep receiving fragments after visible text.
-        # Keep its block open until its complete replay record is available.
-        if self._reasoning_started and self.reasoning_replay_events is None:
+    def complete_reasoning_record(
+        self, group_id: str, record: ReplayRecord
+    ) -> list[str]:
+        data = encode_replay(record)
+        if self._reasoning_started:
+            events = self._attach_reasoning_replay(data)
             events.extend(self._stop_reasoning_block())
             self._reasoning_started = False
+            return events
+        return self._emit_opaque_reasoning(data)
+
+    def flush_reasoning_replay(self) -> list[str]:
+        if self.reasoning_replay is None:
+            return []
+        return list(self.reasoning_replay.finish(self))
+
+    def _pause_reasoning(self) -> list[str]:
+        events: list[str] = []
+        if self.reasoning_replay is not None:
+            events.extend(self.reasoning_replay.before_content(self))
+        if self._reasoning_started and not (
+            self.reasoning_replay and self.reasoning_replay.active
+        ):
+            events.extend(self._stop_reasoning_block())
+            self._reasoning_started = False
+        return events
+
+    def ensure_text_block(self) -> list[str]:
+        events = self._pause_reasoning()
         if not self._text_started:
             events.extend(self._start_text_block())
             self._text_started = True
@@ -155,19 +175,19 @@ class ChatStreamOutput(ABC):
         return self._emit_text_delta(content)
 
     def close_content_blocks(self) -> list[str]:
-        if self.reasoning_replay_events is None:
-            return self._close_content_blocks()
-        events: list[str] = []
+        events = self._pause_reasoning()
         if self._text_started:
             events.extend(self._stop_text_block())
             self._text_started = False
         return events
 
     def finish_reasoning_group(self) -> list[str]:
-        """Finish a replay record before a new readable reasoning group starts."""
         events = self.flush_reasoning_replay()
         events.extend(self._close_content_blocks())
         return events
+
+    def finish_replay_carriers(self) -> list[str]:
+        return []
 
     def _close_content_blocks(self) -> list[str]:
         events: list[str] = []
@@ -231,6 +251,7 @@ class ChatStreamOutput(ABC):
         for tool_index, state in self.tool_states.items():
             if state.open:
                 events.extend(self.stop_tool_block(tool_index))
+        events.extend(self.finish_replay_carriers())
         return events
 
     def close_unclosed_blocks(self) -> list[str]:
@@ -361,6 +382,8 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
         log_raw_events: bool = False,
     ) -> None:
         super().__init__(input_tokens=input_tokens)
+        self._anchored_groups: set[str] = set()
+        self._pending_replay: list[str] = []
         self._ledger = AnthropicStreamLedger(
             message_id,
             model,
@@ -368,9 +391,56 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
             log_raw_events=log_raw_events,
         )
 
+    def pause_reasoning_record(self, group_id: str, record: ReplayRecord) -> list[str]:
+        if group_id in self._anchored_groups:
+            return []
+        if not self._reasoning_started and any(
+            state.open for state in self.tool_states.values()
+        ):
+            return []
+        self._anchored_groups.add(group_id)
+        data = encode_replay(
+            AssociatedReplayRecord(record.origin, record.native, group_id, "anchor")
+        )
+        self._content_started = True
+        if self._reasoning_started:
+            events = self._attach_reasoning_replay(data)
+            events.extend(self._stop_reasoning_block())
+            self._reasoning_started = False
+            return events
+        events = self._close_content_blocks()
+        events.extend(self._emit_opaque_reasoning(data))
+        return events
+
+    def complete_reasoning_record(
+        self, group_id: str, record: ReplayRecord
+    ) -> list[str]:
+        if group_id in self._anchored_groups:
+            self._anchored_groups.remove(group_id)
+            self._pending_replay.append(
+                encode_replay(
+                    AssociatedReplayRecord(
+                        record.origin, record.native, group_id, "final"
+                    )
+                )
+            )
+            return []
+        if self._reasoning_started:
+            return super().complete_reasoning_record(group_id, record)
+        self._pending_replay.append(encode_replay(record))
+        self._content_started = True
+        return []
+
+    def finish_replay_carriers(self) -> list[str]:
+        pending, self._pending_replay = self._pending_replay, []
+        return [
+            event for data in pending for event in self._emit_opaque_reasoning(data)
+        ]
+
     def close_unclosed_blocks(self) -> list[str]:
         events = self.flush_reasoning_replay()
         events.extend(self._ledger.close_unclosed_blocks())
+        events.extend(self.finish_replay_carriers())
         self._text_started = False
         self._reasoning_started = False
         for state in self.tool_states.values():
@@ -473,6 +543,13 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         self._usage: dict[str, object] | None = None
         self._conversion_failure: ExecutionFailure | None = None
         self._started = False
+
+    def begin_reasoning_record(self) -> list[str]:
+        if self._reasoning_started:
+            return []
+        self._reasoning_started = True
+        self._content_started = True
+        return self._start_reasoning_block()
 
     def _response_payload(
         self,

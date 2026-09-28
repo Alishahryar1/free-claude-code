@@ -58,6 +58,7 @@ from free_claude_code.providers.failure_policy import (
     is_retryable_stream_error,
 )
 from free_claude_code.providers.history_replay import (
+    normalize_messages_history,
     replay_origin,
     validate_history,
 )
@@ -121,7 +122,7 @@ class AnthropicMessagesTransport:
         capabilities: MessagesModelCapabilities,
         preserve_native_controls: bool,
     ) -> PreparedMessagesRequest:
-        validate_history(request.model_dump(mode="json"))
+        request = normalize_messages_history(request)
         try:
             options = resolve_messages_options(
                 model=request.model,

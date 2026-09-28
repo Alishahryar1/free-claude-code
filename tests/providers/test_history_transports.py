@@ -15,7 +15,11 @@ from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.history_replay import decode_replay, encode_replay
+from free_claude_code.core.history_replay import (
+    decode_replay,
+    encode_replay,
+    resolve_messages_replay,
+)
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.open_router import OpenRouterProvider
@@ -230,8 +234,9 @@ def _carrier(history, wire):
         )
     return next(
         block.get("signature", block.get("data"))
-        for block in history[0]["content"]
-        if block["type"] in {"thinking", "redacted_thinking"}
+        for block in resolve_messages_replay(history[0]["content"])
+        if isinstance(block, dict)
+        and block["type"] in {"thinking", "redacted_thinking"}
         and block.get("signature", block.get("data"))
     )
 
@@ -748,6 +753,8 @@ async def test_chat_plaintext_beside_encrypted_details_survives_switching(
             if wire == "responses":
                 saved[0]["encrypted_content"] = carrier
             else:
+                # Model an older complete v1 transcript before removing its readable field.
+                saved[0]["content"] = resolve_messages_replay(saved[0]["content"])
                 saved[0]["content"][0]["signature"] = carrier
         else:
             assert record.native["reasoning_content"] == text

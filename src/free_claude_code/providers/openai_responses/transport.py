@@ -54,6 +54,7 @@ from free_claude_code.providers.failure_policy import (
     reports_context_window_incomplete,
 )
 from free_claude_code.providers.history_replay import (
+    normalize_messages_history,
     replay_origin,
     validate_history,
 )
@@ -197,7 +198,7 @@ class OpenAIResponsesTransport:
         model_info: ProviderModelInfo | None = None,
         can_disable_reasoning: bool = True,
     ) -> JsonObject:
-        validate_history(request.model_dump(mode="json"))
+        request = normalize_messages_history(request)
         request, reasoning = prepare_messages_reasoning(
             request,
             reasoning,

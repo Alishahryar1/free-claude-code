@@ -2,7 +2,7 @@
 
 import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -13,6 +13,7 @@ from .openai_chat import ChatToolResultImages
 
 type HistoryProtocol = Literal["responses", "messages", "chat"]
 _PREFIX = "fcc:history:v1:"
+_ASSOCIATED_PREFIX = "fcc:history:v2:"
 _LEGACY_PREFIX = "fcc:anthropic-reasoning:v1:"
 
 
@@ -52,6 +53,12 @@ class ReplayRecord:
     native: JsonObject
 
 
+@dataclass(frozen=True, slots=True)
+class AssociatedReplayRecord(ReplayRecord):
+    group_id: str
+    part: Literal["anchor", "final"]
+
+
 def _json_copy(value: object) -> JsonObject:
     if not isinstance(value, Mapping):
         raise HistoryReplayError("History replay must contain a native object.")
@@ -86,15 +93,22 @@ def is_replay(value: object) -> bool:
 def encode_replay(record: ReplayRecord) -> str:
     """Preserve native state, without claiming to encrypt or authenticate it."""
     payload = _json_copy({"origin": asdict(record.origin), "native": record.native})
-    _validate_record(payload)
+    associated = isinstance(record, AssociatedReplayRecord)
+    if associated:
+        payload.update(group_id=record.group_id, part=record.part)
+    _validate_record(payload, associated=associated)
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    return _PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    prefix = _ASSOCIATED_PREFIX if associated else _PREFIX
+    return prefix + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def _validate_record(payload: JsonObject) -> ReplayRecord:
+def _validate_record(payload: JsonObject, *, associated: bool = False) -> ReplayRecord:
     origin, native = payload.get("origin"), payload.get("native")
+    fields = (
+        {"origin", "native", "group_id", "part"} if associated else {"origin", "native"}
+    )
     if (
-        set(payload) != {"origin", "native"}
+        set(payload) != fields
         or not isinstance(origin, dict)
         or set(origin) != {"provider", "protocol", "endpoint", "connection", "model"}
         or not all(isinstance(value, str) for value in origin.values())
@@ -129,7 +143,7 @@ def _validate_record(payload: JsonObject) -> ReplayRecord:
             )
     if protocol == "chat" and not isinstance(native.get("reasoning_details"), list):
         raise HistoryReplayError("Chat replay requires structured reasoning details.")
-    return ReplayRecord(
+    record = ReplayRecord(
         ReplayOrigin(
             str(origin["provider"]),
             protocol,
@@ -139,11 +153,32 @@ def _validate_record(payload: JsonObject) -> ReplayRecord:
         ),
         native,
     )
+    if associated:
+        group_id, part = payload.get("group_id"), payload.get("part")
+        if (
+            protocol != "chat"
+            or not isinstance(group_id, str)
+            or not group_id
+            or not isinstance(part, str)
+            or part not in {"anchor", "final"}
+        ):
+            raise HistoryReplayError("Invalid reasoning replay association.")
+        return AssociatedReplayRecord(
+            record.origin,
+            record.native,
+            group_id,
+            part,
+        )
+    return record
 
 
 def decode_replay(value: str) -> ReplayRecord:
     prefix = next(
-        (prefix for prefix in (_PREFIX, _LEGACY_PREFIX) if value.startswith(prefix)),
+        (
+            prefix
+            for prefix in (_PREFIX, _ASSOCIATED_PREFIX, _LEGACY_PREFIX)
+            if value.startswith(prefix)
+        ),
         None,
     )
     if prefix is None:
@@ -175,7 +210,54 @@ def decode_replay(value: str) -> ReplayRecord:
             },
             "native": payload["block"],
         }
-    return _validate_record(payload)
+    return _validate_record(payload, associated=prefix == _ASSOCIATED_PREFIX)
+
+
+def resolve_messages_replay(content: Sequence[JsonValue]) -> list[JsonValue]:
+    """Join late metadata within one assistant message on a fresh copy."""
+    blocks = deepcopy(list(content))
+    groups: dict[str, dict[str, tuple[int, str, AssociatedReplayRecord]]] = {}
+    for index, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            continue
+        key = (
+            "signature"
+            if block.get("type") == "thinking"
+            else "data"
+            if block.get("type") == "redacted_thinking"
+            else None
+        )
+        if key is None or not is_replay(value := block.get(key)):
+            continue
+        record = decode_replay(cast(str, value))
+        if not isinstance(record, AssociatedReplayRecord):
+            continue
+        group = groups.setdefault(record.group_id, {})
+        if record.part in group or any(
+            previous.origin != record.origin for _, _, previous in group.values()
+        ):
+            raise HistoryReplayError("Conflicting reasoning replay association.")
+        if record.part == "final" and key != "data":
+            raise HistoryReplayError(
+                "Final reasoning replay requires a redacted carrier."
+            )
+        group[record.part] = (index, key, record)
+    removed: set[int] = set()
+    for group in groups.values():
+        anchor, final = group.get("anchor"), group.get("final")
+        if anchor and final and anchor[0] >= final[0]:
+            raise HistoryReplayError("Reasoning replay final precedes its anchor.")
+        target = anchor or final
+        assert target is not None
+        index, key, record = target
+        if final:
+            record = final[2]
+        block = blocks[index]
+        assert isinstance(block, dict)
+        block[key] = encode_replay(ReplayRecord(record.origin, record.native))
+        if anchor and final:
+            removed.add(final[0])
+    return [block for index, block in enumerate(blocks) if index not in removed]
 
 
 def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:

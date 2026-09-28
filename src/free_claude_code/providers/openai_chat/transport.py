@@ -206,7 +206,7 @@ class _OpenAIChatStreamAssembler:
             else None
         )
         if self._structured_reasoning is not None:
-            self._output.reasoning_replay_events = self._structured_reasoning.flush
+            self._output.reasoning_replay = self._structured_reasoning
         self._finish_reason: Any = None
         self._usage_info: Any = None
         self._native_reasoning_seen = False
@@ -1428,7 +1428,9 @@ class _OpenAIChatStreamRunner:
         )
         text_suffix = continuation_suffix(partial_text, recovered.text)
         thinking_suffix = continuation_suffix(partial_thinking, recovered.thinking)
-        events: list[str] = []
+        if not (thinking_suffix or text_suffix or recovered.tool_calls):
+            return None
+        events = output.flush_reasoning_replay()
         if thinking_suffix:
             events.extend(output.ensure_reasoning_block())
             events.append(output.emit_reasoning_delta(thinking_suffix))

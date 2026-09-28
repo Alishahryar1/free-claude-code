@@ -2,22 +2,59 @@
 
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import Any, Literal, cast
+from uuid import uuid4
 
-from free_claude_code.core.history_replay import readable_reasoning
+from free_claude_code.core.history_replay import (
+    ReplayOrigin,
+    ReplayRecord,
+    readable_reasoning,
+)
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .stream_output import ChatStreamOutput
 
 
+@dataclass(slots=True)
+class _ReasoningGroup:
+    origin: ReplayOrigin
+    id: str = field(default_factory=lambda: uuid4().hex)
+    details: list[dict[str, Any]] = field(default_factory=list)
+    slots: dict[tuple[object, object], int] = field(default_factory=dict)
+    native_parts: list[str] = field(default_factory=list)
+    after_content: bool = False
+
+    def snapshot(self) -> ReplayRecord:
+        native: JsonObject = {
+            "reasoning_details": cast(list[JsonValue], deepcopy(self.details))
+        }
+        if self.native_parts:
+            native["reasoning_content"] = "".join(self.native_parts)
+        return ReplayRecord(self.origin, native)
+
+
 class StructuredReasoningStream:
-    """Reconcile alternate plaintext reasoning representations for one stream."""
+    """Collect replay groups independently of their visible wire blocks."""
 
     def __init__(self) -> None:
         self._text_source: Literal["native", "details"] | None = None
-        self._details: list[dict[str, Any]] = []
-        self._slots: dict[tuple[object, object], int] = {}
-        self._native_parts: list[str] = []
+        self._group: _ReasoningGroup | None = None
+
+    @property
+    def active(self) -> bool:
+        return self._group is not None
+
+    def before_reasoning(self, output: ChatStreamOutput) -> Iterator[str]:
+        if self._group is not None and self._group.after_content:
+            yield from self.finish(output)
+
+    def before_content(self, output: ChatStreamOutput) -> Iterator[str]:
+        if self._group is not None and not self._group.after_content:
+            self._group.after_content = True
+            yield from output.pause_reasoning_record(
+                self._group.id, self._group.snapshot()
+            )
 
     def events(
         self,
@@ -26,35 +63,45 @@ class StructuredReasoningStream:
         *,
         native_reasoning: str | None,
     ) -> Iterator[str]:
-        """Emit plaintext once while preserving every opaque reasoning detail."""
         details = _reasoning_details(delta)
         if self._text_source is None:
             if native_reasoning:
                 self._text_source = "native"
             elif any(_reasoning_detail_text(detail) for detail in details):
                 self._text_source = "details"
-
-        if self._text_source == "native" and native_reasoning:
-            yield from output.ensure_reasoning_block()
-            self._native_parts.append(native_reasoning)
-            yield output.emit_reasoning_delta(native_reasoning)
-
+        visible = (
+            [native_reasoning]
+            if self._text_source == "native" and native_reasoning
+            else [
+                text for detail in details if (text := _reasoning_detail_text(detail))
+            ]
+            if self._text_source == "details"
+            else []
+        )
+        if visible:
+            yield from self.before_reasoning(output)
+        if self._group is None and (native_reasoning is not None or details):
+            if output.replay_origin is None:
+                raise AssertionError(
+                    "Structured reasoning requires attempt provenance."
+                )
+            self._group = _ReasoningGroup(output.replay_origin)
+            yield from output.begin_reasoning_record()
+        group = self._group
+        if group is None:
+            return
+        if native_reasoning is not None:
+            group.native_parts.append(native_reasoning)
         for detail in details:
-            if self._text_source == "details":
-                text = _reasoning_detail_text(detail)
-                if text:
-                    yield from output.ensure_reasoning_block()
-                    yield output.emit_reasoning_delta(text)
-
             if isinstance(detail, Mapping):
                 value = deepcopy(dict(detail))
                 identity = value.get("index", value.get("id"))
                 key = (identity, value.get("type"))
-                if isinstance(identity, str | int) and key in self._slots:
-                    current = self._details[self._slots[key]]
-                    for field, part in value.items():
+                if isinstance(identity, str | int) and key in group.slots:
+                    current = group.details[group.slots[key]]
+                    for name, part in value.items():
                         if (
-                            field
+                            name
                             in {
                                 "text",
                                 "summary",
@@ -64,27 +111,23 @@ class StructuredReasoningStream:
                                 "signature",
                             }
                             and isinstance(part, str)
-                            and isinstance(current.get(field), str)
+                            and isinstance(current.get(name), str)
                         ):
-                            current[field] += part
+                            current[name] += part
                         else:
-                            current[field] = part
+                            current[name] = part
                 else:
                     if isinstance(identity, str | int):
-                        self._slots[key] = len(self._details)
-                    self._details.append(value)
+                        group.slots[key] = len(group.details)
+                    group.details.append(value)
+        for text in visible:
+            yield from output.ensure_reasoning_block()
+            yield output.emit_reasoning_delta(text)
 
-    def flush(self, output: ChatStreamOutput) -> Iterator[str]:
-        if self._details:
-            native: JsonObject = {
-                "reasoning_details": cast(list[JsonValue], self._details)
-            }
-            if self._native_parts:
-                native["reasoning_content"] = "".join(self._native_parts)
-            yield from output.emit_reasoning_replay(native)
-            self._details.clear()
-            self._slots.clear()
-        self._native_parts.clear()
+    def finish(self, output: ChatStreamOutput) -> Iterator[str]:
+        group, self._group = self._group, None
+        if group is not None:
+            yield from output.complete_reasoning_record(group.id, group.snapshot())
 
 
 def _reasoning_details(delta: Any) -> Sequence[Any]:
