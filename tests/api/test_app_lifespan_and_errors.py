@@ -56,7 +56,7 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner():
         patch.object(manager, "start_model_list_refresh") as start_refresh,
         patch.object(manager, "close", new=AsyncMock()),
         patch(
-            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            "free_claude_code.runtime.messaging_service.messaging_platform_factory.create_messaging_components",
             return_value=None,
         ),
         patch.object(uvicorn_logger, "info") as log_info,
@@ -165,7 +165,7 @@ async def test_runtime_startup_schedules_catalog_without_a_network_barrier():
         ) as refresh,
         patch.object(manager, "close", new=AsyncMock()),
         patch(
-            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            "free_claude_code.runtime.messaging_service.messaging_platform_factory.create_messaging_components",
             return_value=None,
         ),
     ):
@@ -386,11 +386,15 @@ async def test_bootstrap_constructs_isolated_runtime_resource_graphs(
         assert isinstance(first_provider, NvidiaNimProvider)
         assert isinstance(second_provider, NvidiaNimProvider)
         assert first_provider._admission is not second_provider._admission
-        assert first.runtime._transcriber is second.runtime._transcriber is None
-        assert first.runtime._transcriber_factory is not None
-        assert second.runtime._transcriber_factory is not None
-        first_voice = await first.runtime._transcriber_factory(settings)
-        second_voice = await second.runtime._transcriber_factory(settings)
+        assert (
+            first.runtime._messaging._transcriber
+            is second.runtime._messaging._transcriber
+            is None
+        )
+        assert first.runtime._messaging._transcriber_factory is not None
+        assert second.runtime._messaging._transcriber_factory is not None
+        first_voice = await first.runtime._messaging._transcriber_factory(settings)
+        second_voice = await second.runtime._messaging._transcriber_factory(settings)
         assert first_voice is not None and second_voice is not None
         assert first_voice is not second_voice
         await first_voice.close()

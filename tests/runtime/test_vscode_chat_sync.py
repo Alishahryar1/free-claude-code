@@ -57,7 +57,7 @@ async def runtime(request):
 
 async def settle(runtime):
     await runtime.provider_manager.wait_for_catalog()
-    task = runtime._vscode_update.task
+    task = runtime._integrations._vscode_update.task
     if task:
         await asyncio.wait_for(asyncio.shield(task), 5)
 
@@ -76,7 +76,7 @@ async def test_catalog_updates_connected_file_and_disconnect_stays_removed(runti
     assert {m["id"] for m in models} == {"nvidia_nim/one", "nvidia_nim/two"}
     assert (await runtime.vscode_chat_status())["connected"]
     await runtime.disconnect_vscode_chat()
-    runtime._queue_vscode_refresh()
+    runtime._integrations.catalog_changed()
     await settle(runtime)
     assert json.loads(path.read_text()) == []
     assert not (await runtime.vscode_chat_status())["connected"]
@@ -101,7 +101,7 @@ async def test_update_arriving_during_write_is_not_lost(runtime, monkeypatch):
 
     monkeypatch.setattr(vscode, "configure", held)
     try:
-        runtime._queue_vscode_refresh()
+        runtime._integrations.catalog_changed()
         await asyncio.wait_for(entered.wait(), 5)
         runtime.provider_manager.cache_model_infos(
             "nvidia_nim", (ProviderModelInfo("late"),)
@@ -126,7 +126,7 @@ async def test_bad_file_does_not_fail_catalog_and_disconnect_needs_no_catalog(
     path.write_text("{broken")
     await runtime.refresh_vscode_chat()
     await settle(runtime)
-    assert runtime._vscode_update.state == "failed"
+    assert runtime._integrations._vscode_update.state == "failed"
     assert runtime.provider_manager.catalog_status()["catalog_file"] == "ready"
     path.unlink()
     await runtime.connect_vscode_chat()
@@ -158,7 +158,7 @@ async def test_startup_refreshes_owned_group_and_only_writes_once(runtime):
     await runtime.refresh_vscode_chat()
     await settle(runtime)
     assert path.stat().st_mtime_ns == before
-    assert not runtime._vscode_update.changed
+    assert not runtime._integrations._vscode_update.changed
 
 
 @pytest.mark.asyncio
@@ -239,7 +239,7 @@ async def test_codex_publication_failure_does_not_block_vscode(runtime):
     await asyncio.gather(*runtime.provider_manager._publications)
     await settle(runtime)
     assert runtime.provider_manager.catalog_status()["catalog_file"] == "failed"
-    assert runtime._vscode_update.state == "ready"
+    assert runtime._integrations._vscode_update.state == "ready"
     assert "nvidia_nim/new" in [
         m["id"] for m in json.loads(vscode.config_path().read_text())[0]["models"]
     ]

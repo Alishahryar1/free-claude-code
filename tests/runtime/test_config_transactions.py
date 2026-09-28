@@ -6,10 +6,71 @@ import pytest
 
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.harnesses import claude_integration
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.runtime.test_application_runtime import TrackingFactory, _prepared, _settings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_writer", [False, True])
+async def test_integration_write_finishes_before_configuration_publication(
+    tmp_path, monkeypatch, cancel_writer
+):
+    factory = TrackingFactory()
+    manager = ProviderRuntimeManager(
+        _settings("nvidia_nim/old"), runtime_factory=factory
+    )
+    configuration = AsyncMock(spec=ConfigurationService)
+    prepared = _prepared(_settings("nvidia_nim/new"), tmp_path)
+    configuration.prepare.return_value = prepared
+    configuration.commit.return_value = prepared.applied_response()
+    runtime = ApplicationRuntime(manager, configuration=configuration, transcriber=None)
+    entered, release = threading.Event(), threading.Event()
+    apply_started = asyncio.Event()
+    configure = claude_integration.configure
+
+    def held(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return configure(*args, **kwargs)
+
+    async def apply_config():
+        apply_started.set()
+        return await runtime.apply_admin_config({})
+
+    monkeypatch.setattr(claude_integration, "configure", held)
+    monkeypatch.setattr(
+        "free_claude_code.runtime.application.check_credentials",
+        AsyncMock(return_value=()),
+    )
+    writer = asyncio.create_task(runtime.connect_claude_vscode())
+    apply = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        if cancel_writer:
+            writer.cancel()
+        apply = asyncio.create_task(apply_config())
+        await asyncio.wait_for(apply_started.wait(), 5)
+        configuration.prepare.assert_not_awaited()
+        configuration.commit.assert_not_awaited()
+        assert manager.current_generation_id == 1
+        assert not writer.done()
+        release.set()
+        if cancel_writer:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(writer, 5)
+        else:
+            assert (await asyncio.wait_for(writer, 5))["connected"] is True
+        assert (await asyncio.wait_for(apply, 5))["applied"] is True
+        assert manager.current_generation_id == 2
+    finally:
+        release.set()
+        await asyncio.gather(
+            writer, *([apply] if apply else []), return_exceptions=True
+        )
+        await runtime.close()
 
 
 @pytest.mark.asyncio

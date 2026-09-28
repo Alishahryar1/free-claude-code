@@ -562,12 +562,12 @@ async def test_startup_partial_import_preserves_links_scopes_and_code(
     )
     try:
         with patch(
-            "free_claude_code.runtime.application.messaging_state_dir_path",
+            "free_claude_code.runtime.messaging_service.messaging_state_dir_path",
             return_value=str(tmp_path),
         ):
-            await runtime._initialize_messaging_storage()
-        assert runtime._messaging_storage_error is None
-        assert runtime._messaging_warning
+            await runtime._messaging._initialize_messaging_storage()
+        assert runtime._messaging._messaging_storage_error is None
+        assert runtime._messaging._messaging_warning
         assert (await storage.load_conversation_snapshot()).trees == {
             valid.identity: valid,
             inactive.identity: inactive,
