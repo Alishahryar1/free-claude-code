@@ -2055,21 +2055,23 @@ def test_library_reconnect_removes_missed_deletion_and_searches_beyond_first_pag
 ):
     control_feed(page)
 
-    async def seed():
-        first = await code_control.service.create_session(
-            str(uuid.uuid4()), str(tmp_path)
-        )
-        await code_control.service.update_settings(
-            first.id, first.revision, {"title": "Needle project"}
-        )
-        for _ in range(26):
-            await code_control.service.create_session(str(uuid.uuid4()), str(tmp_path))
-        return first.id
-
     # Start the isolated service before seeding it.
     page.goto(f"{admin_base_url}/admin/code")
     expect(page.locator("#codeNew")).to_be_enabled()
-    session_id = code_control.run(seed())
+    # Bound each operation, not the cumulative cost of filling a whole page.
+    first = code_control.run(
+        code_control.service.create_session(str(uuid.uuid4()), str(tmp_path))
+    )
+    code_control.run(
+        code_control.service.update_settings(
+            first.id, first.revision, {"title": "Needle project"}
+        )
+    )
+    for _ in range(26):
+        code_control.run(
+            code_control.service.create_session(str(uuid.uuid4()), str(tmp_path))
+        )
+    session_id = first.id
     page.get_by_role("searchbox", name="Search titles and folders").fill("Needle")
     expect(page.locator(".session-card")).to_have_count(1)
     expect(page.locator(".session-card")).to_contain_text("Needle project")
