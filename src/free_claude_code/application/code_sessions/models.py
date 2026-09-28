@@ -12,7 +12,19 @@ type RunStatus = Literal[
     "preparing", "running", "stopping", "completed", "interrupted", "failed"
 ]
 ACTIVE_RUN_STATUSES = frozenset({"preparing", "running", "stopping"})
-type CodeMode = Literal["config", "ask", "auto_review", "full_access"]
+type HarnessId = Literal["codex", "claude"]
+type CodeMode = Literal[
+    "config",
+    "ask",
+    "auto_review",
+    "full_access",
+    "default",
+    "acceptEdits",
+    "plan",
+    "dontAsk",
+    "auto",
+    "bypassPermissions",
+]
 
 
 def now_ms() -> int:
@@ -23,13 +35,26 @@ class Record(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class CodeModeOption(Record):
+    id: CodeMode
+    name: str
+
+
+class HarnessCapabilities(Record):
+    generation: str
+    model: str
+    configuration_key: str
+    reasoning_efforts: tuple[str, ...] = ()
+    modes: tuple[CodeModeOption, ...] = ()
+
+
 class CodeSession(Record):
     id: str
     cwd: str
     model: str
     reasoning_effort: str | None = None
     mode: CodeMode = "config"
-    harness: Literal["codex"] = "codex"
+    harness: HarnessId = "codex"
     title: str = "New code session"
     auto_title: bool = True
     native_thread_id: str | None = None
@@ -106,6 +131,7 @@ class CodeDetail:
     runs: tuple[CodeRun, ...] = ()
     active_prompt_ids: tuple[str, ...] = ()
     active_review_ids: tuple[str, ...] = ()
+    capabilities: HarnessCapabilities | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +178,17 @@ class CodeCatalog:
     models: tuple[CodeModel, ...]
 
 
+class CodeHarness(Record):
+    id: HarnessId
+    name: str
+    available: bool
+    message: str | None
+    prepare_on_open: bool
+    modes: tuple[CodeModeOption, ...]
+    default_model: str
+    models: tuple[CodeModel, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class CodePage:
     sessions: tuple[CodeSession, ...]
@@ -193,6 +230,7 @@ class HarnessEvent:
         "resolved",
         "error",
         "notice",
+        "session_notice",
         "context_usage",
         "closed",
     ]
@@ -222,6 +260,7 @@ class NativeThread:
     id: str
     turns: tuple[NativeTurn, ...] = ()
     permission_defaults: JsonObject | None = None
+    history_notice: str | None = None
 
 
 class CodeError(Exception):

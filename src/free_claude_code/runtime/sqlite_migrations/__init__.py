@@ -14,6 +14,7 @@ from . import (
     v0003_code_context_usage,
     v0004_messaging_schema,
     v0005_active_code_prompts,
+    v0006_code_harnesses,
 )
 
 MIGRATIONS: tuple[tuple[int, Callable[[sqlite3.Connection], None]], ...] = (
@@ -22,4 +23,5 @@ MIGRATIONS: tuple[tuple[int, Callable[[sqlite3.Connection], None]], ...] = (
     (3, v0003_code_context_usage.upgrade),
     (4, v0004_messaging_schema.upgrade),
     (5, v0005_active_code_prompts.upgrade),
+    (6, v0006_code_harnesses.upgrade),
 )

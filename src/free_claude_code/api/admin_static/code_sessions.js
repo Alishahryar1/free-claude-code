@@ -94,6 +94,44 @@
       });
     return records.get(id);
   }
+  function harnessFor(record) {
+    return harnesses.find((entry) => entry.id === record?.session?.harness);
+  }
+  function harnessName(record = records.get(selected)) {
+    return harnessFor(record)?.name || record?.session?.harness || "coding agent";
+  }
+  function sessionCatalog(record) {
+    const capabilities = record?.capabilities;
+    return (harnessFor(record)?.models || []).map((model) =>
+      capabilities?.model === model.id && harnessFor(record)?.prepare_on_open
+        ? { ...model, reasoning_efforts: capabilities.reasoning_efforts }
+        : model,
+    );
+  }
+  function preparationKey(record) {
+    return JSON.stringify([epoch, record.session.model, record.session.reasoning_effort, record.session.mode]);
+  }
+  async function prepare(record) {
+    if (!ready(record) || !available || !catalogLoaded || !harnessFor(record)?.available || !harnessFor(record)?.prepare_on_open || busy(record) || pending(record) || record.preparing) return;
+    const key = preparationKey(record), token = syncToken;
+    if (record.preparedKey === key || record.prepareError) return;
+    record.preparing = true;
+    renderControls();
+    try {
+      const data = await api(`${base}/sessions/${record.id}/prepare`, {
+        method: "POST", body: JSON.stringify({expected_epoch: epoch, expected_revision: record.session.revision}),
+      });
+      if (token === syncToken && !deleted.has(record.id) && key === preparationKey(record)) {
+        merge(data);
+        record.preparedKey = key;
+      }
+    } catch (error) {
+      if (token === syncToken && !deleted.has(record.id) && key === preparationKey(record)) record.prepareError = error.message;
+    } finally {
+      record.preparing = false;
+      if (selected === record.id) render();
+    }
+  }
   function busy(record) {
     return activeStatuses.has(record?.run?.status);
   }
@@ -162,8 +200,15 @@
     const record = get(id),
       version = data.version;
     if (version >= record.version) {
-      if (!record.session || data.session.revision >= record.session.revision)
+      if (!record.session || data.session.revision >= record.session.revision) {
+        if (record.session && ["model", "reasoning_effort", "mode"].some((key) => record.session[key] !== data.session[key])) {
+          record.capabilities = null;
+          record.prepareError = "";
+          record.preparedKey = null;
+        }
         record.session = data.session;
+      }
+      if (Object.hasOwn(data, "capabilities")) record.capabilities = data.capabilities;
       record.run = data.run;
       if (data.active_review_ids)
         record.activeReviewIds = new Set(data.active_review_ids);
@@ -378,8 +423,8 @@
       available = data.available;
       catalogPhase = data.startup?.catalog || "ready";
       if (catalogPhase === "ready" || !catalogLoaded) {
-        catalog = data.models;
         harnesses = data.harnesses;
+        catalog = sessionCatalog(records.get(selected));
       }
       if (catalogPhase === "ready") catalogLoaded = true;
       availabilityNotice = data.message || "";
@@ -470,6 +515,7 @@
     });
     for (const type of [
       "session.updated",
+      "session.capabilities",
       "session.deleted",
       "run.updated",
       "item.updated",
@@ -714,7 +760,13 @@
       "New code session",
       (form, context) => {
         const harness = element("select");
-        harness.append(new Option("Codex", "codex"));
+        for (const entry of harnesses) {
+          const option = new Option(entry.name + (entry.available ? "" : " (unavailable)"), entry.id);
+          option.disabled = !entry.available;
+          option.title = entry.message || "";
+          harness.append(option);
+        }
+        harness.value = harnesses.find((entry) => entry.id === "codex" && entry.available)?.id || harnesses.find((entry) => entry.available)?.id || "";
         const folder = element("input");
         folder.required = true;
         folder.autocomplete = "off";
@@ -778,7 +830,7 @@
             "code-notice",
           ),
         );
-        return readFolder;
+        return () => ({cwd: readFolder(), harness: harness.value});
       },
       "Create session",
       async (readFolder, context) => {
@@ -786,8 +838,7 @@
           method: "POST",
           body: JSON.stringify({
             session_id: id,
-            harness: "codex",
-            cwd: readFolder(),
+            ...readFolder(),
           }),
         });
         if (context.isOpen()) navigate(id);
@@ -815,7 +866,13 @@
         !deleted.has(id) &&
         session.revision > (records.get(id)?.session?.revision || 0)
       )
-        get(id).session = session;
+        {
+          const record = get(id);
+          record.session = session;
+          record.capabilities = null;
+          record.preparedKey = null;
+          record.prepareError = "";
+        }
     } catch (error) {
       if (selected === id) {
         notice = error.message;
@@ -834,7 +891,12 @@
   }
   function selectionError(record) {
     if (!record?.session) return "";
+    const descriptor = harnessFor(record);
+    if (!descriptor?.available) return descriptor?.message || "This harness is unavailable.";
+    if (record.preparing) return "Initializing " + harnessName(record) + "…";
+    if (record.prepareError) return record.prepareError;
     if (providerDraft) return "Choose a model for the selected provider.";
+    const catalog = sessionCatalog(record);
     if (!catalogLoaded) return catalogPhase === "starting" ? "Models are loading…" : "Model list unavailable.";
     const model = catalog.find((model) => model.id === record.session.model);
     if (!model) return "Selected model is unavailable. Choose another model.";
@@ -865,7 +927,7 @@
         form.append(
           element(
             "p",
-            "This deletes the conversation from FCC and Codex history. Your project files stay in place.",
+            `This deletes the conversation from FCC and ${harnessName(record)} history. Your project files stay in place.${record.session.harness === "claude" ? " Claude removes ancillary subagent files on a best-effort basis." : ""}`,
           ),
         );
       },
@@ -954,7 +1016,7 @@
         [],
         "",
         (value) => {
-          void updateSettings({ reasoning_effort: value });
+          void updateSettings({ reasoning_effort: value || null });
         },
       );
       harnessControl = UI.selectControl(
@@ -980,6 +1042,15 @@
       );
       modeControl.select.title =
         "Use config uses this session's original configured permission selection.";
+      const prepareRetry = button("Retry setup", () => {
+        const current = records.get(selected);
+        current.prepareError = "";
+        current.preparedKey = null;
+        void prepare(current);
+      });
+      prepareRetry.id = "codePrepareRetry";
+      prepareRetry.hidden = true;
+      controls.append(prepareRetry);
       controls.append(
         providerControl.group,
         modelControl.group,
@@ -1057,7 +1128,7 @@
       const composer = UI.composer(
         "code",
         saved(id).draft || "",
-        "Ask Codex to work on this folder…",
+        `Ask ${harnessName(record)} to work on this folder…`,
         (value) => {
           save(id, { ...saved(id), draft: value });
           renderControls();
@@ -1079,7 +1150,7 @@
       create.id = "codeNew";
       const header = UI.libraryHeader(
         "Code sessions",
-        "Work with Codex in a project folder.",
+        "Work with a coding agent in a project folder.",
         create,
       );
       const search = UI.search("Search titles and folders", query, (value) => {
@@ -1116,6 +1187,9 @@
   }
 
   function render(outputChanged = false) {
+    catalog = sessionCatalog(records.get(selected));
+    const current = records.get(selected);
+    if (current) void prepare(current);
     if (!root) return;
     if (rendered !== (selected || "library")) shell();
     const message = root.querySelector("#codeNotice");
@@ -1195,7 +1269,7 @@
         group.dataset.ordinal = run.ordinal;
         group.append(
           element("div", undefined, "code-run-items"),
-          UI.message("assistant", "Codex"),
+          UI.message("assistant", harnessName()),
         );
         group.lastChild.classList.add("code-outcome");
         group.lastChild.append(element("div", "", "session-generation-status"));
@@ -1220,6 +1294,7 @@
   }
 
   function renderControls() {
+    catalog = sessionCatalog(records.get(selected));
     if (!selected || !root?.querySelector("#codeComposer")) return;
     const record = records.get(selected),
       isBusy = busy(record),
@@ -1270,6 +1345,7 @@
       pending(record);
     const disabled =
       !ready(record) ||
+      record?.preparing ||
       isBusy ||
       pending(record) ||
       settingsPending ||
@@ -1297,19 +1373,32 @@
       record?.session?.harness || "codex",
     );
     harnessControl.select.disabled = true;
-    modeControl.select.value = record?.session?.mode || "config";
+    const descriptor = harnessFor(record);
+    const modes = record?.capabilities?.modes || descriptor?.modes || [];
+    const mode = record?.session?.mode || "config";
+    const modeOptions = modes.map((mode) => [mode.id, mode.name]);
+    if (!modes.some((choice) => choice.id === mode))
+      modeOptions.push([mode, mode + " (unavailable)"]);
+    modeControl.update(modeOptions, mode);
+    for (const option of modeControl.select.options)
+      option.disabled = !modes.some((choice) => choice.id === option.value);
+    modeControl.select.title = record?.session?.harness === "claude" ? "Use config reloads native Claude settings when initialized." : "Use config uses this session's original configured permission selection.";
+    const retry = root.querySelector("#codePrepareRetry");
+    if (retry) { retry.hidden = !record?.prepareError; retry.disabled = record?.preparing || !synchronized; }
     modeControl.select.disabled = disabled;
     const model = catalog.find((model) => model.id === record?.session?.model),
       effort =
         record?.session?.reasoning_effort ||
         model?.default_reasoning_effort ||
-        "off";
-    const options = ["off", "low", "medium", "high", "xhigh", "max"].map(
-      (value) => [value, value],
-    );
+        (record?.session?.harness === "claude" ? "" : "off");
+    const options = record?.session?.harness === "claude"
+      ? [["", "Native/default"], ...(model?.reasoning_efforts || []).map((value) => [value, value])]
+      : ["off", "low", "medium", "high", "xhigh", "max"].map((value) => [value, value]);
+    if (!options.some(([value]) => value === effort))
+      options.push([effort, effort + " (unavailable)"]);
     reasoningControl.update(options, effort);
     for (const option of reasoningControl.select.options)
-      option.disabled = !model?.reasoning_efforts.includes(option.value);
+      option.disabled = option.value !== "" && !model?.reasoning_efforts.includes(option.value);
     reasoningControl.select.disabled = disabled || !model;
     const selectionMessage = root.querySelector("#codeSelectionError"),
       deletionMessage = root.querySelector("#codeDeletionError");
@@ -1326,6 +1415,7 @@
           prompt?.status !== "pending" ||
           node.dataset.claiming === "true";
     }
+    input.placeholder = `Ask ${harnessName(record)} to work on this folder…`;
     UI.resizeComposer(input);
   }
 
@@ -1339,7 +1429,7 @@
     if (!node) {
       node = UI.message(
         item.kind === "user" ? "user" : "assistant",
-        item.kind === "user" ? "You" : "Codex",
+        item.kind === "user" ? "You" : harnessName(),
       );
       node.classList.add("code-item");
       node.dataset.id = item.id;
@@ -1501,10 +1591,10 @@
             radios = [];
           for (const option of question.options) {
             const radio = element("input");
-            radio.type = "radio";
+            radio.type = question.multiple ? "checkbox" : "radio";
             radio.name = name;
             radio.value = option.label;
-            radio.required = true;
+            radio.required = !question.multiple;
             const optionLabel = element("label", undefined, "code-choice");
             optionLabel.append(
               radio,
@@ -1519,7 +1609,7 @@
           let other;
           if (question.allow_other) {
             const radio = element("input");
-            radio.type = "radio";
+            radio.type = question.multiple ? "checkbox" : "radio";
             radio.name = name;
             radio.value = "__other__";
             radios.push(radio);
@@ -1536,11 +1626,7 @@
           }
           return () => [
             question.id,
-            [
-              radios.find((radio) => radio.checked)?.value === "__other__"
-                ? other.value
-                : radios.find((radio) => radio.checked)?.value || "",
-            ],
+            radios.filter((radio) => radio.checked).map((radio) => radio.value === "__other__" ? other.value : radio.value),
           ];
         }
         const input = element("input");

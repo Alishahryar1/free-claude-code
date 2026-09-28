@@ -17,7 +17,7 @@ async def code_api(database_factory, tmp_path):
     harness = FakeHarness()
     code = CodeService(
         SQLiteCodeStore(database_factory(tmp_path / "code.db", tmp_path / "code.lock")),
-        harness,
+        {"codex": harness},
     )
     await code.start()
     app = create_test_app(code=code)
@@ -93,7 +93,7 @@ async def test_mode_is_saved_but_native_defaults_stay_private(code_api):
         rejected = await client.patch(
             path, json={"expected_revision": changed.json()["revision"], "mode": mode}
         )
-        assert rejected.status_code == 422
+        assert rejected.status_code == (400 if mode == "plan" else 422)
     await code.send(
         session["id"],
         str(uuid.uuid4()),
@@ -120,7 +120,9 @@ async def test_mode_is_saved_but_native_defaults_stay_private(code_api):
 async def test_code_library_has_one_harness_and_no_native_work_on_open(code_api):
     client, _, harness, _, _ = code_api
     bootstrap = await client.get("/admin/api/code/bootstrap")
-    assert bootstrap.json()["harnesses"] == [{"id": "codex", "name": "Codex"}]
+    assert [
+        (entry["id"], entry["name"]) for entry in bootstrap.json()["harnesses"]
+    ] == [("codex", "Codex")]
     session = await create_session(code_api)
     detail = await client.get(f"/admin/api/code/sessions/{session['id']}")
     assert detail.status_code == 200
@@ -139,7 +141,7 @@ async def test_context_usage_and_raw_provider_capacity_are_public_session_state(
     harness.context_windows[harness.model] = 100_000
     harness.configurations["unknown/model"] = "unknown"
     bootstrap = (await client.get("/admin/api/code/bootstrap")).json()
-    models = {model["id"]: model for model in bootstrap["models"]}
+    models = {model["id"]: model for model in bootstrap["harnesses"][0]["models"]}
     assert models[harness.model]["context_window_tokens"] == 100_000
     assert models["unknown/model"]["context_window_tokens"] is None
 

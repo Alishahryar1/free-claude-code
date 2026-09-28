@@ -17,9 +17,12 @@ from free_claude_code.application.code_sessions.models import (
     CodeConflictError,
     CodeMode,
     CodeModel,
+    CodeModeOption,
     CodeUnavailableError,
     CodeValidationError,
+    HarnessCapabilities,
     HarnessEvent,
+    HarnessId,
     NativeHistoryMissing,
     NativeThread,
 )
@@ -135,6 +138,14 @@ class CodexAppServer:
             and self._fingerprints.get(selection.model) == selection.configuration_key
         )
 
+    def capabilities(self, selection: HarnessSelection) -> HarnessCapabilities:
+        return HarnessCapabilities(
+            generation=self.generation,
+            model=selection.model,
+            configuration_key=selection.configuration_key,
+            modes=CodexHarnessFactory.modes,
+        )
+
     async def create_thread(self) -> NativeThread:
         response = await self.rpc(
             "thread/start", {"cwd": self._cwd, "modelProvider": "fcc"}
@@ -143,7 +154,9 @@ class CodexAppServer:
         self.thread_id = native.id
         return native
 
-    async def resume_thread(self, thread_id: str) -> NativeThread:
+    async def resume_thread(
+        self, thread_id: str, *, submitted_run_ids: frozenset[str] = frozenset()
+    ) -> NativeThread:
         response = await self.rpc(
             "thread/resume",
             {"threadId": thread_id, "cwd": self._cwd, "modelProvider": "fcc"},
@@ -175,7 +188,7 @@ class CodexAppServer:
         text: str,
         selection: HarnessSelection,
         client_id: str,
-        permission_defaults: JsonObject,
+        permission_defaults: JsonObject | None,
     ) -> str:
         model = self._model_slugs.get(selection.model)
         if not self.thread_id or model is None:
@@ -630,6 +643,16 @@ class _CodexSelection:
 
 
 class CodexHarnessFactory:
+    id: HarnessId = "codex"
+    name = "Codex"
+    prepare_on_open = False
+    modes: tuple[CodeModeOption, ...] = (
+        CodeModeOption(id="config", name="Use config"),
+        CodeModeOption(id="ask", name="Ask"),
+        CodeModeOption(id="auto_review", name="Auto-review"),
+        CodeModeOption(id="full_access", name="Full access"),
+    )
+
     def __init__(
         self,
         runtime: RequestRuntimePort,
@@ -735,7 +758,13 @@ def _model_option(entry: CodexModel) -> CodeModel:
     )
 
 
-def _permission_settings(mode: CodeMode, defaults: JsonObject) -> JsonObject:
+def _permission_settings(mode: CodeMode, defaults: JsonObject | None) -> JsonObject:
+    if defaults is None:
+        raise CodeUnavailableError(
+            "Codex did not return complete native permission settings. Your input was not sent."
+        )
+    if mode not in {option.id for option in CodexHarnessFactory.modes}:
+        raise CodeValidationError("This permission mode is unavailable for Codex.")
     if mode != "config":
         return {
             "approvalPolicy": "never" if mode == "full_access" else "on-request",

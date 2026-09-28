@@ -243,7 +243,7 @@ async def test_child_warning_during_shutdown_allows_connection_replacement(
     monkeypatch.setattr(harness, "prepare", selection_for)
     service = CodeService(
         SQLiteCodeStore(database_factory(tmp_path / "code.db", tmp_path / "code.lock")),
-        harness,
+        {"codex": harness},
     )
     await service.start()
     observing = asyncio.create_task(warning.wait())
@@ -514,7 +514,7 @@ async def test_terminal_storage_failure_drains_the_native_dispatcher(
         await save(session, revision, **values)
 
     monkeypatch.setattr(store, "save_progress", reject_terminal)
-    service = CodeService(store, harness)
+    service = CodeService(store, {"codex": harness})
     await service.start()
     try:
         session = await service.create_session(str(uuid.uuid4()), str(tmp_path))

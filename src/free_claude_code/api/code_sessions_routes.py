@@ -3,7 +3,6 @@
 import base64
 import json
 from collections.abc import AsyncIterator, Mapping
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.sse import EventSourceResponse, ServerSentEvent
@@ -19,7 +18,7 @@ from free_claude_code.application.code_sessions import (
     CodeUnavailableError,
     CodeValidationError,
 )
-from free_claude_code.application.code_sessions.models import CodeMode
+from free_claude_code.application.code_sessions.models import CodeMode, HarnessId
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.session_events import EventOverflowError
 from free_claude_code.config.model_refs import split_provider_model_ref
@@ -41,7 +40,12 @@ class CommandPayload(BaseModel):
 class CreatePayload(CommandPayload):
     session_id: str
     cwd: str = Field(min_length=1, max_length=4096)
-    harness: Literal["codex"] = "codex"
+    harness: HarnessId = "codex"
+
+
+class PreparePayload(CommandPayload):
+    expected_revision: int = Field(gt=0)
+    expected_epoch: str
 
 
 class FolderPickerPayload(CommandPayload):
@@ -88,16 +92,13 @@ def code_page(request: Request, session_id: str | None = None):
 async def bootstrap(services: ApiServices = Depends(get_services)) -> JsonObject:
     code = _code(services)
     available, message = code.availability()
-    catalog = code.catalog()
     return {
         "available": available,
         "message": message,
         "storage": code.storage_status(),
         "startup": services.requests.catalog_status(),
-        "harnesses": [{"id": "codex", "name": "Codex"}],
+        "harnesses": [harness.model_dump(mode="json") for harness in code.harnesses()],
         "epoch": code.epoch,
-        "models": [model.model_dump(mode="json") for model in catalog.models],
-        "default_model": catalog.default_model,
     }
 
 
@@ -170,7 +171,22 @@ async def create(
     payload: CreatePayload, services: ApiServices = Depends(get_services)
 ) -> JsonObject:
     return _session_payload(
-        await _code(services).create_session(payload.session_id, payload.cwd)
+        await _code(services).create_session(
+            payload.session_id, payload.cwd, payload.harness
+        )
+    )
+
+
+@router.post("/admin/api/code/sessions/{session_id}/prepare")
+async def prepare_session(
+    session_id: str,
+    payload: PreparePayload,
+    services: ApiServices = Depends(get_services),
+) -> JsonObject:
+    return _detail_payload(
+        await _code(services).prepare_session(
+            session_id, payload.expected_revision, expected_epoch=payload.expected_epoch
+        )
     )
 
 
@@ -316,6 +332,11 @@ def _detail_payload(detail: CodeDetail) -> JsonObject:
         "version": detail.version,
         "cursor": detail.cursor,
         "next_before": _encode_cursor(detail.next_before),
+        "capabilities": detail.capabilities.model_dump(
+            mode="json", exclude={"configuration_key"}
+        )
+        if detail.capabilities
+        else None,
     }
 
 

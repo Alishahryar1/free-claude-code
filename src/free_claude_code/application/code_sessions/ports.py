@@ -10,23 +10,35 @@ from .models import (
     CodeCatalog,
     CodeDetail,
     CodeExecutionSeed,
+    CodeHarness,
     CodeHistory,
     CodeItem,
     CodeItemPage,
     CodeMode,
+    CodeModeOption,
     CodePage,
     CodePrompt,
     CodeRun,
     CodeSession,
+    HarnessCapabilities,
     HarnessEvent,
+    HarnessId,
     NativeThread,
 )
 
-# Harness connections must await each call and preserve native wire order.
+# Await serialized events, preserving causal order across native callbacks/streams.
 type EventSink = Callable[[HarnessEvent], Awaitable[None]]
 
 
-class HarnessConnection(Protocol):
+class HarnessHistory(Protocol):
+    async def read_thread(self, thread_id: str) -> NativeThread: ...
+
+    async def delete_thread(self, thread_id: str) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+class HarnessConnection(HarnessHistory, Protocol):
     generation: str
     thread_id: str | None
 
@@ -34,7 +46,11 @@ class HarnessConnection(Protocol):
 
     async def create_thread(self) -> NativeThread: ...
 
-    async def resume_thread(self, thread_id: str) -> NativeThread: ...
+    async def resume_thread(
+        self, thread_id: str, *, submitted_run_ids: frozenset[str] = frozenset()
+    ) -> NativeThread: ...
+
+    def capabilities(self, selection: HarnessSelection) -> HarnessCapabilities: ...
 
     async def read_thread(self, thread_id: str) -> NativeThread: ...
 
@@ -43,7 +59,7 @@ class HarnessConnection(Protocol):
         text: str,
         selection: HarnessSelection,
         client_id: str,
-        permission_defaults: JsonObject,
+        permission_defaults: JsonObject | None,
     ) -> str: ...
 
     async def interrupt(self, turn_id: str) -> None: ...
@@ -76,6 +92,11 @@ class HarnessSelection(Protocol):
 
 
 class HarnessFactory(Protocol):
+    id: HarnessId
+    name: str
+    prepare_on_open: bool
+    modes: tuple[CodeModeOption, ...]
+
     def availability(self) -> tuple[bool, str | None]: ...
 
     def catalog(self) -> CodeCatalog: ...
@@ -84,7 +105,7 @@ class HarnessFactory(Protocol):
         self, model: str, reasoning_effort: str | None, mode: CodeMode
     ) -> HarnessSelection: ...
 
-    async def open_history(self, cwd: str, sink: EventSink) -> HarnessConnection: ...
+    async def open_history(self, cwd: str, sink: EventSink) -> HarnessHistory: ...
 
 
 class CodeStore(Protocol):
@@ -187,9 +208,17 @@ class CodeApplicationPort(Protocol):
 
     def availability(self) -> tuple[bool, str | None]: ...
 
-    def catalog(self) -> CodeCatalog: ...
+    def catalog(self, harness: HarnessId = "codex") -> CodeCatalog: ...
 
-    async def create_session(self, session_id: str, cwd: str) -> CodeSession: ...
+    def harnesses(self) -> tuple[CodeHarness, ...]: ...
+
+    async def prepare_session(
+        self, session_id: str, revision: int, *, expected_epoch: str
+    ) -> CodeDetail: ...
+
+    async def create_session(
+        self, session_id: str, cwd: str, harness: HarnessId = "codex"
+    ) -> CodeSession: ...
 
     async def list_sessions(
         self, cursor: tuple[int, str] | None = None, limit: int = 25, query: str = ""

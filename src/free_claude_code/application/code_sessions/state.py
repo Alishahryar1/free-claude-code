@@ -320,10 +320,6 @@ class SessionState:
 
     def prepare_submission(self) -> SessionProgress:
         assert self._run is not None
-        if self._session.native_permission_defaults is None:
-            raise CodeUnavailableError(
-                "The harness did not return its permission settings. Your input was not sent."
-            )
         return SessionProgress(
             self._session.model_copy(update={"native_may_have_input": True}),
             run=self._run.model_copy(update={"submission_started": True}),
@@ -333,7 +329,9 @@ class SessionState:
         run = self._run
         assert run is not None
         if run.native_turn_id not in {None, turn_id}:
-            raise CodeUnavailableError("Codex returned a different turn identity.")
+            raise CodeUnavailableError(
+                "The harness returned a different turn identity."
+            )
         return SessionProgress(
             self._session,
             run=run.model_copy(
@@ -394,7 +392,7 @@ class SessionState:
                 identity not in saved for identity in identities
             ):
                 raise CodeUnavailableError(
-                    "Codex history contains conflicting turn identities. Saved history was retained."
+                    "The harness history contains conflicting turn identities. Saved history was retained."
                 )
             if candidates:
                 run = candidates[0]
@@ -404,7 +402,7 @@ class SessionState:
                     or run.id in {value.id for value in mapped.values()}
                 ):
                     raise CodeUnavailableError(
-                        "Codex history could not be matched to its saved turns."
+                        "The harness history could not be matched to its saved turns."
                     )
                 mapped[turn.id] = run
         unmatched = [turn for turn in native.turns if turn.id not in mapped]
@@ -418,7 +416,7 @@ class SessionState:
         if unmatched:
             if len(unmatched) != 1 or len(pending) != 1:
                 raise CodeUnavailableError(
-                    "Codex history could not be matched to its saved turns. No input was resent."
+                    "The harness history could not be matched to its saved turns. No input was resent."
                 )
             mapped[unmatched[0].id] = pending[0]
         # Recovery fills content and diagnostics, preserving outcomes already settled
@@ -456,12 +454,12 @@ class SessionState:
         if existing is None and update.kind == "user":
             if update.client_id is not None and update.client_id != run.id:
                 raise CodeUnavailableError(
-                    "Codex returned a different message identity."
+                    "The harness returned a different message identity."
                 )
             existing = self._items.get(run.id)
         if existing is not None and existing.run_id != run.id:
             raise CodeUnavailableError(
-                "Codex returned output belonging to another turn."
+                "The harness returned output belonging to another turn."
             )
         if existing is None:
             self._sequence += 1
@@ -526,7 +524,9 @@ class SessionState:
         self, request: PromptRequest, generation: str
     ) -> SessionProgress:
         if self._run is None:
-            raise CodeUnavailableError("Codex returned a prompt without a saved turn.")
+            raise CodeUnavailableError(
+                "The harness returned a prompt without a saved turn."
+            )
         prompt = CodePrompt(
             id=str(uuid.uuid4()),
             session_id=self._session.id,
@@ -608,7 +608,7 @@ class SessionState:
 
     def prepare_notice(self, event: HarnessEvent) -> CodeItem:
         assert self._run is not None
-        message = event.message or "Codex reported an error."
+        message = event.message or "The harness reported an error."
         if event.kind == "error" and event.will_retry:
             message = f"Retrying… {message}"
         return CodeItem(
