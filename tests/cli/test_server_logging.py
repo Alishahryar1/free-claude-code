@@ -6,6 +6,7 @@ import logging
 import logging.config
 import subprocess
 import sys
+from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +23,9 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.runtime.application import ApplicationRuntime
 
 
-def _exercise_server_logging(path: Path, console: bool, level: str) -> None:
+def _exercise_server_logging(
+    path: Path, console: bool, level: str, without_streams: bool
+) -> None:
     baseline = deepcopy(uvicorn.config.LOGGING_CONFIG)
     # An earlier server may already have installed Uvicorn's console handlers.
     logging.config.dictConfig(baseline)
@@ -63,6 +66,9 @@ def _exercise_server_logging(path: Path, console: bool, level: str) -> None:
     with (
         patch("free_claude_code.runtime.bootstrap.build_asgi_app", build_app),
         patch.object(RuntimeServer, "run", run),
+        patch.multiple(sys, stdout=None, stderr=None)
+        if without_streams
+        else nullcontext(),
     ):
         supervisor = ServerSupervisor(console_logging=console)
         for _ in range(2):
@@ -73,9 +79,15 @@ def _exercise_server_logging(path: Path, console: bool, level: str) -> None:
     assert baseline == uvicorn.config.LOGGING_CONFIG
 
 
-@pytest.mark.parametrize("console", [True, False], ids=["cli", "desktop"])
+@pytest.mark.parametrize(
+    ("console", "without_streams"),
+    [(True, False), (False, False), (False, True)],
+    ids=["cli", "desktop", "desktop-no-console"],
+)
 @pytest.mark.parametrize("level", ["INFO", "WARNING"])
-def test_server_logs_reach_file_once_per_start(tmp_path, console, level):
+def test_server_logs_reach_file_once_per_start(
+    tmp_path, console, level, without_streams
+):
     path = tmp_path / "server.log"
     result = subprocess.run(
         [
@@ -83,10 +95,12 @@ def test_server_logs_reach_file_once_per_start(tmp_path, console, level):
             "-c",
             "import sys; from pathlib import Path; "
             "from tests.cli.test_server_logging import _exercise_server_logging; "
-            "_exercise_server_logging(Path(sys.argv[1]), sys.argv[2] == 'True', sys.argv[3])",
+            "_exercise_server_logging(Path(sys.argv[1]), sys.argv[2] == 'True', "
+            "sys.argv[3], sys.argv[4] == 'True')",
             str(path),
             str(console),
             level,
+            str(without_streams),
         ],
         capture_output=True,
         text=True,
