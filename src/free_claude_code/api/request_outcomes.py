@@ -17,14 +17,12 @@ from free_claude_code.core.request_outcomes import (
     record_request_failure,
 )
 
+_FAILURE_EVENTS = frozenset({"error", "response.error", "response.failed"})
+
 
 def _observe_event(event: SSEEvent) -> None:
     kind = event.event or event.data.get("type")
-    if not isinstance(kind, str) or kind not in {
-        "error",
-        "response.error",
-        "response.failed",
-    }:
+    if not isinstance(kind, str) or kind not in _FAILURE_EVENTS:
         return
     response = event.data.get("response")
     payload = response if isinstance(response, dict) else event.data
@@ -77,7 +75,7 @@ class RequestOutcomeMiddleware:
                     .get("content-type", "")
                     .startswith("text/event-stream")
                 ):
-                    decoder = AnthropicSSEDecoder()
+                    decoder = AnthropicSSEDecoder(event_names=_FAILURE_EVENTS)
             elif message["type"] == "http.response.body":
                 completed = not message.get("more_body", False)
                 if decoder is not None:

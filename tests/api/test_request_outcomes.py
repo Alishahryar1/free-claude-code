@@ -328,8 +328,12 @@ async def test_delivery_outcomes_preserve_control_flow(outcomes, ending):
 
 
 @pytest.mark.asyncio
-async def test_wire_observation_preserves_split_utf8_body(outcomes):
-    frame = 'event: error\r\ndata: {"type":"error","error":{"type":"api_error","message":"☃"}}\r\n\r\n'.encode()
+@pytest.mark.parametrize("event_header", ["event: error\r\n", ""])
+async def test_wire_observation_preserves_split_utf8_body(outcomes, event_header):
+    frame = (
+        event_header
+        + 'data: {"type":"error","error":{"type":"api_error","message":"☃"}}\r\n\r\n'
+    ).encode()
     chunks = [frame[index : index + 2] for index in range(0, len(frame), 2)]
     sent = []
 
@@ -359,6 +363,40 @@ async def test_wire_observation_preserves_split_utf8_body(outcomes):
     assert outcomes[0]["extra"]["outcome"] == "failure"
     assert outcomes[0]["extra"]["failure_reason"] == "api_error"
     assert "☃" not in str(outcomes)
+
+
+@pytest.mark.asyncio
+async def test_successful_named_events_skip_json_decoding(outcomes):
+    frame = (
+        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hello"}\n\n'
+        b'event: response.completed\ndata: {"type":"response.completed","response":{"output":[]}}\n\n'
+    )
+
+    async def app(scope, receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        await send({"type": "http.response.body", "body": frame})
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        pass
+
+    with patch(
+        "free_claude_code.core.anthropic.stream_contracts.json.loads", wraps=json.loads
+    ) as loads:
+        await RequestCorrelationMiddleware(RequestOutcomeMiddleware(app))(
+            _http_scope("/v1/responses"), receive, send
+        )
+    loads.assert_not_called()
+    assert len(outcomes) == 1
+    assert outcomes[0]["extra"]["outcome"] == "success"
 
 
 @pytest.mark.asyncio

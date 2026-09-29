@@ -8,14 +8,15 @@ _EVENT_BOUNDARY = re.compile(r"(?>\r\n|\r|\n){2}")
 
 
 class AnthropicSSEDecoder:
-    """Decode arbitrarily split SSE text without losing frame order."""
+    """Decode split SSE text, optionally filtering named events before JSON parsing."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, event_names: frozenset[str] | None = None) -> None:
+        self._event_names = event_names
         self._parts: list[str] = []
         self._boundary_tail = ""
 
     def feed(self, chunk: str) -> tuple[SSEEvent, ...]:
-        """Consume one wire chunk and return every complete event."""
+        """Consume one wire chunk and return its selected complete events."""
 
         events: list[SSEEvent] = []
         probe = self._boundary_tail + chunk
@@ -26,7 +27,7 @@ class AnthropicSSEDecoder:
             self._parts.append(chunk[chunk_start:chunk_end])
             raw = "".join(self._parts)
             self._parts.clear()
-            events.extend(parse_sse_text(raw))
+            events.extend(parse_sse_text(raw, event_names=self._event_names))
             chunk_start = chunk_end
 
         remainder = chunk[chunk_start:]
@@ -46,4 +47,4 @@ class AnthropicSSEDecoder:
         self._boundary_tail = ""
         if not remainder.strip():
             return ()
-        return tuple(parse_sse_text(remainder))
+        return tuple(parse_sse_text(remainder, event_names=self._event_names))
