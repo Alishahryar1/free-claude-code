@@ -116,8 +116,9 @@ def test_explicit_open_admin_waits_for_owned_http_ready():
         open_admin.assert_not_called()
         settings = _launcher_settings()
         supervisor._ready_settings = settings
+        supervisor._ready_instance_id = "ready-instance"
         supervisor.request_open_admin()
-        open_admin.assert_called_once_with(settings, 0)
+        open_admin.assert_called_once_with(settings, 0, "ready-instance")
 
 
 @pytest.mark.parametrize("open_admin_browser", (False, True))
@@ -341,7 +342,7 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
         commands.serve()
 
     assert len(servers) == 2
-    open_admin.assert_called_once_with(settings, 0)
+    open_admin.assert_called_once_with(settings, 0, "instance-0")
     clear_settings_cache.assert_called_once()
     kill_all.assert_called_once()
 
