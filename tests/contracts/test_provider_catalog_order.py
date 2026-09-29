@@ -14,6 +14,7 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "openai_api",
     "github_copilot",
     "xai",
+    "alibaba_cloud",
     "qwencloud",
     "qwencloud_coding",
     "together",

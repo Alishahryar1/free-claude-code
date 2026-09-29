@@ -213,6 +213,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 | [OpenAI API](https://platform.openai.com/api-keys) | `OPENAI_API_KEY` | `openai_api/gpt-5.6-sol` |
 | [GitHub Copilot](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate) | Connect GitHub Copilot in the Admin UI | `github_copilot/<model-id>` |
 | [xAI (Grok)](https://console.x.ai/team/default/api-keys) | `XAI_API_KEY` | `xai/grok-4.5` |
+| [Alibaba Cloud](https://www.alibabacloud.com/help/en/model-studio/get-api-key) | `ALIBABA_CLOUD_API_KEY` | `alibaba_cloud/<model-id>` |
 | [QwenCloud Token Plan](https://home.qwencloud.com/api-keys) | `QWENCLOUD_API_KEY` | `qwencloud/qwen3.7-plus` |
 | [QwenCloud Coding Plan](https://home.qwencloud.com/api-keys) | `QWENCLOUD_CODING_API_KEY` | `qwencloud_coding/qwen3.7-plus` |
 | [Together AI](https://api.together.ai/settings/api-keys) | `TOGETHER_API_KEY` | `together/zai-org/GLM-5.2` |
@@ -288,6 +289,10 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 - Kimi Code subscription keys use `kimi_code/`. Kimi API credit keys use
   `kimi/`. Kimi Code plans are for personal interactive coding-agent use under
   [Kimi's community guidelines](https://www.kimi.com/code/docs/en/kimi-code/community-guidelines.html).
+- Alibaba Cloud uses a Model Studio pay-as-you-go key and defaults to Singapore.
+  For another region or workspace, set `ALIBABA_CLOUD_BASE_URL` to its
+  [OpenAI-compatible endpoint](https://www.alibabacloud.com/help/en/model-studio/base-url)
+  ending in `/compatible-mode/v1`. The key and endpoint must use the same region.
 - QwenCloud Coding Plan keys use `qwencloud_coding/`. QwenCloud Token Plan keys
   use `qwencloud/`. The keys and endpoints are not interchangeable. Coding Plan
   is for local, personal, interactive coding-agent use under the

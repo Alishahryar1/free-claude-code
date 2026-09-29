@@ -290,6 +290,14 @@ class Settings(BaseModel):
         default=None, validation_alias="XAI_API_KEY"
     )
 
+    # ==================== Alibaba Cloud Model Studio ====================
+    alibaba_cloud_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ALIBABA_CLOUD_API_KEY"
+    )
+    alibaba_cloud_base_url: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ALIBABA_CLOUD_BASE_URL"
+    )
+
     # ==================== QwenCloud Token Plan (OpenAI-compatible) ====================
     qwencloud_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="QWENCLOUD_API_KEY"
@@ -432,6 +440,9 @@ class Settings(BaseModel):
     )
     xai_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="XAI_PROXY"
+    )
+    alibaba_cloud_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ALIBABA_CLOUD_PROXY"
     )
     qwencloud_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="QWENCLOUD_PROXY"

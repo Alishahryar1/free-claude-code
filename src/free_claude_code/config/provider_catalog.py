@@ -54,6 +54,7 @@ KILO_DEFAULT_BASE = "https://api.kilo.ai/api/gateway"
 OPENAI_CODEX_DEFAULT_BASE = "https://chatgpt.com/backend-api/codex"
 # xAI OpenAI-compatible Chat Completions API.
 XAI_DEFAULT_BASE = "https://api.x.ai/v1"
+ALIBABA_CLOUD_DEFAULT_BASE = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 # QwenCloud Token Plan OpenAI-compatible Chat Completions API.
 QWENCLOUD_DEFAULT_BASE = (
     "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
@@ -218,6 +219,18 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="xai_api_key",
         default_base_url=XAI_DEFAULT_BASE,
         proxy_attr="xai_proxy",
+    ),
+    "alibaba_cloud": ProviderDescriptor(
+        provider_id="alibaba_cloud",
+        display_name="Alibaba Cloud",
+        website_url="https://www.alibabacloud.com/en/product/modelstudio",
+        logo_filename="alibabacloud-color.svg",
+        credential_env="ALIBABA_CLOUD_API_KEY",
+        credential_url="https://www.alibabacloud.com/help/en/model-studio/get-api-key",
+        credential_attr="alibaba_cloud_api_key",
+        default_base_url=ALIBABA_CLOUD_DEFAULT_BASE,
+        base_url_attr="alibaba_cloud_base_url",
+        proxy_attr="alibaba_cloud_proxy",
     ),
     "qwencloud": ProviderDescriptor(
         provider_id="qwencloud",

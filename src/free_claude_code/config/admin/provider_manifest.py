@@ -165,6 +165,19 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "models."
         ),
     },
+    "ALIBABA_CLOUD_API_KEY": {
+        "description": (
+            "Alibaba Cloud Model Studio pay-as-you-go API key. Use a key from "
+            "the same region as the base URL."
+        ),
+    },
+    "ALIBABA_CLOUD_BASE_URL": {
+        "description": (
+            "Optional Model Studio OpenAI-compatible base URL ending in "
+            "/compatible-mode/v1. Defaults to Singapore. Set your regional "
+            "or workspace URL when using a key from another region."
+        ),
+    },
     "QWENCLOUD_API_KEY": {
         "label": "QwenCloud Token Plan API Key",
         "description": (

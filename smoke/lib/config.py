@@ -75,6 +75,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "groq": "groq/openai/gpt-oss-20b",
     "cline_pass": "cline_pass/cline-pass/deepseek-v4-flash",
     "xai": "xai/grok-4.5",
+    "alibaba_cloud": "alibaba_cloud/qwen3-coder-plus",
     "qwencloud": "qwencloud/qwen3.7-plus",
     "qwencloud_coding": "qwencloud_coding/qwen3.7-plus",
     "together": "together/zai-org/GLM-5.2",

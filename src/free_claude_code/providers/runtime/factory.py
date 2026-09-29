@@ -107,6 +107,19 @@ def _load_deepseek() -> ProviderFactory:
     return construct
 
 
+def _load_alibaba_cloud() -> ProviderFactory:
+    from free_claude_code.providers.alibaba_cloud import AlibabaCloudProvider
+
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return AlibabaCloudProvider(config, admission=admission)
+
+    return construct
+
+
 def _load_lmstudio() -> ProviderFactory:
     from free_claude_code.providers.lmstudio import LMStudioProvider
 
@@ -208,6 +221,7 @@ def _load_opencode_go() -> ProviderFactory:
 
 
 _SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
+    "alibaba_cloud": _load_alibaba_cloud,
     "nvidia_nim": _load_nvidia_nim,
     "open_router": _load_open_router,
     "openai_api": _load_openai_api,
