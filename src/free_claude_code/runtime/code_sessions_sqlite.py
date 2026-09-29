@@ -446,7 +446,7 @@ class SQLiteCodeStore:
                 previous = _record(CodeSession, row)
                 if previous.cwd != session.cwd or previous.harness != session.harness:
                     raise CodeConflictError(
-                        "This session ID was already used for another folder."
+                        "This session ID was already used for another folder or harness."
                     )
                 return previous
             _insert(connection, "code_sessions", session)

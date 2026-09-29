@@ -38,7 +38,7 @@ async def code(database_factory, tmp_path):
     store = SQLiteCodeStore(
         database_factory(tmp_path / "code.db", tmp_path / "code.lock")
     )
-    service = CodeService(store, harness)
+    service = CodeService(store, {"codex": harness})
     await service.start()
     try:
         yield service, harness, tmp_path
@@ -577,7 +577,7 @@ async def test_pending_child_review_becomes_unavailable_when_idle_connection_end
             SQLiteCodeStore(
                 database_factory(directory / "code.db", directory / "code.lock")
             ),
-            harness,
+            {"codex": harness},
         )
         await restarted.start()
         try:
@@ -848,7 +848,7 @@ async def test_native_reviews_and_notices_keep_identity_order_and_survive_restar
         SQLiteCodeStore(
             database_factory(directory / "code.db", directory / "code.lock")
         ),
-        harness,
+        {"codex": harness},
     )
     await restarted.start()
     try:
@@ -1006,7 +1006,7 @@ async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(
     )
     detail = await service.get_detail(session.id)
     assert detail.run.status == "running"
-    assert detail.items[-1].text == "Codex reported an error."
+    assert detail.items[-1].text == "The harness reported an error."
     await connection.text("turn-1", "text", "success", complete=True)
     await connection.finish("turn-1")
     subscription, _ = await service.subscribe()
@@ -1030,7 +1030,7 @@ async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(
         SQLiteCodeStore(
             database_factory(directory / "code.db", directory / "code.lock")
         ),
-        harness,
+        {"codex": harness},
     )
     await restarted.start()
     try:
@@ -1257,7 +1257,7 @@ async def test_storage_start_failure_is_isolated_to_code(database_factory, tmp_p
 
     service = CodeService(
         BrokenStore(database_factory(tmp_path / "code.db", tmp_path / "code.lock")),
-        FakeHarness(),
+        {"codex": FakeHarness()},
     )
     try:
         await service.start()
@@ -1376,7 +1376,11 @@ async def test_deletion_fences_commands_and_repeated_delete_has_one_native_call(
         await service.update_settings(session.id, session.revision, {"title": "late"})
     harness.delete_gate.set()
     await service.wait_idle(session.id)
-    assert harness.connections[0].deleted == [session.native_thread_id]
+    assert [
+        identity
+        for connection in harness.connections
+        for identity in connection.deleted
+    ] == [session.native_thread_id]
     assert project.read_text() == "keep"
     assert not (await service.list_sessions()).sessions
 
@@ -1669,7 +1673,11 @@ async def test_idle_delete_removes_both_histories_and_blocks_late_create(code):
     detail = await service.get_detail(session.id)
     await service.delete_session(session.id, detail.session.revision)
     await service.wait_idle(session.id)
-    assert harness.connections[0].deleted == ["native-1"]
+    assert [
+        identity
+        for connection in harness.connections
+        for identity in connection.deleted
+    ] == ["native-1"]
     assert (await service.list_sessions()).sessions == ()
     with pytest.raises(CodeConflictError):
         await service.create_session(session.id, str(directory))
@@ -1681,7 +1689,9 @@ async def test_restart_preserves_receipt_and_does_not_replay_input(
 ):
     harness = FakeHarness()
     database, lock = tmp_path / "code.db", tmp_path / "code.lock"
-    first = CodeService(SQLiteCodeStore(database_factory(database, lock)), harness)
+    first = CodeService(
+        SQLiteCodeStore(database_factory(database, lock)), {"codex": harness}
+    )
     await first.start()
     session = await first.create_session(new_id(), str(tmp_path))
     run = await first.send(
@@ -1690,7 +1700,9 @@ async def test_restart_preserves_receipt_and_does_not_replay_input(
     await harness.started.wait()
     await first.close()
     await close_code_database(first)
-    second = CodeService(SQLiteCodeStore(database_factory(database, lock)), harness)
+    second = CodeService(
+        SQLiteCodeStore(database_factory(database, lock)), {"codex": harness}
+    )
     await second.start()
     try:
         repeat = await second.send(
@@ -1786,7 +1798,7 @@ async def test_prompt_arrival_has_one_durable_position_despite_repeated_native_i
             SQLiteCodeStore(
                 database_factory(directory / "code.db", directory / "code.lock")
             ),
-            harness,
+            {"codex": harness},
         )
         await restored.start()
         try:
@@ -2093,7 +2105,7 @@ async def test_cancelled_http_admission_still_commits_and_executes_once(
     harness = FakeHarness()
     service = CodeService(
         GatedStore(database_factory(tmp_path / "code.db", tmp_path / "code.lock")),
-        harness,
+        {"codex": harness},
     )
     await service.start()
     try:
@@ -2342,7 +2354,7 @@ async def test_startup_reconciles_persisted_deletion_without_another_native_dele
         SQLiteCodeStore(
             database_factory(directory / "code.db", directory / "code.lock")
         ),
-        harness,
+        {"codex": harness},
     )
     try:
         await restarted.start()
@@ -2380,7 +2392,7 @@ async def test_missing_native_history_is_recreated_only_before_possible_input(
         SQLiteCodeStore(
             database_factory(directory / "code.db", directory / "code.lock")
         ),
-        harness,
+        {"codex": harness},
     )
     try:
         await restarted.start()

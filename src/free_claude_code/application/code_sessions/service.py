@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +21,7 @@ from .models import (
     CodeCatalog,
     CodeConflictError,
     CodeDetail,
+    CodeHarness,
     CodeNotFoundError,
     CodePage,
     CodePrompt,
@@ -28,7 +29,9 @@ from .models import (
     CodeSession,
     CodeUnavailableError,
     CodeValidationError,
+    HarnessCapabilities,
     HarnessEvent,
+    HarnessId,
     ItemUpdate,
     NativeHistoryMissing,
     NativeThread,
@@ -67,6 +70,8 @@ class _SessionRuntime:
     finished: asyncio.Event = field(default_factory=asyncio.Event)
     connection: HarnessConnection | None = None
     generation: str | None = None
+    setup_task: asyncio.Task[None] | None = None
+    capabilities: HarnessCapabilities | None = None
     job: asyncio.Task[None] | None = None
     flush_task: asyncio.Task[None] | None = None
     interrupt_task: asyncio.Task[None] | None = None
@@ -78,9 +83,11 @@ class _SessionRuntime:
 
 
 class CodeService:
-    def __init__(self, store: CodeStore, harness: HarnessFactory) -> None:
+    def __init__(
+        self, store: CodeStore, harnesses: Mapping[HarnessId, HarnessFactory]
+    ) -> None:
         self._store = store
-        self._harness = harness
+        self._harnesses = dict(harnesses)
         self._owners: dict[str, _SessionRuntime] = {}
         self._gates: dict[str, _SessionGate] = {}
         self._version = 0
@@ -147,10 +154,43 @@ class CodeService:
     def availability(self) -> tuple[bool, str | None]:
         if not self._accepting:
             return False, self._message
-        return self._harness.availability()
+        return True, None
 
-    def catalog(self) -> CodeCatalog:
-        return self._harness.catalog()
+    def _factory(self, harness: HarnessId) -> HarnessFactory:
+        factory = self._harnesses.get(harness)
+        if factory is None:
+            raise CodeValidationError("Choose an available harness.")
+        return factory
+
+    def _require_harness(self, harness: HarnessId) -> HarnessFactory:
+        self._require_available()
+        factory = self._factory(harness)
+        available, message = factory.availability()
+        if not available:
+            raise CodeUnavailableError(message or f"{factory.name} is unavailable.")
+        return factory
+
+    def catalog(self, harness: HarnessId = "codex") -> CodeCatalog:
+        return self._factory(harness).catalog()
+
+    def harnesses(self) -> tuple[CodeHarness, ...]:
+        result = []
+        for factory in self._harnesses.values():
+            available, message = factory.availability()
+            catalog = factory.catalog()
+            result.append(
+                CodeHarness(
+                    id=factory.id,
+                    name=factory.name,
+                    available=available,
+                    message=message,
+                    prepare_on_open=factory.prepare_on_open,
+                    modes=factory.modes,
+                    default_model=catalog.default_model,
+                    models=catalog.models,
+                )
+            )
+        return tuple(result)
 
     def begin_shutdown(self) -> None:
         self._stopping = True
@@ -170,6 +210,10 @@ class CodeService:
             if not self._start_task.done():
                 self._start_task.cancel()
             await asyncio.gather(self._start_task, return_exceptions=True)
+        owners = tuple(self._owners.values())
+        for owner in owners:
+            if owner.setup_task is not None and not owner.setup_task.done():
+                owner.setup_task.cancel()
         if self._commands:
             await asyncio.gather(*tuple(self._commands), return_exceptions=True)
         owners = tuple(self._owners.values())
@@ -282,12 +326,16 @@ class CodeService:
             raise CodeNotFoundError("Code session was deleted.")
         return owner
 
-    async def create_session(self, session_id: str, cwd: str) -> CodeSession:
-        return await self._command(self._create(session_id, cwd))
+    async def create_session(
+        self, session_id: str, cwd: str, harness: HarnessId = "codex"
+    ) -> CodeSession:
+        return await self._command(self._create(session_id, cwd, harness))
 
-    async def _create(self, session_id: str, cwd: str) -> CodeSession:
+    async def _create(
+        self, session_id: str, cwd: str, harness: HarnessId
+    ) -> CodeSession:
         await self._wait_for_store()
-        self._require_available()
+        self._require_harness(harness)
         _validate_id(session_id)
         try:
             folder = Path(cwd).expanduser().resolve(strict=True)
@@ -299,7 +347,10 @@ class CodeService:
             ) from None
         session = await self._store.create(
             CodeSession(
-                id=session_id, cwd=str(folder), model=self.catalog().default_model
+                id=session_id,
+                cwd=str(folder),
+                model=self.catalog(harness).default_model,
+                harness=harness,
             )
         )
         owner = await self._owner(session.id)
@@ -372,6 +423,7 @@ class CodeService:
                 snapshot.runs,
                 snapshot.active_prompt_ids,
                 active_reviews,
+                owner.capabilities if owner is not None else None,
             )
 
     async def update_settings(
@@ -386,9 +438,18 @@ class CodeService:
         owner = await self._owner(session_id)
         async with self._locked(owner):
             self._editable(owner, revision)
+            if (
+                changes.keys() & {"model", "reasoning_effort", "mode"}
+                and owner.setup_task is not None
+                and not owner.setup_task.done()
+            ):
+                raise CodeConflictError(
+                    "This session is initializing. Your draft has been kept."
+                )
             updates = owner.state.settings_updates(changes)
+            self._validate_mode(owner, changes)
             catalog = (
-                self.catalog()
+                self._session_catalog(owner)
                 if changes.keys() & {"model", "reasoning_effort"}
                 else None
             )
@@ -426,6 +487,8 @@ class CodeService:
                 "Enter a message of at most 1,000,000 characters."
             )
         owner = await self._owner(session_id)
+        if owner.setup_task is not None and not owner.setup_task.done():
+            await asyncio.shield(owner.setup_task)
         async with self._locked(owner):
             previous = await self._store.get_run(session_id, operation_id)
             if previous:
@@ -438,7 +501,8 @@ class CodeService:
             self._editable(owner, revision)
             owner.state.check_can_send()
             selected = owner.state.session
-        selection = await self._harness.prepare(
+        factory = self._require_harness(selected.harness)
+        selection = await factory.prepare(
             selected.model, selected.reasoning_effort, selected.mode
         )
         async with self._locked(owner):
@@ -559,48 +623,177 @@ class CodeService:
         if owner is not None:
             await owner.finished.wait()
 
+    def _session_catalog(self, owner: _SessionRuntime) -> CodeCatalog:
+        session = owner.state.session
+        catalog = self.catalog(session.harness)
+        capabilities = owner.capabilities
+        if capabilities is None or not self._factory(session.harness).prepare_on_open:
+            return catalog
+        return CodeCatalog(
+            catalog.default_model,
+            tuple(
+                model.model_copy(
+                    update={"reasoning_efforts": capabilities.reasoning_efforts}
+                )
+                if model.id == capabilities.model
+                else model
+                for model in catalog.models
+            ),
+        )
+
+    def _validate_mode(self, owner: _SessionRuntime, changes: JsonObject) -> None:
+        if "mode" not in changes:
+            return
+        modes = self._factory(owner.state.session.harness).modes
+        if owner.capabilities is not None:
+            modes = owner.capabilities.modes
+        if changes["mode"] not in {option.id for option in modes}:
+            raise CodeValidationError(
+                "This permission mode is unavailable for this harness/model."
+            )
+
+    async def prepare_session(
+        self, session_id: str, revision: int, *, expected_epoch: str
+    ) -> CodeDetail:
+        return await self._command(
+            self._prepare_session(session_id, revision, expected_epoch)
+        )
+
+    async def _prepare_session(
+        self, session_id: str, revision: int, epoch: str
+    ) -> CodeDetail:
+        owner = await self._owner(session_id)
+        async with self._locked(owner):
+            self._editable(owner, revision)
+            if epoch != self.epoch:
+                raise CodeConflictError(
+                    "FCC restarted. Refresh the session before preparing it."
+                )
+            selected = owner.state.session
+            busy = owner.state.busy or owner.state.pending
+        if not busy:
+            factory = self._require_harness(selected.harness)
+            selection = await factory.prepare(
+                selected.model, selected.reasoning_effort, selected.mode
+            )
+            await self._ensure_prepared(owner, selection, expected_revision=revision)
+        return await self.get_detail(session_id)
+
+    async def _ensure_prepared(
+        self,
+        owner: _SessionRuntime,
+        selection: HarnessSelection,
+        *,
+        expected_revision: int | None = None,
+    ) -> None:
+        async with self._locked(owner):
+            self._check_owner(owner)
+            if expected_revision is not None:
+                owner.state.check_revision(expected_revision)
+            if not self._accepting or owner.state.session.status != "ready":
+                raise CodeUnavailableError("This session is closing.")
+            current = owner.state.session
+            if (
+                current.model != selection.model
+                or current.mode != selection.mode
+                or (
+                    current.reasoning_effort is not None
+                    and current.reasoning_effort != selection.reasoning_effort
+                )
+            ):
+                raise CodeConflictError("The selection changed during preparation.")
+            if (
+                owner.connection is not None
+                and owner.connection.supports(selection)
+                and owner.loaded_thread_id is not None
+            ):
+                return
+            task = owner.setup_task
+            if task is None or task.done():
+                task = asyncio.create_task(
+                    self._prepare_connection(owner, selection), name="fcc-code-prepare"
+                )
+                owner.setup_task = task
+        await asyncio.shield(task)
+
+    async def _prepare_connection(
+        self, owner: _SessionRuntime, selection: HarnessSelection
+    ) -> None:
+        try:
+            async with asyncio.timeout(30):
+                if owner.connection is not None and not owner.connection.supports(
+                    selection
+                ):
+                    await self._close_connection(owner)
+                if owner.connection is None:
+                    connection = await selection.open(
+                        owner.state.session.cwd, lambda event: self._event(owner, event)
+                    )
+                    async with self._locked(owner):
+                        owner.connection = connection
+                        owner.generation = connection.generation
+                else:
+                    connection = owner.connection
+                thread_id = owner.state.session.native_thread_id
+                if thread_id is None:
+                    native = await connection.create_thread()
+                elif owner.loaded_thread_id != thread_id:
+                    runs = await self._store.runs(owner.state.session.id)
+                    try:
+                        native = await connection.resume_thread(
+                            thread_id,
+                            submitted_run_ids=frozenset(
+                                run.id for run in runs if run.submission_started
+                            ),
+                        )
+                    except NativeHistoryMissing:
+                        if owner.state.session.native_may_have_input:
+                            raise
+                        native = await connection.create_thread()
+                else:
+                    native = None
+                async with self._locked(owner):
+                    if (
+                        not self._accepting
+                        or owner.deleted
+                        or owner.state.session.status != "ready"
+                    ):
+                        raise CodeUnavailableError(
+                            "This session closed during preparation."
+                        )
+                    if native is not None:
+                        await self._commit_progress(
+                            owner,
+                            owner.state.attach_thread(
+                                native.id, native.permission_defaults
+                            ),
+                        )
+                        owner.loaded_thread_id = native.id
+                        await self._recover_locked(owner, native)
+                    owner.capabilities = connection.capabilities(selection)
+                    self._publish(
+                        owner,
+                        "session.capabilities",
+                        capabilities=owner.capabilities.model_dump(
+                            mode="json", exclude={"configuration_key"}
+                        ),
+                    )
+        except BaseException:
+            await self._close_connection(owner)
+            raise
+
     async def _work(
         self, owner: _SessionRuntime, run_id: str, selection: HarnessSelection
     ) -> None:
         finished = owner.finished
         try:
+            await self._ensure_prepared(owner, selection)
             connection = owner.connection
-            if connection is not None and not connection.supports(selection):
-                await self._close_connection(owner)
-                connection = None
             if connection is None:
-                connection = await selection.open(
-                    owner.state.session.cwd, lambda event: self._event(owner, event)
+                raise CodeUnavailableError(
+                    "The harness connection closed during preparation."
                 )
-                owner.connection = connection
-                owner.generation = connection.generation
-            thread_id = owner.state.session.native_thread_id
-            if thread_id is None:
-                async with self._locked(owner):
-                    if owner.state.run and owner.state.run.stop_requested:
-                        await self._finish_locked(owner, "interrupted")
-                        return
-                native = await connection.create_thread()
-            elif owner.loaded_thread_id != thread_id:
-                try:
-                    native = await connection.resume_thread(thread_id)
-                except NativeHistoryMissing:
-                    if owner.state.session.native_may_have_input:
-                        raise
-                    native = await connection.create_thread()
-            else:
-                native = None
             async with self._locked(owner):
-                if native is not None:
-                    await self._commit_progress(
-                        owner,
-                        owner.state.attach_thread(
-                            native.id, native.permission_defaults
-                        ),
-                    )
-                    owner.loaded_thread_id = native.id
-                    await self._recover_locked(owner, native)
-                    native = None
                 run = owner.state.active_run(run_id)
                 if run is None:
                     return
@@ -613,7 +806,7 @@ class CodeService:
                     progress.run,
                     progress.session.native_permission_defaults,
                 )
-                assert run is not None and defaults is not None
+                assert run is not None
             turn_id = await connection.start_turn(run.text, selection, run.id, defaults)
             async with self._locked(owner):
                 if owner.state.active_run(run_id) is None:
@@ -639,6 +832,8 @@ class CodeService:
     async def _recover_locked(
         self, owner: _SessionRuntime, native: NativeThread
     ) -> None:
+        if native.history_notice:
+            self._publish(owner, "session.notice", message=native.history_notice)
         saved_runs = await self._store.runs(owner.state.session.id)
         for turn, run in owner.state.match_history(native, saved_runs):
             owner.state.remember_items(
@@ -706,7 +901,7 @@ class CodeService:
                 await self._finish_locked(
                     owner,
                     "interrupted",
-                    "Codex did not stop normally; its session process was closed.",
+                    "The harness did not stop normally; its session process was closed.",
                 )
 
     async def _deliver_answer(
@@ -821,6 +1016,26 @@ class CodeService:
                         await self._flush_locked(owner)
                     elif owner.flush_task is None or owner.flush_task.done():
                         owner.flush_task = self._job(self._flush_later(owner))
+                elif (
+                    event.kind == "item"
+                    and event.item is not None
+                    and event.item.complete
+                ):
+                    saved = await self._store.get_native_item(
+                        owner.state.session.id, event.item.turn_id, event.item.item_id
+                    )
+                    if (
+                        saved is not None
+                        and saved.kind == "tool"
+                        and not saved.complete
+                    ):
+                        previous_run = await self._store.get_run(
+                            owner.state.session.id, saved.run_id
+                        )
+                        if previous_run is not None:
+                            owner.state.remember_items((saved,), (previous_run,))
+                            self._update_item(owner, event.item, previous_run)
+                            await self._flush_locked(owner)
                 elif event.kind == "prompt" and event.prompt is not None:
                     request = event.prompt
                     if request.turn_id is not None and not matches:
@@ -858,13 +1073,15 @@ class CodeService:
                     self._publish(
                         owner, "item.updated", item=item.model_dump(mode="json")
                     )
+                elif event.kind == "session_notice":
+                    self._publish(owner, "session.notice", message=event.message or "")
                 elif event.kind == "closed":
                     self._detach_connection_locked(owner)
                     if owner.state.busy:
                         await self._finish_locked(
                             owner,
                             "interrupted" if run and run.stop_requested else "failed",
-                            event.message or "The Codex process ended.",
+                            event.message or "The harness process ended.",
                         )
                     await self._expire_prompts_locked(owner)
         except Exception as exc:
@@ -996,6 +1213,7 @@ class CodeService:
         owner.connection = None
         owner.generation = None
         owner.loaded_thread_id = None
+        owner.capabilities = None
         if owner.state.clear_review_liveness() and not owner.deleted:
             self._publish(owner, "session.updated")
         return connection
@@ -1064,28 +1282,28 @@ class CodeService:
     async def _delete_native(
         self, owner: _SessionRuntime, *, reconcile: bool = False
     ) -> None:
-        thread_id = owner.state.session.native_thread_id
         native_complete = False
         try:
+            if owner.setup_task is not None and not owner.setup_task.done():
+                owner.setup_task.cancel()
+                await asyncio.gather(owner.setup_task, return_exceptions=True)
+            await self._close_connection(owner)
+            thread_id = owner.state.session.native_thread_id
             if thread_id is not None:
-                connection = owner.connection
-                if connection is None:
-                    connection = await self._harness.open_history(
-                        owner.state.session.cwd, lambda event: self._event(owner, event)
-                    )
-                    owner.connection, owner.generation = (
-                        connection,
-                        connection.generation,
-                    )
+                history = await self._factory(owner.state.session.harness).open_history(
+                    owner.state.session.cwd, lambda event: self._event(owner, event)
+                )
                 try:
                     if reconcile:
-                        await connection.read_thread(thread_id)
+                        await history.read_thread(thread_id)
                         raise CodeConflictError(
                             "The native conversation still exists. You can retry deletion."
                         )
-                    await connection.delete_thread(thread_id)
+                    await history.delete_thread(thread_id)
                 except NativeHistoryMissing:
                     pass
+                finally:
+                    await history.close()
             native_complete = True
             await self._close_connection(owner)
             async with self._locked(owner):

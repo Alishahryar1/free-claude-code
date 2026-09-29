@@ -10,9 +10,12 @@ from free_claude_code.application.code_sessions.models import (
     CodeConflictError,
     CodeMode,
     CodeModel,
+    CodeModeOption,
     CodeUnavailableError,
     CodeValidationError,
+    HarnessCapabilities,
     HarnessEvent,
+    HarnessId,
     ItemUpdate,
     NativeHistoryMissing,
     NativeThread,
@@ -116,6 +119,14 @@ class CodexPackets:
 
 
 class FakeHarness:
+    id: HarnessId = "codex"
+    name = "Codex"
+    prepare_on_open = False
+    modes = tuple(
+        CodeModeOption(id=mode, name=mode)
+        for mode in ("config", "ask", "auto_review", "full_access")
+    )
+
     def __init__(self):
         self.connections: list[FakeConnection] = []
         self.model = "provider/model"
@@ -128,7 +139,7 @@ class FakeHarness:
         self.configurations = {self.model: "capabilities-1"}
         self.context_windows: dict[str, int | None] = {self.model: None}
         self.efforts = ("off", "low", "medium", "high", "xhigh", "max")
-        self.default_effort = "medium"
+        self.default_effort: str | None = "medium"
         self.creation_gate = asyncio.Event()
         self.start_gate = asyncio.Event()
         self.creation_gate.set()
@@ -220,7 +231,7 @@ class FakeConnection:
         self.inputs: list[tuple[str, str, str]] = []
         self.efforts: list[str | None] = []
         self.modes: list[CodeMode] = []
-        self.defaults: list[JsonObject] = []
+        self.defaults: list[JsonObject | None] = []
         self.interrupts: list[str] = []
         self.deleted: list[str] = []
         self.resumed: list[str] = []
@@ -234,6 +245,15 @@ class FakeConnection:
             and self.catalog.get(selection.model) == selection.configuration_key
         )
 
+    def capabilities(self, selection):
+        return HarnessCapabilities(
+            generation=self.generation,
+            model=selection.model,
+            configuration_key=selection.configuration_key,
+            modes=self.harness.modes,
+            reasoning_efforts=self.harness.efforts,
+        )
+
     async def create_thread(self):
         self.harness.creating.set()
         await self.harness.creation_gate.wait()
@@ -245,7 +265,7 @@ class FakeConnection:
             self.thread_id, permission_defaults=self.harness.permission_defaults
         )
 
-    async def resume_thread(self, thread_id: str):
+    async def resume_thread(self, thread_id: str, *, submitted_run_ids=frozenset()):
         self.resumed.append(thread_id)
         self.thread_id = thread_id
         return await self.read_thread(thread_id)
@@ -269,7 +289,7 @@ class FakeConnection:
         text: str,
         selection: HarnessSelection,
         client_id: str,
-        permission_defaults: JsonObject,
+        permission_defaults: JsonObject | None,
     ):
         self.inputs.append((client_id, text, selection.model))
         self.efforts.append(selection.reasoning_effort)
@@ -416,7 +436,6 @@ class FakeConnection:
         self.harness.start_gate.set()
         self.harness.answer_gate.set()
         self.harness.interrupt_gate.set()
-        self.harness.delete_gate.set()
         await self.sink(HarnessEvent(self.generation, self.thread_id, "closed"))
 
 

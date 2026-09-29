@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 from .application import ApplicationRuntime, RestartCallback
 from .asgi import RuntimeASGIApp
+from .claude_agent import ClaudeHarnessFactory
 from .code_sessions_sqlite import SQLiteCodeStore
 from .codex_app_server import CodexHarnessFactory
 from .codex_catalog import CodexModelCatalogPublisher
@@ -79,7 +80,10 @@ def build_asgi_app(
     )
     code_service = CodeService(
         SQLiteCodeStore(database),
-        CodexHarnessFactory(provider_manager),
+        {
+            "codex": CodexHarnessFactory(provider_manager),
+            "claude": ClaudeHarnessFactory(provider_manager),
+        },
     )
     runtime = ApplicationRuntime(
         provider_manager,
