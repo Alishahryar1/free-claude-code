@@ -241,7 +241,7 @@ async def test_failed_import_transaction_keeps_source_and_allows_retry(
     assert source.exists()
     assert (await storage.load_conversation_snapshot()).is_empty
     assert (
-        storage.database.execute(
+        await storage.database.run(
             lambda connection: connection.execute(
                 "SELECT count(*) FROM messaging_legacy_import"
             ).fetchone()[0],
@@ -259,8 +259,8 @@ def incoming(node, *, text="prompt"):
     )
 
 
-def import_receipt(database):
-    return database.execute(
+async def import_receipt(database):
+    return await database.run(
         lambda connection: dict(
             connection.execute("SELECT * FROM messaging_legacy_import").fetchone()
         ),
@@ -313,7 +313,7 @@ async def test_import_rejects_storage_invalid_tree_without_reserving_references(
         after.identity: after,
     }
     assert source.read_text() == original
-    assert import_receipt(storage.database) == {
+    assert await import_receipt(storage.database) == {
         "source": "sessions.json",
         "outcome": "partial",
         "trees": 2,
@@ -357,7 +357,7 @@ async def test_import_message_storage_validation_and_successful_duplicate_owners
     rejected = value == "\ud800" or field == "kind"
     assert bool(await import_legacy(storage.database, source)) is rejected
     assert source.exists() is rejected
-    rows = storage.database.execute(
+    rows = await storage.database.run(
         lambda connection: [
             tuple(row)
             for row in connection.execute(
@@ -378,7 +378,7 @@ async def test_import_message_storage_validation_and_successful_duplicate_owners
             bad["kind"],
         )
         assert len(rows) == (1 if field == "ts" else 2)
-    receipt = import_receipt(storage.database)
+    receipt = await import_receipt(storage.database)
     assert receipt["messages"] == len(rows)
     assert receipt["skipped"] == int(rejected)
 
@@ -395,7 +395,7 @@ async def test_import_last_tree_identity_wins_even_when_unrecoverable(
     assert (await storage.load_conversation_snapshot()).trees == (
         {} if last_invalid else {last.identity: last}
     )
-    assert import_receipt(storage.database)["skipped"] == 1 + int(last_invalid)
+    assert (await import_receipt(storage.database))["skipped"] == 1 + int(last_invalid)
     await storage.commit_trees((tree(root="fresh"),))
 
 
@@ -416,7 +416,7 @@ async def test_partial_import_survives_reopen_and_clear_without_replay(
         )
     )
     assert await import_legacy(storage.database, source)
-    receipt = import_receipt(storage.database)
+    receipt = await import_receipt(storage.database)
     await storage.database.close()
     for restart in range(2):
         database = SQLiteDatabase(storage.database.path, tmp_path / "code.lock")
@@ -424,7 +424,7 @@ async def test_partial_import_survives_reopen_and_clear_without_replay(
         try:
             reopened = SQLiteMessagingStore(database)
             assert await import_legacy(database, source) is None
-            assert import_receipt(database) == receipt
+            assert await import_receipt(database) == receipt
             assert (await reopened.load_conversation_snapshot()).is_empty is bool(
                 restart
             )
@@ -438,8 +438,6 @@ async def test_partial_import_survives_reopen_and_clear_without_replay(
 async def test_import_outer_failure_rolls_back_released_units(
     storage, tmp_path, failure_stage
 ):
-    from free_claude_code.runtime import sqlite_database
-
     source = tmp_path / "sessions.json"
     source.write_text(
         json.dumps(
@@ -453,12 +451,10 @@ async def test_import_outer_failure_rolls_back_released_units(
             }
         )
     )
-    connect = sqlite_database._connect
+    transaction = storage.database._transaction
     inserted = []
 
-    def faulting_connect(path, *, existing=False):
-        connection = connect(path, existing=existing)
-
+    def faulting_transaction(pool, operation, *, write):
         def authorize(action, arg1, arg2, database_name, trigger):
             if action == sqlite3.SQLITE_INSERT:
                 inserted.append(arg1)
@@ -473,11 +469,24 @@ async def test_import_outer_failure_rolls_back_released_units(
                 return sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK
 
-        connection.set_authorizer(authorize)
-        return connection
+        observed = []
 
+        def faulting(connection):
+            observed.append(connection)
+            connection.set_authorizer(authorize)
+            return operation(connection)
+
+        try:
+            return transaction(pool, faulting, write=write)
+        finally:
+            for connection in observed:
+                connection.set_authorizer(None)
+
+    await storage.database.run(
+        lambda connection: connection.execute("SELECT 1").close()
+    )
     with (
-        patch.object(sqlite_database, "_connect", faulting_connect),
+        patch.object(storage.database, "_transaction", faulting_transaction),
         pytest.raises(sqlite3.DatabaseError),
     ):
         await import_legacy(storage.database, source)
@@ -486,7 +495,7 @@ async def test_import_outer_failure_rolls_back_released_units(
     assert (await storage.load_conversation_snapshot()).is_empty
     assert not await storage.get_tracked_message_ids_for_chat("telegram", "chat")
     assert (
-        storage.database.execute(
+        await storage.database.run(
             lambda connection: connection.execute(
                 "SELECT count(*) FROM messaging_legacy_import"
             ).fetchone()[0],
@@ -495,8 +504,8 @@ async def test_import_outer_failure_rolls_back_released_units(
         == 0
     )
     assert await import_legacy(storage.database, source) is None
-    assert import_receipt(storage.database)["trees"] == 1
-    assert import_receipt(storage.database)["messages"] == 1
+    assert (await import_receipt(storage.database))["trees"] == 1
+    assert (await import_receipt(storage.database))["messages"] == 1
 
 
 @pytest.mark.parametrize("platform", ["none", "telegram"])
@@ -576,11 +585,11 @@ async def test_startup_partial_import_preserves_links_scopes_and_code(
             "2",
             "3",
         ]
-        assert import_receipt(storage.database)["skipped"] == 2
-        assert import_receipt(storage.database)["messages"] == 3
+        assert (await import_receipt(storage.database))["skipped"] == 2
+        assert (await import_receipt(storage.database))["messages"] == 3
         assert await code.get_session(session.id) == session
         assert (
-            storage.database.execute(
+            await storage.database.run(
                 lambda connection: connection.execute(
                     "PRAGMA foreign_key_check"
                 ).fetchall(),

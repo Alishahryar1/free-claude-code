@@ -9,11 +9,373 @@ from pathlib import Path
 
 import httpx
 import pytest
+from anyio import to_thread
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from free_claude_code.application.code_sessions.models import CodeUnavailableError
 from free_claude_code.runtime import sqlite_database
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.sqlite_database import initialize_database
+
+
+@pytest.mark.asyncio
+async def test_transactions_reuse_connections_until_database_closes(
+    database_factory, tmp_path
+):
+    database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
+    await database.start()
+    observed = []
+
+    def observe(connection):
+        observed.append(connection)
+        assert connection.in_transaction
+        assert connection.autocommit is True
+        assert connection.execute("PRAGMA synchronous").fetchone()[0] == 2
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        return connection.execute("SELECT 1 AS value").fetchone()["value"]
+
+    for write in (True, True, False, False):
+        assert await database.run(observe, write=write) == 1
+    assert observed[0] is observed[1]
+    assert observed[2] is observed[3]
+    assert observed[0] is not observed[2]
+    await database.close()
+    for connection in observed:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
+
+
+@pytest.mark.asyncio
+async def test_queued_writers_leave_workers_available_and_drain_on_close(
+    database_factory, tmp_path
+):
+    database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
+    await database.start()
+    entered, release = threading.Event(), threading.Event()
+    limiter = to_thread.current_default_thread_limiter()
+    previous_limit = limiter.total_tokens
+    limiter.total_tokens = 2
+
+    def write(connection, value):
+        if value == "0":
+            entered.set()
+            assert release.wait(10)
+        connection.execute("INSERT INTO code_deleted VALUES (?)", (value,)).close()
+        return value
+
+    writers = [asyncio.create_task(database.run(lambda c: write(c, "0")))]
+    readers = []
+    closing_task = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        writers.extend(
+            asyncio.create_task(database.run(lambda c, i=i: write(c, str(i))))
+            for i in range(1, 12)
+        )
+        # Let each accepted call register its admission task before the probes.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        writers[-1].cancel()
+        readers = [
+            asyncio.create_task(
+                database.run(
+                    lambda c: c.execute("SELECT count(*) FROM code_deleted").fetchone()[
+                        0
+                    ],
+                    write=False,
+                )
+            ),
+            asyncio.create_task(to_thread.run_sync(lambda: "available")),
+        ]
+        done, pending = await asyncio.wait(readers, timeout=3)
+        assert not pending
+        assert {task.result() for task in done} == {0, "available"}
+        closing_task = asyncio.create_task(database.close())
+        await asyncio.sleep(0)
+        assert not closing_task.done()
+        with pytest.raises(sqlite3.OperationalError, match="closed"):
+            await database.run(lambda c: None)
+        other = database_factory(database.path, tmp_path / "fcc.lock")
+        with pytest.raises(sqlite3.OperationalError, match="another FCC"):
+            await other.start()
+    finally:
+        release.set()
+        outcomes = await asyncio.gather(*writers, *readers, return_exceptions=True)
+        if closing_task is not None:
+            await closing_task
+        limiter.total_tokens = previous_limit
+    assert outcomes[:12] == [str(i) for i in range(12)]
+    reopened = database_factory(database.path, tmp_path / "fcc.lock")
+    await reopened.start()
+    assert (
+        await reopened.run(
+            lambda c: c.execute("SELECT count(*) FROM code_deleted").fetchone()[0],
+            write=False,
+        )
+        == 12
+    )
+
+
+@pytest.mark.asyncio
+async def test_reader_leases_are_bounded_and_can_move_between_threads(
+    database_factory, tmp_path
+):
+    database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
+    await database.start()
+    four_readers, release = threading.Event(), threading.Event()
+    observed = []
+    guard = threading.Lock()
+
+    def read(connection):
+        with guard:
+            observed.append(connection)
+            if len(observed) == 4:
+                four_readers.set()
+        assert release.wait(10)
+        return connection.execute("SELECT 1").fetchone()[0]
+
+    tasks = [asyncio.create_task(database.run(read, write=False)) for _ in range(10)]
+    try:
+        assert await asyncio.to_thread(four_readers.wait, 3)
+        assert len(observed) == 4
+    finally:
+        release.set()
+        results = await asyncio.gather(*tasks)
+    assert results == [1] * 10
+    assert len(set(observed)) == 4
+    # Force two different worker threads to reuse the single writer connection.
+    seen = []
+
+    def cross_threads():
+        errors = []
+        finished, release_thread = threading.Event(), threading.Event()
+
+        def execute(wait):
+            try:
+                database.execute(lambda c: seen.append(c))
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                if wait:
+                    finished.set()
+                    assert release_thread.wait(5)
+
+        thread = threading.Thread(target=execute, args=(True,))
+        thread.start()
+        try:
+            assert finished.wait(3)
+            execute(False)
+        finally:
+            release_thread.set()
+            thread.join(3)
+        assert not thread.is_alive()
+        assert not errors
+
+    await database.work(cross_threads)
+    assert seen[0] is seen[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", ["begin", "callback", "commit", "rollback", "closed"]
+)
+async def test_failed_transactions_are_clean_or_replaced(
+    database_factory, tmp_path, failure
+):
+    database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
+    await database.start()
+    observed = []
+
+    def authorize(action, arg1, arg2, name, trigger):
+        denied = {"begin": "BEGIN", "commit": "COMMIT", "rollback": "ROLLBACK"}
+        if action == sqlite3.SQLITE_TRANSACTION and arg1 == denied.get(failure):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    def configure(connection):
+        observed.append(connection)
+        connection.set_authorizer(authorize)
+
+    # Configure before BEGIN without wrapping/replacing sqlite3's transaction logic.
+    def configure_lease():
+        with closing(database._writer.connect()) as lease:
+            configure(lease.driver_connection)
+
+    await database.work(configure_lease)
+
+    def fail(connection):
+        connection.execute("INSERT INTO code_deleted VALUES ('failed')").close()
+        if failure == "closed":
+            connection.close()
+        if failure in ("callback", "rollback", "closed"):
+            raise ValueError("original callback failure")
+
+    error_type = (
+        ValueError
+        if failure in ("callback", "rollback", "closed")
+        else sqlite3.DatabaseError
+    )
+    with pytest.raises(error_type) as error:
+        await database.run(fail)
+    invalidated = failure in ("rollback", "closed")
+    if invalidated:
+        assert isinstance(error.value.__cause__, sqlite3.Error)
+    else:
+        await database.work(lambda: observed[0].set_authorizer(None))
+
+    def verify(connection):
+        assert (connection is observed[0]) is not invalidated
+        assert (
+            connection.execute("SELECT count(*) FROM code_deleted").fetchone()[0] == 0
+        )
+        connection.execute("INSERT INTO code_deleted VALUES ('success')").close()
+
+    await database.run(verify)
+
+
+@pytest.mark.asyncio
+async def test_checkout_timeout_uses_sqlite_error_contract(
+    database_factory, tmp_path, monkeypatch
+):
+    database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
+    await database.start()
+
+    def timeout():
+        raise PoolTimeoutError("injected capacity timeout")
+
+    monkeypatch.setattr(database._writer, "connect", timeout)
+    with pytest.raises(sqlite3.OperationalError, match="capacity") as error:
+        await database.run(lambda c: pytest.fail("callback must not run"))
+    assert isinstance(error.value.__cause__, PoolTimeoutError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_startup_failure_disposes_connections_before_releasing_owner(
+    tmp_path, cancel
+):
+    entered, release = threading.Event(), threading.Event()
+    observed = []
+
+    class GatedDatabase(sqlite_database.SQLiteDatabase):
+        def _initialize(self):
+            super()._initialize()
+            self.execute(lambda c: observed.append(c))
+            entered.set()
+            assert release.wait(10)
+            if not cancel:
+                raise sqlite3.OperationalError("injected startup failure")
+
+    database = GatedDatabase(tmp_path / "fcc.db", tmp_path / "fcc.lock")
+    starting = asyncio.create_task(database.start())
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        if cancel:
+            starting.cancel()
+        competing = sqlite_database.SQLiteDatabase(database.path, tmp_path / "fcc.lock")
+        with pytest.raises(sqlite3.OperationalError, match="another FCC"):
+            await competing.start()
+        await competing.close()
+    finally:
+        release.set()
+    try:
+        with pytest.raises(
+            asyncio.CancelledError if cancel else sqlite3.OperationalError
+        ):
+            await starting
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            observed[0].execute("SELECT 1")
+        reopened = sqlite_database.SQLiteDatabase(database.path, tmp_path / "fcc.lock")
+        try:
+            await reopened.start()
+        finally:
+            await reopened.close()
+    finally:
+        await database.close()
+
+
+def test_connection_setup_failure_closes_raw_connection(tmp_path, monkeypatch):
+    connect = sqlite3.connect
+    observed = []
+
+    class FailedSetup(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if sql.startswith("PRAGMA foreign_keys"):
+                raise sqlite3.OperationalError("injected configuration failure")
+            return super().execute(sql, *args)
+
+    def create(*args, **kwargs):
+        connection = connect(*args, **kwargs, factory=FailedSetup)
+        observed.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite_database.sqlite3, "connect", create)
+    with pytest.raises(sqlite3.OperationalError, match="configuration"):
+        sqlite_database._connect(tmp_path / "fcc.db")
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        observed[0].execute("SELECT 1")
+
+
+@pytest.mark.asyncio
+async def test_partial_pool_creation_cleans_up_writer(tmp_path, monkeypatch):
+    database = sqlite_database.SQLiteDatabase(
+        tmp_path / "fcc.db", tmp_path / "fcc.lock"
+    )
+    create_pool = database._pool
+    observed = []
+
+    def partial(size):
+        if size == 4:
+            raise RuntimeError("reader pool creation failed")
+        pool = create_pool(size)
+        with closing(pool.connect()) as lease:
+            observed.append(lease.driver_connection)
+        return pool
+
+    monkeypatch.setattr(database, "_pool", partial)
+    try:
+        with pytest.raises(RuntimeError, match="reader pool"):
+            await database.start()
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            observed[0].execute("SELECT 1")
+        other = sqlite_database.SQLiteDatabase(database.path, tmp_path / "fcc.lock")
+        try:
+            await other.start()
+        finally:
+            await other.close()
+    finally:
+        await database.close()
+
+
+@pytest.mark.asyncio
+async def test_disposal_failure_retains_owner_and_can_be_retried(
+    database_factory, tmp_path, monkeypatch
+):
+    database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
+    await database.start()
+    reader_connections = []
+    await database.run(lambda c: reader_connections.append(c), write=False)
+    writer = database._writer
+    dispose = writer.dispose
+
+    def fail():
+        raise RuntimeError("injected disposal failure")
+
+    monkeypatch.setattr(writer, "dispose", fail)
+    try:
+        with pytest.raises(RuntimeError, match="disposal"):
+            await database.close()
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            reader_connections[0].execute("SELECT 1")
+        competing = database_factory(database.path, tmp_path / "fcc.lock")
+        with pytest.raises(sqlite3.OperationalError, match="another FCC"):
+            await competing.start()
+    finally:
+        monkeypatch.setattr(writer, "dispose", dispose)
+        await database.close()
+    reopened = database_factory(database.path, tmp_path / "fcc.lock")
+    await reopened.start()
 
 
 def historical_database(path: Path, version: int) -> None:

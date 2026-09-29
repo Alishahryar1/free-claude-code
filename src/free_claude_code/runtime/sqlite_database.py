@@ -1,7 +1,7 @@
 """Connection, transaction, and lifetime ownership of FCC's shared database.
 
-The application holds the owner lock until both features close. Each connection
-is opened, used, and closed within initialization or one synchronous transaction.
+The application holds the owner lock until both features close and pooled
+connections are disposed. Each transaction exclusively leases one connection.
 """
 
 import asyncio
@@ -10,6 +10,11 @@ import sqlite3
 from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
+from typing import cast
+
+from sqlalchemy.engine.interfaces import DBAPIConnection
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+from sqlalchemy.pool import QueuePool
 
 from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
@@ -36,15 +41,22 @@ _MESSAGING_COLUMNS = {
 }
 
 
-def _connect(path: Path, *, existing: bool = False) -> sqlite3.Connection:
+def _connect(
+    path: Path, *, existing: bool = False, check_same_thread: bool = True
+) -> sqlite3.Connection:
     connection = sqlite3.connect(
         path.as_uri() + ("?mode=rw" if existing else "?mode=rwc"),
         uri=True,
         timeout=10,
         autocommit=True,
+        check_same_thread=check_same_thread,
     )
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON").close()
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 
@@ -191,6 +203,10 @@ class SQLiteDatabase:
         self._closing = False
         self._startup_error: Exception | None = None
         self._operations: set[asyncio.Task] = set()
+        self._writer: QueuePool | None = None
+        self._readers: QueuePool | None = None
+        self._write_admission = asyncio.Semaphore(1)
+        self._read_admission = asyncio.Semaphore(4)
 
     async def start(self) -> None:
         async with self._lifecycle:
@@ -204,10 +220,10 @@ class SQLiteDatabase:
                 await run_sync_owned(self._initialize)
             except Exception as exc:
                 self._startup_error = exc
-                self._owner.release()
+                await run_sync_owned(self._dispose)
                 raise
             except BaseException:
-                self._owner.release()
+                await run_sync_owned(self._dispose)
                 raise
             self._started = True
 
@@ -224,37 +240,111 @@ class SQLiteDatabase:
             for path in (self.path, Path(f"{self.path}-wal"), Path(f"{self.path}-shm")):
                 if path.exists():
                     path.chmod(0o600)
+        self._writer = self._pool(1)
+        self._readers = self._pool(4)
+
+    def _pool(self, size: int) -> QueuePool:
+        return QueuePool(
+            lambda: cast(DBAPIConnection, _connect(self.path, check_same_thread=False)),
+            pool_size=size,
+            max_overflow=0,
+            timeout=10,
+            reset_on_return=None,
+        )
+
+    def _dispose(self) -> None:
+        try:
+            if self._writer is not None:
+                self._writer.dispose()
+                self._writer = None
+        finally:
+            if self._readers is not None:
+                self._readers.dispose()
+                self._readers = None
+        self._owner.release()
 
     def execute[T](
         self, operation: Callable[[sqlite3.Connection], T], *, write: bool = True
     ) -> T:
-        """Run one transaction inside an admitted worker, closing its connection.
+        """Run a writer-pool transaction inside an already admitted worker.
 
         Callbacks consume the connection synchronously and return materialized
-        results. They must not begin or finish the outer transaction themselves.
+        results. They must not control the outer transaction, retain or close
+        the connection, or change connection-wide settings.
         Legacy import uses this primitive for several transactions in one worker.
         """
-        with closing(_connect(self.path)) as connection:
+        return self._transaction(self._writer, operation, write=write)
+
+    def _transaction[T](
+        self,
+        pool: QueuePool | None,
+        operation: Callable[[sqlite3.Connection], T],
+        *,
+        write: bool,
+    ) -> T:
+        if pool is None:
+            raise sqlite3.OperationalError("FCC storage is closed")
+        try:
+            lease = pool.connect()
+        except PoolTimeoutError as exc:
+            raise sqlite3.OperationalError(
+                "Timed out waiting for FCC storage connection capacity"
+            ) from exc
+        try:
+            connection = lease.driver_connection
+            if not isinstance(connection, sqlite3.Connection):
+                raise sqlite3.OperationalError("Invalid FCC storage connection")
+            if connection.in_transaction:
+                raise sqlite3.OperationalError("FCC storage connection is not clean")
+        except BaseException as exc:
+            lease.invalidate(exc)
+            lease.close()
+            raise
+        try:
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+            result = operation(connection)
+            connection.execute("COMMIT")
+            return result
+        except BaseException as exc:
             try:
-                result = operation(connection)
-                connection.execute("COMMIT")
-                return result
-            except BaseException:
                 if connection.in_transaction:
                     connection.execute("ROLLBACK")
-                raise
+                if connection.in_transaction:
+                    raise sqlite3.OperationalError(
+                        "FCC storage rollback did not finish"
+                    )
+            except BaseException as cleanup_error:
+                lease.invalidate(cleanup_error)
+                raise exc from cleanup_error
+            raise
+        finally:
+            lease.close()
 
     async def run[T](
         self, operation: Callable[[sqlite3.Connection], T], *, write: bool = True
     ) -> T:
         """Admit and supervise one transaction through committed result delivery."""
-        return await self.work(lambda: self.execute(operation, write=write))
+        if write:
+            return await self.work(lambda: self.execute(operation))
+        return await self._work(
+            lambda: self._transaction(self._readers, operation, write=False),
+            self._read_admission,
+        )
 
     async def work[T](self, operation: Callable[[], T]) -> T:
+        return await self._work(operation, self._write_admission)
+
+    async def _work[T](
+        self, operation: Callable[[], T], admission: asyncio.Semaphore
+    ) -> T:
         if not self._started or self._closing:
             raise sqlite3.OperationalError("FCC storage is closed")
-        task = asyncio.create_task(run_sync_owned(operation))
+
+        async def admitted() -> T:
+            async with admission:
+                return await run_sync_owned(operation)
+
+        task = asyncio.create_task(admitted())
         self._operations.add(task)
         try:
             # Deliver the result before cancellation can separate SQL commit from
@@ -279,4 +369,4 @@ class SQLiteDatabase:
                     except asyncio.CancelledError:
                         continue
             self._started = False
-            await run_sync_owned(self._owner.release)
+            await run_sync_owned(self._dispose)

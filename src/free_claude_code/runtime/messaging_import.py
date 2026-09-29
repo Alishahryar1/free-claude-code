@@ -201,6 +201,6 @@ def _import_legacy(database: SQLiteDatabase, path: Path) -> str | None:
         database.execute(
             lambda connection: connection.execute(
                 "UPDATE messaging_legacy_import SET cleanup_pending=0"
-            )
+            ).close()
         )
     return warning
