@@ -28,6 +28,10 @@ from free_claude_code.core.openai_responses import (
     committed_response_failure_frame,
     openai_error_type_for_failure,
 )
+from free_claude_code.core.request_outcomes import (
+    record_request_exception,
+    record_request_failure,
+)
 from free_claude_code.core.trace import close_stream_input, trace_event
 
 TERMINAL_EXECUTION_ERROR_HEADERS = {"x-should-retry": "false"}
@@ -198,6 +202,10 @@ def trace_terminal_execution_error(
     error: BaseException | None = None,
 ) -> None:
     """Record one correlated terminal-execution decision at the HTTP boundary."""
+    if error is not None:
+        record_request_exception(error)
+    else:
+        record_request_failure(error_type)
     fields: dict[str, object] = {
         "stage": "egress",
         "event": "free_claude_code.api.response.terminal_execution_error",

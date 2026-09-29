@@ -29,6 +29,7 @@ from free_claude_code.core.openai_responses import (
     openai_error_type_for_failure,
     openai_failure_payload,
 )
+from free_claude_code.core.request_outcomes import record_request_route
 
 
 class ResponsesHandler:
@@ -77,6 +78,10 @@ class ResponsesHandler:
 
         try:
             routed = self._model_router.resolve_responses_request(request_data)
+            record_request_route(
+                routed.resolved.primary.provider_id,
+                routed.resolved.primary.provider_model,
+            )
             streamed = self._provider_executor.stream_responses(
                 routed,
                 raw_log_payload=request_payload,
