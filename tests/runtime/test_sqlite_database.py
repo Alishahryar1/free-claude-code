@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -252,8 +253,9 @@ async def test_checkout_timeout_uses_sqlite_error_contract(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_startup_failure_disposes_connections_before_releasing_owner(
-    tmp_path, cancel
+    tmp_path, cancel, initialized_database
 ):
+    shutil.copyfile(initialized_database, tmp_path / "fcc.db")
     entered, release = threading.Event(), threading.Event()
     observed = []
 
@@ -292,6 +294,14 @@ async def test_startup_failure_disposes_connections_before_releasing_owner(
             await reopened.close()
     finally:
         await database.close()
+
+
+@pytest.fixture(scope="module")
+def initialized_database(tmp_path_factory):
+    """Build the schema once, outside the ownership test's synchronization window."""
+    path = tmp_path_factory.mktemp("initialized-database") / "fcc.db"
+    initialize_database(path)
+    return path
 
 
 def test_connection_setup_failure_closes_raw_connection(tmp_path, monkeypatch):

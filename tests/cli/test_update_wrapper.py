@@ -45,7 +45,9 @@ def installer_server(body, status, outcome):
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}
+    )
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_port}/install", requests
@@ -116,7 +118,6 @@ def test_installed_update_delegates_and_survives_replacement(tmp_path, outcome):
     env.update(
         UV_TOOL_DIR=str(area / "tools"),
         UV_TOOL_BIN_DIR=str(area / "bin"),
-        UV_CACHE_DIR=str(area / "cache"),
         UV_NO_CONFIG="1",
         UV_PYTHON_DOWNLOADS="never",
         FCC_TEST_LAUNCHER=str(
