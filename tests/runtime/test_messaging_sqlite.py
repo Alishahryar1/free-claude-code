@@ -476,18 +476,19 @@ async def test_import_outer_failure_rolls_back_released_units(
             connection.set_authorizer(authorize)
             return operation(connection)
 
-        try:
-            return transaction(pool, faulting, write=write)
-        finally:
-            for connection in observed:
-                connection.set_authorizer(None)
+        result = transaction(pool, faulting, write=write)
+        # Failed transactions discard their connection; only successful leases
+        # need the injected connection state restored before another checkout.
+        for connection in observed:
+            connection.set_authorizer(None)
+        return result
 
     await storage.database.run(
         lambda connection: connection.execute("SELECT 1").close()
     )
     with (
         patch.object(storage.database, "_transaction", faulting_transaction),
-        pytest.raises(sqlite3.DatabaseError),
+        pytest.raises(sqlite3.DatabaseError, match="not authorized"),
     ):
         await import_legacy(storage.database, source)
     assert "messaging_nodes" in inserted and "messaging_managed_messages" in inserted

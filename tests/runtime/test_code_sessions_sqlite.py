@@ -2,6 +2,7 @@ import asyncio
 import json
 import sqlite3
 import threading
+import traceback
 import uuid
 from contextlib import closing
 from typing import Literal
@@ -20,6 +21,52 @@ from free_claude_code.application.code_sessions.models import (
 from free_claude_code.runtime import code_sessions_sqlite as code_store_module
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.sqlite_database import SQLiteDatabase
+
+
+@pytest.mark.asyncio
+async def test_failed_history_decode_cannot_leak_snapshot_to_next_reader(store):
+    session = await store.create(
+        CodeSession(id="s", cwd="/work", model="provider/model", title="before")
+    )
+
+    def seed(connection):
+        for index in range(2):
+            code_store_module._insert(
+                connection,
+                "code_runs",
+                CodeRun(
+                    id=f"r{index}",
+                    session_id=session.id,
+                    text="test",
+                    model=session.model,
+                    ordinal=index + 1,
+                    status="completed",
+                ),
+            )
+        connection.execute(
+            "UPDATE code_runs SET error_details='invalid json' WHERE id='r0'"
+        ).close()
+
+    await store.database.run(seed)
+    with pytest.raises(json.JSONDecodeError) as failure:
+        await store.runs(session.id)
+    # Keep the traceback, and therefore its unfinished SELECT cursor, alive.
+    try:
+        await store.database.run(
+            lambda connection: connection.execute(
+                "UPDATE code_sessions SET title='after' WHERE id=?", (session.id,)
+            ).close()
+        )
+        with closing(sqlite3.connect(store.database.path)) as external:
+            assert (
+                external.execute(
+                    "SELECT title FROM code_sessions WHERE id=?", (session.id,)
+                ).fetchone()[0]
+                == "after"
+            )
+        assert (await store.get_session(session.id)).title == "after"
+    finally:
+        traceback.clear_frames(failure.value.__traceback__)
 
 
 @pytest.mark.asyncio

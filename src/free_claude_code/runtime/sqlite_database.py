@@ -314,8 +314,11 @@ class SQLiteDatabase:
                         "FCC storage rollback did not finish"
                     )
             except BaseException as cleanup_error:
-                lease.invalidate(cleanup_error)
                 raise exc from cleanup_error
+            finally:
+                # A traceback can retain a SELECT cursor after ROLLBACK. Never
+                # let that cursor's snapshot reach the next borrower.
+                lease.invalidate(exc)
             raise
         finally:
             lease.close()

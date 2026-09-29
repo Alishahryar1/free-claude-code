@@ -180,7 +180,7 @@ async def test_reader_leases_are_bounded_and_can_move_between_threads(
 @pytest.mark.parametrize(
     "failure", ["begin", "callback", "commit", "rollback", "closed"]
 )
-async def test_failed_transactions_are_clean_or_replaced(
+async def test_failed_transactions_discard_the_connection(
     database_factory, tmp_path, failure
 ):
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
@@ -218,14 +218,13 @@ async def test_failed_transactions_are_clean_or_replaced(
     )
     with pytest.raises(error_type) as error:
         await database.run(fail)
-    invalidated = failure in ("rollback", "closed")
-    if invalidated:
+    if failure in ("rollback", "closed"):
         assert isinstance(error.value.__cause__, sqlite3.Error)
-    else:
-        await database.work(lambda: observed[0].set_authorizer(None))
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        observed[0].execute("SELECT 1")
 
     def verify(connection):
-        assert (connection is observed[0]) is not invalidated
+        assert connection is not observed[0]
         assert (
             connection.execute("SELECT count(*) FROM code_deleted").fetchone()[0] == 0
         )
