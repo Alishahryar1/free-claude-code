@@ -190,7 +190,8 @@ def test_apply_network_error_unlocks_form_and_keeps_edits(
 
 
 def test_restart_waits_for_a_new_running_server(page: Page, admin_base_url: str):
-    pending: list[Route] = []
+    status = {"status": "running", "instance_id": "old-server"}
+    status_url = f"{admin_base_url}/admin/api/status"
     page.route(
         "**/admin/api/config/apply",
         lambda route: route.fulfill(
@@ -210,21 +211,25 @@ def test_restart_waits_for_a_new_running_server(page: Page, admin_base_url: str)
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
     page.wait_for_function("!state.startupRequest && !state.startupTimer")
-    page.route("**/admin/api/status", lambda route: pending.append(route))
+    page.route(status_url, lambda route: route.fulfill(json=status))
     open_provider(page, "nvidia_nim")
     page.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
     with page.expect_request("**/admin/api/status"):
         page.get_by_role("button", name="Save", exact=True).click()
     expect(page.locator("#applyButton")).to_have_text("Reconnecting…")
-    for status in (
+    for next_status in (
         {"status": "running", "instance_id": "old-server"},
         {"status": "stopping", "instance_id": "new-server"},
     ):
-        with page.expect_request("**/admin/api/status"):
-            pending.pop(0).fulfill(json=status)
+        with page.expect_response(
+            lambda response, expected=next_status: (
+                response.url == status_url and response.json() == expected
+            )
+        ):
+            status = next_status
         expect(page.locator("#view-providers")).to_have_attribute("inert", "")
         expect(page.locator("#dirtyState")).to_have_text("Changes saved")
-    pending.pop(0).fulfill(json={"status": "running", "instance_id": "new-server"})
+    status = {"status": "running", "instance_id": "new-server"}
     expect(page.locator('[data-provider="nvidia_nim"]')).to_be_enabled()
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     expect(page.locator("#messageArea")).to_have_text("Applied")
