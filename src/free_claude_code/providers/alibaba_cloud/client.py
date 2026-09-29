@@ -20,6 +20,8 @@ from free_claude_code.providers.openai_chat import (
     OpenAIModelListing,
 )
 
+_CHAT_CAPABILITIES = frozenset({"TG", "Reasoning", "VU", "Multimodal-Omni"})
+
 _PROFILE = OpenAIChatProfile(
     OpenAIChatRequestPolicy(
         provider_name="ALIBABA_CLOUD",
@@ -55,6 +57,7 @@ class AlibabaCloudProvider(OpenAIChatProvider):
         # An absolute URL avoids the OpenAI SDK appending to /compatible-mode/v1.
         url = urljoin(self._base_url, "/api/v1/models")
         models: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
         expected_total: int | None = None
         for page in range(1, 101):
             params = {
@@ -88,13 +91,32 @@ class AlibabaCloudProvider(OpenAIChatProvider):
                 or not isinstance(items, list)
                 or not items
                 or any(not isinstance(item, dict) for item in items)
-                or len(models) + len(items) > total
+                or len(seen_ids) + len(items) > total
             ):
                 raise ModelListResponseError(
                     "ALIBABA_CLOUD model-list page is malformed"
                 )
             expected_total = total
             for item in items:
+                model_id = item.get("model")
+                if not isinstance(model_id, str) or not model_id.strip():
+                    raise ModelListResponseError(
+                        "ALIBABA_CLOUD model-list item is missing its model id"
+                    )
+                if model_id in seen_ids:
+                    raise ModelListResponseError(
+                        "ALIBABA_CLOUD model-list contains duplicate model ids"
+                    )
+                seen_ids.add(model_id)
+                # Count all catalog entries before selecting our HTTP chat subset.
+                capabilities = item.get("capabilities")
+                if (
+                    not isinstance(capabilities, list)
+                    or any(not isinstance(value, str) for value in capabilities)
+                    or not _CHAT_CAPABILITIES.intersection(capabilities)
+                    or any(value.startswith("Realtime-") for value in capabilities)
+                ):
+                    continue
                 metadata = item.get("inference_metadata")
                 modalities = (
                     metadata.get("request_modality")
@@ -110,7 +132,7 @@ class AlibabaCloudProvider(OpenAIChatProvider):
                         else None,
                     }
                 )
-            if len(models) == total:
+            if len(seen_ids) == total:
                 return {"data": models}
         raise ModelListResponseError(
             "ALIBABA_CLOUD model-list pagination exceeded 100 pages"

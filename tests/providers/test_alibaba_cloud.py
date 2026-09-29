@@ -122,6 +122,76 @@ async def test_discovery_fetches_all_pages_with_same_region_and_auth(endpoint):
 
 
 @pytest.mark.asyncio
+async def test_discovery_filters_transport_after_counting_every_page():
+    requests = []
+    pages = [
+        [
+            model("realtime", capabilities=["Realtime-Omni"]),
+            model("voice", capabilities=["TG", "Realtime-Chatting"]),
+            model("audio", capabilities=["ASR"]),
+            model("unknown", capabilities=[]),
+        ],
+        [
+            model("chat", capabilities=["TG"]),
+            model("reasoner", capabilities=["Reasoning"]),
+            model("vision", capabilities=["VU"]),
+            model("omni", capabilities=["Multimodal-Omni"]),
+        ],
+    ]
+
+    def handler(request):
+        number = int(request.url.params["page_no"])
+        requests.append(number)
+        return httpx2.Response(
+            200, json=page(pages[number - 1], number=number, total=8)
+        )
+
+    async with provider_for(handler) as provider:
+        infos = await provider.list_model_infos()
+
+    assert requests == [1, 2]
+    assert {info.model_id for info in infos} == {"chat", "reasoner", "vision", "omni"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capabilities", [None, [], ["New-API"], "TG", [1]])
+async def test_discovery_does_not_assume_unknown_capabilities_support_chat(
+    capabilities,
+):
+    payload = page([model(), model("unknown", capabilities=capabilities)])
+    async with provider_for(lambda _: httpx2.Response(200, json=payload)) as provider:
+        infos = await provider.list_model_infos()
+    assert {info.model_id for info in infos} == {"qwen-coder"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("same_page", [False, True])
+@pytest.mark.parametrize("capabilities", [["TG"], ["Realtime-Omni"]])
+async def test_discovery_rejects_duplicate_ids_before_publishing_catalog(
+    same_page, capabilities
+):
+    requests = []
+    repeated = model("repeated", capabilities=capabilities)
+    pages = (
+        [[model("chat"), repeated, repeated]]
+        if same_page
+        else [[model("chat"), repeated], [repeated]]
+    )
+
+    def handler(request):
+        number = int(request.url.params["page_no"])
+        requests.append(number)
+        return httpx2.Response(
+            200, json=page(pages[number - 1], number=number, total=3)
+        )
+
+    async with provider_for(handler) as provider:
+        with pytest.raises(ModelListResponseError, match="duplicate"):
+            await provider.list_model_infos()
+    assert requests == ([1] if same_page else [1, 2])
+
+
+@pytest.mark.asyncio
 async def test_discovery_filters_non_tool_models_without_guessing_missing_limits():
     payload = page(
         [model(), model("embedding", features=[]), model("unknown", model_info=None)]
