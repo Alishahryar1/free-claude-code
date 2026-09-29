@@ -2,8 +2,21 @@
 
 import socket
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 
 import uvicorn
+
+from free_claude_code.config.logging_config import InterceptHandler
+
+
+def uvicorn_log_config(*, console: bool) -> dict[str, object]:
+    """Send Uvicorn records to FCC's file and optional standard console handlers."""
+    config = deepcopy(uvicorn.config.LOGGING_CONFIG)
+    config["handlers"]["fcc"] = {"()": InterceptHandler}
+    for name in ("uvicorn", "uvicorn.access"):
+        handlers = config["loggers"][name]["handlers"]
+        config["loggers"][name]["handlers"] = [*handlers, "fcc"] if console else ["fcc"]
+    return config
 
 
 class RuntimeServer(uvicorn.Server):

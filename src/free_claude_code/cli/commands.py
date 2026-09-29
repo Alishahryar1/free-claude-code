@@ -259,7 +259,7 @@ class ServerSupervisor:
 
         from free_claude_code.runtime.bootstrap import build_asgi_app
 
-        from .uvicorn_server import RuntimeServer
+        from .uvicorn_server import RuntimeServer, uvicorn_log_config
 
         asgi_app = build_asgi_app(
             settings,
@@ -270,9 +270,7 @@ class ServerSupervisor:
             host=settings.host,
             port=settings.port,
             log_level="debug",
-            log_config=(
-                uvicorn.config.LOGGING_CONFIG if self._console_logging else None
-            ),
+            log_config=uvicorn_log_config(console=self._console_logging),
             timeout_graceful_shutdown=SERVER_GRACEFUL_SHUTDOWN_SECONDS,
         )
 
