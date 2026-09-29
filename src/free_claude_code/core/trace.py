@@ -1,6 +1,6 @@
 """Structured DEBUG traces for end-to-end request / CLI / provider logging.
 
-Emitted lines are merged into JSON log rows by ``config.logging_config``.
+Trace payloads are preserved in ``record.extra.trace_payload`` by Loguru.
 Conversation and Claude Code prompts are logged verbatim unless values live under
 sanitized credential keys (e.g. ``api_key``, ``authorization``). The default
 INFO log level excludes these detailed request traces.
@@ -50,7 +50,7 @@ def sanitize_trace_value(obj: Any) -> Any:
 
 
 def trace_event(*, stage: str, event: str, source: str, **fields: Any) -> None:
-    """Emit one structured DEBUG trace row merged into JSON by the log sink."""
+    """Emit a DEBUG record with a structured payload bound to its extra fields."""
     payload = sanitize_trace_value(
         {
             "stage": stage,

@@ -5,8 +5,11 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from loguru import logger
 
+from free_claude_code.config.logging_config import configure_logging
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.trace import trace_event
 from smoke.lib import child_process
 from smoke.lib import e2e as smoke_e2e
 from smoke.lib import http as smoke_http
@@ -20,7 +23,28 @@ from smoke.lib.config import ProviderModel, SmokeConfig
 from smoke.lib.e2e import ConversationDriver
 from smoke.lib.http import collect_message_stream
 from smoke.lib.server import RunningServer
+from smoke.product import test_client_product_live as client_smoke
 from smoke.product import test_provider_product_live as provider_smoke
+
+
+def test_smoke_reads_native_trace_events_from_mixed_subprocess_output(tmp_path):
+    path = tmp_path / "server.log"
+    configure_logging(path, force=True, level="DEBUG")
+    logger.info("ordinary log record")
+    trace_event(stage="execution", event="test.completed", source="test", status=200)
+    logger.complete()
+    output = 'INFO: server started\n{"type":"result"}\n' + path.read_text(
+        encoding="utf-8"
+    )
+    assert client_smoke._trace_log_events(output) == [
+        {
+            "stage": "execution",
+            "event": "test.completed",
+            "source": "test",
+            "status": 200,
+        }
+    ]
+    assert {"type": "result"} in client_smoke._json_object_lines(output)
 
 
 def test_fcc_server_command_uses_cli_entrypoint() -> None:

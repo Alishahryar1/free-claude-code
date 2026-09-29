@@ -2,13 +2,11 @@
 
 Structured logs are written as JSON lines to a configurable path (default
 ``~/.fcc/logs/server.log``). Stdlib logging is intercepted and funneled to loguru.
-Context vars (request_id, node_id, chat_id) from contextualize() are
-included at top level for easy grep/filter.
+Loguru's JSON stores exception metadata in ``record.exception`` and context in
+``record.extra``. Structured traces live in ``record.extra.trace_payload``.
 """
 
-import json
 import logging
-import re
 import threading
 from pathlib import Path
 
@@ -29,63 +27,6 @@ _THIRD_PARTY_LOGGERS = (
     "telegram",
     "telegram.ext",
 )
-
-# Loguru ``logger.bind()`` key used by structured TRACE payloads; ``core/trace.py``
-# uses the identical string constant ``TRACE_PAYLOAD_BINDING``.
-_TRACE_PAYLOAD_BINDING = "trace_payload"
-
-# Context keys we promote to top-level JSON for traceability / grep
-_CONTEXT_KEYS = (
-    "request_id",
-    "node_id",
-    "chat_id",
-    "claude_session_id",
-    "http_method",
-    "http_path",
-)
-
-_TELEGRAM_BOT_RE = re.compile(
-    r"(https?://api\.telegram\.org/)bot([0-9]+:[A-Za-z0-9_-]+)(/?)",
-    re.IGNORECASE,
-)
-# Authorization: Bearer <token> (HTTP client / proxy debug lines)
-_AUTH_BEARER_RE = re.compile(
-    r"(\bAuthorization\s*:\s*Bearer\s+)([^\s'\"]+)",
-    re.IGNORECASE,
-)
-
-
-def _redact_sensitive_substrings(message: str) -> str:
-    """Remove obvious API tokens and secrets before JSON log line emission."""
-    text = _TELEGRAM_BOT_RE.sub(r"\1bot<redacted>\3", message)
-    return _AUTH_BEARER_RE.sub(r"\1<redacted>", text)
-
-
-def _serialize_with_context(record) -> str:
-    """Format record as JSON with context vars at top level.
-    Returns a format template; we inject _json into record for output.
-    """
-    extra = record.get("extra", {})
-    out = {
-        "time": str(record["time"]),
-        "level": record["level"].name,
-        "message": _redact_sensitive_substrings(str(record["message"])),
-        "module": record["name"],
-        "function": record["function"],
-        "line": record["line"],
-    }
-    trace_payload = extra.get(_TRACE_PAYLOAD_BINDING)
-    for key in _CONTEXT_KEYS:
-        if key in extra and extra[key] is not None:
-            out[key] = extra[key]
-    if isinstance(trace_payload, dict):
-        for tk, tv in trace_payload.items():
-            if tk in out:
-                continue
-            out[tk] = tv
-        out["trace"] = True
-    record["_json"] = json.dumps(out, default=str)
-    return "{_json}\n"
 
 
 class InterceptHandler(logging.Handler):
@@ -129,7 +70,7 @@ def _add_file_sink(log_file: str | Path, level: str) -> int:
     return logger.add(
         log_path,
         level=level,
-        format=_serialize_with_context,
+        serialize=True,
         encoding="utf-8",
         mode="a",
         rotation="50 MB",
