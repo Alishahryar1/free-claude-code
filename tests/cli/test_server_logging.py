@@ -30,11 +30,14 @@ def _exercise_server_logging(
     # An earlier server may already have installed Uvicorn's console handlers.
     logging.config.dictConfig(baseline)
     settings = Settings(host="127.0.0.1", port=8082, log_level=level)
+    instances = []
 
     def build_app(settings, restart_callback):
+        instances.append(f"instance-{len(instances) + 1}")
         configure_logging(path, level=settings.log_level)
         runtime = MagicMock(
             spec=ApplicationRuntime,
+            instance_id=instances[-1],
             settings=settings,
             _draining=False,
             _http_ready=asyncio.Event(),
@@ -75,6 +78,7 @@ def _exercise_server_logging(
             supervisor._run_bound(
                 settings, [], open_admin_browser=False, restart_generation=0
             )
+    logger.warning("outside server run")
     logger.complete()
     assert baseline == uvicorn.config.LOGGING_CONFIG
 
@@ -122,6 +126,17 @@ def test_server_logs_reach_file_once_per_start(
         assert row["record"]["exception"]["type"] == "ValueError"
         assert "controlled server failure" in row["text"]
         assert "Traceback" in row["text"]
+    server_records = [
+        row["record"]
+        for row in rows
+        if row["record"]["message"] != "outside server run"
+    ]
+    assert {record["extra"]["instance_id"] for record in server_records} == {
+        "instance-1",
+        "instance-2",
+    }
+    assert len({record["process"]["id"] for record in server_records}) == 1
+    assert "instance_id" not in rows[-1]["record"]["extra"]
     assert result.stdout.count("/test-request") == (2 if console else 0)
     assert result.stderr.count("Admin UI:") == (2 if console else 0)
     assert result.stderr.count("ASGI request failed") == (2 if console else 0)

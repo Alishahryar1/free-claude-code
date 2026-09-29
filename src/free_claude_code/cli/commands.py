@@ -305,7 +305,8 @@ class ServerSupervisor:
                 server.should_exit = True
 
         try:
-            server.run(sockets=sockets)
+            with logger.contextualize(instance_id=asgi_app.runtime.instance_id):
+                server.run(sockets=sockets)
         finally:
             with self._lock:
                 if self._server is server:

@@ -32,6 +32,7 @@ from free_claude_code.config.server_urls import local_admin_url
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.version import package_version
 from free_claude_code.messaging.voice import Transcriber
 from free_claude_code.providers.credential_validation import (
     CredentialStatus,
@@ -150,6 +151,11 @@ class ApplicationRuntime:
         )
 
     @property
+    def instance_id(self) -> str:
+        """Identity shared by this runtime's status responses and logs."""
+        return self._instance_id
+
+    @property
     def settings(self) -> Settings:
         return self.provider_manager.current_settings()
 
@@ -167,7 +173,11 @@ class ApplicationRuntime:
                     )
                 if self._started:
                     return
-                logger.info("Starting Claude Code Proxy...")
+                logger.bind(
+                    event="server.starting",
+                    instance_id=self.instance_id,
+                    fcc_version=package_version(),
+                ).info("Starting Claude Code Proxy...")
                 await _await_owned_task(
                     asyncio.create_task(self._configuration.initialize())
                 )

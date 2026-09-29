@@ -224,6 +224,7 @@ def _run_browser_shutdown_probe(mode, outcome, directory, setup_delay="0"):
     if mode in {"server", "desktop"}:
         supervisor = commands.ServerSupervisor(console_logging=False)
         runtime = SimpleNamespace(
+            instance_id="browser-probe-instance",
             is_closed=True,
             begin_shutdown=lambda: None,
             http_started=lambda: None,
