@@ -1,3 +1,4 @@
+import json
 import subprocess
 from contextlib import nullcontext
 from pathlib import Path
@@ -5,6 +6,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from loguru import logger
 
 from free_claude_code.config.settings import Settings
 from smoke.lib import child_process
@@ -23,12 +25,44 @@ from smoke.lib.server import RunningServer
 from smoke.product import test_provider_product_live as provider_smoke
 
 
-def test_fcc_server_command_uses_cli_entrypoint() -> None:
+def test_fcc_server_command_captures_structured_logs() -> None:
     assert cmd_fcc_server() == [
         child_process.python_exe(),
         "-c",
-        "from free_claude_code.cli.entrypoints import serve; serve()",
+        "from smoke.lib.child_process import serve_with_log_capture; serve_with_log_capture()",
     ]
+
+
+def test_smoke_capture_keeps_canonical_log_and_cli_entrypoint(
+    monkeypatch, tmp_path, capsys
+):
+    from free_claude_code.cli import entrypoints
+    from free_claude_code.config import logging_config, paths
+    from free_claude_code.runtime import bootstrap
+
+    log_path = tmp_path / ".fcc" / "logs" / "server.log"
+    settings = Settings(log_level="DEBUG")
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    monkeypatch.setattr(paths, "server_log_path", lambda: log_path)
+    monkeypatch.setattr(logging_config, "_configured", False)
+
+    def serve():
+        # The real CLI bootstraps logging again. Its idempotence must preserve
+        # the extra smoke sink rather than losing or duplicating capture.
+        bootstrap.configure_logging(log_path, level=settings.log_level)
+        logger.bind(trace_payload={"event": "smoke-test"}).debug("smoke record")
+
+    monkeypatch.setattr(entrypoints, "serve", serve)
+    child_process.serve_with_log_capture()
+    logger.complete()
+    stdout = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    records = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert len(stdout) == len(records) == 1
+    assert stdout[0]["event"] == records[0]["event"] == "smoke-test"
+    logger.info("after smoke")
+    logger.complete()
+    assert capsys.readouterr().out == ""
+    assert "after smoke" in log_path.read_text()
 
 
 def test_start_server_disables_cli_admin_browser(monkeypatch, tmp_path: Path) -> None:

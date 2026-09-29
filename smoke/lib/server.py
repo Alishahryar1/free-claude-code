@@ -49,7 +49,6 @@ def start_server(
         {
             "HOST": "127.0.0.1",
             "PORT": str(port),
-            "LOG_FILE": str(log_path),
             "FCC_OPEN_BROWSER": "0",
             "MESSAGING_PLATFORM": "none",
             "PYTHONUNBUFFERED": "1",

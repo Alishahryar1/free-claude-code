@@ -1,7 +1,7 @@
 """Loguru-based structured logging configuration.
 
-Structured logs are written as JSON lines to a configurable path (default
-``logs/server.log``). Stdlib logging is intercepted and funneled to loguru.
+Structured server logs are written as JSON lines to ``~/.fcc/logs/server.log``.
+Stdlib logging is intercepted and funneled to loguru.
 Context vars (request_id, node_id, chat_id) from contextualize() are
 included at top level for easy grep/filter.
 """
@@ -150,7 +150,7 @@ def configure_logging(
     Idempotent: skips if already configured with the same path, level, and verbosity.
     On path or level change, replaces only the file sink without truncating.
     On verbosity change alone, updates only the third-party logger levels.
-    Use force=True to reconfigure from scratch.
+    Use force=True to rebuild handlers while preserving existing log records.
 
     When ``verbose_third_party`` is false, managed noisy third-party loggers
     are capped at WARNING unless explicitly configured otherwise.
@@ -173,8 +173,6 @@ def configure_logging(
         _configured = True
 
         logger.remove()
-
-        log_path.write_text("")
 
         _sink_id = _add_file_sink(log_path, level)
 

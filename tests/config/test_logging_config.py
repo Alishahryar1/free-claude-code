@@ -2,6 +2,8 @@
 
 import json
 import logging
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,10 +24,47 @@ def test_log_capture_does_not_feed_back_into_interception(caplog, capsys, monkey
 
 
 def test_configure_logging_creates_parent_directories(tmp_path) -> None:
-    """Nested log path: parent directories are created before truncating."""
+    """Nested log path: parent directories are created before opening."""
     log_file = tmp_path / "nested" / "dir" / "app.log"
     configure_logging(str(log_file), force=True)
     assert log_file.is_file()
+
+
+def test_logging_preserves_records_across_process_restarts(tmp_path):
+    log_file = tmp_path / "server.log"
+    script = """
+import sys
+from loguru import logger
+from free_claude_code.config.logging_config import configure_logging
+configure_logging(sys.argv[1])
+logger.info(sys.argv[2])
+logger.complete()
+logger.remove()
+"""
+    for message in ("first run", "second run"):
+        subprocess.run(
+            [sys.executable, "-c", script, str(log_file), message],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    records = [json.loads(line) for line in log_file.read_text().splitlines()]
+    assert [record["message"] for record in records] == ["first run", "second run"]
+
+
+def test_forced_logging_reconfiguration_preserves_records(tmp_path):
+    log_file = tmp_path / "server.log"
+    configure_logging(log_file, force=True)
+    logger.info("before reconfiguration")
+    configure_logging(log_file, force=True)
+    logger.info("after reconfiguration")
+    logger.complete()
+    records = [json.loads(line) for line in log_file.read_text().splitlines()]
+    assert [record["message"] for record in records] == [
+        "before reconfiguration",
+        "after reconfiguration",
+    ]
 
 
 def test_configure_logging_writes_json_to_file(tmp_path):

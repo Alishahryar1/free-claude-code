@@ -36,8 +36,38 @@ def cmd_fcc_server() -> list[str]:
     return [
         python_exe(),
         "-c",
-        "from free_claude_code.cli.entrypoints import serve; serve()",
+        "from smoke.lib.child_process import serve_with_log_capture; serve_with_log_capture()",
     ]
+
+
+def serve_with_log_capture() -> None:
+    """Keep canonical server logs and copy structured records to smoke output."""
+    from loguru import logger
+
+    from free_claude_code.cli.entrypoints import serve
+    from free_claude_code.config.loader import get_settings
+    from free_claude_code.config.logging_config import (
+        _serialize_with_context,
+        configure_logging,
+    )
+    from free_claude_code.config.paths import server_log_path
+
+    settings = get_settings()
+    configure_logging(
+        server_log_path(),
+        level=settings.log_level,
+        verbose_third_party=settings.log_raw_api_payloads,
+    )
+    sink = logger.add(
+        sys.stdout,
+        level=settings.log_level,
+        format=_serialize_with_context,
+        enqueue=True,
+    )
+    try:
+        serve()
+    finally:
+        logger.remove(sink)
 
 
 def run_captured_text(
