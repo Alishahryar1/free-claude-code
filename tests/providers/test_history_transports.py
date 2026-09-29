@@ -462,7 +462,7 @@ async def test_successful_fallback_stamps_its_own_origin_and_gets_unmodified_inp
     try:
         saved = await _saved_reply(
             executor.stream_messages(
-                routed, raw_log_payload={}, request_id="actual-fallback"
+                routed, raw_log_payload=dict, request_id="actual-fallback"
             ),
             "messages",
         )

@@ -1107,7 +1107,7 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
                     resolved=resolved,
                     reasoning=DEFAULT_REASONING_POLICY,
                 ),
-                raw_log_payload={},
+                raw_log_payload=dict,
                 request_id="req_opencode_cross_transport_responses",
             )
         else:
@@ -1117,7 +1117,7 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
                     resolved=resolved,
                     reasoning=DEFAULT_REASONING_POLICY,
                 ),
-                raw_log_payload={},
+                raw_log_payload=dict,
                 request_id="req_opencode_cross_transport_messages",
             )
         body = "".join([chunk async for chunk in stream])

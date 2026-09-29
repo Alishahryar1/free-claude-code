@@ -403,7 +403,7 @@ async def test_primary_context_validation_counts_toward_progress_timeout(
         route = _routed_request if wire == "messages" else _routed_responses_request
         routed = route(_target("fallback", "fallback-model"))
         stream = getattr(executor, f"stream_{wire}")(
-            routed, raw_log_payload={}, request_id="context-timeout"
+            routed, raw_log_payload=dict, request_id="context-timeout"
         )
         async with asyncio.timeout(2):
             with pytest.raises(ExecutionFailure) as error:
@@ -805,7 +805,7 @@ async def test_request_timeout_while_waiting_for_cache_leaves_refresh_running(wi
             _routed_request() if wire == "messages" else _routed_responses_request()
         )
         stream = getattr(executor, f"stream_{wire}")(
-            routed, raw_log_payload={}, request_id="cache-wait-timeout"
+            routed, raw_log_payload=dict, request_id="cache-wait-timeout"
         )
         async with asyncio.timeout(2):
             with pytest.raises(ExecutionFailure) as error:
@@ -878,7 +878,7 @@ async def test_context_rejection_before_first_event_allows_fallback(wire):
         route = _routed_request if wire == "messages" else _routed_responses_request
         stream = getattr(executor, f"stream_{wire}")(
             route(_target("fallback", "fallback-model")),
-            raw_log_payload={},
+            raw_log_payload=dict,
             request_id="context-fallback",
         )
         output = [event async for event in stream]

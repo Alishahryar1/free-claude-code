@@ -8,7 +8,7 @@ INFO log level excludes these detailed request traces.
 
 import asyncio
 import sys
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from typing import Any
 
 from loguru import logger
@@ -49,17 +49,29 @@ def sanitize_trace_value(obj: Any) -> Any:
     return obj
 
 
-def trace_event(*, stage: str, event: str, source: str, **fields: Any) -> None:
-    """Emit a DEBUG record with a structured payload bound to its extra fields."""
-    payload = sanitize_trace_value(
-        {
-            "stage": stage,
-            "event": event,
-            "source": source,
-            **fields,
-        },
+def trace_event(
+    lazy_fields: Callable[[], Mapping[str, Any]] | None = None,
+    /,
+    *,
+    stage: str,
+    event: str,
+    source: str,
+    **fields: Any,
+) -> None:
+    """Defer sanitization and the optional field factory until DEBUG is enabled."""
+    logger.opt(lazy=True).debug(
+        "TRACE {}",
+        lambda: event,
+        trace_payload=lambda: sanitize_trace_value(
+            {
+                "stage": stage,
+                "event": event,
+                "source": source,
+                **fields,
+                **(lazy_fields() if lazy_fields is not None else {}),
+            }
+        ),
     )
-    logger.bind(trace_payload=payload).debug("TRACE {}", event)
 
 
 async def close_stream_input(

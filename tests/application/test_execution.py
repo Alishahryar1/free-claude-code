@@ -389,7 +389,7 @@ async def test_fallback_receives_its_own_cached_capability_in_stream(
         event
         async for event in getattr(executor, f"stream_{ingress}")(
             route(_target("fallback", "fallback-model")),
-            raw_log_payload={},
+            raw_log_payload=dict,
             request_id="capability-fallback",
         )
     ]
@@ -433,7 +433,7 @@ def _executor_stream(
     )
     return executor.stream_messages(
         _routed_request(),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id=request_id,
     )
 
@@ -451,7 +451,7 @@ async def test_executor_routes_native_responses_without_messages_conversion() ->
 
     stream = executor.stream_responses(
         routed,
-        raw_log_payload=request.model_dump(mode="json"),
+        raw_log_payload=lambda: request.model_dump(mode="json"),
         request_id="req_responses_application",
     )
 
@@ -486,7 +486,7 @@ async def test_executor_uses_structural_provider_port_and_defers_stream_startup(
 
     stream = executor.stream_messages(
         routed,
-        raw_log_payload=request.model_dump(),
+        raw_log_payload=request.model_dump,
         request_id="req_application",
     )
 
@@ -530,7 +530,7 @@ async def test_primary_success_never_resolves_fallback() -> None:
     executor = ProviderExecutor(resolve, progress_timeout_seconds=60.0)
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "fallback-model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_primary_success",
     )
 
@@ -566,7 +566,7 @@ async def test_retryable_preframe_failure_selects_fallback_after_closing_primary
             chunk
             async for chunk in executor.stream_messages(
                 routed,
-                raw_log_payload={},
+                raw_log_payload=dict,
                 request_id="req_fallback",
             )
         ]
@@ -629,7 +629,7 @@ async def test_fallback_chain_preserves_exact_last_failure() -> None:
     )
     stream = executor.stream_messages(
         _routed_request(_target("second", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_exhausted",
     )
 
@@ -659,7 +659,7 @@ async def test_multiple_retryable_failures_walk_fallbacks_in_order() -> None:
             _target("second", "second-model"),
             _target("third", "third-model"),
         ),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_ordered_fallbacks",
     )
 
@@ -681,7 +681,7 @@ async def test_empty_primary_completion_does_not_select_fallback() -> None:
     executor = ProviderExecutor(resolve, progress_timeout_seconds=60.0)
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_empty_primary",
     )
 
@@ -703,7 +703,7 @@ async def test_unexpected_primary_failure_does_not_select_fallback() -> None:
     executor = ProviderExecutor(resolve, progress_timeout_seconds=60.0)
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_unexpected_primary",
     )
 
@@ -728,7 +728,7 @@ async def test_invalid_none_stream_remains_terminal() -> None:
     with patch.object(primary, "stream_messages", return_value=None):
         stream = executor.stream_messages(
             _routed_request(_target("fallback", "model")),
-            raw_log_payload={},
+            raw_log_payload=dict,
             request_id="req_invalid_stream",
         )
         with pytest.raises(TypeError):
@@ -760,7 +760,7 @@ async def test_nonretryable_provider_failure_selects_fallback_before_first_frame
     executor = ProviderExecutor(resolve, progress_timeout_seconds=60.0)
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_rejected",
     )
 
@@ -796,7 +796,7 @@ async def test_primary_canonical_startup_failure_selects_fallback() -> None:
 
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "fallback-model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_startup_fallback",
     )
 
@@ -824,7 +824,7 @@ async def test_nonretryable_stream_construction_failure_selects_fallback() -> No
     )
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_construction_failure",
     )
 
@@ -846,7 +846,7 @@ async def test_failure_after_first_frame_never_selects_fallback() -> None:
     executor = ProviderExecutor(resolve, progress_timeout_seconds=60.0)
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_committed",
     )
 
@@ -870,7 +870,7 @@ async def test_lazy_fallback_startup_application_error_stops_unchanged() -> None
     )
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_startup",
     )
 
@@ -919,7 +919,7 @@ async def test_candidate_requests_are_isolated_from_provider_mutation() -> None:
         chunk
         async for chunk in executor.stream_messages(
             routed,
-            raw_log_payload={},
+            raw_log_payload=dict,
             request_id="req_isolated",
         )
     ]
@@ -940,7 +940,7 @@ async def test_closing_executor_stream_closes_provider_stream_once() -> None:
     )
     stream = executor.stream_messages(
         routed,
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_early_close",
     )
 
@@ -969,7 +969,7 @@ async def test_stream_construction_failure_remains_deferred_to_iteration() -> No
 
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_deferred_construction",
     )
 
@@ -991,7 +991,7 @@ async def test_executor_validation_is_deferred_until_iteration() -> None:
 
     stream = executor.stream_messages(
         _routed_request(),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_application",
     )
     token_counter.assert_called_once()
@@ -1067,7 +1067,7 @@ async def test_application_progress_timeout_never_resolves_fallback() -> None:
     executor = ProviderExecutor(resolve, progress_timeout_seconds=0.02)
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_terminal_progress_timeout",
     )
 
@@ -1098,7 +1098,7 @@ async def test_provider_cleanup_cannot_delay_fallback_past_progress_deadline() -
     executor = ProviderExecutor(resolve, progress_timeout_seconds=0.02)
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_cleanup_timeout",
     )
 
@@ -1199,7 +1199,7 @@ async def test_fallback_transition_does_not_reset_shared_progress_deadline() -> 
     )
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_shared_deadline",
     )
     deadlines: list[float | None] = []
@@ -1277,7 +1277,7 @@ async def test_cancelling_progress_wait_remains_cancellation() -> None:
     )
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
-        raw_log_payload={},
+        raw_log_payload=dict,
         request_id="req_cancelled_progress",
     )
     task = asyncio.ensure_future(anext(stream))

@@ -934,6 +934,7 @@ class _OpenAIChatStreamRunner:
         output_reasoning = self._reasoning.output_enabled
         corrections = RequestCorrections("chat", self._reasoning_correction)
         trace_event(
+            lambda: {"body": provider_chat_body_snapshot(body)},
             stage="provider",
             event="provider.request.sent",
             source="provider",
@@ -944,7 +945,6 @@ class _OpenAIChatStreamRunner:
             downstream_model=body.get("model"),
             message_count=len(body.get("messages", [])),
             tool_count=len(body.get("tools", [])),
-            body=provider_chat_body_snapshot(body),
         )
 
         while True:
