@@ -695,6 +695,18 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             context_window_tokens_path=("context_window", "tokens"),
         ),
     ),
+    "freemodel": OpenAIChatProfile(
+        _policy(
+            "FREEMODEL",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NO_REASONING,
+        model_listing=OpenAIModelListing(
+            path="/models",
+            required_path_values=((("modality",), ("chat",)),),
+        ),
+    ),
     "lightning": OpenAIChatProfile(
         _policy(
             "LIGHTNING",

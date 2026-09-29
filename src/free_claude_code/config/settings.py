@@ -224,6 +224,11 @@ class Settings(BaseModel):
         default=None, validation_alias="LLM7_API_KEY"
     )
 
+    # ==================== FreeModel by Aiglade (OpenAI-compatible) ====================
+    freemodel_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="FREEMODEL_API_KEY"
+    )
+
     # ==================== Lightning AI (OpenAI-compatible) ====================
     lightning_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="LIGHTNING_API_KEY"
@@ -551,6 +556,9 @@ class Settings(BaseModel):
     )
     llm7_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="LLM7_PROXY"
+    )
+    freemodel_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="FREEMODEL_PROXY"
     )
     lightning_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="LIGHTNING_PROXY"

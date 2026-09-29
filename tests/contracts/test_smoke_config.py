@@ -68,6 +68,7 @@ def _settings(**overrides):
         "ollama_api_key": "",
         "poolside_api_key": "",
         "llm7_api_key": "",
+        "freemodel_api_key": "",
         "lightning_api_key": "",
         "experiential_api_key": "",
         "cheaperinference_api_key": "",

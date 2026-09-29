@@ -1093,6 +1093,7 @@ async def test_create_provider_instantiates_each_builtin():
         provider_rate_window=11,
         provider_max_concurrency=3,
         sambanova_api_key="test_sambanova_key",
+        freemodel_api_key="test_freemodel_key",
     )
     cases = {
         "nvidia_nim": NvidiaNimProvider,
@@ -1130,6 +1131,7 @@ async def test_create_provider_instantiates_each_builtin():
         "opencode_zen": OpenCodeProvider,
         "poolside": OpenAIChatProvider,
         "llm7": OpenAIChatProvider,
+        "freemodel": OpenAIChatProvider,
         "lightning": OpenAIChatProvider,
         "experiential": OpenAIChatProvider,
         "cheaperinference": OpenAIChatProvider,

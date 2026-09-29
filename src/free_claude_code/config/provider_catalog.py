@@ -83,6 +83,8 @@ NARAROUTE_DEFAULT_BASE = "https://router.bynara.id/v1"
 POOLSIDE_DEFAULT_BASE = "https://inference.poolside.ai/v1"
 # LLM7.io OpenAI-compatible Chat Completions API.
 LLM7_DEFAULT_BASE = "https://api.llm7.io/v1"
+# FreeModel by Aiglade OpenAI-compatible Chat Completions gateway.
+FREEMODEL_DEFAULT_BASE = "https://freemodel.online/v1"
 # Lightning AI Model APIs OpenAI-compatible Chat Completions gateway.
 LIGHTNING_DEFAULT_BASE = "https://lightning.ai/api/v1"
 # Experiential Labs OpenAI-compatible Chat Completions gateway.
@@ -670,6 +672,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="llm7_api_key",
         default_base_url=LLM7_DEFAULT_BASE,
         proxy_attr="llm7_proxy",
+    ),
+    "freemodel": ProviderDescriptor(
+        provider_id="freemodel",
+        display_name="FreeModel by Aiglade",
+        website_url="https://freemodel.online/",
+        logo_filename="freemodel.svg",
+        credential_env="FREEMODEL_API_KEY",
+        credential_url="https://freemodel.online/console/",
+        credential_attr="freemodel_api_key",
+        default_base_url=FREEMODEL_DEFAULT_BASE,
+        proxy_attr="freemodel_proxy",
     ),
     "scaleway": ProviderDescriptor(
         provider_id="scaleway",
