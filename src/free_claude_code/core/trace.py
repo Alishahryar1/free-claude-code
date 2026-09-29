@@ -1,4 +1,4 @@
-"""Structured DEBUG traces for end-to-end request / CLI / provider logging.
+"""Structured DEBUG traces and stream cleanup warnings.
 
 Trace payloads are preserved in ``record.extra.trace_payload`` by Loguru.
 Conversation and Claude Code prompts are logged verbatim unless values live under
@@ -73,7 +73,7 @@ async def close_stream_input(
     close_error = await try_close_async_iterator(iterator)
     if close_error is None:
         return
-    trace_event(
+    logger.bind(
         stage="lifecycle",
         event="stream.input.close_failed",
         source=source,
@@ -82,7 +82,7 @@ async def close_stream_input(
         preserved_exc_type=(
             type(preserved_error).__name__ if preserved_error is not None else None
         ),
-    )
+    ).opt(exception=close_error).warning("Stream input cleanup failed")
 
 
 def extract_claude_session_id_from_headers(headers: Mapping[str, str]) -> str | None:

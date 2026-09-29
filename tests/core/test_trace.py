@@ -160,12 +160,16 @@ async def test_traced_async_stream_logs_real_exception(tmp_path) -> None:
     assert interrupted[0]["outcome"] == "error"
     assert interrupted[0]["exc_type"] == "RuntimeError"
     close_failed = [
-        row for row in rows if row.get("event") == "stream.input.close_failed"
+        row["record"]
+        for row in _json_log_rows(log_file)
+        if row["record"]["extra"].get("event") == "stream.input.close_failed"
     ]
     assert len(close_failed) == 1
-    assert close_failed[0]["owner"] == "traced_async_stream"
-    assert close_failed[0]["close_exc_type"] == "RuntimeError"
-    assert close_failed[0]["preserved_exc_type"] == "RuntimeError"
+    assert close_failed[0]["level"]["name"] == "WARNING"
+    assert close_failed[0]["exception"]["value"] == "close boom"
+    assert close_failed[0]["extra"]["owner"] == "traced_async_stream"
+    assert close_failed[0]["extra"]["close_exc_type"] == "RuntimeError"
+    assert close_failed[0]["extra"]["preserved_exc_type"] == "RuntimeError"
 
 
 @pytest.mark.asyncio

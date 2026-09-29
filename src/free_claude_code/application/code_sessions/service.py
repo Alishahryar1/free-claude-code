@@ -183,9 +183,10 @@ class CodeService:
                     await self._stop(
                         owner.state.session.id, owner.state.run.id, shutting_down=True
                     )
-                except Exception:
+                except Exception as exc:
+                    self._mark_storage_failed(owner, "stop_run", exc)
                     await self._close_connection(owner)
-                    self._storage_failure(owner)
+                    self._notify_storage_failure(owner)
         jobs = [owner.job for owner in owners if owner.job is not None]
         if jobs:
             await asyncio.wait(jobs, timeout=5)
@@ -199,8 +200,9 @@ class CodeService:
                             "interrupted",
                             "FCC stopped before this turn finished.",
                         )
-                    except Exception:
-                        self._storage_failure(owner)
+                    except Exception as exc:
+                        self._mark_storage_failed(owner, "finish_run", exc)
+                        self._notify_storage_failure(owner)
         if self._jobs:
             await asyncio.gather(*tuple(self._jobs), return_exceptions=True)
         self._events.close()
@@ -978,8 +980,8 @@ class CodeService:
             )
         except CodeConflictError, CodeNotFoundError:
             raise
-        except Exception:
-            owner.storage_failed = True
+        except Exception as exc:
+            self._mark_storage_failed(owner, "save_progress", exc)
             if owner.failure_task is None:
                 owner.failure_task = self._job(self._halt_storage(owner))
             raise
@@ -987,7 +989,7 @@ class CodeService:
 
     async def _halt_storage(self, owner: _SessionRuntime) -> None:
         await self._close_connection(owner)
-        self._storage_failure(owner)
+        self._notify_storage_failure(owner)
 
     def _detach_connection_locked(
         self, owner: _SessionRuntime
@@ -1017,8 +1019,9 @@ class CodeService:
                             owner, owner.state.attach_thread(connection.thread_id)
                         )
                     await self._expire_prompts_locked(owner)
-                except Exception:
-                    self._storage_failure(owner)
+                except Exception as exc:
+                    self._mark_storage_failed(owner, "close_connection", exc)
+                    self._notify_storage_failure(owner)
 
     async def _fail(
         self,
@@ -1049,11 +1052,24 @@ class CodeService:
                         else "failed"
                     )
                     await self._finish_locked(owner, status, message)
-        except Exception:
-            self._storage_failure(owner)
+        except Exception as exc:
+            self._mark_storage_failed(owner, "fail_run", exc)
+            self._notify_storage_failure(owner)
 
-    def _storage_failure(self, owner: _SessionRuntime) -> None:
+    def _mark_storage_failed(
+        self, owner: _SessionRuntime, operation: str, error: Exception
+    ) -> None:
+        if owner.storage_failed:
+            return
         owner.storage_failed = True
+        logger.bind(
+            event="code.storage_failed",
+            operation=operation,
+            session_id=owner.state.session.id,
+            run_id=owner.state.run.id if owner.state.run is not None else None,
+        ).opt(exception=error).error("Code session stopped after a storage failure")
+
+    def _notify_storage_failure(self, owner: _SessionRuntime) -> None:
         owner.finished.set()
         self._publish(
             owner,
@@ -1104,8 +1120,11 @@ class CodeService:
                 progress = owner.state.deletion_failed(status, _error_message(exc))
                 try:
                     await self._commit_progress(owner, progress)
-                except Exception:
-                    self._storage_failure(owner)
+                except Exception as save_error:
+                    self._mark_storage_failed(
+                        owner, "save_deletion_failure", save_error
+                    )
+                    self._notify_storage_failure(owner)
                     return
                 self._publish(owner, "session.updated")
             if status == "delete_uncertain" and not reconcile and not native_complete:

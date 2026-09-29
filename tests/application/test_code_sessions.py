@@ -1286,19 +1286,21 @@ async def test_shutdown_settles_run_when_native_interrupt_never_acknowledges(cod
 
 @pytest.mark.asyncio
 async def test_storage_failure_retires_native_work_even_with_pending_prompt(
-    code, monkeypatch
+    code, monkeypatch, caplog
 ):
     service, harness, _ = code
     session = await session_for(code)
-    await service.send(
+    run = await service.send(
         session.id, new_id(), session.revision, "prompt", expected_epoch=service.epoch
     )
     await harness.started.wait()
     connection = harness.connections[0]
     await connection.prompt(1)
 
+    error = CodeUnavailableError("Code disk unavailable")
+
     async def fail_save(*args, **kwargs):
-        raise CodeUnavailableError("Code disk unavailable")
+        raise error
 
     monkeypatch.setattr(service._store, "save_progress", fail_save)
     await connection.text("turn-1", "text", "unsaved", complete=True)
@@ -1306,6 +1308,74 @@ async def test_storage_failure_retires_native_work_even_with_pending_prompt(
     assert connection.closed
     with pytest.raises(CodeUnavailableError):
         await service.get_detail(session.id)
+    await service.close()
+    failures = [record for record in caplog.records if record.levelname == "ERROR"]
+    assert len(failures) == 1
+    assert failures[0].extra == {
+        "event": "code.storage_failed",
+        "operation": "save_progress",
+        "session_id": session.id,
+        "run_id": run.id,
+    }
+    assert failures[0].exc_info[1] is error
+    assert "fail_save" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_shutdown_storage_read_failure_logs_original_cause(
+    code, monkeypatch, caplog
+):
+    service, harness, _ = code
+    session = await session_for(code)
+    run = await service.send(
+        session.id, new_id(), session.revision, "work", expected_epoch=service.epoch
+    )
+    await harness.started.wait()
+    error = CodeUnavailableError("Cannot read run during shutdown")
+    monkeypatch.setattr(service._store, "get_run", AsyncMock(side_effect=error))
+
+    await service.close()
+
+    assert harness.connections[0].closed
+    failures = [record for record in caplog.records if record.levelname == "ERROR"]
+    assert len(failures) == 1
+    assert failures[0].extra["operation"] == "stop_run"
+    assert failures[0].extra["session_id"] == session.id
+    assert failures[0].extra["run_id"] == run.id
+    assert failures[0].exc_info[1] is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conflict", [False, True])
+async def test_delete_before_first_run_logs_only_terminal_storage_failure(
+    code, monkeypatch, caplog, conflict
+):
+    service, _, _ = code
+    session = await session_for(code)
+    error = (
+        CodeConflictError("Revision changed")
+        if conflict
+        else CodeUnavailableError("Cannot save deletion")
+    )
+    save = service._store.save_progress
+    monkeypatch.setattr(service._store, "save_progress", AsyncMock(side_effect=error))
+
+    with pytest.raises(type(error)):
+        await service.delete_session(session.id, session.revision)
+    if conflict:
+        monkeypatch.setattr(service._store, "save_progress", save)
+        assert (await service.get_detail(session.id)).session == session
+    else:
+        await asyncio.wait_for(service.wait_idle(session.id), 3)
+    await service.close()
+
+    failures = [record for record in caplog.records if record.levelname == "ERROR"]
+    assert len(failures) == (0 if conflict else 1)
+    if not conflict:
+        assert failures[0].extra["session_id"] == session.id
+        assert failures[0].extra["run_id"] is None
+        assert failures[0].extra["operation"] == "save_progress"
+        assert failures[0].exc_info[1] is error
 
 
 @pytest.mark.asyncio

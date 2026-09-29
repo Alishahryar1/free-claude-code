@@ -10,6 +10,7 @@ from collections.abc import (
 from typing import Literal
 
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from loguru import logger
 from starlette.background import BackgroundTask
 from starlette.responses import ContentStream
 from starlette.types import Receive, Scope, Send
@@ -114,7 +115,7 @@ class ManagedStreamingResponse(StreamingResponse):
                 preserved_error=preserved_error,
             )
         except Exception as exc:
-            _trace_response_cleanup_failure("close_body", exc)
+            _log_response_cleanup_failure("close_body", exc)
 
         release = self._release
         if release is None:
@@ -122,7 +123,7 @@ class ManagedStreamingResponse(StreamingResponse):
         try:
             await release()
         except Exception as exc:
-            _trace_response_cleanup_failure("release_resource", exc)
+            _log_response_cleanup_failure("release_resource", exc)
 
 
 async def _wait_for_cleanup(task: asyncio.Task[None]) -> None:
@@ -134,7 +135,7 @@ async def _wait_for_cleanup(task: asyncio.Task[None]) -> None:
         except asyncio.CancelledError as exc:
             cancellation = exc
 
-    # Ordinary defensive failures are trace-only; cancellation remains control flow.
+    # Ordinary cleanup failures preserve the response; cancellation remains control flow.
     try:
         task.result()
     except asyncio.CancelledError:
@@ -142,20 +143,20 @@ async def _wait_for_cleanup(task: asyncio.Task[None]) -> None:
             raise cancellation from None
         raise
     except Exception as exc:
-        _trace_response_cleanup_failure("cleanup_task", exc)
+        _log_response_cleanup_failure("cleanup_task", exc)
 
     if cancellation is not None:
         raise cancellation
 
 
-def _trace_response_cleanup_failure(operation: str, exc: BaseException) -> None:
-    trace_event(
+def _log_response_cleanup_failure(operation: str, exc: BaseException) -> None:
+    logger.bind(
         stage="egress",
         event="free_claude_code.api.response.cleanup_failed",
         source="api",
         operation=operation,
         exc_type=type(exc).__name__,
-    )
+    ).opt(exception=exc).warning("Response cleanup failed")
 
 
 async def bind_response_lifetime(

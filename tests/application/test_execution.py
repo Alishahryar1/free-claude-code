@@ -1120,7 +1120,7 @@ async def test_provider_cleanup_cannot_delay_fallback_past_progress_deadline() -
 
 
 @pytest.mark.asyncio
-async def test_cleanup_failure_trace_names_preserved_provider_failure() -> None:
+async def test_cleanup_warning_names_preserved_provider_failure(caplog) -> None:
     failure = _execution_failure("primary overloaded")
     provider = CloseControlledProvider(
         failure,
@@ -1132,20 +1132,16 @@ async def test_cleanup_failure_trace_names_preserved_provider_failure() -> None:
         request_id="req_close_failure_trace",
     )
 
-    with (
-        patch("free_claude_code.core.trace.trace_event") as trace_mock,
-        pytest.raises(ExecutionFailure) as exc_info,
-    ):
+    with pytest.raises(ExecutionFailure) as exc_info:
         await anext(stream)
 
     assert exc_info.value is failure
-    close_trace = next(
-        call.kwargs
-        for call in trace_mock.call_args_list
-        if call.kwargs.get("event") == "stream.input.close_failed"
-    )
-    assert close_trace["close_exc_type"] == "RuntimeError"
-    assert close_trace["preserved_exc_type"] == "ExecutionFailure"
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert warnings[0].extra["event"] == "stream.input.close_failed"
+    assert warnings[0].extra["close_exc_type"] == "RuntimeError"
+    assert warnings[0].extra["preserved_exc_type"] == "ExecutionFailure"
+    assert str(warnings[0].exc_info[1]) == "close failed"
 
 
 @pytest.mark.asyncio
