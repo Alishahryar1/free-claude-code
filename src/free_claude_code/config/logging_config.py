@@ -1,7 +1,7 @@
 """Loguru-based structured logging configuration.
 
-Structured server logs are written as JSON lines to ``~/.fcc/logs/server.log``.
-Stdlib logging is intercepted and funneled to loguru.
+Structured logs are written as JSON lines to a configurable path (default
+``~/.fcc/logs/server.log``). Stdlib logging is intercepted and funneled to loguru.
 Context vars (request_id, node_id, chat_id) from contextualize() are
 included at top level for easy grep/filter.
 """

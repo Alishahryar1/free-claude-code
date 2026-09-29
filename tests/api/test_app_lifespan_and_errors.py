@@ -337,16 +337,11 @@ def test_bootstrap_wires_the_codex_catalog_publisher() -> None:
     assert manager._model_catalog_publisher is publisher
 
 
-def test_bootstrap_ignores_process_log_file_override(monkeypatch, tmp_path):
-    log_path = tmp_path / ".fcc" / "logs" / "server.log"
-    monkeypatch.setenv("LOG_FILE", str(tmp_path / "custom.log"))
+def test_bootstrap_honors_process_log_file_override(monkeypatch, tmp_path):
+    log_path = tmp_path / "custom.log"
+    monkeypatch.setenv("LOG_FILE", str(log_path))
 
-    with (
-        patch(
-            "free_claude_code.runtime.bootstrap.server_log_path", return_value=log_path
-        ),
-        patch("free_claude_code.runtime.bootstrap.configure_logging") as configure,
-    ):
+    with patch("free_claude_code.runtime.bootstrap.configure_logging") as configure:
         build_asgi_app(_settings())
 
     assert configure.call_args.args[0] == log_path

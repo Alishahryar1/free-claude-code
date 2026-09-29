@@ -1,6 +1,8 @@
 """Single production composition root for the FCC server."""
 
+import os
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from free_claude_code.api.app import create_app
@@ -42,8 +44,9 @@ def build_asgi_app(
     restart_callback: RestartCallback | None = None,
 ) -> RuntimeASGIApp:
     """Construct the complete server application and its resource owner."""
+    log_path = Path(os.getenv("LOG_FILE", server_log_path()))
     configure_logging(
-        server_log_path(),
+        log_path,
         level=settings.log_level,
         verbose_third_party=settings.log_raw_api_payloads,
     )
