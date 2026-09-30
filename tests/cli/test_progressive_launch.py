@@ -6,10 +6,11 @@ import subprocess
 import sys
 import threading
 from contextlib import asynccontextmanager
+from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 import pytest
 import uvicorn
@@ -210,7 +211,9 @@ def test_browser_warning_retains_owning_instance_after_server_exit(
         ("running", "FCC is already running on port 8082. Use it at http://"),
         ("stopping", "The FCC instance on port 8082 is still stopping."),
         ("other", "port 8082 is already in use by another program"),
-        ("unreachable", "port 8082 is already in use by another program"),
+        ("not_found", "port 8082 is already in use by another program"),
+        ("forbidden", "port 8082 is already in use. If FCC is not already running"),
+        ("unreachable", "port 8082 is already in use. If FCC is not already running"),
     ],
 )
 def test_terminal_serve_explains_busy_port(monkeypatch, caplog, occupant, expected):
@@ -223,6 +226,11 @@ def test_terminal_serve_explains_busy_port(monkeypatch, caplog, occupant, expect
     )
     if occupant == "unreachable":
         request = MagicMock(side_effect=URLError("refused"))
+    elif occupant in {"not_found", "forbidden"}:
+        code = 404 if occupant == "not_found" else 403
+        error = HTTPError("url", code, "error", Message(), None)
+        error.close()  # Only the status code matters; release its body up front.
+        request = MagicMock(side_effect=error)
     else:
         payload = {"unrelated": "server"}
         if occupant != "other":

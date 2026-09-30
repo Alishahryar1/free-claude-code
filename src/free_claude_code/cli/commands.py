@@ -81,10 +81,17 @@ def serve() -> None:
 
 def _log_port_in_use(settings: Settings) -> None:
     """Explain a busy port, telling a running FCC apart from another program."""
+    status = None
     try:
         status = _external_fcc_status(settings, timeout=1.5)
-    except OSError, ValueError:
-        status = None
+        other_program = status is None
+    except HTTPError as exc:
+        # Admin rejects non-loopback requests, so a 403 cannot rule out FCC.
+        other_program = exc.code != 403
+    except ValueError:
+        other_program = True
+    except OSError:
+        other_program = False
     if status is not None and status["status"] == "running":
         logger.error(
             "FCC is already running on port {}. Use it at {}, or stop it before "
@@ -97,10 +104,17 @@ def _log_port_in_use(settings: Settings) -> None:
             "The FCC instance on port {} is still stopping. Try again in a moment.",
             settings.port,
         )
-    else:
+    elif other_program:
         logger.error(
             "Could not start FCC: port {} is already in use by another program. "
             "Stop that program, or set PORT to a free port in {}.",
+            settings.port,
+            managed_env_path(),
+        )
+    else:
+        logger.error(
+            "Could not start FCC: port {} is already in use. If FCC is not already "
+            "running, stop the program using it, or set PORT to a free port in {}.",
             settings.port,
             managed_env_path(),
         )
@@ -381,7 +395,9 @@ def load_server_settings() -> Settings:
     return get_settings()
 
 
-def _external_fcc_status(settings: Settings, *, timeout: float) -> dict[str, Any] | None:
+def _external_fcc_status(
+    settings: Settings, *, timeout: float
+) -> dict[str, Any] | None:
     """Return the status payload an FCC instance reports on this port, or None for other servers."""
     url = f"{local_proxy_root_url(settings)}/admin/api/status"
     with open_local_request(Request(url), timeout=timeout) as response:
