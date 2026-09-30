@@ -1,9 +1,40 @@
 """Atomic text-file replacement for local client configuration."""
 
+import json
 import os
 import stat
 import tempfile
 from pathlib import Path
+from typing import cast
+
+import json5
+
+from free_claude_code.core.json_types import JsonObject, JsonValue
+
+
+def _unique_object(pairs: list[tuple[str, JsonValue]]) -> JsonObject:
+    document: JsonObject = {}
+    for key, value in pairs:
+        if key in document:
+            raise ValueError("Duplicate configuration key")
+        document[key] = value
+    return document
+
+
+def _reject_constant(value: str) -> JsonValue:
+    raise ValueError("Nonfinite configuration value")
+
+
+def decode_json(source: str) -> JsonValue:
+    """Decode native JSON/JSON5 without duplicate or nonfinite values."""
+    try:
+        document = json.loads(
+            source, object_pairs_hook=_unique_object, parse_constant=_reject_constant
+        )
+    except json.JSONDecodeError:
+        document = json5.loads(source, allow_duplicate_keys=False)
+    json.dumps(document, allow_nan=False)
+    return cast(JsonValue, document)
 
 
 def ensure_private_permissions(path: Path) -> None:

@@ -221,7 +221,8 @@ def test_local_model_discovery_takes_precedence_over_reachability(
     availability: list[Route] = []
     page.route("**/admin/api/status", lambda route: startup.append(route))
     page.route(
-        "**/admin/api/providers/local-status", lambda route: availability.append(route)
+        "**/admin/api/providers/lmstudio/local-status",
+        lambda route: availability.append(route),
     )
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
     page.wait_for_function("!!state.startupRequest && !!state.localStatusRequest")
@@ -298,9 +299,12 @@ def test_admin_loading_finishes_before_local_availability_checks(
     page: Page, admin_base_url: str
 ) -> None:
     pending: list[Route] = []
-    page.route(
-        "**/admin/api/providers/local-status", lambda route: pending.append(route)
-    )
+
+    def hold(route):
+        pending.append(route)
+        page.evaluate("window.localChecks = (window.localChecks || 0) + 1")
+
+    page.route("**/admin/api/providers/*/local-status", hold)
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
     open_provider(page, "nvidia_nim")
     key = page.locator("#field-NVIDIA_NIM_API_KEY")
@@ -308,12 +312,14 @@ def test_admin_loading_finishes_before_local_availability_checks(
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     expect(page.locator("#saveProvider")).to_be_enabled()
 
-    route = pending.pop()
-    payload = route.fetch().json()
-    providers = {provider["provider_id"]: provider for provider in payload["providers"]}
-    providers["llamacpp"].update(status="offline", label="Offline", status_code=503)
-    providers["ollama"].update(status="missing_url", label="Missing URL", base_url="")
-    route.fulfill(json=payload)
+    page.wait_for_function("window.localChecks === 3")
+    for route in pending:
+        payload = route.fetch().json()
+        if payload["provider_id"] == "llamacpp":
+            payload.update(status="offline", label="Offline", status_code=503)
+        elif payload["provider_id"] == "ollama":
+            payload.update(status="missing_url", label="Missing URL", base_url="")
+        route.fulfill(json=payload)
     expect(page.locator('[data-provider-check-result="lmstudio"]')).to_have_text(
         "Reachable: http://localhost:1234/v1"
     )
@@ -339,9 +345,10 @@ def test_local_availability_failure_does_not_fail_admin_loading(
     errors: list[str] = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.route(
-        "**/admin/api/providers/local-status", lambda route: pending.append(route)
+        "**/admin/api/providers/lmstudio/local-status",
+        lambda route: pending.append(route),
     )
-    with page.expect_request("**/admin/api/providers/local-status"):
+    with page.expect_request("**/admin/api/providers/lmstudio/local-status"):
         page.goto(f"{admin_base_url}/admin")
     open_provider(page, "nvidia_nim")
     expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_editable()
@@ -353,9 +360,12 @@ def test_local_availability_failure_does_not_fail_admin_loading(
 
     for provider_id in ("lmstudio", "llamacpp", "ollama"):
         card = page.locator(f'[data-provider="{provider_id}"]')
-        expect(card.locator(".provider-check-result")).to_have_text(
-            "Availability check failed. Use Test to retry."
-        )
+        if provider_id == "lmstudio":
+            expect(card.locator(".provider-check-result")).to_have_text(
+                "Availability check failed. Use Test to retry."
+            )
+        else:
+            expect(card.locator(".provider-check-result")).to_contain_text("Reachable:")
         expect(card.get_by_role("button", name="Edit", exact=True)).to_have_class(
             "secondary-button"
         )
@@ -377,7 +387,8 @@ def test_manual_provider_test_takes_precedence_over_automatic_availability(
     availability: list[Route] = []
     manual: list[Route] = []
     page.route(
-        "**/admin/api/providers/local-status", lambda route: availability.append(route)
+        "**/admin/api/providers/lmstudio/local-status",
+        lambda route: availability.append(route),
     )
     page.route(
         "**/admin/api/providers/lmstudio/test", lambda route: manual.append(route)
@@ -401,7 +412,9 @@ def test_manual_provider_test_takes_precedence_over_automatic_availability(
             "Unavailable: Could not refresh this provider's models."
         )
 
-    with page.expect_response("**/admin/api/providers/local-status") as response:
+    with page.expect_response(
+        "**/admin/api/providers/lmstudio/local-status"
+    ) as response:
         if manual_finished:
             availability.pop().fulfill(status=503, json={"detail": "Check failed"})
         else:
@@ -413,7 +426,7 @@ def test_manual_provider_test_takes_precedence_over_automatic_availability(
         expect(result).to_have_text(
             "Unavailable: Could not refresh this provider's models."
         )
-        expect(other).to_have_text("Availability check failed. Use Test to retry.")
+        expect(other).to_have_text("Reachable: http://localhost:11434")
     else:
         expect(result).to_have_text("Checking...")
         expect(other).to_have_text("Reachable: http://localhost:11434")

@@ -6,12 +6,10 @@ import sys
 from pathlib import Path
 from typing import cast
 
-import json5
-
 from free_claude_code.config.server_urls import same_proxy_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses.claude import claude_proxy_values
-from free_claude_code.harnesses.config_file import atomic_write_text
+from free_claude_code.harnesses.config_file import atomic_write_text, decode_json
 
 _ENV = "claudeCode.environmentVariables"
 _LOGIN = "claudeCode.disableLoginPrompt"
@@ -41,11 +39,9 @@ def _read_object(path: Path) -> JsonObject:
         source = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         return {}
-    document = json5.loads(source, allow_duplicate_keys=False)
+    document = decode_json(source)
     if not isinstance(document, dict):
         raise ValueError("Settings must be an object")
-    # Also reject non-finite JSON5 numbers before any operation or status result.
-    json.dumps(document, allow_nan=False)
     return cast(JsonObject, document)
 
 

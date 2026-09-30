@@ -9,11 +9,9 @@ import sys
 from pathlib import Path
 from typing import cast
 
-import json5
-
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses.claude import claude_proxy_values
-from free_claude_code.harnesses.config_file import atomic_write_text
+from free_claude_code.harnesses.config_file import atomic_write_text, decode_json
 
 _NAME = "Claude Code (FCC)"
 _MARKER = "FCC_JETBRAINS_ACP"
@@ -71,8 +69,7 @@ def _read(path: Path) -> JsonObject:
         source = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         return {}
-    value = _object(json5.loads(source, allow_duplicate_keys=False))
-    json.dumps(value, allow_nan=False)
+    value = _object(decode_json(source))
     return value
 
 
