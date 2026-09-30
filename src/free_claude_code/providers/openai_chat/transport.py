@@ -366,6 +366,16 @@ class _OpenAIChatStreamAssembler:
         if is_context_window_finish_reason(self._finish_reason):
             raise context_window_exceeded_provider_failure()
         if any(
+            not state.started and index not in self._tool_name_buffers
+            for index, state in self._output.tool_states.items()
+        ):
+            raise ExecutionFailure(
+                FailureKind.UPSTREAM,
+                502,
+                "Provider stream ended with a tool call missing its function name.",
+                False,
+            )
+        if any(
             not self._tool_names.is_unchanged_name(name)
             for name in self._tool_name_buffers.values()
         ):
