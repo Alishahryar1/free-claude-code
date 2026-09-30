@@ -374,12 +374,9 @@ Providers that do not support a selected control retain their own behavior.
 
 ## Connect Your Client
 
-For terminal use, run `fcc-claude`, `fcc-codex`, `fcc-pi`, `fcc-opencode`,
-`fcc-cline`, `fcc-hermes`, `fcc-dsh`, `fcc-grok`, `fcc-muse`, or `fcc-aider`.
-If FCC is not running, the launcher starts FCC Desktop on Windows/macOS or
-`fcc-server` in the background on Linux, then waits for it to become ready.
-FCC stays running after the client exits. Desktop keeps its tray/menu-bar controls
-and your Admin browser preference. If automatic startup fails, run
+If FCC is not running when you start a launcher, it starts FCC Desktop on
+Windows/macOS or `fcc-server` on Linux and waits for it to become ready. FCC
+stays running after the client exits. If automatic startup fails, run
 `fcc-desktop` (Windows/macOS) or `fcc-server` (Linux) manually to diagnose it.
 
 For editor and app integrations, install the client, start FCC, then open
