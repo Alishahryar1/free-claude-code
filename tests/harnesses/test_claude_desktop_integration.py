@@ -170,6 +170,7 @@ def test_fresh_connection_and_disconnect_preserve_native_library(tmp_path):
     assert read(meta(root))["appliedId"] == desktop.FCC_ID
     assert read(mode(root))["deploymentMode"] == "3p"
     assert read(profile(root))["inferenceGatewayApiKey"] == TOKEN
+    assert read(profile(root))["coworkEgressAllowedHosts"] == ["*"]
     before = {p: p.read_bytes() for p in root.rglob("*.json")}
     assert (
         desktop.refresh_connected(
@@ -198,6 +199,42 @@ def test_fresh_connection_and_disconnect_preserve_native_library(tmp_path):
         root, URL, TOKEN, False, disconnect_path=claude_desktop_disconnect_path()
     )
     assert {p: p.read_bytes() for p in root.rglob("*.json")} == after
+
+
+@pytest.mark.parametrize("reconnect", [False, True])
+@pytest.mark.parametrize(
+    "egress",
+    [
+        {},
+        {"coworkEgressAllowedHosts": []},
+        {"coworkEgressAllowedHosts": ["github.com"]},
+    ],
+)
+def test_connection_defaults_missing_egress_and_preserves_explicit_policy(
+    tmp_path, reconnect, egress
+):
+    record = claude_desktop_disconnect_path()
+    desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
+    config = read(profile(tmp_path))
+    config.pop("coworkEgressAllowedHosts", None)
+    config.update(egress)
+    write(profile(tmp_path), config)
+    before = profile(tmp_path).read_bytes()
+    assert desktop.configure(tmp_path, URL, TOKEN, disconnect_path=record)["connected"]
+    assert profile(tmp_path).read_bytes() == before
+
+    if reconnect:
+        desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
+    else:
+        assert desktop.refresh_connected(
+            tmp_path, URL, TOKEN, disconnect_path=record
+        ) is (not egress)
+
+    assert read(profile(tmp_path))["coworkEgressAllowedHosts"] == egress.get(
+        "coworkEgressAllowedHosts", ["*"]
+    )
+    assert desktop.configure(tmp_path, URL, TOKEN, disconnect_path=record)["connected"]
+    assert not desktop.refresh_connected(tmp_path, URL, TOKEN, disconnect_path=record)
 
 
 def test_refresh_rotates_credentials_without_reactivating(tmp_path):
