@@ -23,6 +23,7 @@ from free_claude_code.runtime.asgi import RuntimeASGIApp
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from free_claude_code.runtime.sqlite_database import SQLiteDatabase
 from tests.code_sessions_support import FakeHarness
 from tests.web_tools_support import StubWebToolsClient
 
@@ -48,18 +49,20 @@ def test_harness_waits_through_owner_apply_restart(
 
     def build(settings, restart_callback):
         manager = ProviderRuntimeManager(
-            settings, runtime_factory=lambda snapshot: ProviderRuntime(snapshot, {})
+            settings,
+            runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
+                snapshot, admission_registry, {}
+            ),
         )
         monkeypatch.setattr(manager, "start_model_list_refresh", lambda: None)
         monkeypatch.setattr(manager, "_start_pass", lambda *args, **kwargs: None)
-        code = CodeService(
-            SQLiteCodeStore(paths.code_database_path(), paths.code_lock_path()),
-            FakeHarness(),
-        )
+        database = SQLiteDatabase(paths.fcc_database_path(), paths.code_lock_path())
+        code = CodeService(SQLiteCodeStore(database), FakeHarness())
         runtime = ApplicationRuntime(
             manager,
             configuration=ConfigurationService(ManagedConfigStore()),
             code_service=code,
+            database=database,
             transcriber=None,
             restart_callback=restart_callback,
         )

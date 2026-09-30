@@ -33,7 +33,7 @@ def test_server_entrypoint_routes_logs_across_restarts(tmp_path, automatic):
             generations.append(restart_callback)
             return SimpleNamespace(runtime=SimpleNamespace(
                 is_closed=True, begin_shutdown=lambda: None, close=closed,
-                http_started=lambda: None,
+                http_started=lambda: None, instance_id="test-instance",
             ))
 
         def run(self, **kwargs):
