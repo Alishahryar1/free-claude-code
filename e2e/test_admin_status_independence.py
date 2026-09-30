@@ -46,9 +46,14 @@ def test_each_integration_finishes_without_slowest_card(
 
 def test_local_cards_render_before_slowest_check(page, admin_base_url):
     pending = []
+
+    def hold(route):
+        pending.append(route)
+        page.evaluate("window.heldLocalCheck = true")
+
     page.route(
         "**/admin/api/providers/ollama/local-status",
-        lambda route: pending.append(route),
+        hold,
     )
     page.route(
         "**/admin/api/providers/lmstudio/local-status",
@@ -64,9 +69,20 @@ def test_local_cards_render_before_slowest_check(page, admin_base_url):
         "**/admin/api/providers/llamacpp/local-status",
         lambda route: route.fulfill(status=503, json={"detail": "Check failed"}),
     )
-    page.goto(f"{admin_base_url}/admin")
+    with (
+        page.expect_response(
+            "**/admin/api/providers/lmstudio/local-status"
+        ) as lmstudio_response,
+        page.expect_response(
+            "**/admin/api/providers/llamacpp/local-status"
+        ) as llamacpp_response,
+    ):
+        page.goto(f"{admin_base_url}/admin")
+        page.wait_for_function("window.heldLocalCheck === true")
+    lmstudio_response.value.finished()
+    llamacpp_response.value.finished()
     expect(page.locator('[data-provider-check-result="lmstudio"]')).to_have_text(
-        "Reachable: http://localhost:1234/v1", timeout=2000
+        "Reachable: http://localhost:1234/v1"
     )
     expect(page.locator('[data-provider-check-result="llamacpp"]')).to_have_text(
         "Availability check failed. Use Test to retry."
