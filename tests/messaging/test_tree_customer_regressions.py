@@ -1,6 +1,7 @@
 """Customer-visible regressions at the tree manager ownership boundary."""
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -43,7 +44,7 @@ async def test_same_telegram_ids_in_different_chats_remain_independent_after_res
     async def process(_claim: NodeClaim) -> None:
         return
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
 
     first = await manager.admit(_incoming("chat-a"), "99")
     second = await manager.admit(_incoming("chat-b"), "99")
@@ -61,7 +62,7 @@ async def test_same_telegram_ids_in_different_chats_remain_independent_after_res
     assert snapshot.get_tree(TreeIdentity(scope=chat_a, root_id="42")) is not None
     assert snapshot.get_tree(TreeIdentity(scope=chat_b, root_id="42")) is not None
 
-    restored = TreeQueueManager.from_snapshot(snapshot, process)
+    restored = TreeQueueManager.from_snapshot(snapshot, process, store=AsyncMock())
 
     assert restored.get_tree_count() == 2
     assert _snapshot_chat_ids(await restored.snapshot()) == {"chat-a", "chat-b"}
@@ -82,7 +83,7 @@ async def test_successful_completion_overrides_recoverable_failure_and_records_s
         started.set()
         await release.wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     decision = await manager.admit(_incoming("chat"), "99")
     assert decision.claim is not None
     await started.wait()

@@ -69,7 +69,7 @@ async def test_native_citations_survive_block_completion_and_fragmented_aggregat
         block = state.accept(cast(str, event["type"]), event)
         if block is not None:
             completed = block
-    assert completed is not None and completed["citations"] == [citation]
+    assert completed is not None and completed.body["citations"] == [citation]
     relay = NativeMessagesRelay(public_model="public")
 
     async def stream() -> AsyncIterator[str]:
@@ -197,7 +197,7 @@ def test_reused_block_indexes_and_events_after_terminal_are_rejected() -> None:
 
 
 @pytest.mark.parametrize("partial", ['{"x":', "[]", '{"x":NaN}'])
-def test_invalid_json_tools_never_complete(partial: str) -> None:
+def test_invalid_json_tools_are_forwarded_for_harness_validation(partial: str) -> None:
     relay = NativeMessagesRelay(public_model="public")
     relay.feed("message_start", _START)
     relay.feed(
@@ -221,6 +221,9 @@ def test_invalid_json_tools_never_complete(partial: str) -> None:
             "delta": {"type": "input_json_delta", "partial_json": partial},
         },
     )
-    with pytest.raises(NativeMessagesError, match="arguments"):
-        relay.feed("content_block_stop", {"type": "content_block_stop", "index": 0})
-    assert not relay.completed
+    relay.feed("content_block_stop", {"type": "content_block_stop", "index": 0})
+    relay.feed(
+        "message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use"}}
+    )
+    relay.feed("message_stop", {"type": "message_stop"})
+    assert relay.completed

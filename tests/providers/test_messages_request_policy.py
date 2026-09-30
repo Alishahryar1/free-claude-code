@@ -131,7 +131,10 @@ def test_manual_effort_uses_budget_and_minimum() -> None:
 
 
 @pytest.mark.parametrize("raw", ["bogus", 1, {"mode": "high"}])
-def test_client_on_cannot_hide_invalid_output_effort(raw: object) -> None:
+@pytest.mark.parametrize("preserve_native_controls", [False, True])
+def test_client_on_cannot_hide_invalid_output_effort(
+    raw: object, preserve_native_controls: bool
+) -> None:
     with pytest.raises(NativeMessagesError, match="client output effort"):
         resolve_messages_options(
             model="m",
@@ -139,6 +142,7 @@ def test_client_on_cannot_hide_invalid_output_effort(raw: object) -> None:
             output_effort=raw,
             reasoning=ReasoningPolicy.on(budget_tokens=1536),
             thinking=ThinkingConfig(type="enabled", budget_tokens=1536),
+            preserve_native_controls=preserve_native_controls,
         )
 
 

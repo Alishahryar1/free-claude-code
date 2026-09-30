@@ -52,9 +52,6 @@ class SDKStreamDouble[EventT](AsyncIterator[EventT]):
 def make_provider_config(
     api_key: str | None,
     base_url: str,
-    rate_limit: int = 1_000_000,
-    rate_window: int = 1,
-    max_concurrency: int = 1_000,
     http_read_timeout: float = 120.0,
     http_write_timeout: float = 10.0,
     http_connect_timeout: float = 10.0,
@@ -67,9 +64,6 @@ def make_provider_config(
     return ProviderConfig(
         api_key=api_key,
         base_url=base_url,
-        rate_limit=rate_limit,
-        rate_window=rate_window,
-        max_concurrency=max_concurrency,
         http_read_timeout=http_read_timeout,
         http_write_timeout=http_write_timeout,
         http_connect_timeout=http_connect_timeout,

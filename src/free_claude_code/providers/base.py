@@ -20,9 +20,6 @@ class ProviderConfig:
 
     api_key: str | None
     base_url: str
-    rate_limit: int
-    rate_window: int
-    max_concurrency: int
     http_read_timeout: float
     http_write_timeout: float
     http_connect_timeout: float
@@ -69,5 +66,6 @@ class BaseProvider(ABC):
         response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         """Validate the request before yielding OpenAI Responses SSE events."""

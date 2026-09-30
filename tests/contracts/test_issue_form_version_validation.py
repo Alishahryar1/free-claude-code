@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 BUG_FORM = Path(".github/ISSUE_TEMPLATE/bug-report.yml")
 WORKFLOW = Path(".github/workflows/validate-bug-report-version.yml")
@@ -56,14 +57,144 @@ def _run_javascript(script: str) -> Any:
     return json.loads(completed.stdout)
 
 
-def test_bug_form_requests_a_contained_version_or_none() -> None:
-    form = BUG_FORM.read_text(encoding="utf-8")
+def test_bug_forms_require_description_and_post_install_diagnostics() -> None:
+    post = yaml.safe_load(BUG_FORM.read_text(encoding="utf-8"))
+    pre = yaml.safe_load(
+        BUG_FORM.with_name("installation-problem.yml").read_text(encoding="utf-8")
+    )
+    assert len(post["body"]) == 2
+    assert all(field["validations"]["required"] for field in post["body"])
+    assert all(field["type"] == "textarea" for field in post["body"])
+    assert post["body"][1]["attributes"]["render"] == "json"
+    assert "fcc-doctor" in post["body"][1]["attributes"]["description"]
+    assert len(pre["body"]) == 1
+    assert pre["body"][0]["validations"]["required"]
+    assert "render" not in pre["body"][0]["attributes"]
 
-    assert "Run `fcc-server --version`" in form
-    assert "include one version" in form
-    assert "enter `None`" in form
-    assert 'placeholder: "The version is 1.22.333, or None"' in form
-    assert "not installed" not in form
+
+@pytest.mark.parametrize(
+    "body, valid, version",
+    [
+        ('### FCC doctor output\n\n```json\n{"version":"1.2.3"}\n```', True, "1.2.3"),
+        (
+            '### FCC doctor output\n\n<details>\n<summary>FCC doctor output</summary>\n\n```json\n{"version":"1.2.3"}\n```\n\n</details>',
+            True,
+            "1.2.3",
+        ),
+        (
+            '### FCC doctor output\r\n\r\n<details>\r\n<summary>Diagnostics</summary>\r\n\r\n```json\r\n{"version":"1.2.3"}\r\n```\r\n\r\n</details>',
+            True,
+            "1.2.3",
+        ),
+        (
+            "### FCC doctor output\n\n<details>\n<summary>Diagnostics</summary>\n\n```json\n{invalid}\n```\n\n</details>",
+            False,
+            None,
+        ),
+        (
+            '### FCC doctor output\r\n\r\n```json\r\n{"version":"1.2.3"}\r\n```',
+            True,
+            "1.2.3",
+        ),
+        ('### FCC doctor output\n\n{"version":"0+unknown"}', True, None),
+        (
+            '### FCC doctor output\n\n{"version":"6.2.67.dev1+g123"}',
+            True,
+            "6.2.67.dev1+g123",
+        ),
+        (
+            '### Describe the issue\n\nversion 9.9.9\n\n### FCC doctor output\n\n{"version":"1.2.3"}',
+            True,
+            "1.2.3",
+        ),
+        ("### FCC doctor output\n\n{invalid}", False, None),
+        ('### FCC doctor output\n\n{"version":123}', False, None),
+        ('### FCC doctor output\n\n{"version":"hello 1.2.3"}', False, None),
+        ("### FCC doctor output\n\n{}\n\n### FCC version\n\n1.2.3", False, None),
+        ("### Installation issue\n\nCannot install", True, None),
+        ("unstructured issue 1.2.3", False, None),
+    ],
+)
+def test_report_parser_uses_the_correct_form_section(body, valid, version):
+    result = _parse_report(body)
+    assert result["valid"] is valid
+    assert result.get("reportedVersion") == version
+
+
+def _parse_report(body):
+    patterns = "\n".join(
+        f"const {name} = {json.dumps(_workflow_pattern(name))};"
+        for name in ("fieldPattern", "versionPattern")
+    )
+    script = patterns + "\n" + _javascript_function("parseReport")
+    script += (
+        f"\nprocess.stdout.write(JSON.stringify(parseReport({json.dumps(body)})));"
+    )
+    return _run_javascript(script)
+
+
+def test_plain_doctor_report_can_be_collapsed_without_changing_its_data(
+    monkeypatch, capsys
+):
+    from free_claude_code.cli import doctor
+
+    copied = []
+    report = {"version": "1.2.3", "model_routing": {"model": "provider/```</details>"}}
+    monkeypatch.setattr(doctor, "collect_report", lambda: report)
+    monkeypatch.setattr(doctor, "copy_text", copied.append)
+    doctor.main([])
+    assert json.loads(capsys.readouterr().out) == report
+    assert json.loads(copied[0]) == report
+    body = "### FCC doctor output\n\n" + copied[0]
+    collapsed = _collapse_report(body)
+    assert collapsed.startswith("### FCC doctor output\n\n<details>\n")
+    assert json.loads(collapsed.split("```json\n", 1)[1].rsplit("```", 1)[0]) == report
+    assert _parse_report(collapsed) == {"valid": True, "reportedVersion": "1.2.3"}
+
+
+def _collapse_report(body):
+    patterns = "\n".join(
+        f"const {name} = {json.dumps(_workflow_pattern(name))};"
+        for name in ("fieldPattern", "versionPattern")
+    )
+    script = (
+        patterns
+        + "\n"
+        + _javascript_function("parseReport")
+        + "\n"
+        + _javascript_function("collapseDoctorReport")
+    )
+    script += f"\nprocess.stdout.write(JSON.stringify(collapseDoctorReport({json.dumps(body)})));"
+    return _run_javascript(script)
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("fenced", [False, True])
+def test_collapsing_only_changes_doctor_section_and_is_idempotent(newline, fenced):
+    report = '{"version":"1.2.3","model":"$&```</details>"}'
+    content = f"```json\n{report}\n```" if fenced else report
+    before = "### Describe the issue\n\nMy description and ![image](https://example.com/image.png)\n\n### FCC doctor output\n\n"
+    after = "\n\n### Other details\n\nKeep this text exactly.\n"
+    body = (before + content + after).replace("\n", newline)
+    collapsed = _collapse_report(body)
+    assert collapsed.startswith(before.replace("\n", newline) + "<details>")
+    assert collapsed.endswith(after.replace("\n", newline))
+    assert report in collapsed
+    assert _collapse_report(collapsed) == collapsed
+    assert _parse_report(collapsed) == {"valid": True, "reportedVersion": "1.2.3"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "### Installation issue\n\nCannot install",
+        "### FCC version\n\n1.2.3",
+        "### FCC doctor output\n\n{invalid}",
+        '### FCC doctor output\n\n{"version":"1.2.3"}\n\n### FCC doctor output\n\n{"version":"1.2.3"}',
+    ],
+)
+def test_collapsing_leaves_other_or_invalid_reports_untouched(body):
+    assert _collapse_report(body) == body
 
 
 @pytest.mark.parametrize(
@@ -180,7 +311,8 @@ def test_release_tags_are_exact_stable_versions(tag, expected):
     assert (match[1] if match else None) == expected
 
 
-def test_outdated_version_comment_is_reconciled_across_edits() -> None:
+@pytest.mark.parametrize("form", ["legacy", "doctor"])
+def test_outdated_version_comment_is_reconciled_across_edits(form) -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     latest = "17.23.456"
     source = f"return (async () => {{\n{_workflow_script()}\n}})();"
@@ -197,6 +329,11 @@ const github = {
     issues: {
       get: async (args) => {
         record("getIssue", args);
+        return { data: liveIssue };
+      },
+      update: async (args) => {
+        record("updateIssue", args);
+        liveIssue.body = args.body;
         return { data: liveIssue };
       },
       getLabel: async (args) => record("getLabel", args),
@@ -245,14 +382,14 @@ const context = {
     },
   },
 };
-const bodyFor = (value) => `### FCC version\n\n${value}\n\n### CLI\n\nClaude Code`;
+const bodyFor = __BODY_FOR__;
 
 liveIssue.body = bodyFor("latest");
 await run(github, context);
-liveIssue.body = bodyFor("The version is 17.23.454");
+liveIssue.body = bodyFor("17.23.454");
 await run(github, context);
 await run(github, context);
-liveIssue.body = bodyFor("free-claude-code 17.23.455");
+liveIssue.body = bodyFor("17.23.455");
 await run(github, context);
 liveIssue.body = bodyFor(latestVersion);
 await run(github, context);
@@ -268,8 +405,15 @@ await run(github, context);
 process.stdout.write(JSON.stringify({ calls, comments }));
 """
     result = _run_javascript(
-        harness.replace("__SOURCE__", json.dumps(source)).replace(
-            "__LATEST__", json.dumps(latest)
+        harness.replace("__SOURCE__", json.dumps(source))
+        .replace("__LATEST__", json.dumps(latest))
+        .replace(
+            "__BODY_FOR__",
+            (
+                "(value) => `### FCC version\\n\\n${value}\\n\\n### CLI\\n\\nClaude Code`"
+                if form == "legacy"
+                else '(value) => value === "None" ? "### Installation issue\\n\\nCannot install" : `### FCC doctor output\\n\\n${JSON.stringify({version: value})}`'
+            ),
         )
     )
     calls = result["calls"]
@@ -280,6 +424,7 @@ process.stdout.write(JSON.stringify({ calls, comments }));
     assert names.count("deleteComment") == 3
     assert names.count("getLatestRelease") == 4
     assert names.count("getIssue") == 6
+    assert names.count("updateIssue") == (3 if form == "doctor" else 0)
     assert names.count("getLabel") == 1
     assert names.count("addLabels") == 1
     assert names.count("removeLabel") == 2
@@ -298,7 +443,11 @@ process.stdout.write(JSON.stringify({ calls, comments }));
     )
     assert result["comments"] == []
     assert "cancel-in-progress: false" in workflow
-    assert "github.rest.issues.update({" not in workflow
+    assert all(
+        set(call["args"]) == {"owner", "repo", "issue_number", "body"}
+        for call in calls
+        if call["name"] == "updateIssue"
+    )
     assert 'state: "closed"' not in workflow
 
 

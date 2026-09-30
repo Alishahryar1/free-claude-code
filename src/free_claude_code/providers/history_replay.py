@@ -5,10 +5,11 @@ import json
 import re
 from collections.abc import Iterator, Mapping
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.core.anthropic.models import Message, MessagesRequest
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.history_replay import (
     HistoryProtocol,
@@ -18,7 +19,9 @@ from free_claude_code.core.history_replay import (
     is_replay,
     readable_reasoning,
     reasoning_context,
+    resolve_messages_replay,
 )
+from free_claude_code.core.json_types import JsonValue
 
 from .endpoint_types import HttpEndpoint
 
@@ -37,6 +40,25 @@ def validate_history(body: Mapping[str, Any]) -> None:
                         decode_replay(value)
     except HistoryReplayError as error:
         raise InvalidRequestError(str(error)) from error
+
+
+def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
+    """Resolve persisted associations before any lossy protocol conversion."""
+    validate_history(request.model_dump(mode="json"))
+    messages = []
+    try:
+        for message in request.messages:
+            if message.role != "assistant" or isinstance(message.content, str):
+                messages.append(message)
+                continue
+            body = message.model_dump(mode="json")
+            body["content"] = resolve_messages_replay(
+                cast(list[JsonValue], body["content"])
+            )
+            messages.append(Message.model_validate(body))
+    except HistoryReplayError as error:
+        raise InvalidRequestError(str(error)) from error
+    return request.model_copy(update={"messages": messages})
 
 
 def replay_origin(

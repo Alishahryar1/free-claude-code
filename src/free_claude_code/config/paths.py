@@ -19,6 +19,7 @@ SERVER_OWNER_LOCK_FILENAME = "server.owner.lock"
 FCC_TEMP_DIRNAME = "tmp"
 LAUNCHER_TEMP_DIRNAME = "launchers"
 CODE_STATE_DIRNAME = "code"
+FCC_DATABASE_FILENAME = "fcc.db"
 CODE_DATABASE_FILENAME = "code.db"
 CODE_LOCK_FILENAME = "code.lock"
 
@@ -59,8 +60,13 @@ def launcher_temp_dir_path() -> Path:
     return config_dir_path() / FCC_TEMP_DIRNAME / LAUNCHER_TEMP_DIRNAME
 
 
-def code_database_path() -> Path:
-    """Return the managed Code sessions database path."""
+def fcc_database_path() -> Path:
+    """Return the shared FCC database path."""
+    return config_dir_path() / FCC_DATABASE_FILENAME
+
+
+def legacy_code_database_path() -> Path:
+    """Return the former Code database path for startup relocation."""
     return config_dir_path() / CODE_STATE_DIRNAME / CODE_DATABASE_FILENAME
 
 

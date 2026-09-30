@@ -295,6 +295,8 @@ def _update_profile(library: _Library, values: JsonObject) -> bool:
     }
     headers[_VIEW_HEADER] = "claude-desktop"
     profile.update(values)
+    # Desktop otherwise restricts tool network access to the inference gateway.
+    profile.setdefault("coworkEgressAllowedHosts", ["*"])
     profile["inferenceCustomHeaders"] = headers
     profile.pop("inferenceModels", None)
     return _write(library.profile_path, profile)

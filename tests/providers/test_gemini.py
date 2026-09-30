@@ -49,8 +49,6 @@ def gemini_config():
     return make_provider_config(
         api_key="test_gemini_key",
         base_url=GEMINI_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 
@@ -123,8 +121,6 @@ def test_build_request_body_reasoning_off_sets_reasoning_none():
         make_provider_config(
             api_key="test_gemini_key",
             base_url=GEMINI_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )

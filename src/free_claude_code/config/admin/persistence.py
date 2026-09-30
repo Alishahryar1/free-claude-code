@@ -18,6 +18,7 @@ from free_claude_code.config.provider_proxies import invalid_provider_proxy_keys
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject
 
+from .custom_providers import CustomProviderMutation, merge_custom_provider
 from .manifest import FIELD_BY_KEY, FIELDS
 from .state import ConfigInputValue
 from .validation import settings_from_values
@@ -39,6 +40,7 @@ class PreparedAdminUpdate:
     pending_fields: tuple[str, ...]
     path: Path
     changed_keys: tuple[str, ...] = ()
+    custom_provider_id: str | None = None
 
     @property
     def valid(self) -> bool:
@@ -61,6 +63,7 @@ class PreparedAdminUpdate:
                 "pending_fields": [],
             }
         return {
+            "custom_provider_id": self.custom_provider_id,
             "applied": True,
             "valid": True,
             "errors": [],
@@ -129,11 +132,18 @@ def prepare_admin_update(
     updates: Mapping[str, ConfigInputValue],
     snapshot: ManagedConfigSnapshot,
     active_settings: Settings,
+    custom_provider: CustomProviderMutation | None = None,
 ) -> PreparedAdminUpdate:
     """Validate an update and construct its prospective Settings snapshot."""
 
     update_errors = _update_protocol_errors(updates)
     target_values = target_values_with_updates(updates, snapshot)
+    custom_id = None
+    if custom_provider is not None:
+        try:
+            custom_id = merge_custom_provider(target_values, snapshot, custom_provider)
+        except ValueError as exc:
+            update_errors = (*update_errors, str(exc))
     settings, settings_errors = settings_from_values(target_values, snapshot.process)
     errors = (
         *update_errors,
@@ -164,6 +174,7 @@ def prepare_admin_update(
         pending_fields=pending_fields,
         path=snapshot.path,
         changed_keys=changed_keys,
+        custom_provider_id=custom_id,
     )
 
 

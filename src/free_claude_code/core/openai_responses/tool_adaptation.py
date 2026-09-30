@@ -416,35 +416,6 @@ class ResponsesToolAdapter:
             raise ResponsesConversionError("Ambiguous tool name returned by provider.")
         return next(iter(candidates)) if len(candidates) == 1 else None
 
-    def prepare_arguments(
-        self, name: str, arguments: str, *, namespace: str | None = None
-    ) -> str:
-        """Validate provider arguments before publishing a completed tool call."""
-        identity = self._identity({"name": name, "namespace": namespace})
-        if identity is not None and identity.kind == "custom":
-            return json.dumps(
-                {"input": custom_tool_input_text_from_arguments(arguments)},
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-        try:
-            parsed = json.loads(
-                arguments,
-                parse_float=_canonical_number,
-                parse_constant=_reject_json_constant,
-            )
-        except ValueError as exc:
-            raise ResponsesConversionError("Invalid tool call arguments.") from exc
-        if not isinstance(parsed, dict):
-            raise ResponsesConversionError("Tool call arguments must be a JSON object.")
-        return simplejson.dumps(
-            parsed,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            allow_nan=False,
-            use_decimal=True,
-        )
-
     def restore_item(self, value: JsonValue) -> JsonValue:
         if not isinstance(value, dict):
             return value
@@ -456,18 +427,6 @@ class ResponsesToolAdapter:
         if value.get("type") != "function_call":
             return value
         identity = self._identity(value)
-        if value.get("status") == "completed" and (
-            self._policy.client_tool_search or self._policy.flatten_namespaces
-        ):
-            raw = value.get("arguments")
-            value = {
-                **value,
-                "arguments": self.prepare_arguments(
-                    _name(value),
-                    raw if isinstance(raw, str) else "",
-                    namespace=_namespace(value),
-                ),
-            }
         if self._is_search(value):
             arguments = value.get("arguments")
             if not is_unfinished_search_call(value):
@@ -662,7 +621,6 @@ class ResponsesToolEventAdapter:
         self._tools = tools
         self._custom_items: set[str] = set()
         self._search_items: set[str] = set()
-        self._function_items: set[str] = set()
         self._sequence = 0
 
     def feed(
@@ -676,34 +634,6 @@ class ResponsesToolEventAdapter:
         item = self._tools.restore_item(original_item)
         if isinstance(item, dict):
             data["item"] = item
-            if item.get("type") == "function_call" and (
-                self._tools._policy.client_tool_search
-                or self._tools._policy.flatten_namespaces
-            ):
-                if isinstance(item_id := item.get("id"), str):
-                    self._function_items.add(item_id)
-                if event_type == "response.output_item.added":
-                    item["arguments"] = ""
-                if (
-                    event_type == "response.output_item.done"
-                    and item.get("status") == "completed"
-                ):
-                    coordinates = {
-                        "item_id": item.get("id"),
-                        "output_index": data.get("output_index"),
-                    }
-                    arguments = item.get("arguments", "")
-                    yield self._emit(
-                        "response.function_call_arguments.delta",
-                        {**coordinates, "delta": arguments},
-                    )
-                    identity = {
-                        key: item[key] for key in ("name", "namespace") if key in item
-                    }
-                    yield self._emit(
-                        "response.function_call_arguments.done",
-                        {**coordinates, **identity, "arguments": arguments},
-                    )
             if item.get("type") == "tool_search_call":
                 if isinstance(item_id := item.get("id"), str):
                     self._search_items.add(item_id)
@@ -742,8 +672,7 @@ class ResponsesToolEventAdapter:
                 "response.function_call_arguments.delta",
                 "response.function_call_arguments.done",
             }
-            and data.get("item_id")
-            in self._custom_items | self._search_items | self._function_items
+            and data.get("item_id") in self._custom_items | self._search_items
         ):
             return
         if (

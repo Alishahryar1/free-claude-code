@@ -40,7 +40,9 @@ def _runtime():
     store.initialize()
     manager = ProviderRuntimeManager(
         store.read().settings,
-        runtime_factory=lambda snapshot: ProviderRuntime(snapshot, {}),
+        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
+            snapshot, admission_registry, {}
+        ),
     )
     return ApplicationRuntime(
         manager, configuration=ConfigurationService(store), transcriber=None

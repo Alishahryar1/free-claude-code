@@ -233,8 +233,6 @@ def groq_provider():
         make_provider_config(
             api_key="test_groq_key",
             base_url=GROQ_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )

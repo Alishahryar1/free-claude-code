@@ -31,9 +31,6 @@ def _config(base_url: str) -> ProviderConfig:
     return make_provider_config(
         api_key="test_key",
         base_url=base_url,
-        rate_limit=1_000_000,
-        rate_window=1,
-        max_concurrency=1_000,
         http_read_timeout=30.0,
         http_write_timeout=15.0,
         http_connect_timeout=5.0,

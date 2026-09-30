@@ -418,3 +418,11 @@ class FakeConnection:
         self.harness.interrupt_gate.set()
         self.harness.delete_gate.set()
         await self.sink(HarnessEvent(self.generation, self.thread_id, "closed"))
+
+
+async def close_code_database(service):
+    """Tests composing a service directly also own its injected database."""
+    from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
+
+    assert isinstance(service._store, SQLiteCodeStore)
+    await service._store.database.close()

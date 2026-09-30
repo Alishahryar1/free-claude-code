@@ -41,6 +41,8 @@ from unittest.mock import MagicMock
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime.runtime import create_provider
+from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 
 async def main():
     loop = asyncio.get_running_loop()
@@ -54,7 +56,7 @@ async def main():
             assert threading.get_ident() == thread
             return provider
         return construct
-    assert await create_provider("groq", Settings(groq_api_key="test"), provider_loaders={"groq": load}) is provider
+    assert await create_provider("groq", Settings(groq_api_key="test"), ProviderAdmissionRegistry(ProviderAdmissionLimits(1, 2, 2)), provider_loaders={"groq": load}) is provider
     await provider.cleanup()
 
 asyncio.run(main())

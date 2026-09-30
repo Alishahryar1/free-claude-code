@@ -2,6 +2,9 @@
 
 DEFAULT_MODEL = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
 
+# Client context allocation when the provider reports no model limit.
+DEFAULT_MODEL_CONTEXT_TOKENS = 200_000
+
 # HTTP client connect timeout (seconds).
 HTTP_CONNECT_TIMEOUT_DEFAULT = 10.0
 

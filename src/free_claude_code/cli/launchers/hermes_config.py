@@ -2,7 +2,10 @@
 
 from dataclasses import dataclass, field
 
-from free_claude_code.application.model_catalog import CatalogModel
+from free_claude_code.application.model_catalog import (
+    CatalogModel,
+    context_window_for_client,
+)
 from free_claude_code.config.server_urls import proxy_v1_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
@@ -127,8 +130,7 @@ def _model_override(model: CatalogModel) -> JsonObject:
         override["supports_reasoning"] = model.supports_reasoning
     if model.input_modalities is not None:
         override["supports_vision"] = ModelInputModality.IMAGE in model.input_modalities
-    if model.context_window_tokens is not None:
-        override["context_window"] = model.context_window_tokens
+    override["context_window"] = context_window_for_client(model)
     if model.max_output_tokens is not None:
         override["max_output_tokens"] = model.max_output_tokens
     return override

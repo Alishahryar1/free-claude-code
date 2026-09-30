@@ -27,11 +27,13 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.harnesses.claude import build_claude_proxy_env
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
-from free_claude_code.messaging.session import SessionStore
 from free_claude_code.messaging.voice import VoiceCancellationResult
 from free_claude_code.messaging.workflow import MessagingWorkflow
+from free_claude_code.runtime.messaging_sqlite import SQLiteMessagingStore
+from free_claude_code.runtime.sqlite_database import SQLiteDatabase
 from smoke.lib.child_process import run_captured_text
 from smoke.lib.config import ProviderModel, SmokeConfig, auth_headers
+from smoke.lib.http import conversation_headers
 from smoke.lib.server import RunningServer, start_server
 from smoke.lib.skips import fail_missing_env, skip_if_upstream_unavailable_events
 
@@ -88,6 +90,7 @@ class ConversationDriver:
         self.config = config
         self.messages: list[dict[str, Any]] = []
         self.turns: list[ConversationTurn] = []
+        self._session_id = str(uuid.uuid4())
 
     def ask(
         self,
@@ -120,7 +123,7 @@ class ConversationDriver:
         *,
         headers: dict[str, str] | None = None,
     ) -> ConversationTurn:
-        request_headers = headers or auth_headers()
+        request_headers = conversation_headers(headers, session_id=self._session_id)
         stream_payload = {**payload, "stream": True}
         with httpx.stream(
             "POST",
@@ -148,7 +151,7 @@ class ConversationDriver:
     ) -> dict[str, Any]:
         response = httpx.post(
             f"{self.server.base_url}/v1/messages",
-            headers=auth_headers(),
+            headers=conversation_headers(session_id=self._session_id),
             json=payload,
             timeout=self.config.timeout_s,
         )
@@ -566,15 +569,18 @@ class FakePlatformDriver:
     event_batches: list[list[dict[str, Any]]] | None = None
     platform: FakePlatform = field(init=False)
     cli_manager: FakeCLIManager = field(init=False)
-    session_store: SessionStore = field(init=False)
+    session_store: SQLiteMessagingStore = field(init=False)
     workflow: MessagingWorkflow = field(init=False)
+    database: SQLiteDatabase = field(init=False)
 
     def __post_init__(self) -> None:
         self.platform = FakePlatform(self.platform_name)
         self.cli_manager = FakeCLIManager(self.event_batches)
-        self.session_store = SessionStore(
-            storage_path=str(self.tmp_path / f"{self.platform_name}-sessions.json")
+        self.database = SQLiteDatabase(
+            self.tmp_path / f"{self.platform_name}-fcc.db",
+            self.tmp_path / f"{self.platform_name}-fcc.lock",
         )
+        self.session_store = SQLiteMessagingStore(self.database)
         self.workflow = MessagingWorkflow(
             self.platform,
             self.cli_manager,
@@ -583,6 +589,14 @@ class FakePlatformDriver:
             voice_cancellation=self.platform,
         )
         self.platform.on_message(self.workflow.handle_message)
+
+    async def start(self) -> None:
+        await self.database.start()
+        await self.workflow.restore()
+
+    async def close(self) -> None:
+        await self.workflow.close()
+        await self.database.close()
 
     async def send(
         self,
@@ -626,7 +640,7 @@ class FakePlatformDriver:
         while time.monotonic() < deadline:
             pending = [task for task in self.platform._tasks if not task.done()]
             if not pending and await self._all_tree_nodes_terminal():
-                self.session_store.flush_pending_save()
+                await self.workflow.tree_queue.wait_idle()
                 return
             await asyncio.sleep(0.02)
         raise AssertionError("fake platform did not become idle")

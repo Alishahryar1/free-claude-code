@@ -7,9 +7,11 @@ from free_claude_code.application.errors import (
     ApplicationUnavailableError,
     UnknownProviderError,
 )
+from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
@@ -101,6 +103,19 @@ def _load_deepseek() -> ProviderFactory:
         admission: ProviderAdmissionController,
     ) -> BaseProvider:
         return DeepSeekProvider(config, admission=admission)
+
+    return construct
+
+
+def _load_alibaba_cloud() -> ProviderFactory:
+    from free_claude_code.providers.alibaba_cloud import AlibabaCloudProvider
+
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return AlibabaCloudProvider(config, admission=admission)
 
     return construct
 
@@ -206,6 +221,7 @@ def _load_opencode_go() -> ProviderFactory:
 
 
 _SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
+    "alibaba_cloud": _load_alibaba_cloud,
     "nvidia_nim": _load_nvidia_nim,
     "open_router": _load_open_router,
     "openai_api": _load_openai_api,
@@ -249,12 +265,28 @@ if (
 def prepare_provider(
     provider_id: str,
     provider_loaders: Mapping[str, Callable[[], ProviderFactory]],
-) -> Callable[[Settings], BaseProvider]:
+    custom_definition: CustomProviderDefinition | None = None,
+) -> Callable[[Settings, ProviderAdmissionRegistry], BaseProvider]:
     """Load implementation modules in a worker; return a loop-owned constructor."""
 
     # The SDK lazily imports these on first client resource access. Keep that
     # work in this loader, before constructing clients on their owner loop.
     importlib.import_module("openai.resources")
+    if custom_definition is not None:
+        from free_claude_code.providers.custom import CustomProvider
+
+        from .config import build_custom_provider_config
+
+        def construct_custom(
+            settings: Settings, admission_registry: ProviderAdmissionRegistry
+        ) -> BaseProvider:
+            config = build_custom_provider_config(custom_definition, settings)
+            admission = admission_registry.get(provider_id)
+            return CustomProvider(
+                config, definition=custom_definition, admission=admission
+            )
+
+        return construct_custom
     descriptor = PROVIDER_CATALOG.get(provider_id)
     if descriptor is None:
         raise UnknownProviderError.for_provider(provider_id, PROVIDER_CATALOG)
@@ -267,14 +299,11 @@ def prepare_provider(
         )
     factory = loader() if loader is not None else None
 
-    def construct(settings: Settings) -> BaseProvider:
+    def construct(
+        settings: Settings, admission_registry: ProviderAdmissionRegistry
+    ) -> BaseProvider:
         config = build_provider_config(descriptor, settings)
-        admission = ProviderAdmissionController(
-            provider_name=provider_id,
-            rate_limit=config.rate_limit,
-            rate_window=config.rate_window,
-            max_concurrency=config.max_concurrency,
-        )
+        admission = admission_registry.get(provider_id)
         if factory is not None:
             return factory(config, settings, admission)
         return create_openai_chat_provider(provider_id, config, admission)

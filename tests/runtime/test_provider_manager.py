@@ -45,7 +45,7 @@ class RuntimeFactory:
         self.runtimes: list[FakeRuntime] = []
         self.error: Exception | None = None
 
-    def __call__(self, settings: Settings) -> ProviderRuntime:
+    def __call__(self, settings: Settings, admission_registry) -> ProviderRuntime:
         if self.error is not None:
             raise self.error
         runtime = FakeRuntime(settings)
@@ -302,7 +302,7 @@ async def test_replacement_keeps_leased_generation_open_until_final_release() ->
 
 
 @pytest.mark.asyncio
-async def test_hot_replacement_owns_admission_per_provider_generation() -> None:
+async def test_hot_replacement_shares_admission_and_retires_clients() -> None:
     first_settings = _settings("nvidia_nim/one")
     second_settings = _settings("nvidia_nim/two")
     clients: list[MagicMock] = []
@@ -331,7 +331,7 @@ async def test_hot_replacement_owns_admission_per_provider_generation() -> None:
             assert isinstance(old_provider, NvidiaNimProvider)
             assert isinstance(new_provider, NvidiaNimProvider)
             assert new_provider is not old_provider
-            assert new_provider._admission is not old_provider._admission
+            assert new_provider._admission is old_provider._admission
             assert (await old_lease.resolve_provider("nvidia_nim")) is old_provider
             clients[0].close.assert_not_awaited()
 
@@ -815,9 +815,17 @@ async def test_generation_lease_keeps_its_model_metadata_after_replacement() -> 
     await lease.resolve_provider("open_router")
 
     await manager.replace(
-        _settings("nvidia_nim/two"),
+        first_settings,
         commit=AsyncMock(),
     )
+
+    factory.runtimes[-1].provider.list_model_infos.return_value = frozenset(
+        {ProviderModelInfo("old-model", max_output_tokens=16384)}
+    )
+    new_lease = await manager.acquire()
+    await new_lease.resolve_provider("open_router")
+    new_info = new_lease.model_info("open_router", "old-model")
+    assert new_info is not None and new_info.max_output_tokens == 16384
 
     assert lease.model_info("open_router", "old-model") == ProviderModelInfo(
         "open_router/old-model",
@@ -825,6 +833,7 @@ async def test_generation_lease_keeps_its_model_metadata_after_replacement() -> 
         max_output_tokens=4_096,
     )
     await lease.release()
+    await new_lease.release()
     await manager.close()
 
 

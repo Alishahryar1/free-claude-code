@@ -138,7 +138,7 @@ class WebToolService:
         )
         provider_stream = self._executor.stream_messages(
             translated,
-            raw_log_payload=plan.request.model_dump(),
+            raw_log_payload=plan.request.model_dump,
             request_id=request_id,
         )
         chunks: list[str] = []

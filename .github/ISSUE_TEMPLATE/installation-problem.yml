@@ -1,0 +1,12 @@
+name: Installation problem
+description: Report a problem before FCC has been installed successfully.
+labels:
+  - bug
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Installation issue
+      description: Describe what happened and include the error you received. You can attach screenshots here if helpful.
+    validations:
+      required: true

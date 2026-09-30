@@ -156,8 +156,6 @@ def open_router_provider():
         make_provider_config(
             api_key="test_openrouter_key",
             base_url="https://openrouter.ai/api/v1",
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )

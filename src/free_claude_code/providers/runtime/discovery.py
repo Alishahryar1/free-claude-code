@@ -44,7 +44,9 @@ def model_cache_provider_ids_for_settings(
     )
     available = set(configured) | set(connected_provider_ids)
     return tuple(
-        provider_id for provider_id in PROVIDER_CATALOG if provider_id in available
+        provider_id
+        for provider_id in settings.provider_ids
+        if provider_id in available or settings.custom_provider(provider_id) is not None
     )
 
 
@@ -59,5 +61,7 @@ def model_list_provider_ids_for_settings(
         for provider_id in model_cache_provider_ids_for_settings(
             settings, connected_provider_ids
         )
-        if not PROVIDER_CATALOG[provider_id].local or provider_id in referenced_ids
+        if settings.custom_provider(provider_id) is not None
+        or not PROVIDER_CATALOG[provider_id].local
+        or provider_id in referenced_ids
     )

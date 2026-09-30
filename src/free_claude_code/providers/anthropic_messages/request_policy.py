@@ -43,9 +43,12 @@ def resolve_messages_options(
     capabilities: MessagesModelCapabilities = MessagesModelCapabilities(),
     thinking: ThinkingConfig | None = None,
     output_effort: object = None,
+    preserve_native_controls: bool = False,
 ) -> NativeMessagesOptions:
     """Encode supported controls without conflating effort and thinking mode."""
 
+    if preserve_native_controls:
+        reasoning = ReasoningPolicy.provider_default()
     if output_effort is not None:
         if not isinstance(
             output_effort, str
@@ -109,6 +112,10 @@ def resolve_messages_options(
                 and not reasoning.requests_reasoning
             ):
                 exact = thinking.budget_tokens
+            if preserve_native_controls and exact is None:
+                raise NativeMessagesError(
+                    "Native manual thinking requires a token budget."
+                )
             derived = max(_MIN_THINKING_BUDGET, reasoning.numeric_budget_tokens or 2048)
             effective = exact if exact is not None else min(derived, limit - 1)
             if effective < _MIN_THINKING_BUDGET or effective >= limit:
@@ -153,6 +160,7 @@ def resolve_messages_options(
             and supported is None
             and native_mode is None
             and mode is None
+            and not preserve_native_controls
         ):
             raise NativeMessagesError(
                 "This model does not advertise output effort support."

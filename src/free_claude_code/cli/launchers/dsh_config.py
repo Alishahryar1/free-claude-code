@@ -3,7 +3,10 @@
 import math
 from pathlib import Path
 
-from free_claude_code.application.model_catalog import CatalogModel
+from free_claude_code.application.model_catalog import (
+    CatalogModel,
+    context_window_for_client,
+)
 from free_claude_code.config.server_urls import proxy_v1_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
@@ -109,8 +112,7 @@ def _model_profile(model: CatalogModel) -> JsonObject:
             for modality in ModelInputModality
             if modality in model.input_modalities
         ]
-    if model.context_window_tokens is not None:
-        profile["contextWindow"] = model.context_window_tokens
+    profile["contextWindow"] = context_window_for_client(model)
     if model.max_output_tokens is not None:
         profile["maxTokens"] = model.max_output_tokens
     return profile

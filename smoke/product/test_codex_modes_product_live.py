@@ -22,6 +22,7 @@ from free_claude_code.config.env_migrations import (
     atomic_write_managed_config,
     settings_env_keys,
 )
+from free_claude_code.config.paths import FCC_DATABASE_FILENAME
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from smoke.lib.child_process import run_captured_text
 from smoke.lib.config import SmokeConfig
@@ -554,7 +555,11 @@ def test_codex_child_review_local_e2e(
                 )
                 assert marker.read_text().strip() == "smoke"
                 with closing(
-                    sqlite3.connect(tmp_path / "home" / ".fcc" / "code" / "code.db")
+                    sqlite3.connect(
+                        (tmp_path / "home" / ".fcc" / FCC_DATABASE_FILENAME).as_uri()
+                        + "?mode=ro",
+                        uri=True,
+                    )
                 ) as database:
                     root = database.execute(
                         "SELECT native_thread_id FROM code_sessions WHERE id = ?",

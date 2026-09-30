@@ -50,13 +50,13 @@ def runtime():
         return_value=frozenset({ProviderModelInfo("one")})
     )
 
-    async def construct(_id, _settings):
+    async def construct(_id, _settings, _admission_registry):
         return provider
 
     manager = ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda snapshot: ProviderRuntime(
-            snapshot, provider_constructor=construct
+        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
+            snapshot, admission_registry, provider_constructor=construct
         ),
     )
     return ApplicationRuntime(
@@ -98,7 +98,7 @@ async def test_jetbrains_startup_refresh_and_failed_discovery_allow_disconnect(
     )
     try:
         await runtime.start()
-        await asyncio.wait_for(runtime._jetbrains_update.task, 5)
+        await asyncio.wait_for(runtime._integrations._jetbrains_update.task, 5)
         status = await runtime.jetbrains_acp_status()
         assert status["connected"] is True
         assert status["update"]["changed"] is True
@@ -109,7 +109,7 @@ async def test_jetbrains_startup_refresh_and_failed_discovery_allow_disconnect(
         assert entry["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8000"
         jb.registry_path().unlink()
         await runtime.refresh_jetbrains_acp()
-        await asyncio.wait_for(runtime._jetbrains_update.task, 5)
+        await asyncio.wait_for(runtime._integrations._jetbrains_update.task, 5)
         status = await runtime.jetbrains_acp_status()
         assert status["update"]["state"] == "failed"
         assert status["connected"] is True
@@ -120,7 +120,11 @@ async def test_jetbrains_startup_refresh_and_failed_discovery_allow_disconnect(
 
 async def finish(runtime):
     await asyncio.wait_for(
-        asyncio.gather(runtime._claude_update.task, runtime._codex_update.task), 5
+        asyncio.gather(
+            runtime._integrations._claude_update.task,
+            runtime._integrations._codex_update.task,
+        ),
+        5,
     )
 
 
@@ -147,7 +151,7 @@ async def test_startup_refreshes_old_connections_and_status_is_read_only(runtime
         await runtime.disconnect_claude_vscode()
         assert (await runtime.claude_vscode_status())["update"]["changed"] is False
         await runtime.refresh_claude_vscode()
-        await runtime._claude_update.task
+        await runtime._integrations._claude_update.task
         assert (await runtime.claude_vscode_status())["connected"] is False
     finally:
         await runtime.close()
@@ -174,7 +178,7 @@ async def test_codex_wait_does_not_delay_http_or_claude(runtime, monkeypatch):
     try:
         await asyncio.wait_for(runtime.start(), 1)
         await asyncio.wait_for(entered.wait(), 5)
-        await asyncio.wait_for(runtime._claude_update.task, 5)
+        await asyncio.wait_for(runtime._integrations._claude_update.task, 5)
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
@@ -224,9 +228,9 @@ async def test_update_failure_is_isolated_and_retry_finishes(runtime):
         assert (await runtime.claude_vscode_status())["update"]["state"] == "failed"
         assert "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" not in claude.read_text()
         await runtime.refresh_claude_vscode()
-        task = runtime._claude_update.task
+        task = runtime._integrations._claude_update.task
         await runtime.refresh_claude_vscode()
-        assert runtime._claude_update.task is task
+        assert runtime._integrations._claude_update.task is task
         await asyncio.wait_for(task, 5)
         assert (await runtime.claude_vscode_status())["connected"] is True
     finally:
@@ -357,7 +361,7 @@ async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off
     )
     try:
         await runtime.start()
-        await runtime._desktop_update.task
+        await runtime._integrations._desktop_update.task
         result = await runtime.claude_desktop_status()
         assert result["connected"] is True
         assert result["update"]["changed"] is True
@@ -366,7 +370,7 @@ async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off
         assert before == {p: p.stat().st_mtime_ns for p in root.rglob("*.json")}
         await runtime.disconnect_claude_desktop()
         await runtime.refresh_claude_desktop()
-        await runtime._desktop_update.task
+        await runtime._integrations._desktop_update.task
         assert (await runtime.claude_desktop_status())["connected"] is False
     finally:
         await runtime.close()
@@ -380,11 +384,13 @@ async def test_desktop_failure_does_not_block_other_startup(runtime, monkeypatch
     monkeypatch.setattr(desktop, "refresh_connected", fail)
     try:
         await runtime.start()
-        await runtime._desktop_update.task
+        await runtime._integrations._desktop_update.task
         await finish(runtime)
-        assert runtime._desktop_update.state == "failed"
-        assert "private-invalid-file" not in runtime._desktop_update.message
-        assert runtime._claude_update.state == "ready"
-        assert runtime._codex_update.state == "ready"
+        assert runtime._integrations._desktop_update.state == "failed"
+        assert (
+            "private-invalid-file" not in runtime._integrations._desktop_update.message
+        )
+        assert runtime._integrations._claude_update.state == "ready"
+        assert runtime._integrations._codex_update.state == "ready"
     finally:
         await runtime.close()

@@ -22,8 +22,6 @@ async def test_model_catalog_extracts_strict_optional_reasoning_boolean() -> Non
         make_provider_config(
             api_key="test-nararoute-key",
             base_url=NARAROUTE_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="nararoute"),
     )

@@ -66,6 +66,14 @@ class _Accounts:
             page.wait_for_timeout(10)
         return self.pending_status.pop(0)
 
+    def take_pending_login(self, page: Page) -> Route:
+        deadline = time.monotonic() + 5
+        while not self.pending_login:
+            if time.monotonic() >= deadline:
+                pytest.fail("Account login request did not reach the route handler")
+            page.wait_for_timeout(10)
+        return self.pending_login.pop(0)
+
     def config(self, route: Route) -> None:
         response = route.fetch()
         config = response.json()
@@ -247,9 +255,10 @@ def test_openai_connect_uses_browser_login(
     try:
         assert popup.url == "about:blank"
         assert popup.evaluate("window.opener === null") is True
+        login = accounts.take_pending_login(page)
         assert accounts.login_requests == [("openai", "browser")]
-        assert len(accounts.pending_login) == 1
-        accounts.pending_login.pop().fulfill(json=accounts.statuses["openai"])
+        assert not accounts.pending_login
+        login.fulfill(json=accounts.statuses["openai"])
         popup.wait_for_url(f"{admin_base_url}/account-test-sign-in")
     finally:
         popup.close()

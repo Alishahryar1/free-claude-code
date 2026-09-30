@@ -111,7 +111,7 @@ async def test_uvicorn_readiness_and_early_exit_close_runtime(failure):
 @pytest.mark.parametrize("valid", [False, True])
 @pytest.mark.parametrize("browser_result", [True, False, RuntimeError("opener failed")])
 def test_existing_server_must_identify_itself_as_fcc(
-    monkeypatch, browser_workers, valid, browser_result
+    monkeypatch, browser_workers, valid, browser_result, caplog
 ):
     settings = Settings()
     payload = {"unrelated": "server"}
@@ -136,6 +136,70 @@ def test_existing_server_must_identify_itself_as_fcc(
     monkeypatch.setattr(commands.webbrowser, "open", browser)
     assert commands.open_admin_when_ready(settings) is valid
     assert browser.call_count == int(valid)
+    if valid and browser_result is not True:
+        assert len(caplog.records) == 1
+        assert caplog.records[0].extra["instance_id"] == payload["instance_id"]
+
+
+@pytest.mark.parametrize("automatic", [False, True], ids=["tray", "automatic"])
+@pytest.mark.parametrize("raises", [False, True])
+def test_browser_warning_retains_owning_instance_after_server_exit(
+    monkeypatch, browser_workers, caplog, automatic, raises
+):
+    supervisor = commands.ServerSupervisor(console_logging=False)
+    settings = Settings()
+    entered, release = threading.Event(), threading.Event()
+    instances = []
+
+    def build(*args, **kwargs):
+        instance_id = f"instance-{len(instances)}"
+        instances.append(instance_id)
+        return SimpleNamespace(
+            runtime=SimpleNamespace(
+                instance_id=instance_id,
+                is_closed=True,
+                http_started=lambda: None,
+                begin_shutdown=lambda: None,
+                close=AsyncMock(return_value=True),
+            )
+        )
+
+    def browser(url):
+        entered.set()
+        assert release.wait(5)
+        if raises:
+            raise RuntimeError("opener failed")
+        return False
+
+    class Server:
+        def __init__(self, config, *, on_started, **kwargs):
+            self.on_started = on_started
+
+        def run(self, **kwargs):
+            self.on_started()
+            if not automatic:
+                tray = threading.Thread(target=supervisor.request_open_admin)
+                tray.start()
+                tray.join(2)
+                assert not tray.is_alive()
+            assert entered.wait(2)
+
+    monkeypatch.setattr("free_claude_code.runtime.bootstrap.build_asgi_app", build)
+    monkeypatch.setattr(uvicorn, "Config", lambda *args, **kwargs: None)
+    monkeypatch.setattr("free_claude_code.cli.uvicorn_server.RuntimeServer", Server)
+    monkeypatch.setattr(commands.webbrowser, "open", browser)
+    try:
+        for _ in range(2):
+            entered.clear()
+            supervisor._run_bound(
+                settings, [], open_admin_browser=automatic, restart_generation=0
+            )
+    finally:
+        release.set()
+        for worker in browser_workers:
+            worker.join(2)
+    assert len(caplog.records) == 2
+    assert {record.extra["instance_id"] for record in caplog.records} == set(instances)
 
 
 @pytest.mark.parametrize("change", ["none", "stop", "restart", "settings"])
@@ -144,6 +208,7 @@ def test_queued_browser_rechecks_owner_before_handoff(monkeypatch, change):
     settings = Settings()
     supervisor.schedule_run()
     supervisor._ready_settings = settings
+    supervisor._ready_instance_id = "queued-instance"
     queued = []
     monkeypatch.setattr(threading.Thread, "start", lambda thread: queued.append(thread))
     browser = MagicMock(return_value=True)
@@ -161,7 +226,7 @@ def test_queued_browser_rechecks_owner_before_handoff(monkeypatch, change):
 
 
 @pytest.mark.parametrize("reuse", [False, True])
-def test_browser_thread_start_failure_does_not_fail_fcc(monkeypatch, reuse):
+def test_browser_thread_start_failure_does_not_fail_fcc(monkeypatch, reuse, caplog):
     settings = Settings()
     browser = MagicMock()
     monkeypatch.setattr(commands.webbrowser, "open", browser)
@@ -185,17 +250,20 @@ def test_browser_thread_start_failure_does_not_fail_fcc(monkeypatch, reuse):
     else:
         supervisor = commands.ServerSupervisor()
         supervisor._ready_settings = settings
+        supervisor._ready_instance_id = "a" * 32
         supervisor.request_open_admin()
         supervisor.request_stop()
     browser.assert_not_called()
+    assert caplog.records[-1].extra["instance_id"] == "a" * 32
 
 
-def _run_browser_shutdown_probe(mode, outcome, directory):
+def _run_browser_shutdown_probe(mode, outcome, directory, setup_delay="0"):
     """Run real FCC lifecycle owners with only OS/browser/server dependencies faked."""
     from free_claude_code.cli import desktop, uvicorn_server
     from free_claude_code.config import paths
     from free_claude_code.runtime import bootstrap
 
+    print("probe: setup", flush=True)
     entered = threading.Event()
     patcher = pytest.MonkeyPatch()
     settings = Settings.model_construct(
@@ -208,6 +276,7 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
 
     def browser(url):
         assert url == "http://127.0.0.1:0/admin"
+        print("probe: browser entered", flush=True)
         entered.set()
         if outcome in {"automatic", "tray", "quit", "timeout"}:
             threading.Event().wait()  # Intentionally never released in this process.
@@ -222,6 +291,7 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
     if mode in {"server", "desktop"}:
         supervisor = commands.ServerSupervisor(console_logging=False)
         runtime = SimpleNamespace(
+            instance_id="browser-probe-instance",
             is_closed=True,
             begin_shutdown=lambda: None,
             http_started=lambda: None,
@@ -244,10 +314,10 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
                 if mode == "server":
                     if outcome == "tray":
                         supervisor.request_open_admin()
-                    assert entered.wait(2)
+                    entered.wait()  # The parent process owns the finite lifecycle deadline.
                     supervisor.request_stop()
                 else:
-                    assert supervisor.stop_event.wait(3)
+                    supervisor.stop_event.wait()
 
         patcher.setattr(uvicorn_server, "RuntimeServer", Server)
 
@@ -259,7 +329,7 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
                 setup()
                 if outcome == "tray":
                     self.controller.open_admin()
-                assert entered.wait(2)
+                entered.wait()  # The parent process owns the finite lifecycle deadline.
                 self.controller.quit()
 
             def stop(self):
@@ -305,15 +375,23 @@ def _run_browser_shutdown_probe(mode, outcome, directory):
 
                 def run(self, setup):
                     setup()
-                    assert entered.wait(2)
+                    entered.wait()  # The parent process owns the finite lifecycle deadline.
                     if outcome == "quit":
                         self.controller.quit()
-                    assert self.stopped.wait(6 if outcome == "timeout" else 2)
+                    self.stopped.wait()
 
                 def stop(self):
                     self.stopped.set()
 
             lock = InterprocessFileLock(Path(directory) / "desktop.lock")
+            original_acquire = InterprocessFileLock.acquire
+
+            def acquire(instance):
+                print("probe: acquiring desktop lock", flush=True)
+                threading.Event().wait(float(setup_delay))
+                return original_acquire(instance)
+
+            patcher.setattr(InterprocessFileLock, "acquire", acquire)
             try:
                 if mode == "reuse-desktop":
                     assert lock.acquire()
@@ -339,20 +417,33 @@ def test_reusing_desktop_process_exits_without_owning_browser(tmp_path, mode, ou
     _assert_browser_probe_exits(tmp_path, mode, outcome)
 
 
-def _assert_browser_probe_exits(tmp_path, mode, outcome):
+def test_browser_shutdown_waits_for_slow_healthy_setup(tmp_path):
+    _assert_browser_probe_exits(tmp_path, "reuse-terminal", "quit", setup_delay="2.2")
+
+
+def _assert_browser_probe_exits(tmp_path, mode, outcome, setup_delay="0"):
     script = (
         "import runpy, sys; "
         "runpy.run_path(sys.argv[1])['_run_browser_shutdown_probe'](*sys.argv[2:])"
     )
     # subprocess.run kills and reaps only this disposable child on timeout.
     completed = subprocess.run(
-        [sys.executable, "-c", script, __file__, mode, outcome, str(tmp_path)],
+        [
+            sys.executable,
+            "-c",
+            script,
+            __file__,
+            mode,
+            outcome,
+            str(tmp_path),
+            setup_delay,
+        ],
         capture_output=True,
         text=True,
         timeout=12,
         check=False,
     )
-    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "FCC exited while preserving its resource ownership" in completed.stdout
 
 

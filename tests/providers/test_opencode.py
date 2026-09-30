@@ -58,8 +58,6 @@ def _config():
     return make_provider_config(
         api_key="test_opencode_key",
         base_url="https://opencode.ai/zen/v1",
-        rate_limit=100,
-        rate_window=1,
     )
 
 
@@ -1109,7 +1107,7 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
                     resolved=resolved,
                     reasoning=DEFAULT_REASONING_POLICY,
                 ),
-                raw_log_payload={},
+                raw_log_payload=dict,
                 request_id="req_opencode_cross_transport_responses",
             )
         else:
@@ -1119,7 +1117,7 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
                     resolved=resolved,
                     reasoning=DEFAULT_REASONING_POLICY,
                 ),
-                raw_log_payload={},
+                raw_log_payload=dict,
                 request_id="req_opencode_cross_transport_messages",
             )
         body = "".join([chunk async for chunk in stream])

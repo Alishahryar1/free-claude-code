@@ -2,9 +2,12 @@
 
 import json
 import logging
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from loguru import logger
 
 from free_claude_code.config import logging_config
@@ -22,10 +25,99 @@ def test_log_capture_does_not_feed_back_into_interception(caplog, capsys, monkey
 
 
 def test_configure_logging_creates_parent_directories(tmp_path) -> None:
-    """Nested log path: parent directories are created before truncating."""
+    """Nested log path: parent directories are created before opening."""
     log_file = tmp_path / "nested" / "dir" / "app.log"
     configure_logging(str(log_file), force=True)
     assert log_file.is_file()
+
+
+def test_native_json_preserves_bound_and_request_context(tmp_path):
+    log_file = tmp_path / "context.log"
+    configure_logging(log_file, force=True)
+    with logger.contextualize(request_id="req-test", session_id="session-test"):
+        logger.bind(provider_id="provider-test", run_id="run-test").info("completed")
+    logger.complete()
+    row = json.loads(log_file.read_text(encoding="utf-8"))
+    assert row["record"]["extra"] == {
+        "request_id": "req-test",
+        "session_id": "session-test",
+        "provider_id": "provider-test",
+        "run_id": "run-test",
+    }
+    assert row["record"]["level"]["name"] == "INFO"
+    assert row["record"]["message"] == "completed"
+
+
+@pytest.mark.parametrize("stdlib", [False, True])
+def test_native_json_preserves_exception_chain_and_stack(tmp_path, stdlib):
+    log_file = tmp_path / "exception.log"
+    configure_logging(log_file, force=True)
+    try:
+        try:
+            raise ValueError("upstream HTTP 429: rate limited")
+        except ValueError as exc:
+            raise RuntimeError("provider request failed") from exc
+    except RuntimeError:
+        if stdlib:
+            logging.getLogger("test.exception").exception("request failed")
+        else:
+            logger.exception("request failed")
+    logger.complete()
+    rows = log_file.read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 1
+    row = json.loads(rows[0])
+    assert row["record"]["exception"] == {
+        "type": "RuntimeError",
+        "value": "provider request failed",
+        "traceback": True,
+    }
+    assert "ValueError: upstream HTTP 429: rate limited" in row["text"]
+    assert "RuntimeError: provider request failed" in row["text"]
+    assert "test_native_json_preserves_exception_chain_and_stack" in row["text"]
+
+
+def test_logging_preserves_records_across_process_restarts(tmp_path):
+    log_file = tmp_path / "server.log"
+    script = """
+import sys
+from loguru import logger
+from free_claude_code.config.logging_config import configure_logging
+configure_logging(sys.argv[1])
+logger.info(sys.argv[2])
+logger.complete()
+logger.remove()
+"""
+    for message in ("first run", "second run"):
+        subprocess.run(
+            [sys.executable, "-c", script, str(log_file), message],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    records = [
+        json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["record"]["message"] for record in records] == [
+        "first run",
+        "second run",
+    ]
+
+
+def test_forced_logging_reconfiguration_preserves_records(tmp_path):
+    log_file = tmp_path / "server.log"
+    configure_logging(log_file, force=True)
+    logger.info("before reconfiguration")
+    configure_logging(log_file, force=True)
+    logger.info("after reconfiguration")
+    logger.complete()
+    records = [
+        json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["record"]["message"] for record in records] == [
+        "before reconfiguration",
+        "after reconfiguration",
+    ]
 
 
 def test_configure_logging_writes_json_to_file(tmp_path):
@@ -83,26 +175,24 @@ def test_configure_logging_replaces_sink_when_path_changes(tmp_path):
     assert "second destination" in second_text
 
 
-def test_telegram_bot_token_redacted_in_message_field(tmp_path) -> None:
-    log_file = str(tmp_path / "redact.log")
-    configure_logging(log_file, force=True, verbose_third_party=False)
-    token = "123456:ABCDEF-ghij-klm"
-    logger.info("Calling {}", f"https://api.telegram.org/bot{token}/getMe")
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Calling https://api.telegram.org/bot123456:synthetic-token/getMe",
+        "Request headers: Authorization: Bearer synthetic-token",
+        "first line\nsecond line \u2603",
+    ],
+)
+def test_native_json_preserves_message_text(tmp_path, message):
+    log_file = tmp_path / "message.log"
+    configure_logging(log_file, force=True)
+    logger.info(message)
     logger.complete()
-    text = Path(log_file).read_text(encoding="utf-8")
-    assert token not in text
-    assert "bot<redacted>/" in text or "redacted" in text
-
-
-def test_bearer_substring_redacted_in_log_file(tmp_path) -> None:
-    log_file = str(tmp_path / "bearer.log")
-    configure_logging(log_file, force=True, verbose_third_party=False)
-    secret = "ya29.secret-token-abc"
-    logger.info("Request headers: Authorization: Bearer {}", secret)
-    logger.complete()
-    text = Path(log_file).read_text(encoding="utf-8")
-    assert secret not in text
-    assert "Bearer" in text
+    lines = log_file.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["record"]["message"] == message
+    assert message in row["text"]
 
 
 def test_noisy_third_party_loggers_quieted_when_not_verbose(tmp_path) -> None:

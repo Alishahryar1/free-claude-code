@@ -1,11 +1,13 @@
 # Product E2E Smoke Tests
 
 `smoke/` is local-only. It can launch subprocesses, call real providers, touch
-local model servers, and optionally send/delete bot messages. Hermetic contracts
-belong under `tests/` and must stay green with plain `uv run pytest`.
+local model servers, and optionally send/delete bot messages. Installer checks
+also live here as an opt-in suite. Regular CI collects only `tests/` and `e2e/`.
 
 ## Taxonomy
 
+- `smoke/installers/`: installer, uninstaller, and harness lifecycle checks with
+  isolated files and simulated downloads. These do not install real tools.
 - `smoke/prereq/`: liveness checks that prove the server, routes, auth, CLI
   scripts, provider pings, local `/models`, and bot permissions are reachable.
   These are prerequisites only.
@@ -23,6 +25,13 @@ uv run pytest smoke -n 0 -s --tb=short
 
 The second command skips everything unless `FCC_LIVE_SMOKE=1` is set, but still
 writes skip entries to `.smoke-results/`.
+
+Run only the installer checks:
+
+```powershell
+$env:FCC_LIVE_SMOKE = "1"
+uv run pytest smoke/installers
+```
 
 ## Product Smoke Run
 

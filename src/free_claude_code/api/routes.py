@@ -96,6 +96,7 @@ async def _create_responses_response(
             provider_resolver=_provider_resolver(lease),
             generation_id=lease.generation_id,
             request_headers=request_headers,
+            model_info_lookup=lease.model_info,
         )
         response = await handler.create(request_data, request_id=request_id)
     except ApplicationError as exc:

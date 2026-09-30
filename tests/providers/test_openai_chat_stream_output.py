@@ -377,7 +377,7 @@ def test_responses_chat_output_preserves_custom_tool_free_form_input() -> None:
     ]
 
 
-def test_responses_chat_output_fails_malformed_function_call_once() -> None:
+def test_responses_chat_output_completes_malformed_function_call_once() -> None:
     output = _responses_output(
         OpenAIResponsesRequest.model_validate(
             {
@@ -413,8 +413,14 @@ def test_responses_chat_output_fails_malformed_function_call_once() -> None:
 
     events = _parse_frames(frames)
     event_types = [event_type for event_type, _ in events]
-    assert event_types.count("response.failed") == 1
-    assert "response.completed" not in event_types
+    assert event_types.count("response.completed") == 1
+    assert "response.failed" not in event_types
     final = _object_dict(events[-1][1]["response"])
-    assert final["status"] == "failed"
-    assert _object_dict(final["error"])["type"] == "api_error"
+    assert final["status"] == "completed"
+    assert final["error"] is None
+    final_output = final["output"]
+    assert isinstance(final_output, list)
+    assert len(final_output) == 1
+    item = _object_dict(final_output[0])
+    assert item["arguments"] == '{"q":'
+    assert item["call_id"] == "call_bad"

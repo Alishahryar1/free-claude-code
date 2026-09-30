@@ -5,6 +5,145 @@ from free_claude_code.core.json_types import JsonObject
 from free_claude_code.runtime.codex_protocol import CodexProtocol, NativePrompt
 
 
+def test_history_projection_does_not_retain_transcript_buffers():
+    protocol = CodexProtocol("generation")
+    history = protocol.history(
+        {
+            "thread": {
+                "id": "thread",
+                "turns": [
+                    {
+                        "id": "turn",
+                        "items": [
+                            {"id": "answer", "type": "agentMessage", "text": "saved"}
+                        ],
+                    }
+                ],
+            }
+        }
+    )
+    assert history.turns[0].items[0].text == "saved"
+    assert not protocol._items
+
+
+def test_terminal_turn_releases_only_its_thread_buffers():
+    protocol = CodexProtocol("generation")
+    for thread in ("parent", "child"):
+        protocol.notification(
+            "item/agentMessage/delta",
+            {
+                "threadId": thread,
+                "turnId": "turn",
+                "itemId": "answer",
+                "delta": thread,
+            },
+        )
+    event = protocol.notification(
+        "item/completed",
+        {
+            "threadId": "parent",
+            "turnId": "turn",
+            "item": {"id": "answer", "type": "agentMessage"},
+        },
+    )
+    protocol.notification(
+        "turn/completed", {"threadId": "parent", "turn": {"id": "turn"}}
+    )
+    assert event is not None and event.item is not None
+    assert event.item.text == "parent"
+    assert len(protocol._items) == 1
+    child = protocol.notification(
+        "item/completed",
+        {
+            "threadId": "child",
+            "turnId": "turn",
+            "item": {"id": "answer", "type": "agentMessage"},
+        },
+    )
+    assert child is not None and child.item is not None
+    assert child.item.text == "child"
+    protocol.notification(
+        "turn/completed", {"threadId": "child", "turn": {"id": "turn"}}
+    )
+    assert not protocol._items
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "interrupted"])
+def test_errors_keep_partial_output_until_terminal_event(status):
+    protocol = CodexProtocol("g")
+    identity = {"threadId": "thread", "turnId": "turn", "itemId": "command"}
+    protocol.notification(
+        "item/commandExecution/outputDelta", {**identity, "delta": "captured"}
+    )
+    protocol.notification(
+        "error", {**identity, "willRetry": False, "error": {"message": "failed"}}
+    )
+    projected = protocol.notification(
+        "item/completed",
+        {
+            **identity,
+            "item": {"id": "command", "type": "commandExecution"},
+        },
+    )
+    assert projected is not None and projected.item is not None
+    assert "captured" in projected.item.detail
+    protocol.notification(
+        "turn/completed",
+        {"threadId": "thread", "turn": {"id": "turn", "status": status}},
+    )
+    assert not protocol._items
+    assert "captured" in projected.item.detail
+
+
+def test_history_uses_live_fallback_without_modifying_accumulation():
+    protocol = CodexProtocol("g")
+    identity = {"threadId": "thread", "turnId": "turn", "itemId": "answer"}
+    protocol.notification("item/agentMessage/delta", {**identity, "delta": "live"})
+    history = protocol.history(
+        {
+            "thread": {
+                "id": "thread",
+                "turns": [
+                    {
+                        "id": "turn",
+                        "items": [
+                            {
+                                "id": "answer",
+                                "type": "agentMessage",
+                                "text": "historical",
+                            },
+                            {"id": "other", "type": "agentMessage", "text": "other"},
+                        ],
+                    }
+                ],
+            }
+        }
+    )
+    assert history.turns[0].items[0].text == "historical"
+    assert len(protocol._items) == 1
+    event = protocol.notification(
+        "item/agentMessage/delta", {**identity, "delta": " output"}
+    )
+    assert (
+        event is not None
+        and event.item is not None
+        and event.item.text == "live output"
+    )
+    protocol.clear()
+    assert not protocol._items
+
+
+def test_unknown_item_notifications_do_not_allocate_buffers():
+    protocol = CodexProtocol("g")
+    assert (
+        protocol.notification(
+            "item/unknown", {"threadId": "thread", "turnId": "turn", "itemId": "item"}
+        )
+        is None
+    )
+    assert not protocol._items
+
+
 @pytest.mark.parametrize(
     "status,label",
     [

@@ -7,8 +7,7 @@ model's jinja chat template with strict role-alternation rules and a fragile
 (``[TOOL_CALLS]Read``) and dumping whole tool calls into text
 (``Read[ARGS]{...}``), which ends agent runs silently. The OpenAI
 ``/v1/chat/completions`` path is LM Studio's mature parsing route, and fcc's
-OpenAI provider layers its own tool-call assembly, think-tag parsing, and
-heuristic recovery on top.
+OpenAI provider layers its own native tool-call assembly and think-tag parsing on top.
 """
 
 import asyncio
@@ -126,6 +125,7 @@ class LMStudioProvider(OpenAIChatProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         stream = super().stream_responses(
             request,
@@ -135,6 +135,7 @@ class LMStudioProvider(OpenAIChatProvider):
             reasoning=reasoning,
             endpoint_context=endpoint_context,
             request_headers=request_headers,
+            model_info=model_info,
         )
         return self._stream_with_context_budget(
             stream,

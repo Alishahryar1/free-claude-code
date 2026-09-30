@@ -34,8 +34,6 @@ def kilo_config():
     return make_provider_config(
         api_key="test_kilo_key",
         base_url=KILO_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 

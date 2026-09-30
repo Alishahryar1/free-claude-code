@@ -597,14 +597,18 @@ def test_settings_apply_preserves_open_creation_and_picker(
     page, admin_base_url, tmp_path, code_control
 ):
     pending = []
-    page.route("**/admin/api/config/apply", lambda route: pending.append(route))
-    page.expose_function("applyRequestIntercepted", lambda: bool(pending))
+
+    def capture_apply(route):
+        pending.append(route)
+        page.evaluate("window.applyRequestIntercepted = true")
+
+    page.route("**/admin/api/config/apply", capture_apply)
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
     page.locator("#field-PORT").fill("8081")
     page.get_by_role("button", name="Apply", exact=True).click()
     expect(page.locator("#messageArea")).to_have_text("Applying…")
-    page.wait_for_function("window.applyRequestIntercepted()")
+    page.wait_for_function("window.applyRequestIntercepted === true")
     assert len(pending) == 1
     page.get_by_role("button", name="Code sessions", exact=True).click()
     page.get_by_role("button", name="New code session", exact=True).click()
@@ -1722,7 +1726,13 @@ def test_off_clears_effort_when_reasoning_becomes_unavailable(
 ):
     url = create_session(page, admin_base_url, tmp_path)
     effort = page.locator("#codeReasoning")
-    effort.select_option("high")
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "PATCH" and "/api/code/sessions/" in response.url
+        )
+    ) as changed:
+        effort.select_option("high")
+    assert changed.value.json()["reasoning_effort"] == "high"
     expect(effort).to_be_enabled()
     page.locator("#codeComposer").fill("Preserve this draft")
     code_control.harness.efforts = ("off",)
@@ -2045,21 +2055,23 @@ def test_library_reconnect_removes_missed_deletion_and_searches_beyond_first_pag
 ):
     control_feed(page)
 
-    async def seed():
-        first = await code_control.service.create_session(
-            str(uuid.uuid4()), str(tmp_path)
-        )
-        await code_control.service.update_settings(
-            first.id, first.revision, {"title": "Needle project"}
-        )
-        for _ in range(26):
-            await code_control.service.create_session(str(uuid.uuid4()), str(tmp_path))
-        return first.id
-
     # Start the isolated service before seeding it.
     page.goto(f"{admin_base_url}/admin/code")
     expect(page.locator("#codeNew")).to_be_enabled()
-    session_id = code_control.run(seed())
+    # Bound each operation, not the cumulative cost of filling a whole page.
+    first = code_control.run(
+        code_control.service.create_session(str(uuid.uuid4()), str(tmp_path))
+    )
+    code_control.run(
+        code_control.service.update_settings(
+            first.id, first.revision, {"title": "Needle project"}
+        )
+    )
+    for _ in range(26):
+        code_control.run(
+            code_control.service.create_session(str(uuid.uuid4()), str(tmp_path))
+        )
+    session_id = first.id
     page.get_by_role("searchbox", name="Search titles and folders").fill("Needle")
     expect(page.locator(".session-card")).to_have_count(1)
     expect(page.locator(".session-card")).to_contain_text("Needle project")

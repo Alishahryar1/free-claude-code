@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from free_claude_code.config.settings import Settings
-from free_claude_code.runtime.application import ApplicationRuntime, best_effort
+from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
+from free_claude_code.runtime.lifecycle import best_effort
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 
 
@@ -29,12 +30,12 @@ async def test_messaging_start_failure_default_logs_exclude_traceback(caplog):
 
     with (
         patch(
-            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            "free_claude_code.runtime.messaging_service.messaging_platform_factory.create_messaging_components",
             side_effect=RuntimeError("SECRET_RUNTIME_DETAIL"),
         ),
         caplog.at_level(logging.ERROR),
     ):
-        await runtime._start_messaging_if_configured()
+        await runtime._messaging._start_messaging_if_configured()
 
     blob = " | ".join(record.getMessage() for record in caplog.records)
     assert "SECRET_RUNTIME_DETAIL" not in blob

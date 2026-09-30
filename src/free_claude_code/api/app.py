@@ -37,6 +37,7 @@ from .request_ids import (
     get_request_id,
 )
 from .request_lifetime import ClientRequestLifetimeMiddleware
+from .request_outcomes import RequestOutcomeMiddleware
 from .routes import router
 from .validation_log import summarize_request_validation_body
 
@@ -47,6 +48,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.state.services = services
     app.add_middleware(AdminNoStoreMiddleware)
     app.add_middleware(ClientRequestLifetimeMiddleware)
+    app.add_middleware(RequestOutcomeMiddleware)
     app.add_middleware(RequestCorrelationMiddleware)
 
     app.include_router(admin_router)

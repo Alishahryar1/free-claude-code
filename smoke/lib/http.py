@@ -1,5 +1,6 @@
 """HTTP helpers for live smoke requests."""
 
+import uuid
 from typing import Any
 
 import httpx
@@ -8,6 +9,16 @@ from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse
 
 from .config import SmokeConfig, auth_headers, redacted
 from .server import RunningServer
+
+
+def conversation_headers(
+    headers: dict[str, str] | None = None, *, session_id: str | None = None
+) -> dict[str, str]:
+    """Identify a smoke conversation while preserving explicit caller headers."""
+    result = httpx.Headers(auth_headers() if headers is None else headers)
+    result.setdefault("user-agent", "fcc-smoke/1.0")
+    result.setdefault("x-opencode-session", session_id or str(uuid.uuid4()))
+    return dict(result)
 
 
 def message_payload(
@@ -35,7 +46,7 @@ def post_json(
     *,
     headers: dict[str, str] | None = None,
 ) -> httpx.Response:
-    request_headers = headers or auth_headers()
+    request_headers = conversation_headers(headers)
     response = httpx.post(
         f"{server.base_url}{path}",
         headers=request_headers,
@@ -52,7 +63,7 @@ def collect_message_stream(
     *,
     headers: dict[str, str] | None = None,
 ) -> list[SSEEvent]:
-    request_headers = headers or auth_headers()
+    request_headers = conversation_headers(headers)
     stream_payload = {**payload, "stream": True}
     with httpx.stream(
         "POST",

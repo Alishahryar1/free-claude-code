@@ -3,7 +3,11 @@
 import re
 from dataclasses import dataclass, field
 
-from free_claude_code.application.model_catalog import CatalogModel, model_order_key
+from free_claude_code.application.model_catalog import (
+    CatalogModel,
+    context_window_for_client,
+    model_order_key,
+)
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 
@@ -73,8 +77,7 @@ def _model_metadata(model: CatalogModel) -> JsonObject:
     }
     if model.input_modalities is not None:
         metadata["supports_vision"] = ModelInputModality.IMAGE in model.input_modalities
-    if model.context_window_tokens is not None:
-        metadata["max_input_tokens"] = model.context_window_tokens
+    metadata["max_input_tokens"] = context_window_for_client(model)
     if model.max_output_tokens is not None:
         metadata["max_output_tokens"] = model.max_output_tokens
     return metadata

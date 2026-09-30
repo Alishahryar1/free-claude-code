@@ -40,8 +40,6 @@ async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
     config = make_provider_config(
         api_key="test_key",
         base_url="https://test.api.nvidia.com/v1",
-        rate_limit=100,
-        rate_window=60,
         http_read_timeout=600.0,
         http_write_timeout=15.0,
         http_connect_timeout=5.0,
@@ -87,8 +85,6 @@ async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
     config = make_provider_config(
         api_key="test_key",
         base_url="https://test.api.nvidia.com/v1",
-        rate_limit=100,
-        rate_window=60,
         http_read_timeout=600.0,
         http_write_timeout=15.0,
         http_connect_timeout=5.0,
@@ -131,8 +127,6 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
     config = make_provider_config(
         api_key="test_key",
         base_url="https://test.api.nvidia.com/v1",
-        rate_limit=100,
-        rate_window=60,
         http_read_timeout=600.0,
         http_write_timeout=15.0,
         http_connect_timeout=5.0,
@@ -186,8 +180,6 @@ async def test_nim_stream_openai_5xx_exhausted_emits_user_message(
     config = make_provider_config(
         api_key="test_key",
         base_url="https://test.api.nvidia.com/v1",
-        rate_limit=100,
-        rate_window=60,
         http_read_timeout=600.0,
         http_write_timeout=15.0,
         http_connect_timeout=5.0,

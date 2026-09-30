@@ -25,8 +25,6 @@ def fireworks_provider():
         make_provider_config(
             api_key="test_fireworks_key",
             base_url=FIREWORKS_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )
@@ -81,8 +79,6 @@ def test_replay_is_independent_of_current_turn_reasoning_control():
         make_provider_config(
             api_key="k",
             base_url=FIREWORKS_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
         ),
         admission=immediate_admission(),
     )

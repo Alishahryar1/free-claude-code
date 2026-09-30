@@ -34,8 +34,6 @@ def kimi_code_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-subscription-key",
             base_url=KIMI_CODE_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )

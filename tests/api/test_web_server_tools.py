@@ -184,6 +184,7 @@ class ScriptedSelectionProvider:
         response_model: str,
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         raise AssertionError("Web-search selection received a Responses request")
         yield ""

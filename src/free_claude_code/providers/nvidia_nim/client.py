@@ -33,7 +33,6 @@ from .request_options import (
 )
 from .retry import (
     clone_body_without_chat_template,
-    clone_body_without_reasoning_budget,
     clone_body_without_reasoning_content,
 )
 from .tool_schema import (
@@ -61,10 +60,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
 
     @property
     def reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:
-        return (
-            ("extra_body", "chat_template_kwargs", "thinking"),
-            ("extra_body", "chat_template_kwargs", "enable_thinking"),
-        )
+        return (("reasoning_effort",),)
 
     @property
     def normal_max_tokens(self) -> int | None:
@@ -117,17 +113,6 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         if error_body is not None:
             error_text = f"{error_text} {json.dumps(error_body, default=str)}"
         error_text = error_text.lower()
-
-        if _is_reasoning_budget_rejection(error_text) and (
-            bad_request_like or status_code == 500
-        ):
-            retry_body = clone_body_without_reasoning_budget(body)
-            if retry_body is None:
-                return None
-            logger.warning(
-                "NIM_STREAM: retrying without reasoning budget after upstream rejection"
-            )
-            return retry_body
 
         if not bad_request_like:
             return None
@@ -215,10 +200,3 @@ def _is_degraded_function(body: Mapping[str, Any]) -> bool:
         and function_id
         and state.strip() == _DEGRADED_FUNCTION_STATE
     )
-
-
-def _is_reasoning_budget_rejection(error_text: str) -> bool:
-    """Return whether NIM rejected optional thinking budget control."""
-    if "reasoning_budget" in error_text:
-        return True
-    return "thinking_token_budget" in error_text and "reasoning_config" in error_text

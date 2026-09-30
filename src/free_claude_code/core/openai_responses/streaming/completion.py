@@ -1,20 +1,12 @@
 """Block finalization for OpenAI Responses streams."""
 
-from collections.abc import Callable
-
-from ..errors import ResponsesConversionError
 from ..items import encrypted_reasoning_item, message_item, reasoning_item
 from ..tools import (
     custom_tool_input_text_from_arguments,
-    normalized_function_call_arguments,
 )
 from .blocks import BlockState, ReasoningBlockState, TextBlockState, ToolBlockState
 from .event_builders import ResponseEventBuilder
 from .ledger import ResponsesOutputLedger
-
-InvalidFunctionCallHandler = Callable[
-    [ToolBlockState, ResponsesConversionError], list[str]
-]
 
 
 class ResponseBlockCompleter:
@@ -25,13 +17,9 @@ class ResponseBlockCompleter:
         ledger: ResponsesOutputLedger,
         *,
         events: ResponseEventBuilder,
-        on_invalid_function_call: InvalidFunctionCallHandler,
-        prepare_tool_arguments: Callable[[str, str], str] | None = None,
     ) -> None:
         self._ledger = ledger
         self._events = events
-        self._on_invalid_function_call = on_invalid_function_call
-        self._prepare_tool_arguments = prepare_tool_arguments
 
     def complete_block(self, state: BlockState) -> list[str]:
         if isinstance(state, TextBlockState):
@@ -68,17 +56,8 @@ class ResponseBlockCompleter:
     def _complete_tool_block(self, state: ToolBlockState) -> list[str]:
         if state.kind == "custom":
             return self._complete_custom_tool_block(state)
-        raw_arguments = "".join(state.argument_parts)
-        try:
-            arguments = (
-                self._prepare_tool_arguments(state.name, raw_arguments)
-                if self._prepare_tool_arguments is not None
-                else normalized_function_call_arguments(raw_arguments or "{}")
-            )
-        except ResponsesConversionError as exc:
-            return self._on_invalid_function_call(state, exc)
+        arguments = "".join(state.argument_parts)
         item = tool_item(state, status="completed", arguments=arguments)
-        self._ledger.commit_output(state.output_index, item)
         chunks: list[str] = []
         if arguments:
             chunks.append(
@@ -94,6 +73,7 @@ class ResponseBlockCompleter:
                 self._events.output_item_done(state.output_index, item),
             ]
         )
+        self._ledger.commit_output(state.output_index, item)
         return chunks
 
     def _complete_custom_tool_block(self, state: ToolBlockState) -> list[str]:

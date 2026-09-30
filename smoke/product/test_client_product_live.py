@@ -47,6 +47,21 @@ def _json_object_lines(text: str) -> list[JsonObject]:
     return objects
 
 
+def _trace_log_events(text: str) -> list[JsonObject]:
+    events: list[JsonObject] = []
+    for row in _json_object_lines(text):
+        record = row.get("record")
+        if not isinstance(record, dict):
+            continue
+        extra = record.get("extra")
+        if not isinstance(extra, dict):
+            continue
+        payload = extra.get("trace_payload")
+        if isinstance(payload, dict):
+            events.append(payload)
+    return events
+
+
 @pytest.mark.smoke_target("clients")
 def test_vscode_protocol_e2e(smoke_config: SmokeConfig) -> None:
     provider_model = ProviderMatrixDriver(smoke_config).first_model()
@@ -985,7 +1000,7 @@ def test_claude_cli_web_search_e2e(smoke_config: SmokeConfig, tmp_path: Path) ->
     assert '"type": "server_tool_use"' in automatic_payload
     assert '"type": "web_search_tool_result"' in automatic_payload
     assert "github.com" in automatic_payload
-    log_rows = _json_object_lines(server_log)
+    log_rows = _trace_log_events(server_log)
     assert (
         sum(
             row.get("event") == "free_claude_code.api.web_search.automatic_recognized"
@@ -1087,7 +1102,7 @@ def test_claude_auto_mode_openai_connected_e2e(
     ):
         assert unexpected not in combined_lower
 
-    log_rows = _json_object_lines(server_log)
+    log_rows = _trace_log_events(server_log)
     policy_rows = [
         row
         for row in log_rows

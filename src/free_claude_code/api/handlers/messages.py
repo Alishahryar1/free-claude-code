@@ -42,6 +42,7 @@ from free_claude_code.core.anthropic import (
 from free_claude_code.core.diagnostics import safe_exception_message
 from free_claude_code.core.failures import ExecutionFailure, find_execution_failure
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
+from free_claude_code.core.request_outcomes import record_request_route
 from free_claude_code.core.trace import trace_event
 
 from .classifier_response import classifier_response
@@ -103,6 +104,10 @@ class MessagesHandler:
             require_non_empty_messages(request_data.messages)
             routed = self._model_router.resolve_messages_request(request_data)
             routed = self._apply_message_routing_policies(routed)
+            record_request_route(
+                routed.resolved.primary.provider_id,
+                routed.resolved.primary.provider_model,
+            )
             tool_body = self._web_tools.try_stream_messages(
                 routed, request_id=request_id
             )
@@ -116,7 +121,7 @@ class MessagesHandler:
                 result = _MessagesStreamResult(
                     self._provider_executor.stream_messages(
                         routed,
-                        raw_log_payload=routed.request.model_dump(),
+                        raw_log_payload=routed.request.model_dump,
                         request_id=request_id,
                     )
                 )

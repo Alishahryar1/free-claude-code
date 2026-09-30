@@ -29,8 +29,6 @@ def huggingface_config():
     return make_provider_config(
         api_key="test_hf_key",
         base_url=HUGGINGFACE_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 

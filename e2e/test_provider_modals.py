@@ -82,6 +82,7 @@ def test_provider_groups_sort_each_subgroup_and_keep_setup_separate_from_health(
         "OAuth providers",
         "Cloud providers",
         "Local providers",
+        "Custom providers",
     ]
     for group in ("cloud", "local"):
         for subgroup in ("configured", "unconfigured"):

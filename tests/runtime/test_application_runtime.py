@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import free_claude_code.messaging.session.persistence as persistence_module
 from free_claude_code.application.connected_accounts import (
     ConnectedAccountState,
     ConnectedAccountStatus,
@@ -25,8 +24,6 @@ from free_claude_code.messaging.platforms.ports import (
     MessagingPlatformComponents,
     MessagingStartupNotice,
 )
-from free_claude_code.messaging.session import SessionStore
-from free_claude_code.messaging.workflow import MessagingWorkflow
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.credential_validation import (
     CredentialCheck,
@@ -40,8 +37,8 @@ from tests.providers.support import make_provider_config
 
 
 class TrackingRuntime(ProviderRuntime):
-    def __init__(self, settings: Settings) -> None:
-        super().__init__(settings)
+    def __init__(self, settings: Settings, admission_registry) -> None:
+        super().__init__(settings, admission_registry)
         self.cleanup_calls = 0
 
     async def cleanup(self) -> None:
@@ -96,6 +93,7 @@ class AdminModelProvider(BaseProvider):
         response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
     ) -> AsyncIterator[str]:
         if False:
             yield ""
@@ -107,11 +105,11 @@ class TrackingFactory:
         self.fail = False
         self.events: list[str] = []
 
-    def __call__(self, settings: Settings) -> ProviderRuntime:
+    def __call__(self, settings: Settings, admission_registry) -> ProviderRuntime:
         self.events.append(f"construct:{settings.model}")
         if self.fail:
             raise RuntimeError("candidate failed")
-        runtime = TrackingRuntime(settings)
+        runtime = TrackingRuntime(settings, admission_registry)
         self.runtimes.append(runtime)
         return runtime
 
@@ -235,8 +233,9 @@ def _runtime_with_admin_provider(
     )
     manager = ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda snapshot: ProviderRuntime(
+        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
             snapshot,
+            admission_registry,
             {"nvidia_nim": provider},
         ),
     )
@@ -336,7 +335,7 @@ async def test_stop_all_maps_messaging_outcome_to_application_count() -> None:
             fallback_required=False,
         )
     )
-    runtime._messaging_workflow = workflow
+    runtime._messaging._messaging_workflow = workflow
 
     result = await runtime.stop_all()
 
@@ -597,11 +596,11 @@ async def test_close_drains_messaging_before_transcriber_and_is_idempotent() -> 
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=transcriber,
     )
-    runtime._messaging_runtime = TrackingMessagingRuntime(events)
+    runtime._messaging._messaging_runtime = TrackingMessagingRuntime(events)
     workflow = MagicMock()
     workflow.close = AsyncMock(side_effect=lambda: events.append("workflow.close"))
-    runtime._messaging_workflow = workflow
-    runtime._cli_manager = MagicMock()
+    runtime._messaging._messaging_workflow = workflow
+    runtime._messaging._cli_manager = MagicMock()
 
     assert runtime.is_closed is False
     assert await runtime.close() is True
@@ -614,9 +613,9 @@ async def test_close_drains_messaging_before_transcriber_and_is_idempotent() -> 
         "transcriber.close",
     ]
     assert transcriber.close_calls == 1
-    assert runtime._transcriber is None
-    assert runtime._messaging_runtime is None
-    assert runtime._messaging_workflow is None
+    assert runtime._messaging._transcriber is None
+    assert runtime._messaging._messaging_runtime is None
+    assert runtime._messaging._messaging_workflow is None
     assert runtime.is_closed is True
 
 
@@ -630,7 +629,7 @@ async def test_close_retains_transcriber_ownership_when_close_fails() -> None:
         configuration=AsyncMock(spec=ConfigurationService),
         transcriber=transcriber,
     )
-    runtime._messaging_runtime = TrackingMessagingRuntime(events)
+    runtime._messaging._messaging_runtime = TrackingMessagingRuntime(events)
 
     assert await runtime.close() is False
 
@@ -640,7 +639,7 @@ async def test_close_retains_transcriber_ownership_when_close_fails() -> None:
         "transcriber.close",
     ]
     assert transcriber.close_calls == 1
-    assert runtime._transcriber is transcriber
+    assert runtime._messaging._transcriber is transcriber
     assert runtime._closed is False
     await manager.close()
 
@@ -656,13 +655,13 @@ async def test_close_retries_runtime_before_closing_later_resources() -> None:
         transcriber=transcriber,
     )
     messaging = TrackingMessagingRuntime(events, fail_close_once=True)
-    runtime._messaging_runtime = messaging
+    runtime._messaging._messaging_runtime = messaging
 
     assert await runtime.close() is False
 
     assert events == ["messaging.quiesce", "messaging.close"]
-    assert runtime._messaging_runtime is messaging
-    assert runtime._transcriber is transcriber
+    assert runtime._messaging._messaging_runtime is messaging
+    assert runtime._messaging._transcriber is transcriber
     assert runtime._closed is False
 
     assert await runtime.close() is True
@@ -674,8 +673,8 @@ async def test_close_retries_runtime_before_closing_later_resources() -> None:
         "messaging.close",
         "transcriber.close",
     ]
-    assert runtime._messaging_runtime is None
-    assert runtime._transcriber is None
+    assert runtime._messaging._messaging_runtime is None
+    assert runtime._messaging._transcriber is None
     assert runtime._closed is True
 
 
@@ -763,14 +762,14 @@ async def test_close_retries_workflow_close_before_closing_delivery() -> None:
         events.append("workflow.close")
 
     workflow.close = AsyncMock(side_effect=close_workflow)
-    runtime._messaging_runtime = messaging
-    runtime._messaging_workflow = workflow
+    runtime._messaging._messaging_runtime = messaging
+    runtime._messaging._messaging_workflow = workflow
 
     assert await runtime.close() is False
 
     assert events == ["messaging.quiesce"]
-    assert runtime._messaging_runtime is messaging
-    assert runtime._messaging_workflow is workflow
+    assert runtime._messaging._messaging_runtime is messaging
+    assert runtime._messaging._messaging_workflow is workflow
     assert runtime._closed is False
 
     assert await runtime.close() is True
@@ -794,14 +793,14 @@ async def test_close_does_not_drain_workflow_until_ingress_is_quiescent() -> Non
     messaging = TrackingMessagingRuntime(events, fail_quiesce_once=True)
     workflow = MagicMock()
     workflow.close = AsyncMock(side_effect=lambda: events.append("workflow.close"))
-    runtime._messaging_runtime = messaging
-    runtime._messaging_workflow = workflow
+    runtime._messaging._messaging_runtime = messaging
+    runtime._messaging._messaging_workflow = workflow
 
     assert await runtime.close() is False
 
     workflow.close.assert_not_awaited()
-    assert runtime._messaging_runtime is messaging
-    assert runtime._messaging_workflow is workflow
+    assert runtime._messaging._messaging_runtime is messaging
+    assert runtime._messaging._messaging_workflow is workflow
 
     assert await runtime.close() is True
 
@@ -833,13 +832,13 @@ async def test_close_retries_failed_persistence_before_closing_delivery() -> Non
         events.append("workflow.close")
 
     workflow.close = AsyncMock(side_effect=close_workflow)
-    runtime._messaging_runtime = messaging
-    runtime._messaging_workflow = workflow
+    runtime._messaging._messaging_runtime = messaging
+    runtime._messaging._messaging_workflow = workflow
 
     await runtime.close()
 
-    assert runtime._messaging_workflow is workflow
-    assert runtime._messaging_runtime is messaging
+    assert runtime._messaging._messaging_workflow is workflow
+    assert runtime._messaging._messaging_runtime is messaging
     assert "messaging.close" not in events
 
     await runtime.close()
@@ -854,92 +853,6 @@ async def test_close_retries_failed_persistence_before_closing_delivery() -> Non
 
 
 @pytest.mark.asyncio
-async def test_close_retries_real_workflow_persistence_without_losing_latest_state(
-    tmp_path: Path,
-) -> None:
-    events: list[str] = []
-    manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
-    runtime = ApplicationRuntime(
-        manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
-    )
-    messaging = TrackingMessagingRuntime(events)
-    cli_manager = MagicMock()
-    cli_manager.stop_all = AsyncMock()
-    outbound = MagicMock()
-    store_path = tmp_path / "sessions.json"
-    real_replace = persistence_module.os.replace
-    replace_calls = 0
-
-    def fail_first_replace(source: str, target: str) -> None:
-        nonlocal replace_calls
-        replace_calls += 1
-        if replace_calls == 1:
-            raise OSError("replace failed once")
-        real_replace(source, target)
-
-    with patch.object(persistence_module.threading, "Timer"):
-        store = SessionStore(storage_path=str(store_path))
-        store.record_message_id(
-            "telegram",
-            "chat_1",
-            "old",
-            "out",
-            "status",
-        )
-        store.flush_pending_save()
-        store.record_message_id(
-            "telegram",
-            "chat_1",
-            "latest",
-            "out",
-            "status",
-        )
-        workflow = MessagingWorkflow(outbound, cli_manager, store)
-        runtime._messaging_runtime = messaging
-        runtime._messaging_workflow = workflow
-        runtime._cli_manager = cli_manager
-
-        with patch.object(
-            persistence_module.os,
-            "replace",
-            side_effect=fail_first_replace,
-        ):
-            assert await runtime.close() is False
-
-            assert runtime._messaging_runtime is messaging
-            assert runtime._messaging_workflow is workflow
-            assert runtime._cli_manager is cli_manager
-            assert runtime.is_closed is False
-            assert store.dirty is True
-            assert store.get_tracked_message_ids_for_chat("telegram", "chat_1") == [
-                "old",
-                "latest",
-            ]
-            assert SessionStore(
-                storage_path=str(store_path)
-            ).get_tracked_message_ids_for_chat("telegram", "chat_1") == ["old"]
-
-            assert await runtime.close() is True
-
-        assert runtime._messaging_runtime is None
-        assert runtime._messaging_workflow is None
-        assert runtime._cli_manager is None
-        assert runtime.is_closed is True
-        assert store.dirty is False
-        assert SessionStore(
-            storage_path=str(store_path)
-        ).get_tracked_message_ids_for_chat("telegram", "chat_1") == [
-            "old",
-            "latest",
-        ]
-        assert events == [
-            "messaging.quiesce",
-            "messaging.quiesce",
-            "messaging.close",
-        ]
-
-
-@pytest.mark.asyncio
 async def test_cancelled_transcriber_close_retains_ownership() -> None:
     events: list[str] = []
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
@@ -951,10 +864,10 @@ async def test_cancelled_transcriber_close_retains_ownership() -> None:
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await runtime._cleanup_transcriber()
+        await runtime._messaging.close_transcriber()
 
     assert transcriber.close_calls == 1
-    assert runtime._transcriber is transcriber
+    assert runtime._messaging._transcriber is transcriber
     await manager.close()
 
 
@@ -973,12 +886,12 @@ async def test_cancelled_application_close_remains_retryable() -> None:
         await runtime.close()
 
     assert runtime._closed is False
-    assert runtime._transcriber is transcriber
+    assert runtime._messaging._transcriber is transcriber
 
     await runtime.close()
 
     assert transcriber.close_calls == 2
-    assert runtime._transcriber is None
+    assert runtime._messaging._transcriber is None
     assert runtime._closed is True
 
 
@@ -1020,12 +933,12 @@ async def test_startup_cancellation_cleans_partial_messaging_and_reraises() -> N
     entered = asyncio.Event()
 
     async def start_messaging() -> None:
-        runtime._messaging_runtime = messaging
+        runtime._messaging._messaging_runtime = messaging
         entered.set()
         await asyncio.Event().wait()
 
     with patch.object(
-        runtime,
+        runtime._messaging,
         "_start_messaging_if_configured",
         side_effect=start_messaging,
     ):
@@ -1039,8 +952,8 @@ async def test_startup_cancellation_cleans_partial_messaging_and_reraises() -> N
         "transcriber.close",
     ]
     assert runtime._closed is True
-    assert runtime._messaging_runtime is None
-    assert runtime._transcriber is None
+    assert runtime._messaging._messaging_runtime is None
+    assert runtime._messaging._transcriber is None
 
 
 @pytest.mark.asyncio
@@ -1069,27 +982,27 @@ async def test_public_start_retries_transient_partial_messaging_cleanup() -> Non
         published: MessagingPlatformComponents,
     ) -> None:
         assert published is components
-        runtime._messaging_runtime = messaging
-        runtime._messaging_workflow = workflow
-        runtime._cli_manager = cli_manager
+        runtime._messaging._messaging_runtime = messaging
+        runtime._messaging._messaging_workflow = workflow
+        runtime._messaging._cli_manager = cli_manager
         raise startup_failure
 
     with (
         patch.object(manager, "start_model_list_refresh"),
         patch(
-            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            "free_claude_code.runtime.messaging_service.messaging_platform_factory.create_messaging_components",
             return_value=components,
         ),
         patch.object(
-            runtime,
+            runtime._messaging,
             "_start_messaging_workflow",
             side_effect=fail_after_publication,
         ),
     ):
         await runtime.start()
         with pytest.raises(RuntimeError, match="cleanup incomplete") as raised:
-            await asyncio.gather(*runtime._startup_tasks)
-        assert runtime._messaging_state == "failed"
+            await asyncio.gather(*runtime._messaging._startup_tasks)
+        assert runtime._messaging._messaging_state == "failed"
         assert await runtime.close() is True
 
     assert raised.value.__cause__ is startup_failure
@@ -1100,9 +1013,9 @@ async def test_public_start_retries_transient_partial_messaging_cleanup() -> Non
         "messaging.close",
     ]
     workflow.close.assert_awaited_once()
-    assert runtime._messaging_runtime is None
-    assert runtime._messaging_workflow is None
-    assert runtime._cli_manager is None
+    assert runtime._messaging._messaging_runtime is None
+    assert runtime._messaging._messaging_workflow is None
+    assert runtime._messaging._cli_manager is None
     assert runtime.is_closed is True
 
 
@@ -1137,37 +1050,37 @@ async def test_public_start_retains_persistently_unclean_partial_messaging_graph
         published: MessagingPlatformComponents,
     ) -> None:
         assert published is components
-        runtime._messaging_runtime = messaging
-        runtime._messaging_workflow = workflow
-        runtime._cli_manager = cli_manager
+        runtime._messaging._messaging_runtime = messaging
+        runtime._messaging._messaging_workflow = workflow
+        runtime._messaging._cli_manager = cli_manager
         raise startup_failure
 
     with (
         patch.object(manager, "start_model_list_refresh"),
         patch(
-            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            "free_claude_code.runtime.messaging_service.messaging_platform_factory.create_messaging_components",
             return_value=components,
         ),
         patch.object(
-            runtime,
+            runtime._messaging,
             "_start_messaging_workflow",
             side_effect=fail_after_publication,
         ),
     ):
         await runtime.start()
         with pytest.raises(RuntimeError, match="cleanup incomplete") as raised:
-            await asyncio.gather(*runtime._startup_tasks)
-        assert runtime._messaging_state == "failed"
+            await asyncio.gather(*runtime._messaging._startup_tasks)
+        assert runtime._messaging._messaging_state == "failed"
         assert await runtime.close() is False
 
     assert raised.value.__cause__ is startup_failure
     assert events == ["messaging.quiesce", "messaging.quiesce"]
     workflow.close.assert_not_awaited()
     assert transcriber.close_calls == 0
-    assert runtime._messaging_runtime is messaging
-    assert runtime._messaging_workflow is workflow
-    assert runtime._cli_manager is cli_manager
-    assert runtime._transcriber is transcriber
+    assert runtime._messaging._messaging_runtime is messaging
+    assert runtime._messaging._messaging_workflow is workflow
+    assert runtime._messaging._cli_manager is cli_manager
+    assert runtime._messaging._transcriber is transcriber
     assert runtime._provider_manager_closed is False
     assert runtime.is_closed is False
 
@@ -1194,12 +1107,14 @@ async def test_messaging_start_failure_is_nonfatal_after_complete_cleanup() -> N
 
     with (
         patch(
-            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            "free_claude_code.runtime.messaging_service.messaging_platform_factory.create_messaging_components",
             side_effect=RuntimeError("messaging unavailable"),
         ),
-        patch.object(runtime, "_cleanup_messaging", AsyncMock(return_value=True)),
+        patch.object(
+            runtime._messaging, "close_delivery", AsyncMock(return_value=True)
+        ),
     ):
-        await runtime._start_messaging_if_configured()
+        await runtime._messaging._start_messaging_if_configured()
 
     await manager.close()
 
@@ -1215,13 +1130,15 @@ async def test_messaging_start_failure_fails_closed_when_cleanup_is_incomplete()
 
     with (
         patch(
-            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            "free_claude_code.runtime.messaging_service.messaging_platform_factory.create_messaging_components",
             side_effect=RuntimeError("messaging unavailable"),
         ),
-        patch.object(runtime, "_cleanup_messaging", AsyncMock(return_value=False)),
+        patch.object(
+            runtime._messaging, "close_delivery", AsyncMock(return_value=False)
+        ),
         pytest.raises(RuntimeError, match="cleanup incomplete") as exc_info,
     ):
-        await runtime._start_messaging_if_configured()
+        await runtime._messaging._start_messaging_if_configured()
 
     assert isinstance(exc_info.value.__cause__, RuntimeError)
     await manager.close()
@@ -1243,14 +1160,14 @@ async def test_composition_records_runtime_before_workspace_setup() -> None:
 
     with (
         patch(
-            "free_claude_code.runtime.application.os.makedirs",
+            "free_claude_code.runtime.messaging_service.os.makedirs",
             side_effect=OSError("workspace failed"),
         ),
         pytest.raises(OSError, match="workspace failed"),
     ):
-        await runtime._start_messaging_workflow(components)
+        await runtime._messaging._start_messaging_workflow(components)
 
-    assert runtime._messaging_runtime is messaging
+    assert runtime._messaging._messaging_runtime is messaging
 
     await runtime.close()
 
@@ -1278,7 +1195,7 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
     )
     workflow = MagicMock()
     workflow.handle_message = AsyncMock()
-    workflow.restore.side_effect = lambda: events.append("workflow.restore")
+    workflow.restore = AsyncMock(side_effect=lambda: events.append("workflow.restore"))
     workflow.repair_restored_statuses = AsyncMock(
         side_effect=lambda: events.append("workflow.repair")
     )
@@ -1293,14 +1210,14 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
             "free_claude_code.cli.managed.ManagedClaudeSessionManager",
             return_value=cli_manager,
         ) as manager_constructor,
-        patch("free_claude_code.messaging.session.SessionStore"),
+        patch.object(runtime._messaging, "_messaging_store", AsyncMock()),
         patch(
             "free_claude_code.messaging.workflow.MessagingWorkflow",
             return_value=workflow,
         ),
     ):
         runtime.http_started()
-        await runtime._start_messaging_workflow(components)
+        await runtime._messaging._start_messaging_workflow(components)
 
     assert events == [
         "workflow.restore",

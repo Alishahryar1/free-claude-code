@@ -325,9 +325,12 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         "configured providers must not reject adaptive thinking payloads",
     ),
     FeatureCoverage(
-        "heuristic_tool_parser",
+        "native_tool_assembly",
         "Tool use and tool result continuation survive provider/client paths",
-        ("tests/providers/test_parsers.py", "tests/contracts/test_stream_contracts.py"),
+        (
+            "tests/providers/test_native_tool_arguments.py",
+            "tests/contracts/test_stream_contracts.py",
+        ),
         ("test_live_tool_use_when_configured_model_supports_tools",),
         (
             "test_provider_interleaved_thinking_tool_e2e",
@@ -405,7 +408,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     ),
     FeatureCoverage(
         "subagent_control",
-        "Task-like tool output is rendered and controlled as foreground work",
+        "Task arguments are preserved and tool output is rendered in transcripts",
         ("tests/providers/test_subagent_interception.py",),
         (),
         ("test_messaging_subagent_control_e2e",),
@@ -638,8 +641,8 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
     ),
     FeatureCoverage(
         "session_persistence",
-        "Session JSON preserves scoped trees and message logs",
-        ("tests/messaging/test_session_store_edge_cases.py",),
+        "SQLite persistence preserves scoped trees and message logs",
+        ("tests/runtime/test_messaging_sqlite.py",),
         (),
         ("test_restart_restore_and_session_persistence_e2e",),
         ("messaging",),

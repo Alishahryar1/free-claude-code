@@ -108,3 +108,14 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
     assert "timeout graceful shutdown exceeded" not in caplog.text
     assert all(app.runtime.is_closed for app in apps)
     assert len(apps) == (2 if restart else 1)
+    starts = [
+        extra
+        for record in caplog.records
+        if (extra := getattr(record, "extra", {})).get("event") == "server.starting"
+    ]
+    assert [extra["instance_id"] for extra in starts] == [
+        app.runtime.instance_id for app in apps
+    ]
+    assert starts[0]["instance_id"] == old_instance
+    if restart:
+        assert starts[1]["instance_id"] == new_status["instance_id"]

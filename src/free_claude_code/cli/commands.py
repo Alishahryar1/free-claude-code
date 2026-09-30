@@ -36,20 +36,23 @@ _BROWSER_HANDOFF_SECONDS = 5.0
 
 
 def _start_admin_browser(
-    settings: Settings, eligible: Callable[[], bool]
+    settings: Settings, eligible: Callable[[], bool], *, instance_id: str
 ) -> threading.Event:
     """Hand off an optional browser action without keeping FCC alive."""
     completed = threading.Event()
     url = local_admin_url(settings)
+    browser_logger = logger.bind(instance_id=instance_id)
 
     def open_browser() -> None:
         try:
             if eligible() and not webbrowser.open(url):
-                logger.warning(
+                browser_logger.warning(
                     "Could not open Admin in a browser. Open {} manually.", url
                 )
         except Exception as exc:
-            logger.warning("Could not open Admin: {}. Open {} manually.", exc, url)
+            browser_logger.warning(
+                "Could not open Admin: {}. Open {} manually.", exc, url
+            )
         finally:
             completed.set()
 
@@ -58,7 +61,7 @@ def _start_admin_browser(
             target=open_browser, name="fcc-open-admin-browser", daemon=True
         ).start()
     except Exception as exc:
-        logger.warning(
+        browser_logger.warning(
             "Could not start the Admin browser: {}. Open {} manually.", exc, url
         )
         completed.set()
@@ -94,6 +97,7 @@ class ServerSupervisor:
         self._running = False
         self.stop_event = threading.Event()
         self._ready_settings: Settings | None = None
+        self._ready_instance_id: str | None = None
         self._pending_admin = False
         self._auto_browser_opened = False
         self._owned_server = False
@@ -224,11 +228,14 @@ class ServerSupervisor:
                 return
             self._pending_admin = True
             settings = self._ready_settings
+            instance_id = self._ready_instance_id
             generation = self._restart_generation
-        if settings is not None:
-            self._open_admin(settings, generation)
+        if settings is not None and instance_id is not None:
+            self._open_admin(settings, generation, instance_id)
 
-    def _open_admin(self, settings: Settings, generation: int) -> None:
+    def _open_admin(
+        self, settings: Settings, generation: int, instance_id: str
+    ) -> None:
         def eligible() -> bool:
             with self._lock:
                 if (
@@ -240,7 +247,7 @@ class ServerSupervisor:
                 self._pending_admin = False
                 return True
 
-        _start_admin_browser(settings, eligible)
+        _start_admin_browser(settings, eligible, instance_id=instance_id)
 
     def _run_once(
         self,
@@ -272,7 +279,7 @@ class ServerSupervisor:
 
         from free_claude_code.runtime.bootstrap import build_asgi_app
 
-        from .uvicorn_server import RuntimeServer
+        from .uvicorn_server import RuntimeServer, uvicorn_log_config
 
         asgi_app = build_asgi_app(
             settings,
@@ -283,9 +290,7 @@ class ServerSupervisor:
             host=settings.host,
             port=settings.port,
             log_level="debug",
-            log_config=(
-                uvicorn.config.LOGGING_CONFIG if self._console_logging else None
-            ),
+            log_config=uvicorn_log_config(console=self._console_logging),
             timeout_graceful_shutdown=SERVER_GRACEFUL_SHUTDOWN_SECONDS,
         )
 
@@ -298,12 +303,15 @@ class ServerSupervisor:
                 ):
                     return
                 self._ready_settings = settings
+                self._ready_instance_id = asgi_app.runtime.instance_id
                 should_open = open_admin_browser or self._pending_admin
                 if open_admin_browser:
                     self._auto_browser_opened = True
             asgi_app.runtime.http_started()
             if should_open:
-                self._open_admin(settings, restart_generation)
+                self._open_admin(
+                    settings, restart_generation, asgi_app.runtime.instance_id
+                )
 
         server = RuntimeServer(
             config,
@@ -320,12 +328,14 @@ class ServerSupervisor:
                 server.should_exit = True
 
         try:
-            server.run(sockets=sockets)
+            with logger.contextualize(instance_id=asgi_app.runtime.instance_id):
+                server.run(sockets=sockets)
         finally:
             with self._lock:
                 if self._server is server:
                     self._server = None
                     self._ready_settings = None
+                    self._ready_instance_id = None
 
         with self._lock:
             restart_requested = self._restart_generation != restart_generation
@@ -376,7 +386,11 @@ def open_admin_when_ready(
             ):
                 return False
             if payload["status"] == "running" and not stop.is_set():
-                completed = _start_admin_browser(settings, lambda: not stop.is_set())
+                completed = _start_admin_browser(
+                    settings,
+                    lambda: not stop.is_set(),
+                    instance_id=payload["instance_id"],
+                )
                 # This extra launcher is about to exit: allow a brief URL handoff.
                 handoff_deadline = time.monotonic() + _BROWSER_HANDOFF_SECONDS
                 while not stop.is_set():

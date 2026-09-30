@@ -1,6 +1,6 @@
-"""Structured DEBUG traces for end-to-end request / CLI / provider logging.
+"""Structured DEBUG traces and stream cleanup warnings.
 
-Emitted lines are merged into JSON log rows by ``config.logging_config``.
+Trace payloads are preserved in ``record.extra.trace_payload`` by Loguru.
 Conversation and Claude Code prompts are logged verbatim unless values live under
 sanitized credential keys (e.g. ``api_key``, ``authorization``). The default
 INFO log level excludes these detailed request traces.
@@ -8,7 +8,7 @@ INFO log level excludes these detailed request traces.
 
 import asyncio
 import sys
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from typing import Any
 
 from loguru import logger
@@ -49,17 +49,29 @@ def sanitize_trace_value(obj: Any) -> Any:
     return obj
 
 
-def trace_event(*, stage: str, event: str, source: str, **fields: Any) -> None:
-    """Emit one structured DEBUG trace row merged into JSON by the log sink."""
-    payload = sanitize_trace_value(
-        {
-            "stage": stage,
-            "event": event,
-            "source": source,
-            **fields,
-        },
+def trace_event(
+    lazy_fields: Callable[[], Mapping[str, Any]] | None = None,
+    /,
+    *,
+    stage: str,
+    event: str,
+    source: str,
+    **fields: Any,
+) -> None:
+    """Defer sanitization and the optional field factory until DEBUG is enabled."""
+    logger.opt(lazy=True).debug(
+        "TRACE {}",
+        lambda: event,
+        trace_payload=lambda: sanitize_trace_value(
+            {
+                "stage": stage,
+                "event": event,
+                "source": source,
+                **fields,
+                **(lazy_fields() if lazy_fields is not None else {}),
+            }
+        ),
     )
-    logger.bind(trace_payload=payload).debug("TRACE {}", event)
 
 
 async def close_stream_input(
@@ -73,7 +85,7 @@ async def close_stream_input(
     close_error = await try_close_async_iterator(iterator)
     if close_error is None:
         return
-    trace_event(
+    logger.bind(
         stage="lifecycle",
         event="stream.input.close_failed",
         source=source,
@@ -82,7 +94,7 @@ async def close_stream_input(
         preserved_exc_type=(
             type(preserved_error).__name__ if preserved_error is not None else None
         ),
-    )
+    ).opt(exception=close_error).warning("Stream input cleanup failed")
 
 
 def extract_claude_session_id_from_headers(headers: Mapping[str, str]) -> str | None:

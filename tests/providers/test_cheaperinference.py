@@ -32,8 +32,6 @@ def cheaperinference_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-cheaperinference-key",
             base_url=CHEAPERINFERENCE_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="cheaperinference", max_attempts=1),
     )

@@ -31,8 +31,6 @@ def mistral_config():
     return make_provider_config(
         api_key="test_mistral_key",
         base_url=MISTRAL_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 
@@ -209,8 +207,6 @@ def test_build_request_body_reasoning_off_uses_native_none():
         make_provider_config(
             api_key="test_mistral_key",
             base_url=MISTRAL_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )
@@ -226,8 +222,6 @@ def test_reasoning_off_keeps_replay_separate_from_new_turn_compute():
         make_provider_config(
             api_key="test_mistral_key",
             base_url=MISTRAL_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )

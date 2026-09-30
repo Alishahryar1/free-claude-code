@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 from typing import cast
@@ -6,13 +7,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from loguru import logger
 
+from free_claude_code.api.request_ids import RequestCorrelationMiddleware
 from free_claude_code.application.errors import (
     ApplicationUnavailableError,
     InvalidRequestError,
 )
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.async_tasks import run_sync_owned
+from free_claude_code.core.version import package_version
 from free_claude_code.messaging.transcription import TranscriptionService
 from free_claude_code.providers.nvidia_nim.client import NvidiaNimProvider
 from free_claude_code.providers.nvidia_nim.voice import NvidiaNimTranscriber
@@ -39,7 +44,7 @@ def _redirect_fcc_home(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_runtime_startup_logs_admin_url_without_printed_server_banner():
+async def test_runtime_startup_logs_admin_url_without_printed_server_banner(caplog):
     settings = _settings(
         messaging_platform="none",
         host="127.0.0.1",
@@ -56,11 +61,12 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner():
         patch.object(manager, "start_model_list_refresh") as start_refresh,
         patch.object(manager, "close", new=AsyncMock()),
         patch(
-            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            "free_claude_code.runtime.messaging_service.messaging_platform_factory.create_messaging_components",
             return_value=None,
         ),
         patch.object(uvicorn_logger, "info") as log_info,
     ):
+        await runtime.start()
         await runtime.start()
         log_info.assert_not_called()
         runtime.http_started()
@@ -72,6 +78,14 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner():
         "Admin UI: %s (local-only)",
         "http://127.0.0.1:9099/admin",
     )
+    startup = [
+        record
+        for record in caplog.records
+        if record.extra.get("event") == "server.starting"
+    ]
+    assert len(startup) == 1
+    assert startup[0].extra["instance_id"] == runtime.instance_id
+    assert startup[0].extra["fcc_version"] == package_version()
 
 
 def test_create_app_application_error_handler_returns_anthropic_format():
@@ -165,7 +179,7 @@ async def test_runtime_startup_schedules_catalog_without_a_network_barrier():
         ) as refresh,
         patch.object(manager, "close", new=AsyncMock()),
         patch(
-            "free_claude_code.runtime.application.messaging_platform_factory.create_messaging_components",
+            "free_claude_code.runtime.messaging_service.messaging_platform_factory.create_messaging_components",
             return_value=None,
         ),
     ):
@@ -196,11 +210,16 @@ def test_startup_failure_message_preserves_existing_concise_contract():
 
 
 @pytest.mark.asyncio
-async def test_runtime_asgi_app_starts_and_closes_owner_once():
-    runtime = MagicMock(spec=ApplicationRuntime)
+async def test_runtime_asgi_app_starts_and_closes_owner_once(caplog):
+    runtime = MagicMock(spec=ApplicationRuntime, instance_id="lifespan-instance")
     runtime.settings = _settings()
-    runtime.start = AsyncMock()
-    runtime.close = AsyncMock(return_value=True)
+    runtime.start = AsyncMock(side_effect=lambda: logger.info("lifespan starting"))
+
+    async def close():
+        logger.info("lifespan closing")
+        return True
+
+    runtime.close = AsyncMock(side_effect=close)
     app = RuntimeASGIApp(AsyncMock(), runtime)
     received = iter(
         [
@@ -224,6 +243,66 @@ async def test_runtime_asgi_app_starts_and_closes_owner_once():
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
+    assert len(caplog.records) == 2
+    assert all(
+        record.extra["instance_id"] == "lifespan-instance" for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, RuntimeError, asyncio.CancelledError])
+async def test_asgi_log_context_isolated_across_runtimes_tasks_and_workers(
+    caplog, failure
+):
+    release = asyncio.Event()
+    jobs = []
+
+    async def background(path):
+        await release.wait()
+        logger.info("background {}", path)
+
+    async def app(scope, receive, send):
+        path = scope["path"]
+        logger.info("request {}", path)
+        jobs.append(asyncio.create_task(background(path)))
+        await run_sync_owned(lambda: logger.info("worker {}", path))
+        if failure is not None:
+            raise failure()
+
+    async def request(name):
+        runtime = MagicMock(spec=ApplicationRuntime, instance_id=name)
+        wrapped = RuntimeASGIApp(RequestCorrelationMiddleware(app), runtime)
+        try:
+            await wrapped(
+                {"type": "http", "method": "GET", "path": "/" + name, "headers": []},
+                AsyncMock(),
+                AsyncMock(),
+            )
+        finally:
+            logger.info("after {}", name)
+
+    try:
+        results = await asyncio.gather(
+            request("first"), request("second"), return_exceptions=True
+        )
+    finally:
+        release.set()
+        await asyncio.gather(*jobs)
+    for name in ("first", "second"):
+        records = [
+            record for record in caplog.records if record.message.endswith("/" + name)
+        ]
+        assert len(records) == 3
+        assert all(record.extra["instance_id"] == name for record in records)
+        assert len({record.extra["request_id"] for record in records}) == 1
+        after = next(
+            record for record in caplog.records if record.message == "after " + name
+        )
+        assert "instance_id" not in after.extra
+        assert "request_id" not in after.extra
+    assert all(
+        isinstance(result, failure) if failure else result is None for result in results
+    )
 
 
 @pytest.mark.asyncio
@@ -386,11 +465,15 @@ async def test_bootstrap_constructs_isolated_runtime_resource_graphs(
         assert isinstance(first_provider, NvidiaNimProvider)
         assert isinstance(second_provider, NvidiaNimProvider)
         assert first_provider._admission is not second_provider._admission
-        assert first.runtime._transcriber is second.runtime._transcriber is None
-        assert first.runtime._transcriber_factory is not None
-        assert second.runtime._transcriber_factory is not None
-        first_voice = await first.runtime._transcriber_factory(settings)
-        second_voice = await second.runtime._transcriber_factory(settings)
+        assert (
+            first.runtime._messaging._transcriber
+            is second.runtime._messaging._transcriber
+            is None
+        )
+        assert first.runtime._messaging._transcriber_factory is not None
+        assert second.runtime._messaging._transcriber_factory is not None
+        first_voice = await first.runtime._messaging._transcriber_factory(settings)
+        second_voice = await second.runtime._messaging._transcriber_factory(settings)
         assert first_voice is not None and second_voice is not None
         assert first_voice is not second_voice
         await first_voice.close()

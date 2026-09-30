@@ -60,16 +60,19 @@ class TokenCountHandler:
                     provider_model_ref=routed.resolved.primary.provider_model_ref,
                     gateway_model=routed.resolved.original_model,
                 )
-                request_snapshot = anthropic_request_snapshot(routed.request)
-                request_snapshot["model"] = routed.resolved.original_model
                 trace_event(
+                    lambda: {
+                        "snapshot": {
+                            **anthropic_request_snapshot(routed.request),
+                            "model": routed.resolved.original_model,
+                        }
+                    },
                     stage="ingress",
                     event="free_claude_code.api.count_tokens.completed",
                     source="api",
                     request_id=request_id,
                     message_count=len(routed.request.messages),
                     input_tokens=tokens,
-                    snapshot=request_snapshot,
                 )
                 return TokenCountResponse(input_tokens=tokens)
             except ApplicationError:

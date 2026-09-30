@@ -22,6 +22,7 @@ from free_claude_code.application.connected_accounts import (
 from free_claude_code.application.errors import ApplicationError
 from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
+from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY
 from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
@@ -76,6 +77,7 @@ class AdminConfigPayload(BaseModel):
     """Partial config update submitted by the admin UI."""
 
     values: JsonObject = Field(default_factory=dict)
+    custom_provider: CustomProviderMutation | None = None
 
 
 class ConnectedAccountLoginPayload(BaseModel):
@@ -136,6 +138,10 @@ async def apply_admin_config(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
+    if payload.custom_provider is not None:
+        return await services.admin.apply_admin_config(
+            _filtered_values(payload.values), payload.custom_provider
+        )
     result = await services.admin.apply_admin_config(_filtered_values(payload.values))
     return result
 
@@ -265,6 +271,42 @@ async def claude_vscode_status(
 ):
     require_loopback_admin(request)
     return await _integration_response(services.admin.claude_vscode_status)
+
+
+@router.get("/admin/api/integrations/vscode-chat")
+async def vscode_chat_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.vscode_chat_status)
+
+
+@router.post("/admin/api/integrations/vscode-chat/connect")
+async def connect_vscode_chat(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_vscode_chat)
+
+
+@router.post("/admin/api/integrations/vscode-chat/disconnect")
+async def disconnect_vscode_chat(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_vscode_chat)
+
+
+@router.post("/admin/api/integrations/vscode-chat/refresh")
+async def refresh_vscode_chat(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_vscode_chat)
 
 
 @router.post("/admin/api/integrations/claude-vscode/connect")
@@ -421,13 +463,16 @@ def _model_options(
     services: ApiServices,
     *,
     refresh_result: ProviderModelRefreshResult | None = None,
-) -> dict[str, list[str]]:
+) -> JsonObject:
     catalog = read_model_catalog(services.requests)
     failed_provider_ids = (
         refresh_result.failed_provider_ids if refresh_result is not None else ()
     )
     return {
         "models": [model.provider_model_ref for model in catalog.models],
+        "model_labels": {
+            model.provider_model_ref: model.display_name for model in catalog.models
+        },
         "failed_providers": list(failed_provider_ids),
     }
 

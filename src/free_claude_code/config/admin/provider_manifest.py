@@ -165,6 +165,19 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "models."
         ),
     },
+    "ALIBABA_CLOUD_API_KEY": {
+        "description": (
+            "Alibaba Cloud Model Studio pay-as-you-go API key. Use a key from "
+            "the same region as the base URL."
+        ),
+    },
+    "ALIBABA_CLOUD_BASE_URL": {
+        "description": (
+            "Optional Model Studio OpenAI-compatible base URL ending in "
+            "/compatible-mode/v1. Defaults to Singapore. Set your regional "
+            "or workspace URL when using a key from another region."
+        ),
+    },
     "QWENCLOUD_API_KEY": {
         "label": "QwenCloud Token Plan API Key",
         "description": (
@@ -267,6 +280,14 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         "description": (
             "Lightning AI Model APIs key for the OpenAI-compatible endpoint at "
             "lightning.ai/api/v1. Create one on lightning.ai under Model APIs."
+        ),
+    },
+    "ORCAROUTER_API_KEY": {
+        "label": "OrcaRouter API Key",
+        "description": (
+            "OrcaRouter OpenAI-compatible multi-provider gateway API key for "
+            "api.orcarouter.ai/v1. Keys begin with sk-orca-; create one at "
+            "www.orcarouter.ai/console."
         ),
     },
     "AGNES_API_KEY": {

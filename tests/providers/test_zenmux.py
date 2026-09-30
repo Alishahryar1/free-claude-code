@@ -43,8 +43,6 @@ def zenmux_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-zenmux-key",
             base_url=ZENMUX_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="zenmux"),
     )
@@ -456,8 +454,6 @@ async def test_model_catalog_uses_documented_endpoint_and_auth() -> None:
             make_provider_config(
                 api_key="wire-zenmux-key",
                 base_url=ZENMUX_DEFAULT_BASE,
-                rate_limit=10,
-                rate_window=60,
             ),
             admission=immediate_admission(provider_name="zenmux"),
         )

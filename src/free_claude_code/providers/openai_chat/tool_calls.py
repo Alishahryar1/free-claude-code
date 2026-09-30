@@ -117,35 +117,6 @@ class OpenAIToolCallCollector:
         return tuple(completed)
 
 
-def iter_heuristic_tool_use_events(
-    output: ChatStreamOutput,
-    tool_use: dict[str, Any],
-    *,
-    tool_names: OpenAIToolNameCodec | None = None,
-) -> Iterator[str]:
-    """Emit SSE for one heuristic tool_use block."""
-    name = tool_use.get("name")
-    if tool_names is not None and isinstance(name, str):
-        decoded_name = tool_names.decode(name)
-        if decoded_name != name:
-            tool_use = {**tool_use, "name": decoded_name}
-    if tool_use.get("name") == "Task" and isinstance(tool_use.get("input"), dict):
-        task_input = tool_use["input"]
-        if task_input.get("run_in_background") is not False:
-            task_input["run_in_background"] = False
-    yield from output.close_content_blocks()
-    tool_index = len(output.tool_states)
-    output.ensure_tool_state(tool_index)
-    output.register_tool_name(tool_index, str(tool_use["name"]))
-    yield output.start_tool_block(
-        tool_index,
-        str(tool_use["id"]),
-        str(tool_use["name"]),
-    )
-    yield output.emit_tool_delta(tool_index, json.dumps(tool_use["input"]))
-    yield from output.stop_tool_block(tool_index)
-
-
 def tool_call_extra_content(tool_call: Any) -> dict[str, Any] | None:
     """Return provider-specific extra tool-call metadata from OpenAI objects."""
     if isinstance(tool_call, dict):
@@ -299,11 +270,6 @@ class OpenAIToolCallAssembler:
         self._public_tool_ids[tool_index] = public_id
         return public_id
 
-    def flush_task_arg_buffers(self, output: ChatStreamOutput) -> Iterator[str]:
-        """Emit buffered Task args as a single JSON delta."""
-        for tool_index, out in output.flush_task_arg_buffers():
-            yield output.emit_tool_delta(tool_index, out)
-
     def flush_tool_name_buffers(
         self,
         output: ChatStreamOutput,
@@ -339,7 +305,7 @@ class OpenAIToolCallAssembler:
                 tool_argument_alias_buffers.pop(tool_index, None)
                 continue
             state = output.tool_states.get(tool_index)
-            if state is None or state.name == "Task":
+            if state is None:
                 continue
             aliases = tool_argument_aliases.get(state.name, {})
             if not aliases:
@@ -365,11 +331,6 @@ class OpenAIToolCallAssembler:
             return
         state = output.tool_states.get(tc_index)
         if state is None:
-            return
-        if state.name == "Task":
-            parsed = output.buffer_task_args(tc_index, args)
-            if parsed is not None:
-                yield output.emit_tool_delta(tc_index, json.dumps(parsed))
             return
         aliases = (
             tool_argument_aliases.get(state.name, {}) if tool_argument_aliases else {}

@@ -40,6 +40,11 @@ class Publisher:
     def gh(self, *args: str) -> str:
         return command(["gh", "release", *args, "--repo", self.repository])
 
+    def release_api(self, suffix: str, *args: str) -> dict:
+        return json.loads(
+            command(["gh", "api", f"repos/{self.repository}/releases{suffix}", *args])
+        )
+
     def releases(self) -> dict:
         pages = json.loads(
             command(
@@ -112,16 +117,23 @@ class Publisher:
             command(["git", "tag", tag, target])
             command(["git", "push", "origin", f"refs/tags/{tag}"])
         if release is None:
-            self.gh(
-                "create",
-                tag,
-                "--draft",
-                "--verify-tag",
-                "--title",
-                tag,
-                "--generate-notes",
-                "--notes-start-tag",
-                previous,
+            notes = self.release_api(
+                "/generate-notes",
+                "-f",
+                f"tag_name={tag}",
+                "-f",
+                f"previous_tag_name={previous}",
+            )
+            release = self.release_api(
+                "",
+                "-f",
+                f"tag_name={tag}",
+                "-f",
+                f"name={tag}",
+                "-f",
+                f"body={notes['body']}",
+                "-F",
+                "draft=true",
             )
         print(f"Publishing {tag} from {target}")
         with tempfile.TemporaryDirectory(prefix="fcc-release-") as temporary:
@@ -132,7 +144,7 @@ class Publisher:
             try:
                 if command(["git", "status", "--porcelain"], cwd=source).strip():
                     raise ValueError("Release source must be clean")
-                self.stage(tag, version, source, dist)
+                self.stage(tag, release["id"], version, source, dist)
                 command(
                     [
                         "uv",
@@ -154,9 +166,11 @@ class Publisher:
             cwd=source,
         )
 
-    def stage(self, tag: str, version: str, source: Path, dist: Path) -> None:
+    def stage(
+        self, tag: str, release_id: int, version: str, source: Path, dist: Path
+    ) -> None:
         names = set(distribution_names(version))
-        assets = self.releases()[tag]["assets"]
+        assets = self.release_api(f"/{release_id}")["assets"]
         if any(asset["name"] not in names for asset in assets):
             raise ValueError(f"Unexpected assets on {tag}")
         complete = (
@@ -173,7 +187,7 @@ class Publisher:
             command(["uv", "build", "--no-sources", "--out-dir", str(dist)], cwd=source)
             self.validate(source, dist, version)
             self.gh("upload", tag, *(str(dist / name) for name in sorted(names)))
-            assets = self.releases()[tag]["assets"]
+            assets = self.release_api(f"/{release_id}")["assets"]
         if {asset["name"] for asset in assets} != names or len(assets) != 2:
             raise ValueError(f"Incomplete staged distributions for {tag}")
         for asset in assets:

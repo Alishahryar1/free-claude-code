@@ -6,7 +6,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from free_claude_code.application.model_catalog import ModelCatalog, read_model_catalog
+from free_claude_code.application.model_catalog import (
+    ModelCatalog,
+    context_window_for_client,
+    read_model_catalog,
+)
 from free_claude_code.application.ports import ModelCatalogPort
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import (
@@ -74,6 +78,9 @@ class ModelResponse(BaseModel):
     )
     context_window_tokens: int | None = Field(
         default=None, serialization_alias="contextWindow"
+    )
+    context_window_source: Literal["provider", "default"] | None = Field(
+        default=None, serialization_alias="contextWindowSource"
     )
     max_output_tokens: int | None = Field(
         default=None, serialization_alias="maxCompletionTokens"
@@ -239,7 +246,11 @@ def _build_direct_models_response(
                 max_retries=0 if view is ModelCatalogView.RESPONSES else None,
                 supports_reasoning=model.supports_reasoning,
                 input_modalities=_serialize_input_modalities(model.input_modalities),
-                context_window_tokens=model.context_window_tokens,
+                context_window_tokens=context_window_for_client(model),
+                context_window_source="provider"
+                if model.context_window_tokens is not None
+                and model.context_window_tokens > 0
+                else "default",
                 max_output_tokens=model.max_output_tokens,
                 supports_reasoning_effort=(
                     allows_reasoning if view is ModelCatalogView.RESPONSES else None

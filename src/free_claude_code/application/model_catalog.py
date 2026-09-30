@@ -1,9 +1,10 @@
 """Application model inventory and presentation order, independent of clients."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+from free_claude_code.config.constants import DEFAULT_MODEL_CONTEXT_TOKENS
 from free_claude_code.config.model_refs import (
     configured_chat_model_refs,
     split_provider_model_ref,
@@ -40,6 +41,14 @@ class ModelCatalog:
     default_model_id: str
 
 
+def context_window_for_client(model: CatalogModel) -> int:
+    """Resolve client capacity without changing reported provider metadata."""
+    context = model.context_window_tokens
+    return (
+        context if context is not None and context > 0 else DEFAULT_MODEL_CONTEXT_TOKENS
+    )
+
+
 def model_order_key(provider_model_ref: str) -> tuple[str, str, str, str]:
     provider, model = split_provider_model_ref(provider_model_ref)
     return provider.casefold(), model.casefold(), provider, model
@@ -58,11 +67,32 @@ def read_model_catalog(
     for info in runtime.cached_prefixed_model_infos():
         if info.model_id not in models:
             models[info.model_id] = _catalog_model(info.model_id, info)
+    for ref, model in tuple(models.items()):
+        provider_id, model_id = split_provider_model_ref(ref)
+        if definition := settings.custom_provider(provider_id):
+            models[ref] = replace(
+                model,
+                display_name=f"{definition.display_name}/{model_id}"
+                + (" (no thinking)" if model.supports_reasoning is False else ""),
+            )
+
+    def order(model: CatalogModel):
+        provider_id, model_id = split_provider_model_ref(model.provider_model_ref)
+        definition = settings.custom_provider(provider_id)
+        name = definition.display_name if definition else provider_id
+        return (
+            name.casefold(),
+            model_id.casefold(),
+            name,
+            model_id,
+            model.provider_model_ref,
+        )
+
     return ModelCatalog(
         models=tuple(
             sorted(
                 models.values(),
-                key=lambda model: model_order_key(model.provider_model_ref),
+                key=order,
             )
         ),
         default_model_id=models[settings.model].wire_slug,

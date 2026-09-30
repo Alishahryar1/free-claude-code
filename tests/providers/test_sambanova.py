@@ -25,8 +25,6 @@ def sambanova_config():
     return make_provider_config(
         api_key="test_sambanova_key",
         base_url=SAMBANOVA_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 

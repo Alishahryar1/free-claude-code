@@ -53,6 +53,26 @@ def _credential_document(*, expires_at: int) -> dict[str, object]:
     }
 
 
+def test_saved_connection_inspection_has_no_client_or_write_side_effects(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "openai.json"
+    monkeypatch.setattr(openai_auth, "openai_auth_path", lambda: path)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("saved inspection must not construct an HTTP client")
+
+    monkeypatch.setattr(openai_auth.httpx, "AsyncClient", forbidden)
+    assert openai_auth.saved_connection_state() == "disconnected"
+    assert not path.exists()
+    path.write_text(json.dumps(_credential_document(expires_at=1)), encoding="utf-8")
+    before = path.read_bytes()
+    assert openai_auth.saved_connection_state() == "connected"
+    assert path.read_bytes() == before
+    path.write_text('{"private":"not credentials"}', encoding="utf-8")
+    assert openai_auth.saved_connection_state() == "unavailable"
+
+
 @pytest.mark.asyncio
 async def test_auth_manager_refreshes_atomically_without_exposing_tokens(
     tmp_path: Path,

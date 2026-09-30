@@ -34,8 +34,6 @@ def cloudflare_config() -> ProviderConfig:
     return make_provider_config(
         api_key="test-cloudflare-token",
         base_url=CLOUDFLARE_AI_REST_ROOT,
-        rate_limit=10,
-        rate_window=60,
     )
 
 

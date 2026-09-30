@@ -68,6 +68,32 @@
             <article class="provider-strip integration-card">
               <div class="section-heading">
                 <div>
+                  <h3>VS Code Chat</h3>
+                  <p>Use FCC models in VS Code's built-in chat and agent mode.</p>
+                </div>
+              </div>
+              <p id="vscodeChatIntegrationMessage" class="message-area" role="status" hidden></p>
+              <div class="integration-actions">
+                <button id="openVSCodeChatIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+                <button id="retryVSCodeChatIntegration" class="secondary-button" type="button" hidden>Retry</button>
+              </div>
+            </article>
+            <dialog id="vscodeChatIntegrationDialog" class="integration-dialog" aria-labelledby="vscodeChatIntegrationTitle" aria-describedby="vscodeChatIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="vscodeChatIntegrationTitle">VS Code Chat</h3>
+                <button id="closeVSCodeChatIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="vscodeChatIntegrationDescription">Add FCC models to VS Code Chat. Your selected models stay unchanged.</p>
+              <div class="integration-files">
+                <h4>Files to modify</h4>
+                <ul id="vscodeChatIntegrationFiles"></ul>
+              </div>
+              <button id="confirmVSCodeChatIntegration" class="primary-button" type="button">Connect</button>
+              <p id="vscodeChatIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
+            </dialog>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
                   <h3>Claude Code in VS Code</h3>
                   <p>Use FCC's models in the Claude Code extension for VS Code.</p>
                 </div>

@@ -100,12 +100,14 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
                 "id": "claude-3-freecc-no-thinking/open_router/plain-model",
                 "name": "No-thinking model",
                 "reasoningEfforts": False,
+                "contextWindow": 200000,
                 "input": ["text"],
                 "maxTokens": 4096,
             },
             {
                 "id": "future_provider/unknown-model",
                 "name": "Unknown model",
+                "contextWindow": 200000,
                 "reasoningEfforts": {
                     "off": "none",
                     "minimal": "minimal",

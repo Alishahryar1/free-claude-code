@@ -25,7 +25,7 @@ from free_claude_code.runtime.codex_app_server import (
     CodexAppServer,
     CodexHarnessFactory,
 )
-from tests.code_sessions_support import FakeHarness
+from tests.code_sessions_support import FakeHarness, close_code_database
 
 
 @dataclass
@@ -200,7 +200,7 @@ async def test_history_open_needs_no_fcc_setup_or_inventory(tmp_path, factory_pe
 
 @pytest.mark.asyncio
 async def test_child_warning_during_shutdown_allows_connection_replacement(
-    tmp_path, monkeypatch
+    database_factory, tmp_path, monkeypatch
 ):
     harness = FakeHarness()
     prepare = harness.prepare
@@ -242,7 +242,8 @@ async def test_child_warning_during_shutdown_allows_connection_replacement(
 
     monkeypatch.setattr(harness, "prepare", selection_for)
     service = CodeService(
-        SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock"), harness
+        SQLiteCodeStore(database_factory(tmp_path / "code.db", tmp_path / "code.lock")),
+        harness,
     )
     await service.start()
     observing = asyncio.create_task(warning.wait())
@@ -286,6 +287,7 @@ async def test_child_warning_during_shutdown_allows_connection_replacement(
         observing.cancel()
         await asyncio.gather(observing, return_exceptions=True)
         await service.close()
+        await close_code_database(service)
 
 
 @pytest.mark.asyncio
@@ -468,7 +470,7 @@ async def test_jsonl_large_unicode_events_can_precede_rpc_ack(tmp_path):
 
 @pytest.mark.asyncio
 async def test_terminal_storage_failure_drains_the_native_dispatcher(
-    tmp_path, monkeypatch
+    database_factory, tmp_path, monkeypatch
 ):
     harness = FakeHarness()
     prepare = harness.prepare
@@ -498,7 +500,9 @@ async def test_terminal_storage_failure_drains_the_native_dispatcher(
         return selection
 
     monkeypatch.setattr(harness, "prepare", select)
-    store = SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock")
+    store = SQLiteCodeStore(
+        database_factory(tmp_path / "code.db", tmp_path / "code.lock")
+    )
     save = store.save_progress
     rejected = []
 
@@ -532,6 +536,7 @@ async def test_terminal_storage_failure_drains_the_native_dispatcher(
             await service.get_detail(session.id)
     finally:
         await asyncio.wait_for(service.close(), 5)
+        await close_code_database(service)
 
 
 @pytest.mark.asyncio

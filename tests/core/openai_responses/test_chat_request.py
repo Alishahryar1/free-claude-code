@@ -260,7 +260,7 @@ def test_build_responses_chat_request_uses_provider_reasoning_replay(
             }
 
 
-def test_build_responses_chat_request_quarantines_one_malformed_call_pair() -> None:
+def test_build_responses_chat_request_keeps_malformed_call_and_error_result() -> None:
     translated = build_responses_chat_request(
         _request(
             input=[
@@ -274,7 +274,7 @@ def test_build_responses_chat_request_quarantines_one_malformed_call_pair() -> N
                 {
                     "type": "function_call_output",
                     "call_id": "call_bad",
-                    "output": "stale",
+                    "output": "Invalid arguments",
                 },
                 {
                     "type": "function_call",
@@ -294,6 +294,19 @@ def test_build_responses_chat_request_quarantines_one_malformed_call_pair() -> N
 
     assert translated.body["messages"] == [
         {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "",
+            "tool_calls": [
+                {
+                    "id": "call_bad",
+                    "type": "function",
+                    "function": {"name": "echo", "arguments": "{"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_bad", "content": "Invalid arguments"},
         {
             "role": "assistant",
             "content": "",

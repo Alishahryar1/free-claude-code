@@ -47,8 +47,32 @@ def test_apply_is_the_only_config_action_and_retains_invalid_edits(
 def test_key_rejection_retains_edits_and_restores_focus(
     page: Page, admin_base_url: str
 ):
-    pending: list[Route] = []
-    page.route("**/admin/api/config/apply", lambda route: pending.append(route))
+    request_count = 0
+
+    def reject_key(route: Route) -> None:
+        nonlocal request_count
+        request_count += 1
+        expect(page.locator("#messageArea")).to_have_text("Checking API keys…")
+        expect(page.locator("#view-providers")).to_have_attribute("inert", "")
+        expect(page.locator("#applyButton")).to_be_disabled()
+        submitted = route.request.post_data_json
+        assert isinstance(submitted, dict)
+        assert submitted["values"] == {"MISTRAL_API_KEY": "bad-key"}
+        route.fulfill(
+            json={
+                "applied": False,
+                "errors": ["Rejected key"],
+                "credential_checks": [
+                    {
+                        "key": "MISTRAL_API_KEY",
+                        "status": "rejected",
+                        "message": "Check this API key.",
+                    }
+                ],
+            }
+        )
+
+    page.route("**/admin/api/config/apply", reject_key)
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
     page.get_by_role("button", name="Model Config", exact=True).click()
@@ -58,34 +82,14 @@ def test_key_rejection_retains_edits_and_restores_focus(
     open_provider(page, "mistral")
     key = page.locator("#field-MISTRAL_API_KEY")
     key.fill("bad-key")
-    page.get_by_role("button", name="Save", exact=True).click()
-    expect(page.locator("#messageArea")).to_have_text("Checking API keys…")
-    expect(page.locator("#view-providers")).to_have_attribute("inert", "")
-    expect(page.locator("#applyButton")).to_be_disabled()
-    assert len(pending) == 1
-    submitted = pending[0].request.post_data_json
-    assert isinstance(submitted, dict)
-    assert submitted["values"] == {
-        "MISTRAL_API_KEY": "bad-key",
-    }
-    pending.pop().fulfill(
-        json={
-            "applied": False,
-            "errors": ["Rejected key"],
-            "credential_checks": [
-                {
-                    "key": "MISTRAL_API_KEY",
-                    "status": "rejected",
-                    "message": "Check this API key.",
-                }
-            ],
-        }
-    )
+    with page.expect_response("**/admin/api/config/apply"):
+        page.get_by_role("button", name="Save", exact=True).click()
     expect(key).to_be_focused()
     expect(key).to_have_attribute("aria-invalid", "true")
     expect(page.locator("#field-MISTRAL_API_KEY-error")).to_have_text(
         "Check this API key."
     )
+    assert request_count == 1
     expect(key).to_have_value("bad-key")
     expect(other).to_have_value("open_router/other-edit")
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
@@ -186,7 +190,8 @@ def test_apply_network_error_unlocks_form_and_keeps_edits(
 
 
 def test_restart_waits_for_a_new_running_server(page: Page, admin_base_url: str):
-    pending: list[Route] = []
+    status = {"status": "running", "instance_id": "old-server"}
+    status_url = f"{admin_base_url}/admin/api/status"
     page.route(
         "**/admin/api/config/apply",
         lambda route: route.fulfill(
@@ -206,21 +211,25 @@ def test_restart_waits_for_a_new_running_server(page: Page, admin_base_url: str)
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
     page.wait_for_function("!state.startupRequest && !state.startupTimer")
-    page.route("**/admin/api/status", lambda route: pending.append(route))
+    page.route(status_url, lambda route: route.fulfill(json=status))
     open_provider(page, "nvidia_nim")
     page.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
     with page.expect_request("**/admin/api/status"):
         page.get_by_role("button", name="Save", exact=True).click()
     expect(page.locator("#applyButton")).to_have_text("Reconnecting…")
-    for status in (
+    for next_status in (
         {"status": "running", "instance_id": "old-server"},
         {"status": "stopping", "instance_id": "new-server"},
     ):
-        with page.expect_request("**/admin/api/status"):
-            pending.pop(0).fulfill(json=status)
+        with page.expect_response(
+            lambda response, expected=next_status: (
+                response.url == status_url and response.json() == expected
+            )
+        ):
+            status = next_status
         expect(page.locator("#view-providers")).to_have_attribute("inert", "")
         expect(page.locator("#dirtyState")).to_have_text("Changes saved")
-    pending.pop(0).fulfill(json={"status": "running", "instance_id": "new-server"})
+    status = {"status": "running", "instance_id": "new-server"}
     expect(page.locator('[data-provider="nvidia_nim"]')).to_be_enabled()
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     expect(page.locator("#messageArea")).to_have_text("Applied")

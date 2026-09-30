@@ -71,8 +71,6 @@ def deepinfra_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-deepinfra-key",
             base_url=DEEPINFRA_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="deepinfra"),
     )
@@ -290,8 +288,6 @@ async def test_model_catalog_uses_absolute_public_url() -> None:
             make_provider_config(
                 api_key="wire-deepinfra-key",
                 base_url=DEEPINFRA_DEFAULT_BASE,
-                rate_limit=10,
-                rate_window=60,
             ),
             admission=immediate_admission(provider_name="deepinfra"),
         )

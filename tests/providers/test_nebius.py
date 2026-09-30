@@ -33,8 +33,6 @@ def nebius_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-nebius-key",
             base_url=NEBIUS_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="nebius"),
     )

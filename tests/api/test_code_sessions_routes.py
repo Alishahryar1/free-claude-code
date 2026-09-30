@@ -9,14 +9,15 @@ from free_claude_code.application.code_sessions import CodeService
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from tests.api.support import create_test_app
-from tests.code_sessions_support import CodexPackets, FakeHarness
+from tests.code_sessions_support import CodexPackets, FakeHarness, close_code_database
 
 
 @pytest_asyncio.fixture
-async def code_api(tmp_path):
+async def code_api(database_factory, tmp_path):
     harness = FakeHarness()
     code = CodeService(
-        SQLiteCodeStore(tmp_path / "code.db", tmp_path / "code.lock"), harness
+        SQLiteCodeStore(database_factory(tmp_path / "code.db", tmp_path / "code.lock")),
+        harness,
     )
     await code.start()
     app = create_test_app(code=code)
@@ -27,6 +28,7 @@ async def code_api(tmp_path):
             yield client, code, harness, tmp_path, app
     finally:
         await code.close()
+        await close_code_database(code)
         await app.state.services.admin.close()
 
 

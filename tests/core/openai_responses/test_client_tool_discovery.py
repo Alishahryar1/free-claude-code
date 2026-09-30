@@ -177,7 +177,7 @@ def test_native_namespaced_argument_done_event_matches_completed_item() -> None:
             },
         )
     )
-    assert done == []
+    assert len(done) == 1
     completed = list(
         events.feed(
             "response.output_item.done",
@@ -192,12 +192,15 @@ def test_native_namespaced_argument_done_event_matches_completed_item() -> None:
         )
     )
     done_event = next(
-        data
-        for kind, data in completed
-        if kind == "response.function_call_arguments.done"
+        data for kind, data in done if kind == "response.function_call_arguments.done"
     )
     assert done_event["name"] == "spawn_agent"
     assert done_event["namespace"] == "agents"
+
+    assert (
+        done_event["arguments"]
+        == cast(dict[str, Any], completed[-1][1]["item"])["arguments"]
+    )
 
 
 def test_native_rejects_ambiguous_bare_names() -> None:
@@ -313,17 +316,16 @@ def test_native_search_buffers_partial_added_arguments() -> None:
     }
 
 
-def test_native_does_not_publish_empty_completed_arguments_as_success() -> None:
-    adapter = _native_adapter([AGENTS])
-    with pytest.raises(ResponsesConversionError, match="arguments"):
-        adapter.restore_item(
-            {
-                "type": "function_call",
-                "name": "agents__spawn_agent",
-                "status": "completed",
-                "arguments": "",
-            }
-        )
+def test_native_preserves_empty_completed_arguments_for_the_harness() -> None:
+    item = _native_adapter([AGENTS]).restore_item(
+        {
+            "type": "function_call",
+            "name": "agents__spawn_agent",
+            "status": "completed",
+            "arguments": "",
+        }
+    )
+    assert isinstance(item, dict) and item["arguments"] == ""
 
 
 @pytest.mark.parametrize("terminal", ["failed", "incomplete"])
@@ -827,7 +829,7 @@ def test_flattened_function_collision_is_rejected() -> None:
 
 
 @pytest.mark.parametrize("search", [True, False])
-def test_integral_json_numbers_are_accepted_by_native_codex(search: bool) -> None:
+def test_only_object_conversion_normalizes_integral_numbers(search: bool) -> None:
     adapter = _native_adapter([SEARCH, AGENTS])
     value = adapter.restore_item(
         {
@@ -840,11 +842,11 @@ def test_integral_json_numbers_are_accepted_by_native_codex(search: bool) -> Non
     assert isinstance(value, dict)
     arguments = value["arguments"] if search else json.loads(str(value["arguments"]))
     assert isinstance(arguments, dict)
-    assert type(arguments["limit"]) is int
+    assert type(arguments["limit"]) is (int if search else float)
     assert arguments["fraction"] == 0.25
     nested = arguments["nested"]
     assert isinstance(nested, list)
-    assert type(nested[0]) is int
+    assert type(nested[0]) is (int if search else float)
 
 
 def test_server_search_choice_stays_native() -> None:
@@ -964,7 +966,7 @@ def test_real_unnamespaced_tool_wins_over_bare_namespace_alias() -> None:
 
 
 @pytest.mark.parametrize("prefix", ["", '{"limit":', '{"limit":8.0}'])
-def test_native_canonical_arguments_agree_across_the_stream(prefix: str) -> None:
+def test_native_original_arguments_agree_across_the_stream(prefix: str) -> None:
     adapter = _native_adapter([{**AGENTS, "description": "Agent tools"}])
     stream = adapter.event_adapter()
     assert stream is not None
@@ -1017,7 +1019,7 @@ def test_native_canonical_arguments_agree_across_the_stream(prefix: str) -> None
     done = next(
         data for kind, data in events if kind == "response.function_call_arguments.done"
     )
-    assert delta == done["arguments"] == completed["arguments"]
+    assert prefix + delta == done["arguments"] == completed["arguments"]
     sdk: ResponseStreamState[Any] = ResponseStreamState(
         input_tools=omit, text_format=omit
     )
@@ -1752,6 +1754,17 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
             events.extend(
                 data
                 for _, data in stream.feed(
+                    "response.function_call_arguments.done",
+                    {
+                        "item_id": item["id"],
+                        "output_index": i,
+                        "arguments": finished["arguments"],
+                    },
+                )
+            )
+            events.extend(
+                data
+                for _, data in stream.feed(
                     "response.output_item.done", {"item": finished, "output_index": i}
                 )
             )
@@ -1792,7 +1805,7 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
     assert final[0]["arguments"] == {"query": "agent"}
     assert final[1]["type"] == "function_call"
     assert (final[1]["name"], final[1]["namespace"]) == ("lookup", "group")
-    assert final[1]["arguments"] == '{"n":8}'
+    assert final[1]["arguments"] == '{"n":8.0}'
     assert final[2]["type"] == "custom_tool_call"
     assert (final[2]["name"], final[2]["namespace"], final[2]["input"]) == (
         "edit",
@@ -1840,7 +1853,7 @@ def test_chat_preserves_custom_result_text_serialization() -> None:
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("search", [False, True])
 @pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
-def test_non_finite_arguments_cannot_complete_or_corrupt_sse(
+def test_non_finite_arguments_are_opaque_except_in_object_conversion(
     native: bool, search: bool, constant: str
 ) -> None:
     request = OpenAIResponsesRequest(
@@ -1848,16 +1861,23 @@ def test_non_finite_arguments_cannot_complete_or_corrupt_sse(
     )
     name = "fcc_tool_search" if search else "agents__spawn_agent"
     arguments = '{"nested":[{"limit":' + constant + "}]}"
-    if native:
+    if search and native:
         with pytest.raises(ResponsesConversionError, match="arguments"):
-            _completed_tool_events(request, native=True, name=name, arguments=arguments)
-    else:
+            _completed_tool_events(
+                request, native=native, name=name, arguments=arguments
+            )
+    elif search:
         events = _completed_tool_events(
-            request, native=False, name=name, arguments=arguments
+            request, native=native, name=name, arguments=arguments
         )
         assert events[-1]["type"] == "response.failed"
         assert events[-1]["response"]["output"] == []
-        assert not any(event["type"] == "response.output_item.done" for event in events)
+    else:
+        events = _completed_tool_events(
+            request, native=native, name=name, arguments=arguments
+        )
+        assert events[-1]["type"] == "response.completed"
+        assert events[-1]["response"]["output"][0]["arguments"] == arguments
         json.dumps(events, allow_nan=False)
 
 
@@ -1894,7 +1914,7 @@ def test_non_finite_spellings_in_json_strings_remain_valid(
     item = events[-1]["response"]["output"][0]
     arguments = item["arguments"] if search else json.loads(item["arguments"])
     assert arguments == {"text": "NaN Infinity -Infinity", "limit": 8}
-    assert type(arguments["limit"]) is int
+    assert type(arguments["limit"]) is (int if search else float)
     json.dumps(events, allow_nan=False)
 
 
@@ -1997,7 +2017,9 @@ def test_argument_numbers_survive_sse_serialization(
             else json.loads(item["arguments"], parse_float=Decimal)
         )
         assert actual == json.loads(arguments, parse_float=Decimal)
-        assert type(actual["nested"]["values"][1]) is int
+        assert type(actual["nested"]["values"][1]) is (int if search else Decimal)
+        if not search:
+            assert item["arguments"] == arguments
 
 
 @pytest.mark.parametrize("custom", [False, True])

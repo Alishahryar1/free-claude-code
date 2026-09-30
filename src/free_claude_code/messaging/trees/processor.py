@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from ..safe_diagnostics import format_exception_for_log
+from .ports import MessagingStorageError
 from .runtime import MessageTree
 from .transitions import CancellationReason, NodeClaim, QueueEntry
 
@@ -186,7 +187,12 @@ class TreeQueueProcessor:
                     log_full_message=self._log_messaging_error_details,
                 ),
             )
-            await self._claim_failure_callback(claim)
+            if not isinstance(exc, MessagingStorageError):
+                try:
+                    await self._claim_failure_callback(claim)
+                except MessagingStorageError:
+                    # The manager has gated the tree. Finalization retires it.
+                    logger.warning("Messaging failure state could not be saved")
         finally:
             if not slot.transitioned:
                 await self._finish_and_continue(slot)
@@ -256,6 +262,15 @@ class TreeQueueProcessor:
     def task_count(self) -> int:
         """Return the number of attached claims for observability."""
         return len(self._tasks)
+
+    def owns_tree(self, tree: MessageTree) -> bool:
+        return any(slot.tree is tree for slot in self._tasks.values())
+
+    def cancel_all(self, reason: CancellationReason) -> dict[str, CancelledTask | None]:
+        return {
+            slot.claim.claim_id: self.cancel(slot.claim, reason)
+            for slot in tuple(self._tasks.values())
+        }
 
     async def wait_idle(self) -> None:
         """Wait for every task and hand completion failures to the caller once."""

@@ -16,7 +16,9 @@ from .reasoning import (
     NO_REASONING,
     ChatTemplateReasoning,
     NamedEffortReasoning,
+    ReasoningEncoder,
     ReasoningObject,
+    ThinkingObjectReasoning,
 )
 from .request_policy import (
     OpenAIChatRequestPolicy,
@@ -60,7 +62,9 @@ __all__ = [
     "OpenAIChatRequestPolicy",
     "OpenAIChatTransport",
     "OpenAIModelListing",
+    "ReasoningEncoder",
     "ReasoningObject",
+    "ThinkingObjectReasoning",
     "apply_openai_chat_body_policy",
     "build_openai_chat_request_body",
     "create_chat_client",

@@ -4,6 +4,7 @@ from collections.abc import Mapping
 
 from anyio import CapacityLimiter, to_thread
 
+from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.persistence import (
     PreparedAdminUpdate,
     prepare_admin_update,
@@ -37,12 +38,15 @@ class ConfigurationService:
         return load_value_state(snapshot)
 
     async def prepare(
-        self, updates: Mapping[str, ConfigInputValue], active_settings: Settings
+        self,
+        updates: Mapping[str, ConfigInputValue],
+        active_settings: Settings,
+        custom_provider: CustomProviderMutation | None = None,
     ) -> PreparedAdminUpdate:
         snapshot = await to_thread.run_sync(
             self._store.read, limiter=self._worker_limiter
         )
-        return prepare_admin_update(updates, snapshot, active_settings)
+        return prepare_admin_update(updates, snapshot, active_settings, custom_provider)
 
     async def commit(self, prepared: PreparedAdminUpdate) -> JsonObject:
         if not prepared.valid:

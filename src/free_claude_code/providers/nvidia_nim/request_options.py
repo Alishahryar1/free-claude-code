@@ -6,13 +6,20 @@ from typing import Any
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.anthropic import ReasoningReplayMode, set_if_not_none
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
+from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.openai_chat import (
+    NamedEffortReasoning,
     OpenAIChatRequestPolicy,
     build_openai_chat_request_body,
 )
 
 from .tool_schema import sanitize_nim_tool_schemas
+
+NIM_REASONING = NamedEffortReasoning(
+    tuple((effort, effort.value) for effort in ReasoningEffort),
+    disabled_value="none",
+    enabled_value="high",
+)
 
 NIM_REQUEST_POLICY = OpenAIChatRequestPolicy(
     provider_name="NIM",
@@ -106,14 +113,7 @@ def apply_nim_request_options(
         if not request_template_kwargs:
             extra_body.pop("chat_template_kwargs", None)
 
-    if reasoning.control is ReasoningControl.OFF or reasoning.requests_reasoning:
-        chat_template_kwargs = extra_body.setdefault("chat_template_kwargs", {})
-        if isinstance(chat_template_kwargs, dict):
-            enabled = reasoning.control is not ReasoningControl.OFF
-            chat_template_kwargs["thinking"] = enabled
-            chat_template_kwargs["enable_thinking"] = enabled
-            if enabled and (budget := reasoning.numeric_budget_tokens) is not None:
-                chat_template_kwargs["reasoning_budget"] = budget
+    NIM_REASONING.encode(body, reasoning)
 
     _set_extra(extra_body, "top_k", nim.top_k, ignore_value=-1)
     _set_extra(extra_body, "min_p", nim.min_p, ignore_value=0.0)
