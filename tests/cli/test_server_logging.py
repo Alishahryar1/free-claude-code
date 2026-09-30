@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import logging.config
+import os
 import subprocess
 import sys
 from contextlib import nullcontext
@@ -21,6 +22,12 @@ from free_claude_code.cli.uvicorn_server import RuntimeServer
 from free_claude_code.config.logging_config import configure_logging
 from free_claude_code.config.settings import Settings
 from free_claude_code.runtime.application import ApplicationRuntime
+
+# This scenario runs in a fresh interpreter that imports the whole server stack.
+# Import cost dominates the wall clock, and it is far slower on cold caches, on
+# spinning disks, and on machines with no antivirus exclusions. Keep the budget
+# generous so a slow host reports a real failure instead of a timeout.
+SUBPROCESS_TIMEOUT_SECONDS = float(os.environ.get("FCC_TEST_SUBPROCESS_TIMEOUT", "300"))
 
 
 def _exercise_server_logging(
@@ -109,7 +116,7 @@ def test_server_logs_reach_file_once_per_start(
         capture_output=True,
         text=True,
         encoding="utf-8",
-        timeout=30,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]

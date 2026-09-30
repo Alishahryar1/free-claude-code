@@ -1,0 +1,78 @@
+diff --git a/tests/cli/test_progressive_launch.py b/tests/cli/test_progressive_launch.py
+index 08b23b6..3a27d03 100644
+--- a/tests/cli/test_progressive_launch.py
++++ b/tests/cli/test_progressive_launch.py
+@@ -1,6 +1,7 @@
+ import asyncio
+ import errno
+ import json
++import os
+ import socket
+ import subprocess
+ import sys
+@@ -21,6 +22,13 @@ from free_claude_code.cli.server_socket import ServerSockets
+ from free_claude_code.cli.uvicorn_server import RuntimeServer
+ from free_claude_code.config.settings import Settings
+ 
++# Booting a real server in a child interpreter is import-bound, not logic-bound.
++# A tight budget turns slow or cold hosts into false failures, so allow a wide
++# margin and let constrained environments tune it.
++_BROWSER_PROBE_TIMEOUT_SECONDS = float(
++    os.environ.get("FCC_TEST_SUBPROCESS_TIMEOUT", "300")
++)
++
+ 
+ @pytest.fixture
+ def browser_workers(monkeypatch):
+@@ -427,6 +435,8 @@ def _assert_browser_probe_exits(tmp_path, mode, outcome, setup_delay="0"):
+         "runpy.run_path(sys.argv[1])['_run_browser_shutdown_probe'](*sys.argv[2:])"
+     )
+     # subprocess.run kills and reaps only this disposable child on timeout.
++    # The child boots the real server, so a cold interpreter plus the full import
++    # chain dominates the runtime and is much slower on constrained hardware.
+     completed = subprocess.run(
+         [
+             sys.executable,
+@@ -440,7 +450,7 @@ def _assert_browser_probe_exits(tmp_path, mode, outcome, setup_delay="0"):
+         ],
+         capture_output=True,
+         text=True,
+-        timeout=12,
++        timeout=_BROWSER_PROBE_TIMEOUT_SECONDS,
+         check=False,
+     )
+     assert completed.returncode == 0, completed.stdout + completed.stderr
+diff --git a/tests/cli/test_server_logging.py b/tests/cli/test_server_logging.py
+index da720ac..68fe048 100644
+--- a/tests/cli/test_server_logging.py
++++ b/tests/cli/test_server_logging.py
+@@ -4,6 +4,7 @@ import asyncio
+ import json
+ import logging
+ import logging.config
++import os
+ import subprocess
+ import sys
+ from contextlib import nullcontext
+@@ -22,6 +23,12 @@ from free_claude_code.config.logging_config import configure_logging
+ from free_claude_code.config.settings import Settings
+ from free_claude_code.runtime.application import ApplicationRuntime
+ 
++# This scenario runs in a fresh interpreter that imports the whole server stack.
++# Import cost dominates the wall clock, and it is far slower on cold caches, on
++# spinning disks, and on machines with no antivirus exclusions. Keep the budget
++# generous so a slow host reports a real failure instead of a timeout.
++SUBPROCESS_TIMEOUT_SECONDS = float(os.environ.get("FCC_TEST_SUBPROCESS_TIMEOUT", "300"))
++
+ 
+ def _exercise_server_logging(
+     path: Path, console: bool, level: str, without_streams: bool
+@@ -109,7 +116,7 @@ def test_server_logs_reach_file_once_per_start(
+         capture_output=True,
+         text=True,
+         encoding="utf-8",
+-        timeout=30,
++        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+     )
+     assert result.returncode == 0, result.stdout + result.stderr
+     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]

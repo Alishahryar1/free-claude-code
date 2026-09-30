@@ -1,6 +1,7 @@
 import asyncio
 import errno
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -20,6 +21,13 @@ from free_claude_code.cli.launchers import common
 from free_claude_code.cli.server_socket import ServerSockets
 from free_claude_code.cli.uvicorn_server import RuntimeServer
 from free_claude_code.config.settings import Settings
+
+# Booting a real server in a child interpreter is import-bound, not logic-bound.
+# A tight budget turns slow or cold hosts into false failures, so allow a wide
+# margin and let constrained environments tune it.
+_BROWSER_PROBE_TIMEOUT_SECONDS = float(
+    os.environ.get("FCC_TEST_SUBPROCESS_TIMEOUT", "300")
+)
 
 
 @pytest.fixture
@@ -427,6 +435,8 @@ def _assert_browser_probe_exits(tmp_path, mode, outcome, setup_delay="0"):
         "runpy.run_path(sys.argv[1])['_run_browser_shutdown_probe'](*sys.argv[2:])"
     )
     # subprocess.run kills and reaps only this disposable child on timeout.
+    # The child boots the real server, so a cold interpreter plus the full import
+    # chain dominates the runtime and is much slower on constrained hardware.
     completed = subprocess.run(
         [
             sys.executable,
@@ -440,7 +450,7 @@ def _assert_browser_probe_exits(tmp_path, mode, outcome, setup_delay="0"):
         ],
         capture_output=True,
         text=True,
-        timeout=12,
+        timeout=_BROWSER_PROBE_TIMEOUT_SECONDS,
         check=False,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr

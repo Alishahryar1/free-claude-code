@@ -1,0 +1,115 @@
+diff --git a/src/free_claude_code/cli/commands.py b/src/free_claude_code/cli/commands.py
+index 25b8aa5..bcaa36f 100644
+--- a/src/free_claude_code/cli/commands.py
++++ b/src/free_claude_code/cli/commands.py
+@@ -32,6 +32,8 @@ if TYPE_CHECKING:
+ 
+ SERVER_GRACEFUL_SHUTDOWN_SECONDS = 5
+ _BROWSER_HANDOFF_SECONDS = 5.0
++_CRASH_RESTART_BASE_DELAY_SECONDS = 0.5
++_CRASH_RESTART_MAX_DELAY_SECONDS = 30.0
+ 
+ 
+ def _start_admin_browser(
+@@ -144,35 +146,55 @@ class ServerSupervisor:
+ 
+         self._auto_browser_opened = False
+         try:
+-            try:
+-                while not self._is_stop_requested():
+-                    with self._lock:
+-                        restart_generation = self._restart_generation
+-                    settings = load_server_settings()
+-                    should_open_admin = (
+-                        settings.open_admin_browser
+-                        if open_admin_browser is None
+-                        else open_admin_browser
+-                    ) and not self._auto_browser_opened
+-                    try:
+-                        restart = self._run_once(
+-                            settings,
+-                            open_admin_browser=should_open_admin,
+-                            restart_generation=restart_generation,
+-                        )
+-                    except OSError as exc:
+-                        if (
+-                            exc.errno == errno.EADDRINUSE
+-                            and existing_server
+-                            and existing_server(settings)
+-                        ):
+-                            return
+-                        raise
+-                    if not restart:
++            consecutive_failures = 0
++            while not self._is_stop_requested():
++                with self._lock:
++                    restart_generation = self._restart_generation
++                settings = load_server_settings()
++                should_open_admin = (
++                    settings.open_admin_browser
++                    if open_admin_browser is None
++                    else open_admin_browser
++                ) and not self._auto_browser_opened
++                try:
++                    restart = self._run_once(
++                        settings,
++                        open_admin_browser=should_open_admin,
++                        restart_generation=restart_generation,
++                    )
++                except OSError as exc:
++                    if (
++                        exc.errno == errno.EADDRINUSE
++                        and existing_server
++                        and existing_server(settings)
++                    ):
+                         return
++                    raise
++                except KeyboardInterrupt:
++                    return
++                except Exception as exc:
++                    # The server is a long-lived local dependency for every
++                    # connected agent. Letting an unexpected failure escape here
++                    # kills the whole process and leaves those clients pointed at
++                    # a dead proxy until someone notices and relaunches it, so
++                    # back off and try again for as long as no stop is pending.
++                    if not self._wait_before_crash_restart(consecutive_failures):
++                        return
++                    consecutive_failures += 1
++                    logger.error(
++                        "FCC server exited unexpectedly ({}) and will be restarted "
++                        "automatically. Run 'fcc-server' in a terminal to watch, or "
++                        "use the tray to quit.",
++                        type(exc).__name__,
++                    )
+                     clear_settings_cache()
+-            except KeyboardInterrupt:
+-                return
++                    continue
++                if not restart:
++                    return
++                # A clean generation boundary proves the previous server released
++                # its resources, so any later crash is a fresh fault to back off from.
++                consecutive_failures = 0
++                clear_settings_cache()
+         finally:
+             with self._lock:
+                 self._server = None
+@@ -180,6 +202,18 @@ class ServerSupervisor:
+             if self._owned_server:
+                 kill_all_best_effort()
+ 
++    def _wait_before_crash_restart(self, consecutive_failures: int) -> bool:
++        """Sleep before an automatic restart, reporting whether to proceed."""
++
++        if consecutive_failures <= 0:
++            return not self._is_stop_requested()
++        delay = min(
++            _CRASH_RESTART_MAX_DELAY_SECONDS,
++            _CRASH_RESTART_BASE_DELAY_SECONDS * 2 ** (consecutive_failures - 1),
++        )
++        # A stop requested during the wait must win over the pending restart.
++        return not self.stop_event.wait(delay)
++
+     def request_restart(self) -> bool:
+         """Reload an active generation or coalesce into a scheduled fresh run."""
+ 
