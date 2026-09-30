@@ -89,6 +89,8 @@ LIGHTNING_DEFAULT_BASE = "https://lightning.ai/api/v1"
 EXPERIENTIAL_DEFAULT_BASE = "https://api.experientiallabs.ai/v1"
 # Cheaper Inference OpenAI-compatible Chat Completions gateway.
 CHEAPERINFERENCE_DEFAULT_BASE = "https://api.cheaperinference.com/v1"
+# API Route OpenAI-compatible Chat Completions gateway.
+APIROUTE_DEFAULT_BASE = "https://global.api-route.com/v1"
 # OrcaRouter OpenAI-compatible multi-provider gateway.
 ORCAROUTER_DEFAULT_BASE = "https://api.orcarouter.ai/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
@@ -714,6 +716,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="cheaperinference_api_key",
         default_base_url=CHEAPERINFERENCE_DEFAULT_BASE,
         proxy_attr="cheaperinference_proxy",
+    ),
+    "apiroute": ProviderDescriptor(
+        provider_id="apiroute",
+        display_name="API Route",
+        website_url="https://www.api-route.com/",
+        logo_filename="apiroute.png",
+        credential_env="API_ROUTE_API_KEY",
+        credential_url="https://www.api-route.com/",
+        credential_attr="apiroute_api_key",
+        default_base_url=APIROUTE_DEFAULT_BASE,
+        proxy_attr="apiroute_proxy",
     ),
     "orcarouter": ProviderDescriptor(
         provider_id="orcarouter",

@@ -71,6 +71,7 @@ def _settings(**overrides):
         "lightning_api_key": "",
         "experiential_api_key": "",
         "cheaperinference_api_key": "",
+        "apiroute_api_key": "",
         "orcarouter_api_key": "",
         "fireworks_api_key": "",
         "novita_api_key": "",
@@ -356,6 +357,21 @@ def test_cheaperinference_provider_configuration_uses_default_model(
     assert [model.provider for model in models] == ["cheaperinference"]
     assert models[0].full_model == "cheaperinference/gpt-5.4-mini"
     assert models[0].source == "provider_default"
+
+
+def test_apiroute_provider_configuration_uses_default_model(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_APIROUTE", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            apiroute_api_key="test-api-route-key",
+        )
+    )
+
+    assert config.has_provider_configuration("apiroute")
+    models = config.provider_smoke_models()
+    assert [model.full_model for model in models] == ["apiroute/gpt-5.5"]
 
 
 def test_cheaperinference_smoke_override_accepts_model_with_or_without_prefix(

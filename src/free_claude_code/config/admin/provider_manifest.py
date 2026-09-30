@@ -326,6 +326,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Keys start with ci_live_; create one at cheaperinference.com/signup."
         ),
     },
+    "API_ROUTE_API_KEY": {
+        "label": "API Route API Key",
+        "description": (
+            "API Route OpenAI-compatible gateway API key for "
+            "global.api-route.com/v1. Create a key at api-route.com."
+        ),
+    },
 }
 
 

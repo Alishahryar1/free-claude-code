@@ -87,6 +87,12 @@ CASES = [
         None,
     ),
     (
+        "apiroute",
+        "https://global.api-route.com/v1/models",
+        {"data": []},
+        None,
+    ),
+    (
         "fireworks",
         "https://api.fireworks.ai/v1/accounts?pageSize=1",
         {"accounts": []},

@@ -170,6 +170,7 @@ _PROBES = (
     _Probe("cerebras", "/models", _MODELS),
     _Probe("sambanova", "/models", _MODELS),
     _Probe("cheaperinference", "/models", _MODELS),
+    _Probe("apiroute", "/models", _MODELS),
     _Probe(
         "fireworks",
         "https://api.fireworks.ai/v1/accounts?pageSize=1",
