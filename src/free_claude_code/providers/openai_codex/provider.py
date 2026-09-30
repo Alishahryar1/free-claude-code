@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx2
 from openai import AsyncOpenAI
+from packaging.version import Version
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
@@ -126,7 +127,9 @@ class OpenAICodexProvider(BaseProvider):
                     payload = await client.get(
                         "models",
                         cast_to=object,
-                        options={"params": {"client_version": FCC_VERSION}},
+                        options={
+                            "params": {"client_version": _model_list_client_version()}
+                        },
                     )
                     await attempt.accept()
                     execution.succeed()
@@ -197,6 +200,19 @@ class OpenAICodexProvider(BaseProvider):
             reasoning=reasoning,
             endpoint_context=self._endpoint(session_id=str(uuid.uuid4())),
         )
+
+
+def _model_list_client_version() -> str:
+    """Format FCC's release and VCS development versions for the catalog API."""
+    if FCC_VERSION == "dev":
+        return "0.0.0-dev"
+    parsed = Version(FCC_VERSION)
+    formatted = f"{parsed.major}.{parsed.minor}.{parsed.micro}"
+    if parsed.dev is not None:
+        formatted += f"-dev.{parsed.dev}"
+    if parsed.local is not None:
+        formatted += f"+{parsed.local}"
+    return formatted
 
 
 async def _endpoint_required() -> str:
