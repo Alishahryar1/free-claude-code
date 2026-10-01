@@ -290,6 +290,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "www.orcarouter.ai/console."
         ),
     },
+    "XKIRO_API_KEY": {
+        "label": "xKiro API Key",
+        "description": (
+            "xKiro API key for api.xkiro.com/v1. "
+            "Create one at xkiro.com/dashboard/api/keys."
+        ),
+    },
     "AGNES_API_KEY": {
         "label": "Agnes AI API Key",
         "description": (

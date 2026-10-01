@@ -146,6 +146,18 @@ _PROBES = (
     _Probe("nararoute", "/models", _MODELS, _AUTH_401),
     _Probe("experiential", "/models", _MODELS, _AUTH_401),
     _Probe("orcarouter", "/models", _MODELS, _AUTH_401),
+    # xKiro's /models is public; /usage requires the inference API key.
+    # https://docs.xkiro.com/api/usage/
+    _Probe(
+        "xkiro",
+        "/usage",
+        lambda p: (
+            _field(p, "object") == "usage"
+            and isinstance(_field(p, "windows"), list)
+            and isinstance(_field(p, "free_tokens"), Mapping)
+        ),
+        _AUTH_401,
+    ),
     # Positive evidence only: these errors can also reflect permissions, budget,
     # token type, or an undocumented response contract. Never reject on failure.
     # https://docs.deepinfra.com/api-reference/account/me

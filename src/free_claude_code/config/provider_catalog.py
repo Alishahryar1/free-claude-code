@@ -91,6 +91,8 @@ EXPERIENTIAL_DEFAULT_BASE = "https://api.experientiallabs.ai/v1"
 CHEAPERINFERENCE_DEFAULT_BASE = "https://api.cheaperinference.com/v1"
 # OrcaRouter OpenAI-compatible multi-provider gateway.
 ORCAROUTER_DEFAULT_BASE = "https://api.orcarouter.ai/v1"
+# xKiro OpenAI-compatible multi-provider gateway.
+XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -725,6 +727,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="orcarouter_api_key",
         default_base_url=ORCAROUTER_DEFAULT_BASE,
         proxy_attr="orcarouter_proxy",
+    ),
+    "xkiro": ProviderDescriptor(
+        provider_id="xkiro",
+        display_name="xKiro",
+        website_url="https://xkiro.com/",
+        logo_filename="xkiro.png",
+        credential_env="XKIRO_API_KEY",
+        credential_url="https://xkiro.com/dashboard/api/keys",
+        credential_attr="xkiro_api_key",
+        default_base_url=XKIRO_DEFAULT_BASE,
+        proxy_attr="xkiro_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",

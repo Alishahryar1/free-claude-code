@@ -64,6 +64,19 @@ CASES = [
     ("experiential", "https://api.experientiallabs.ai/v1/models", {"data": []}, 401),
     ("orcarouter", "https://api.orcarouter.ai/v1/models", {"data": []}, 401),
     (
+        "xkiro",
+        "https://api.xkiro.com/v1/usage",
+        {
+            "object": "usage",
+            "windows": [],
+            "free_tokens": {},
+            "plan": None,
+            "user": None,
+            "wallet": None,
+        },
+        401,
+    ),
+    (
         "deepinfra",
         "https://api.deepinfra.com/v1/me",
         {"uid": "id", "email": None},
@@ -167,7 +180,10 @@ async def test_documented_probe_acceptance_and_rejection(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [400, 402, 403, 404, 429, 500, 503])
-async def test_ambiguous_errors_warn_without_retry(monkeypatch, status, caplog):
+@pytest.mark.parametrize("provider_id", ["groq", "xkiro"])
+async def test_ambiguous_errors_warn_without_retry(
+    monkeypatch, status, caplog, provider_id
+):
     requests = []
 
     def respond(request):
@@ -175,7 +191,9 @@ async def test_ambiguous_errors_warn_without_retry(monkeypatch, status, caplog):
         return httpx.Response(status, json={"error": "secret-not-a-known-format"})
 
     _mock_http(monkeypatch, respond)
-    result = await validation.check_credentials(_settings("groq"), ("GROQ_API_KEY",))
+    key = PROVIDER_CATALOG[provider_id].credential_env
+    assert key is not None
+    result = await validation.check_credentials(_settings(provider_id), (key,))
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
     assert len(requests) == 1
     assert "secret-not-a-known-format" not in caplog.text
@@ -183,7 +201,10 @@ async def test_ambiguous_errors_warn_without_retry(monkeypatch, status, caplog):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [200, 401, 302])
-async def test_non_api_responses_do_not_verify_or_reject(monkeypatch, status):
+@pytest.mark.parametrize("provider_id", ["groq", "xkiro"])
+async def test_non_api_responses_do_not_verify_or_reject(
+    monkeypatch, status, provider_id
+):
     _mock_http(
         monkeypatch,
         lambda request: httpx.Response(
@@ -192,7 +213,9 @@ async def test_non_api_responses_do_not_verify_or_reject(monkeypatch, status):
             headers={"Location": "https://other.invalid/"},
         ),
     )
-    result = await validation.check_credentials(_settings("groq"), ("GROQ_API_KEY",))
+    key = PROVIDER_CATALOG[provider_id].credential_env
+    assert key is not None
+    result = await validation.check_credentials(_settings(provider_id), (key,))
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
 
 
@@ -343,3 +366,18 @@ async def test_programming_errors_do_not_become_permission_to_save(monkeypatch):
         await validation.check_credentials(_settings("groq"), ("GROQ_API_KEY",))
     assert isinstance(error.value.exceptions[0], RuntimeError)
     assert all(client.is_closed for client in clients)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"data": []},
+        {"object": "usage", "windows": None, "free_tokens": {}},
+        {"object": "usage", "windows": [], "free_tokens": None},
+    ],
+)
+async def test_xkiro_unexpected_usage_remains_unverified(monkeypatch, payload):
+    _mock_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
+    result = await validation.check_credentials(_settings("xkiro"), ("XKIRO_API_KEY",))
+    assert result[0].status == validation.CredentialStatus.UNVERIFIED

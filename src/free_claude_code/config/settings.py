@@ -244,6 +244,11 @@ class Settings(BaseModel):
         default=None, validation_alias="ORCAROUTER_API_KEY"
     )
 
+    # ==================== xKiro (OpenAI-compatible gateway) ====================
+    xkiro_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="XKIRO_API_KEY"
+    )
+
     # ==================== Fireworks AI Config ====================
     fireworks_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_API_KEY"
@@ -563,6 +568,9 @@ class Settings(BaseModel):
     )
     orcarouter_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="ORCAROUTER_PROXY"
+    )
+    xkiro_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="XKIRO_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"

@@ -435,3 +435,18 @@ def test_manual_provider_test_takes_precedence_over_automatic_availability(
         )
         expect(result).to_have_text("1 model available")
     expect(dialog.get_by_role("button", name="Test", exact=True)).to_be_enabled()
+
+
+def test_xkiro_uses_standard_provider_configuration(page: Page, admin_base_url: str):
+    _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
+    card = page.locator('[data-provider="xkiro"]')
+    expect(card.get_by_role("button", name="Configure", exact=True)).to_be_visible()
+    expect(card.locator('a[href="https://xkiro.com/"]')).to_be_visible()
+    dialog = open_provider(page, "xkiro")
+    expect(dialog.locator("#field-XKIRO_API_KEY")).to_be_focused()
+    expect(dialog.locator("#field-XKIRO_API_KEY")).to_have_attribute(
+        "data-secret", "true"
+    )
+    expect(dialog.locator("#field-XKIRO_PROXY")).to_be_visible()
+    expect(dialog).to_contain_text("xkiro.com/dashboard/api/keys")
+    close_provider(page)
