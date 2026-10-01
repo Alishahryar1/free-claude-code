@@ -21,6 +21,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `experiential.svg` | https://www.experientiallabs.ai/icon.svg?d749d3cd48f6539d |
 | `featherless-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/featherless-color.svg |
 | `fireworks-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/fireworks-color.svg |
+| `futureinfra.svg` | https://futureinfra.ai/assets/favicon.svg |
 | `gemini-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/gemini-color.svg |
 | `githubcopilot.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/githubcopilot.svg |
 | `groq.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/groq.svg |

@@ -381,3 +381,19 @@ async def test_xkiro_unexpected_usage_remains_unverified(monkeypatch, payload):
     _mock_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
     result = await validation.check_credentials(_settings("xkiro"), ("XKIRO_API_KEY",))
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_futureinfra_public_catalog_is_not_used_to_verify_keys(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"data": []})
+
+    _mock_http(monkeypatch, respond)
+    result = await validation.check_credentials(
+        _settings("futureinfra"), ("FUTUREINFRA_API_KEY",)
+    )
+    assert result[0].status == validation.CredentialStatus.UNVERIFIED
+    assert requests == []
