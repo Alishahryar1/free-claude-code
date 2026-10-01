@@ -93,6 +93,8 @@ CHEAPERINFERENCE_DEFAULT_BASE = "https://api.cheaperinference.com/v1"
 ORCAROUTER_DEFAULT_BASE = "https://api.orcarouter.ai/v1"
 # xKiro OpenAI-compatible multi-provider gateway.
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
+# FutureInfra OpenAI-compatible AI router.
+FUTUREINFRA_DEFAULT_BASE = "https://futureinfra.ai/v1/ai"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -738,6 +740,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="xkiro_api_key",
         default_base_url=XKIRO_DEFAULT_BASE,
         proxy_attr="xkiro_proxy",
+    ),
+    "futureinfra": ProviderDescriptor(
+        provider_id="futureinfra",
+        display_name="FutureInfra",
+        website_url="https://futureinfra.ai/",
+        logo_filename="futureinfra.svg",
+        credential_env="FUTUREINFRA_API_KEY",
+        credential_url="https://futureinfra.ai/console/?screen=ai-router",
+        credential_attr="futureinfra_api_key",
+        default_base_url=FUTUREINFRA_DEFAULT_BASE,
+        proxy_attr="futureinfra_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",

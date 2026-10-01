@@ -774,6 +774,19 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             max_output_tokens_path=("max_output_tokens",),
         ),
     ),
+    "futureinfra": OpenAIChatProfile(
+        _policy(
+            "FUTUREINFRA",
+            ReasoningReplayMode.DISABLED,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NO_REASONING,
+        model_listing=OpenAIModelListing(
+            path="/models",
+            required_path_values=((("kind",), ("text",)),),
+            context_window_tokens_path=("context_length",),
+        ),
+    ),
     "ollama_cloud": OpenAIChatProfile(
         _policy(
             "OLLAMA_CLOUD",

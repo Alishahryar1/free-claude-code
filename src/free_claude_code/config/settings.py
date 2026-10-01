@@ -249,6 +249,11 @@ class Settings(BaseModel):
         default=None, validation_alias="XKIRO_API_KEY"
     )
 
+    # ==================== FutureInfra (OpenAI-compatible router) ====================
+    futureinfra_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="FUTUREINFRA_API_KEY"
+    )
+
     # ==================== Fireworks AI Config ====================
     fireworks_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_API_KEY"
@@ -571,6 +576,9 @@ class Settings(BaseModel):
     )
     xkiro_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="XKIRO_PROXY"
+    )
+    futureinfra_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="FUTUREINFRA_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"

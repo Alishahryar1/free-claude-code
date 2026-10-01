@@ -21,6 +21,7 @@ from free_claude_code.config.provider_catalog import (
     DEEPINFRA_DEFAULT_BASE,
     EXPERIENTIAL_DEFAULT_BASE,
     FEATHERLESS_DEFAULT_BASE,
+    FUTUREINFRA_DEFAULT_BASE,
     HUGGINGFACE_DEFAULT_BASE,
     KIMI_CODE_DEFAULT_BASE,
     LLM7_DEFAULT_BASE,
@@ -126,6 +127,7 @@ def _make_settings(**overrides):
     mock.cheaperinference_api_key = "test_cheaperinference_key"
     mock.orcarouter_api_key = "test_orcarouter_key"
     mock.xkiro_api_key = "test_xkiro_key"
+    mock.futureinfra_api_key = "test_futureinfra_key"
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -177,6 +179,7 @@ def _make_settings(**overrides):
     mock.cheaperinference_proxy = None
     mock.orcarouter_proxy = None
     mock.xkiro_proxy = None
+    mock.futureinfra_proxy = None
     mock.kilo_api_key = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
@@ -1138,6 +1141,7 @@ async def test_create_provider_instantiates_each_builtin():
         "cheaperinference": OpenAIChatProvider,
         "orcarouter": OpenAIChatProvider,
         "xkiro": OpenAIChatProvider,
+        "futureinfra": OpenAIChatProvider,
         "opencode_go": OpenCodeProvider,
         "vercel": OpenAIChatProvider,
         "bedrock": OpenAIChatProvider,
@@ -1666,4 +1670,45 @@ def test_xkiro_requires_key_despite_public_catalog():
     with pytest.raises(ApplicationUnavailableError, match="XKIRO_API_KEY is not set"):
         build_provider_config(
             PROVIDER_CATALOG["xkiro"], _make_settings(xkiro_api_key=None)
+        )
+
+
+@pytest.mark.asyncio
+async def test_futureinfra_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["futureinfra"]
+    settings = _make_settings(
+        futureinfra_api_key="pk_live_token",
+        futureinfra_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "futureinfra",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "FutureInfra"
+    assert descriptor.credential_env == "FUTUREINFRA_API_KEY"
+    assert descriptor.credential_attr == "futureinfra_api_key"
+    assert (
+        descriptor.credential_url == "https://futureinfra.ai/console/?screen=ai-router"
+    )
+    assert descriptor.default_base_url == FUTUREINFRA_DEFAULT_BASE
+    assert descriptor.base_url_attr is None
+    assert descriptor.proxy_attr == "futureinfra_proxy"
+    assert config.api_key == "pk_live_token"
+    assert config.base_url == "https://futureinfra.ai/v1/ai"
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+def test_futureinfra_requires_key_despite_public_catalog():
+    with pytest.raises(
+        ApplicationUnavailableError, match="FUTUREINFRA_API_KEY is not set"
+    ):
+        build_provider_config(
+            PROVIDER_CATALOG["futureinfra"],
+            _make_settings(futureinfra_api_key=None),
         )

@@ -73,6 +73,7 @@ def _settings(**overrides):
         "cheaperinference_api_key": "",
         "orcarouter_api_key": "",
         "xkiro_api_key": "",
+        "futureinfra_api_key": "",
         "fireworks_api_key": "",
         "novita_api_key": "",
         "cloudflare_api_token": "",
@@ -1403,4 +1404,54 @@ def test_xkiro_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
     )
 
     assert not config.has_provider_configuration("xkiro")
+    assert config.provider_smoke_models() == []
+
+
+def test_futureinfra_provider_configuration_uses_default_model(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_FUTUREINFRA", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            futureinfra_api_key="futureinfra-key",
+        )
+    )
+
+    assert config.has_provider_configuration("futureinfra")
+    models = config.provider_smoke_models()
+    assert [model.provider for model in models] == ["futureinfra"]
+    assert models[0].full_model == "futureinfra/openai/gpt-4o-mini"
+    assert models[0].source == "provider_default"
+
+
+def test_futureinfra_smoke_override_accepts_model_with_or_without_prefix(
+    monkeypatch,
+) -> None:
+    settings = _settings(
+        model="ollama/llama3.1",
+        ollama_base_url="",
+        futureinfra_api_key="futureinfra-key",
+    )
+    for override in (
+        "deepseek/deepseek-chat",
+        "futureinfra/deepseek/deepseek-chat",
+    ):
+        monkeypatch.setenv("FCC_SMOKE_MODEL_FUTUREINFRA", override)
+        models = _smoke_config(settings=settings).provider_smoke_models()
+
+        assert [model.provider for model in models] == ["futureinfra"]
+        assert models[0].full_model == "futureinfra/deepseek/deepseek-chat"
+        assert models[0].source == "FCC_SMOKE_MODEL_FUTUREINFRA"
+
+
+def test_futureinfra_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_FUTUREINFRA", raising=False)
+    config = _smoke_config(
+        provider_matrix=frozenset({"futureinfra"}),
+        settings=_settings(ollama_base_url="", futureinfra_api_key=""),
+    )
+
+    assert not config.has_provider_configuration("futureinfra")
     assert config.provider_smoke_models() == []

@@ -297,6 +297,14 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Create one at xkiro.com/dashboard/api/keys."
         ),
     },
+    "FUTUREINFRA_API_KEY": {
+        "label": "FutureInfra API Key",
+        "description": (
+            "FutureInfra AI router API key for futureinfra.ai/v1/ai. "
+            "Keys start with pk_live_; create one at "
+            "futureinfra.ai/console/?screen=ai-router."
+        ),
+    },
     "AGNES_API_KEY": {
         "label": "Agnes AI API Key",
         "description": (
