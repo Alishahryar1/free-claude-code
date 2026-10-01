@@ -5,6 +5,18 @@ const readline = require('node:readline');
 const { _electron } = require(process.argv[2]);
 const options = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 const input = readline.createInterface({ input: process.stdin });
+let app;
+
+// The Python controller interrupts this process when an assertion fails.
+// Let Electron close before exiting so the next test can use its native port.
+for (const signal of ['SIGINT', 'SIGTERM', ...(process.platform === 'win32' ? ['SIGBREAK'] : [])]) {
+  process.once(signal, () => {
+    void (async () => {
+      try { if (app) await app.close(); }
+      finally { process.exit(1); }
+    })();
+  });
+}
 
 function host(action) {
   return new Promise((resolve, reject) => {
@@ -29,10 +41,16 @@ async function launch() {
   return app;
 }
 
-async function turn(window, label, marker) {
+async function turn(window, label, marker, newSession = true) {
   await window.getByText(label, { exact: true }).waitFor({ timeout: 30000 });
-  await window.getByRole('button', { name: 'New session', exact: true }).last().click();
   const composer = window.locator('[contenteditable="true"]');
+  if (newSession) {
+    const previous = await composer.elementHandle();
+    await window.getByRole('button', { name: 'New session', exact: true }).last().click();
+    // Native session creation is asynchronous and replaces the session-scoped editor.
+    await previous.waitForElementState('hidden');
+    await previous.dispose();
+  }
   await composer.click();
   await window.keyboard.insertText(`Read the local fixture and reply ${marker}`);
   await window.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -40,7 +58,6 @@ async function turn(window, label, marker) {
 }
 
 (async () => {
-  let app;
   try {
     app = await launch();
     let window = await app.firstWindow();
@@ -54,7 +71,7 @@ async function turn(window, label, marker) {
       }
       return;
     }
-    await turn(window, 'FCC Desktop Fixture', 'FCC_DESKTOP_DONE');
+    await turn(window, 'FCC Desktop Fixture', 'FCC_DESKTOP_DONE', false);
     await host('refresh');
     await turn(window, 'FCC Updated Fixture', 'FCC_DESKTOP_UPDATED');
     await window.screenshot({ path: path.join(options.artifacts, 'desktop-connected.png') });
@@ -63,6 +80,11 @@ async function turn(window, label, marker) {
     window = await app.firstWindow();
     await turn(window, 'FCC Updated Fixture', 'FCC_DESKTOP_UPDATED');
     await host('disconnect');
+    await window.getByRole('button', { name: 'New session', exact: true }).last().click();
+    await window.getByText('FCC Updated Fixture', { exact: true }).waitFor({ state: 'hidden', timeout: 30000 });
+    await host('reconnect');
+    await turn(window, 'FCC Updated Fixture', 'FCC_DESKTOP_UPDATED', false);
+    await host('final_disconnect');
     await window.getByRole('button', { name: 'New session', exact: true }).last().click();
     await window.getByText('FCC Updated Fixture', { exact: true }).waitFor({ state: 'hidden', timeout: 30000 });
     await window.screenshot({ path: path.join(options.artifacts, 'desktop-disconnected.png') });

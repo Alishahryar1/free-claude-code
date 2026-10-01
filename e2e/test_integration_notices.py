@@ -33,6 +33,8 @@ def notice(page, admin_base_url, request):
             json={
                 "connected": True,
                 "configured": True,
+                "connection_state": "connected",
+                "actions": {"configure": False, "disconnect": True, "refresh": True},
                 "paths": None,
                 "update": dict(progress),
             }
@@ -62,10 +64,13 @@ def notice(page, admin_base_url, request):
 
 
 def test_notices_require_a_live_changed_completion(page, notice):
-    _, button, message, observe = notice
+    integration, button, message, observe = notice
     expect(message).to_be_hidden()
     observe("starting")
-    expect(button).to_be_disabled()
+    if integration == "dsh-desktop":
+        expect(button).to_be_enabled()
+    else:
+        expect(button).to_be_disabled()
     observe("ready", changed=True)
     expect(message).to_be_visible()
     expect(message).not_to_have_class("message-area error")
@@ -115,6 +120,14 @@ def test_settled_poll_after_mutation_preserves_next_action(page, notice):
                     "connected": route.request.url.endswith("/connect"),
                     "configured": route.request.url.endswith("/connect"),
                     "disconnect_pending": False,
+                    "connection_state": "connected"
+                    if route.request.url.endswith("/connect")
+                    else "disconnected",
+                    "actions": {
+                        "configure": route.request.url.endswith("/disconnect"),
+                        "disconnect": route.request.url.endswith("/connect"),
+                        "refresh": route.request.url.endswith("/connect"),
+                    },
                     "paths": None,
                 }
             ),
@@ -191,6 +204,8 @@ def test_busy_status_recovery_preserves_notice_without_replaying_it(
                 "configured": True,
                 "paths": None,
                 "update": {"state": "ready", "changed": True},
+                "connection_state": "connected",
+                "actions": {"configure": False, "disconnect": True, "refresh": True},
             }
         ),
     )
@@ -200,6 +215,8 @@ def test_busy_status_recovery_preserves_notice_without_replaying_it(
             "connected": None,
             "paths": None,
             "update": {"state": "starting", "changed": False},
+            "connection_state": "connected",
+            "actions": {"configure": False, "disconnect": True, "refresh": True},
         }
     )
     expect(button).to_be_enabled()

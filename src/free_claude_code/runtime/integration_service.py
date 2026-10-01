@@ -79,6 +79,7 @@ class IntegrationService:
         self._vscode_dirty = False
         self._dsh_update = _IntegrationUpdate()
         self._dsh_dirty = False
+        self._dsh_action_revision = 0
 
     @property
     def settings(self) -> Settings:
@@ -208,6 +209,11 @@ class IntegrationService:
         return {"update": self._dsh_update.snapshot()}
 
     async def _dsh_desktop(self, action: IntegrationAction) -> JsonObject:
+        if action in {"connect", "disconnect"}:
+            self._check_integration_available()
+            self._dsh_action_revision += 1
+        action_revision = self._dsh_action_revision
+
         def status(url: str, token: str, ready: bool) -> JsonObject:
             return dsh_desktop_integration.status(
                 dsh_desktop_integration.config_home(),
@@ -239,6 +245,15 @@ class IntegrationService:
                 revision = self.provider_manager.catalog_status()["catalog_revision"]
                 async with self._config_lock, self._dsh_update.access.write():
                     self._check_integration_available()
+                    if action_revision != self._dsh_action_revision:
+                        return await run_sync_owned(
+                            partial(
+                                status,
+                                local_proxy_root_url(self.settings),
+                                self.settings.proxy_auth_token,
+                                True,
+                            )
+                        )
                     if (
                         snapshot.current_settings() is not self.settings
                         or revision

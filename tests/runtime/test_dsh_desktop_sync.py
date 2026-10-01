@@ -197,3 +197,35 @@ async def test_startup_without_connection_does_not_create_native_profile(runtime
         assert not dsh_desktop_state_path().exists()
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_first_configure_waiting_for_catalog_is_superseded_by_disconnect(
+    runtime, monkeypatch
+):
+    install()
+    await runtime.start()
+    await settle(runtime)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = runtime.provider_manager.wait_for_catalog
+
+    async def held():
+        entered.set()
+        await release.wait()
+        return await original()
+
+    monkeypatch.setattr(runtime.provider_manager, "wait_for_catalog", held)
+    task = asyncio.create_task(runtime.connect_dsh_desktop())
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        assert not (await asyncio.wait_for(runtime.disconnect_dsh_desktop(), 1))[
+            "configured"
+        ]
+        release.set()
+        await asyncio.wait_for(task, 5)
+        assert not dsh_desktop_state_path().exists()
+        assert not (await runtime.dsh_desktop_status())["configured"]
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await runtime.close()

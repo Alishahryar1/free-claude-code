@@ -110,3 +110,72 @@ def test_failed_disconnect_can_be_retried_after_reload(
     dialog.get_by_role("button", name="Retry disconnect", exact=True).click()
     expect(opener).to_have_text("Configure")
     assert not (tmp_path / ".fcc/dsh-desktop-integration.json").exists()
+
+
+def test_partial_configure_keeps_disconnect_after_unreadable_reload(
+    page, admin_base_url, tmp_path, monkeypatch
+):
+    from free_claude_code.harnesses import dsh_files
+
+    home = install(tmp_path)
+    patch = home / "profiles/desktop/cordis.patch.yml"
+    original = dsh_files.atomic_write_text
+
+    def fail(path, content, **kwargs):
+        if path == patch:
+            raise OSError("profile interruption")
+        return original(path, content, **kwargs)
+
+    page.goto(admin_base_url + "/admin/integrations")
+    opener = page.locator("#openDshDesktopIntegration")
+    expect(opener).to_have_text("Configure")
+    opener.click()
+    dialog = page.locator("#dshDesktopIntegrationDialog")
+    with monkeypatch.context() as scoped:
+        scoped.setattr(dsh_files, "atomic_write_text", fail)
+        dialog.get_by_role("button", name="Configure", exact=True).click()
+        expect(dialog.get_by_role("alert")).to_be_visible()
+        expect(
+            dialog.get_by_role("button", name="Disconnect", exact=True)
+        ).to_be_enabled()
+    patch.write_text("bad: [yaml")
+    page.reload()
+    expect(opener).to_have_text("Disconnect")
+    expect(page.locator("#dshDesktopIntegrationMessage")).to_contain_text("YAML")
+    patch.write_text("[]\n")
+    opener.click()
+    dialog.get_by_role("button", name="Disconnect", exact=True).click()
+    expect(opener).to_have_text("Configure")
+
+
+def test_shared_credential_disconnect_is_successful_and_reconnectable(
+    page, admin_base_url, tmp_path
+):
+    home = install(tmp_path)
+    peer = home / "profiles/web"
+    peer.mkdir()
+    (peer / "package.json").write_bytes(
+        (home / "profiles/desktop/package.json").read_bytes()
+    )
+    (peer / "cordis.patch.yml").write_text(
+        "- id: llm-deepseek\n  config:\n    apiKeyEnv: FCC_DSH_DESKTOP_API_KEY\n"
+    )
+    page.goto(admin_base_url + "/admin/integrations")
+    opener = page.locator("#openDshDesktopIntegration")
+    expect(opener).to_have_text("Configure")
+    opener.click()
+    dialog = page.locator("#dshDesktopIntegrationDialog")
+    dialog.get_by_role("button", name="Configure", exact=True).click()
+    expect(opener).to_have_text("Disconnect")
+    opener.click()
+    dialog.get_by_role("button", name="Disconnect", exact=True).click()
+    expect(opener).to_have_text("Configure")
+    message = page.locator("#dshDesktopIntegrationMessage")
+    expect(message).to_contain_text("retained")
+    expect(message).not_to_have_class("message-area error")
+    page.reload()
+    expect(opener).to_have_text("Configure")
+    expect(message).to_contain_text("retained")
+    opener.click()
+    dialog.get_by_role("button", name="Configure", exact=True).click()
+    expect(opener).to_have_text("Disconnect")

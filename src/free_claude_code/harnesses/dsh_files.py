@@ -3,6 +3,7 @@
 import errno
 import io
 import os
+import stat
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -17,6 +18,37 @@ from free_claude_code.harnesses.config_file import atomic_write_text
 
 class DshConfigError(ValueError):
     """A native configuration cannot be changed without losing user intent."""
+
+
+def regular_path(path: Path, *, root: Path | None = None) -> None:
+    """Reject redirected files and managed directory ancestors without following them."""
+    candidates = [path]
+    if root is not None:
+        if not path.is_relative_to(root):
+            raise DshConfigError(
+                "DSH configuration must remain inside its selected home."
+            )
+        candidates.extend(
+            parent
+            for parent in path.parents
+            if parent != root and parent.is_relative_to(root)
+        )
+    for item in candidates:
+        try:
+            info = item.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or getattr(
+            info, "st_file_attributes", 0
+        ) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
+            raise DshConfigError(
+                "DSH integration files and directories must be regular paths, not links. Keep the managed files in the selected DSH home."
+            )
+        expected = stat.S_ISREG if item == path else stat.S_ISDIR
+        if not expected(info.st_mode):
+            raise DshConfigError(
+                "DSH integration needs regular configuration files and directories."
+            )
 
 
 def yaml_parser() -> YAML:

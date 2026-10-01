@@ -685,7 +685,10 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
             "tests/api/test_dsh_desktop_integration.py",
             "e2e/test_dsh_desktop_integration.py",
         ),
-        ("test_dsh_desktop_live_catalog_credentials_and_restart_e2e",),
+        (
+            "test_dsh_desktop_live_catalog_credentials_and_restart_e2e",
+            "test_dsh_desktop_native_composition_e2e",
+        ),
     ),
     CapabilityContract(
         "cli",
