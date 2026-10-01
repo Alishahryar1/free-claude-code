@@ -106,6 +106,7 @@ def test_slow_test_reports_stacks_without_interrupting_execution():
 @pytest.mark.parametrize("fails", [False, True])
 def test_completion_cancels_and_joins_pending_diagnostic(fails):
     output = DiagnosticOutput()
+    existing_threads = set(threading.enumerate())
     try:
         with dump_threads_after(60, output, "completed-test"):
             if fails:
@@ -113,4 +114,7 @@ def test_completion_cancels_and_joins_pending_diagnostic(fails):
     except RuntimeError as error:
         assert fails and str(error) == "original failure"
     assert output.getvalue() == ""
-    assert not any(t.name == "fcc-test-diagnostics" for t in threading.enumerate())
+    assert not any(
+        t.name == "fcc-test-diagnostics" and t not in existing_threads
+        for t in threading.enumerate()
+    )
