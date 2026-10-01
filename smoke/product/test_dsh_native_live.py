@@ -31,7 +31,7 @@ def command(config: SmokeConfig) -> list[str]:
 @pytest.mark.parametrize(
     "operation", ["subagent", "idle_tool", "native_responses", "vision_no_thinking"]
 )
-def test_dsh_native_operations(
+def test_dsh_native_operations_e2e(
     smoke_config: SmokeConfig, tmp_path: Path, operation: str
 ) -> None:
     native = command(smoke_config)
@@ -144,7 +144,7 @@ def test_dsh_native_operations(
         assert "data:image/png;base64," in json.dumps(main[-1])
 
 
-def test_dsh_native_settings_migration_and_dump(
+def test_dsh_native_settings_migration_and_dump_e2e(
     smoke_config: SmokeConfig, tmp_path: Path
 ) -> None:
     native = command(smoke_config)

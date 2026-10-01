@@ -666,8 +666,8 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
             "test_dsh_cli_terminal_failure_e2e",
             "test_dsh_cli_web_startup_e2e",
             "test_dsh_cli_tools_and_resume_e2e",
-            "test_dsh_native_operations",
-            "test_dsh_native_settings_migration_and_dump",
+            "test_dsh_native_operations_e2e",
+            "test_dsh_native_settings_migration_and_dump_e2e",
         ),
     ),
     CapabilityContract(
@@ -685,7 +685,7 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
             "tests/api/test_dsh_desktop_integration.py",
             "e2e/test_dsh_desktop_integration.py",
         ),
-        ("test_dsh_desktop_live_catalog_credentials_and_restart",),
+        ("test_dsh_desktop_live_catalog_credentials_and_restart_e2e",),
     ),
     CapabilityContract(
         "cli",

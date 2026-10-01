@@ -26,7 +26,7 @@ from smoke.product.test_client_product_live import (
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("clients")]
 
 
-def test_dsh_desktop_live_catalog_credentials_and_restart(
+def test_dsh_desktop_live_catalog_credentials_and_restart_e2e(
     smoke_config: SmokeConfig, tmp_path: Path
 ) -> None:
     executable = os.environ.get("FCC_SMOKE_DSH_DESKTOP_BIN")
