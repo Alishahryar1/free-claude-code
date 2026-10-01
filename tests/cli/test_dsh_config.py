@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.application.model_catalog import CatalogModel
-from free_claude_code.cli.launchers.dsh_config import build_dsh_launch_config
 from free_claude_code.core.model_capabilities import ModelInputModality
+from free_claude_code.harnesses.dsh_config import build_dsh_launch_config
 
 
 def _models() -> tuple[CatalogModel, ...]:
@@ -48,23 +48,16 @@ def _row_by_id(patch: tuple[dict, ...], row_id: str) -> dict:
 def test_dsh_config_pins_responses_models_retries_and_private_state(
     tmp_path: Path,
 ) -> None:
-    settings_path = tmp_path / "settings.yaml"
     credentials_path = tmp_path / ".credentials.yaml"
     launch = build_dsh_launch_config(
         _models(),
         default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191/",
-        settings_path=settings_path,
         credentials_path=credentials_path,
         provider_progress_timeout=600.0,
     )
 
-    settings = _row_by_id(launch, "settings")
-    assert settings == {
-        "id": "settings",
-        "name": "@deepseek-ai/dsh-settings-file",
-        "config": {"path": str(settings_path), "watch": False},
-    }
+    assert all(row["id"] != "settings" for row in launch)
     credentials = _row_by_id(launch, "credentials")
     assert credentials == {
         "id": "credentials",
@@ -133,7 +126,8 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
     }
 
     for row_id, package in (
-        ("llm-deepseek", "@deepseek-ai/dsh-llm-deepseek"),
+        ("llm-deepseek", "@deepseek-ai/dsh-llm-deepseek-api-key"),
+        ("llm-deepseek-account", "@deepseek-ai/dsh-llm-deepseek-account"),
         ("web-search-deepseek", "@deepseek-ai/dsh-web-search-deepseek"),
         ("tool-web", "@deepseek-ai/dsh-tool-web"),
     ):
@@ -154,7 +148,6 @@ def test_dsh_config_rounds_fractional_progress_timeout_up() -> None:
         _models(),
         default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191",
-        settings_path=Path("settings.yaml"),
         credentials_path=Path("credentials.yaml"),
         provider_progress_timeout=0.0001,
     )
@@ -171,7 +164,6 @@ def test_dsh_config_rejects_empty_catalog() -> None:
             (),
             default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
-            settings_path=Path("settings.yaml"),
             credentials_path=Path("credentials.yaml"),
             provider_progress_timeout=600,
         )
@@ -184,7 +176,6 @@ def test_dsh_config_rejects_invalid_progress_timeout(timeout: float) -> None:
             _models(),
             default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
-            settings_path=Path("settings.yaml"),
             credentials_path=Path("credentials.yaml"),
             provider_progress_timeout=timeout,
         )
@@ -196,7 +187,6 @@ def test_dsh_config_rejects_timeout_beyond_node_timer_limit() -> None:
             _models(),
             default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
-            settings_path=Path("settings.yaml"),
             credentials_path=Path("credentials.yaml"),
             provider_progress_timeout=2_147_424,
         )

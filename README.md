@@ -160,6 +160,16 @@ DeepSeek Harness Web:
 fcc-dsh
 ```
 
+For DeepSeek Harness Desktop, install and open the app once, then select **Configure** under **Integrations → DeepSeek Harness Desktop** in FCC. Keep FCC running while using its models. FCC becomes the default for new sessions. Native DeepSeek account features still need a DeepSeek login.
+
+Use DeepSeek Harness 0.2.0-rc.2 or newer. Update the CLI with:
+
+```bash
+npm install -g @deepseek-ai/dsh@latest
+```
+
+For headless tasks, run `fcc-dsh headless "your task"`. Extra `--patch` files apply after FCC's settings. After disconnecting Desktop, select another model to continue an existing FCC session.
+
 Grok Build:
 
 ```bash

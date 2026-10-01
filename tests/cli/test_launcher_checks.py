@@ -33,9 +33,19 @@ from tests.cli.test_launcher_workflow import HARNESSES, launch
         ("cline", "3.1.0-beta", False),
         ("hermes", "Hermes Agent v0.20.4", True),
         ("hermes", "Hermes Agent 0.20.3", False),
-        ("dsh", "dsh v0.1.0-rc.8", True),
-        ("dsh", "0.1.0-rc.7", False),
-        ("dsh", "0.1.0-rc.9", False),
+        ("dsh", "dsh v0.2.0-rc.2", True),
+        ("dsh", "0.1.0-rc.8", False),
+        ("dsh", "0.2.0-rc.1", False),
+        ("dsh", "0.2.0-rc.3", True),
+        ("dsh", "0.2.0-rc.10", True),
+        ("dsh", "0.2.0", True),
+        ("dsh", "v1.0.0", True),
+        ("dsh", "0.2.0-rc.2+build.7", True),
+        ("dsh", "0.2.0-alpha.9", False),
+        ("dsh", "0.2.0-rc.02", False),
+        ("dsh", "0.2.0-rc", False),
+        ("dsh", "0.2.0-zeta", True),
+        ("dsh", "opaque upstream output", False),
         ("grok", '{"currentVersion":"1.0.5"}', True),
         ("grok", '{"currentVersion":"1.1.0+build (build info)"}', True),
         ("grok", '{"currentVersion":"1.0.4"}', False),
@@ -56,7 +66,7 @@ def test_native_compatibility_precedes_fcc_setup(
     name: str, output: str, compatible: bool, launch_capture: LaunchCapture
 ) -> None:
     launch_capture.versions[name] = output
-    launch(name, ["--help"], exit_code=23 if compatible else 126)
+    launch(name, [], exit_code=23 if compatible else 126)
     assert bool(launch_capture.commands) is compatible
     assert bool(launch_capture.requests) is compatible
 

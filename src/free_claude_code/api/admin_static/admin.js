@@ -145,6 +145,7 @@ function renderStartup() {
   renderJetBrainsIntegration();
   renderCodexIntegration();
   renderClaudeDesktopIntegration();
+  renderDshDesktopIntegration();
 }
 
 async function refreshStartup() {
@@ -296,6 +297,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
     refreshJetBrainsIntegration();
     refreshCodexIntegration();
     refreshClaudeDesktopIntegration();
+    refreshDshDesktopIntegration();
   }
 }
 
@@ -1618,6 +1620,7 @@ function refreshIntegrationUpdates(previous, current) {
     ["jetbrains-acp", jetBrainsIntegration, refreshJetBrainsIntegration, "jetBrainsIntegrationMessage", "Settings updated. Reopen JetBrains and start a new chat."],
     ["codex", codexIntegration, refreshCodexIntegration, "codexIntegrationMessage", "Settings updated. Restart Codex."],
     ["claude-desktop", claudeDesktopIntegration, refreshClaudeDesktopIntegration, "claudeDesktopIntegrationMessage", "Settings updated. Reopen Claude Desktop."],
+    ["dsh-desktop", dshDesktopIntegration, refreshDshDesktopIntegration, "dshDesktopIntegrationMessage", "DSH Desktop configuration updated."],
   ]) {
     const phase = current?.[id]?.state;
     // Successful actions clear update metadata, not the last observed state.
@@ -2135,6 +2138,130 @@ claudeDesktopIntegrationDialog.addEventListener("click", (event) => {
   const bounds = claudeDesktopIntegrationDialog.getBoundingClientRect();
   if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
     claudeDesktopIntegrationDialog.close();
+  }
+});
+
+const dshDesktopIntegrationDialog = byId("dshDesktopIntegrationDialog");
+const dshDesktopIntegration = { connected: null, configured: false, disconnectPending: false, busy: false, paths: null, update: null };
+const dshDesktopIntegrationPath = "/admin/api/integrations/dsh-desktop";
+
+function renderDshDesktopIntegration() {
+  const { connected, configured, paths, disconnectPending } = dshDesktopIntegration;
+  const busy = dshDesktopIntegration.busy || integrationUpdating(dshDesktopIntegration, "dsh-desktop");
+  const disconnect = disconnectPending || configured;
+  byId("retryDshDesktopIntegration").hidden = disconnectPending || !configured || (connected && dshDesktopIntegration.update?.state !== "failed");
+  byId("retryDshDesktopIntegration").disabled = busy;
+  const action = disconnectPending ? "Retry disconnect" : configured ? "Disconnect" : "Configure";
+  byId("openDshDesktopIntegration").textContent = busy ? "Loading…" : connected === null && !disconnectPending ? "Retry" : action;
+  byId("openDshDesktopIntegration").disabled = busy;
+  byId("openDshDesktopIntegration").setAttribute("aria-busy", String(busy));
+  byId("confirmDshDesktopIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmDshDesktopIntegration").disabled = busy || (connected === null && !disconnectPending);
+  byId("openDshDesktopIntegration").className = disconnect && !busy ? "danger-button" : "primary-button";
+  byId("confirmDshDesktopIntegration").className = disconnect ? "danger-button" : "primary-button";
+  byId("dshDesktopIntegrationDescription").textContent = disconnectPending
+    ? "Finish removing FCC's Desktop connection. Your other providers and accounts will be preserved."
+    : configured
+    ? "Remove FCC's Desktop connection and restore the previous default if you have not changed it. Existing FCC sessions need another model selected to continue."
+    : "Install and open DSH Desktop once, then configure FCC as the default for new sessions. Your existing sessions and accounts stay unchanged.";
+  const files = byId("dshDesktopIntegrationFiles");
+  files.replaceChildren();
+  if (paths) {
+    const targets = Object.values(paths);
+    targets.forEach((path) => {
+      const item = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = path;
+      item.appendChild(code);
+      files.appendChild(item);
+    });
+  }
+}
+
+async function refreshDshDesktopIntegration(retry = false, { background = false } = {}) {
+  if (!background) integrationMessage("dshDesktopIntegrationMessage", "");
+  const request = beginIntegrationCheck(dshDesktopIntegration);
+  if (!request) return;
+  renderDshDesktopIntegration();
+  try {
+    if (retry) await api(`${dshDesktopIntegrationPath}/refresh`, { method: "POST" });
+    const result = await api(dshDesktopIntegrationPath);
+    if (!currentIntegrationCheck(dshDesktopIntegration, request)) return;
+    dshDesktopIntegration.connected = result.connected;
+    dshDesktopIntegration.configured = result.configured;
+    dshDesktopIntegration.disconnectPending = result.disconnect_pending;
+    dshDesktopIntegration.paths = result.paths ?? dshDesktopIntegration.paths;
+    dshDesktopIntegration.update = result.update;
+    if (result.update?.state === "failed") integrationMessage("dshDesktopIntegrationMessage", result.update.message, true);
+    else if (byId("dshDesktopIntegrationMessage").classList.contains("error")) integrationMessage("dshDesktopIntegrationMessage", "");
+  } catch (error) {
+    if (!currentIntegrationCheck(dshDesktopIntegration, request)) return;
+    dshDesktopIntegration.connected = null;
+    dshDesktopIntegration.disconnectPending = false;
+    dshDesktopIntegration.update = null;
+    integrationMessage("dshDesktopIntegrationMessage", error.message, true);
+  } finally {
+    finishIntegrationCheck(dshDesktopIntegration, request, renderDshDesktopIntegration);
+  }
+}
+
+byId("openDshDesktopIntegration").addEventListener("click", () => {
+  if (dshDesktopIntegration.connected === null && !dshDesktopIntegration.disconnectPending) {
+    refreshDshDesktopIntegration(dshDesktopIntegration.update?.state === "failed");
+    return;
+  }
+  integrationMessage("dshDesktopIntegrationDialogMessage", "");
+  dshDesktopIntegrationDialog.showModal();
+});
+byId("confirmDshDesktopIntegration").addEventListener("click", async () => {
+  if (byId("confirmDshDesktopIntegration").disabled) return;
+  const disconnect = dshDesktopIntegration.disconnectPending || dshDesktopIntegration.configured;
+  const config = state.config;
+  dshDesktopIntegration.busy = true;
+  renderDshDesktopIntegration();
+  integrationMessage("dshDesktopIntegrationDialogMessage", "");
+  integrationMessage("dshDesktopIntegrationMessage", "");
+  try {
+    const result = await api(`${dshDesktopIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    if (config !== state.config) return;
+    dshDesktopIntegration.connected = result.connected;
+    dshDesktopIntegration.configured = result.configured;
+    dshDesktopIntegration.disconnectPending = result.disconnect_pending;
+    dshDesktopIntegration.paths = result.paths ?? dshDesktopIntegration.paths;
+    dshDesktopIntegration.update = null;
+    dshDesktopIntegrationDialog.close();
+    integrationMessage("dshDesktopIntegrationMessage", disconnect
+      ? "FCC connection removed. Select another model in existing DSH sessions."
+      : "Configuration saved. New DSH sessions use FCC. Reopen DSH if it does not reload the changes.");
+  } catch (error) {
+    if (config !== state.config) return;
+    if (disconnect) {
+      try {
+        const result = await api(dshDesktopIntegrationPath);
+        dshDesktopIntegration.connected = result.connected;
+        dshDesktopIntegration.configured = result.configured;
+        dshDesktopIntegration.disconnectPending = result.disconnect_pending;
+        dshDesktopIntegration.paths = result.paths ?? dshDesktopIntegration.paths;
+        dshDesktopIntegration.update = result.update;
+      } catch {
+        // Keep the user's disconnect action available if status is unreadable too.
+      }
+    }
+    integrationMessage("dshDesktopIntegrationDialogMessage", error.message, true);
+    integrationMessage("dshDesktopIntegrationMessage", error.message, true);
+  } finally {
+    dshDesktopIntegration.busy = false;
+    renderDshDesktopIntegration();
+    if (config !== state.config) void refreshDshDesktopIntegration();
+  }
+});
+byId("retryDshDesktopIntegration").addEventListener("click", () => refreshDshDesktopIntegration(true));
+byId("closeDshDesktopIntegration").addEventListener("click", () => dshDesktopIntegrationDialog.close());
+dshDesktopIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== dshDesktopIntegrationDialog) return;
+  const bounds = dshDesktopIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    dshDesktopIntegrationDialog.close();
   }
 });
 

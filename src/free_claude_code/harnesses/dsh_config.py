@@ -1,4 +1,4 @@
-"""Process-local DeepSeek Harness configuration for FCC model routing."""
+"""DeepSeek Harness provider metadata and process-local CLI overlays."""
 
 import math
 from pathlib import Path
@@ -33,32 +33,18 @@ def build_dsh_launch_config(
     *,
     default_model_id: str,
     proxy_root_url: str,
-    settings_path: Path,
     credentials_path: Path,
     provider_progress_timeout: float,
 ) -> tuple[JsonObject, ...]:
     """Translate FCC's catalog and timeout into an isolated DSH overlay."""
 
-    if not models:
-        raise ValueError("DeepSeek Harness requires at least one routable FCC model")
-
-    stream_idle_timeout_ms = _stream_idle_timeout_ms(provider_progress_timeout)
-    provider: JsonObject = {
-        "displayName": "Free Claude Code",
-        "apiKeyEnv": DSH_API_KEY_ENV,
-        "api": "openai-responses",
-        "baseURL": proxy_v1_url(proxy_root_url),
-        "models": [_model_profile(model) for model in models],
-        "defaultInput": ["text"],
-        "retryPolicy": {"mode": "normal", "maxRetries": 0},
-        "streamIdleTimeoutMs": stream_idle_timeout_ms,
-    }
+    provider = build_dsh_provider(
+        models,
+        proxy_root_url=proxy_root_url,
+        credential_ref=DSH_API_KEY_ENV,
+        provider_progress_timeout=provider_progress_timeout,
+    )
     return (
-        _configured_row(
-            "settings",
-            "@deepseek-ai/dsh-settings-file",
-            {"path": str(settings_path), "watch": False},
-        ),
         _configured_row(
             "credentials",
             "@deepseek-ai/dsh-credentials-local",
@@ -74,13 +60,38 @@ def build_dsh_launch_config(
             "@deepseek-ai/dsh-agent-default-model",
             {"provider": DSH_PROVIDER_ID, "model": default_model_id},
         ),
-        _disabled_row("llm-deepseek", "@deepseek-ai/dsh-llm-deepseek"),
+        _disabled_row("llm-deepseek", "@deepseek-ai/dsh-llm-deepseek-api-key"),
+        _disabled_row("llm-deepseek-account", "@deepseek-ai/dsh-llm-deepseek-account"),
         _disabled_row(
             "web-search-deepseek",
             "@deepseek-ai/dsh-web-search-deepseek",
         ),
         _disabled_row("tool-web", "@deepseek-ai/dsh-tool-web"),
     )
+
+
+def build_dsh_provider(
+    models: tuple[CatalogModel, ...],
+    *,
+    proxy_root_url: str,
+    credential_ref: str,
+    provider_progress_timeout: float,
+) -> JsonObject:
+    """Build the same FCC Responses route for temporary and persistent clients."""
+    if not models:
+        raise ValueError("DeepSeek Harness requires at least one routable FCC model")
+
+    stream_idle_timeout_ms = _stream_idle_timeout_ms(provider_progress_timeout)
+    return {
+        "displayName": "Free Claude Code",
+        "apiKeyEnv": credential_ref,
+        "api": "openai-responses",
+        "baseURL": proxy_v1_url(proxy_root_url),
+        "models": [_model_profile(model) for model in models],
+        "defaultInput": ["text"],
+        "retryPolicy": {"mode": "normal", "maxRetries": 0},
+        "streamIdleTimeoutMs": stream_idle_timeout_ms,
+    }
 
 
 def _stream_idle_timeout_ms(provider_progress_timeout: float) -> int:

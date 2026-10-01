@@ -93,6 +93,10 @@ def claude_desktop_disconnect_path() -> Path:
     return config_dir_path() / "claude-desktop-disconnect.json"
 
 
+def dsh_desktop_state_path() -> Path:
+    return config_dir_path() / "dsh-desktop-integration.json"
+
+
 def openai_auth_path() -> Path:
     """Return FCC's private ChatGPT credential file path."""
 

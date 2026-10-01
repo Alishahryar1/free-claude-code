@@ -331,6 +331,38 @@ async def disconnect_claude_vscode(
     return await _integration_response(services.admin.disconnect_claude_vscode)
 
 
+@router.get("/admin/api/integrations/dsh-desktop")
+async def dsh_desktop_status(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.dsh_desktop_status)
+
+
+@router.post("/admin/api/integrations/dsh-desktop/connect")
+async def connect_dsh_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_dsh_desktop)
+
+
+@router.post("/admin/api/integrations/dsh-desktop/disconnect")
+async def disconnect_dsh_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_dsh_desktop)
+
+
+@router.post("/admin/api/integrations/dsh-desktop/refresh")
+async def refresh_dsh_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_dsh_desktop)
+
+
 @router.get("/admin/api/integrations/claude-desktop")
 async def claude_desktop_status(
     request: Request, services: ApiServices = Depends(get_services)

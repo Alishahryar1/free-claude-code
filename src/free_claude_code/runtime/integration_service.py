@@ -18,6 +18,7 @@ from free_claude_code.application.readiness import InitializationWait
 from free_claude_code.config.paths import (
     claude_desktop_disconnect_path,
     codex_model_catalog_path,
+    dsh_desktop_state_path,
 )
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.config.settings import Settings
@@ -28,6 +29,7 @@ from free_claude_code.harnesses import (
     claude_desktop_integration,
     claude_integration,
     codex_integration,
+    dsh_desktop_integration,
     jetbrains_acp_integration,
     vscode_chat_integration,
 )
@@ -75,6 +77,8 @@ class IntegrationService:
         self._jetbrains_update = _IntegrationUpdate()
         self._vscode_update = _IntegrationUpdate()
         self._vscode_dirty = False
+        self._dsh_update = _IntegrationUpdate()
+        self._dsh_dirty = False
 
     @property
     def settings(self) -> Settings:
@@ -85,6 +89,7 @@ class IntegrationService:
             "vscode-chat": self._vscode_update,
             "claude-vscode": self._claude_update,
             "claude-desktop": self._desktop_update,
+            "dsh-desktop": self._dsh_update,
             "codex": self._codex_update,
             "jetbrains-acp": self._jetbrains_update,
         }
@@ -135,6 +140,7 @@ class IntegrationService:
     def catalog_changed(self) -> None:
         if self._is_draining():
             return
+        self._schedule_dsh_refresh()
         self._vscode_dirty = True
         update = self._vscode_update
         if update.task is not None and not update.task.done():
@@ -160,6 +166,132 @@ class IntegrationService:
                     update.state = "starting"
 
         update.task = asyncio.create_task(drain(), name="fcc-vscode-models")
+
+    def _schedule_dsh_refresh(self) -> None:
+        self._dsh_dirty = True
+        update = self._dsh_update
+        if update.task is not None and not update.task.done():
+            return
+        update.state, update.changed, update.message = "starting", False, None
+
+        async def drain() -> None:
+            while self._dsh_dirty:
+                self._dsh_dirty = False
+                try:
+                    result = await self._dsh_desktop("refresh")
+                    update.complete(update.changed or result.get("changed") is True)
+                except ApplicationError as exc:
+                    update.state, update.message = "failed", exc.message
+                except Exception as exc:
+                    update.state = "failed"
+                    update.message = "Could not update DSH Desktop. Retry shortly."
+                    logger.warning(
+                        "DSH Desktop update failed: exc_type={}", type(exc).__name__
+                    )
+                if self._dsh_dirty:
+                    update.state = "starting"
+
+        update.task = asyncio.create_task(drain(), name="fcc-dsh-desktop-models")
+
+    async def dsh_desktop_status(self) -> JsonObject:
+        return await self._dsh_desktop("status")
+
+    async def connect_dsh_desktop(self) -> JsonObject:
+        return await self._dsh_desktop("connect")
+
+    async def disconnect_dsh_desktop(self) -> JsonObject:
+        return await self._dsh_desktop("disconnect")
+
+    async def refresh_dsh_desktop(self) -> JsonObject:
+        self._check_integration_available()
+        self._schedule_dsh_refresh()
+        return {"update": self._dsh_update.snapshot()}
+
+    async def _dsh_desktop(self, action: IntegrationAction) -> JsonObject:
+        def status(url: str, token: str, ready: bool) -> JsonObject:
+            return dsh_desktop_integration.status(
+                dsh_desktop_integration.config_home(),
+                url,
+                token,
+                state_path=dsh_desktop_state_path(),
+            )
+
+        def disconnect(url: str, token: str, ready: bool) -> JsonObject:
+            return dsh_desktop_integration.disconnect(
+                dsh_desktop_integration.config_home(),
+                state_path=dsh_desktop_state_path(),
+            )
+
+        try:
+            if action == "status":
+                return await self._read_status(self._dsh_update, status)
+            if action == "disconnect":
+                return await self._run_integration(self._dsh_update, action, disconnect)
+            if action == "refresh":
+                current = await self._read_status(self._dsh_update, status)
+                if current.get("disconnect_pending"):
+                    await self._run_integration(self._dsh_update, action, disconnect)
+                    return {"changed": True}
+                if not current.get("configured"):
+                    return {"changed": False}
+            while True:
+                snapshot = await self.provider_manager.wait_for_catalog()
+                revision = self.provider_manager.catalog_status()["catalog_revision"]
+                async with self._config_lock, self._dsh_update.access.write():
+                    self._check_integration_available()
+                    if (
+                        snapshot.current_settings() is not self.settings
+                        or revision
+                        != self.provider_manager.catalog_status()["catalog_revision"]
+                        or self.provider_manager.catalog_status()["catalog"] != "ready"
+                    ):
+                        continue
+                    catalog = read_model_catalog(snapshot)
+                    url = local_proxy_root_url(self.settings)
+                    token = self.settings.proxy_auth_token
+                    timeout = self.settings.provider_progress_timeout
+
+                    def operate(
+                        catalog: ModelCatalog = catalog,
+                        url: str = url,
+                        token: str = token,
+                        timeout: float = timeout,
+                    ) -> JsonObject:
+                        home = dsh_desktop_integration.config_home()
+                        if action == "refresh":
+                            return {
+                                "changed": dsh_desktop_integration.refresh_connected(
+                                    home,
+                                    url,
+                                    token,
+                                    catalog,
+                                    state_path=dsh_desktop_state_path(),
+                                    provider_progress_timeout=timeout,
+                                )
+                            }
+                        return dsh_desktop_integration.configure(
+                            home,
+                            url,
+                            token,
+                            catalog,
+                            state_path=dsh_desktop_state_path(),
+                            provider_progress_timeout=timeout,
+                        )
+
+                    result = await run_sync_owned(operate)
+                    if action == "connect":
+                        self._dsh_update.complete()
+                    return result
+        except dsh_desktop_integration.DshConfigError as exc:
+            raise InvalidRequestError(str(exc)) from None
+        except ValueError, UnicodeError:
+            raise InvalidRequestError(
+                "Could not read DSH Desktop configuration or FCC's ownership record. Correct the invalid document and retry."
+            ) from None
+        except OSError:
+            raise ApplicationUnavailableError(
+                "Could not update DSH Desktop files. Finish native configuration edits, check file permissions, and retry."
+            ) from None
 
     async def _vscode_chat(self, action: IntegrationAction) -> JsonObject:
         try:

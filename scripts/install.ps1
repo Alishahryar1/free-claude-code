@@ -20,8 +20,8 @@ $CodexInstallUrl = "https://chatgpt.com/codex/install.ps1"
 $PiInstallUrl = "https://pi.dev/install.ps1"
 $OpenCodeReleaseBaseUrl = "https://opencode.ai/files/bin"
 $HermesInstallUrl = "https://hermes-agent.nousresearch.com/install.ps1"
-$DshVersion = "0.1.0-rc.8"
-$DshPackage = "@deepseek-ai/dsh@$DshVersion"
+$DshMinimumVersion = "0.2.0-rc.2"
+$DshPackage = "@deepseek-ai/dsh@latest"
 $GrokInstallUrl = "https://x.ai/cli/install.ps1"
 $MuseInstallUrl = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1"
 $RtkVersion = "0.44.2"
@@ -1114,11 +1114,45 @@ function Get-DshVersion {
     param([string] $DshPath)
 
     $output = Invoke-Utf8NativeCapture -FilePath $DshPath -Arguments @("--version")
-    $version = Convert-SemanticVersionOutput $output
-    if ([string]::IsNullOrWhiteSpace($version) -or (-not $version.Contains("-"))) {
-        throw "DeepSeek Harness is present, but 'dsh --version' did not return its preview semantic version."
+    if ($output -notmatch '(?m)^\s*(?:dsh\s+)?v?(?<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)\s*$') {
+        throw "DeepSeek Harness is present, but 'dsh --version' did not return a semantic version."
     }
-    return $version
+    return $Matches['version']
+}
+
+function Test-DshVersion {
+    param([string] $Version)
+
+    $versionParts = ($Version -replace '\+.*$', '') -split '-', 2
+    $minimumParts = $DshMinimumVersion -split '-', 2
+    if ($versionParts[0] -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+        return $false
+    }
+    $preview = @()
+    if ($versionParts.Count -gt 1) {
+        $preview = @($versionParts[1] -split '\.')
+        foreach ($part in $preview) {
+            if ($part -notmatch '^[0-9A-Za-z-]+$' -or $part -match '^0[0-9]+$') { return $false }
+        }
+    }
+    $release = [version] $versionParts[0]
+    $minimum = [version] $minimumParts[0]
+    if ($release -ne $minimum) { return $release -gt $minimum }
+    if ($preview.Count -eq 0) { return $true }
+    $floor = @($minimumParts[1] -split '\.')
+    for ($index = 0; $index -lt [Math]::Min($preview.Count, $floor.Count); $index++) {
+        $part = $preview[$index]
+        $base = $floor[$index]
+        if ($part -ceq $base) { continue }
+        $numeric = $part -match '^[0-9]+$'
+        $baseNumeric = $base -match '^[0-9]+$'
+        if ($numeric -and $baseNumeric) {
+            if ($part.Length -ne $base.Length) { return $part.Length -gt $base.Length }
+        }
+        elseif ($numeric -ne $baseNumeric) { return $baseNumeric }
+        return [string]::CompareOrdinal($part, $base) -gt 0
+    }
+    return $preview.Count -ge $floor.Count
 }
 
 function Get-DshNodeVersion {
@@ -1188,8 +1222,8 @@ function Confirm-DshApplication {
         throw "DeepSeek Harness was installed, but 'dsh' is not available on PATH."
     }
     $version = Get-DshVersion $command.Source
-    if ($version -ne $DshVersion) {
-        throw "DeepSeek Harness $DshVersion is required; found $version after installation."
+    if (-not (Test-DshVersion $version)) {
+        throw "DeepSeek Harness requires >=$DshMinimumVersion; found $version after installation."
     }
     Write-Host "Verified DeepSeek Harness $version."
 }
@@ -1206,7 +1240,7 @@ function Ensure-Dsh {
     if ($DryRun) {
         if (Get-ApplicationCommand "dsh") {
             Write-Host "+ dsh --version"
-            Write-Host "The exact supported DeepSeek Harness preview will be preserved; another version will be replaced."
+            Write-Host "DeepSeek Harness >=$DshMinimumVersion will be preserved; an older version will be upgraded to latest."
         }
         else {
             $node = Get-ApplicationCommand "node"
@@ -1225,11 +1259,11 @@ function Ensure-Dsh {
     $command = Get-ApplicationCommand "dsh"
     if ($command) {
         $version = Get-DshVersion $command.Source
-        if ($version -eq $DshVersion) {
-            Write-Host "DeepSeek Harness $version already matches the supported preview; leaving it unchanged."
+        if (Test-DshVersion $version) {
+            Write-Host "DeepSeek Harness $version already satisfies >=$DshMinimumVersion; leaving it unchanged."
             return
         }
-        Write-Host "DeepSeek Harness $version does not match $DshVersion; replacing it with the supported preview."
+        Write-Host "DeepSeek Harness requires >=$DshMinimumVersion; upgrading $version to latest."
     }
 
     Install-Dsh
@@ -1660,7 +1694,7 @@ else {
         Write-Host "Run DeepSeek Harness with: fcc-dsh"
     }
     else {
-        Write-Host "The fcc-dsh wrapper is ready after you install DeepSeek Harness $DshVersion."
+        Write-Host "The fcc-dsh wrapper is ready after you install DeepSeek Harness >=$DshMinimumVersion."
     }
     if ($script:InstallGrok) {
         Write-Host "Run Grok Build with: fcc-grok"

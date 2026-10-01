@@ -40,6 +40,7 @@ dependencies = [
     "nvidia-riva-client>=2.26.0",
     "pyperclip>=1.11.0",
     "sqlalchemy>=2.1.1",
+    "ruamel-yaml>=0.19.1",
 ]
 
 [project.scripts]

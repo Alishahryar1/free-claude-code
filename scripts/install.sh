@@ -8,8 +8,8 @@ CODEX_INSTALL_URL="https://chatgpt.com/codex/install.sh"
 PI_INSTALL_URL="https://pi.dev/install.sh"
 OPENCODE_INSTALL_URL="https://opencode.ai/v2/install"
 HERMES_INSTALL_URL="https://hermes-agent.nousresearch.com/install.sh"
-DSH_VERSION="0.1.0-rc.8"
-DSH_PACKAGE="@deepseek-ai/dsh@$DSH_VERSION"
+MIN_DSH_VERSION="0.2.0-rc.2"
+DSH_PACKAGE="@deepseek-ai/dsh@latest"
 GROK_INSTALL_URL="https://x.ai/cli/install.sh"
 MUSE_INSTALL_URL="https://dev.meta.ai/install.sh"
 RTK_VERSION="0.44.2"
@@ -904,13 +904,48 @@ current_dsh_version() {
     fi
 
     version=$(printf '%s\n' "$output" | awk '
-        match($0, /[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z][0-9A-Za-z.-]*/) {
-            print substr($0, RSTART, RLENGTH)
-            exit
-        }
+        { sub(/^[[:space:]]*(dsh[[:space:]]+)?v?/, ""); sub(/[[:space:]]*$/, "") }
+        /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/ { print; exit }
     ')
     [ -n "$version" ] || return 1
     printf '%s\n' "$version"
+}
+
+dsh_version_is_supported() {
+    LC_ALL=C awk -v version="$1" -v minimum="$MIN_DSH_VERSION" '
+        function numeric(value) { return value ~ /^[0-9]+$/ }
+        function compare(left, right) {
+            if (left == right) return 0
+            if (numeric(left) && numeric(right)) {
+                if (length(left) != length(right)) return length(left) > length(right) ? 1 : -1
+            } else if (numeric(left) != numeric(right)) return numeric(left) ? -1 : 1
+            return ("x" left) > ("x" right) ? 1 : -1
+        }
+        BEGIN {
+            sub(/\+.*/, "", version)
+            dash = index(version, "-")
+            core = dash ? substr(version, 1, dash - 1) : version
+            count = dash ? split(substr(version, dash + 1), preview, ".") : 0
+            if (split(core, release, ".") != 3) exit 1
+            for (i = 1; i <= 3; i++) if (release[i] !~ /^(0|[1-9][0-9]*)$/) exit 1
+            for (i = 1; i <= count; i++) {
+                if (preview[i] !~ /^[0-9A-Za-z-]+$/ || preview[i] ~ /^0[0-9]+$/) exit 1
+            }
+            split(minimum, parts, "-")
+            split(parts[1], base, ".")
+            for (i = 1; i <= 3; i++) {
+                diff = compare(release[i], base[i])
+                if (diff) exit (diff < 0)
+            }
+            if (!count) exit 0
+            floorCount = split(parts[2], floor, ".")
+            for (i = 1; i <= count && i <= floorCount; i++) {
+                diff = compare(preview[i], floor[i])
+                if (diff) exit (diff < 0)
+            }
+            exit (count < floorCount)
+        }
+    '
 }
 
 current_node_version() {
@@ -967,8 +1002,8 @@ verify_dsh_command() {
     fi
 
     command -v dsh >/dev/null 2>&1 || fail "DeepSeek Harness was installed, but 'dsh' is not available on PATH."
-    version=$(current_dsh_version) || fail "DeepSeek Harness is present, but 'dsh --version' did not return its preview semantic version."
-    [ "$version" = "$DSH_VERSION" ] || fail "DeepSeek Harness $DSH_VERSION is required; found $version after installation."
+    version=$(current_dsh_version) || fail "DeepSeek Harness is present, but 'dsh --version' did not return a semantic version."
+    dsh_version_is_supported "$version" || fail "DeepSeek Harness requires >=$MIN_DSH_VERSION; found $version after installation."
     printf 'Verified DeepSeek Harness %s.\n' "$version"
 }
 
@@ -984,7 +1019,7 @@ ensure_dsh() {
     if [ "$dry_run" -eq 1 ]; then
         if command -v dsh >/dev/null 2>&1; then
             print_command dsh --version
-            printf 'The exact supported DeepSeek Harness preview will be preserved; another version will be replaced.\n'
+            printf 'DeepSeek Harness >=%s will be preserved; an older version will be upgraded to latest.\n' "$MIN_DSH_VERSION"
         else
             command -v node >/dev/null 2>&1 || fail "DeepSeek Harness requires Node.js ^22.19.0 or >=24.0.0 and npm. Install Node.js, then rerun the installer."
             command -v npm >/dev/null 2>&1 || fail "DeepSeek Harness requires npm. Install npm, then rerun the installer."
@@ -996,12 +1031,12 @@ ensure_dsh() {
 
     require_dsh_toolchain
     if command -v dsh >/dev/null 2>&1; then
-        version=$(current_dsh_version) || fail "DeepSeek Harness is present, but 'dsh --version' did not return its preview semantic version."
-        if [ "$version" = "$DSH_VERSION" ]; then
-            printf 'DeepSeek Harness %s already matches the supported preview; leaving it unchanged.\n' "$version"
+        version=$(current_dsh_version) || fail "DeepSeek Harness is present, but 'dsh --version' did not return a semantic version."
+        if dsh_version_is_supported "$version"; then
+            printf 'DeepSeek Harness %s already satisfies >=%s; leaving it unchanged.\n' "$version" "$MIN_DSH_VERSION"
             return 0
         fi
-        printf 'DeepSeek Harness %s does not match %s; replacing it with the supported preview.\n' "$version" "$DSH_VERSION"
+        printf 'DeepSeek Harness requires >=%s; upgrading %s to latest.\n' "$MIN_DSH_VERSION" "$version"
     fi
 
     install_dsh_package
@@ -1515,7 +1550,7 @@ else
     if [ "$install_dsh" -eq 1 ]; then
         printf 'Run DeepSeek Harness with: fcc-dsh\n'
     else
-        printf 'The fcc-dsh wrapper is ready after you install DeepSeek Harness %s.\n' "$DSH_VERSION"
+        printf 'The fcc-dsh wrapper is ready after you install DeepSeek Harness >=%s.\n' "$MIN_DSH_VERSION"
     fi
     if [ "$install_grok" -eq 1 ]; then
         printf 'Run Grok Build with: fcc-grok\n'

@@ -50,7 +50,7 @@ class LaunchCapture:
             "opencode": "opencode v2.0.10",
             "cline": "3.0.55",
             "hermes": "Hermes Agent 0.20.4",
-            "dsh": "0.1.0-rc.8",
+            "dsh": "0.2.0-rc.2",
             "grok": '{"currentVersion":"1.0.5"}',
             "muse": "Muse Code 1.0.3 (1.0.3-R2198.1)",
         }

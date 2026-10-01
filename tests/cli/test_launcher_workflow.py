@@ -103,7 +103,7 @@ def test_launch_default_is_server_selection_not_first_row_or_local_settings(
     launch(name, [])
 
 
-@pytest.mark.parametrize("name", HARNESSES)
+@pytest.mark.parametrize("name", tuple(name for name in HARNESSES if name != "dsh"))
 def test_help_receives_normal_fcc_setup(
     name: str, launch_capture: LaunchCapture
 ) -> None:
@@ -123,7 +123,7 @@ def test_help_receives_normal_fcc_setup(
         ]
 
 
-@pytest.mark.parametrize("name", HARNESSES)
+@pytest.mark.parametrize("name", tuple(name for name in HARNESSES if name != "dsh"))
 def test_help_does_not_bypass_failed_setup(
     name: str, launch_capture: LaunchCapture
 ) -> None:

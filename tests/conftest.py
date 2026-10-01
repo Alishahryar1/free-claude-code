@@ -35,6 +35,8 @@ def _isolate_managed_config(monkeypatch, tmp_path):
     """Keep every test away from real home, checkout, and running-server config."""
 
     config_dir = tmp_path / ".fcc"
+    monkeypatch.setenv("DSH_HOME", str(tmp_path / ".dsh"))
+    monkeypatch.delenv("FCC_DSH_DESKTOP_API_KEY", raising=False)
     monkeypatch.setattr(
         vscode_chat_integration,
         "config_path",
