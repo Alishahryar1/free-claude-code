@@ -239,6 +239,11 @@ class Settings(BaseModel):
         default=None, validation_alias="CHEAPER_INFERENCE_API_KEY"
     )
 
+    # ==================== API Route (OpenAI-compatible) ====================
+    apiroute_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="API_ROUTE_API_KEY"
+    )
+
     # ==================== OrcaRouter (OpenAI-compatible gateway) ====================
     orcarouter_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="ORCAROUTER_API_KEY"
@@ -565,6 +570,9 @@ class Settings(BaseModel):
     )
     cheaperinference_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="CHEAPER_INFERENCE_PROXY"
+    )
+    apiroute_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="API_ROUTE_PROXY"
     )
     orcarouter_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="ORCAROUTER_PROXY"
