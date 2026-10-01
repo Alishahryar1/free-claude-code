@@ -1,6 +1,7 @@
 """Coordinate recoverable, narrowly owned DSH Desktop configuration changes."""
 
 import os
+import stat
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -35,17 +36,43 @@ class _Peers:
 
 
 def _peer_paths(home: Path) -> list[Path]:
-    return sorted(
-        path
-        for path in (home / "profiles").iterdir()
-        if path.name != "desktop" and path.is_dir()
-    )
+    try:
+        return sorted(
+            path
+            for path in (home / "profiles").iterdir()
+            if path.name != "desktop" and path.is_dir()
+        )
+    except FileNotFoundError:
+        return []
+
+
+def _directories(home: Path) -> tuple[bool, bool]:
+    def exists(path: Path) -> bool:
+        try:
+            mode = path.stat().st_mode
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISDIR(mode):
+            raise DshConfigError(
+                "DSH configuration directories must be regular directories."
+            )
+        return True
+
+    return exists(home), exists(home / "profiles/desktop")
+
+
+def _check_directories(home: Path, expected: tuple[bool, bool]) -> None:
+    native.validate_paths(home)
+    if _directories(home) != expected:
+        raise DshConfigError(
+            "DSH configuration directories changed during the operation. Retry to acquire their current locks."
+        )
 
 
 @contextmanager
 def _locked(
     home: Path, state: Path, *, strict: bool, peers: bool = False
-) -> Iterator[tuple[native.Profile, _Peers]]:
+) -> Iterator[tuple[native.Profile, _Peers, tuple[bool, bool]]]:
     native.validate_paths(home)
     dsh_files.regular_path(state)
     if strict and not native._initialized(home):
@@ -53,9 +80,11 @@ def _locked(
             "Install and open DeepSeek Harness Desktop once, then retry Configure."
         )
     with ExitStack() as locks:
-        locks.enter_context(
-            dsh_files.file_lock(home / "profiles/desktop/package.json.lock", wait=2)
-        )
+        directories = _directories(home)
+        if directories[1]:
+            locks.enter_context(
+                dsh_files.file_lock(home / "profiles/desktop/package.json.lock", wait=2)
+            )
         inspection = _Peers(_peer_paths(home) if peers else [])
         for path in inspection.paths:
             try:
@@ -65,10 +94,12 @@ def _locked(
                 )
             except OSError, ValueError:
                 inspection.unknown = True
-        locks.enter_context(
-            dsh_files.file_lock(home / ".credentials.yaml.lock", wait=30)
-        )
-        yield native.load(home, strict=strict), inspection
+        if directories[0]:
+            locks.enter_context(
+                dsh_files.file_lock(home / ".credentials.yaml.lock", wait=30)
+            )
+        _check_directories(home, directories)
+        yield native.load(home, strict=strict), inspection, directories
 
 
 def _retention(profile: native.Profile, peers: _Peers) -> str | None:
@@ -118,8 +149,12 @@ def _retention(profile: native.Profile, peers: _Peers) -> str | None:
     return None
 
 
-def _verify(home: Path, expected: journal.Projection) -> None:
+def _verify(
+    home: Path, expected: journal.Projection, directories: tuple[bool, bool]
+) -> None:
+    _check_directories(home, directories)
     actual = native.load(home, strict=False).projection(expected.defaults)
+    _check_directories(home, directories)
     if actual != expected:
         raise DshConfigError(
             "DSH configuration changed during the operation. Retry to reconcile the saved changes."
@@ -155,7 +190,7 @@ def configure(
     if catalog.default_model_id not in {model.wire_slug for model in catalog.models}:
         raise DshConfigError("FCC's default model is missing from its DSH catalog.")
     changed = False
-    with _locked(home, state_path, strict=True) as (profile, _):
+    with _locked(home, state_path, strict=True) as (profile, _, directories):
         record = journal.read(state_path, home)
         if only_existing and (record is None or record.phase == "retained"):
             return {"changed": False, "connected": False}
@@ -212,10 +247,12 @@ def configure(
             restoration=restoration,
             retention_reason=None,
         )
+        _check_directories(home, directories)
         journal.save(state_path, pending)
+        _check_directories(home, directories)
         changed |= profile.save_credentials()
         changed |= profile.save_profile()
-        _verify(home, after)
+        _verify(home, after, directories)
         journal.save(
             state_path,
             pending.model_copy(
@@ -231,7 +268,11 @@ def disconnect(home: Path, *, state_path: Path) -> JsonObject:
     home = home.resolve()
     if journal.read(state_path, home) is None:
         return _status_record(home, None)
-    with _locked(home, state_path, strict=False, peers=True) as (profile, peers):
+    with _locked(home, state_path, strict=False, peers=True) as (
+        profile,
+        peers,
+        directories,
+    ):
         record = journal.read(state_path, home)
         if record is None:
             return _status_record(home, None)
@@ -254,11 +295,13 @@ def disconnect(home: Path, *, state_path: Path) -> JsonObject:
             restoration=restoration,
             retention_reason=reason,
         )
+        _check_directories(home, directories)
         journal.save(state_path, pending)
+        _check_directories(home, directories)
         profile.save_profile()
         if reason is None and "refs" in profile.credentials:
             profile.save_credentials()
-        _verify(home, after)
+        _verify(home, after, directories)
         if reason is not None:
             retained = journal.Ownership(
                 home=str(home),
@@ -323,6 +366,13 @@ def status(
     if record is None and not result["installed"]:
         return result
     try:
+        if record and result["configured"] and not result["installed"]:
+            profile = native.load(home, strict=False)
+            record.recognize(profile.projection(record.owned_defaults), removing=True)
+            result["inspection_error"] = (
+                "DSH Desktop's profile is missing. Disconnect to clear its saved FCC connection."
+            )
+            return result
         profile = native.load(
             home,
             strict=record is None or record.phase in {"connected", "pending_connect"},

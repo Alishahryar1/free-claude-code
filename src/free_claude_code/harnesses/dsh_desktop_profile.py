@@ -160,6 +160,9 @@ class Profile:
         )
 
     def save_profile(self) -> bool:
+        dsh_files.regular_path(self.patch_path, root=self.home)
+        if not self.rows and not dsh_files.read_yaml(self.patch_path, sequence=True):
+            return False
         return dsh_files.write_yaml(self.patch_path, self.rows)
 
     def save_credentials(self) -> bool:

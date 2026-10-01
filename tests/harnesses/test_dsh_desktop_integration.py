@@ -658,6 +658,182 @@ def test_cleanup_survives_removed_manifest(desktop, home, state):
     assert ROUTE not in (home / "profiles/desktop/cordis.patch.yml").read_text()
 
 
+@pytest.mark.parametrize(
+    "phase", ["connected", "pending_connect", "pending_disconnect"]
+)
+@pytest.mark.parametrize(
+    "removed",
+    [
+        "profiles/desktop/package.json",
+        "profiles/desktop/cordis.patch.yml",
+        "profiles/desktop",
+        "profiles",
+        ".",
+    ],
+)
+def test_disconnect_does_not_recreate_missing_native_paths(
+    desktop, home, state, tmp_path, phase, removed
+):
+    credentials = home / ".credentials.yaml"
+    write(credentials, {"version": 1, "refs": {"USER_KEY": "preserved"}})
+    credentials.chmod(0o600)
+    connect(desktop, home, state)
+    record = desktop.journal.read(state, home)
+    desktop.journal.save(
+        state,
+        record.model_copy(
+            update={
+                "phase": phase,
+                "after": record.before if phase.startswith("pending_") else None,
+            }
+        ),
+    )
+    missing = home / removed
+    moved = tmp_path / "moved-native"
+    missing.rename(moved)
+    before = (
+        {
+            str(path.relative_to(moved)): path.read_bytes()
+            for path in moved.rglob("*")
+            if path.is_file()
+        }
+        if moved.is_dir()
+        else moved.read_bytes()
+    )
+    status = desktop.status(home, URL, TOKEN, state_path=state)
+    assert status["actions"]["disconnect"]
+    result = desktop.disconnect(home, state_path=state)
+    assert not result["configured"]
+    assert not missing.exists()
+    assert result["credential_retained"] == (
+        removed not in (".", "profiles/desktop/cordis.patch.yml")
+    )
+    assert desktop.disconnect(home, state_path=state) == result
+    assert not missing.exists()
+    after = (
+        {
+            str(path.relative_to(moved)): path.read_bytes()
+            for path in moved.rglob("*")
+            if path.is_file()
+        }
+        if moved.is_dir()
+        else moved.read_bytes()
+    )
+    assert after == before
+    if credentials.exists():
+        assert read(credentials)["refs"]["USER_KEY"] == "preserved"
+
+
+def test_absent_profile_with_changed_credential_is_conflict(
+    desktop, home, state, tmp_path
+):
+    connect(desktop, home, state)
+    (home / "profiles/desktop").rename(tmp_path / "moved")
+    credentials = home / ".credentials.yaml"
+    write(credentials, {"version": 1, "refs": {REF: "user replacement"}})
+    before = credentials.read_bytes(), state.read_bytes()
+    with pytest.raises(ValueError, match="edited"):
+        desktop.disconnect(home, state_path=state)
+    assert (credentials.read_bytes(), state.read_bytes()) == before
+    assert not (home / "profiles/desktop").exists()
+
+
+def test_disconnect_preserves_existing_empty_patch_bytes(desktop, home, state):
+    connect(desktop, home, state)
+    patch = home / "profiles/desktop/cordis.patch.yml"
+    patch.write_text("# user replaced settings\n\n[]\n\n")
+    before = patch.read_bytes()
+    desktop.disconnect(home, state_path=state)
+    assert patch.read_bytes() == before
+
+
+@pytest.mark.parametrize("credential", ["present", "absent"])
+def test_missing_profile_finalization_failure_is_retryable(
+    desktop, home, state, tmp_path, monkeypatch, credential
+):
+    from pathlib import Path
+
+    connect(desktop, home, state)
+    (home / "profiles").rename(tmp_path / "moved")
+    if credential == "absent":
+        (home / ".credentials.yaml").unlink()
+    original_save = desktop.journal.save
+    original_unlink = Path.unlink
+
+    def save(path, record):
+        if record.phase == "retained":
+            raise OSError("final record write interrupted")
+        return original_save(path, record)
+
+    def unlink(path, *args, **kwargs):
+        if path == state:
+            raise OSError("final record removal interrupted")
+        return original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(desktop.journal, "save", save)
+        patcher.setattr(Path, "unlink", unlink)
+        with pytest.raises(OSError, match="interrupted"):
+            desktop.disconnect(home, state_path=state)
+    assert desktop.status(home, URL, TOKEN, state_path=state)["disconnect_pending"]
+    result = desktop.disconnect(home, state_path=state)
+    assert not result["configured"]
+    assert result["credential_retained"] == (credential == "present")
+    assert not (home / "profiles").exists()
+    assert (home / ".credentials.yaml").exists() == (credential == "present")
+
+
+@pytest.mark.parametrize(
+    "boundary", ["credential_lock", "pending_record", "verification"]
+)
+def test_profile_recreation_requires_retry_before_finalization(
+    desktop, home, state, tmp_path, monkeypatch, boundary
+):
+    from contextlib import contextmanager
+
+    connect(desktop, home, state)
+    profile = home / "profiles/desktop"
+    moved = tmp_path / "moved"
+    profile.rename(moved)
+    original_lock = desktop.dsh_files.file_lock
+    original_save = desktop.journal.save
+    original_verify = desktop._verify
+    credentials = (home / ".credentials.yaml").read_bytes()
+
+    @contextmanager
+    def lock(path, **kwargs):
+        with original_lock(path, **kwargs):
+            if boundary == "credential_lock" and path.name == ".credentials.yaml.lock":
+                moved.rename(profile)
+            yield
+
+    def save(path, record):
+        original_save(path, record)
+        if boundary == "pending_record" and record.phase == "pending_disconnect":
+            moved.rename(profile)
+
+    def verify(*args):
+        if boundary == "verification":
+            moved.rename(profile)
+        return original_verify(*args)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(desktop.dsh_files, "file_lock", lock)
+        patcher.setattr(desktop.journal, "save", save)
+        patcher.setattr(desktop, "_verify", verify)
+        with pytest.raises(ValueError, match="directories changed"):
+            desktop.disconnect(home, state_path=state)
+    assert ROUTE in (profile / "cordis.patch.yml").read_text()
+    assert (home / ".credentials.yaml").read_bytes() == credentials
+    assert state.exists()
+    if boundary == "credential_lock":
+        assert not desktop.disconnect(home, state_path=state)["configured"]
+    else:
+        # Restoring an old route after ownership was rebased is a manual conflict.
+        with pytest.raises(ValueError, match="edited"):
+            desktop.disconnect(home, state_path=state)
+
+
 def test_credential_symlink_is_rejected_before_writes(desktop, home, state, tmp_path):
     target = tmp_path / "managed.yaml"
     write(target, {"version": 1, "refs": {"USER_KEY": "keep"}})

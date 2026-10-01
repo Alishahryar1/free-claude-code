@@ -1,11 +1,9 @@
 """Own the native folder dialog for one client request at a time."""
 
 import asyncio
-import json
-import os
-import signal
 import subprocess
 import sys
+import tempfile
 from contextlib import suppress
 from pathlib import Path
 
@@ -13,6 +11,7 @@ from loguru import logger
 
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.cli.process_registry import register_pid, unregister_pid
+from free_claude_code.runtime.native_folder_dialog import decode_result
 
 _UNAVAILABLE = "Could not open the folder picker. Enter the path manually."
 
@@ -72,15 +71,17 @@ class NativeFolderPicker:
             raise cancellation
         return task.result()
 
-    async def _spawn(self, initial_path: str | None) -> asyncio.subprocess.Process:
+    async def _spawn(
+        self, initial_path: str | None, stdout: int, stderr: int
+    ) -> asyncio.subprocess.Process:
         return await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",
             "free_claude_code.runtime.native_folder_dialog",
             initial_path or "",
             stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stdout=stdout,
+            stderr=stderr,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             start_new_session=sys.platform != "win32",
         )
@@ -88,47 +89,41 @@ class NativeFolderPicker:
     async def _select(
         self, initial_path: str | None, stop: asyncio.Event
     ) -> str | None:
+        process = None
         try:
-            process = await self._spawn(initial_path)
-        except (OSError, ValueError) as exc:
-            raise _unavailable(exc) from exc
-        register_pid(process.pid)
-        reading = asyncio.create_task(process.communicate())
-        stopped = asyncio.create_task(stop.wait())
-        try:
-            await asyncio.wait((reading, stopped), return_when=asyncio.FIRST_COMPLETED)
-            if stop.is_set():
-                return None
-            stdout, stderr = reading.result()
-            if process.returncode != 0:
-                raise RuntimeError(stderr.decode("utf-8", errors="replace"))
-            result = json.loads(stdout)
-            if not isinstance(result, dict) or "path" not in result:
-                raise ValueError("Missing folder selection")
-            path = result["path"]
-            if path is not None and (
-                not isinstance(path, str)
-                or not path
-                or "\0" in path
-                or not Path(path).is_absolute()
-            ):
-                raise ValueError("Invalid folder selection")
-            return path
+            with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+                process = await self._spawn(
+                    initial_path, stdout.fileno(), stderr.fileno()
+                )
+                register_pid(process.pid)
+                exited = asyncio.create_task(process.wait())
+                stopped = asyncio.create_task(stop.wait())
+                try:
+                    await asyncio.wait(
+                        (exited, stopped), return_when=asyncio.FIRST_COMPLETED
+                    )
+                    if stop.is_set():
+                        return None
+                    returncode = exited.result()
+                    stdout.seek(0)
+                    stderr.seek(0)
+                    path = decode_result(
+                        stdout.read(), stderr.read(), returncode, platform=sys.platform
+                    )
+                    if path is not None and (
+                        not path or "\0" in path or not Path(path).is_absolute()
+                    ):
+                        raise ValueError("Invalid folder selection")
+                    return path
+                finally:
+                    if process.returncode is None:
+                        with suppress(ProcessLookupError):
+                            process.kill()
+                    await exited
+                    stopped.cancel()
+                    await asyncio.gather(stopped, return_exceptions=True)
         except Exception as exc:
             raise _unavailable(exc) from exc
         finally:
-            try:
-                if process.returncode is None or not reading.done():
-                    try:
-                        if sys.platform == "win32":
-                            process.kill()
-                        else:
-                            os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                await process.wait()
-                await reading
-            finally:
-                stopped.cancel()
-                await asyncio.gather(stopped, return_exceptions=True)
+            if process is not None:
                 unregister_pid(process.pid)

@@ -1,7 +1,10 @@
 """The DSH Desktop card uses real isolated native configuration files."""
 
+import asyncio
 import json
+import threading
 
+import pytest
 from playwright.sync_api import expect
 from ruamel.yaml import YAML
 
@@ -179,3 +182,98 @@ def test_shared_credential_disconnect_is_successful_and_reconnectable(
     opener.click()
     dialog.get_by_role("button", name="Configure", exact=True).click()
     expect(opener).to_have_text("Disconnect")
+
+
+def test_disconnect_after_native_profile_is_moved(page, admin_base_url, tmp_path):
+    home = install(tmp_path)
+    page.goto(admin_base_url + "/admin/integrations")
+    opener = page.locator("#openDshDesktopIntegration")
+    expect(opener).to_have_text("Configure")
+    opener.click()
+    dialog = page.locator("#dshDesktopIntegrationDialog")
+    dialog.get_by_role("button", name="Configure", exact=True).click()
+    expect(opener).to_have_text("Disconnect")
+    (home / "profiles/desktop").rename(tmp_path / "moved-desktop")
+    page.reload()
+    expect(opener).to_have_text("Disconnect")
+    expect(page.locator("#dshDesktopIntegrationMessage")).to_contain_text("missing")
+    opener.click()
+    dialog.get_by_role("button", name="Disconnect", exact=True).click()
+    expect(opener).to_have_text("Configure")
+    expect(page.locator("#dshDesktopIntegrationMessage")).to_contain_text("retained")
+    assert not (home / "profiles/desktop").exists()
+
+
+def test_superseded_configure_notice_matches_real_disconnect(
+    page, admin_base_url, tmp_path, monkeypatch
+):
+    from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+
+    home = install(tmp_path)
+    page.goto(admin_base_url + "/admin/integrations")
+    opener = page.locator("#openDshDesktopIntegration")
+    expect(opener).to_have_text("Configure")
+    entered, release = threading.Event(), threading.Event()
+    original = ProviderRuntimeManager.wait_for_catalog
+
+    async def held(manager):
+        entered.set()
+        assert await asyncio.to_thread(release.wait, 10)
+        return await original(manager)
+
+    monkeypatch.setattr(ProviderRuntimeManager, "wait_for_catalog", held)
+    endpoint = admin_base_url + "/admin/api/integrations/dsh-desktop"
+    try:
+        opener.click()
+        page.locator("#confirmDshDesktopIntegration").click()
+        assert entered.wait(5)
+        response = page.request.post(endpoint + "/disconnect")
+        assert response.ok
+        assert response.json()["connection_state"] == "disconnected"
+    finally:
+        release.set()
+    expect(page.locator("#dshDesktopIntegrationDialog")).not_to_be_visible()
+    expect(opener).to_have_text("Configure")
+    notice = page.locator("#dshDesktopIntegrationMessage")
+    expect(notice).to_contain_text("disconnected")
+    expect(notice).not_to_contain_text("Configuration saved")
+    assert page.request.get(endpoint).json()["connection_state"] == "disconnected"
+    assert not (home / "profiles/desktop/cordis.patch.yml").exists()
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    ["inspection_error", "pending_connect", "pending_disconnect", "not_current"],
+)
+def test_configure_response_preserves_recovery_notice(
+    page, admin_base_url, tmp_path, outcome
+):
+    install(tmp_path)
+    page.goto(admin_base_url + "/admin/integrations")
+    opener = page.locator("#openDshDesktopIntegration")
+    expect(opener).to_have_text("Configure")
+
+    def response(route):
+        actual = route.fetch()
+        result = actual.json()
+        if outcome == "inspection_error":
+            result["inspection_error"] = (
+                "Native configuration changed during inspection."
+            )
+        else:
+            result["connection_state"] = (
+                "connected" if outcome == "not_current" else outcome
+            )
+            result["connected"] = False
+        route.fulfill(response=actual, json=result)
+
+    page.route("**/admin/api/integrations/dsh-desktop/connect", response)
+    opener.click()
+    page.locator("#confirmDshDesktopIntegration").click()
+    expect(page.locator("#dshDesktopIntegrationDialog")).not_to_be_visible()
+    expect(opener).to_have_text(
+        "Retry disconnect" if outcome == "pending_disconnect" else "Disconnect"
+    )
+    notice = page.locator("#dshDesktopIntegrationMessage")
+    expect(notice).to_have_class("message-area error")
+    expect(notice).not_to_contain_text("Configuration saved")

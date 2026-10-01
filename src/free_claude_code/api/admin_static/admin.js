@@ -2236,9 +2236,22 @@ byId("confirmDshDesktopIntegration").addEventListener("click", async () => {
     if (!current()) return;
     applyDshDesktopStatus(result);
     dshDesktopIntegrationDialog.close();
-    integrationMessage("dshDesktopIntegrationMessage", disconnect
-      ? `FCC connection removed. Select another model in existing DSH sessions.${result.retention_reason ? ` ${result.retention_reason}` : ""}`
-      : "Configuration saved. New DSH sessions use FCC. Reopen DSH if it does not reload the changes.");
+    if (result.inspection_error) {
+      integrationMessage("dshDesktopIntegrationMessage", result.inspection_error, true);
+    } else if (["disconnected", "retained"].includes(result.connection_state)) {
+      const message = disconnect
+        ? "FCC connection removed. Select another model in existing DSH sessions."
+        : "DSH Desktop is disconnected. A newer action replaced this configuration request.";
+      integrationMessage("dshDesktopIntegrationMessage", `${message}${result.retention_reason ? ` ${result.retention_reason}` : ""}`);
+    } else if (result.connection_state === "connected" && result.connected) {
+      integrationMessage("dshDesktopIntegrationMessage", disconnect
+        ? "DSH Desktop is connected. A newer configuration replaced this disconnect request."
+        : "Configuration saved. New DSH sessions use FCC. Reopen DSH if it does not reload the changes.");
+    } else {
+      integrationMessage("dshDesktopIntegrationMessage", result.connection_state === "pending_disconnect"
+        ? "DSH Desktop cleanup is incomplete. Retry disconnect to finish."
+        : "DSH Desktop configuration is not current. Retry the update or disconnect to clear the saved connection.", true);
+    }
   } catch (error) {
     if (!current()) return;
     try {
