@@ -10,7 +10,6 @@ import pytest_asyncio
 from ruamel.yaml import YAML
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.config.paths import dsh_desktop_state_path
 from free_claude_code.harnesses import dsh_desktop_integration as desktop
 from tests.runtime.test_integration_startup import runtime as runtime
 
@@ -76,7 +75,7 @@ async def test_late_catalog_updates_and_disconnect_remains_removed(connected):
     await runtime.disconnect_dsh_desktop()
     runtime._integrations.catalog_changed()
     await settle(runtime)
-    assert not dsh_desktop_state_path().exists()
+    assert not desktop.has_provider(desktop.config_home())
     assert not (await runtime.dsh_desktop_status())["connected"]
 
 
@@ -104,7 +103,7 @@ async def test_disconnect_during_catalog_wait_cannot_be_reconnected(
     finally:
         release.set()
     await settle(runtime)
-    assert not dsh_desktop_state_path().exists()
+    assert not desktop.has_provider(desktop.config_home())
 
 
 @pytest.mark.asyncio
@@ -194,7 +193,7 @@ async def test_startup_without_connection_does_not_create_native_profile(runtime
         await runtime.start()
         await settle(runtime)
         assert not desktop.config_home().exists()
-        assert not dsh_desktop_state_path().exists()
+        assert not desktop.has_provider(desktop.config_home())
     finally:
         await runtime.close()
 
@@ -219,12 +218,12 @@ async def test_first_configure_waiting_for_catalog_is_superseded_by_disconnect(
     try:
         await asyncio.wait_for(entered.wait(), 5)
         assert not (await asyncio.wait_for(runtime.disconnect_dsh_desktop(), 1))[
-            "configured"
+            "connected"
         ]
         release.set()
         await asyncio.wait_for(task, 5)
-        assert not dsh_desktop_state_path().exists()
-        assert not (await runtime.dsh_desktop_status())["configured"]
+        assert not desktop.has_provider(desktop.config_home())
+        assert not (await runtime.dsh_desktop_status())["connected"]
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)

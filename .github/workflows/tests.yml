@@ -104,40 +104,6 @@ jobs:
           runner-label: ${{ matrix.runner }}
           prepare-node: "true"
 
-      - name: Diagnose macOS status concurrency
-        if: matrix.os == 'macOS'
-        run: |
-          uv run --locked python - <<'PY'
-          import contextlib
-          import os
-          import signal
-          import subprocess
-
-          # Temporary reproduction gate while PR #1961's status hang is unresolved.
-          selections = [[
-              "tests/runtime/test_integration_status_concurrency.py::test_slow_status_does_not_block_other_integration[claude_desktop_status]"
-          ]] * 10 + [[
-              "tests/runtime/test_integration_status_concurrency.py",
-              "tests/runtime/test_integration_startup.py",
-              "tests/runtime/test_dsh_desktop_sync.py",
-          ]]
-          for index, selection in enumerate(selections, 1):
-              print(f"macOS status diagnostic {index}/{len(selections)}", flush=True)
-              command = ["uv", "run", "--locked", "pytest", *selection,
-                         "-n", "2", "--dist=worksteal", "-v", "--tb=short",
-                         "-o", "thread_dump_timeout=15"]
-              with subprocess.Popen(command, start_new_session=True) as process:
-                  try:
-                      result = process.wait(timeout=120)
-                  except subprocess.TimeoutExpired:
-                      with contextlib.suppress(ProcessLookupError):
-                          os.killpg(process.pid, signal.SIGKILL)
-                      process.wait()
-                      raise
-              if result:
-                  raise SystemExit(result)
-          PY
-
       - name: Run pytest
         run: uv run --locked pytest -v --tb=short -o thread_dump_timeout=15 --durations=50
 

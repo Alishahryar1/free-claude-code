@@ -76,10 +76,11 @@ def test_dsh_desktop_native_composition_e2e(
         "const loaded = loadProfileDirectory('dsh', process.argv[1], process.argv[2]);\n"
         "const entries = composeEntries([...loaded.layers.map(layer => layer.patches), loaded.patches]);\n"
         "const row = entries.find(entry => entry.id === 'llm-pi-ai');\n"
-        "console.log(JSON.stringify(Object.keys(row.config?.providers ?? {}).sort()));\n"
+        "const selection = entries.find(entry => entry.id === 'agent-default-model');\n"
+        "console.log(JSON.stringify({ providers: Object.keys(row.config?.providers ?? {}).sort(), default: selection.config }));\n"
     )
 
-    def composed() -> list[str]:
+    def composed() -> dict[str, object]:
         result = subprocess.run(
             [
                 node,
@@ -96,23 +97,27 @@ def test_dsh_desktop_native_composition_e2e(
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout.splitlines()[-1])
 
-    assert composed() == ["native-user-provider"]
+    assert composed()["providers"] == ["native-user-provider"]
+    native_default = composed()["default"]
     model = CatalogModel("fixture/model", "fixture/model", "Fixture", True)
-    state = tmp_path / "ownership.json"
     desktop.configure(
         tmp_path / "home",
         "http://127.0.0.1:8182",
         "fixture-only",
         ModelCatalog((model,), model.wire_slug),
-        state_path=state,
         provider_progress_timeout=600,
     )
-    assert composed() == ["free-claude-code", "native-user-provider"]
+    assert composed()["providers"] == ["free-claude-code", "native-user-provider"]
+    assert composed()["default"] == {
+        "provider": "free-claude-code",
+        "model": "fixture/model",
+    }
     rows = dsh_files.read_yaml(path, sequence=True)
     rows.append(copy.deepcopy(rows[-1]))
     dsh_files.write_yaml(path, rows)
-    desktop.disconnect(tmp_path / "home", state_path=state)
-    assert composed() == ["native-user-provider"]
+    desktop.disconnect(tmp_path / "home")
+    assert composed()["providers"] == ["native-user-provider"]
+    assert composed()["default"] == native_default
 
     atomic_write = (
         native_package / "node_modules/@deepseek-ai/dsh-atomic-write/lib/index.js"
@@ -211,7 +216,6 @@ def test_dsh_desktop_live_catalog_credentials_and_restart_e2e(
     )
     env["DSH_TELEMETRY_DISABLED"] = "1"
     home = Path(env["DSH_HOME"])
-    state = tmp_path / "ownership.json"
     options = {
         "executable": executable,
         "userData": str(tmp_path / "electron"),
@@ -249,7 +253,8 @@ def test_dsh_desktop_live_catalog_credentials_and_restart_e2e(
         return _local_provider_overrides(full_model, upstream) | {
             "HOME": str(root),
             "USERPROFILE": str(root),
-            "DSH_HOME": str(home),
+            # These inference servers must not refresh the driver's profile.
+            "DSH_HOME": str(root / ".dsh"),
         }
 
     with (
@@ -278,7 +283,6 @@ def test_dsh_desktop_live_catalog_credentials_and_restart_e2e(
                 url,
                 token,
                 catalog,
-                state_path=state,
                 provider_progress_timeout=600,
             )
 
@@ -327,28 +331,17 @@ def test_dsh_desktop_live_catalog_credentials_and_restart_e2e(
                         rotated.base_url, "desktop-rotated", "FCC Updated Fixture"
                     )
                 elif event.get("action") == "disconnect":
-                    peer = home / "profiles/web"
-                    peer.mkdir(exist_ok=True)
-                    (peer / "package.json").write_bytes(
-                        (home / "profiles/desktop/package.json").read_bytes()
+                    assert not desktop.disconnect(home)["connected"]
+                    assert (
+                        desktop.DSH_DESKTOP_API_KEY
+                        not in (home / ".credentials.yaml").read_text()
                     )
-                    (peer / "cordis.patch.yml").write_text(
-                        "- id: llm-deepseek\n  config:\n    apiKeyEnv: FCC_DSH_DESKTOP_API_KEY\n",
-                        encoding="utf-8",
-                    )
-                    result = desktop.disconnect(home, state_path=state)
-                    assert result["credential_retained"] and not result["configured"]
                 elif event.get("action") == "reconnect":
                     configure(
                         rotated.base_url, "desktop-rotated", "FCC Updated Fixture"
                     )
                 elif event.get("action") == "final_disconnect":
-                    (home / "profiles/web/cordis.patch.yml").write_text(
-                        "[]\n", encoding="utf-8"
-                    )
-                    assert not desktop.disconnect(home, state_path=state)[
-                        "credential_retained"
-                    ]
+                    assert not desktop.disconnect(home)["connected"]
                 else:
                     completed |= event.get("completed") is True
                     continue
@@ -374,7 +367,6 @@ def test_dsh_desktop_live_catalog_credentials_and_restart_e2e(
         assert any(
             "DESKTOP_TOOL_WITNESS" in json.dumps(item["body"]) for item in requests
         )
-    assert not state.exists()
     saved = (home / "profiles/desktop/cordis.patch.yml").read_text(encoding="utf-8")
     assert "free-claude-code" not in saved
     assert (

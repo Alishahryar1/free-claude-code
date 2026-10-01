@@ -18,7 +18,6 @@ from free_claude_code.application.readiness import InitializationWait
 from free_claude_code.config.paths import (
     claude_desktop_disconnect_path,
     codex_model_catalog_path,
-    dsh_desktop_state_path,
 )
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.config.settings import Settings
@@ -214,31 +213,51 @@ class IntegrationService:
             self._dsh_action_revision += 1
         action_revision = self._dsh_action_revision
 
-        def status(url: str, token: str, ready: bool) -> JsonObject:
-            return dsh_desktop_integration.status(
+        def status_reader() -> Callable[[str, str, bool], JsonObject]:
+            catalog = read_model_catalog(self.provider_manager)
+            timeout = self.settings.provider_progress_timeout
+            return lambda url, token, ready: dsh_desktop_integration.status(
                 dsh_desktop_integration.config_home(),
                 url,
                 token,
-                state_path=dsh_desktop_state_path(),
+                catalog,
+                provider_progress_timeout=timeout,
             )
 
         def disconnect(url: str, token: str, ready: bool) -> JsonObject:
             return dsh_desktop_integration.disconnect(
                 dsh_desktop_integration.config_home(),
-                state_path=dsh_desktop_state_path(),
             )
 
         try:
             if action == "status":
-                return await self._read_status(self._dsh_update, status)
+                for _ in range(2):
+                    settings = self.settings
+                    revision = self.provider_manager.catalog_status()[
+                        "catalog_revision"
+                    ]
+                    result = await self._read_status(self._dsh_update, status_reader())
+                    if (
+                        settings is self.settings
+                        and revision
+                        == self.provider_manager.catalog_status()["catalog_revision"]
+                    ):
+                        return result
+                raise ApplicationUnavailableError(
+                    "FCC models changed during the check. Retry shortly."
+                )
             if action == "disconnect":
                 return await self._run_integration(self._dsh_update, action, disconnect)
             if action == "refresh":
-                current = await self._read_status(self._dsh_update, status)
-                if current.get("disconnect_pending"):
-                    await self._run_integration(self._dsh_update, action, disconnect)
-                    return {"changed": True}
-                if not current.get("configured"):
+                current = await self._read_status(
+                    self._dsh_update,
+                    lambda url, token, ready: {
+                        "connected": dsh_desktop_integration.has_provider(
+                            dsh_desktop_integration.config_home()
+                        )
+                    },
+                )
+                if not current["connected"]:
                     return {"changed": False}
             while True:
                 snapshot = await self.provider_manager.wait_for_catalog()
@@ -248,7 +267,7 @@ class IntegrationService:
                     if action_revision != self._dsh_action_revision:
                         return await run_sync_owned(
                             partial(
-                                status,
+                                status_reader(),
                                 local_proxy_root_url(self.settings),
                                 self.settings.proxy_auth_token,
                                 True,
@@ -280,7 +299,6 @@ class IntegrationService:
                                     url,
                                     token,
                                     catalog,
-                                    state_path=dsh_desktop_state_path(),
                                     provider_progress_timeout=timeout,
                                 )
                             }
@@ -289,7 +307,6 @@ class IntegrationService:
                             url,
                             token,
                             catalog,
-                            state_path=dsh_desktop_state_path(),
                             provider_progress_timeout=timeout,
                         )
 
@@ -301,7 +318,7 @@ class IntegrationService:
             raise InvalidRequestError(str(exc)) from None
         except ValueError, UnicodeError:
             raise InvalidRequestError(
-                "Could not read DSH Desktop configuration or FCC's ownership record. Correct the invalid document and retry."
+                "Could not read DSH Desktop configuration. Correct the invalid document and retry."
             ) from None
         except OSError:
             raise ApplicationUnavailableError(

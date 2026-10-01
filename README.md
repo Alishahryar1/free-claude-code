@@ -160,7 +160,7 @@ DeepSeek Harness Web:
 fcc-dsh
 ```
 
-For DeepSeek Harness Desktop, install and open the app once, then select **Configure** under **Integrations → DeepSeek Harness Desktop** in FCC. Keep FCC running while using its models. FCC becomes the default for new sessions. Configure supports the stock Desktop base and Web bundles with your ordinary settings. If you added a custom bundle, restore the stock bundle list before configuring FCC. Native DeepSeek account features still need a DeepSeek login.
+For DeepSeek Harness Desktop, install and open the app once, then select **Connect** under **Integrations → DeepSeek Harness Desktop** in FCC. Keep FCC running while using its models. FCC becomes the default for new sessions. Select **Disconnect** to remove the connection. Native DeepSeek account features still need a DeepSeek login.
 
 Use DeepSeek Harness 0.2.0-rc.2 or newer. Update the CLI with:
 

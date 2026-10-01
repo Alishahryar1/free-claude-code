@@ -51,7 +51,7 @@ def test_configure_status_disconnect_hide_credentials(client):
     response = client.post(ROOT + "/disconnect")
     assert response.status_code == 200
     assert not response.json()["connected"]
-    assert not client.get(ROOT).json()["configured"]
+    assert not client.get(ROOT).json()["connected"]
 
 
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect", "/refresh"])
