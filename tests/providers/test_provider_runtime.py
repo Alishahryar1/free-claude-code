@@ -14,6 +14,7 @@ from free_claude_code.config.provider_catalog import (
     AGNES_DEFAULT_BASE,
     BEDROCK_DEFAULT_BASE,
     CHUTES_DEFAULT_BASE,
+    CLINE_DEFAULT_BASE,
     COHERE_DEFAULT_BASE,
     DEEPINFRA_DEFAULT_BASE,
     FEATHERLESS_DEFAULT_BASE,
@@ -149,6 +150,8 @@ def _make_settings(**overrides):
     mock.vertex_proxy = None
     mock.groq_api_key = ""
     mock.groq_proxy = None
+    mock.cline_api_key = ""
+    mock.cline_pass_proxy = None
     mock.cerebras_api_key = ""
     mock.cerebras_proxy = None
     mock.ollama_cloud_proxy = None
@@ -269,6 +272,29 @@ def test_qwencloud_provider_config_uses_key_base_and_proxy() -> None:
     assert config.base_url == QWENCLOUD_DEFAULT_BASE
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
+
+
+def test_cline_pass_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["cline_pass"]
+    settings = _make_settings(
+        cline_api_key="cline-programmatic-token",
+        cline_pass_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+        provider = create_provider("cline_pass", settings)
+
+    assert descriptor.display_name == "ClinePass"
+    assert descriptor.credential_env == "CLINE_API_KEY"
+    assert descriptor.credential_attr == "cline_api_key"
+    assert descriptor.credential_url == "https://app.cline.bot"
+    assert descriptor.base_url_attr is None
+    assert config.api_key == "cline-programmatic-token"
+    assert config.base_url == CLINE_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+    assert provider._provider_name == "CLINE_PASS"
 
 
 def test_qwencloud_coding_provider_config_uses_key_base_and_proxy() -> None:
@@ -772,6 +798,7 @@ def test_create_provider_instantiates_each_builtin():
         gemini_api_key="test_gemini_key",
         vertex_project_id="test-vertex-project",
         groq_api_key="test_groq_key",
+        cline_api_key="test_cline_key",
         cerebras_api_key="test_cerebras_key",
         fireworks_api_key="test_fireworks_key",
         novita_api_key="test_novita_key",
@@ -792,6 +819,7 @@ def test_create_provider_instantiates_each_builtin():
     cases = {
         "nvidia_nim": NvidiaNimProvider,
         "openai": OpenAICodexProvider,
+        "cline_pass": OpenAIChatProvider,
         "xai": OpenAIChatProvider,
         "qwencloud": OpenAIChatProvider,
         "qwencloud_coding": OpenAIChatProvider,

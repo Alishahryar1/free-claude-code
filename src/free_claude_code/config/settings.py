@@ -200,6 +200,11 @@ class Settings(BaseModel):
         default=None, validation_alias="GROQ_API_KEY"
     )
 
+    # ==================== ClinePass (OpenAI-compatible) ====================
+    cline_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="CLINE_API_KEY"
+    )
+
     # ==================== xAI / Grok (OpenAI-compatible) ====================
     xai_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="XAI_API_KEY"
@@ -458,6 +463,9 @@ class Settings(BaseModel):
     )
     groq_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="GROQ_PROXY"
+    )
+    cline_pass_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="CLINE_PASS_PROXY"
     )
     cerebras_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="CEREBRAS_PROXY"

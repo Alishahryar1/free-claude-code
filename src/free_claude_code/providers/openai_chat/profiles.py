@@ -211,6 +211,17 @@ def _zai_profile(provider_name: str) -> OpenAIChatProfile:
 
 
 OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
+    "cline_pass": OpenAIChatProfile(
+        _policy("CLINE_PASS", ReasoningReplayMode.DISABLED),
+        NO_REASONING,
+        postprocessors=(apply_reasoning_details_replay,),
+        model_listing=OpenAIModelListing(
+            path="/ai/cline/recommended-models",
+            collection_field="clinePass",
+        ),
+        reasoning_delta_field="reasoning",
+        structured_reasoning_details=True,
+    ),
     "xai": OpenAIChatProfile(
         _policy(
             "XAI",

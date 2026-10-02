@@ -796,6 +796,13 @@ because its subscription key, quota, endpoint, and personal interactive-use
 contract are separate. It uses the ordinary OpenAI Chat transport, preserves
 reasoning history through `reasoning_content`, and does not impose one reasoning
 control or output-token default across its heterogeneous model catalog.
+ClinePass is a distinct subscription provider using Cline's programmatic
+`CLINE_API_KEY` and fixed OpenAI Chat Completions endpoint. Its declarative
+profile discovers only the dynamic `clinePass` catalog collection, consumes
+plaintext `reasoning`, preserves documented opaque `reasoning_details`, and
+sends no invented catalog-wide reasoning control. General Cline usage billing,
+CLI account authentication, and Cline-native tools remain separate product
+decisions.
 Z.ai Coding Plan (`zai`) and Z.ai API (`zai_api`) are distinct provider
 identities because their fixed endpoints select Coding Plan quota versus
 pay-as-you-go balance. They share the upstream `ZAI_API_KEY` and one declarative

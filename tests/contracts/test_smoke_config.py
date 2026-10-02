@@ -53,6 +53,7 @@ def _settings(**overrides):
         "vertex_project_id": "",
         "vertex_location": "global",
         "groq_api_key": "",
+        "cline_api_key": "",
         "xai_api_key": "",
         "qwencloud_api_key": "",
         "qwencloud_coding_api_key": "",
@@ -176,6 +177,45 @@ def test_xai_provider_smoke_uses_current_grok_model(monkeypatch) -> None:
     assert [model.provider for model in models] == ["xai"]
     assert models[0].full_model == "xai/grok-4.5"
     assert models[0].source == "provider_default"
+
+
+def test_cline_pass_provider_smoke_uses_low_cost_subscription_model(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_CLINE_PASS", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            cline_api_key="cline-key",
+        )
+    )
+
+    models = config.provider_smoke_models()
+
+    assert [model.provider for model in models] == ["cline_pass"]
+    assert models[0].full_model == "cline_pass/cline-pass/deepseek-v4-flash"
+    assert models[0].source == "provider_default"
+
+
+def test_cline_pass_smoke_override_accepts_full_or_upstream_model_ref(
+    monkeypatch,
+) -> None:
+    settings = _settings(
+        model="ollama/llama3.1",
+        ollama_base_url="",
+        cline_api_key="cline-key",
+    )
+    for override in (
+        "cline_pass/cline-pass/kimi-k3",
+        "cline-pass/kimi-k3",
+    ):
+        monkeypatch.setenv("FCC_SMOKE_MODEL_CLINE_PASS", override)
+        models = _smoke_config(settings=settings).provider_smoke_models()
+
+        assert [model.provider for model in models] == ["cline_pass"]
+        assert models[0].full_model == "cline_pass/cline-pass/kimi-k3"
+        assert models[0].source == "FCC_SMOKE_MODEL_CLINE_PASS"
 
 
 def test_zai_shared_key_enables_both_provider_smoke_surfaces(monkeypatch) -> None:

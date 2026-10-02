@@ -163,6 +163,33 @@ def test_qwencloud_coding_key_is_a_distinct_admin_provider_field() -> None:
     assert "separate endpoints" in entry.description
 
 
+def test_cline_pass_admin_fields_use_programmatic_key_and_fixed_endpoint() -> None:
+    from free_claude_code.config.admin.status import provider_config_status
+
+    key = FIELD_BY_KEY["CLINE_API_KEY"]
+    proxy = FIELD_BY_KEY["CLINE_PASS_PROXY"]
+    status = next(
+        item
+        for item in provider_config_status(
+            {"CLINE_API_KEY": _test_value("cline-programmatic-key")}
+        )
+        if item["provider_id"] == "cline_pass"
+    )
+
+    assert key.label == "Cline API Key"
+    assert key.settings_attr == "cline_api_key"
+    assert key.section_id == "providers"
+    assert key.secret is True
+    assert "Subscribe to ClinePass" in key.description
+    assert "Settings > API Keys" in key.description
+    assert "not the Cline CLI's managed account token" in key.description
+    assert proxy.settings_attr == "cline_pass_proxy"
+    assert proxy.secret is True
+    assert "CLINE_BASE_URL" not in FIELD_BY_KEY
+    assert status["display_name"] == "ClinePass"
+    assert status["status"] == "configured"
+
+
 def test_zai_shared_key_configures_both_distinct_provider_surfaces() -> None:
     from free_claude_code.config.admin.status import provider_config_status
 
