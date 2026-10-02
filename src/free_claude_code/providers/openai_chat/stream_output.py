@@ -4,7 +4,7 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from free_claude_code.core.anthropic.streaming import (
@@ -34,7 +34,7 @@ from free_claude_code.core.openai_responses import (
     reasoning_output_item,
     tool_item,
 )
-from free_claude_code.core.stream_events import StreamEvent
+from free_claude_code.core.stream_events import ItemCompletion, StreamEvent
 from free_claude_code.core.token_estimation import estimate_text_tokens
 
 
@@ -241,7 +241,10 @@ class ChatStreamOutput(ABC):
         if not state.open:
             return []
         state.open = False
-        return self._stop_tool_block(tool_index, state)
+        return [
+            replace(event, item_completion=ItemCompletion.COMPLETE)
+            for event in self._stop_tool_block(tool_index, state)
+        ]
 
     def close_all_blocks(self) -> list[StreamEvent]:
         events = self.finish_reasoning_group()
@@ -487,7 +490,7 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         if self.tool_events is None:
             return tuple(events)
         return tuple(
-            StreamEvent(kind, body)
+            StreamEvent(kind, body, event.item_completion)
             for event in events
             for kind, body in self.tool_events.feed(event.kind, event.payload)
         )

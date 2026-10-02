@@ -71,12 +71,14 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        preserve_features: bool = False,
     ) -> dict:
         """Internal helper for tests and shared building."""
         return build_nim_request_body(
             request,
             self._nim_settings,
             reasoning=reasoning,
+            preserve_features=preserve_features,
         )
 
     def finalize_chat_body(

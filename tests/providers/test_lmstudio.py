@@ -296,10 +296,12 @@ async def test_startup_builds_before_context_budget_and_preserves_policy(
     )
     original = getattr(lmstudio_provider._chat, name)
 
-    def build(request_arg, *, reasoning):
+    def build(request_arg, *, reasoning, preserve_features=False):
         assert request_arg == request
         calls.append(("build", reasoning))
-        return original(request_arg, reasoning=reasoning)
+        return original(
+            request_arg, reasoning=reasoning, preserve_features=preserve_features
+        )
 
     async def check_context(estimate):
         calls.append(("context", estimate))

@@ -10,7 +10,8 @@ from free_claude_code.core.history_replay import (
     encode_replay,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
-from free_claude_code.core.stream_events import StreamEvent
+from free_claude_code.core.stream_events import ItemCompletion, StreamEvent
+from free_claude_code.core.tool_input import complete_json_object
 
 from .native import NativeMessagesError
 
@@ -38,18 +39,35 @@ class CompletedMessagesBlock:
 
     body: JsonObject
     tool_arguments: str | None = None
+    completion: ItemCompletion = ItemCompletion.COMPLETE
 
 
 class NativeMessagesStreamState:
     """Validate one upstream lifecycle without rewriting protocol identities."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, permissive: bool = False) -> None:
+        self._permissive = permissive
+        self._invalid_input = False
+        self._incomplete_replay = False
         self.started = False
         self.completed = False
         self.stop_reason: str | None = None
         self._blocks: dict[int, _Block] = {}
         self._seen: set[int] = set()
         self._tool_ids: set[str] = set()
+
+    @property
+    def invalid_input(self) -> bool:
+        return self._invalid_input or any(
+            block.body.get("type") == "tool_use" for block in self._blocks.values()
+        )
+
+    @property
+    def native_reasoning_pending(self) -> bool:
+        return self._incomplete_replay or any(
+            block.body.get("type") in {"thinking", "redacted_thinking"}
+            for block in self._blocks.values()
+        )
 
     def accept(
         self, event_type: str, payload: Mapping[str, JsonValue]
@@ -72,7 +90,7 @@ class NativeMessagesStreamState:
             if self.started:
                 raise NativeMessagesError("Duplicate message_start.")
             message = payload.get("message")
-            if (
+            if not self._permissive and (
                 not isinstance(message, Mapping)
                 or not isinstance(message.get("id"), str)
                 or not message["id"]
@@ -90,11 +108,13 @@ class NativeMessagesStreamState:
                 raise NativeMessagesError("Native message_delta requires an object.")
             reason = delta.get("stop_reason")
             if reason is not None:
-                if self._blocks:
+                if self._blocks and not self._permissive:
                     raise NativeMessagesError(
                         "Stop reason arrived with open content blocks."
                     )
-                if not isinstance(reason, str) or reason not in _STOP_REASONS:
+                if not isinstance(reason, str) or (
+                    not self._permissive and reason not in _STOP_REASONS
+                ):
                     raise NativeMessagesError(
                         "Unsupported native Messages stop reason."
                     )
@@ -103,7 +123,7 @@ class NativeMessagesStreamState:
                 self.stop_reason = reason
             return None
         if event_type == "message_stop":
-            if self._blocks or self.stop_reason is None:
+            if not self._permissive and (self._blocks or self.stop_reason is None):
                 raise NativeMessagesError(
                     "message_stop arrived before content or stop reason completed."
                 )
@@ -114,6 +134,8 @@ class NativeMessagesStreamState:
             "content_block_delta",
             "content_block_stop",
         }:
+            if self._permissive:
+                return None
             raise NativeMessagesError(
                 f"Unsupported native Messages event: {event_type!r}."
             )
@@ -155,7 +177,10 @@ class NativeMessagesStreamState:
                     or tool_id in self._tool_ids
                     or not isinstance(body.get("name"), str)
                     or not body["name"]
-                    or not isinstance(body.get("input"), Mapping)
+                    or (
+                        not self._permissive
+                        and not isinstance(body.get("input"), Mapping)
+                    )
                 ):
                     raise NativeMessagesError(
                         "Invalid or duplicate native tool identity/input."
@@ -170,6 +195,12 @@ class NativeMessagesStreamState:
                 "Messages content event refers to a closed or unknown block."
             )
         if event_type == "content_block_delta":
+            if self._permissive and block.body["type"] not in {
+                "text",
+                "thinking",
+                "tool_use",
+            }:
+                return None
             delta = payload.get("delta")
             if not isinstance(delta, Mapping):
                 raise NativeMessagesError("Native content delta must be an object.")
@@ -196,6 +227,8 @@ class NativeMessagesStreamState:
                         raise NativeMessagesError("Invalid native citation delta.")
                     block.body["citations"] = [*citations, dict(citation)]
                     return None
+                if self._permissive:
+                    return None
                 raise NativeMessagesError("Unsupported native content delta.")
             block_type, key = target
             value = delta.get(key)
@@ -220,10 +253,14 @@ class NativeMessagesStreamState:
             if not isinstance(initial, str):
                 raise AssertionError("Validated native content fields must be strings.")
             block.body[key] = initial + "".join(parts)
+        completion = ItemCompletion.COMPLETE
         if block.body["type"] == "thinking" and not block.body.get("signature"):
-            raise NativeMessagesError(
-                "Completed native thinking requires its signature."
-            )
+            if not self._permissive:
+                raise NativeMessagesError(
+                    "Completed native thinking requires its signature."
+                )
+            self._incomplete_replay = True
+            completion = ItemCompletion.INCOMPLETE
         arguments = None
         if block.body["type"] == "tool_use":
             arguments = (
@@ -233,8 +270,11 @@ class NativeMessagesStreamState:
                     block.body["input"], ensure_ascii=False, separators=(",", ":")
                 )
             )
+            if not complete_json_object(arguments):
+                self._invalid_input = True
+                completion = ItemCompletion.INVALID_INPUT
         self._blocks.pop(index)
-        return CompletedMessagesBlock(block.body, arguments)
+        return CompletedMessagesBlock(block.body, arguments, completion)
 
 
 class NativeMessagesRelay:
@@ -254,6 +294,14 @@ class NativeMessagesRelay:
     @property
     def stop_reason(self) -> str | None:
         return self._state.stop_reason
+
+    @property
+    def invalid_input(self) -> bool:
+        return self._state.invalid_input
+
+    @property
+    def native_reasoning_pending(self) -> bool:
+        return self._state.native_reasoning_pending
 
     def feed(
         self, event_type: str, payload: Mapping[str, JsonValue]
@@ -312,4 +360,7 @@ class NativeMessagesRelay:
                         },
                     )
                 ]
-        return [*prefix, StreamEvent(event_type, body)]
+        return [
+            *prefix,
+            StreamEvent(event_type, body, completed.completion if completed else None),
+        ]

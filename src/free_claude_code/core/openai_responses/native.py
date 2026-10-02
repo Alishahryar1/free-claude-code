@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import cast
 
+from free_claude_code.core.failures import UnsupportedRequestFeature
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_events import StreamEvent
@@ -22,6 +23,7 @@ def build_native_responses_request(
     *,
     model: str,
     reasoning: ReasoningPolicy,
+    preserve_features: bool = False,
 ) -> JsonObject:
     """Build the stateless upstream body without translating Responses input."""
 
@@ -29,6 +31,12 @@ def build_native_responses_request(
         JsonObject,
         request.model_dump(mode="json", exclude_none=True),
     )
+    if preserve_features:
+        body.update(request.model_extra or {})
+        if request.previous_response_id:
+            raise UnsupportedRequestFeature(
+                "Recovery requires materialized response history."
+            )
     if isinstance(items := body.get("input"), list):
         for item in items:
             if not isinstance(item, dict) or item.get("type") not in (
@@ -47,7 +55,9 @@ def build_native_responses_request(
     body["stream"] = True
     body["store"] = False
     body.pop("previous_response_id", None)
-    if reasoning != responses_reasoning_policy(request.reasoning):
+    if not (
+        preserve_features and request.reasoning is not None
+    ) and reasoning != responses_reasoning_policy(request.reasoning):
         if reasoning_config := responses_reasoning_config(reasoning):
             body["reasoning"] = reasoning_config
         else:

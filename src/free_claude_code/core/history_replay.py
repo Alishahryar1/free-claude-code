@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Literal, cast
 
+from .failures import UnsupportedRequestFeature
 from .json_types import JsonObject, JsonValue
 from .openai_chat import ChatToolResultImages
 
@@ -436,6 +437,7 @@ def prepare_history(
     scope: HistoryScope = HistoryScope.TOOL_CONTINUATION,
     reasoning_field: str = "reasoning_content",
     structured_details: bool = True,
+    preserve_features: bool = False,
 ) -> JsonObject:
     """Project a fresh wire copy. The caller's native transcript stays intact."""
     result = deepcopy(dict(body))
@@ -451,6 +453,14 @@ def prepare_history(
                 projected.append(item)
                 continue
             record = _record(item, "encrypted_content")
+            if (
+                preserve_features
+                and record is not None
+                and not destination.accepts(record.origin)
+            ):
+                raise UnsupportedRequestFeature(
+                    "Native Responses history requires its original connection."
+                )
             if record is not None and destination.accepts(record.origin):
                 projected.append(record.native)
                 if not readable_reasoning(record.native):
@@ -487,7 +497,9 @@ def prepare_history(
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         if destination.protocol == "messages":
-            _prepare_messages_content(message, destination)
+            _prepare_messages_content(
+                message, destination, preserve_features=preserve_features
+            )
         else:
             _prepare_chat_content(
                 message,
@@ -503,6 +515,7 @@ def prepare_history(
                 ),
                 reasoning_field=reasoning_field,
                 structured_details=structured_details,
+                preserve_features=preserve_features,
             )
     result["messages"] = [
         message
@@ -530,7 +543,9 @@ def _tool_result_message(message: JsonObject) -> bool:
     )
 
 
-def _prepare_messages_content(message: JsonObject, destination: ReplayOrigin) -> None:
+def _prepare_messages_content(
+    message: JsonObject, destination: ReplayOrigin, *, preserve_features: bool = False
+) -> None:
     content = message.get("content")
     if not isinstance(content, list):
         return
@@ -543,6 +558,14 @@ def _prepare_messages_content(message: JsonObject, destination: ReplayOrigin) ->
             blocks.append(block)
             continue
         record = _record(block, "signature", "data")
+        if (
+            preserve_features
+            and record is not None
+            and not destination.accepts(record.origin)
+        ):
+            raise UnsupportedRequestFeature(
+                "Native Messages history requires its original connection."
+            )
         if record is not None and destination.accepts(record.origin):
             blocks.append(record.native)
             if not readable_reasoning(record.native):
@@ -581,6 +604,7 @@ def _prepare_chat_content(
     native_text: bool,
     reasoning_field: str,
     structured_details: bool,
+    preserve_features: bool = False,
 ) -> None:
     had_reasoning_content = "reasoning_content" in message
     details = message.get("reasoning_details")
@@ -591,6 +615,13 @@ def _prepare_chat_content(
             if not isinstance(detail, dict):
                 continue
             record = _record(detail, "data", "signature")
+            if preserve_features and (
+                not structured_details
+                or (record is not None and not destination.accepts(record.origin))
+            ):
+                raise UnsupportedRequestFeature(
+                    "Chat provider cannot preserve native reasoning details."
+                )
             if record is None and structured_details:
                 restored.append(detail)
                 continue

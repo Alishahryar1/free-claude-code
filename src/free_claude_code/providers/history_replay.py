@@ -17,12 +17,11 @@ from free_claude_code.core.history_replay import (
     ReplayOrigin,
     decode_replay,
     is_replay,
-    readable_reasoning,
-    reasoning_context,
     resolve_messages_replay,
 )
 from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.recovery import CandidateIncompatible
 
 from .endpoint_types import HttpEndpoint
 
@@ -152,6 +151,28 @@ def requires_native_origin(body: Mapping[str, Any], protocol: HistoryProtocol) -
     return False
 
 
+def require_original_origin(
+    body: Mapping[str, Any], protocol: HistoryProtocol, destination: ReplayOrigin
+) -> None:
+    """Check the accepted input before a converter can project native state away."""
+    validate_history(body)
+    for _, item in _reasoning_records(body, protocol):
+        for key in ("encrypted_content", "signature", "data"):
+            value = item.get(key)
+            if not value:
+                continue
+            if isinstance(value, str) and is_replay(value):
+                record = decode_replay(value)
+                if not destination.accepts(record.origin):
+                    raise CandidateIncompatible(
+                        "Original native history belongs to another origin."
+                    )
+            elif destination.protocol != protocol:
+                raise CandidateIncompatible(
+                    "Original native history requires its source protocol."
+                )
+
+
 def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
     """Resolve persisted associations before any lossy protocol conversion."""
     validate_history(request.model_dump(mode="json"))
@@ -232,9 +253,13 @@ def replay_origin(
 
 
 def history_retry_body(
-    error: Exception, body: Mapping[str, Any], protocol: HistoryProtocol
+    error: Exception,
+    body: Mapping[str, Any],
+    protocol: HistoryProtocol,
+    *,
+    normalized_ids: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
-    """Repair one explicitly rejected historical record on an independent copy."""
+    """Normalize an explicitly rejected identifier without discarding history."""
     detail = extract_upstream_error_detail(error)
     if detail.status_code not in {None, 200, 400, 422}:
         return None
@@ -248,7 +273,6 @@ def history_retry_body(
     candidates = list(_reasoning_records(body, protocol))
     for record in _error_records(payload):
         message = str(record.get("message", ""))
-        code = record.get("code", record.get("type"))
         invalid_id = bool(
             re.search(
                 r"invalid.+(?:input|messages).+\.id.+(?:letters|characters|ID)",
@@ -256,17 +280,7 @@ def history_retry_body(
                 re.I,
             )
         )
-        invalid_native = code in {
-            "invalid_encrypted_content",
-            "invalid_signature",
-        } or bool(
-            re.search(
-                r"invalid signature in thinking block|referenced reasoning item .+ (?:not found|expired)",
-                message,
-                re.I,
-            )
-        )
-        if not (invalid_id or invalid_native):
+        if not invalid_id:
             continue
         matched = _rejected_record(record, candidates)
         if matched is None:
@@ -276,44 +290,37 @@ def history_retry_body(
         parent: Any = result
         for key in path[:-1]:
             parent = parent[key]
-        if invalid_id:
-            value = original.get("id")
-            if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_-]+", value):
-                continue
-            corrected = "rs_" + hashlib.sha256(value.encode()).hexdigest()[:24]
-            parent[path[-1]]["id"] = corrected
-            for item in result.get("input", []):
-                if (
-                    isinstance(item, dict)
-                    and item.get("type") == "item_reference"
-                    and item.get("id") == value
-                ):
-                    item["id"] = corrected
-        else:
-            context = "\n\n".join(
-                reasoning_context(text, summary=summary)
-                for text, summary in readable_reasoning(
-                    original
-                    if protocol != "chat"
-                    else {"reasoning_details": [original]}
-                )
-            )
-            if protocol == "responses" and context:
-                parent[path[-1]] = {"role": "assistant", "content": context}
-            elif protocol == "messages" and context:
-                parent[path[-1]] = {"type": "text", "text": context}
-            else:
-                del parent[path[-1]]
-                if protocol == "chat":
-                    assistant = result["messages"][path[1]]
-                    if context:
-                        assistant["content"] = (
-                            (assistant.get("content") or "") + "\n\n" + context
-                        )
-                    if not parent:
-                        assistant.pop("reasoning_details", None)
+        value = original.get("id")
+        if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_-]+", value):
+            continue
+        corrected = "rs_" + hashlib.sha256(value.encode()).hexdigest()[:24]
+        if normalized_ids is not None:
+            normalized_ids[value] = corrected
+        parent[path[-1]]["id"] = corrected
+        for item in result.get("input", []):
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "item_reference"
+                and item.get("id") == value
+            ):
+                item["id"] = corrected
         return result
     return None
+
+
+def reapply_history_ids(
+    body: dict[str, Any], protocol: HistoryProtocol, identifiers: Mapping[str, str]
+) -> None:
+    """Retain accepted identifier normalization on a fresh continuation copy."""
+    for _, record in _reasoning_records(body, protocol):
+        value = record.get("id")
+        if isinstance(record, dict) and isinstance(value, str) and value in identifiers:
+            record["id"] = identifiers[value]
+    for item in body.get("input", []):
+        if isinstance(item, dict) and item.get("type") == "item_reference":
+            value = item.get("id")
+            if isinstance(value, str) and value in identifiers:
+                item["id"] = identifiers[value]
 
 
 def _reasoning_records(

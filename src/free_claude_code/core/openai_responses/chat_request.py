@@ -23,6 +23,7 @@ from free_claude_code.core.openai_chat import (
     image_tool_result_label,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
+from free_claude_code.core.request_preservation import require_supported_fields
 
 from .errors import ResponsesConversionError, UnsupportedResponsesFeature
 from .models import OpenAIResponsesRequest
@@ -98,11 +99,13 @@ class _ResponsesChatInputBuilder:
         *,
         reasoning_replay: ReasoningReplayMode,
         structured_reasoning_details: bool,
+        preserve_features: bool = False,
     ) -> None:
         self.system_parts: list[str] = []
         self.messages: list[dict[str, object]] = []
         self._reasoning_replay = reasoning_replay
         self._structured_reasoning_details = structured_reasoning_details
+        self._preserve_features = preserve_features
         self._pending_reasoning = _PendingReasoning()
         self._pending_rich_output_parts: list[dict[str, object]] = []
         self._discovery_outputs: list[dict[str, object]] = []
@@ -128,6 +131,29 @@ class _ResponsesChatInputBuilder:
             self._add_message(item)
             return
         if item_type == "reasoning":
+            if self._preserve_features:
+                require_supported_fields(
+                    item,
+                    {"type", "id", "summary", "content", "encrypted_content", "status"},
+                    "Chat reasoning history",
+                )
+                for field in ("summary", "content"):
+                    parts = item.get(field)
+                    if parts is not None and not isinstance(parts, list):
+                        raise ResponsesConversionError(
+                            "Reasoning content must be a list."
+                        )
+                    for part in parts or []:
+                        if not isinstance(part, Mapping) or part.get("type") not in {
+                            "summary_text",
+                            "reasoning_text",
+                        }:
+                            raise UnsupportedResponsesFeature(
+                                "Chat cannot preserve this reasoning content."
+                            )
+                        require_supported_fields(
+                            part, {"type", "text"}, "Chat reasoning content"
+                        )
             self._pending_reasoning.add(item)
             return
         if item_type == "function_call":
@@ -141,14 +167,29 @@ class _ResponsesChatInputBuilder:
             return
         if item_type in {"input_text", "output_text", "text"}:
             self._flush_reasoning()
-            self.messages.append({"role": "user", "content": _text_from_part(item)})
+            self.messages.append(
+                {
+                    "role": "user",
+                    "content": _message_content(
+                        [dict(item)],
+                        allow_images=False,
+                        preserve_features=self._preserve_features,
+                    ),
+                }
+            )
             return
         if item_type == "input_image":
-            image = _image_part(item, context="input_image")
+            image = _image_part(
+                item, context="input_image", preserve_features=self._preserve_features
+            )
             self._flush_reasoning()
             self.messages.append({"role": "user", "content": [image]})
             return
         if isinstance(item_type, str) and item_type.endswith(("_call", "_result")):
+            if self._preserve_features:
+                raise UnsupportedResponsesFeature(
+                    "Chat Completions cannot preserve hosted tool history."
+                )
             if item.get("status") not in {
                 None,
                 "completed",
@@ -162,6 +203,11 @@ class _ResponsesChatInputBuilder:
             self._flush_reasoning()
             self.messages.append(
                 {"role": "assistant", "content": tool_history_context(item)}
+            )
+            return
+        if self._preserve_features:
+            raise UnsupportedResponsesFeature(
+                f"Chat Completions cannot represent input type {item_type!r}."
             )
 
     def finish(self) -> tuple[list[str], list[dict[str, object]]]:
@@ -180,9 +226,15 @@ class _ResponsesChatInputBuilder:
             message["content"] = json.dumps(tools)
 
     def _add_message(self, item: Mapping[str, JsonValue]) -> None:
+        if self._preserve_features:
+            require_supported_fields(
+                item, {"type", "role", "content", "id", "status"}, "Chat message"
+            )
         role = required_str(item.get("role", "user"), "input.role")
         if role in {"developer", "system"}:
-            text = _content_text(item.get("content"))
+            text = _content_text(
+                item.get("content"), preserve_features=self._preserve_features
+            )
             if text:
                 self.system_parts.append(text)
             return
@@ -193,7 +245,11 @@ class _ResponsesChatInputBuilder:
 
         if role == "user":
             self._flush_reasoning()
-        content = _message_content(item.get("content"), allow_images=role == "user")
+        content = _message_content(
+            item.get("content"),
+            allow_images=role == "user",
+            preserve_features=self._preserve_features,
+        )
         message: dict[str, object] = {"role": role, "content": content}
         if role == "assistant":
             self._apply_pending_reasoning(message)
@@ -202,6 +258,12 @@ class _ResponsesChatInputBuilder:
         self.messages.append(message)
 
     def _add_tool_call(self, item: Mapping[str, JsonValue]) -> None:
+        if self._preserve_features:
+            require_supported_fields(
+                item,
+                {"type", "id", "call_id", "name", "arguments", "status"},
+                "Chat function history",
+            )
         call_id = call_id_from_item(item)
         name = required_str(item.get("name"), "function_call.name")
         raw_arguments = item.get("arguments")
@@ -232,6 +294,14 @@ class _ResponsesChatInputBuilder:
         self, item: Mapping[str, JsonValue], *, source_type: str | None
     ) -> None:
         function = source_type != "custom_tool_call_output"
+        if self._preserve_features:
+            require_supported_fields(
+                item, {"type", "id", "call_id", "output", "status"}, "Chat tool output"
+            )
+            if isinstance(item.get("output"), list):
+                _message_content(
+                    item["output"], allow_images=True, preserve_features=True
+                )
         call_id = call_id_from_item(item)
         if not self._pending_reasoning.empty:
             previous = self._last_tool_call_message()
@@ -334,6 +404,7 @@ def build_responses_chat_request(
     *,
     reasoning_replay: ReasoningReplayMode,
     structured_reasoning_details: bool = False,
+    preserve_features: bool = False,
 ) -> ResponsesChatRequest:
     """Translate a Responses request directly into one Chat Completions body."""
     adapter = ResponsesToolAdapter(
@@ -343,11 +414,13 @@ def build_responses_chat_request(
             flatten_namespaces=True,
             client_tool_search=True,
         ),
+        preserve_features=preserve_features,
     )
     request = adapter.request
     builder = _ResponsesChatInputBuilder(
         reasoning_replay=reasoning_replay,
         structured_reasoning_details=structured_reasoning_details,
+        preserve_features=preserve_features,
     )
     if request.instructions:
         builder.system_parts.append(request.instructions)
@@ -379,10 +452,16 @@ def build_responses_chat_request(
             {"role": "system", "content": "\n\n".join(system_parts)},
         )
 
-    tools, available_tool_names = _chat_tools(request.tools)
+    tools, available_tool_names = _chat_tools(
+        request.tools, preserve_features=preserve_features
+    )
     if request.tool_choice != "none" and tools:
         body["tools"] = tools
-        choice = _chat_tool_choice(request.tool_choice, available_tool_names)
+        choice = _chat_tool_choice(
+            request.tool_choice,
+            available_tool_names,
+            preserve_features=preserve_features,
+        )
         if choice is not None:
             body["tool_choice"] = choice
 
@@ -398,11 +477,33 @@ def build_responses_chat_request(
         body["metadata"] = request.metadata
 
     extra = request.model_extra or {}
+    if preserve_features:
+        if request.previous_response_id:
+            raise UnsupportedResponsesFeature(
+                "Chat Completions requires materialized response history."
+            )
+        require_supported_fields(
+            extra,
+            {*_CHAT_OPTION_FIELDS, "text", "include", "truncation"},
+            "Chat request",
+        )
+        if extra.get("include") not in (None, []):
+            raise UnsupportedResponsesFeature(
+                "Chat Completions cannot preserve Responses include controls."
+            )
+        if extra.get("truncation") not in (None, "disabled"):
+            raise UnsupportedResponsesFeature(
+                "Chat Completions cannot preserve automatic truncation."
+            )
+        if request.reasoning is not None:
+            require_supported_fields(request.reasoning, {"effort"}, "Chat reasoning")
     for field_name in _CHAT_OPTION_FIELDS:
         value = extra.get(field_name)
         if value is not None:
             body[field_name] = value
-    if response_format := _chat_response_format(extra.get("text")):
+    if response_format := _chat_response_format(
+        extra.get("text"), preserve_features=preserve_features
+    ):
         body["response_format"] = response_format
 
     tool_schemas = _body_tool_schemas(body)
@@ -418,39 +519,6 @@ def build_responses_chat_request(
     )
 
 
-def validate_chat_recovery_request(request: OpenAIResponsesRequest) -> None:
-    """Require lossless request features when choosing a recovery target."""
-    if request.previous_response_id:
-        raise UnsupportedResponsesFeature(
-            "Chat Completions requires explicit history, without a stored response handle."
-        )
-    unsupported = sorted(
-        key
-        for key, value in (request.model_extra or {}).items()
-        if value is not None
-        and key not in {*_CHAT_OPTION_FIELDS, "text", "include", "truncation"}
-    )
-    if unsupported:
-        raise UnsupportedResponsesFeature(
-            f"Chat Completions cannot represent request fields: {unsupported}."
-        )
-    if any(
-        tool.get("type") != "function"
-        for tool in ResponsesToolAdapter(
-            request,
-            ResponsesToolPolicy(
-                custom_tools_as_functions=True,
-                flatten_namespaces=True,
-                client_tool_search=True,
-            ),
-        ).request.tools
-        or ()
-    ):
-        raise UnsupportedResponsesFeature(
-            "Chat Completions cannot preserve provider-managed tool declarations."
-        )
-
-
 def _input_items(value: JsonValue) -> Sequence[JsonValue]:
     if value is None:
         return ()
@@ -460,13 +528,17 @@ def _input_items(value: JsonValue) -> Sequence[JsonValue]:
 
 
 def _message_content(
-    value: JsonValue, *, allow_images: bool
+    value: JsonValue, *, allow_images: bool, preserve_features: bool = False
 ) -> str | list[dict[str, object]]:
     if isinstance(value, str):
         return value
     if not isinstance(value, Sequence) or isinstance(value, bytes | bytearray):
         if isinstance(value, Mapping):
-            return _text_from_part(value)
+            return _message_content(
+                [dict(value)],
+                allow_images=allow_images,
+                preserve_features=preserve_features,
+            )
         return ""
 
     parts: list[dict[str, object]] = []
@@ -480,10 +552,29 @@ def _message_content(
         if part_type in {"input_text", "output_text", "text", "refusal"} or (
             "text" in part
         ):
+            if preserve_features:
+                require_supported_fields(
+                    part,
+                    {"type", "text", "refusal", "annotations", "logprobs"},
+                    "Chat text content",
+                )
+                if part.get("annotations") or part.get("logprobs"):
+                    raise UnsupportedResponsesFeature(
+                        "Chat history cannot preserve text annotations or logprobs."
+                    )
             parts.append({"type": "text", "text": _text_from_part(part)})
             continue
         if allow_images and part_type == "input_image":
-            parts.append(_image_part(part, context="input_image"))
+            parts.append(
+                _image_part(
+                    part, context="input_image", preserve_features=preserve_features
+                )
+            )
+            continue
+        if preserve_features:
+            raise UnsupportedResponsesFeature(
+                f"Chat content cannot represent {part_type!r}."
+            )
 
     if not parts:
         return ""
@@ -492,8 +583,10 @@ def _message_content(
     return parts
 
 
-def _content_text(value: JsonValue) -> str:
-    content = _message_content(value, allow_images=False)
+def _content_text(value: JsonValue, *, preserve_features: bool = False) -> str:
+    content = _message_content(
+        value, allow_images=False, preserve_features=preserve_features
+    )
     if isinstance(content, str):
         return content
     return "\n\n".join(
@@ -509,7 +602,17 @@ def _text_from_part(part: Mapping[str, JsonValue]) -> str:
     return ""
 
 
-def _image_part(part: Mapping[str, JsonValue], *, context: str) -> dict[str, object]:
+def _image_part(
+    part: Mapping[str, JsonValue], *, context: str, preserve_features: bool = False
+) -> dict[str, object]:
+    if preserve_features:
+        require_supported_fields(
+            part, {"type", "image_url", "detail", "file_id"}, "Chat image"
+        )
+        if part.get("file_id") is not None:
+            raise UnsupportedResponsesFeature(
+                "Chat images require portable content or URLs."
+            )
     source = part.get("image_url")
     if isinstance(source, str) and source:
         image_url: dict[str, object] = {"url": source}
@@ -600,14 +703,22 @@ def _apply_reasoning_text(
 
 def _chat_tools(
     tools: list[JsonObject] | None,
+    *,
+    preserve_features: bool = False,
 ) -> tuple[list[dict[str, object]], frozenset[str]]:
     converted: list[dict[str, object]] = []
     names: set[str] = set()
     for tool in tools or ():
         tool_type = tool.get("type")
         if tool_type == "function":
-            converted_tool, name = _chat_function_tool(tool)
+            converted_tool, name = _chat_function_tool(
+                tool, preserve_features=preserve_features
+            )
             _append_unique_chat_tool(converted, names, converted_tool, name)
+        elif preserve_features:
+            raise UnsupportedResponsesFeature(
+                f"Chat Completions cannot preserve tool type {tool_type!r}."
+            )
     return converted, frozenset(names)
 
 
@@ -625,7 +736,19 @@ def _append_unique_chat_tool(
     names.add(name)
 
 
-def _chat_function_tool(tool: Mapping[str, JsonValue]) -> tuple[dict[str, object], str]:
+def _chat_function_tool(
+    tool: Mapping[str, JsonValue], *, preserve_features: bool = False
+) -> tuple[dict[str, object], str]:
+    if preserve_features:
+        require_supported_fields(
+            tool,
+            {"type", "name", "description", "parameters", "strict"},
+            "Chat function",
+        )
+        if not isinstance(tool.get("strict"), bool):
+            raise UnsupportedResponsesFeature(
+                "Responses and Chat have different default function strictness."
+            )
     name = required_str(tool.get("name"), "tool.name")
     parameters = tool.get("parameters")
     if parameters is None:
@@ -647,7 +770,10 @@ def _chat_function_tool(tool: Mapping[str, JsonValue]) -> tuple[dict[str, object
 
 
 def _chat_tool_choice(
-    value: JsonValue, available_names: frozenset[str]
+    value: JsonValue,
+    available_names: frozenset[str],
+    *,
+    preserve_features: bool = False,
 ) -> object | None:
     if not available_names:
         return None
@@ -658,11 +784,21 @@ def _chat_tool_choice(
     if value == "none":
         return None
     if not isinstance(value, Mapping):
+        if preserve_features:
+            raise UnsupportedResponsesFeature(
+                "Chat Completions cannot represent this tool choice."
+            )
         return None
+    if preserve_features:
+        require_supported_fields(value, {"type", "name"}, "Chat tool choice")
     choice_type = value.get("type")
     if choice_type in {"auto", "any", "required"}:
         return "required" if choice_type in {"any", "required"} else "auto"
     if choice_type != "function":
+        if preserve_features:
+            raise UnsupportedResponsesFeature(
+                "Chat Completions cannot represent this tool choice."
+            )
         return None
     name = optional_str(value.get("name"))
     if not name:
@@ -672,17 +808,39 @@ def _chat_tool_choice(
     return {"type": "function", "function": {"name": name}}
 
 
-def _chat_response_format(value: JsonValue) -> object | None:
+def _chat_response_format(
+    value: JsonValue, *, preserve_features: bool = False
+) -> object | None:
     if not isinstance(value, Mapping):
+        if preserve_features and value is not None:
+            raise ResponsesConversionError("Responses text must be an object.")
         return None
+    if preserve_features:
+        require_supported_fields(value, {"format"}, "Chat text controls")
     format_value = value.get("format")
     if not isinstance(format_value, Mapping):
         return None
     format_type = format_value.get("type")
     if format_type in {"text", "json_object"}:
+        if preserve_features:
+            require_supported_fields(format_value, {"type"}, "Chat text format")
         return {"type": format_type}
     if format_type != "json_schema":
+        if preserve_features:
+            raise UnsupportedResponsesFeature(
+                "Chat Completions cannot represent this text format."
+            )
         return None
+    if preserve_features:
+        require_supported_fields(
+            format_value,
+            {"type", "name", "description", "schema", "strict"},
+            "Chat structured output",
+        )
+        if not isinstance(format_value.get("strict"), bool):
+            raise UnsupportedResponsesFeature(
+                "Responses and Chat have different default schema strictness."
+            )
     json_schema = {
         key: format_value[key]
         for key in ("name", "description", "schema", "strict")

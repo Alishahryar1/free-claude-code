@@ -32,7 +32,10 @@ class ProviderCandidate(Protocol):
         *,
         wait_for_recovery: bool,
         can_correct: Callable[[], bool],
+        on_rejected: Callable[[], None] | None = None,
     ) -> AsyncIterator[DecodedStreamEvent]: ...
+
+    async def suspend(self) -> None: ...
 
     def finish(self, failure: ExecutionFailure | None) -> None: ...
 

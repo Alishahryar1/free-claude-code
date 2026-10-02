@@ -50,7 +50,7 @@ async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
         nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
-    req = make_messages_request()
+    req = make_messages_request(thinking=None, top_p=0.95)
 
     mock_chunk = MagicMock()
     mock_chunk.choices = [
@@ -95,7 +95,7 @@ async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
         nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
-    req = make_messages_request()
+    req = make_messages_request(thinking=None, top_p=0.95)
 
     mock_chunk = MagicMock()
     mock_chunk.choices = [
@@ -137,7 +137,7 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
         nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
-    req = make_messages_request()
+    req = make_messages_request(thinking=None, top_p=0.95)
     error = _connection_error("upstream disconnected")
 
     with (
@@ -190,7 +190,7 @@ async def test_nim_stream_openai_5xx_exhausted_emits_user_message(
         nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
-    req = make_messages_request()
+    req = make_messages_request(thinking=None, top_p=0.95)
 
     with (
         patch.object(

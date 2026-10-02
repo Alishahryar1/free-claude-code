@@ -3,7 +3,11 @@
 import json
 from typing import Any, cast
 
-from free_claude_code.core.anthropic.content import get_block_attr, get_block_type
+from free_claude_code.core.anthropic.content import (
+    get_block_attr,
+    get_block_type,
+    require_block_fields,
+)
 from free_claude_code.core.anthropic.conversion import resolve_anthropic_tool_choice
 from free_claude_code.core.anthropic.image_sources import (
     AnthropicImageSourceError,
@@ -31,6 +35,7 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.request_preservation import require_supported_fields
 from free_claude_code.core.tool_schema_patterns import translate_tool_schema_patterns
 
 from .errors import ResponsesConversionError, UnsupportedResponsesFeature
@@ -41,16 +46,25 @@ def build_responses_provider_request(
     request: MessagesRequest,
     *,
     reasoning: ReasoningPolicy,
+    preserve_features: bool = False,
 ) -> dict[str, Any]:
     """Build a stateless Responses request without silently dropping fields."""
 
     _validate_supported_request(request)
+    if preserve_features and (request.thinking is not None or request.betas):
+        raise UnsupportedResponsesFeature(
+            "Responses cannot preserve native Messages thinking or beta controls."
+        )
     tool_names = OpenAIToolNameCodec.from_request(request)
-    instructions = _system_text(request)
+    instructions = _system_text(request, preserve_features=preserve_features)
     input_items: list[dict[str, Any]] = []
     for message in request.messages:
         if message.role == "system":
-            text = _message_text(message.content, context="system message")
+            text = _message_text(
+                message.content,
+                context="system message",
+                preserve_features=preserve_features,
+            )
             if text:
                 instructions.append(text)
         elif message.role == "assistant":
@@ -59,10 +73,13 @@ def build_responses_provider_request(
                     message.content,
                     reasoning_content=message.reasoning_content,
                     tool_names=tool_names,
+                    preserve_features=preserve_features,
                 )
             )
         else:
-            input_items.extend(_user_items(message.content))
+            input_items.extend(
+                _user_items(message.content, preserve_features=preserve_features)
+            )
 
     if not input_items:
         raise ResponsesConversionError(
@@ -87,6 +104,17 @@ def build_responses_provider_request(
     if request.metadata is not None:
         body["metadata"] = request.metadata
     if request.tools:
+        if preserve_features:
+            for tool in request.tools:
+                require_block_fields(
+                    tool,
+                    {"name", "description", "input_schema", "type", "strict"},
+                    "Responses function",
+                )
+                if get_block_attr(tool, "strict") not in (None, False):
+                    raise UnsupportedResponsesFeature(
+                        "This Responses converter cannot preserve native tool strictness."
+                    )
         body["tools"] = [
             {
                 "type": "function",
@@ -101,7 +129,9 @@ def build_responses_provider_request(
         ]
     tool_choice = resolve_anthropic_tool_choice(request.tools, request.tool_choice)
     if tool_choice is not None:
-        body["tool_choice"] = _tool_choice(tool_choice, tool_names=tool_names)
+        body["tool_choice"] = _tool_choice(
+            tool_choice, tool_names=tool_names, preserve_features=preserve_features
+        )
     if reasoning_config := responses_reasoning_config(reasoning):
         body["reasoning"] = reasoning_config
     return body
@@ -167,11 +197,16 @@ def _is_noop_context_management(
     )
 
 
-def _system_text(request: MessagesRequest) -> list[str]:
+def _system_text(
+    request: MessagesRequest, *, preserve_features: bool = False
+) -> list[str]:
     if request.system is None:
         return []
     if isinstance(request.system, str):
         return [request.system] if request.system else []
+    if preserve_features:
+        for part in request.system:
+            require_block_fields(part, {"type", "text"}, "Responses system text")
     return [part.text for part in request.system if part.text]
 
 
@@ -180,6 +215,7 @@ def _assistant_items(
     *,
     reasoning_content: str | None,
     tool_names: OpenAIToolNameCodec,
+    preserve_features: bool = False,
 ) -> list[dict[str, Any]]:
     blocks = (
         [{"type": "text", "text": content}] if isinstance(content, str) else content
@@ -222,12 +258,20 @@ def _assistant_items(
     for block in blocks:
         kind = get_block_type(block)
         if kind == "text":
+            if preserve_features:
+                require_block_fields(
+                    block, {"type", "text"}, "Responses assistant text"
+                )
             text_parts.append(
                 {"type": "output_text", "text": str(get_block_attr(block, "text", ""))}
             )
             continue
         flush_text()
         if kind == "thinking":
+            if preserve_features:
+                require_block_fields(
+                    block, {"type", "thinking", "signature"}, "Responses thinking"
+                )
             signature = get_block_attr(block, "signature", None)
             item: dict[str, Any] = {"type": "reasoning", "summary": []}
             if isinstance(signature, str) and signature:
@@ -259,6 +303,10 @@ def _assistant_items(
                 ]
             items.append(item)
         elif kind == "redacted_thinking":
+            if preserve_features:
+                require_block_fields(
+                    block, {"type", "data"}, "Responses redacted thinking"
+                )
             items.append(
                 {
                     "type": "reasoning",
@@ -267,6 +315,10 @@ def _assistant_items(
                 }
             )
         elif kind == "tool_use":
+            if preserve_features:
+                require_block_fields(
+                    block, {"type", "id", "name", "input"}, "Responses function history"
+                )
             items.append(
                 {
                     "type": "function_call",
@@ -284,6 +336,10 @@ def _assistant_items(
             "web_search_tool_result",
             "web_fetch_tool_result",
         }:
+            if preserve_features:
+                raise UnsupportedResponsesFeature(
+                    "Responses cannot preserve Messages hosted tool history."
+                )
             native = (
                 block
                 if isinstance(block, dict)
@@ -302,7 +358,9 @@ def _assistant_items(
     return items
 
 
-def _user_items(content: Any) -> list[dict[str, Any]]:
+def _user_items(
+    content: Any, *, preserve_features: bool = False
+) -> list[dict[str, Any]]:
     if isinstance(content, str):
         return [_user_message([{"type": "input_text", "text": content}])]
     if not isinstance(content, list):
@@ -319,6 +377,8 @@ def _user_items(content: Any) -> list[dict[str, Any]]:
     for block in content:
         block_type = get_block_type(block)
         if block_type == "text":
+            if preserve_features:
+                require_block_fields(block, {"type", "text"}, "Responses user text")
             message_parts.append(
                 {
                     "type": "input_text",
@@ -326,12 +386,26 @@ def _user_items(content: Any) -> list[dict[str, Any]]:
                 }
             )
         elif block_type == "image":
-            message_parts.append(_image_part(block))
+            message_parts.append(
+                _image_part(block, preserve_features=preserve_features)
+            )
         elif block_type == "tool_result":
+            if preserve_features:
+                require_block_fields(
+                    block,
+                    {"type", "tool_use_id", "content", "is_error"},
+                    "Responses tool result",
+                )
+                if get_block_attr(block, "is_error"):
+                    raise UnsupportedResponsesFeature(
+                        "Responses cannot preserve the native tool-result error control."
+                    )
             flush_message()
             tool_content = get_block_attr(block, "content")
             try:
-                decomposed = decompose_tool_result_content(tool_content)
+                decomposed = decompose_tool_result_content(
+                    tool_content, preserve_features=preserve_features
+                )
             except AnthropicImageSourceError as exc:
                 raise ResponsesConversionError(str(exc)) from exc
             if decomposed.has_images:
@@ -362,7 +436,14 @@ def _user_items(content: Any) -> list[dict[str, Any]]:
     return items
 
 
-def _image_part(block: Any) -> dict[str, Any]:
+def _image_part(block: Any, *, preserve_features: bool = False) -> dict[str, Any]:
+    if preserve_features:
+        require_block_fields(block, {"type", "source"}, "Responses image")
+        require_block_fields(
+            get_block_attr(block, "source", {}),
+            {"type", "data", "media_type", "url"},
+            "Responses image source",
+        )
     try:
         url = portable_anthropic_image_url(get_block_attr(block, "source", {}))
     except AnthropicImageSourceError as exc:
@@ -370,13 +451,17 @@ def _image_part(block: Any) -> dict[str, Any]:
     return {"type": "input_image", "image_url": url}
 
 
-def _message_text(content: Any, *, context: str) -> str:
+def _message_text(
+    content: Any, *, context: str, preserve_features: bool = False
+) -> str:
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
         raise ResponsesConversionError(f"{context} must contain only text.")
     parts: list[str] = []
     for block in content:
+        if preserve_features:
+            require_block_fields(block, {"type", "text"}, "Responses system text")
         if get_block_type(block) != "text":
             raise ResponsesConversionError(f"{context} must contain only text.")
         parts.append(str(get_block_attr(block, "text", "")))
@@ -395,7 +480,18 @@ def _tool_choice(
     choice: dict[str, Any],
     *,
     tool_names: OpenAIToolNameCodec,
+    preserve_features: bool = False,
 ) -> str | dict[str, str]:
+    if preserve_features:
+        require_supported_fields(
+            choice,
+            {"type", "name", "disable_parallel_tool_use"},
+            "Responses tool choice",
+        )
+        if choice.get("disable_parallel_tool_use") not in (None, False):
+            raise UnsupportedResponsesFeature(
+                "This Responses converter cannot preserve native parallel-call restrictions."
+            )
     choice_type = choice.get("type")
     if choice_type in {"auto", "none"}:
         return str(choice_type)

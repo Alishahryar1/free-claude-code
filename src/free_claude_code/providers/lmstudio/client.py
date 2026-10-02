@@ -35,6 +35,7 @@ from free_claude_code.core.reasoning import (
 from free_claude_code.core.recovery import RecoveryCheckpoint
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.candidate_setup import CandidateSetup
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
     context_window_exceeded_provider_failure,
@@ -146,13 +147,31 @@ class LMStudioProvider(OpenAIChatProvider):
             checkpoint=RecoveryCheckpoint("responses"),
         )
 
-    @asynccontextmanager
-    async def _stream_with_context_budget(
+    def _stream_with_context_budget(
         self,
         stream: AbstractAsyncContextManager[ProviderCandidate],
         *,
         estimate: int,
         request_id: str | None,
+        checkpoint: RecoveryCheckpoint,
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        async def initialize(
+            wait_for_recovery: bool,
+        ) -> AbstractAsyncContextManager[ProviderCandidate]:
+            return self._validate_candidate(
+                stream, estimate=estimate, checkpoint=checkpoint
+            )
+
+        return CandidateSetup(
+            initialize, provider_name="LMSTUDIO", request_id=request_id
+        ).open()
+
+    @asynccontextmanager
+    async def _validate_candidate(
+        self,
+        stream: AbstractAsyncContextManager[ProviderCandidate],
+        *,
+        estimate: int,
         checkpoint: RecoveryCheckpoint,
     ) -> AsyncIterator[ProviderCandidate]:
         async with stream as candidate:

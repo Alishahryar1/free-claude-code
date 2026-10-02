@@ -3,6 +3,7 @@
 from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 import simplejson
@@ -10,10 +11,26 @@ import simplejson
 from .history_replay import ReplayOrigin
 
 
+class ItemCompletion(Enum):
+    """Source evidence at an item boundary, independent of public event names."""
+
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+    INVALID_INPUT = "invalid_input"
+
+
+class RequestOutcome(Enum):
+    """Authoritative source termination, independent of projected events."""
+
+    SUCCESS = "success"
+    INCOMPLETE = "incomplete"
+
+
 @dataclass(frozen=True, slots=True)
 class StreamEvent:
     kind: str
     payload: dict[str, Any]
+    item_completion: ItemCompletion | None = None
 
     def serialize(self) -> str:
         return (
@@ -40,11 +57,16 @@ class DecodedStreamEvent:
     source: StreamEvent
     projected: tuple[StreamEvent, ...]
     progress: bool = False
-    completed: bool = False
+    outcome: RequestOutcome | None = None
+    stop_reason: str | None = None
     replay_safe: bool = True
     required_origins: tuple[ReplayOrigin, ...] = ()
     native_reasoning_pending: bool = False
     allow_empty_completion: bool = False
+
+    @property
+    def completed(self) -> bool:
+        return self.outcome is not None
 
 
 @dataclass(slots=True)
@@ -78,6 +100,9 @@ class OrderedStreamBuffer:
 
     def complete(self, index: int) -> bool:
         return self._items[index].complete
+
+    def atomic(self, index: int) -> bool:
+        return self._items[index].atomic
 
     def append(self, index: int, event: StreamEvent, *, complete: bool = False) -> None:
         item = self._items[index]

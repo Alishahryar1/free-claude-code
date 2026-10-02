@@ -1,6 +1,7 @@
 """Responses recovery retains IDs, complete calls, native data and stop reasons."""
 
 from copy import deepcopy
+from weakref import WeakKeyDictionary
 
 import pytest
 
@@ -8,16 +9,34 @@ from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.openai_responses import (
     ResponsesRecoveryWriter,
 )
+from free_claude_code.core.openai_responses.source_state import ResponsesSourceState
 from free_claude_code.core.stream_events import DecodedStreamEvent, StreamEvent
 
 ORIGIN = ReplayOrigin("first", "responses", "https://first.test", "key", "model")
+SOURCES: WeakKeyDictionary[ResponsesRecoveryWriter, ResponsesSourceState] = (
+    WeakKeyDictionary()
+)
 
 
 def _feed(
     writer: ResponsesRecoveryWriter, kind: str, **body: object
 ) -> list[StreamEvent]:
     event = StreamEvent(kind, {"type": kind, **body})
-    return writer.feed(DecodedStreamEvent(ORIGIN, event, (event,)))
+    if kind == "response.created":
+        SOURCES[writer] = ResponsesSourceState()
+    source = SOURCES[writer]
+    return [
+        output
+        for observed in source.feed(event)
+        for output in writer.feed(
+            DecodedStreamEvent(
+                ORIGIN,
+                observed,
+                (observed,),
+                native_reasoning_pending=source.native_reasoning_pending,
+            )
+        )
+    ]
 
 
 def _start(
@@ -102,7 +121,8 @@ def test_done_only_call_is_retained_in_a_failed_response():
         "status": "completed",
     }
     frames = _feed(writer, "response.output_item.done", output_index=0, item=call)
-    assert [frame.kind for frame in frames] == ["response.output_item.done"]
+    assert sum(frame.kind == "response.output_item.done" for frame in frames) == 1
+    assert frames[-1].payload["item"] == call
     assert writer.checkpoint.published_tools
     failed = writer.failure(
         ExecutionFailure(FailureKind.UPSTREAM, 502, "failed", False)
@@ -138,7 +158,8 @@ def test_terminal_snapshot_keeps_text_that_has_no_delta_events(recovered):
     if recovered:
         assert writer.checkpoint.text == "First. Second."
     else:
-        assert [event.kind for event in emitted] == ["response.completed"]
+        assert sum(event.kind == "response.completed" for event in emitted) == 1
+        assert writer.checkpoint.text == "Second."
 
 
 def test_repeated_failures_share_identity_and_allocate_distinct_items() -> None:
@@ -198,7 +219,7 @@ def test_tool_identity_and_raw_arguments_are_held_until_item_done() -> None:
         "arguments": "",
     }
     assert not _feed(writer, "response.output_item.added", output_index=0, item=item)
-    arguments = "{" + "x" * 70000
+    arguments = '{"value":"' + "x" * 70000 + '"}'
     assert not _feed(
         writer,
         "response.function_call_arguments.delta",

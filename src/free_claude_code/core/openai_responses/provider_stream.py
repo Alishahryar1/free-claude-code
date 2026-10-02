@@ -98,11 +98,15 @@ class ResponsesProviderStream:
             return []
         item_id = _string(item.get("id"))
         if item.get("type") == "function_call" and item_id:
-            self._tools[item_id] = _ToolState(
+            state = self._tools[item_id] = _ToolState(
                 tool_index=len(self._tools),
                 call_id=_string(item.get("call_id")) or item_id,
                 name=self._tool_names.decode(_string(item.get("name"))),
             )
+            return [
+                *self.ledger.close_content_blocks(),
+                *self._ensure_tool_started(state),
+            ]
         if item.get("type") == "reasoning" and item_id:
             encrypted = item.get("encrypted_content")
             if isinstance(encrypted, str) and encrypted:
@@ -213,16 +217,6 @@ class ResponsesProviderStream:
         response = data.get("response")
         response = response if isinstance(response, dict) else {}
         events: list[StreamEvent] = []
-        output = response.get("output")
-        if isinstance(output, list):
-            for item in output:
-                if (
-                    isinstance(item, dict)
-                    and item.get("type") == "function_call"
-                    and item.get("status") in {None, "completed"}
-                    and not incomplete
-                ):
-                    events.extend(self._item_done({"item": item}))
         events.extend(self.ledger.close_content_blocks())
         if not self.ledger.has_content_block():
             events.extend(self.ledger.ensure_text_block())
@@ -244,7 +238,9 @@ class ResponsesProviderStream:
         stop_reason = "max_tokens" if incomplete else "end_turn"
         events.append(
             self.ledger.message_delta(
-                self.ledger.final_stop_reason(stop_reason),
+                stop_reason
+                if incomplete
+                else self.ledger.final_stop_reason(stop_reason),
                 output_tokens
                 if output_tokens is not None
                 else self.ledger.estimate_output_tokens(),

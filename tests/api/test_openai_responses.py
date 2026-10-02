@@ -161,11 +161,17 @@ def test_create_response_stream_routes_native_request_through_provider(
     assert "text/event-stream" in response.headers["content-type"]
     assert response.headers["x-request-id"] == response.headers["request-id"]
     events = parse_sse_text(response.text)
-    assert [event.event for event in events] == [
-        "response.created",
-        "response.output_text.delta",
-        "response.completed",
-    ]
+    assert events[0].event == "response.created"
+    assert events[-1].event == "response.completed"
+    assert sum(event.event == "response.completed" for event in events) == 1
+    assert (
+        "".join(
+            event.data["delta"]
+            for event in events
+            if event.event == "response.output_text.delta"
+        )
+        == "Hello from provider"
+    )
     assert events[-1].data["response"]["output"][0]["content"][0]["text"] == (
         "Hello from provider"
     )

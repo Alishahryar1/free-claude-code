@@ -3,7 +3,6 @@
 from .chat_request import (
     ResponsesChatRequest,
     build_responses_chat_request,
-    validate_chat_recovery_request,
 )
 from .errors import (
     ResponsesConversionError,
@@ -31,6 +30,7 @@ from .provider_stream import (
 )
 from .reasoning import responses_reasoning_config, responses_reasoning_policy
 from .recovery_stream import ResponsesRecoveryWriter
+from .source_state import ResponsesSourceState
 from .streaming.blocks import ReasoningBlockState, TextBlockState, ToolBlockState
 from .streaming.completion import (
     ResponseBlockCompleter,
@@ -64,6 +64,7 @@ __all__ = [
     "ResponsesOutputLedger",
     "ResponsesProviderStream",
     "ResponsesRecoveryWriter",
+    "ResponsesSourceState",
     "ResponsesStreamFailure",
     "ResponsesToolAdapter",
     "ResponsesToolEventAdapter",
@@ -91,5 +92,4 @@ __all__ = [
     "responses_reasoning_policy",
     "responses_stream_failure_from_event",
     "tool_item",
-    "validate_chat_recovery_request",
 ]

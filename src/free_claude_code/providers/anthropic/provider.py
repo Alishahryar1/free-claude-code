@@ -1,8 +1,8 @@
 """Anthropic credentials, HTTP lifetime, and atomic model capability snapshots."""
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
 from types import MappingProxyType
 from typing import cast
 from urllib.parse import quote
@@ -24,6 +24,7 @@ from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
+    ProviderExecution,
     ProviderOperationKind,
 )
 from free_claude_code.providers.anthropic_messages.discovery import list_messages_models
@@ -37,6 +38,7 @@ from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
+from free_claude_code.providers.candidate_setup import CandidateSetup
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.history_replay import replay_origin
@@ -100,7 +102,13 @@ class AnthropicProvider(BaseProvider):
             )
             return frozenset(record.info for record in records)
 
-    async def model_record(self, model: str) -> AnthropicModelRecord:
+    async def model_record(
+        self,
+        model: str,
+        *,
+        execution: ProviderExecution | None = None,
+        wait_for_recovery: bool = True,
+    ) -> AnthropicModelRecord:
         record = self._records.get(model)
         if record is not None:
             return record
@@ -120,8 +128,10 @@ class AnthropicProvider(BaseProvider):
                 return response.json()
 
             try:
-                item = await self._admission.start_execution().run_call(
-                    fetch, operation_kind=ProviderOperationKind.MODEL_DISCOVERY
+                item = await (execution or self._admission.start_execution()).run_call(
+                    fetch,
+                    operation_kind=ProviderOperationKind.MODEL_DISCOVERY,
+                    wait_for_recovery=wait_for_recovery,
                 )
                 if not isinstance(item, dict):
                     raise ModelListResponseError("Invalid Anthropic model record")
@@ -181,8 +191,7 @@ class AnthropicProvider(BaseProvider):
             ),
         )
 
-    @asynccontextmanager
-    async def open_messages(
+    def open_messages(
         self,
         request: MessagesRequest,
         input_tokens: int = 0,
@@ -192,21 +201,15 @@ class AnthropicProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[ProviderCandidate]:
-        record = await self.model_record(request.model)
-        stream = self._transport(record).open_messages(
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        return self._candidate(
             request,
-            endpoint_context=self,
             request_id=request_id,
             response_model=response_model,
             reasoning=reasoning,
-            model_info=record.info,
         )
-        async with stream as candidate:
-            yield candidate
 
-    @asynccontextmanager
-    async def open_responses(
+    def open_responses(
         self,
         request: OpenAIResponsesRequest,
         input_tokens: int = 0,
@@ -216,15 +219,52 @@ class AnthropicProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[ProviderCandidate]:
-        record = await self.model_record(request.model)
-        stream = self._transport(record).open_responses(
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        return self._candidate(
             request,
-            endpoint_context=self,
             request_id=request_id,
             response_model=response_model,
             reasoning=reasoning,
-            model_info=record.info,
         )
-        async with stream as candidate:
-            yield candidate
+
+    def _candidate(
+        self,
+        request: MessagesRequest | OpenAIResponsesRequest,
+        *,
+        request_id: str | None,
+        response_model: str | None,
+        reasoning: ReasoningPolicy,
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        discovery = self._admission.start_execution(request_id=request_id)
+
+        async def initialize(
+            wait_for_recovery: bool,
+        ) -> AbstractAsyncContextManager[ProviderCandidate]:
+            record = await self.model_record(
+                request.model, execution=discovery, wait_for_recovery=wait_for_recovery
+            )
+            transport = self._transport(record)
+            if isinstance(request, MessagesRequest):
+                return transport.open_messages(
+                    request,
+                    endpoint_context=self,
+                    request_id=request_id,
+                    response_model=response_model,
+                    reasoning=reasoning,
+                    model_info=record.info,
+                )
+            return transport.open_responses(
+                request,
+                endpoint_context=self,
+                request_id=request_id,
+                response_model=response_model,
+                reasoning=reasoning,
+                model_info=record.info,
+            )
+
+        return CandidateSetup(
+            initialize,
+            provider_name="anthropic",
+            request_id=request_id,
+            discovery=discovery,
+        ).open()

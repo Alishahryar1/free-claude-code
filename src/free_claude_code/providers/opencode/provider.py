@@ -18,6 +18,7 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
+from free_claude_code.providers.candidate_setup import CandidateSetup
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -85,6 +86,7 @@ class OpenCodeProvider(BaseProvider):
         catalog_client: httpx.AsyncClient | None = None,
     ) -> None:
         super().__init__(config)
+        self._admission = admission
         self._client = create_chat_client(
             config,
             base_url=profile.chat_profile.base_url(config.base_url).rstrip("/"),
@@ -201,12 +203,24 @@ class OpenCodeProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[ProviderCandidate]:
-        snapshot = await self._catalog.snapshot(request_id=request_id)
-        route = self._require_route(snapshot, request.model)
-        routed = _routed_messages_request(request, route)
-        selected_stream: AbstractAsyncContextManager[ProviderCandidate]
-        if route.transport is OpenCodeUpstreamTransport.RESPONSES:
-            selected_stream = self._responses.open_messages(
+        discovery = self._admission.start_execution(request_id=request_id)
+
+        async def initialize(
+            wait_for_recovery: bool,
+        ) -> AbstractAsyncContextManager[ProviderCandidate]:
+            snapshot = await self._catalog.snapshot(
+                request_id=request_id,
+                execution=discovery,
+                wait_for_recovery=wait_for_recovery,
+            )
+            route = self._require_route(snapshot, request.model)
+            routed = _routed_messages_request(request, route)
+            transport = (
+                self._responses
+                if route.transport is OpenCodeUpstreamTransport.RESPONSES
+                else self._chat
+            )
+            return transport.open_messages(
                 routed,
                 input_tokens=input_tokens,
                 request_id=request_id,
@@ -216,18 +230,13 @@ class OpenCodeProvider(BaseProvider):
                 extra_headers=self._upstream_headers(request_headers or {}),
                 model_info=route.model_info,
             )
-        else:
-            selected_stream = self._chat.open_messages(
-                routed,
-                input_tokens=input_tokens,
-                request_id=request_id,
-                response_model=response_model,
-                reasoning=reasoning,
-                endpoint_context=endpoint_context,
-                extra_headers=self._upstream_headers(request_headers or {}),
-                model_info=route.model_info,
-            )
-        async with selected_stream as candidate:
+
+        async with CandidateSetup(
+            initialize,
+            provider_name=self._opencode_profile.provider_name,
+            request_id=request_id,
+            discovery=discovery,
+        ).open() as candidate:
             yield candidate
 
     def open_responses(
@@ -264,12 +273,24 @@ class OpenCodeProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[ProviderCandidate]:
-        snapshot = await self._catalog.snapshot(request_id=request_id)
-        route = self._require_route(snapshot, request.model)
-        routed = _routed_responses_request(request, route)
-        selected_stream: AbstractAsyncContextManager[ProviderCandidate]
-        if route.transport is OpenCodeUpstreamTransport.RESPONSES:
-            selected_stream = self._responses.open_responses(
+        discovery = self._admission.start_execution(request_id=request_id)
+
+        async def initialize(
+            wait_for_recovery: bool,
+        ) -> AbstractAsyncContextManager[ProviderCandidate]:
+            snapshot = await self._catalog.snapshot(
+                request_id=request_id,
+                execution=discovery,
+                wait_for_recovery=wait_for_recovery,
+            )
+            route = self._require_route(snapshot, request.model)
+            routed = _routed_responses_request(request, route)
+            transport = (
+                self._responses
+                if route.transport is OpenCodeUpstreamTransport.RESPONSES
+                else self._chat
+            )
+            return transport.open_responses(
                 routed,
                 input_tokens=input_tokens,
                 request_id=request_id,
@@ -278,17 +299,13 @@ class OpenCodeProvider(BaseProvider):
                 endpoint_context=endpoint_context,
                 extra_headers=self._upstream_headers(request_headers or {}),
             )
-        else:
-            selected_stream = self._chat.open_responses(
-                routed,
-                input_tokens=input_tokens,
-                request_id=request_id,
-                response_model=response_model,
-                reasoning=reasoning,
-                endpoint_context=endpoint_context,
-                extra_headers=self._upstream_headers(request_headers or {}),
-            )
-        async with selected_stream as candidate:
+
+        async with CandidateSetup(
+            initialize,
+            provider_name=self._opencode_profile.provider_name,
+            request_id=request_id,
+            discovery=discovery,
+        ).open() as candidate:
             yield candidate
 
     def _require_route(

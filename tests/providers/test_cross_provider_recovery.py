@@ -68,7 +68,12 @@ async def test_three_targets_resume_the_latest_prefix_with_tools_and_one_lifecyc
             input="Continue the work",
             instructions="Keep these instructions",
             tools=[
-                {"type": "function", "name": "read", "parameters": {"type": "object"}}
+                {
+                    "type": "function",
+                    "name": "read",
+                    "parameters": {"type": "object"},
+                    "strict": False,
+                }
             ],
         )
     )

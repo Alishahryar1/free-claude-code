@@ -232,9 +232,9 @@ async def test_mixed_recovery_keeps_one_budget_and_correction_history(
         if ordinal == 1:
             return 401, {"type": "authentication_error", "message": "expired"}
         if ordinal == 2:
-            return 400, _history_error(protocol)
-        if ordinal == 3:
             return 400, _reasoning_error()
+        if ordinal == 3:
+            return 503, {"type": "overloaded_error", "message": "unavailable"}
         if ordinal == 4:
             return 200, _partial(protocol)
         if exhausted:
@@ -242,6 +242,7 @@ async def test_mixed_recovery_keeps_one_budget_and_correction_history(
         return 200, _events_for(protocol)
 
     request = _request(protocol)
+    request.messages = request.messages[-1:]
     original = deepcopy(request.model_dump())
     async with _transport(protocol, respond) as (provider, endpoint, bodies, wires, _):
         with patch("free_claude_code.providers.admission.trace_event") as trace:
@@ -262,15 +263,13 @@ async def test_mixed_recovery_keeps_one_budget_and_correction_history(
         assert len({start["execution_id"] for start in starts}) == 1
         assert endpoint.calls == [False, True, False, False, False]
         assert len(bodies) == 5 and bodies[0] == bodies[1]
-        assert "opaque-original" in json.dumps(bodies[1])
-        assert all("opaque-original" not in json.dumps(body) for body in bodies[2:])
         field = {
             "chat": "reasoning_effort",
             "responses": "reasoning",
             "messages": "thinking",
         }[protocol]
-        assert field in bodies[2]
-        assert all(field not in body for body in bodies[3:])
+        assert field in bodies[1]
+        assert all(field not in body for body in bodies[2:])
         assert all(wire.close_calls == 1 for wire in wires)
     assert request.model_dump() == original
 
@@ -280,14 +279,14 @@ async def test_mixed_recovery_keeps_one_budget_and_correction_history(
 async def test_refresh_allowance_survives_an_intervening_correction(protocol):
     def respond(ordinal):
         if ordinal == 2:
-            return 400, _history_error(protocol)
+            return 400, _reasoning_error()
         return 401, {"type": "authentication_error", "message": "expired"}
 
+    request = _request(protocol)
+    request.messages = request.messages[-1:]
     async with _transport(protocol, respond) as (provider, endpoint, bodies, wires, _):
         with pytest.raises(ExecutionFailure) as failure:
-            _ = [
-                event async for event in _stream(provider, endpoint, _request(protocol))
-            ]
+            _ = [event async for event in _stream(provider, endpoint, request)]
         assert failure.value.status_code == 401
         assert len(bodies) == 3 and endpoint.calls == [False, True, False]
         assert all(wire.close_calls == 1 for wire in wires)

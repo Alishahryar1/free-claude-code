@@ -3,6 +3,7 @@
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from functools import partial
 from types import SimpleNamespace
@@ -25,7 +26,6 @@ from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.streaming import (
     ToolSchema,
     map_stop_reason,
-    parse_complete_tool_input,
     tool_schemas_by_name,
 )
 from free_claude_code.core.diagnostics import (
@@ -44,7 +44,6 @@ from free_claude_code.core.openai_responses import (
     ResponsesChatRequest,
     ResponsesConversionError,
     build_responses_chat_request,
-    validate_chat_recovery_request,
 )
 from free_claude_code.core.openai_tool_names import (
     OpenAIToolNameCodec,
@@ -57,7 +56,13 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.core.recovery import CandidateIncompatible, RecoveryCheckpoint
 from free_claude_code.core.recovery_request import continue_request
-from free_claude_code.core.stream_events import DecodedStreamEvent, StreamEvent
+from free_claude_code.core.request_preservation import require_preserved_body
+from free_claude_code.core.stream_events import (
+    DecodedStreamEvent,
+    RequestOutcome,
+    StreamEvent,
+)
+from free_claude_code.core.tool_input import complete_json_object
 from free_claude_code.core.trace import provider_chat_body_snapshot, trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -190,6 +195,7 @@ class _OpenAIChatStreamAssembler:
         self._upstream_finished = False
         self._completion: _OpenAIChatCompletion | None = None
         self._completed = False
+        self.invalid_input = False
 
     @property
     def output(self) -> ChatStreamOutput:
@@ -391,17 +397,10 @@ class _OpenAIChatStreamAssembler:
             self._tool_argument_aliases,
             self._tool_argument_alias_buffers,
         )
-        if self._finish_reason == "length":
-            for state in self._output.tool_states.values():
-                if (
-                    parse_complete_tool_input(
-                        state.content, state.name, self._tool_schemas
-                    )
-                    is None
-                ):
-                    # A token limit is not evidence that the invocation completed.
-                    # Leave its buffered lifecycle without a completion signal.
-                    state.open = False
+        for state in self._output.tool_states.values():
+            if not complete_json_object(state.content):
+                self.invalid_input = True
+                state.open = False
         yield from self._output.close_all_blocks()
 
         completion = usage_int(self._usage_info, "completion_tokens")
@@ -506,18 +505,23 @@ class OpenAIChatTransport:
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         model_info: ProviderModelInfo | None = None,
+        preserve_features: bool = False,
     ) -> dict[str, Any]:
         """Build a provider request from the immutable profile."""
         request, reasoning = self._prepare_messages_reasoning(
-            request, reasoning, model_info
+            request, reasoning, model_info, preserve_features=preserve_features
         )
-        return self._behavior.build_messages_body(request, reasoning=reasoning)
+        return self._behavior.build_messages_body(
+            request, reasoning=reasoning, preserve_features=preserve_features
+        )
 
     def _prepare_messages_reasoning(
         self,
         request: MessagesRequest,
         reasoning: ReasoningPolicy,
         model_info: ProviderModelInfo | None,
+        *,
+        preserve_features: bool = False,
     ) -> tuple[MessagesRequest, ReasoningPolicy]:
         return prepare_messages_reasoning(
             request,
@@ -525,6 +529,7 @@ class OpenAIChatTransport:
             model_info=model_info,
             can_disable=bool(self._behavior.reasoning_off_fields),
             normal_max_tokens=self._behavior.normal_max_tokens,
+            preserve_features=preserve_features,
         )
 
     def _build_responses_request_body(
@@ -532,6 +537,7 @@ class OpenAIChatTransport:
         request: OpenAIResponsesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        preserve_features: bool = False,
     ) -> ResponsesChatRequest:
         """Build a Chat body directly from Responses ingress."""
         validate_history(request.model_dump(mode="json"))
@@ -542,15 +548,21 @@ class OpenAIChatTransport:
                 structured_reasoning_details=(
                     self._profile.structured_reasoning_details
                 ),
+                preserve_features=preserve_features,
             )
         except UnsupportedRequestFeature as error:
             raise CandidateIncompatible(str(error)) from error
         except ResponsesConversionError as exc:
             raise InvalidRequestError(str(exc)) from exc
         body = translated.body
-        apply_openai_chat_body_policy(body, self._profile.request_policy)
+        apply_openai_chat_body_policy(
+            body, self._profile.request_policy, preserve_features=preserve_features
+        )
         self._profile.apply_reasoning_to_body(body, reasoning)
+        unshaped = deepcopy(body) if preserve_features else None
         body = self._behavior.finalize_chat_body(body, reasoning=reasoning)
+        if unshaped is not None:
+            require_preserved_body(unshaped, body, "Chat provider adaptation")
         encode_openai_chat_tool_names(body, translated.tool_names)
         return ResponsesChatRequest(
             body=body,
@@ -728,6 +740,10 @@ class _ChatCandidate(StreamCandidate):
         )
         self._transport = transport
         self._request = request.model_copy(deep=True)
+        self.original_body = request.model_dump(mode="json", exclude_unset=True)
+        self.input_protocol = (
+            "messages" if isinstance(request, MessagesRequest) else "responses"
+        )
         self._input_tokens = input_tokens
         self._response_model = response_model
         self._reasoning = reasoning
@@ -748,9 +764,12 @@ class _ChatCandidate(StreamCandidate):
                 request,
                 self._reasoning,
                 self._model_info,
+                preserve_features=self.preserve_features,
             )
             self.body = self._transport._build_request_body(
-                prepared, reasoning=wire_reasoning
+                prepared,
+                reasoning=wire_reasoning,
+                preserve_features=self.preserve_features,
             )
             off_fields = self._transport._behavior.reasoning_off_fields
             if (
@@ -774,13 +793,10 @@ class _ChatCandidate(StreamCandidate):
                 log_raw_events=self._transport._log_raw_sse_events,
             )
         else:
-            if checkpoint.recovering:
-                try:
-                    validate_chat_recovery_request(request)
-                except UnsupportedRequestFeature as error:
-                    raise CandidateIncompatible(str(error)) from error
             translated = self._transport._build_responses_request_body(
-                request, reasoning=self._reasoning
+                request,
+                reasoning=self._reasoning,
+                preserve_features=self.preserve_features,
             )
             self.body = cast(JsonObject, translated.body)
             self._tool_names = translated.tool_names
@@ -818,7 +834,10 @@ class _ChatCandidate(StreamCandidate):
             client=self._client,
             endpoint=self.endpoint.snapshot if self.endpoint is not None else None,
         )
+        before = deepcopy(self.body) if self.preserve_features else None
         create_body = self._transport._behavior.prepare_create_body(self.body)
+        if before is not None:
+            require_preserved_body(before, create_body, "Chat dispatch adaptation")
         if self._extra_headers or self.endpoint is not None:
             create_body = {
                 **create_body,
@@ -834,6 +853,7 @@ class _ChatCandidate(StreamCandidate):
             scope=self._transport._behavior.history_scope(self.body),
             reasoning_field=self._transport._profile.request_policy.reasoning_replay.value,
             structured_details=self._transport._profile.structured_reasoning_details,
+            preserve_features=self.preserve_features,
         )
         return origin
 
@@ -909,6 +929,10 @@ class _ChatCandidate(StreamCandidate):
             else (*assembler.finish_upstream(), *assembler.prepare_completion())
         )
         completion = assembler.completion
+        if assembler.invalid_input and completion.finish_reason != "length":
+            raise TruncatedProviderStreamError(
+                "Provider completed a response with unfinished or invalid tool input."
+            )
         usage = ChatStreamUsage(
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
@@ -934,7 +958,10 @@ class _ChatCandidate(StreamCandidate):
                 "chat.completion.done", {"finish_reason": completion.finish_reason}
             ),
             output.project(events),
-            completed=True,
+            outcome=RequestOutcome.INCOMPLETE
+            if completion.finish_reason in {"length", "content_filter"}
+            else RequestOutcome.SUCCESS,
+            stop_reason=completion.finish_reason,
         )
 
     def _correction(self, error: Exception) -> JsonObject | None:

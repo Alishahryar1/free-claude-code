@@ -21,6 +21,7 @@ class AttemptFailure(Exception):
     deferred: bool = False
     retry_allowed: bool = False
     request_rejected: bool = False
+    blocked_reason: str | None = None
 
     def __post_init__(self) -> None:
         Exception.__init__(self, self.failure.message)

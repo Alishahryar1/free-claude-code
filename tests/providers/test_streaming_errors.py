@@ -45,7 +45,7 @@ from tests.providers.support import (
     stream_messages,
     stream_responses,
 )
-from tests.providers.test_history_transports import _harness, _saved_reply
+from tests.providers.test_history_transports import _harness
 from tests.providers.test_nvidia_nim import (
     _alias_events,
     _alias_provider,
@@ -2556,7 +2556,7 @@ async def test_openai_compat_stream_ends_with_contract_when_tool_name_never_arri
 
 
 @pytest.mark.asyncio
-async def test_tool_argument_mapping_survives_correction_then_stream_reopen():
+async def test_recovery_does_not_readmit_lossy_nim_tool_schema():
     request = _alias_request()
 
     def responder(bodies):
@@ -2571,11 +2571,8 @@ async def test_tool_argument_mapping_survives_correction_then_stream_reopen():
         bodies,
         provider,
     ):
-        saved = await _saved_reply(stream_messages(provider, request), "messages")
-        call = next(
-            block for block in saved[0]["content"] if block["type"] == "tool_use"
-        )
-    assert call["input"] == {"pattern": "needle", "type": "py"}
-    assert len(bodies) == 3
+        with pytest.raises(ExecutionFailure, match="without finish_reason"):
+            _ = [event async for event in stream_messages(provider, request)]
+    assert len(bodies) == 2
     assert all("chat_template" not in body for body in bodies[1:])
     assert all("_fcc_nim_tool_argument_aliases" not in body for body in bodies)

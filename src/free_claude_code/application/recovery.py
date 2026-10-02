@@ -87,6 +87,8 @@ class RecoveryCoordinator:
         self._last_failure: ExecutionFailure | None = None
         self._last_incompatibility: CandidateIncompatible | None = None
         self._opened: list[_OpenedCandidate] = []
+        self._suspended: list[_OpenedCandidate] = []
+        self._last_dispatched: _OpenedCandidate | None = None
         self._provider_id = candidates[0].provider_id
 
     async def _bounded[T](self, operation: Awaitable[T]) -> T:
@@ -166,6 +168,39 @@ class RecoveryCoordinator:
         opened.candidate.finish(failure)
         await complete_cleanup(self._close_resources(opened.resources, failure))
 
+    async def _next_candidate(
+        self, checkpoint: RecoveryCheckpoint
+    ) -> _OpenedCandidate | None:
+        candidate = await self._open_next(checkpoint)
+        if candidate is not None:
+            return candidate
+        while self._suspended:
+            candidate = self._suspended.pop()
+            if not candidate.closed and candidate.candidate.can_attempt:
+                return candidate
+            await self._close(candidate, self._last_failure)
+        return None
+
+    async def _commit_dispatch(self, current: _OpenedCandidate) -> None:
+        previous = self._last_dispatched
+        if previous is current:
+            return
+        self._last_dispatched = current
+        for suspended in self._suspended:
+            if suspended is not current:
+                await self._close(suspended, self._last_failure)
+        self._suspended.clear()
+        if (
+            previous is not None
+            and self._last_failure is not None
+            and self._on_fallback is not None
+        ):
+            self._on_fallback(
+                previous.target, current.target, self._last_failure, current.index
+            )
+        if current.index > 0 and self._on_selected is not None:
+            self._on_selected(current.target, current.index)
+
     async def _close_resources(
         self, resources: AsyncExitStack, error: BaseException | None
     ) -> None:
@@ -197,7 +232,9 @@ class RecoveryCoordinator:
                 record_request_route(
                     current.target.provider_id, current.target.provider_model
                 )
-                checkpoint = self._checkpoint()
+                checkpoint = replace(
+                    self._checkpoint(), recovering=self._recovering or current.index > 0
+                )
                 self._writer.begin_attempt()
                 revision = self._writer.revision
                 selected = False
@@ -211,6 +248,7 @@ class RecoveryCoordinator:
                         self._writer.revision == revision
                         and self._checkpoint().blocked_reason is None
                     ),
+                    on_rejected=self._writer.reject_attempt,
                 )
                 try:
                     while True:
@@ -222,11 +260,10 @@ class RecoveryCoordinator:
                             break
                         if event.progress:
                             self._deadline = loop.time() + self._timeout_seconds
-                        events = self._writer.feed(event)
-                        if events and not selected and current.index > 0:
+                        if event.source.kind == "request.dispatched":
+                            await self._commit_dispatch(current)
                             selected = True
-                            if self._on_selected is not None:
-                                self._on_selected(current.target, current.index)
+                        events = self._writer.feed(event)
                         for output in events:
                             consumer_started = loop.time()
                             yield output.serialize()
@@ -268,7 +305,7 @@ class RecoveryCoordinator:
                         reason=str(incompatible),
                     )
                     await self._close(current, self._last_failure)
-                    current = await self._open_next(self._checkpoint())
+                    current = await self._next_candidate(self._checkpoint())
                     if current is None:
                         if self._last_failure is not None:
                             raise self._last_failure
@@ -319,6 +356,8 @@ class RecoveryCoordinator:
                 self._last_failure = failure
                 self._recovering = True
                 checkpoint = self._checkpoint()
+                if attempt_failure.blocked_reason is not None:
+                    raise failure
                 if checkpoint.blocked_reason is not None:
                     raise failure
                 if checkpoint.published_tools:
@@ -327,23 +366,18 @@ class RecoveryCoordinator:
                         yield output.serialize()
                     return
 
-                next_candidate = await self._open_next(checkpoint)
-                if next_candidate is not None:
-                    await self._close(current, failure)
-                    if self._on_fallback is not None:
-                        self._on_fallback(
-                            current.target,
-                            next_candidate.target,
-                            failure,
-                            next_candidate.index,
-                        )
-                    current = next_candidate
-                    continue
                 if current.candidate.can_attempt and (
                     attempt_failure.deferred or attempt_failure.retry_allowed
                 ):
-                    continue
-                raise self._last_failure
+                    if self._cursor >= len(self._candidates) and not self._suspended:
+                        continue
+                    await complete_cleanup(current.candidate.suspend())
+                    self._suspended.append(current)
+                else:
+                    await self._close(current, failure)
+                current = await self._next_candidate(checkpoint)
+                if current is None:
+                    raise self._last_failure
         except ExecutionFailure as failure:
             self._last_failure = failure
             if current is not None:

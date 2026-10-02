@@ -8,6 +8,7 @@ from free_claude_code.core.anthropic.native import (
     NativeMessagesError,
     NativeMessagesOptions,
 )
+from free_claude_code.core.failures import UnsupportedRequestFeature
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
 
@@ -44,9 +45,13 @@ def resolve_messages_options(
     thinking: ThinkingConfig | None = None,
     output_effort: object = None,
     preserve_native_controls: bool = False,
+    preserve_features: bool = False,
 ) -> NativeMessagesOptions:
     """Encode supported controls without conflating effort and thinking mode."""
 
+    feature_error = (
+        UnsupportedRequestFeature if preserve_features else NativeMessagesError
+    )
     if preserve_native_controls:
         reasoning = ReasoningPolicy.provider_default()
     if output_effort is not None:
@@ -83,16 +88,14 @@ def resolve_messages_options(
     elif reasoning.control is ReasoningControl.DEFAULT and budget is None:
         mode = None
     else:
-        raise NativeMessagesError(
+        raise feature_error(
             "This model does not advertise its thinking mode. Supply native "
             "thinking.type or use an advertised reasoning effort without forcing thinking."
         )
     if mode == "adaptive" and capabilities.adaptive_thinking == "unsupported":
-        raise NativeMessagesError("This model does not support adaptive thinking.")
+        raise feature_error("This model does not support adaptive thinking.")
     if mode == "enabled" and capabilities.adaptive_thinking == "required":
-        raise NativeMessagesError(
-            "This model requires adaptive rather than manual thinking."
-        )
+        raise feature_error("This model requires adaptive rather than manual thinking.")
     if mode == "adaptive" and (
         budget is not None
         or (thinking is not None and thinking.budget_tokens is not None)
@@ -148,13 +151,13 @@ def resolve_messages_options(
         if effort == "minimal" and supported is not None and "low" in supported:
             effort = "low"
         if effort == "minimal" or (supported is None and effort not in _NATIVE_EFFORTS):
-            raise NativeMessagesError(
+            raise feature_error(
                 f"This model does not advertise a native mapping for effort {effort!r}."
             )
         if supported is not None and effort not in supported:
-            raise NativeMessagesError(f"This model does not support effort {effort!r}.")
+            raise feature_error(f"This model does not support effort {effort!r}.")
         if capabilities.supports_output_effort is False:
-            raise NativeMessagesError("This model does not support output effort.")
+            raise feature_error("This model does not support output effort.")
         elif (
             capabilities.supports_output_effort is None
             and supported is None
@@ -162,9 +165,7 @@ def resolve_messages_options(
             and mode is None
             and not preserve_native_controls
         ):
-            raise NativeMessagesError(
-                "This model does not advertise output effort support."
-            )
+            raise feature_error("This model does not advertise output effort support.")
     return NativeMessagesOptions(
         model=model, max_tokens=limit, thinking=wire_thinking, output_effort=effort
     )

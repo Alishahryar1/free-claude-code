@@ -31,6 +31,7 @@ from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesConversionError,
     ResponsesProviderStream,
+    ResponsesSourceState,
     ResponsesStreamFailure,
     ResponsesToolAdapter,
     ResponsesToolPolicy,
@@ -42,7 +43,11 @@ from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
 from free_claude_code.core.recovery import CandidateIncompatible, RecoveryCheckpoint
 from free_claude_code.core.recovery_request import continue_request
-from free_claude_code.core.stream_events import DecodedStreamEvent, StreamEvent
+from free_claude_code.core.stream_events import (
+    DecodedStreamEvent,
+    RequestOutcome,
+    StreamEvent,
+)
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
 )
@@ -204,6 +209,7 @@ class OpenAIResponsesTransport:
         reasoning: ReasoningPolicy,
         model_info: ProviderModelInfo | None = None,
         can_disable_reasoning: bool = True,
+        preserve_features: bool = False,
     ) -> JsonObject:
         request = normalize_messages_history(request)
         request, reasoning = prepare_messages_reasoning(
@@ -212,6 +218,7 @@ class OpenAIResponsesTransport:
             model_info=model_info,
             can_disable=can_disable_reasoning,
             normal_max_tokens=None,
+            preserve_features=preserve_features,
         )
         try:
             return self._prepare_body(
@@ -219,9 +226,14 @@ class OpenAIResponsesTransport:
                     JsonObject,
                     cast(
                         ResponseCreateParamsStreaming,
-                        build_responses_provider_request(request, reasoning=reasoning),
+                        build_responses_provider_request(
+                            request,
+                            reasoning=reasoning,
+                            preserve_features=preserve_features,
+                        ),
                     ),
-                )
+                ),
+                preserve_features=preserve_features,
             )
         except UnsupportedRequestFeature as error:
             raise CandidateIncompatible(str(error)) from error
@@ -233,6 +245,7 @@ class OpenAIResponsesTransport:
         request: OpenAIResponsesRequest,
         *,
         reasoning: ReasoningPolicy,
+        preserve_features: bool = False,
     ) -> tuple[JsonObject, ResponsesToolAdapter]:
         validate_history(request.model_dump(mode="json"))
         if not request.model.strip():
@@ -240,7 +253,9 @@ class OpenAIResponsesTransport:
         if request.input is None or request.input == "" or request.input == []:
             raise InvalidRequestError("Responses request input must not be empty.")
         try:
-            tools = ResponsesToolAdapter(request, self._tool_policy)
+            tools = ResponsesToolAdapter(
+                request, self._tool_policy, preserve_features=preserve_features
+            )
         except UnsupportedRequestFeature as error:
             raise CandidateIncompatible(str(error)) from error
         except ResponsesConversionError as error:
@@ -250,12 +265,20 @@ class OpenAIResponsesTransport:
                 tools.request,
                 model=request.model,
                 reasoning=reasoning,
-            )
+                preserve_features=preserve_features,
+            ),
+            preserve_features=preserve_features,
         )
         return body, tools
 
-    def _prepare_body(self, body: JsonObject) -> JsonObject:
+    def _prepare_body(
+        self, body: JsonObject, *, preserve_features: bool = False
+    ) -> JsonObject:
         for field in self._omitted_request_fields:
+            if preserve_features and field in body:
+                raise CandidateIncompatible(
+                    f"Responses provider cannot preserve {field!r}."
+                )
             body.pop(field, None)
         return body
 
@@ -317,6 +340,10 @@ class _ResponsesCandidate(StreamCandidate):
         )
         self._transport = transport
         self._request = request.model_copy(deep=True)
+        self.original_body = request.model_dump(mode="json", exclude_unset=True)
+        self.input_protocol = (
+            "messages" if isinstance(request, MessagesRequest) else "responses"
+        )
         self._input_tokens = input_tokens
         self._response_model = response_model
         self._reasoning = reasoning
@@ -337,9 +364,12 @@ class _ResponsesCandidate(StreamCandidate):
                 model_info=self._model_info,
                 can_disable=self._can_disable_reasoning,
                 normal_max_tokens=None,
+                preserve_features=self.preserve_features,
             )
             self.body = self._transport._build_messages_body(
-                prepared, reasoning=wire_reasoning
+                prepared,
+                reasoning=wire_reasoning,
+                preserve_features=self.preserve_features,
             )
             if (
                 self._reasoning.control is ReasoningControl.PREFER_OFF
@@ -364,7 +394,9 @@ class _ResponsesCandidate(StreamCandidate):
                     "Responses recovery requires materialized history without a stored response handle."
                 )
             self.body, tools = self._transport._build_native_body(
-                request, reasoning=self._reasoning
+                request,
+                reasoning=self._reasoning,
+                preserve_features=self.preserve_features,
             )
             self._presenter_factory = lambda: NativeResponsesPresenter(
                 public_model=self._response_model,
@@ -388,7 +420,9 @@ class _ResponsesCandidate(StreamCandidate):
             client=self._client,
             endpoint=self.endpoint.snapshot if self.endpoint is not None else None,
         )
-        self.sent_body = prepare_history(self.body, origin)
+        self.sent_body = prepare_history(
+            self.body, origin, preserve_features=self.preserve_features
+        )
         return origin
 
     async def _read(
@@ -396,6 +430,7 @@ class _ResponsesCandidate(StreamCandidate):
     ) -> AsyncIterator[DecodedStreamEvent]:
         assert self.origin is not None
         presenter = self._presenter_factory()
+        source_state = ResponsesSourceState()
         start_events = tuple(presenter.start())
         adapt = (
             self._transport._event_adapter_factory()
@@ -417,10 +452,6 @@ class _ResponsesCandidate(StreamCandidate):
                 upstream.model_dump(mode="json", exclude_unset=True, warnings=False),
             )
             self.record_usage(raw)
-            if upstream.type in {"response.failed", "error", "response.error"}:
-                raise responses_stream_failure_from_event(upstream.type, raw)
-            if reports_context_window_incomplete(upstream.type, raw):
-                raise context_window_exceeded_provider_failure()
             payload = adapt(upstream.type, raw) if adapt is not None else raw
             response = payload.get("response")
             if (
@@ -429,18 +460,45 @@ class _ResponsesCandidate(StreamCandidate):
                 and response["model"]
             ):
                 self.origin = replace(self.origin, model=response["model"])
-            payload = preserve_responses_reasoning(payload, self.origin)
-            output = (*start_events, *presenter.feed(upstream.type, payload))
-            start_events = ()
-            yield DecodedStreamEvent(
-                self.origin,
-                StreamEvent(upstream.type, raw),
-                output,
-                progress=content_progress("responses", upstream.type, raw),
-                completed=presenter.completed,
-            )
-            if presenter.completed:
-                return
+            for observed in source_state.feed(StreamEvent(upstream.type, payload)):
+                kind = observed.kind
+                if kind in {"response.failed", "error", "response.error"}:
+                    raise responses_stream_failure_from_event(kind, observed.payload)
+                if reports_context_window_incomplete(kind, observed.payload):
+                    raise context_window_exceeded_provider_failure()
+                if kind == "response.completed" and source_state.invalid_input:
+                    raise RetryableProviderProtocolError(
+                        "Provider completed a response with unfinished or invalid tool input."
+                    )
+                preserved = preserve_responses_reasoning(observed.payload, self.origin)
+                output = (*start_events, *presenter.feed(kind, preserved))
+                start_events = ()
+                details = (
+                    response.get("incomplete_details")
+                    if isinstance(response, dict)
+                    else None
+                )
+                reason = details.get("reason") if isinstance(details, dict) else None
+                yield DecodedStreamEvent(
+                    self.origin,
+                    observed,
+                    tuple(
+                        replace(event, item_completion=observed.item_completion)
+                        for event in output
+                    ),
+                    progress=content_progress("responses", kind, observed.payload),
+                    outcome=(
+                        RequestOutcome.INCOMPLETE
+                        if kind == "response.incomplete"
+                        else RequestOutcome.SUCCESS
+                    )
+                    if presenter.completed
+                    else None,
+                    stop_reason=reason if isinstance(reason, str) else None,
+                    native_reasoning_pending=source_state.native_reasoning_pending,
+                )
+                if presenter.completed:
+                    return
         raise _TruncatedResponsesStream(
             "Provider Responses stream ended without a terminal event."
         )

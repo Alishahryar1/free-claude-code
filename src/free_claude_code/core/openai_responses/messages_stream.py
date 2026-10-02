@@ -137,6 +137,18 @@ class AnthropicToResponsesStream:
     def completed(self) -> bool:
         return self._terminal
 
+    @property
+    def invalid_input(self) -> bool:
+        return self._native.invalid_input
+
+    @property
+    def stop_reason(self) -> str | None:
+        return self._native.stop_reason
+
+    @property
+    def native_reasoning_pending(self) -> bool:
+        return self._native.native_reasoning_pending
+
     def start(self) -> list[StreamEvent]:
         return []
 
@@ -232,7 +244,10 @@ class AnthropicToResponsesStream:
         if event_type == "content_block_stop":
             if completed is None:
                 raise AssertionError("Validated content stop must return its block.")
-            return self._finish_block(index, completed)
+            return [
+                replace(event, item_completion=completed.completion)
+                for event in self._finish_block(index, completed)
+            ]
         raise NativeMessagesError(f"Unsupported native event {event_type!r}.")
 
     def _start_block(

@@ -28,6 +28,13 @@ class CopilotResponsesEvents:
             if isinstance(output, list):
                 for position, item in enumerate(output):
                     if isinstance(item, dict):
+                        if (
+                            event_type == "response.failed"
+                            and item.get("status") != "completed"
+                            and item.get("type") == "function_call"
+                            and (not item.get("call_id") or not item.get("name"))
+                        ):
+                            continue
                         self._item(position, item)
         if "response_id" in data and self._response_id is not None:
             data["response_id"] = self._response_id

@@ -1,6 +1,7 @@
 """Provider-specific Chat adaptation, independent of HTTP resource ownership."""
 
 from collections.abc import Iterator, Mapping
+from copy import deepcopy
 from typing import Any
 
 from free_claude_code.core.anthropic.models import MessagesRequest
@@ -11,6 +12,7 @@ from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningPolicy,
 )
+from free_claude_code.core.request_preservation import require_preserved_body
 from free_claude_code.core.stream_events import StreamEvent
 
 from .profiles import OpenAIChatProfile
@@ -37,6 +39,7 @@ class OpenAIChatBehavior:
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        preserve_features: bool = False,
     ) -> dict[str, Any]:
         """Build a provider request from the immutable profile."""
         body = build_openai_chat_request_body(
@@ -44,8 +47,13 @@ class OpenAIChatBehavior:
             reasoning=reasoning,
             policy=self.profile.request_policy,
             postprocessors=self.profile.request_postprocessors,
+            preserve_features=preserve_features,
         )
-        return self.finalize_chat_body(body, reasoning=reasoning)
+        before = deepcopy(body) if preserve_features else None
+        result = self.finalize_chat_body(body, reasoning=reasoning)
+        if before is not None:
+            require_preserved_body(before, result, "Chat provider adaptation")
+        return result
 
     @property
     def reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:

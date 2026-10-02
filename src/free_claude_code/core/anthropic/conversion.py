@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from free_claude_code.core.failures import UnsupportedRequestFeature
 from free_claude_code.core.history_replay import (
     HistoryReplayError,
     has_readable_replay,
@@ -22,9 +23,10 @@ from free_claude_code.core.openai_chat import (
     close_chat_tool_result_turns,
     image_tool_result_label,
 )
+from free_claude_code.core.request_preservation import require_supported_fields
 from free_claude_code.core.tool_schema_patterns import translate_tool_schema_patterns
 
-from .content import get_block_attr, get_block_type
+from .content import get_block_attr, get_block_type, require_block_fields
 from .image_sources import AnthropicImageSourceError, portable_anthropic_image_url
 from .models import MessagesRequest
 from .request_serialization import serialize_tool_result_content
@@ -200,6 +202,7 @@ def _openai_system_text(
     content: Any,
     *,
     context: str,
+    preserve_features: bool = False,
 ) -> str | None:
     """Return OpenAI-compatible system text without silently dropping blocks."""
     if isinstance(content, str):
@@ -213,6 +216,8 @@ def _openai_system_text(
 
     text_parts: list[str] = []
     for block in content:
+        if preserve_features:
+            require_block_fields(block, {"type", "text"}, "Chat system text")
         block_type = get_block_type(block)
         if block_type != "text":
             raise OpenAIConversionError(
@@ -224,9 +229,18 @@ def _openai_system_text(
     return "\n\n".join(text_parts)
 
 
-def _openai_user_image_part(block: Any) -> JsonObject:
+def _openai_user_image_part(
+    block: Any, *, preserve_features: bool = False
+) -> JsonObject:
     """Convert one Anthropic user image block without performing I/O."""
     try:
+        if preserve_features:
+            require_block_fields(block, {"type", "source"}, "Chat image")
+            require_block_fields(
+                get_block_attr(block, "source", {}),
+                {"type", "data", "media_type", "url"},
+                "Chat image source",
+            )
         url = portable_anthropic_image_url(get_block_attr(block, "source", {}))
     except AnthropicImageSourceError as exc:
         raise OpenAIConversionError(str(exc)) from exc
@@ -240,11 +254,23 @@ class _OpenAIChatToolResult:
     rich_user_message: JsonObject | None = None
 
 
-def _openai_chat_tool_result(block: Any) -> _OpenAIChatToolResult:
+def _openai_chat_tool_result(
+    block: Any, *, preserve_features: bool = False
+) -> _OpenAIChatToolResult:
+    if preserve_features:
+        require_block_fields(
+            block, {"type", "tool_use_id", "content", "is_error"}, "Chat tool result"
+        )
+        if get_block_attr(block, "is_error"):
+            raise UnsupportedRequestFeature(
+                "Chat tool results cannot preserve the native error control."
+            )
     tool_id = get_block_attr(block, "tool_use_id")
     tool_content = get_block_attr(block, "content", "")
     try:
-        decomposed = decompose_tool_result_content(tool_content)
+        decomposed = decompose_tool_result_content(
+            tool_content, preserve_features=preserve_features
+        )
     except AnthropicImageSourceError as exc:
         raise OpenAIConversionError(str(exc)) from exc
 
@@ -329,7 +355,8 @@ def _coalesce_openai_user_messages(
 class _OpenAIChatHistoryLedger:
     """Assemble OpenAI chat history while respecting tool-result dependencies."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, preserve_features: bool = False) -> None:
+        self._preserve_features = preserve_features
         self._output: list[dict[str, Any]] = []
         self._segments: list[_TranscriptSegment] = []
         self._tool_results: dict[str, _OpenAIChatToolResult] = {}
@@ -374,16 +401,26 @@ class _OpenAIChatHistoryLedger:
     def _add_text_blocks(self, blocks: list[Any]) -> None:
         if not blocks:
             return
-        self.add_plain(AnthropicToOpenAIConverter._convert_user_message(blocks))
+        self.add_plain(
+            AnthropicToOpenAIConverter._convert_user_message(
+                blocks, preserve_features=self._preserve_features
+            )
+        )
         blocks.clear()
 
     def _record_tool_result(self, block: Any) -> None:
         tuid = get_block_attr(block, "tool_use_id")
         tuid_s = str(tuid) if tuid is not None else ""
         if not tuid_s:
-            self.add_plain(AnthropicToOpenAIConverter._convert_user_message([block]))
+            self.add_plain(
+                AnthropicToOpenAIConverter._convert_user_message(
+                    [block], preserve_features=self._preserve_features
+                )
+            )
             return
-        converted = _openai_chat_tool_result(block)
+        converted = _openai_chat_tool_result(
+            block, preserve_features=self._preserve_features
+        )
         if self._has_pending_tool_id(tuid_s):
             self._tool_results[tuid_s] = converted
         else:
@@ -474,8 +511,9 @@ class AnthropicToOpenAIConverter:
         messages: list[Any],
         *,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+        preserve_features: bool = False,
     ) -> list[dict[str, Any]]:
-        ledger = _OpenAIChatHistoryLedger()
+        ledger = _OpenAIChatHistoryLedger(preserve_features=preserve_features)
 
         for msg in messages:
             role = msg.role
@@ -493,6 +531,7 @@ class AnthropicToOpenAIConverter:
                 content,
                 reasoning_content=reasoning_content,
                 reasoning_replay=reasoning_replay,
+                preserve_features=preserve_features,
             )
             for segment in segments:
                 if isinstance(segment, _PlainSegment):
@@ -511,11 +550,13 @@ class AnthropicToOpenAIConverter:
         *,
         reasoning_content: str | None,
         reasoning_replay: ReasoningReplayMode,
+        preserve_features: bool = False,
     ) -> list[_TranscriptSegment]:
         if role == "system":
             system_text = _openai_system_text(
                 content,
                 context="an inline Anthropic system message",
+                preserve_features=preserve_features,
             )
             if system_text is None:
                 raise OpenAIConversionError(
@@ -525,6 +566,20 @@ class AnthropicToOpenAIConverter:
             # Reserve the downstream system role for request.system at index zero.
             return [_PlainSegment([{"role": "user", "content": system_text}])]
         if role == "assistant" and isinstance(content, list):
+            if preserve_features:
+                for block in content:
+                    kind = get_block_type(block)
+                    fields = {
+                        "text": {"type", "text"},
+                        "thinking": {"type", "thinking", "signature"},
+                        "redacted_thinking": {"type", "data"},
+                        "tool_use": {"type", "id", "name", "input", "extra_content"},
+                    }.get(kind)
+                    if fields is None:
+                        raise UnsupportedRequestFeature(
+                            f"Chat cannot preserve assistant block {kind!r}."
+                        )
+                    require_block_fields(block, fields, "Chat assistant content")
             try:
                 validate_hosted_tool_history(
                     [
@@ -737,7 +792,9 @@ class AnthropicToOpenAIConverter:
         )
 
     @staticmethod
-    def _convert_user_message(content: list[Any]) -> list[dict[str, Any]]:
+    def _convert_user_message(
+        content: list[Any], *, preserve_features: bool = False
+    ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         content_parts: list[dict[str, Any]] = []
         tool_results: list[_OpenAIChatToolResult] = []
@@ -769,23 +826,49 @@ class AnthropicToOpenAIConverter:
             block_type = get_block_type(block)
 
             if block_type == "text":
+                if preserve_features:
+                    require_block_fields(block, {"type", "text"}, "Chat user text")
                 flush_tool_results()
                 content_parts.append(
                     {"type": "text", "text": get_block_attr(block, "text", "")}
                 )
             elif block_type == "image":
                 flush_tool_results()
-                content_parts.append(_openai_user_image_part(block))
+                content_parts.append(
+                    _openai_user_image_part(block, preserve_features=preserve_features)
+                )
             elif block_type == "tool_result":
                 flush_content()
-                tool_results.append(_openai_chat_tool_result(block))
+                tool_results.append(
+                    _openai_chat_tool_result(block, preserve_features=preserve_features)
+                )
+            elif preserve_features:
+                raise UnsupportedRequestFeature(
+                    f"Chat cannot preserve user block {block_type!r}."
+                )
 
         flush_tool_results()
         flush_content()
         return result
 
     @staticmethod
-    def convert_tools(tools: list[Any]) -> list[dict[str, Any]]:
+    def convert_tools(
+        tools: list[Any], *, preserve_features: bool = False
+    ) -> list[dict[str, Any]]:
+        if preserve_features:
+            for tool in tools:
+                require_block_fields(
+                    tool,
+                    {"name", "description", "input_schema", "type", "strict"},
+                    "Chat tool declaration",
+                )
+                if tool.type is not None or get_block_attr(tool, "strict") not in (
+                    None,
+                    False,
+                ):
+                    raise UnsupportedRequestFeature(
+                        "Chat cannot preserve native tool type or strictness."
+                    )
         return [
             {
                 "type": "function",
@@ -801,9 +884,21 @@ class AnthropicToOpenAIConverter:
         ]
 
     @staticmethod
-    def convert_tool_choice(tool_choice: Any) -> Any:
+    def convert_tool_choice(
+        tool_choice: Any, *, preserve_features: bool = False
+    ) -> Any:
         if not isinstance(tool_choice, dict):
             return tool_choice
+        if preserve_features:
+            require_supported_fields(
+                tool_choice,
+                {"type", "name", "disable_parallel_tool_use"},
+                "Chat tool choice",
+            )
+            if tool_choice.get("disable_parallel_tool_use") not in (None, False):
+                raise UnsupportedRequestFeature(
+                    "This Chat converter cannot preserve native parallel-call restrictions."
+                )
 
         choice_type = tool_choice.get("type")
         if choice_type == "tool":
@@ -820,12 +915,15 @@ class AnthropicToOpenAIConverter:
         return tool_choice
 
     @staticmethod
-    def convert_system_prompt(system: Any) -> dict[str, str] | None:
+    def convert_system_prompt(
+        system: Any, *, preserve_features: bool = False
+    ) -> dict[str, str] | None:
         if system is None:
             return None
         system_text = _openai_system_text(
             system,
             context="the top-level Anthropic system prompt",
+            preserve_features=preserve_features,
         )
         if system_text is None:
             return None
@@ -839,17 +937,50 @@ def build_base_request_body(
     *,
     default_max_tokens: int | None = None,
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+    preserve_features: bool = False,
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body."""
+    if preserve_features:
+        raw = request_data.model_dump(mode="json", exclude_none=True)
+        raw.update(request_data.model_extra or {})
+        require_supported_fields(
+            raw,
+            {
+                "model",
+                "messages",
+                "system",
+                "max_tokens",
+                "stream",
+                "temperature",
+                "top_p",
+                "stop_sequences",
+                "tools",
+                "tool_choice",
+                "output_config",
+                "extra_body",
+            },
+            "Chat request",
+        )
+        if request_data.output_config is not None:
+            require_supported_fields(
+                request_data.output_config, {"effort"}, "Chat output controls"
+            )
+        if request_data.betas:
+            raise UnsupportedRequestFeature(
+                "Chat cannot preserve Messages beta controls."
+            )
     _openai_reject_native_only_top_level_fields(request_data)
     messages = AnthropicToOpenAIConverter.convert_messages(
         request_data.messages,
         reasoning_replay=reasoning_replay,
+        preserve_features=preserve_features,
     )
 
     system = request_data.system
     if system:
-        system_msg = AnthropicToOpenAIConverter.convert_system_prompt(system)
+        system_msg = AnthropicToOpenAIConverter.convert_system_prompt(
+            system, preserve_features=preserve_features
+        )
         if system_msg:
             messages.insert(0, system_msg)
 
@@ -866,11 +997,13 @@ def build_base_request_body(
 
     tools = request_data.tools
     if tools:
-        body["tools"] = AnthropicToOpenAIConverter.convert_tools(tools)
+        body["tools"] = AnthropicToOpenAIConverter.convert_tools(
+            tools, preserve_features=preserve_features
+        )
     tool_choice = resolve_anthropic_tool_choice(tools, request_data.tool_choice)
     if tool_choice:
         body["tool_choice"] = AnthropicToOpenAIConverter.convert_tool_choice(
-            tool_choice
+            tool_choice, preserve_features=preserve_features
         )
 
     return body

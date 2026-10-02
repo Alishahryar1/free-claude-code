@@ -56,12 +56,8 @@ def test_legacy_invalid_id_then_ciphertext_rejection_keeps_original():
         fixed,
         "responses",
     )
-    assert cleaned is not None
-    assert cleaned["input"][1] == {
-        "role": "assistant",
-        "content": "[Earlier reasoning summary]\nlook up 17",
-    }
-    assert cleaned["input"][2:] == original["input"][2:]
+    assert cleaned is None
+    assert fixed["input"][1]["encrypted_content"] == "opaque-a"
     assert body == original
 
 
@@ -99,7 +95,7 @@ def test_unidentified_cipher_failure_with_multiple_records_is_not_guessed():
     )
 
 
-def test_missing_reference_targets_its_item_only():
+def test_missing_reference_cannot_remove_required_history():
     body = {
         "input": [
             {"type": "reasoning", "id": f"rs_{i}", "encrypted_content": f"opaque{i}"}
@@ -111,11 +107,10 @@ def test_missing_reference_targets_its_item_only():
         body,
         "responses",
     )
-    assert result is not None
-    assert result["input"] == [body["input"][0]]
+    assert result is None
 
 
-def test_messages_signature_path_retains_readable_text_and_other_blocks():
+def test_messages_signature_rejection_cannot_replace_native_history_with_text():
     body = {
         "messages": [
             {
@@ -138,11 +133,7 @@ def test_messages_signature_path_retains_readable_text_and_other_blocks():
         body,
         "messages",
     )
-    assert result is not None
-    assert result["messages"][0]["content"] == [
-        {"type": "text", "text": "[Earlier reasoning]\nread the file"},
-        body["messages"][0]["content"][1],
-    ]
+    assert result is None
 
 
 def test_origin_does_not_expose_credentials_and_survives_account_token_refresh():

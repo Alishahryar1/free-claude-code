@@ -77,9 +77,24 @@ class NativeMessagesPassthrough:
     """Inspect the envelope and preserve provider-owned event payloads."""
 
     def __init__(self, public_model: str) -> None:
+        from .native_stream import NativeMessagesStreamState
+
+        self._state = NativeMessagesStreamState(permissive=True)
         self.public_model = public_model
         self.started = False
         self.completed = False
+
+    @property
+    def invalid_input(self) -> bool:
+        return self._state.invalid_input
+
+    @property
+    def stop_reason(self) -> str | None:
+        return self._state.stop_reason
+
+    @property
+    def native_reasoning_pending(self) -> bool:
+        return self._state.native_reasoning_pending
 
     def feed(self, kind: str, payload: JsonObject) -> StreamEvent | None:
         if self.completed:
@@ -102,4 +117,5 @@ class NativeMessagesPassthrough:
             )
         if kind == "message_stop":
             self.completed = True
-        return StreamEvent(kind, body)
+        completed = self._state.accept(kind, payload)
+        return StreamEvent(kind, body, completed.completion if completed else None)

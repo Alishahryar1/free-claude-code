@@ -290,7 +290,7 @@ async def test_provider_a_b_a_preserves_exact_native_history(protocol, wire):
 
 
 @pytest.mark.asyncio
-async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changing_effort():
+async def test_legacy_id_normalization_preserves_history_after_cipher_rejection():
     wire = "responses"
 
     def responder(bodies):
@@ -315,21 +315,40 @@ async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changi
     ]
     original = deepcopy(history)
     async with _harness("responses", responder) as (send, bodies, _):
-        await _saved_reply(send(wire, history), wire)
-        assert len(bodies) == 3
+        with pytest.raises(ExecutionFailure):
+            await _saved_reply(send(wire, history), wire)
+        assert len(bodies) == 2
         assert ":" not in bodies[1]["input"][0]["id"]
         assert bodies[1]["input"][0]["encrypted_content"] == "opaque-original"
-        assert bodies[2]["input"][0] == {
-            "role": "assistant",
-            "content": "[Earlier reasoning summary]\nFind 17.",
-        }
         assert all(body["reasoning"] == bodies[0]["reasoning"] for body in bodies)
         assert history == original
 
 
 @pytest.mark.asyncio
+async def test_id_normalization_survives_entering_recovery_without_dropping_history():
+    def responder(bodies):
+        if len(bodies) == 1:
+            return 400, {
+                "code": "invalid_value",
+                "param": "input[0].id",
+                "message": "Invalid 'input[0].id'. Expected an ID containing letters and numbers.",
+            }
+        if len(bodies) == 2:
+            return 503, {"type": "overloaded_error", "message": "busy"}
+        return 200, _events_for("responses")
+
+    history = [_native("responses"), {"role": "user", "content": "continue"}]
+    async with _harness("responses", responder) as (send, bodies, _):
+        await _saved_reply(send("responses", history), "responses")
+        assert len(bodies) == 3
+        assert bodies[2] == bodies[1]
+        assert ":" not in bodies[2]["input"][0]["id"]
+        assert bodies[2]["input"][0]["encrypted_content"] == "opaque-original"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["responses", "messages", "chat"])
-async def test_explicit_legacy_rejection_corrects_only_history_before_commit(protocol):
+async def test_explicit_legacy_rejection_preserves_required_history(protocol):
     def responder(bodies):
         if len(bodies) == 1:
             return 400, {
@@ -351,18 +370,17 @@ async def test_explicit_legacy_rejection_corrects_only_history_before_commit(pro
     ]
     original = deepcopy(history)
     async with _harness(protocol, responder) as (send, bodies, _):
-        await _saved_reply(send("messages", history), "messages")
-        assert len(bodies) == 2
+        with pytest.raises(ExecutionFailure):
+            await _saved_reply(send("messages", history), "messages")
+        assert len(bodies) == 1
         assert "opaque-original" in json.dumps(bodies[0])
-        assert "opaque-original" not in json.dumps(bodies[1])
-        assert "17" in json.dumps(bodies[1])
         assert history == original
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["responses", "messages", "chat"])
 @pytest.mark.parametrize("committed", [False, True])
-async def test_stream_history_rejection_respects_the_public_commit_boundary(
+async def test_stream_history_rejection_never_discards_required_history(
     protocol, committed
 ):
     visible = "already visible " * 5000  # Exceeds the existing holdback budget.
@@ -423,10 +441,15 @@ async def test_stream_history_rejection_respects_the_public_commit_boundary(
             assert parse_sse_text(output)[-1].event == "error"
             assert visible in output
             assert len(bodies) == 1
+        elif protocol == "chat":
+            with pytest.raises(ExecutionFailure):
+                await _saved_reply(send("messages", history), "messages")
+            assert len(bodies) == 1
         else:
-            await _saved_reply(send("messages", history), "messages")
-            assert len(bodies) == 2
-            assert "opaque-original" not in json.dumps(bodies[1])
+            output = "".join([event async for event in send("messages", history)])
+            assert parse_sse_text(output)[-1].event == "error"
+            assert len(bodies) == 1
+        assert "opaque-original" in json.dumps(bodies[0])
 
 
 @pytest.mark.asyncio
@@ -489,7 +512,7 @@ async def test_history_corrections_exhaust_the_shared_attempt_budget():
     history = [
         {
             "type": "reasoning",
-            "id": f"rs_{index}",
+            "id": f"rs_{index}:legacy",
             "summary": [],
             "encrypted_content": f"opaque{index}",
         }
@@ -499,17 +522,19 @@ async def test_history_corrections_exhaust_the_shared_attempt_budget():
     original = deepcopy(history)
 
     def responder(bodies):
+        index = len(bodies) - 1
         return 400, {
-            "code": "invalid_encrypted_content",
-            "param": "input[0].encrypted_content",
-            "message": "The encrypted content could not be verified.",
+            "code": "invalid_value",
+            "param": f"input[{index}].id",
+            "message": f"Invalid 'input[{index}].id'. Expected an ID containing letters and numbers.",
         }
 
     async with _harness("responses", responder) as (send, bodies, _):
         with pytest.raises(ExecutionFailure):
             await _saved_reply(send("responses", history), "responses")
         assert len(bodies) == 5
-        assert [len(body["input"]) for body in bodies] == [8, 7, 6, 5, 4]
+        assert [len(body["input"]) for body in bodies] == [8] * 5
+        assert all("opaque0" in json.dumps(body) for body in bodies)
         assert history == original
 
 

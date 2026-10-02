@@ -734,7 +734,7 @@ async def test_non_streaming_success_cannot_complete_generation() -> None:
         await _collect(
             stream_messages(
                 provider,
-                _request(),
+                _request().model_copy(update={"max_tokens": None}),
                 request_id="req_non_stream",
                 response_model="claude-opus-4",
             )
@@ -1156,7 +1156,7 @@ async def test_final_attempt_unauthorized_preserves_the_provider_401() -> None:
         await _collect(
             stream_messages(
                 provider,
-                _request(),
+                _request().model_copy(update={"max_tokens": None}),
                 request_id="req_final_401",
                 response_model="claude-opus-4",
             )

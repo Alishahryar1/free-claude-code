@@ -466,6 +466,26 @@ async def test_copilot_completed_call_is_salvaged_with_its_public_identity(
 ) -> None:
     capture = _capture()
     capture[3]["delta"] = " " * 70000 + str(capture[3]["delta"])
+    # Every authoritative snapshot must agree with the raw streamed input.
+    for event in capture:
+        if isinstance(event.get("arguments"), str):
+            event["arguments"] = " " * 70000 + str(event["arguments"])
+        item = event.get("item")
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("arguments"), str)
+            and item["arguments"]
+        ):
+            item["arguments"] = " " * 70000 + str(item["arguments"])
+        response = event.get("response")
+        if isinstance(response, dict):
+            for output in response.get("output", []):
+                if (
+                    isinstance(output, dict)
+                    and isinstance(output.get("arguments"), str)
+                    and output["arguments"]
+                ):
+                    output["arguments"] = " " * 70000 + str(output["arguments"])
     capture[-1]["type"] = "response.failed"
     _response(capture[-1])["status"] = "failed"
     _response(capture[-1])["error"] = {

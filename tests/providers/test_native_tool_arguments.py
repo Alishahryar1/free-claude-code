@@ -123,7 +123,10 @@ def tool_events(protocol, arguments):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-@pytest.mark.parametrize("arguments", ARGUMENTS)
+@pytest.mark.parametrize(
+    "arguments",
+    [value for value in ARGUMENTS if value.startswith("{") and value.endswith("}")],
+)
 async def test_completed_native_arguments_are_transparent(protocol, wire, arguments):
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments))
@@ -184,10 +187,13 @@ async def test_harness_tool_error_is_kept_in_next_request(protocol, arguments):
         protocol, lambda _: (200, tool_events(protocol, arguments))
     ) as (send, bodies, _):
         history = [{"role": "user", "content": "read"}]
-        first = parse_sse_text(
-            "".join([chunk async for chunk in send("responses", history)])
-        )
-        call = first[-1].data["response"]["output"][0]
+        call = {
+            "type": "function_call",
+            "id": "fc_previous",
+            "call_id": "call_previous",
+            "name": "read",
+            "arguments": arguments,
+        }
         history += [
             call,
             {

@@ -14,11 +14,13 @@ from free_claude_code.core.anthropic import (
 )
 from free_claude_code.core.anthropic.conversion import OpenAIConversionError
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.failures import UnsupportedRequestFeature
 from free_claude_code.core.openai_tool_names import (
     OpenAIToolNameCodec,
     encode_openai_chat_tool_names,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.request_preservation import require_preserved_body
 from free_claude_code.providers.history_replay import (
     normalize_messages_history,
 )
@@ -52,6 +54,7 @@ def build_openai_chat_request_body(
     reasoning: ReasoningPolicy,
     policy: OpenAIChatRequestPolicy,
     postprocessors: Iterable[OpenAIChatPostprocessor] = (),
+    preserve_features: bool = False,
 ) -> dict[str, Any]:
     """Build an OpenAI-compatible chat request body from an Anthropic request."""
     request_data = normalize_messages_history(request_data)
@@ -66,12 +69,19 @@ def build_openai_chat_request_body(
             request_data,
             default_max_tokens=policy.default_max_tokens,
             reasoning_replay=policy.reasoning_replay,
+            preserve_features=preserve_features,
         )
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc
 
     request_extra = request_data.extra_body
     if isinstance(request_extra, dict) and request_extra:
+        if preserve_features and (
+            policy.reject_extra_body_message or not policy.include_extra_body
+        ):
+            raise UnsupportedRequestFeature(
+                "Chat provider cannot preserve extra_body controls."
+            )
         if policy.reject_extra_body_message:
             raise InvalidRequestError(policy.reject_extra_body_message)
         if policy.include_extra_body:
@@ -83,10 +93,13 @@ def build_openai_chat_request_body(
                     raise InvalidRequestError(str(exc)) from exc
             body["extra_body"] = extra_body
 
-    apply_openai_chat_body_policy(body, policy)
+    apply_openai_chat_body_policy(body, policy, preserve_features=preserve_features)
 
     for postprocess in postprocessors:
+        before = deepcopy(body) if preserve_features else None
         postprocess(body, request_data, reasoning)
+        if before is not None:
+            require_preserved_body(before, body, "Chat provider postprocessing")
 
     encode_openai_chat_tool_names(body, OpenAIToolNameCodec.from_request(request_data))
 
@@ -101,9 +114,13 @@ def build_openai_chat_request_body(
 
 
 def apply_openai_chat_body_policy(
-    body: dict[str, Any], policy: OpenAIChatRequestPolicy
+    body: dict[str, Any],
+    policy: OpenAIChatRequestPolicy,
+    *,
+    preserve_features: bool = False,
 ) -> None:
     """Apply source-independent Chat Completions body policy."""
+    before = deepcopy(body) if preserve_features else None
     if policy.strip_message_names:
         _strip_message_names(body.get("messages"))
 
@@ -124,6 +141,8 @@ def apply_openai_chat_body_policy(
 
     if policy.normalize_n_to_one and body.get("n") is not None:
         body["n"] = 1
+    if before is not None:
+        require_preserved_body(before, body, "Chat provider body policy")
 
 
 def _strip_message_names(messages: Any) -> None:

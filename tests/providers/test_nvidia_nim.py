@@ -212,7 +212,7 @@ async def test_argument_aliases_survive_request_corrections(wire, correction):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("early_sse", [False, True])
-async def test_argument_aliases_survive_shared_history_correction(early_sse):
+async def test_native_history_failure_cannot_retry_an_alias_request(early_sse):
     # Test adapter exercises the shared history path; native NIM disables details.
     def provider_factory():
         with patch(
@@ -248,11 +248,10 @@ async def test_argument_aliases_survive_shared_history_correction(early_sse):
         bodies,
         provider,
     ):
-        saved = await _saved_reply(stream_messages(provider, request), "messages")
-    call = next(block for block in saved[0]["content"] if block["type"] == "tool_use")
-    assert call["input"] == {"pattern": "needle", "type": "py"}
-    assert len(bodies) == 2
-    assert "opaque-original" not in json.dumps(bodies[-1])
+        with pytest.raises(ExecutionFailure):
+            await _saved_reply(stream_messages(provider, request), "messages")
+    assert len(bodies) == 1
+    assert "opaque-original" in json.dumps(bodies[0])
     assert all(NIM_TOOL_ARGUMENT_ALIASES_KEY not in body for body in bodies)
 
 
@@ -929,7 +928,7 @@ async def test_native_minimax_reasoning_markup_becomes_anthropic_tool_use(
 async def test_native_minimax_markup_without_tools_retries_without_leaking(
     nim_provider,
 ):
-    req = make_request(tools=None)
+    req = make_request(tools=None, thinking=None, top_p=0.95)
     namespace = "]<]minimax[>["
     raw = (
         f"{namespace}<tool_call>"
@@ -1013,6 +1012,8 @@ async def test_malformed_native_minimax_tool_call_retries_without_leaking(
     nim_provider,
 ):
     req = make_request(
+        thinking=None,
+        top_p=0.95,
         tools=[
             tool(
                 "Read",
@@ -1023,7 +1024,7 @@ async def test_malformed_native_minimax_tool_call_retries_without_leaking(
                     "required": ["file_path"],
                 },
             )
-        ]
+        ],
     )
     namespace = "]<]minimax[>["
     malformed = (
@@ -1068,6 +1069,8 @@ async def test_midstream_native_tool_suffix_failure_recovers_without_duplication
     nim_provider,
 ):
     req = make_request(
+        thinking=None,
+        top_p=0.95,
         tools=[
             tool(
                 "Read",
@@ -1078,7 +1081,7 @@ async def test_midstream_native_tool_suffix_failure_recovers_without_duplication
                     "required": ["file_path"],
                 },
             )
-        ]
+        ],
     )
     namespace = "]<]minimax[>["
     malformed = (
@@ -1407,7 +1410,7 @@ async def test_stream_messages_bad_request_without_reasoning_budget_does_not_ret
 async def test_stream_messages_unrelated_internal_error_does_not_downgrade(
     nim_provider,
 ):
-    req = make_request()
+    req = make_request(thinking=None, top_p=0.95)
     error = _make_internal_server_error("unrelated internal provider failure")
 
     with patch.object(
@@ -1430,7 +1433,7 @@ async def test_stream_messages_unrelated_internal_error_does_not_downgrade(
 async def test_stream_messages_internal_reasoning_content_error_does_not_downgrade(
     nim_provider,
 ):
-    req = make_request()
+    req = make_request(thinking=None, top_p=0.95)
     error = _make_internal_server_error(
         "reasoning_content could not be processed by the upstream model"
     )

@@ -273,7 +273,7 @@ def _public_stream(provider, wire):
             "reasoning": DEFAULT_REASONING_POLICY,
         }
     request = (
-        make_messages_request("model")
+        make_messages_request("model", thinking=None, top_p=0.95)
         if wire == "messages"
         else OpenAIResponsesRequest(model="model", input="hello")
     )

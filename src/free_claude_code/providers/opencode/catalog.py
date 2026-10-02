@@ -13,10 +13,14 @@ from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningCapability
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
+    ProviderExecution,
     ProviderOperationKind,
 )
 from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.failure_policy import classify_provider_failure
+from free_claude_code.providers.failure_policy import (
+    ProviderRecoveryDeferred,
+    classify_provider_failure,
+)
 from free_claude_code.providers.model_listing import (
     ModelListResponseError,
     optional_input_modalities,
@@ -213,7 +217,11 @@ class OpenCodeCatalog:
         return self._snapshot
 
     async def snapshot(
-        self, *, request_id: str | None = None
+        self,
+        *,
+        request_id: str | None = None,
+        execution: ProviderExecution | None = None,
+        wait_for_recovery: bool = True,
     ) -> OpenCodeCatalogSnapshot:
         """Return last-good data or coalesce one cold catalog load."""
         if self._snapshot is not None:
@@ -222,7 +230,13 @@ class OpenCodeCatalog:
             if self._snapshot is not None:
                 return self._snapshot
             try:
-                return await self._load_and_publish(request_id=request_id)
+                return await self._load_and_publish(
+                    request_id=request_id,
+                    execution=execution,
+                    wait_for_recovery=wait_for_recovery,
+                )
+            except ProviderRecoveryDeferred:
+                raise
             except Exception as exc:
                 raise classify_provider_failure(
                     exc,
@@ -240,7 +254,11 @@ class OpenCodeCatalog:
         await self._client.aclose()
 
     async def _load_and_publish(
-        self, *, request_id: str | None = None
+        self,
+        *,
+        request_id: str | None = None,
+        execution: ProviderExecution | None = None,
+        wait_for_recovery: bool = True,
     ) -> OpenCodeCatalogSnapshot:
         async def request() -> OpenCodeCatalogSnapshot:
             response = await self._client.get(
@@ -264,10 +282,11 @@ class OpenCodeCatalog:
             finally:
                 await response.aclose()
 
-        execution = self._admission.start_execution(request_id=request_id)
+        execution = execution or self._admission.start_execution(request_id=request_id)
         snapshot = await execution.run_call(
             request,
             operation_kind=ProviderOperationKind.MODEL_DISCOVERY,
+            wait_for_recovery=wait_for_recovery,
         )
         self._snapshot = snapshot
         return snapshot

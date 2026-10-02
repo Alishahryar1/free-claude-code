@@ -140,7 +140,9 @@ async def test_degraded_function_retries_unchanged_request_then_succeeds() -> No
         events = [
             event
             async for event in stream_messages(
-                provider, make_messages_request(), request_id="req_recovered"
+                provider,
+                make_messages_request(thinking=None, top_p=0.95),
+                request_id="req_recovered",
             )
         ]
 
@@ -176,7 +178,9 @@ async def test_degraded_function_exhaustion_is_detailed_redacted_overload() -> N
         [
             event
             async for event in stream_messages(
-                provider, make_messages_request(), request_id="req_degraded"
+                provider,
+                make_messages_request(thinking=None, top_p=0.95),
+                request_id="req_degraded",
             )
         ]
 

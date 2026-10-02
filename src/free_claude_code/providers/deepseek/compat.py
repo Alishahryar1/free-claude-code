@@ -35,7 +35,10 @@ _OMITTED_DOCUMENT_BLOCK = {"type": "text", "text": _OMITTED_DOCUMENT_TEXT}
 
 
 def build_deepseek_request_body(
-    request_data: MessagesRequest, *, reasoning: ReasoningPolicy
+    request_data: MessagesRequest,
+    *,
+    reasoning: ReasoningPolicy,
+    preserve_features: bool = False,
 ) -> dict:
     """Build a DeepSeek Chat Completions body from an Anthropic request."""
     logger.debug(
@@ -45,7 +48,7 @@ def build_deepseek_request_body(
     )
 
     data = dump_messages_request(request_data)
-    if "messages" in data:
+    if "messages" in data and not preserve_features:
         data["messages"] = _strip_document_blocks(data["messages"])
     _validate_deepseek_request_dict(data)
 
@@ -54,6 +57,7 @@ def build_deepseek_request_body(
         sanitized_request,
         reasoning=reasoning,
         policy=DEEPSEEK_REQUEST_POLICY,
+        preserve_features=preserve_features,
         postprocessors=(
             lambda body, _request, _policy: finalize_deepseek_chat_body(
                 body, reasoning

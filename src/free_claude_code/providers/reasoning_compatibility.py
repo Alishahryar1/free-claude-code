@@ -24,6 +24,7 @@ def prepare_messages_reasoning(
     model_info: ProviderModelInfo | None,
     can_disable: bool,
     normal_max_tokens: int | None,
+    preserve_features: bool = False,
 ) -> tuple[MessagesRequest, ReasoningPolicy]:
     """Resolve only tolerant intent; retain original intent in execution owners."""
     if reasoning.control is not ReasoningControl.PREFER_OFF:
@@ -47,6 +48,10 @@ def prepare_messages_reasoning(
             max(limit or 0, normal_max_tokens)
             if normal_max_tokens is not None
             else None
+        )
+    if preserve_features and request.max_tokens is not None:
+        limit = (
+            min(limit, request.max_tokens) if limit is not None else request.max_tokens
         )
     return request.model_copy(
         update={
@@ -97,14 +102,24 @@ class ReasoningCorrection:
             or (self.provider_rejection is not None and self.provider_rejection(error))
         ):
             return None
+        return self.without_off_control(body, paths=present)
+
+    def without_off_control(
+        self, body: dict[str, Any], *, paths: list[tuple[str, ...]] | None = None
+    ) -> dict[str, Any]:
+        """Reapply an accepted tolerant-control correction to a rebuilt body."""
         result = deepcopy(body)
+        present = self.off_fields if paths is None else paths
         for path in present:
             parents = []
             current = result
             for key in path[:-1]:
+                if not isinstance(current.get(key), dict):
+                    break
                 parents.append((current, key))
                 current = current[key]
-            del current[path[-1]]
+            else:
+                current.pop(path[-1], None)
             for parent, key in reversed(parents):
                 if not parent[key]:
                     del parent[key]

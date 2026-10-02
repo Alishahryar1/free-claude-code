@@ -36,6 +36,7 @@ class RecordingChatBehavior(OpenAIChatBehavior):
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        preserve_features: bool = False,
     ) -> dict:
         self.build_calls.append((request, reasoning))
         return {}

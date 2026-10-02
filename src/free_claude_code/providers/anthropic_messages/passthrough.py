@@ -25,7 +25,11 @@ from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.recovery import RecoveryCheckpoint
 from free_claude_code.core.recovery_request import continue_request
-from free_claude_code.core.stream_events import DecodedStreamEvent, StreamEvent
+from free_claude_code.core.stream_events import (
+    DecodedStreamEvent,
+    RequestOutcome,
+    StreamEvent,
+)
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.failure_policy import RetryableProviderProtocolError
 from free_claude_code.providers.http import ProviderAttemptScope
@@ -96,6 +100,7 @@ class _NativeMessagesCandidate(StreamCandidate):
         self._base_url = base_url
         self._headers = dict(headers)
         self._request = NativeMessagesRequest(body)
+        self.original_body = self._request.body
         self._public_model = public_model
         self._native_origin = origin
 
@@ -141,13 +146,33 @@ class _NativeMessagesCandidate(StreamCandidate):
                 raise RetryableProviderProtocolError(
                     "Messages upstream did not return a Message object."
                 )
+            content = message.get("content", [])
+            invalid = next(
+                (
+                    index
+                    for index, block in enumerate(content)
+                    if isinstance(block, dict)
+                    and block.get("type") == "tool_use"
+                    and not isinstance(block.get("input"), dict)
+                ),
+                None,
+            )
+            if invalid is not None:
+                if message.get("stop_reason") != "max_tokens":
+                    raise RetryableProviderProtocolError(
+                        "Native tool input must be a complete JSON object."
+                    )
+                message = {**message, "content": content[:invalid]}
             await scope.attempt.accept()
             yield DecodedStreamEvent(
                 self.origin,
                 StreamEvent("message", message),
                 (),
                 progress=True,
-                completed=True,
+                outcome=RequestOutcome.INCOMPLETE
+                if message.get("stop_reason") in {"max_tokens", "pause_turn"}
+                else RequestOutcome.SUCCESS,
+                stop_reason=message.get("stop_reason"),
             )
             return
         if "text/event-stream" not in response.headers.get("content-type", "").lower():
@@ -159,6 +184,14 @@ class _NativeMessagesCandidate(StreamCandidate):
             self.record_usage(payload)
             check_messages_failure(kind, payload, native=True)
             output = relay.feed(kind, payload)
+            if (
+                relay.completed
+                and relay.invalid_input
+                and relay.stop_reason != "max_tokens"
+            ):
+                raise RetryableProviderProtocolError(
+                    "Provider completed a response with unfinished or invalid tool input."
+                )
             if output is not None and not scope.attempt.accepted:
                 await scope.attempt.accept()
             yield DecodedStreamEvent(
@@ -166,7 +199,15 @@ class _NativeMessagesCandidate(StreamCandidate):
                 StreamEvent(kind, payload),
                 (output,) if output is not None else (),
                 progress=content_progress("messages", kind, payload),
-                completed=relay.completed,
+                outcome=(
+                    RequestOutcome.INCOMPLETE
+                    if relay.stop_reason in {"max_tokens", "pause_turn"}
+                    else RequestOutcome.SUCCESS
+                )
+                if relay.completed
+                else None,
+                stop_reason=relay.stop_reason,
+                native_reasoning_pending=relay.native_reasoning_pending,
             )
             if relay.completed:
                 return

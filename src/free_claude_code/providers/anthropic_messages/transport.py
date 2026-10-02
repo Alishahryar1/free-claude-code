@@ -32,7 +32,12 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.core.recovery import CandidateIncompatible, RecoveryCheckpoint
 from free_claude_code.core.recovery_request import continue_request
-from free_claude_code.core.stream_events import DecodedStreamEvent, StreamEvent
+from free_claude_code.core.request_preservation import require_preserved_body
+from free_claude_code.core.stream_events import (
+    DecodedStreamEvent,
+    RequestOutcome,
+    StreamEvent,
+)
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
 )
@@ -106,6 +111,8 @@ class AnthropicMessagesTransport:
         reasoning: ReasoningPolicy,
         capabilities: MessagesModelCapabilities,
         preserve_native_controls: bool,
+        *,
+        preserve_features: bool = False,
     ) -> PreparedMessagesRequest:
         request = normalize_messages_history(request)
         try:
@@ -115,12 +122,17 @@ class AnthropicMessagesTransport:
                 reasoning=reasoning,
                 capabilities=capabilities,
                 preserve_native_controls=preserve_native_controls,
+                preserve_features=preserve_features,
                 thinking=request.thinking,
                 output_effort=request.output_config.get("effort")
                 if request.output_config
                 else None,
             )
-            return build_native_messages_request(request, options=options)
+            return build_native_messages_request(
+                request, options=options, preserve_features=preserve_features
+            )
+        except UnsupportedRequestFeature as error:
+            raise CandidateIncompatible(str(error)) from error
         except (NativeMessagesError, ValueError) as error:
             raise InvalidRequestError(str(error)) from error
 
@@ -129,6 +141,8 @@ class AnthropicMessagesTransport:
         request: OpenAIResponsesRequest,
         reasoning: ReasoningPolicy,
         capabilities: MessagesModelCapabilities,
+        *,
+        preserve_features: bool = False,
     ) -> ResponsesMessagesRequest:
         validate_history(request.model_dump(mode="json"))
         try:
@@ -140,8 +154,11 @@ class AnthropicMessagesTransport:
                 output_effort=request.reasoning.get("effort")
                 if request.reasoning
                 else None,
+                preserve_features=preserve_features,
             )
-            return build_responses_messages_request(request, options=options)
+            return build_responses_messages_request(
+                request, options=options, preserve_features=preserve_features
+            )
         except UnsupportedRequestFeature as error:
             raise CandidateIncompatible(str(error)) from error
         except (NativeMessagesError, ResponsesConversionError, ValueError) as error:
@@ -240,6 +257,10 @@ class _MessagesCandidate(StreamCandidate):
         )
         self._transport = transport
         self._request = request.model_copy(deep=True)
+        self.original_body = request.model_dump(mode="json", exclude_unset=True)
+        self.input_protocol = (
+            "messages" if isinstance(request, MessagesRequest) else "responses"
+        )
         self._response_model = response_model
         self._reasoning = reasoning
         self._model_info = model_info
@@ -263,14 +284,28 @@ class _MessagesCandidate(StreamCandidate):
                 model_info=self._model_info,
                 can_disable=True,
                 normal_max_tokens=DEFAULT_MESSAGES_OUTPUT_TOKENS,
+                preserve_features=self.preserve_features,
             )
             prepared = self._transport._messages_body(
                 prepared_request,
                 wire_reasoning,
                 capabilities,
                 self._preserve_native_controls,
+                preserve_features=self.preserve_features,
             )
             self.body = prepared.body
+            if self.preserve_features:
+                require_preserved_body(
+                    {
+                        key: value
+                        for key, value in request.model_dump(
+                            mode="json", exclude_none=True, exclude_unset=True
+                        ).items()
+                        if key in {"thinking", "output_config"}
+                    },
+                    self.body,
+                    "Native Messages controls",
+                )
             self._betas = prepared.betas
             if (
                 reasoning.control is ReasoningControl.PREFER_OFF
@@ -292,7 +327,10 @@ class _MessagesCandidate(StreamCandidate):
                     "Messages recovery requires explicit history without a stored response handle."
                 )
             prepared_responses = self._transport._responses_body(
-                request, self._reasoning, capabilities
+                request,
+                self._reasoning,
+                capabilities,
+                preserve_features=self.preserve_features,
             )
             self.body = prepared_responses.body
             self._presenter_factory = lambda origin: AnthropicToResponsesStream(
@@ -313,7 +351,9 @@ class _MessagesCandidate(StreamCandidate):
             str(self.body["model"]),
             endpoint=endpoint,
         )
-        self.sent_body = prepare_history(self.body, origin)
+        self.sent_body = prepare_history(
+            self.body, origin, preserve_features=self.preserve_features
+        )
         return origin
 
     async def _read(
@@ -366,6 +406,14 @@ class _MessagesCandidate(StreamCandidate):
                     payload.get("delta", {}).get("stop_reason") == "pause_turn"
                 )
             output = presenter.feed(kind, payload)
+            if (
+                presenter.completed
+                and presenter.invalid_input
+                and presenter.stop_reason != "max_tokens"
+            ):
+                raise RetryableProviderProtocolError(
+                    "Provider completed a response with unfinished or invalid tool input."
+                )
             if kind != "ping" and not scope.attempt.accepted:
                 await scope.attempt.accept()
             yield DecodedStreamEvent(
@@ -373,9 +421,17 @@ class _MessagesCandidate(StreamCandidate):
                 StreamEvent(kind, payload),
                 tuple(output),
                 progress=content_progress("messages", kind, payload),
-                completed=presenter.completed,
+                outcome=(
+                    RequestOutcome.INCOMPLETE
+                    if presenter.stop_reason in {"max_tokens", "pause_turn"}
+                    else RequestOutcome.SUCCESS
+                )
+                if presenter.completed
+                else None,
+                stop_reason=presenter.stop_reason,
                 allow_empty_completion=allow_empty_completion,
                 replay_safe=not native_paused,
+                native_reasoning_pending=presenter.native_reasoning_pending,
             )
             if presenter.completed:
                 return

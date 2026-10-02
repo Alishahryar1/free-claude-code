@@ -12,6 +12,7 @@ from free_claude_code.core.recovery import RecoveryCheckpoint
 from free_claude_code.core.stream_events import (
     DecodedStreamEvent,
     ExactPrefixFilter,
+    ItemCompletion,
     NativeMessage,
     OrderedStreamBuffer,
     StreamEvent,
@@ -225,7 +226,15 @@ class MessagesRecoveryWriter:
                 )
             self._buffer.start(index, event, atomic=block.get("type") == "tool_use")
         else:
-            self._buffer.append(index, event, complete=kind == "content_block_stop")
+            self._buffer.append(
+                index,
+                event,
+                complete=kind == "content_block_stop"
+                and (
+                    not self._buffer.atomic(index)
+                    or event.item_completion is ItemCompletion.COMPLETE
+                ),
+            )
         return [out for queued in self._buffer.drain() for out in self._publish(queued)]
 
     def _publish(self, event: StreamEvent) -> list[StreamEvent]:

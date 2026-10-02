@@ -147,11 +147,15 @@ class ProviderExecution:
         *,
         operation_kind: ProviderOperationKind,
         provider_failure_override: ProviderFailureOverride | None = None,
+        wait_for_recovery: bool = True,
     ) -> T:
         """Run a callable that performs exactly one provider call per invocation."""
+        deferred = False
         try:
             while self.can_attempt:
-                attempt = await self.open_attempt(operation_kind)
+                attempt = await self.open_attempt(
+                    operation_kind, wait_for_recovery=wait_for_recovery
+                )
                 try:
                     result = await fn()
                 except asyncio.CancelledError:
@@ -169,18 +173,30 @@ class ProviderExecution:
                     return result
                 finally:
                     await attempt.aclose()
+            if self._last_failure is not None:
+                self.fail(self._last_failure)
+                raise self._last_failure
+            self.abandon()
+            raise RuntimeError("provider execution ended without an attempt outcome")
+        except ProviderRecoveryDeferred:
+            deferred = True
+            await self.suspend()
+            raise
         except asyncio.CancelledError:
             self.abandon()
             raise
         except Exception as error:
             self.fail(error)
             raise
+        finally:
+            if not deferred:
+                await self.aclose()
 
-        if self._last_failure is not None:
-            self.fail(self._last_failure)
-            raise self._last_failure
-        self.abandon()
-        raise RuntimeError("provider execution ended without an attempt outcome")
+    async def suspend(self) -> None:
+        """Yield gate participation without ending this execution or its budget."""
+        if self._active_claim is not None:
+            raise RuntimeError("close the active provider attempt before suspension")
+        await complete_cleanup(self._controller._finalize_execution(self))
 
     def succeed(self) -> None:
         """Mark the complete logical provider operation successful."""

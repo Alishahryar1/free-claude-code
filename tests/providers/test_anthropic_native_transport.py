@@ -30,6 +30,34 @@ async def collect(p, body=None, **kwargs):
 
 
 @pytest.mark.asyncio
+async def test_native_nonstream_limit_omits_invalid_call_and_dependent_tail():
+    text = {"type": "text", "text": "Kept"}
+    valid = {"type": "tool_use", "id": "valid", "name": "read", "input": {}}
+    response = {
+        "type": "message",
+        "stop_reason": "max_tokens",
+        "content": [
+            text,
+            valid,
+            {"type": "tool_use", "id": "invalid", "name": "read", "input": None},
+            {"type": "text", "text": "Uncommitted tail"},
+        ],
+        "usage": {"output_tokens": 12},
+        "native_extension": True,
+    }
+    p = provider(lambda _: httpx.Response(200, json=response))
+    try:
+        result = json.loads("".join(await collect(p)))
+        assert result["content"] == [text, valid]
+        assert result["stop_reason"] == "max_tokens"
+        assert (
+            result["usage"] == response["usage"] and result["native_extension"] is True
+        )
+    finally:
+        await p.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_native_omissions_helpers_controls_and_cookie_isolation():
     received = []
 

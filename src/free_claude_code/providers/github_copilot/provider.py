@@ -25,6 +25,7 @@ from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
+from free_claude_code.providers.candidate_setup import CandidateSetup
 from free_claude_code.providers.endpoint_types import EndpointContext, HttpEndpoint
 from free_claude_code.providers.openai_chat import (
     OpenAIChatBehavior,
@@ -191,8 +192,27 @@ class GitHubCopilotProvider(BaseProvider):
             return transport
         return cached[1]
 
+    def _dispatch(
+        self,
+        request: MessagesRequest | OpenAIResponsesRequest,
+        input_tokens: int,
+        request_id: str | None,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        async def initialize(
+            wait_for_recovery: bool,
+        ) -> AbstractAsyncContextManager[ProviderCandidate]:
+            return self._initialize_candidate(
+                request, input_tokens, request_id, response_model, reasoning
+            )
+
+        return CandidateSetup(
+            initialize, provider_name=PROVIDER_NAME, request_id=request_id
+        ).open()
+
     @asynccontextmanager
-    async def _dispatch(
+    async def _initialize_candidate(
         self,
         request: MessagesRequest | OpenAIResponsesRequest,
         input_tokens: int,

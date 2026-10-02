@@ -10,8 +10,9 @@ from typing import Never, cast
 import simplejson
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.request_preservation import require_supported_fields
 
-from .errors import ResponsesConversionError
+from .errors import ResponsesConversionError, UnsupportedResponsesFeature
 from .ids import tool_item_id_for_kind
 from .models import OpenAIResponsesRequest
 from .tool_search import (
@@ -56,11 +57,16 @@ class ResponsesToolAdapter:
     """Prepare one request and retain only the information needed to undo edits."""
 
     def __init__(
-        self, request: OpenAIResponsesRequest, policy: ResponsesToolPolicy
+        self,
+        request: OpenAIResponsesRequest,
+        policy: ResponsesToolPolicy,
+        *,
+        preserve_features: bool = False,
     ) -> None:
         self.original = request
         self.request = request.model_copy(deep=True)
         self._policy = policy
+        self._preserve_features = preserve_features
         self._identities: dict[tuple[str | None, str], ResponsesToolIdentity] = {}
         self._wire_names: dict[ResponsesToolIdentity, str] = {}
         self._declared: set[ResponsesToolIdentity] = set()
@@ -186,6 +192,10 @@ class ResponsesToolAdapter:
                 and isinstance(tool, dict)
                 and tool.get("type") == "namespace"
             ):
+                if self._preserve_features and set(tool) - {"type", "name", "tools"}:
+                    raise UnsupportedResponsesFeature(
+                        "Namespace flattening cannot preserve namespace controls or descriptions."
+                    )
                 name = _name(tool)
                 self._namespace_headers[(scope, name)] = {
                     key: deepcopy(value)
@@ -211,6 +221,12 @@ class ResponsesToolAdapter:
             and kind == "tool_search"
             and is_client_search(tool)
         ):
+            if self._preserve_features:
+                require_supported_fields(
+                    tool,
+                    {"type", "execution", "description", "parameters"},
+                    "Client tool search adaptation",
+                )
             if self._policy.explicit_search_parameters:
                 tool = normalize_tool_search(tool)
             if not isinstance(tool.get("parameters"), dict):
@@ -245,6 +261,13 @@ class ResponsesToolAdapter:
                 tool = {**tool, "name": wire_name}
                 tool.pop("namespace", None)
             if kind == "custom":
+                if self._preserve_features and source.get("format") not in (
+                    None,
+                    {"type": "text"},
+                ):
+                    raise UnsupportedResponsesFeature(
+                        "Function adaptation cannot preserve custom tool grammars."
+                    )
                 tool = {
                     **{key: child for key, child in tool.items() if key != "custom"},
                     **source,
@@ -266,6 +289,10 @@ class ResponsesToolAdapter:
         }:
             content_types = tool.get("search_content_types")
             if content_types is not None:
+                if self._preserve_features and content_types != ["text"]:
+                    raise UnsupportedResponsesFeature(
+                        "This provider cannot preserve requested web search content types."
+                    )
                 if not isinstance(content_types, list) or "text" not in content_types:
                     raise ResponsesConversionError(
                         "The selected provider supports text web search only."

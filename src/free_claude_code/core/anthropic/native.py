@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.request_preservation import require_supported_fields
 
 from .models import MessagesRequest
 from .request_serialization import dump_messages_request
@@ -114,14 +115,23 @@ def apply_messages_options(body: JsonObject, options: NativeMessagesOptions) -> 
 
 
 def build_native_messages_request(
-    request: MessagesRequest, *, options: NativeMessagesOptions
+    request: MessagesRequest,
+    *,
+    options: NativeMessagesOptions,
+    preserve_features: bool = False,
 ) -> PreparedMessagesRequest:
     """Prepare native input, preserving supported nested protocol extensions."""
 
     if not request.messages:
         raise NativeMessagesError("Messages input must not be empty.")
     body = cast(JsonObject, dump_messages_request(request))
-    raw_request = cast(JsonObject, request.model_dump(mode="json", exclude_none=True))
+    if preserve_features:
+        require_supported_fields(
+            request.model_extra or {}, set(_NATIVE_EXTRA_FIELDS), "Native Messages"
+        )
+    raw_request = cast(
+        JsonObject, request.model_dump(mode="json", exclude_none=not preserve_features)
+    )
     for name in request.model_extra or ():
         if name not in raw_request:
             continue

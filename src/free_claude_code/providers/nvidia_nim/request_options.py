@@ -28,13 +28,18 @@ NIM_REQUEST_POLICY = OpenAIChatRequestPolicy(
 
 
 def build_nim_request_body(
-    request_data: MessagesRequest, nim: NimSettings, *, reasoning: ReasoningPolicy
+    request_data: MessagesRequest,
+    nim: NimSettings,
+    *,
+    reasoning: ReasoningPolicy,
+    preserve_features: bool = False,
 ) -> dict[str, Any]:
     """Build OpenAI-format request body from Anthropic request plus NIM settings."""
     return build_openai_chat_request_body(
         request_data,
         reasoning=reasoning,
         policy=NIM_REQUEST_POLICY,
+        preserve_features=preserve_features,
         postprocessors=(
             lambda body, request, policy: _apply_nim_messages_request_options(
                 body,

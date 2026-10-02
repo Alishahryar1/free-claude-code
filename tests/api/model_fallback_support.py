@@ -20,7 +20,11 @@ from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.recovery import AttemptFailure, RecoveryCheckpoint
 from free_claude_code.core.recovery_request import continue_request
-from free_claude_code.core.stream_events import DecodedStreamEvent, StreamEvent
+from free_claude_code.core.stream_events import (
+    DecodedStreamEvent,
+    RequestOutcome,
+    StreamEvent,
+)
 from tests.api.support import create_test_app
 
 
@@ -303,6 +307,7 @@ class _ControlledCandidate:
         *,
         wait_for_recovery: bool,
         can_correct: Callable[[], bool],
+        on_rejected: Callable[[], None] | None = None,
     ) -> AsyncIterator[DecodedStreamEvent]:
         self._attempted = True
         provider = self._provider
@@ -315,6 +320,7 @@ class _ControlledCandidate:
             "",
             self._request.model,
         )
+        yield DecodedStreamEvent(origin, StreamEvent("request.dispatched", {}), ())
         prefix = (
             provider._chunks_before_failure
             if self._wire_api == "messages"
@@ -337,13 +343,18 @@ class _ControlledCandidate:
                     (event,),
                     progress=parsed.event
                     in {"content_block_delta", "response.output_text.delta"},
-                    completed=parsed.event
-                    in {"message_stop", "response.completed", "response.incomplete"},
+                    outcome=RequestOutcome.SUCCESS
+                    if parsed.event
+                    in {"message_stop", "response.completed", "response.incomplete"}
+                    else None,
                 )
         if provider._failure is not None:
             raise AttemptFailure(provider._failure)
 
     def finish(self, failure: ExecutionFailure | None) -> None:
+        pass
+
+    async def suspend(self) -> None:
         pass
 
     async def aclose(self) -> None:

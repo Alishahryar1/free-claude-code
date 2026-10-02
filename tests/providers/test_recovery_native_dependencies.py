@@ -135,6 +135,7 @@ async def test_dispatched_native_history_restricts_recovery_before_response_outp
                 event = await anext(source)
                 writer.feed(event)
                 assert writer.checkpoint.required_origins == (event.origin,)
-                assert bodies == []
+                assert len(bodies) == 1
+                assert bodies[0]["input"][0] == _native("responses")
             finally:
                 await source.aclose()

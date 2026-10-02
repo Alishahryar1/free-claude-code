@@ -1,6 +1,7 @@
 """Shared request correction and authentication recovery decisions."""
 
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from typing import Any
 
 from free_claude_code.core.history_replay import HistoryProtocol
@@ -11,7 +12,10 @@ from free_claude_code.providers.admission import (
     ProviderExecution,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
-from free_claude_code.providers.history_replay import history_retry_body
+from free_claude_code.providers.history_replay import (
+    history_retry_body,
+    reapply_history_ids,
+)
 from free_claude_code.providers.reasoning_compatibility import ReasoningCorrection
 
 
@@ -78,6 +82,21 @@ class RequestCorrections:
         self._protocol = protocol
         self._reasoning = reasoning
         self._used_retry_kinds: set[str] = set()
+        self._normalized_ids: dict[str, str] = {}
+
+    def reapply(self, body: JsonObject) -> JsonObject:
+        """Carry accepted optional controls across continuation preparation."""
+        result = deepcopy(body)
+        reapply_history_ids(result, self._protocol, self._normalized_ids)
+        if self._reasoning is not None and "reasoning" in self._used_retry_kinds:
+            result = self._reasoning.without_off_control(result)
+        if "stream_usage" in self._used_retry_kinds:
+            options = result.get("stream_options")
+            if isinstance(options, dict):
+                options.pop("include_usage", None)
+                if not options:
+                    result.pop("stream_options", None)
+        return result
 
     def next_body(
         self,
@@ -89,7 +108,12 @@ class RequestCorrections:
         reasoning_sent_body: Mapping[str, Any] | None = None,
         after_common: Callable[[set[str]], JsonObject | None] | None = None,
     ) -> JsonObject | None:
-        corrected = history_retry_body(history_error, sent_body, self._protocol)
+        corrected = history_retry_body(
+            history_error,
+            sent_body,
+            self._protocol,
+            normalized_ids=self._normalized_ids,
+        )
         if corrected is not None:
             return corrected
         if self._reasoning is not None and "reasoning" not in self._used_retry_kinds:

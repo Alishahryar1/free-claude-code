@@ -48,6 +48,7 @@ class _UsageTestBehavior(OpenAIChatBehavior):
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        preserve_features: bool = False,
     ) -> dict:
         return {"model": request.model, "messages": [{"role": "user", "content": "x"}]}
 

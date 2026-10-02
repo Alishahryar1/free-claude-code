@@ -59,9 +59,17 @@ class ResponsesMessagesRequest:
     tool_identities: Mapping[str, ResponsesToolIdentity]
 
 
-def _fields(value: Mapping[str, JsonValue], allowed: set[str], context: str) -> None:
+def _fields(
+    value: Mapping[str, JsonValue],
+    allowed: set[str],
+    context: str,
+    *,
+    preserve_features: bool = False,
+) -> None:
     unsupported = sorted(
-        key for key, item in value.items() if key not in allowed and item is not None
+        key
+        for key, item in value.items()
+        if key not in allowed and (preserve_features or item is not None)
     )
     if unsupported:
         raise UnsupportedResponsesFeature(
@@ -122,13 +130,22 @@ def _arguments(value: JsonValue) -> JsonObject:
 
 
 class _ToolScope:
-    def __init__(self, tools: list[JsonObject] | None, items: list[JsonValue]) -> None:
+    def __init__(
+        self,
+        tools: list[JsonObject] | None,
+        items: list[JsonValue],
+        *,
+        preserve_features: bool = False,
+    ) -> None:
+        self.preserve_features = preserve_features
         self._flat: dict[str, ResponsesToolIdentity] = {}
         self._declared: set[ResponsesToolIdentity] = set()
         definitions: list[tuple[ResponsesToolIdentity, JsonObject]] = []
         for tool in tools or ():
             if tool.get("type") == "namespace":
-                _fields(tool, {"type", "name", "description", "tools"}, "Namespace")
+                self._fields(
+                    tool, {"type", "name", "description", "tools"}, "Namespace"
+                )
                 namespace = _string(tool.get("name"), "namespace.name")
                 nested = tool.get("tools")
                 if not isinstance(nested, list):
@@ -173,6 +190,11 @@ class _ToolScope:
             body["name"] = self.alias(identity)
             self.tools.append(body)
 
+    def _fields(
+        self, value: Mapping[str, JsonValue], allowed: set[str], context: str
+    ) -> None:
+        _fields(value, allowed, context, preserve_features=self.preserve_features)
+
     def _register(self, identity: ResponsesToolIdentity) -> None:
         name = flatten_responses_tool_name(identity.name, namespace=identity.namespace)
         previous = self._flat.get(name)
@@ -195,7 +217,7 @@ class _ToolScope:
         )
         allowed = {"type", "name", "namespace", "description"}
         allowed |= {"format"} if kind == "custom" else {"parameters", "strict"}
-        _fields(value, allowed, "Tool declaration")
+        self._fields(value, allowed, "Tool declaration")
         identity = _identity(value, kind, namespace)
         if identity in self._declared:
             raise ResponsesConversionError("Duplicate tool declaration.")
@@ -216,12 +238,16 @@ class _ToolScope:
                     raise UnsupportedResponsesFeature(
                         "Messages upstream cannot enforce custom tool grammars."
                     )
-                _fields(format_value, {"type"}, "Custom tool format")
+                self._fields(format_value, {"type"}, "Custom tool format")
             body["input_schema"] = {
                 **custom_tool_input_schema(description=None),
                 "additionalProperties": False,
             }
         else:
+            if self.preserve_features and not isinstance(value.get("strict"), bool):
+                raise UnsupportedResponsesFeature(
+                    "Responses and Messages have different default function strictness."
+                )
             schema = value.get("parameters", {"type": "object", "properties": {}})
             if not isinstance(schema, Mapping):
                 raise ResponsesConversionError(
@@ -250,7 +276,7 @@ class _ToolScope:
                 kind = value.get("type")
                 if kind not in ("function", "custom"):
                     raise ResponsesConversionError("Unsupported named tool choice.")
-                _fields(value, {"type", "name", "namespace"}, "Tool choice")
+                self._fields(value, {"type", "name", "namespace"}, "Tool choice")
                 identity = _identity(
                     value, "custom" if kind == "custom" else "function"
                 )
@@ -275,8 +301,15 @@ class _ToolScope:
         return choice
 
 
-def _image(value: Mapping[str, JsonValue]) -> JsonObject:
-    _fields(value, {"type", "image_url", "detail", "file_id"}, "Image")
+def _image(
+    value: Mapping[str, JsonValue], *, preserve_features: bool = False
+) -> JsonObject:
+    _fields(
+        value,
+        {"type", "image_url", "detail", "file_id"},
+        "Image",
+        preserve_features=preserve_features,
+    )
     if value.get("file_id") is not None:
         raise UnsupportedResponsesFeature(
             "A Messages upstream requires image content or a portable URL, not file_id."
@@ -307,7 +340,13 @@ def _image(value: Mapping[str, JsonValue]) -> JsonObject:
     return {"type": "image", "source": source}
 
 
-def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[JsonValue]:
+def _content(
+    value: JsonValue,
+    *,
+    images: bool,
+    empty: bool = False,
+    preserve_features: bool = False,
+) -> list[JsonValue]:
     if isinstance(value, str):
         text = _string(value, "content", empty=empty)
         return [{"type": "text", "text": text}] if text else []
@@ -321,7 +360,12 @@ def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[Jso
             raise ResponsesConversionError("Message content blocks must be objects.")
         kind = item.get("type")
         if kind in ("input_text", "output_text", "text"):
-            _fields(item, {"type", "text", "annotations", "logprobs"}, "Text block")
+            _fields(
+                item,
+                {"type", "text", "annotations", "logprobs"},
+                "Text block",
+                preserve_features=preserve_features,
+            )
             if item.get("annotations") or item.get("logprobs"):
                 raise UnsupportedResponsesFeature(
                     "Messages history cannot represent text annotations or logprobs."
@@ -330,7 +374,7 @@ def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[Jso
             if text:
                 blocks.append({"type": "text", "text": text})
         elif kind == "input_image" and images:
-            blocks.append(_image(item))
+            blocks.append(_image(item, preserve_features=preserve_features))
         else:
             raise UnsupportedResponsesFeature(
                 f"Messages upstream cannot represent content type {kind!r}."
@@ -345,6 +389,13 @@ class _MessagesInput:
         self._tools = tools
         self._calls: dict[str, Literal["function", "custom"]] = {}
         self._pending: set[str] = set()
+
+    def _fields(
+        self, value: Mapping[str, JsonValue], allowed: set[str], context: str
+    ) -> None:
+        _fields(
+            value, allowed, context, preserve_features=self._tools.preserve_features
+        )
 
     def _append(
         self,
@@ -383,18 +434,28 @@ class _MessagesInput:
             )
         kind = value.get("type")
         if kind is None or kind == "message":
-            _fields(value, {"type", "role", "content", "id", "status"}, "Message")
+            self._fields(value, {"type", "role", "content", "id", "status"}, "Message")
             role = value.get("role", "user")
             if role in ("system", "developer"):
                 if self.messages:
                     raise UnsupportedResponsesFeature(
                         "Messages upstream supports only leading system/developer input."
                     )
-                self.system.extend(_content(value.get("content"), images=False))
+                self.system.extend(
+                    _content(
+                        value.get("content"),
+                        images=False,
+                        preserve_features=self._tools.preserve_features,
+                    )
+                )
             elif role in ("user", "assistant"):
                 self._append(
                     "user" if role == "user" else "assistant",
-                    _content(value.get("content"), images=role == "user"),
+                    _content(
+                        value.get("content"),
+                        images=role == "user",
+                        preserve_features=self._tools.preserve_features,
+                    ),
                 )
             else:
                 raise ResponsesConversionError("Unsupported Responses message role.")
@@ -427,7 +488,7 @@ class _MessagesInput:
         )
 
     def _call(self, value: Mapping[str, JsonValue], *, custom: bool) -> None:
-        _fields(
+        self._fields(
             value,
             {
                 "type",
@@ -467,7 +528,7 @@ class _MessagesInput:
         self._pending.add(call_id)
 
     def _result(self, value: Mapping[str, JsonValue], *, custom: bool) -> None:
-        _fields(
+        self._fields(
             value,
             {"type", "id", "status", "call_id", "output", "is_error"},
             "Tool output",
@@ -481,7 +542,12 @@ class _MessagesInput:
             "type": "tool_result",
             "tool_use_id": call_id,
         }
-        content = _content(value.get("output"), images=True, empty=True)
+        content = _content(
+            value.get("output"),
+            images=True,
+            empty=True,
+            preserve_features=self._tools.preserve_features,
+        )
         if content:
             block["content"] = content
         if value.get("is_error") is not None:
@@ -504,12 +570,14 @@ class _MessagesInput:
             )
 
 
-def _output_format(value: JsonValue) -> JsonObject | None:
+def _output_format(
+    value: JsonValue, *, preserve_features: bool = False
+) -> JsonObject | None:
     if value is None:
         return None
     if not isinstance(value, Mapping):
         raise ResponsesConversionError("Responses text options must be an object.")
-    _fields(value, {"format"}, "Text options")
+    _fields(value, {"format"}, "Text options", preserve_features=preserve_features)
     format_value = value.get("format")
     if format_value is None:
         return None
@@ -517,7 +585,9 @@ def _output_format(value: JsonValue) -> JsonObject | None:
         raise ResponsesConversionError("Responses text.format must be an object.")
     kind = format_value.get("type")
     if kind == "text":
-        _fields(format_value, {"type"}, "Text format")
+        _fields(
+            format_value, {"type"}, "Text format", preserve_features=preserve_features
+        )
         return None
     if kind != "json_schema":
         raise UnsupportedResponsesFeature(
@@ -527,6 +597,7 @@ def _output_format(value: JsonValue) -> JsonObject | None:
         format_value,
         {"type", "name", "description", "schema", "strict"},
         "Output format",
+        preserve_features=preserve_features,
     )
     schema = format_value.get("schema")
     if not isinstance(schema, Mapping):
@@ -563,11 +634,16 @@ def build_responses_messages_request(
     request: OpenAIResponsesRequest,
     *,
     options: NativeMessagesOptions,
+    preserve_features: bool = False,
 ) -> ResponsesMessagesRequest:
     """Convert caller-owned history directly to the native Messages wire shape."""
 
     raw = cast(JsonObject, request.model_dump(mode="json", exclude_none=True))
-    _fields(raw, _REQUEST_FIELDS, "Responses request")
+    if preserve_features:
+        raw.update(request.model_extra or {})
+    _fields(
+        raw, _REQUEST_FIELDS, "Responses request", preserve_features=preserve_features
+    )
     if raw.get("truncation") not in (None, "disabled"):
         raise UnsupportedResponsesFeature(
             "Messages upstream does not support automatic input truncation."
@@ -581,13 +657,18 @@ def build_responses_messages_request(
             "Messages upstream cannot represent the requested include fields."
         )
     if request.reasoning is not None:
-        _fields(request.reasoning, {"effort", "summary"}, "Reasoning controls")
+        _fields(
+            request.reasoning,
+            {"effort", "summary"},
+            "Reasoning controls",
+            preserve_features=preserve_features,
+        )
         if request.reasoning.get("summary") not in (None, "auto"):
             raise UnsupportedResponsesFeature(
                 "Messages upstream supports only automatic reasoning summaries."
             )
     items = _items(request.input)
-    scope = _ToolScope(request.tools, items)
+    scope = _ToolScope(request.tools, items, preserve_features=preserve_features)
     builder = _MessagesInput(scope)
     if request.instructions is not None:
         builder.system.append({"type": "text", "text": request.instructions})
@@ -606,14 +687,19 @@ def build_responses_messages_request(
         if key in raw:
             body[key] = raw[key]
     if request.metadata is not None:
-        _fields(request.metadata, {"user_id"}, "Metadata")
+        _fields(
+            request.metadata,
+            {"user_id"},
+            "Metadata",
+            preserve_features=preserve_features,
+        )
         if "user_id" in request.metadata:
             body["metadata"] = {
                 "user_id": _string(
                     request.metadata["user_id"], "metadata.user_id", empty=True
                 )
             }
-    output_format = _output_format(raw.get("text"))
+    output_format = _output_format(raw.get("text"), preserve_features=preserve_features)
     if output_format is not None:
         body["output_config"] = {"format": output_format}
     try:

@@ -70,10 +70,12 @@ class DeepSeekChatBehavior(OpenAIChatBehavior):
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        preserve_features: bool = False,
     ) -> dict:
         return build_deepseek_request_body(
             request,
             reasoning=reasoning,
+            preserve_features=preserve_features,
         )
 
     def finalize_chat_body(

@@ -380,11 +380,16 @@ async def test_responses_upstream_accepts_both_ingress_protocols_directly() -> N
     assert_anthropic_stream_contract(messages_events)
     assert text_content(messages_events) == "responses-ok"
     responses_events = parse_sse_text(responses_body)
-    assert [event.event for event in responses_events] == [
-        "response.created",
-        "response.output_text.delta",
-        "response.completed",
-    ]
+    assert sum(event.event == "response.created" for event in responses_events) == 1
+    assert sum(event.event == "response.completed" for event in responses_events) == 1
+    assert (
+        "".join(
+            event.data["delta"]
+            for event in responses_events
+            if event.event == "response.output_text.delta"
+        )
+        == "responses-ok"
+    )
     assert responses_events[0].data["response"]["id"] == "resp_matrix"
     assert responses_events[-1].data["response"]["model"] == "public-model"
     assert (

@@ -18,6 +18,7 @@ from free_claude_code.core.recovery import AttemptFailure, RecoveryCheckpoint
 from free_claude_code.core.stream_events import (
     DecodedStreamEvent,
     ExactPrefixFilter,
+    ItemCompletion,
     OrderedStreamBuffer,
     StreamEvent,
 )
@@ -236,7 +237,7 @@ class ResponsesRecoveryWriter:
             )
         if kind in _TERMINALS:
             self._terminal = deepcopy(event)
-            return self._terminal_output(event)
+            return []
         if kind in {"response.created", "response.in_progress", "response.queued"}:
             if set(payload["response"]) - _RESPONSE_FIELDS:
                 self._blocked_reason = (
@@ -256,7 +257,11 @@ class ResponsesRecoveryWriter:
             payload["output_index"]
         ):
             self._buffer.start(
-                payload["output_index"], event, atomic=False, complete=True
+                payload["output_index"],
+                event,
+                atomic=_client_call(payload["item"]),
+                complete=not _client_call(payload["item"])
+                or event.item_completion is ItemCompletion.COMPLETE,
             )
         elif "output_index" in payload:
             index = payload["output_index"]
@@ -287,7 +292,11 @@ class ResponsesRecoveryWriter:
             self._buffer.append(
                 payload["output_index"],
                 event,
-                complete=kind == "response.output_item.done",
+                complete=kind == "response.output_item.done"
+                and (
+                    not self._buffer.atomic(index)
+                    or event.item_completion is ItemCompletion.COMPLETE
+                ),
             )
         else:
             if kind not in {"ping"}:
@@ -296,54 +305,6 @@ class ResponsesRecoveryWriter:
                 )
             return [self._event(event)]
         return [out for queued in self._buffer.drain() for out in self._publish(queued)]
-
-    def _terminal_output(self, event: StreamEvent) -> list[StreamEvent]:
-        """Retain materialized output even when the provider omitted item events."""
-        result: list[StreamEvent] = []
-        for index, body in enumerate(event.payload["response"].get("output", [])):
-            if not isinstance(body, dict):
-                continue
-            if _client_call(body) and (
-                body.get("status") in {"in_progress", "incomplete"}
-                or (
-                    event.kind == "response.incomplete"
-                    and body.get("status") != "completed"
-                )
-            ):
-                self._unpublished_tail = True
-                continue
-            item_id = self._ids.get(body.get("id"), body.get("id"))
-            index = (
-                next(
-                    (
-                        source
-                        for source, target in self._indexes.items()
-                        if self._items[target].body.get("id") == item_id
-                    ),
-                    index,
-                )
-                if item_id is not None
-                else index
-            )
-            snapshot = StreamEvent(
-                "response.output_item.done",
-                {
-                    "type": "response.output_item.done",
-                    "output_index": index,
-                    "item": body,
-                },
-            )
-            if self._buffer.contains(index) and not self._buffer.complete(index):
-                result.extend(self._accept(snapshot))
-            else:
-                # Terminal-only text remains in the terminal frame. A whole
-                # client call also needs its dispatch event for native clients.
-                result.extend(
-                    self._publish(
-                        snapshot, emit=_client_call(body) and index not in self._indexes
-                    )
-                )
-        return result
 
     def _publish(self, event: StreamEvent, *, emit: bool = True) -> list[StreamEvent]:
         assert self._origin is not None
@@ -731,9 +692,7 @@ class ResponsesRecoveryWriter:
                     "Responses attempt completed without its terminal payload."
                 )
             terminal = deepcopy(self._terminal)
-        if (
-            self._recovered or salvage or self._unpublished_tail
-        ) and not self._opaque_events:
+        if not self._opaque_events or self._unpublished_tail:
             response = terminal.payload["response"]
             response["output"] = [item.content() for item in self._items.values()]
             if self._recovered or salvage:

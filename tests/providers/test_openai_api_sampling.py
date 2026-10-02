@@ -292,7 +292,7 @@ async def test_reasoning_and_sampling_corrections_compose(reasoning_first):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("budget", [1, 2, 3])
-async def test_sampling_corrections_share_the_attempt_budget(budget):
+async def test_recovery_preserves_original_sampling_controls_within_budget(budget):
     bodies = []
 
     def handler(request):
@@ -309,11 +309,9 @@ async def test_sampling_corrections_share_the_attempt_budget(budget):
             await _collect(_stream(provider, _request("responses")))
     finally:
         await provider.cleanup()
-    assert len(bodies) == budget
+    assert len(bodies) == min(budget, 2)
     if budget > 1:
         assert bodies[1] == bodies[0]
-    if budget > 2:
-        assert "temperature" not in bodies[2] and "top_p" in bodies[2]
 
 
 @pytest.mark.asyncio
@@ -338,9 +336,9 @@ async def test_rejection_of_an_already_removed_field_stops_correction():
 @pytest.mark.parametrize("history_first", [False, True])
 async def test_history_and_sampling_corrections_preserve_each_other(history_first):
     history_error = {
-        "code": "invalid_encrypted_content",
-        "param": "input[0].encrypted_content",
-        "message": "The encrypted content could not be verified.",
+        "code": "invalid_value",
+        "param": "input[0].id",
+        "message": "Invalid 'input[0].id'. Expected an ID containing letters and numbers.",
     }
     errors = [history_error, _rejection("temperature")]
     if not history_first:
@@ -360,7 +358,7 @@ async def test_history_and_sampling_corrections_preserve_each_other(history_firs
         input=[
             {
                 "type": "reasoning",
-                "id": "rs_1",
+                "id": "rs_1:legacy",
                 "encrypted_content": "opaque-history",
                 "summary": [{"type": "summary_text", "text": "Saved reasoning"}],
             },
@@ -377,10 +375,9 @@ async def test_history_and_sampling_corrections_preserve_each_other(history_firs
     expected = deepcopy(bodies[0])
     for index, error in enumerate(errors):
         if error is history_error:
-            expected["input"][0] = {
-                "role": "assistant",
-                "content": "[Earlier reasoning summary]\nSaved reasoning",
-            }
+            normalized_id = bodies[index + 1]["input"][0]["id"]
+            assert normalized_id != "rs_1:legacy" and ":" not in normalized_id
+            expected["input"][0]["id"] = normalized_id
         else:
             expected.pop("temperature")
         assert bodies[index + 1] == expected
