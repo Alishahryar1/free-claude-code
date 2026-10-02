@@ -126,6 +126,7 @@ class ProviderDescriptor:
     base_url_attr: str | None = None
     proxy_attr: str | None = None
     required_settings_attrs: tuple[str, ...] = ()
+    native_messages_passthrough: bool = False
 
     def configuration_attrs(self) -> tuple[str, ...]:
         """Return settings fields whose non-empty values configure this provider."""
@@ -202,6 +203,18 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="openai_api_key",
         default_base_url="https://api.openai.com/v1",
         proxy_attr="openai_api_proxy",
+    ),
+    "anthropic": ProviderDescriptor(
+        provider_id="anthropic",
+        display_name="Anthropic",
+        website_url="https://www.anthropic.com/",
+        logo_filename="anthropic.svg",
+        credential_env="ANTHROPIC_API_KEY",
+        credential_attr="anthropic_api_key",
+        credential_url="https://platform.claude.com/settings/keys",
+        default_base_url="https://api.anthropic.com/v1",
+        proxy_attr="anthropic_proxy",
+        native_messages_passthrough=True,
     ),
     "github_copilot": ProviderDescriptor(
         provider_id="github_copilot",

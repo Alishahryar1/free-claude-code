@@ -450,3 +450,42 @@ def test_xkiro_uses_standard_provider_configuration(page: Page, admin_base_url: 
     expect(dialog.locator("#field-XKIRO_PROXY")).to_be_visible()
     expect(dialog).to_contain_text("xkiro.com/dashboard/api/keys")
     close_provider(page)
+
+
+def test_anthropic_standard_modal_groups_key_workspace_and_proxy(
+    page: Page, admin_base_url: str
+):
+    submissions = []
+
+    def save(route: Route):
+        submissions.append(route.request.post_data_json)
+        route.fulfill(
+            json={
+                "applied": True,
+                "credential_checks": [],
+                "restart": {"required": False},
+            }
+        )
+
+    page.route("**/admin/api/config/apply", save)
+    _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
+    card = page.locator('[data-provider="anthropic"]')
+    expect(card.get_by_role("button", name="Configure", exact=True)).to_be_visible()
+    dialog = open_provider(page, "anthropic")
+    key = dialog.locator("#field-ANTHROPIC_API_KEY")
+    expect(key).to_have_attribute("data-secret", "true")
+    expect(key).to_be_focused()
+    expect(dialog.locator("#field-ANTHROPIC_WORKSPACE_ID")).to_be_visible()
+    expect(dialog.locator("#field-ANTHROPIC_PROXY")).to_be_visible()
+    key.fill("test-api-key")
+    dialog.locator("#field-ANTHROPIC_WORKSPACE_ID").fill("wrkspc_test")
+    dialog.get_by_role("button", name="Save", exact=True).click()
+    expect(dialog).not_to_be_visible()
+    assert submissions == [
+        {
+            "values": {
+                "ANTHROPIC_API_KEY": "test-api-key",
+                "ANTHROPIC_WORKSPACE_ID": "wrkspc_test",
+            }
+        }
+    ]

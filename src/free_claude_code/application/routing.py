@@ -1,6 +1,6 @@
 """Model routing for Claude-compatible requests."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from loguru import logger
 
@@ -13,9 +13,11 @@ from free_claude_code.config.model_refs import (
     parse_model_name,
     parse_provider_type,
 )
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest, TokenCountRequest
+from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.gateway_model_ids import (
     DESKTOP_MODEL_PREFIX,
     DESKTOP_NO_THINKING_PREFIX,
@@ -23,6 +25,7 @@ from free_claude_code.core.gateway_model_ids import (
 )
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.trace import trace_event
 
 from .reasoning import resolve_reasoning_policy, resolve_responses_reasoning_policy
 
@@ -58,6 +61,17 @@ class RoutedMessagesRequest:
     request: MessagesRequest
     resolved: ResolvedModelRoute
     reasoning: ReasoningPolicy
+
+
+@dataclass(frozen=True, slots=True)
+class RoutedNativeMessagesRequest:
+    request: NativeMessagesRequest
+    resolved: ResolvedModelRoute
+
+
+def supports_native_messages(provider_id: str) -> bool:
+    descriptor = PROVIDER_CATALOG.get(provider_id)
+    return descriptor is not None and descriptor.native_messages_passthrough
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +242,31 @@ class ModelRouter:
         return next(
             (route for route in _ROUTE_SETTINGS if route[0] in normalized),
             None,
+        )
+
+    def route_native_messages(
+        self,
+        request: NativeMessagesRequest,
+        resolved: ResolvedModelRoute,
+    ) -> RoutedNativeMessagesRequest:
+        eligible = tuple(
+            target
+            for target in resolved.fallbacks
+            if supports_native_messages(target.provider_id)
+        )
+        trace_event(
+            stage="routing",
+            event="free_claude_code.api.route.messages_contract",
+            source="application",
+            contract="native",
+            excluded_fallbacks=tuple(
+                target.provider_model_ref
+                for target in resolved.fallbacks
+                if target not in eligible
+            ),
+        )
+        return RoutedNativeMessagesRequest(
+            request, replace(resolved, fallbacks=eligible)
         )
 
     def resolve_messages_request(

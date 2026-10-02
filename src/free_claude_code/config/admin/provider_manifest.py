@@ -18,6 +18,9 @@ class ProviderFieldOverride(TypedDict, total=False):
 
 
 _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
+    "ANTHROPIC_API_KEY": {
+        "description": "Anthropic API access with separate usage billing. Messages requests use Anthropic tools and client thinking controls. Native fallback uses other Anthropic models. FCC local web and prompt optimizations apply to compatibility routes.",
+    },
     "OPENAI_API_KEY": {
         "label": "OpenAI API Key",
         "description": "API key for the OpenAI Platform. Separate from ChatGPT sign-in.",
@@ -341,6 +344,14 @@ def provider_field_specs() -> tuple[ConfigFieldSpec, ...]:
 
     return (
         *_credential_field_specs(),
+        ConfigFieldSpec(
+            key="ANTHROPIC_WORKSPACE_ID",
+            label="Anthropic Workspace ID",
+            section_id="providers",
+            settings_attr="anthropic_workspace_id",
+            provider_ids=("anthropic",),
+            description="Optional for workspace-scoped keys. Required for multi-workspace API keys.",
+        ),
         *_cloudflare_account_field_specs(),
         *_vertex_field_specs(),
         *_base_url_field_specs(),

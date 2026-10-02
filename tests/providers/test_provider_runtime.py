@@ -48,6 +48,7 @@ from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.alibaba_cloud import AlibabaCloudProvider
+from free_claude_code.providers.anthropic import AnthropicProvider
 from free_claude_code.providers.cloudflare import CloudflareProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
@@ -86,6 +87,9 @@ def _make_settings(**overrides):
     mock.nvidia_nim_api_key = "test_key"
     mock.open_router_api_key = "test_openrouter_key"
     mock.xai_api_key = "test_xai_key"
+    mock.anthropic_api_key = "test_anthropic_key"
+    mock.anthropic_workspace_id = "workspace"
+    mock.anthropic_proxy = None
     mock.alibaba_cloud_api_key = "test_alibaba_key"
     mock.alibaba_cloud_base_url = None
     mock.alibaba_cloud_proxy = None
@@ -1104,6 +1108,7 @@ async def test_create_provider_instantiates_each_builtin():
         "github_copilot": GitHubCopilotProvider,
         "cline_pass": OpenAIChatProvider,
         "xai": OpenAIChatProvider,
+        "anthropic": AnthropicProvider,
         "alibaba_cloud": AlibabaCloudProvider,
         "qwencloud": OpenAIChatProvider,
         "qwencloud_coding": OpenAIChatProvider,

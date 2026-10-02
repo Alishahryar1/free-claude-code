@@ -1,18 +1,15 @@
 """Native Messages HTTP execution with one admitted recovery budget."""
 
 import asyncio
-import json
 import sys
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from functools import partial
-from typing import cast
 
 import httpx
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.core.anthropic.errors import anthropic_status_for_error_type
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.native import (
     NativeMessagesError,
@@ -20,13 +17,7 @@ from free_claude_code.core.anthropic.native import (
     build_native_messages_request,
 )
 from free_claude_code.core.anthropic.native_stream import NativeMessagesRelay
-from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
-from free_claude_code.core.diagnostics import (
-    ERROR_DETAIL_DISPLAY_CAP_BYTES,
-    attach_upstream_error_body,
-    redact_sensitive_error_text,
-)
-from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
@@ -52,9 +43,6 @@ from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
     RetryableProviderProtocolError,
     classify_provider_failure,
-    context_window_exceeded_provider_failure,
-    is_context_window_error_code,
-    is_context_window_finish_reason,
     is_retryable_stream_error,
 )
 from free_claude_code.providers.history_replay import (
@@ -81,6 +69,7 @@ from .request_policy import (
     MessagesModelCapabilities,
     resolve_messages_options,
 )
+from .wire import check_messages_failure, messages_events, messages_status_error
 
 type _Presenter = NativeMessagesRelay | AnthropicToResponsesStream
 
@@ -331,15 +320,15 @@ class AnthropicMessagesTransport:
                     )
                 )
                 if not response.is_success:
-                    raise await _status_error(response)
+                    raise await messages_status_error(response)
                 content_type = response.headers.get("content-type", "")
                 if "text/event-stream" not in content_type.lower():
                     raise RetryableProviderProtocolError(
                         "Messages upstream did not return an SSE stream."
                     )
                 stream_opened = True
-                async for event_type, payload in _events(response):
-                    _check_failure(event_type, payload)
+                async for event_type, payload in messages_events(response):
+                    check_messages_failure(event_type, payload)
                     output = presenter.feed(event_type, payload)
                     if event_type != "ping" and not attempt.accepted:
                         await attempt.accept()
@@ -437,82 +426,3 @@ class AnthropicMessagesTransport:
         if execution.last_failure is not None:
             raise execution.last_failure
         raise RuntimeError("Messages execution ended without a terminal result.")
-
-
-async def _events(response: httpx.Response) -> AsyncIterator[tuple[str, JsonObject]]:
-    decoder = AnthropicSSEDecoder()
-    async for chunk in response.aiter_text():
-        for event in decoder.feed(chunk):
-            payload = cast(JsonObject, event.data)
-            kind = event.event or payload.get("type")
-            if not isinstance(kind, str) or not kind:
-                raise RetryableProviderProtocolError(
-                    "Messages stream has an invalid event type."
-                )
-            yield kind, payload
-    for event in decoder.finish():
-        payload = cast(JsonObject, event.data)
-        kind = event.event or payload.get("type")
-        if not isinstance(kind, str) or not kind:
-            raise RetryableProviderProtocolError(
-                "Messages stream has an invalid final event."
-            )
-        yield kind, payload
-
-
-def _check_failure(event_type: str, payload: JsonObject) -> None:
-    delta = payload.get("delta")
-    if (
-        event_type == "message_delta"
-        and isinstance(delta, Mapping)
-        and is_context_window_finish_reason(delta.get("stop_reason"))
-    ):
-        raise context_window_exceeded_provider_failure()
-    if event_type != "error":
-        return
-    error = payload.get("error")
-    kind = error.get("type") if isinstance(error, Mapping) else None
-    if isinstance(error, Mapping) and any(
-        is_context_window_error_code(error.get(key)) for key in ("type", "code")
-    ):
-        raise context_window_exceeded_provider_failure()
-    status = anthropic_status_for_error_type(kind if isinstance(kind, str) else "")
-    failure_kind = {
-        400: FailureKind.INVALID_REQUEST,
-        401: FailureKind.AUTHENTICATION,
-        402: FailureKind.PERMISSION,
-        403: FailureKind.PERMISSION,
-        404: FailureKind.INVALID_REQUEST,
-        413: FailureKind.INVALID_REQUEST,
-        429: FailureKind.RATE_LIMIT,
-        504: FailureKind.TIMEOUT,
-        529: FailureKind.OVERLOADED,
-    }.get(status, FailureKind.UPSTREAM)
-    message = error.get("message") if isinstance(error, Mapping) else None
-    failure = ExecutionFailure(
-        failure_kind,
-        status,
-        redact_sensitive_error_text(message[:ERROR_DETAIL_DISPLAY_CAP_BYTES])
-        if isinstance(message, str) and message
-        else "Messages upstream returned an error.",
-        status == 429 or status >= 500,
-    )
-    attach_upstream_error_body(failure, json.dumps(payload))
-    raise failure
-
-
-async def _status_error(response: httpx.Response) -> httpx.HTTPStatusError:
-    limit = ERROR_DETAIL_DISPLAY_CAP_BYTES
-    body = bytearray()
-    async for chunk in response.aiter_bytes():
-        body.extend(chunk[: limit + 1 - len(body)])
-        if len(body) > limit:
-            break
-    try:
-        response.raise_for_status()
-    except httpx.HTTPStatusError as error:
-        attach_upstream_error_body(
-            error, bytes(body[:limit]), truncated=len(body) > limit
-        )
-        return error
-    raise AssertionError("Expected an unsuccessful Messages response.")

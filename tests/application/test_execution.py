@@ -17,6 +17,7 @@ from free_claude_code.application.routing import (
 )
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
+from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -27,6 +28,16 @@ class FakeProvider:
     def __init__(self) -> None:
         self.stream_calls: list[dict[str, object]] = []
         self.stream_close_calls = 0
+
+    def stream_native_messages(
+        self,
+        request: NativeMessagesRequest,
+        *,
+        request_id: str,
+        response_model: str,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[str]:
+        raise AssertionError("Compatibility test provider received a native request")
 
     async def stream_messages(
         self,

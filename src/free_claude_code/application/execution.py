@@ -35,6 +35,7 @@ from .routing import (
     ProviderModelTarget,
     ResolvedModelRoute,
     RoutedMessagesRequest,
+    RoutedNativeMessagesRequest,
     RoutedResponsesRequest,
 )
 
@@ -162,6 +163,42 @@ class ProviderExecutor:
         if self._generation_id is not None:
             fields["generation_id"] = self._generation_id
         trace_event(**fields)
+
+    def stream_native_messages(
+        self,
+        routed: RoutedNativeMessagesRequest,
+        *,
+        request_id: str,
+    ) -> AsyncIterator[str]:
+        async def open_candidate(
+            index: int, target: ProviderModelTarget
+        ) -> AsyncIterator[str]:
+            provider = await self._provider_resolver(target.provider_id)
+            return provider.stream_native_messages(
+                routed.request.with_model(target.provider_model),
+                request_id=request_id,
+                response_model=routed.resolved.original_model,
+                request_headers=self._request_headers,
+            )
+
+        messages = routed.request.body["messages"]
+        assert isinstance(messages, list)
+        return self._stream_candidates(
+            resolved=routed.resolved,
+            reasoning=ReasoningPolicy.provider_default(),
+            wire_api="messages",
+            raw_log_label="FULL_NATIVE_MESSAGES_PAYLOAD",
+            raw_log_payload=lambda: routed.request.body,
+            request_snapshot=lambda: {
+                "model": routed.request.model,
+                "message_count": len(messages),
+                "contract": "native",
+            },
+            ingress_count_name="message_count",
+            ingress_count=len(messages),
+            request_id=request_id,
+            open_candidate=open_candidate,
+        )
 
     def stream_messages(
         self,

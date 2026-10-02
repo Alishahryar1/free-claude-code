@@ -25,6 +25,21 @@ ProviderFactory = Callable[
 ]
 
 
+def _load_anthropic() -> ProviderFactory:
+    from free_claude_code.providers.anthropic import AnthropicProvider
+
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return AnthropicProvider(
+            config, workspace_id=settings.anthropic_workspace_id, admission=admission
+        )
+
+    return construct
+
+
 def _load_nvidia_nim() -> ProviderFactory:
     from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 
@@ -221,6 +236,7 @@ def _load_opencode_go() -> ProviderFactory:
 
 
 _SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
+    "anthropic": _load_anthropic,
     "alibaba_cloud": _load_alibaba_cloud,
     "nvidia_nim": _load_nvidia_nim,
     "open_router": _load_open_router,
@@ -305,7 +321,16 @@ def prepare_provider(
         config = build_provider_config(descriptor, settings)
         admission = admission_registry.get(provider_id)
         if factory is not None:
-            return factory(config, settings, admission)
+            provider = factory(config, settings, admission)
+            if (
+                descriptor.native_messages_passthrough
+                and type(provider).stream_native_messages
+                is BaseProvider.stream_native_messages
+            ):
+                raise AssertionError(
+                    f"Provider {provider_id!r} lacks native Messages execution"
+                )
+            return provider
         return create_openai_chat_provider(provider_id, config, admission)
 
     return construct

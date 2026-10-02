@@ -296,6 +296,15 @@ class Settings(BaseModel):
     )
 
     # ==================== Alibaba Cloud Model Studio ====================
+    anthropic_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ANTHROPIC_API_KEY"
+    )
+    anthropic_workspace_id: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ANTHROPIC_WORKSPACE_ID"
+    )
+    anthropic_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ANTHROPIC_PROXY"
+    )
     alibaba_cloud_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="ALIBABA_CLOUD_API_KEY"
     )
