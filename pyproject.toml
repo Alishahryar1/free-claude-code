@@ -33,7 +33,7 @@ dependencies = [
     "requests[socks]>=2.34.2",
     "pystray>=0.19.5; sys_platform == 'win32' or sys_platform == 'darwin'",
     "Pillow>=12.0.0; sys_platform == 'win32' or sys_platform == 'darwin'",
-    "github-copilot-sdk==1.0.14",
+    "github-copilot-sdk==1.0.15",
     "simplejson>=4.1.2",
     "grpcio>=1.84.0",
     "grpcio-tools>=1.81.1",
