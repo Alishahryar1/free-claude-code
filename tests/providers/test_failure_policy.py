@@ -16,12 +16,12 @@ from free_claude_code.core.diagnostics import (
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.providers.failure_policy import (
     ProviderRecoveryExhausted,
+    TruncatedProviderStreamError,
     classify_provider_failure,
     is_retryable_provider_error,
     is_retryable_stream_error,
     retryable_upstream_status,
 )
-from free_claude_code.providers.stream_recovery import TruncatedProviderStreamError
 
 
 def _openai_status_error(

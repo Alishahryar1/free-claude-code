@@ -1,13 +1,11 @@
-import json
 from typing import cast
 
 import pytest
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import build_responses_chat_request
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
+from free_claude_code.core.stream_events import StreamEvent
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
     ChatStreamUsage,
@@ -15,13 +13,12 @@ from free_claude_code.providers.openai_chat.stream_output import (
 )
 
 
-def _parse_frame(frame: str) -> tuple[str, dict[str, object]]:
-    lines = frame.strip().splitlines()
-    return lines[0].removeprefix("event: "), json.loads(lines[1].removeprefix("data: "))
+def _parse_frame(frame: StreamEvent) -> tuple[str, dict[str, object]]:
+    return frame.kind, frame.payload
 
 
-def _parse_frames(frames: list[str]) -> list[tuple[str, dict[str, object]]]:
-    return [(event.event, event.data) for event in parse_sse_text("".join(frames))]
+def _parse_frames(frames: list[StreamEvent]) -> list[tuple[str, dict[str, object]]]:
+    return [_parse_frame(event) for event in frames]
 
 
 def _object_dict(value: object) -> dict[str, object]:
@@ -66,7 +63,7 @@ def test_anthropic_chat_output_preserves_existing_wire_lifecycle() -> None:
     output.ensure_tool_state(0)
     output.register_tool_name(0, "lookup")
     frames.append(output.start_tool_block(0, "call_1", "lookup"))
-    frames.append(output.emit_tool_delta(0, '{"q":"fcc"}'))
+    frames.extend(output.emit_tool_delta(0, '{"q":"fcc"}'))
     frames.extend(output.close_all_blocks())
     frames.extend(
         output.finish_success(
@@ -75,7 +72,7 @@ def test_anthropic_chat_output_preserves_existing_wire_lifecycle() -> None:
         )
     )
 
-    events = [_parse_frame(frame) for frame in frames]
+    events = [_parse_frame(frame) for frame in output.project(frames)]
     assert [event_type for event_type, _ in events] == [
         "message_start",
         "content_block_start",
@@ -134,7 +131,7 @@ def test_responses_chat_output_emits_one_native_lifecycle_with_exact_usage() -> 
     output.ensure_tool_state(0)
     output.register_tool_name(0, "mcp__lookup")
     frames.append(output.start_tool_block(0, "call_1", "mcp__lookup"))
-    frames.append(output.emit_tool_delta(0, '{"q":"fcc"}'))
+    frames.extend(output.emit_tool_delta(0, '{"q":"fcc"}'))
     frames.extend(output.close_all_blocks())
     frames.extend(
         output.finish_success(
@@ -149,7 +146,7 @@ def test_responses_chat_output_emits_one_native_lifecycle_with_exact_usage() -> 
         )
     )
 
-    events = _parse_frames(frames)
+    events = _parse_frames(list(output.project(frames)))
     event_types = [event_type for event_type, _ in events]
     assert event_types.count("response.created") == 1
     assert event_types.count("response.completed") == 1
@@ -254,32 +251,6 @@ def test_responses_chat_output_ignores_overflowing_read_without_losing_write() -
     }
 
 
-def test_responses_chat_output_finishes_committed_failure_once() -> None:
-    output = _responses_output(
-        OpenAIResponsesRequest.model_validate(
-            {"model": "public-model", "input": "Hello"}
-        ),
-        input_tokens=1,
-    )
-    frames = [*output.start_events(), *output.ensure_text_block()]
-    frames.append(output.emit_text_delta("partial"))
-    failure = ExecutionFailure(
-        kind=FailureKind.UPSTREAM,
-        status_code=502,
-        message="Provider failed safely.",
-        retryable=True,
-    )
-    frames.extend(output.finish_failure(failure))
-    frames.extend(output.finish_failure(failure))
-
-    events = _parse_frames(frames)
-    assert [event_type for event_type, _ in events].count("response.failed") == 1
-    final = _object_dict(events[-1][1]["response"])
-    assert final["status"] == "failed"
-    assert _object_dict(final["error"])["message"] == "Provider failed safely."
-    assert output.consumes_terminal_failure is True
-
-
 def test_responses_chat_output_preserves_options_on_incomplete_terminal() -> None:
     output = _responses_output(
         OpenAIResponsesRequest.model_validate(
@@ -303,7 +274,7 @@ def test_responses_chat_output_preserves_options_on_incomplete_terminal() -> Non
         )
     )
 
-    events = _parse_frames(frames)
+    events = _parse_frames(list(output.project(frames)))
     assert [event_type for event_type, _ in events].count("response.created") == 1
     assert [event_type for event_type, _ in events].count("response.incomplete") == 1
     final = _object_dict(events[-1][1]["response"])
@@ -336,7 +307,7 @@ def test_responses_chat_output_preserves_custom_tool_free_form_input() -> None:
 
     frames = [*output.start_events()]
     frames.append(output.start_tool_block(0, "call_patch", "apply_patch"))
-    frames.append(output.emit_tool_delta(0, "*** Begin Patch\n*** End Patch"))
+    frames.extend(output.emit_tool_delta(0, "*** Begin Patch\n*** End Patch"))
     frames.extend(
         output.finish_success(
             stop_reason="tool_calls",
@@ -344,7 +315,7 @@ def test_responses_chat_output_preserves_custom_tool_free_form_input() -> None:
         )
     )
 
-    events = _parse_frames(frames)
+    events = _parse_frames(list(output.project(frames)))
     final = _object_dict(events[-1][1]["response"])
     final_output = final["output"]
     assert isinstance(final_output, list)
@@ -397,7 +368,7 @@ def test_responses_chat_output_completes_malformed_function_call_once() -> None:
 
     frames = [*output.start_events()]
     frames.append(output.start_tool_block(0, "call_bad", "lookup"))
-    frames.append(output.emit_tool_delta(0, '{"q":'))
+    frames.extend(output.emit_tool_delta(0, '{"q":'))
     frames.extend(
         output.finish_success(
             stop_reason="tool_calls",
@@ -411,7 +382,7 @@ def test_responses_chat_output_completes_malformed_function_call_once() -> None:
         )
     )
 
-    events = _parse_frames(frames)
+    events = _parse_frames(list(output.project(frames)))
     event_types = [event_type for event_type, _ in events]
     assert event_types.count("response.completed") == 1
     assert "response.failed" not in event_types

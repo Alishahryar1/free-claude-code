@@ -11,15 +11,16 @@ OpenAI provider layers its own native tool-call assembly and think-tag parsing o
 """
 
 import asyncio
-import sys
 import time
 from collections.abc import AsyncIterator, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import httpx2
 from loguru import logger
 from openai import Omit
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.ports import ProviderCandidate
 from free_claude_code.core.anthropic import ReasoningReplayMode, get_token_count
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import (
@@ -31,13 +32,13 @@ from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from free_claude_code.core.recovery import RecoveryCheckpoint
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
     context_window_exceeded_provider_failure,
 )
-from free_claude_code.providers.http import close_provider_stream
 from free_claude_code.providers.openai_chat import (
     NamedEffortReasoning,
     OpenAIChatProfile,
@@ -87,7 +88,7 @@ class LMStudioProvider(OpenAIChatProvider):
         self._loaded_context_cache: tuple[float, int | None] | None = None
         self._loaded_context_lock = asyncio.Lock()
 
-    def stream_messages(
+    def open_messages(
         self,
         request: MessagesRequest,
         input_tokens: int = 0,
@@ -98,8 +99,8 @@ class LMStudioProvider(OpenAIChatProvider):
         model_info: ProviderModelInfo | None = None,
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AsyncIterator[str]:
-        stream = super().stream_messages(
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        stream = super().open_messages(
             request,
             input_tokens=input_tokens,
             request_id=request_id,
@@ -113,9 +114,10 @@ class LMStudioProvider(OpenAIChatProvider):
             stream,
             estimate=get_token_count(request.messages, request.system, request.tools),
             request_id=request_id,
+            checkpoint=RecoveryCheckpoint("messages"),
         )
 
-    def stream_responses(
+    def open_responses(
         self,
         request: OpenAIResponsesRequest,
         input_tokens: int = 0,
@@ -126,8 +128,8 @@ class LMStudioProvider(OpenAIChatProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
-        stream = super().stream_responses(
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        stream = super().open_responses(
             request,
             input_tokens=input_tokens,
             request_id=request_id,
@@ -141,26 +143,22 @@ class LMStudioProvider(OpenAIChatProvider):
             stream,
             estimate=estimate_responses_input_tokens(request),
             request_id=request_id,
+            checkpoint=RecoveryCheckpoint("responses"),
         )
 
+    @asynccontextmanager
     async def _stream_with_context_budget(
         self,
-        stream: AsyncIterator[str],
+        stream: AbstractAsyncContextManager[ProviderCandidate],
         *,
         estimate: int,
         request_id: str | None,
-    ) -> AsyncIterator[str]:
-        try:
+        checkpoint: RecoveryCheckpoint,
+    ) -> AsyncIterator[ProviderCandidate]:
+        async with stream as candidate:
+            await candidate.prepare(checkpoint)
             await self._validate_context_budget(estimate)
-            async for event in stream:
-                yield event
-        finally:
-            await close_provider_stream(
-                stream,
-                active_error=sys.exception(),
-                provider_name=self._provider_name,
-                request_id=request_id,
-            )
+            yield candidate
 
     async def _validate_context_budget(self, estimate: int) -> None:
         loaded_context = await self._loaded_context_length()

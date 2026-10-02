@@ -24,7 +24,7 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
-from .errors import ResponsesConversionError
+from .errors import ResponsesConversionError, UnsupportedResponsesFeature
 from .models import OpenAIResponsesRequest
 from .tools import (
     ResponsesToolIdentity,
@@ -64,7 +64,7 @@ def _fields(value: Mapping[str, JsonValue], allowed: set[str], context: str) -> 
         key for key, item in value.items() if key not in allowed and item is not None
     )
     if unsupported:
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             f"{context} cannot represent field(s): {', '.join(unsupported)}."
         )
 
@@ -177,7 +177,7 @@ class _ToolScope:
         name = flatten_responses_tool_name(identity.name, namespace=identity.namespace)
         previous = self._flat.get(name)
         if previous is not None and previous != identity:
-            raise ResponsesConversionError(
+            raise UnsupportedResponsesFeature(
                 "Tool identities collide after namespace flattening."
             )
         self._flat[name] = identity
@@ -187,7 +187,7 @@ class _ToolScope:
     ) -> tuple[ResponsesToolIdentity, JsonObject]:
         kind_value = value.get("type")
         if kind_value not in ("function", "custom"):
-            raise ResponsesConversionError(
+            raise UnsupportedResponsesFeature(
                 f"Messages upstream cannot represent tool type {kind_value!r}."
             )
         kind: Literal["function", "custom"] = (
@@ -213,7 +213,7 @@ class _ToolScope:
                     not isinstance(format_value, Mapping)
                     or format_value.get("type") != "text"
                 ):
-                    raise ResponsesConversionError(
+                    raise UnsupportedResponsesFeature(
                         "Messages upstream cannot enforce custom tool grammars."
                     )
                 _fields(format_value, {"type"}, "Custom tool format")
@@ -278,11 +278,11 @@ class _ToolScope:
 def _image(value: Mapping[str, JsonValue]) -> JsonObject:
     _fields(value, {"type", "image_url", "detail", "file_id"}, "Image")
     if value.get("file_id") is not None:
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             "A Messages upstream requires image content or a portable URL, not file_id."
         )
     if value.get("detail") not in (None, "auto"):
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             "Messages upstream cannot represent the requested image detail control."
         )
     url = _string(value.get("image_url"), "input_image.image_url")
@@ -323,7 +323,7 @@ def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[Jso
         if kind in ("input_text", "output_text", "text"):
             _fields(item, {"type", "text", "annotations", "logprobs"}, "Text block")
             if item.get("annotations") or item.get("logprobs"):
-                raise ResponsesConversionError(
+                raise UnsupportedResponsesFeature(
                     "Messages history cannot represent text annotations or logprobs."
                 )
             text = _string(item.get("text"), "content.text", empty=empty)
@@ -332,7 +332,7 @@ def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[Jso
         elif kind == "input_image" and images:
             blocks.append(_image(item))
         else:
-            raise ResponsesConversionError(
+            raise UnsupportedResponsesFeature(
                 f"Messages upstream cannot represent content type {kind!r}."
             )
     return blocks
@@ -387,7 +387,7 @@ class _MessagesInput:
             role = value.get("role", "user")
             if role in ("system", "developer"):
                 if self.messages:
-                    raise ResponsesConversionError(
+                    raise UnsupportedResponsesFeature(
                         "Messages upstream supports only leading system/developer input."
                     )
                 self.system.extend(_content(value.get("content"), images=False))
@@ -422,7 +422,7 @@ class _MessagesInput:
                 "assistant", [{"type": "text", "text": tool_history_context(value)}]
             )
             return
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             f"Messages upstream cannot represent input item {kind!r}."
         )
 
@@ -520,7 +520,7 @@ def _output_format(value: JsonValue) -> JsonObject | None:
         _fields(format_value, {"type"}, "Text format")
         return None
     if kind != "json_schema":
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             "Messages upstream supports text or json_schema output."
         )
     _fields(
@@ -535,7 +535,7 @@ def _output_format(value: JsonValue) -> JsonObject | None:
     if strict is not None and not isinstance(strict, bool):
         raise ResponsesConversionError("Output format strict must be a boolean.")
     if strict is False:
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             "Messages structured output always enforces its schema."
         )
     converted = dict(schema)
@@ -569,7 +569,7 @@ def build_responses_messages_request(
     raw = cast(JsonObject, request.model_dump(mode="json", exclude_none=True))
     _fields(raw, _REQUEST_FIELDS, "Responses request")
     if raw.get("truncation") not in (None, "disabled"):
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             "Messages upstream does not support automatic input truncation."
         )
     include = raw.get("include")
@@ -577,13 +577,13 @@ def build_responses_messages_request(
         not isinstance(include, list)
         or any(item != "reasoning.encrypted_content" for item in include)
     ):
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             "Messages upstream cannot represent the requested include fields."
         )
     if request.reasoning is not None:
         _fields(request.reasoning, {"effort", "summary"}, "Reasoning controls")
         if request.reasoning.get("summary") not in (None, "auto"):
-            raise ResponsesConversionError(
+            raise UnsupportedResponsesFeature(
                 "Messages upstream supports only automatic reasoning summaries."
             )
     items = _items(request.input)

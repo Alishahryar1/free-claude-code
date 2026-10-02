@@ -166,7 +166,7 @@ def test_lazy_fallback_validation_error_remains_ordinary(
     assert fallback.stream_models == []
 
 
-def test_postframe_failure_never_opens_fallback_for_streaming_messages() -> None:
+def test_start_only_failure_uses_fallback_under_one_messages_lifecycle() -> None:
     first = format_sse_event(
         "message_start",
         {"type": "message_start", "message": {}},
@@ -175,50 +175,53 @@ def test_postframe_failure_never_opens_fallback_for_streaming_messages() -> None
         chunks_before_failure=(first,),
         failure=execution_failure("primary failed after start"),
     )
-    fallback = ControlledFallbackProvider(text="must not run")
+    fallback = ControlledFallbackProvider(text="fallback completed")
 
     with fallback_client(primary, fallback) as client:
         response = client.post("/v1/messages", json=messages_payload(stream=True))
 
     assert response.status_code == 200
     events = parse_sse_text(response.text)
-    assert [event.event for event in events] == ["message_start", "error"]
-    assert fallback.stream_models == []
+    assert sum(event.event == "message_start" for event in events) == 1
+    assert events[-1].event == "message_stop"
+    assert "fallback completed" in response.text
+    assert fallback.stream_models == ["fallback-model"]
 
 
-def test_postframe_failure_never_opens_fallback_for_responses() -> None:
+def test_start_only_failure_uses_fallback_under_one_responses_lifecycle() -> None:
     first = responses_created_event(model="nvidia_nim/primary-model")
     primary = ControlledFallbackProvider(
         responses_chunks_before_failure=(first,),
         failure=execution_failure("primary failed after start"),
     )
-    fallback = ControlledFallbackProvider(text="must not run")
+    fallback = ControlledFallbackProvider(text="fallback completed")
 
     with fallback_client(primary, fallback) as client:
         response = client.post("/v1/responses", json=responses_payload())
 
     assert response.status_code == 200
     events = parse_sse_text(response.text)
-    assert [event.event for event in events] == [
-        "response.created",
-        "response.failed",
-    ]
-    assert fallback.stream_models == []
+    assert sum(event.event == "response.created" for event in events) == 1
+    assert events[-1].event == "response.completed"
+    assert events[-1].data["response"]["id"] == events[0].data["response"]["id"]
+    assert fallback.stream_models == ["fallback-model"]
 
 
-def test_nonstreaming_partial_failure_discards_content_without_fallback() -> None:
+def test_nonstreaming_partial_failure_returns_the_recovered_logical_response() -> None:
     partial_text = "PARTIAL_ASSISTANT_OUTPUT"
     partial = text_stream(partial_text, model="nvidia_nim/primary-model")[:3]
     primary = ControlledFallbackProvider(
         chunks_before_failure=tuple(partial),
         failure=execution_failure("primary stream failed"),
     )
-    fallback = ControlledFallbackProvider(text="must not run")
+    fallback = ControlledFallbackProvider(text=" continued")
 
     with fallback_client(primary, fallback) as client:
         response = client.post("/v1/messages", json=messages_payload(stream=False))
 
-    assert response.status_code == 529
-    assert response.headers["x-should-retry"] == "false"
-    assert partial_text not in response.text
-    assert fallback.stream_models == []
+    assert response.status_code == 200
+    assert (
+        "".join(block["text"] for block in response.json()["content"])
+        == partial_text + " continued"
+    )
+    assert fallback.stream_models == ["fallback-model"]

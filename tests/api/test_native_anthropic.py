@@ -89,12 +89,23 @@ def test_native_fallback_excludes_compatibility_and_preserves_alias():
     )
     app = create_test_app(settings, providers={"anthropic": provider(handle)})
     body = native_body()
-    with TestClient(app) as client:
+    with (
+        patch("free_claude_code.application.execution.trace_event") as trace,
+        TestClient(app) as client,
+    ):
         response = client.post("/v1/messages", json=body)
     assert response.status_code == 200, response.text
     assert response.json()["model"] == body["model"]
     assert [item["model"] for item in sent] == ["primary", "backup"]
     assert sent[-1]["tools"] == body["tools"]
+
+    selected = [
+        call.kwargs
+        for call in trace.call_args_list
+        if call.kwargs.get("event") == "free_claude_code.model_fallback.selected"
+    ]
+    assert len(selected) == 1
+    assert selected[0]["selected_provider_model_ref"] == "anthropic/backup"
 
 
 def test_compatibility_ingress_still_rejects_unknown_blocks():
@@ -132,7 +143,7 @@ def test_leading_pings_allow_exhausted_primary_to_reach_native_fallback():
         ),
         providers={"anthropic": provider(handle)},
     )
-    body = native_body(True)
+    body = {**native_body(True), "tools": []}
     with TestClient(app) as client:
         response = client.post("/v1/messages", json=body)
     assert response.status_code == 200, response.text
@@ -140,7 +151,7 @@ def test_leading_pings_allow_exhausted_primary_to_reach_native_fallback():
     assert events[0].event == "message_start"
     assert events[0].data["message"]["model"] == body["model"]
     assert events[-1].event == "message_stop"
-    assert calls == ["primary", "primary", "backup"]
+    assert calls == ["primary", "backup"]
     assert all(wire.closed for wire in wires)
 
 
@@ -265,7 +276,7 @@ def test_compatibility_primary_keeps_conversion_when_anthropic_is_fallback():
     )
     with (
         patch.object(
-            p, "stream_native_messages", side_effect=AssertionError("contract changed")
+            p, "open_native_messages", side_effect=AssertionError("contract changed")
         ),
         TestClient(app) as client,
     ):

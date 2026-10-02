@@ -104,16 +104,20 @@ def tool_events(protocol, arguments):
         "output": [item],
         "usage": {"input_tokens": 1, "output_tokens": 10, "total_tokens": 11},
     }
-    wire = builder.response_created({**response, "status": "in_progress", "output": []})
-    wire += builder.output_item_added(
-        0, {**item, "status": "in_progress", "arguments": ""}
-    )
-    wire += "".join(
-        builder.function_call_arguments_delta("fc_probe", 0, part) for part in arguments
-    )
-    wire += builder.function_call_arguments_done("fc_probe", 0, arguments)
-    wire += builder.output_item_done(0, item) + builder.response_completed(response)
-    return [event.data for event in parse_sse_text(wire)]
+    frames = [
+        builder.response_created({**response, "status": "in_progress", "output": []}),
+        builder.output_item_added(
+            0, {**item, "status": "in_progress", "arguments": ""}
+        ),
+        *(
+            builder.function_call_arguments_delta("fc_probe", 0, part)
+            for part in arguments
+        ),
+        builder.function_call_arguments_done("fc_probe", 0, arguments),
+        builder.output_item_done(0, item),
+        builder.response_completed(response),
+    ]
+    return [event.payload for event in frames]
 
 
 @pytest.mark.asyncio

@@ -67,6 +67,7 @@ from free_claude_code.runtime.web_tools.client import (
     _read_response_body_capped,
 )
 from free_claude_code.runtime.web_tools.egress import enforce_web_fetch_egress
+from tests.provider_double import ScriptedProvider
 from tests.web_tools_support import StubWebToolsClient
 
 _STRICT_EGRESS = WebFetchEgressPolicy(
@@ -155,7 +156,7 @@ def _local_tool_body(
     return body
 
 
-class ScriptedSelectionProvider:
+class ScriptedSelectionProvider(ScriptedProvider):
     """One-stream provider double for the automatic WebSearch decision."""
 
     def __init__(
@@ -640,7 +641,9 @@ async def test_automatic_web_search_replays_provider_response_when_declined(
     )
 
     assert isinstance(response, StreamingResponse)
-    assert await _streaming_body_text(response) == "".join(events)
+    assert await _streaming_body_text(response) == "".join(events).replace(
+        "gateway-model", "claude-haiku-4-5-20251001"
+    )
     search.assert_not_awaited()
     assert provider.close_count == 1
     assert len(provider.requests) == 1
@@ -1942,7 +1945,9 @@ async def test_automatic_selection_stays_private_until_provider_finishes() -> No
         release.set()
         response = await asyncio.wait_for(task, 1)
         assert isinstance(response, StreamingResponse)
-        assert await _streaming_body_text(response) == "".join(provider.events)
+        assert await _streaming_body_text(response) == "".join(provider.events).replace(
+            "gateway-model", "claude-haiku-4-5-20251001"
+        )
         assert provider.close_count == 1
     finally:
         release.set()

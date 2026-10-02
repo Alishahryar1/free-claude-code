@@ -30,6 +30,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     profiled_provider,
+    stream_messages,
 )
 
 
@@ -315,7 +316,8 @@ async def test_stream_uses_upstream_sse_and_preserves_reasoning_details(
         event_text = "".join(
             [
                 event
-                async for event in cline_pass_provider.stream_messages(
+                async for event in stream_messages(
+                    cline_pass_provider,
                     _request(),
                     reasoning=ReasoningPolicy.on(),
                 )

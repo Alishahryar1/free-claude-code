@@ -9,19 +9,20 @@ import pytest
 
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.failures import FailureKind
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
-from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.failure_policy import classify_provider_failure
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.groq.client import GroqChatBehavior
 from free_claude_code.providers.groq.tpm import correct_tpm_completion_budget
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
+    exercise_chat_body,
     immediate_admission,
     make_provider_config,
+    stream_messages,
+    successful_chat_stream,
 )
 
 _MODEL = "openai/gpt-oss-120b"
@@ -289,7 +290,8 @@ async def test_tpm_correction_emits_one_downstream_lifecycle() -> None:
         raw = "".join(
             [
                 event
-                async for event in provider.stream_messages(
+                async for event in stream_messages(
+                    provider,
                     request,
                     reasoning=ReasoningPolicy.off(),
                 )
@@ -313,13 +315,9 @@ async def test_tpm_correction_is_one_shot_per_stream_creation() -> None:
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(openai.APIStatusError),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            _body(),
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await exercise_chat_body(provider, _body())
 
     assert create.await_count == 2
 
@@ -331,13 +329,9 @@ async def test_tpm_correction_respects_physical_attempt_ceiling() -> None:
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(openai.APIStatusError),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            _body(),
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await exercise_chat_body(provider, _body())
 
     assert create.await_count == 1
 
@@ -365,24 +359,18 @@ async def test_tpm_and_reasoning_corrections_compose(
         "tpm": _status_error(),
         "reasoning": _reasoning_error(),
     }
-    create = AsyncMock(side_effect=[*(failures[name] for name in errors), object()])
-    execution = provider._admission.start_execution()
+    create = AsyncMock(
+        side_effect=[
+            *(failures[name] for name in errors),
+            SDKStreamDouble(successful_chat_stream()),
+        ]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            accepted_body,
-            attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            body,
-            RequestRecovery(execution),
-            ProviderOperationKind.GENERATION,
-        )
-        await attempt.aclose()
+        accepted_body = await exercise_chat_body(provider, body)
 
     assert create.await_count == 3
-    assert execution.attempts_started == 3
+    assert create.await_count == 3
     assert accepted_body["max_completion_tokens"] == _CORRECTED_MAX
     assert accepted_body["reasoning_effort"] == "default"
 
@@ -390,37 +378,22 @@ async def test_tpm_and_reasoning_corrections_compose(
 @pytest.mark.asyncio
 async def test_distinct_bodies_get_independent_tpm_corrections() -> None:
     provider = _provider()
-    execution = provider._admission.start_execution()
     second_error = _status_error(
         detail=_detail("tokens per minute (TPM): Limit 8000, Requested 22000")
     )
-    create = AsyncMock(side_effect=[_status_error(), object(), second_error, object()])
+    create = AsyncMock(
+        side_effect=[
+            _status_error(),
+            SDKStreamDouble(successful_chat_stream()),
+            second_error,
+            SDKStreamDouble(successful_chat_stream()),
+        ]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            first_body,
-            first_attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            _body(),
-            RequestRecovery(execution),
-            ProviderOperationKind.CONTINUATION,
-        )
-        await first_attempt.accept()
-        await first_attempt.aclose()
-        (
-            _stream,
-            second_body,
-            second_attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            _body(20_000),
-            RequestRecovery(execution),
-            ProviderOperationKind.TOOL_REPAIR,
-        )
-        await second_attempt.aclose()
+        first_body = await exercise_chat_body(provider, _body())
+        second_body = await exercise_chat_body(provider, _body(20_000))
 
-    assert execution.attempts_started == 4
+    assert create.await_count == 4
     assert first_body["max_completion_tokens"] == _CORRECTED_MAX
     assert second_body["max_completion_tokens"] == 6_000

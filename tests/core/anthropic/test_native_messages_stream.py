@@ -13,8 +13,8 @@ from free_claude_code.core.anthropic.native_stream import (
 from free_claude_code.core.anthropic.sse_aggregation import (
     aggregate_anthropic_sse_to_message,
 )
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_lines
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from tests.stream_helpers import serialize_events
 
 _START: JsonObject = {
     "type": "message_start",
@@ -74,7 +74,7 @@ async def test_native_citations_survive_block_completion_and_fragmented_aggregat
 
     async def stream() -> AsyncIterator[str]:
         for event in events:
-            chunk = relay.feed(cast(str, event["type"]), event)
+            chunk = serialize_events(relay.feed(cast(str, event["type"]), event))
             for start in range(0, len(chunk), 3):
                 yield chunk[start : start + 3]
 
@@ -87,7 +87,7 @@ def test_relay_preserves_native_identity_and_extensions_without_mutating_input()
     None
 ):
     relay = NativeMessagesRelay(public_model="public")
-    result = parse_sse_lines(relay.feed("message_start", _START).splitlines())[0].data
+    result = relay.feed("message_start", _START)[0].payload
     assert result["message"]["model"] == "public"
     assert result["message"]["id"] == "upstream-id"
     assert result["message"]["native_extension"] == "kept"
@@ -97,10 +97,7 @@ def test_relay_preserves_native_identity_and_extensions_without_mutating_input()
         "index": 5,
         "content_block": {"type": "text", "text": "hello", "citations": []},
     }
-    assert (
-        parse_sse_lines(relay.feed("content_block_start", block).splitlines())[0].data
-        == block
-    )
+    assert relay.feed("content_block_start", block)[0].payload == block
     assert not relay.completed
 
 
@@ -137,7 +134,7 @@ async def test_fragmented_native_relay_preserves_nonstreaming_thinking_and_usage
 
     async def stream() -> AsyncIterator[str]:
         for event in events:
-            chunk = relay.feed(cast(str, event["type"]), event)
+            chunk = serialize_events(relay.feed(cast(str, event["type"]), event))
             for start in range(0, len(chunk), 5):
                 yield chunk[start : start + 5]
 

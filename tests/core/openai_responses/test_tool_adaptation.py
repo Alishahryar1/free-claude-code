@@ -10,7 +10,6 @@ from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesConversionError,
-    ResponsesStreamFailure,
     ResponsesToolAdapter,
     ResponsesToolPolicy,
     build_responses_chat_request,
@@ -18,6 +17,7 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.providers.openai_responses.presentation import (
     NativeResponsesPresenter,
 )
+from tests.stream_helpers import serialize_events
 
 
 def _adapter(request: OpenAIResponsesRequest) -> ResponsesToolAdapter:
@@ -111,7 +111,7 @@ def test_hosted_discovery_restores_definitions_and_replays_flat_names(
             },
         )
     )
-    events = parse_sse_text("".join(frames))
+    events = parse_sse_text(serialize_events(frames))
     public = cast(list[JsonObject], events[-1].data["response"]["output"])
     continuation = OpenAIResponsesRequest(
         model="example",
@@ -263,7 +263,7 @@ def test_custom_tool_identity_and_history_preserve_namespaces() -> None:
             "tools": wire["tools"],
         },
     }
-    stream = "".join(_presenter(adapter).feed("response.completed", event))
+    stream = serialize_events(_presenter(adapter).feed("response.completed", event))
     restored = parse_sse_text(stream)[0].data["response"]
     assert restored["output"][0]["type"] == "custom_tool_call"
     assert restored["output"][0]["name"] == "edit"
@@ -320,7 +320,7 @@ def test_terminal_snapshot_restores_custom_item_id_without_prior_events(
     }
     original = deepcopy(payload)
     events = parse_sse_text(
-        "".join(_presenter(adapter).feed(f"response.{status}", payload))
+        serialize_events(_presenter(adapter).feed(f"response.{status}", payload))
     )
     restored = events[0].data["response"]["output"][0]
     assert restored == {
@@ -433,7 +433,7 @@ def test_client_discovery_converts_customs_and_preserves_each_definition() -> No
             "tools": wire["tools"],
         },
     }
-    stream = "".join(_presenter(adapter).feed("response.completed", event))
+    stream = serialize_events(_presenter(adapter).feed("response.completed", event))
     restored = parse_sse_text(stream)[0].data["response"]
     assert restored["output"] == original["input"]
     assert restored["tools"] == original["tools"]
@@ -471,7 +471,7 @@ def test_flattened_custom_call_without_namespace_is_restored() -> None:
             ],
         },
     }
-    stream = "".join(_presenter(adapter).feed("response.completed", event))
+    stream = serialize_events(_presenter(adapter).feed("response.completed", event))
     item = parse_sse_text(stream)[0].data["response"]["output"][0]
     assert item == {
         "type": "custom_tool_call",
@@ -678,10 +678,11 @@ def test_chat_and_native_adaptation_share_custom_input_and_description(
     assert native["description"] == chat["description"] == description
 
 
-@pytest.mark.parametrize("upstream_failure", [False, True])
-def test_adapted_presenter_preserves_terminal_failure_and_original_tool_metadata(
-    upstream_failure: bool,
-) -> None:
+def test_logical_failure_preserves_adapted_tool_metadata() -> None:
+    from free_claude_code.core.history_replay import ReplayOrigin
+    from free_claude_code.core.openai_responses import ResponsesRecoveryWriter
+    from free_claude_code.core.stream_events import DecodedStreamEvent
+
     tool: JsonObject = {
         "type": "custom",
         "name": "edit",
@@ -692,43 +693,24 @@ def test_adapted_presenter_preserves_terminal_failure_and_original_tool_metadata
         OpenAIResponsesRequest(model="example", input="hello", tools=[tool])
     )
     presenter = _presenter(adapter)
-    response: JsonObject = {
-        "id": "resp_one",
-        "model": "upstream",
-        "status": "in_progress",
-        "tools": adapter.request.model_dump()["tools"],
-        "output": [],
-    }
-    list(
-        presenter.feed(
-            "response.created",
-            {"type": "response.created", "sequence_number": 0, "response": response},
-        )
-    )
-    list(
-        presenter.feed(
-            "response.output_text.delta", {"sequence_number": 1, "delta": "partial"}
-        )
-    )
-    failure = ExecutionFailure(FailureKind.UPSTREAM, 502, "failed", False)
-    raw: Exception = RuntimeError("stream ended")
-    if upstream_failure:
-        raw = ResponsesStreamFailure(
-            "failed",
-            event_type="response.failed",
-            payload={
-                "type": "response.failed",
-                "sequence_number": 2,
-                "response": {
-                    **response,
-                    "status": "failed",
-                    "error": {"message": "failed"},
-                },
+    writer = ResponsesRecoveryWriter(model="public", input_tokens=0)
+    origin = ReplayOrigin("test", "responses", "endpoint", "connection", "model")
+    writer.begin_attempt()
+    for event in presenter.feed(
+        "response.created",
+        {
+            "type": "response.created",
+            "response": {
+                "id": "resp_one",
+                "status": "in_progress",
+                "tools": adapter.request.model_dump()["tools"],
+                "output": [],
             },
-        )
-    events = parse_sse_text("".join(presenter.terminal_failure(raw, failure)))
-    assert len(events) == 1 and events[0].event == "response.failed"
-    assert events[0].data["sequence_number"] == 2
-    assert events[0].data["response"]["tools"] == [tool]
-    assert events[0].data["response"]["status"] == "failed"
-    assert presenter.completed
+        },
+    ):
+        writer.feed(DecodedStreamEvent(origin, event, (event,)))
+    failure = ExecutionFailure(FailureKind.UPSTREAM, 502, "failed", False)
+    [event] = writer.failure(failure)
+    assert event.kind == "response.failed"
+    assert event.payload["response"]["tools"] == [tool]
+    assert event.payload["response"]["status"] == "failed"

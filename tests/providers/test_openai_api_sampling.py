@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from contextlib import nullcontext
 from copy import deepcopy
 from typing import Any
 
@@ -18,6 +17,7 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.openai_api.provider import OpenAIAPIProvider
+from tests.providers.support import stream_messages, stream_responses
 from tests.providers.test_openai_api_provider import (
     _collect,
     _complete_stream,
@@ -48,8 +48,8 @@ def _stream(
     reasoning: ReasoningPolicy = ReasoningPolicy.provider_default(),
 ):
     if isinstance(request, MessagesRequest):
-        return provider.stream_messages(request, reasoning=reasoning)
-    return provider.stream_responses(request, reasoning=reasoning)
+        return stream_messages(provider, request, reasoning=reasoning)
+    return stream_responses(provider, request, reasoning=reasoning)
 
 
 def _rejection(param: str, *, default_only: bool = False) -> dict[str, Any]:
@@ -392,62 +392,60 @@ async def test_history_and_sampling_corrections_preserve_each_other(history_firs
 @pytest.mark.parametrize("committed", [False, True])
 async def test_sampling_correction_respects_stream_commitment(ingress, committed):
     bodies = []
-    partial = "x" * 70_000 if committed else "discarded"
+    partial = "x" * 70_000
 
     def handler(request):
         bodies.append(json.loads(request.content))
         if len(bodies) > 1:
             return _success()
-        return httpx2.Response(
-            200,
-            text=_sse(
-                (
-                    "response.created",
-                    {"type": "response.created", "response": {"id": "resp_old"}},
-                ),
+        events = [
+            (
+                "response.created",
+                {"type": "response.created", "response": {"id": "resp_old"}},
+            )
+        ]
+        if committed:
+            events.append(
                 (
                     "response.output_text.delta",
                     {"type": "response.output_text.delta", "delta": partial},
-                ),
-                (
-                    "error",
-                    {
-                        **_rejection("temperature"),
-                        "type": "error",
-                        "sequence_number": 2,
-                    },
-                ),
-            ),
-            headers={"content-type": "text/event-stream"},
+                )
+            )
+        events.append(
+            (
+                "error",
+                {**_rejection("temperature"), "type": "error", "sequence_number": 2},
+            )
+        )
+        return httpx2.Response(
+            200, text=_sse(*events), headers={"content-type": "text/event-stream"}
         )
 
     provider = _provider(httpx2.MockTransport(handler), max_attempts=3)
-    chunks = []
     try:
-        expected_error = (
-            pytest.raises(ExecutionFailure)
-            if committed and ingress == "messages"
-            else nullcontext()
+        output = "".join(
+            [chunk async for chunk in _stream(provider, _request(ingress))]
         )
-        with expected_error:
-            async for chunk in _stream(provider, _request(ingress)):
-                chunks.extend((chunk,))
     finally:
         await provider.cleanup()
-    output = "".join(chunks)
     events = parse_sse_text(output)
     start = "message_start" if ingress == "messages" else "response.created"
     assert sum(event.event == start for event in events) == 1
     if committed:
         assert len(bodies) == 1
         assert partial in output
-        if ingress == "responses":
-            assert sum(event.event == "response.failed" for event in events) == 1
+        assert events[-1].event == (
+            "error" if ingress == "messages" else "response.failed"
+        )
     else:
         assert len(bodies) == 2
-        assert partial not in output
-        assert "resp_old" not in output
+        assert "hello" in output
         assert "temperature" not in bodies[1] and "top_p" in bodies[1]
+        assert events[-1].event == (
+            "message_stop" if ingress == "messages" else "response.completed"
+        )
+        if ingress == "responses":
+            assert events[-1].data["response"]["id"] == "resp_old"
 
 
 @pytest.mark.asyncio

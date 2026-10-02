@@ -1,6 +1,10 @@
 """Public OpenAI Responses protocol boundary."""
 
-from .chat_request import ResponsesChatRequest, build_responses_chat_request
+from .chat_request import (
+    ResponsesChatRequest,
+    build_responses_chat_request,
+    validate_chat_recovery_request,
+)
 from .errors import (
     ResponsesConversionError,
     openai_error_from_failure,
@@ -26,6 +30,7 @@ from .provider_stream import (
     responses_stream_failure_from_event,
 )
 from .reasoning import responses_reasoning_config, responses_reasoning_policy
+from .recovery_stream import ResponsesRecoveryWriter
 from .streaming.blocks import ReasoningBlockState, TextBlockState, ToolBlockState
 from .streaming.completion import (
     ResponseBlockCompleter,
@@ -58,6 +63,7 @@ __all__ = [
     "ResponsesMessagesRequest",
     "ResponsesOutputLedger",
     "ResponsesProviderStream",
+    "ResponsesRecoveryWriter",
     "ResponsesStreamFailure",
     "ResponsesToolAdapter",
     "ResponsesToolEventAdapter",
@@ -85,4 +91,5 @@ __all__ = [
     "responses_reasoning_policy",
     "responses_stream_failure_from_event",
     "tool_item",
+    "validate_chat_recovery_request",
 ]

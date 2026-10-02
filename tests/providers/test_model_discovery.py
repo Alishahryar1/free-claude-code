@@ -25,6 +25,7 @@ from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.providers.runtime.model_cache import ProviderModelCache
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.provider_double import ScriptedProvider
 from tests.providers.support import (
     immediate_admission,
     make_provider_config,
@@ -337,7 +338,7 @@ async def test_model_listing_propagates_upstream_errors() -> None:
         await provider.list_model_infos()
 
 
-class FakeProvider(BaseProvider):
+class FakeProvider(ScriptedProvider, BaseProvider):
     def __init__(
         self,
         model_infos: frozenset[ProviderModelInfo] = frozenset(),

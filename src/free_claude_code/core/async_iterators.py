@@ -1,6 +1,25 @@
 """Minimal lifecycle helpers for composed asynchronous iterators."""
 
+import asyncio
+from collections.abc import Awaitable
 from typing import Protocol, runtime_checkable
+
+
+async def complete_cleanup[T](operation: Awaitable[T]) -> T:
+    """Drain owned cleanup before propagating even repeated caller cancellation."""
+    task = asyncio.ensure_future(operation)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+    result = task.result()
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
 
 
 @runtime_checkable

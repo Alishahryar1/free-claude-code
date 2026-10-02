@@ -11,6 +11,7 @@ from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_events import StreamEvent
 
 from .profiles import OpenAIChatProfile
 from .request_policy import (
@@ -69,7 +70,7 @@ class OpenAIChatBehavior:
 
     def extra_reasoning_events(
         self, delta: Any, output: ChatStreamOutput, *, output_reasoning: bool
-    ) -> Iterator[str]:
+    ) -> Iterator[StreamEvent]:
         """Hook for provider-specific reasoning."""
         return iter(())
 

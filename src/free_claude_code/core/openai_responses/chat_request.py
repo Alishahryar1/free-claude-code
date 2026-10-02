@@ -24,7 +24,7 @@ from free_claude_code.core.openai_chat import (
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
-from .errors import ResponsesConversionError
+from .errors import ResponsesConversionError, UnsupportedResponsesFeature
 from .models import OpenAIResponsesRequest
 from .reasoning import (
     combine_reasoning,
@@ -416,6 +416,39 @@ def build_responses_chat_request(
         reserved_tool_ids=reserved_tool_ids,
         tool_adapter=adapter,
     )
+
+
+def validate_chat_recovery_request(request: OpenAIResponsesRequest) -> None:
+    """Require lossless request features when choosing a recovery target."""
+    if request.previous_response_id:
+        raise UnsupportedResponsesFeature(
+            "Chat Completions requires explicit history, without a stored response handle."
+        )
+    unsupported = sorted(
+        key
+        for key, value in (request.model_extra or {}).items()
+        if value is not None
+        and key not in {*_CHAT_OPTION_FIELDS, "text", "include", "truncation"}
+    )
+    if unsupported:
+        raise UnsupportedResponsesFeature(
+            f"Chat Completions cannot represent request fields: {unsupported}."
+        )
+    if any(
+        tool.get("type") != "function"
+        for tool in ResponsesToolAdapter(
+            request,
+            ResponsesToolPolicy(
+                custom_tools_as_functions=True,
+                flatten_namespaces=True,
+                client_tool_search=True,
+            ),
+        ).request.tools
+        or ()
+    ):
+        raise UnsupportedResponsesFeature(
+            "Chat Completions cannot preserve provider-managed tool declarations."
+        )
 
 
 def _input_items(value: JsonValue) -> Sequence[JsonValue]:

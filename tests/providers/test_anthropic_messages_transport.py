@@ -24,7 +24,11 @@ from free_claude_code.providers.anthropic_messages.transport import (
 )
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.http import maybe_await_aclose
-from tests.providers.support import immediate_admission
+from tests.providers.support import (
+    immediate_admission,
+    stream_messages,
+    stream_responses,
+)
 
 
 @pytest.mark.asyncio
@@ -75,7 +79,8 @@ async def test_tolerant_classifier_corrects_required_reasoning(
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         output = [
             event
-            async for event in _transport(client).stream_messages(
+            async for event in stream_messages(
+                _transport(client),
                 MessagesRequest.model_validate(
                     {
                         "model": "route",
@@ -290,7 +295,8 @@ async def test_model_metadata_cannot_relax_declared_profile_cap(
         )
         assert [
             item
-            async for item in transport.stream_responses(
+            async for item in stream_responses(
+                transport,
                 OpenAIResponsesRequest(
                     model="native", input="hi", max_output_tokens=8192
                 ),
@@ -305,12 +311,14 @@ def _stream(
     transport: AnthropicMessagesTransport, endpoint: Endpoint, *, responses: bool
 ) -> AsyncIterator[str]:
     if responses:
-        return transport.stream_responses(
+        return stream_responses(
+            transport,
             OpenAIResponsesRequest(model="native", input="hi"),
             endpoint_context=endpoint,
             response_model="public",
         )
-    return transport.stream_messages(
+    return stream_messages(
+        transport,
         MessagesRequest(
             model="native",
             messages=[{"role": "user", "content": "hi"}],
@@ -455,13 +463,14 @@ async def test_early_malformed_truncated_and_overloaded_attempts_retry_invisibly
     events = parse_sse_text(result)
     assert calls == 2 and all(wire.closed for wire in wires)
     assert sum(event.event == "response.created" for event in events) == 1
-    assert "final" in result and "hello" not in result
+    assert "final" in result
+    assert ("hello" in result) == (b"hello" in first)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("responses", [False, True])
 @pytest.mark.parametrize("auth", [False, True])
-async def test_committed_failure_never_retries_or_emits_success(
+async def test_committed_failure_preserves_output_and_exhausts_permitted_retries(
     responses: bool,
     auth: bool,
 ) -> None:
@@ -485,20 +494,18 @@ async def test_committed_failure_never_retries_or_emits_success(
     chunks: list[str] = []
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         stream = _stream(_transport(client), Endpoint(), responses=responses)
-        if responses:
-            chunks = [chunk async for chunk in stream]
-        else:
-            with pytest.raises(ExecutionFailure):
-                async for chunk in stream:
-                    chunks.append(chunk)
+        chunks = [chunk async for chunk in stream]
     events = parse_sse_text("".join(chunks))
-    assert calls == 1 and wire.closed
+    assert calls == (1 if auth else 2) and wire.closed
     assert not any(
         event.event in {"message_stop", "response.completed"} for event in events
     )
     if responses:
         assert sum(event.event == "response.failed" for event in events) == 1
-        assert events[-1].data["response"]["output"][0]["status"] == "incomplete"
+        assert events[-1].data["response"]["output"][0]["status"] == "completed"
+
+    else:
+        assert events[-1].event == "error"
 
 
 @pytest.mark.asyncio
@@ -532,14 +539,19 @@ async def test_context_window_stop_is_nonretryable_canonical_failure(
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(ExecutionFailure) as caught:
-            _ = [
-                event
-                async for event in _stream(
-                    _transport(client), Endpoint(), responses=True
-                )
-            ]
-    assert caught.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED and calls == 1
+        source = _stream(_transport(client), Endpoint(), responses=True)
+        if error_code:
+            with pytest.raises(ExecutionFailure) as caught:
+                _ = [event async for event in source]
+            assert caught.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
+        else:
+            events = parse_sse_text("".join([event async for event in source]))
+            assert events[-1].event == "response.failed"
+            assert (
+                events[-1].data["response"]["error"]["code"]
+                == "context_length_exceeded"
+            )
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -646,9 +658,14 @@ async def test_startup_rejects_invalid_conversion_without_request_io() -> None:
     async with httpx.AsyncClient() as client:
         transport = _transport(client)
         with pytest.raises(InvalidRequestError):
-            transport.stream_responses(
-                OpenAIResponsesRequest(
-                    model="native", input=[{"type": "input_file", "file_id": "remote"}]
-                ),
-                endpoint_context=Endpoint(),
-            )
+            _ = [
+                chunk
+                async for chunk in stream_responses(
+                    transport,
+                    OpenAIResponsesRequest(
+                        model="native",
+                        input=[{"type": "input_file", "file_id": "remote"}],
+                    ),
+                    endpoint_context=Endpoint(),
+                )
+            ]

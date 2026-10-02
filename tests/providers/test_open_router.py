@@ -30,6 +30,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    stream_messages,
 )
 
 
@@ -422,7 +423,7 @@ async def test_stream_maps_reasoning_content_and_details(open_router_provider):
     ):
         events = [
             event
-            async for event in open_router_provider.stream_messages(make_request())
+            async for event in stream_messages(open_router_provider, make_request())
         ]
 
     event_text = "".join(events)

@@ -1,6 +1,5 @@
 """Opaque native Messages requests and lifecycle-only SSE relay."""
 
-import json
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -10,6 +9,7 @@ from free_claude_code.core.history_replay import (
     is_replay,
 )
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_events import StreamEvent
 
 from .native import NativeMessagesError, validate_messages_json
 
@@ -81,7 +81,7 @@ class NativeMessagesPassthrough:
         self.started = False
         self.completed = False
 
-    def feed(self, kind: str, payload: JsonObject) -> str | None:
+    def feed(self, kind: str, payload: JsonObject) -> StreamEvent | None:
         if self.completed:
             raise NativeMessagesError("Messages event arrived after message_stop.")
         validate_messages_json(payload)
@@ -102,4 +102,4 @@ class NativeMessagesPassthrough:
             )
         if kind == "message_stop":
             self.completed = True
-        return f"event: {kind}\ndata: {json.dumps(body, ensure_ascii=False)}\n\n"
+        return StreamEvent(kind, body)

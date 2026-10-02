@@ -27,6 +27,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from tests.api.support import create_test_app, provider_manager_for_app
+from tests.provider_double import ScriptedProvider
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_custom_provider import completion, definition
 from tests.providers.test_custom_provider import provider as custom_provider
@@ -69,7 +70,7 @@ def test_responses_route_carries_generation_model_limit_to_messages_egress():
     assert bodies[0]["max_tokens"] == 4096
 
 
-class FakeProvider:
+class FakeProvider(ScriptedProvider):
     def __init__(self, chunks: list[str]) -> None:
         self.chunks = chunks
         self.startup_error: InvalidRequestError | None = None

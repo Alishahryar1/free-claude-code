@@ -31,6 +31,8 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    stream_messages,
+    stream_responses,
 )
 
 _MODEL = "qwen/qwen3.7-flash:free"
@@ -400,16 +402,18 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
     schema = {"type": "object", "properties": {"path": {"type": "string"}}}
     async with _wire_provider(handler) as provider:
         stream = (
-            provider.stream_messages(
+            stream_messages(
+                provider,
                 MessagesRequest(
                     model=_MODEL,
                     max_tokens=2048,
                     messages=[{"role": "user", "content": "Inspect the README."}],
                     tools=[{"name": "inspect", "input_schema": schema}],
-                )
+                ),
             )
             if wire == "messages"
-            else provider.stream_responses(
+            else stream_responses(
+                provider,
                 OpenAIResponsesRequest(
                     model=_MODEL,
                     input="Inspect the README.",
@@ -417,7 +421,7 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
                     tools=[
                         {"type": "function", "name": "inspect", "parameters": schema}
                     ],
-                )
+                ),
             )
         )
         output = "".join([event async for event in stream])

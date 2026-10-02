@@ -15,6 +15,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     profiled_provider,
+    stream_messages,
 )
 
 
@@ -165,7 +166,7 @@ async def test_stream_messages_text(vercel_provider):
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event async for event in vercel_provider.stream_messages(make_request())
+            event async for event in stream_messages(vercel_provider, make_request())
         ]
 
     assert any(
@@ -197,7 +198,7 @@ async def test_stream_messages_reasoning_content(vercel_provider):
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event async for event in vercel_provider.stream_messages(make_request())
+            event async for event in stream_messages(vercel_provider, make_request())
         ]
 
     assert any(

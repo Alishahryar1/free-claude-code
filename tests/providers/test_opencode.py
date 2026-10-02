@@ -51,6 +51,8 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    stream_messages,
+    stream_responses,
 )
 
 
@@ -279,7 +281,8 @@ async def _collect(provider: OpenCodeProvider, model: str, **overrides: object) 
     return "".join(
         [
             chunk
-            async for chunk in provider.stream_messages(
+            async for chunk in stream_messages(
+                provider,
                 _request(model, **overrides),
                 input_tokens=2,
                 request_id="req_opencode",
@@ -296,7 +299,8 @@ async def _collect_responses(
     return "".join(
         [
             chunk
-            async for chunk in provider.stream_responses(
+            async for chunk in stream_responses(
+                provider,
                 _responses_request(model, **overrides),
                 input_tokens=2,
                 request_id="req_opencode_responses",
@@ -720,7 +724,7 @@ async def test_responses_tool_search_accepts_optional_codex_arguments() -> None:
     )
     try:
         await provider.list_model_infos()
-        body = "".join([chunk async for chunk in provider.stream_responses(request)])
+        body = "".join([chunk async for chunk in stream_responses(provider, request)])
     finally:
         await provider.cleanup()
 
@@ -1127,12 +1131,10 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
     assert len(catalog_requests) == 1
     assert [request.url.path for request in generation_requests] == [
         failed_path,
-        failed_path,
         fallback_path,
     ]
     payloads = [json.loads(request.content) for request in generation_requests]
     assert [payload["model"] for payload in payloads] == [
-        upstream_id(primary_model),
         upstream_id(primary_model),
         upstream_id(fallback_model),
     ]

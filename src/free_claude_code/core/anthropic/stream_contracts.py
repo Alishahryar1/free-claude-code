@@ -170,7 +170,8 @@ def assert_anthropic_stream_contract(
             open_blocks.pop(index)
 
     assert not open_blocks, f"unclosed blocks: {open_blocks}"
-    assert seen_blocks, "stream did not emit any content blocks"
+    if event_names[-1] != "error":
+        assert seen_blocks, "stream did not emit any content blocks"
 
 
 def event_names(events: list[SSEEvent]) -> list[str]:

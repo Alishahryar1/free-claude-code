@@ -1,9 +1,12 @@
 """NIM named reasoning across both supported ingress protocols."""
 
+from functools import partial
+
 import pytest
 
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from tests.providers.support import stream_messages, stream_responses
 from tests.providers.test_history_transports import _harness, _saved_reply
 from tests.providers.test_nvidia_nim import _alias_provider, _alias_request
 
@@ -47,9 +50,9 @@ async def test_named_effort_reaches_nim_without_numeric_budget(wire, policy, exp
         provider,
     ):
         stream = (
-            provider.stream_messages
+            partial(stream_messages, provider)
             if wire == "messages"
-            else provider.stream_responses
+            else partial(stream_responses, provider)
         )
         reply = await _saved_reply(stream(_alias_request(wire), reasoning=policy), wire)
 
@@ -75,9 +78,9 @@ async def test_unsupported_named_effort_is_not_silently_remapped(wire, policy):
         provider,
     ):
         stream = (
-            provider.stream_messages
+            partial(stream_messages, provider)
             if wire == "messages"
-            else provider.stream_responses
+            else partial(stream_responses, provider)
         )
         with pytest.raises(ExecutionFailure, match="reasoning_effort"):
             await _saved_reply(stream(_alias_request(wire), reasoning=policy), wire)

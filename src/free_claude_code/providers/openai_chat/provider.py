@@ -1,6 +1,7 @@
 """Provider identity, HTTP resource ownership, and model discovery."""
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from typing import Any
 
@@ -8,6 +9,7 @@ import httpx2
 from openai import AsyncOpenAI
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.ports import ProviderCandidate
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -202,7 +204,7 @@ class OpenAIChatProvider(BaseProvider):
             collection_field=listing.collection_field,
         )
 
-    def stream_messages(
+    def open_messages(
         self,
         request: MessagesRequest,
         input_tokens: int = 0,
@@ -213,8 +215,8 @@ class OpenAIChatProvider(BaseProvider):
         model_info: ProviderModelInfo | None = None,
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AsyncIterator[str]:
-        return self._chat.stream_messages(
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        return self._chat.open_messages(
             request,
             input_tokens=input_tokens,
             request_id=request_id,
@@ -224,7 +226,7 @@ class OpenAIChatProvider(BaseProvider):
             model_info=model_info,
         )
 
-    def stream_responses(
+    def open_responses(
         self,
         request: OpenAIResponsesRequest,
         input_tokens: int = 0,
@@ -235,8 +237,8 @@ class OpenAIChatProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
-        return self._chat.stream_responses(
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        return self._chat.open_responses(
             request,
             input_tokens=input_tokens,
             request_id=request_id,

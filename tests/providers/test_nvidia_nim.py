@@ -1,6 +1,7 @@
 import json
 from copy import deepcopy
 from dataclasses import replace
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import openai
@@ -23,7 +24,6 @@ from free_claude_code.providers.nvidia_nim.client import _PROFILE as NIM_PROFILE
 from free_claude_code.providers.nvidia_nim.tool_schema import (
     NIM_TOOL_ARGUMENT_ALIASES_KEY,
 )
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
@@ -32,6 +32,8 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    stream_messages,
+    stream_responses,
 )
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
 
@@ -183,9 +185,9 @@ async def test_argument_aliases_survive_request_corrections(wire, correction):
         provider,
     ):
         stream = (
-            provider.stream_messages
+            partial(stream_messages, provider)
             if wire == "messages"
-            else provider.stream_responses
+            else partial(stream_responses, provider)
         )
         saved = await _saved_reply(
             stream(request, reasoning=ReasoningPolicy.on(budget_tokens=4096)), wire
@@ -246,7 +248,7 @@ async def test_argument_aliases_survive_shared_history_correction(early_sse):
         bodies,
         provider,
     ):
-        saved = await _saved_reply(provider.stream_messages(request), "messages")
+        saved = await _saved_reply(stream_messages(provider, request), "messages")
     call = next(block for block in saved[0]["content"] if block["type"] == "tool_use")
     assert call["input"] == {"pattern": "needle", "type": "py"}
     assert len(bodies) == 2
@@ -521,7 +523,7 @@ def test_startup_and_build_request_issue_206_post_tool_text(nim_provider):
             ),
         ],
     )
-    nim_provider.stream_messages(req, reasoning=REASONING_OFF)
+    stream_messages(nim_provider, req, reasoning=REASONING_OFF)
     body = nim_provider._chat._build_request_body(req, reasoning=REASONING_OFF)
     assert "messages" in body
     assert any(m.get("role") == "tool" for m in body["messages"])
@@ -559,7 +561,7 @@ async def test_stream_messages_text(nim_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [e async for e in nim_provider.stream_messages(req)]
+        events = [e async for e in stream_messages(nim_provider, req)]
 
         assert len(events) > 0
         assert "event: message_start" in events[0]
@@ -607,7 +609,7 @@ async def test_stream_messages_thinking_reasoning_content(nim_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [e async for e in nim_provider.stream_messages(req)]
+        events = [e async for e in stream_messages(nim_provider, req)]
 
         # Check for thinking_delta
         found_thinking = False
@@ -650,7 +652,7 @@ async def test_stream_messages_suppresses_thinking_when_disabled(provider_config
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            e async for e in provider.stream_messages(req, reasoning=REASONING_OFF)
+            e async for e in stream_messages(provider, req, reasoning=REASONING_OFF)
         ]
 
     event_text = "".join(events)
@@ -697,7 +699,7 @@ async def test_stream_messages_retries_without_chat_template(provider_config):
         mock_create.side_effect = [first_error, SDKStreamDouble(mock_stream())]
 
         events = [
-            e async for e in provider.stream_messages(req, reasoning=REASONING_ON)
+            e async for e in stream_messages(provider, req, reasoning=REASONING_ON)
         ]
 
     assert mock_create.await_count == 2
@@ -754,7 +756,7 @@ async def test_stream_messages_retries_without_chat_template_kwargs_issue_993(
         mock_create.side_effect = [first_error, SDKStreamDouble(mock_stream())]
 
         events = [
-            e async for e in provider.stream_messages(req, reasoning=REASONING_ON)
+            e async for e in stream_messages(provider, req, reasoning=REASONING_ON)
         ]
 
     assert mock_create.await_count == 2
@@ -788,7 +790,7 @@ async def test_stream_messages_does_not_retry_unrelated_bad_request(provider_con
         mock_create.side_effect = _make_bad_request_error("unrelated bad request")
 
         with pytest.raises(ExecutionFailure) as exc_info:
-            [e async for e in provider.stream_messages(req)]
+            [e async for e in stream_messages(provider, req)]
 
     assert mock_create.await_count == 1
     assert "Invalid request sent to provider" in exc_info.value.message
@@ -817,13 +819,14 @@ async def test_tool_call_stream(nim_provider):
 
     async def mock_stream():
         yield mock_chunk
+        yield _content_chunk(None, finish_reason="tool_calls")
 
     with patch.object(
         nim_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [e async for e in nim_provider.stream_messages(req)]
+        events = [e async for e in stream_messages(nim_provider, req)]
 
         starts = [
             e for e in events if "event: content_block_start" in e and '"tool_use"' in e
@@ -865,7 +868,7 @@ async def test_native_minimax_tool_markup_becomes_anthropic_tool_use(nim_provide
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in nim_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(nim_provider, req)]
 
     event_text = "".join(events)
     assert namespace not in event_text
@@ -913,7 +916,7 @@ async def test_native_minimax_reasoning_markup_becomes_anthropic_tool_use(
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in nim_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(nim_provider, req)]
 
     event_text = "".join(events)
     assert namespace not in event_text
@@ -952,7 +955,7 @@ async def test_native_minimax_markup_without_tools_retries_without_leaking(
     ) as mock_create:
         mock_create.side_effect = attempts
 
-        events = [event async for event in nim_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(nim_provider, req)]
 
     event_text = "".join(events)
     assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
@@ -997,7 +1000,7 @@ async def test_native_minimax_tool_markup_restores_nim_argument_aliases(nim_prov
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in nim_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(nim_provider, req)]
 
     assert json.loads(_input_json_deltas(events)[0]) == {
         "pattern": "needle",
@@ -1051,7 +1054,7 @@ async def test_malformed_native_minimax_tool_call_retries_without_leaking(
             SDKStreamDouble(recovered_stream()),
         ]
 
-        events = [event async for event in nim_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(nim_provider, req)]
 
     assert mock_create.await_count == 2
     event_text = "".join(events)
@@ -1101,26 +1104,19 @@ async def test_midstream_native_tool_suffix_failure_recovers_without_duplication
     async def recovered_stream():
         yield _content_chunk(recovered, finish_reason="tool_calls")
 
-    def immediate_holdback():
-        return RecoveryHoldbackBuffer(holdback_seconds=0.0)
-
     with (
         patch.object(
             nim_provider._client.chat.completions,
             "create",
             new_callable=AsyncMock,
         ) as mock_create,
-        patch(
-            "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-            side_effect=immediate_holdback,
-        ),
     ):
         mock_create.side_effect = [
             SDKStreamDouble(malformed_stream()),
             SDKStreamDouble(recovered_stream()),
         ]
 
-        events = [event async for event in nim_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(nim_provider, req)]
 
     assert mock_create.await_count == 2
     event_text = "".join(events)
@@ -1158,13 +1154,14 @@ async def test_stream_messages_restores_aliased_tool_arguments(nim_provider):
 
     async def mock_stream():
         yield mock_chunk
+        yield _content_chunk(None, finish_reason="tool_calls")
 
     with patch.object(
         nim_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [e async for e in nim_provider.stream_messages(req)]
+        events = [e async for e in stream_messages(nim_provider, req)]
 
     await_args = mock_create.await_args
     assert await_args is not None
@@ -1215,13 +1212,14 @@ async def test_stream_messages_buffers_chunked_aliased_tool_arguments(nim_provid
     async def mock_stream():
         yield first_chunk
         yield second_chunk
+        yield _content_chunk(None, finish_reason="tool_calls")
 
     with patch.object(
         nim_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [e async for e in nim_provider.stream_messages(req)]
+        events = [e async for e in stream_messages(nim_provider, req)]
 
     deltas = _input_json_deltas(events)
     assert len(deltas) == 1
@@ -1261,13 +1259,14 @@ async def test_stream_messages_restores_nested_aliased_tool_arguments(nim_provid
 
     async def mock_stream():
         yield mock_chunk
+        yield _content_chunk(None, finish_reason="tool_calls")
 
     with patch.object(
         nim_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [e async for e in nim_provider.stream_messages(req)]
+        events = [e async for e in stream_messages(nim_provider, req)]
 
     deltas = _input_json_deltas(events)
     assert len(deltas) == 1
@@ -1307,13 +1306,14 @@ async def test_stream_messages_task_tool_preserves_background_true(nim_provider)
 
     async def mock_stream():
         yield mock_chunk
+        yield _content_chunk(None, finish_reason="tool_calls")
 
     with patch.object(
         nim_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [e async for e in nim_provider.stream_messages(req)]
+        events = [e async for e in stream_messages(nim_provider, req)]
 
     deltas = _input_json_deltas(events)
     assert len(deltas) == 1
@@ -1369,7 +1369,7 @@ async def test_stream_messages_retries_without_reasoning_content(nim_provider):
     ) as mock_create:
         mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
 
-        events = [e async for e in nim_provider.stream_messages(req)]
+        events = [e async for e in stream_messages(nim_provider, req)]
 
     assert mock_create.await_count == 2
     first_call = mock_create.await_args_list[0].kwargs
@@ -1397,7 +1397,7 @@ async def test_stream_messages_bad_request_without_reasoning_budget_does_not_ret
         mock_create.side_effect = error
 
         with pytest.raises(ExecutionFailure) as exc_info:
-            [e async for e in nim_provider.stream_messages(req)]
+            [e async for e in stream_messages(nim_provider, req)]
 
     assert mock_create.await_count == 1
     assert "Invalid request sent to provider" in exc_info.value.message
@@ -1416,7 +1416,7 @@ async def test_stream_messages_unrelated_internal_error_does_not_downgrade(
         mock_create.side_effect = error
 
         with pytest.raises(ExecutionFailure) as exc_info:
-            [e async for e in nim_provider.stream_messages(req)]
+            [e async for e in stream_messages(nim_provider, req)]
 
     assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
     assert all(
@@ -1441,7 +1441,7 @@ async def test_stream_messages_internal_reasoning_content_error_does_not_downgra
         mock_create.side_effect = error
 
         with pytest.raises(ExecutionFailure) as exc_info:
-            [e async for e in nim_provider.stream_messages(req)]
+            [e async for e in stream_messages(nim_provider, req)]
 
     assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
     assert all(

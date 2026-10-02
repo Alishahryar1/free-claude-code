@@ -8,6 +8,7 @@ from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     build_responses_chat_request,
 )
+from free_claude_code.core.stream_events import StreamEvent
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
     ChatStreamOutput,
@@ -17,6 +18,7 @@ from free_claude_code.providers.openai_chat.stream_output import (
 from free_claude_code.providers.openai_chat.tool_calls import (
     OpenAIToolCallAssembler,
 )
+from tests.stream_helpers import serialize_events
 
 
 @pytest.fixture(params=["messages", "responses"])
@@ -32,9 +34,9 @@ def output(request) -> ChatStreamOutput:
     return ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
 
 
-def _argument_deltas(frames: list[str]) -> list[str]:
+def _argument_deltas(frames: list[StreamEvent]) -> list[str]:
     parts = []
-    for event in parse_sse_text("".join(frames)):
+    for event in parse_sse_text(serialize_events(frames)):
         if event.event == "response.function_call_arguments.delta":
             parts.append(event.data["delta"])
         elif event.data.get("delta", {}).get("type") == "input_json_delta":
@@ -81,7 +83,7 @@ def test_tool_arguments_stream_without_name_specific_rewrites(output, name, argu
     )
     assert output.tool_states[0].content == arguments
     assert output.tool_states[0].tool_id == "call_task"
-    events = parse_sse_text("".join(frames))
+    events = parse_sse_text(serialize_events(frames))
     assert events[-1].event == (
         "response.completed"
         if isinstance(output, ResponsesChatStreamOutput)

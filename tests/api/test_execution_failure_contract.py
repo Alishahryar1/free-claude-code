@@ -22,11 +22,12 @@ from free_claude_code.core.openai_responses import (
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
 from tests.api.support import create_test_app
+from tests.provider_double import ScriptedProvider
 
 _PARTIAL_CONTENT = "PARTIAL_ASSISTANT_CONTENT"
 
 
-class CanonicalFailureProvider:
+class CanonicalFailureProvider(ScriptedProvider):
     """Provider double that raises one request-correlated canonical failure."""
 
     def __init__(
@@ -71,8 +72,11 @@ class CanonicalFailureProvider:
             if self._grouped:
                 raise self._grouped_failure(failure)
             raise failure
-        for chunk in _partial_responses_stream(failure):
+        for chunk in _partial_responses_stream(failure)[:-1]:
             yield chunk
+        if self._grouped:
+            raise self._grouped_failure(failure)
+        raise failure
 
     def _failure(self, request_id: str) -> ExecutionFailure:
         return ExecutionFailure(
@@ -93,7 +97,7 @@ class CanonicalFailureProvider:
         )
 
 
-class StalledProvider:
+class StalledProvider(ScriptedProvider):
     """Provider double that makes no protocol-visible progress."""
 
     def __init__(self, *, responses_chunks: tuple[str, ...] = ()) -> None:
@@ -283,6 +287,14 @@ def _terminal_trace(trace_mock: MagicMock) -> dict[str, Any]:
     )
 
 
+def _logical_failure_trace(trace_mock):
+    return next(
+        call.kwargs
+        for call in trace_mock.call_args_list
+        if call.kwargs.get("event") == "free_claude_code.execution.failed"
+    )
+
+
 def _grouped_rate_limit_provider(chunks: list[str]) -> CanonicalFailureProvider:
     return CanonicalFailureProvider(
         chunks,
@@ -379,7 +391,7 @@ def test_grouped_post_start_execution_failure_keeps_canonical_terminal_event(
 
     with (
         resolver_patch,
-        patch("free_claude_code.api.response_streams.trace_event") as trace_mock,
+        patch("free_claude_code.application.recovery.trace_event") as trace_mock,
         client,
     ):
         response = client.post(path, json=payload)
@@ -395,10 +407,7 @@ def test_grouped_post_start_execution_failure_keeps_canonical_terminal_event(
     assert response.status_code == 200
     assert error["type"] == "rate_limit_error"
     assert error["message"] == f"upstream is busy\n\nRequest ID: {request_id}"
-    if path == "/v1/messages":
-        assert _terminal_trace(trace_mock)["failure_kind"] == "rate_limit"
-    else:
-        trace_mock.assert_not_called()
+    assert _logical_failure_trace(trace_mock)["failure_kind"] == "rate_limit"
 
 
 def test_grouped_stream_false_execution_failure_discards_partial_content() -> None:
@@ -410,6 +419,7 @@ def test_grouped_stream_false_execution_failure_discards_partial_content() -> No
     with (
         resolver_patch,
         patch("free_claude_code.api.response_streams.trace_event") as trace_mock,
+        patch("free_claude_code.application.recovery.trace_event") as logical_trace,
         client,
     ):
         response = client.post("/v1/messages", json=_messages_payload(stream=False))
@@ -425,8 +435,7 @@ def test_grouped_stream_false_execution_failure_discards_partial_content() -> No
     trace = _terminal_trace(trace_mock)
     assert trace["status_code"] == 429
     assert trace["error_type"] == "rate_limit_error"
-    assert trace["exc_type"] == "ExecutionFailure"
-    assert trace["failure_kind"] == "rate_limit"
+    assert _logical_failure_trace(logical_trace)["failure_kind"] == "rate_limit"
 
 
 def test_messages_pre_start_execution_failure_is_correlated_terminal_json() -> None:
@@ -647,7 +656,7 @@ def test_messages_post_start_execution_failure_follows_closed_block() -> None:
 
     with (
         resolver_patch,
-        patch("free_claude_code.api.response_streams.trace_event") as trace_mock,
+        patch("free_claude_code.application.recovery.trace_event") as trace_mock,
         client,
     ):
         response = client.post("/v1/messages", json=_messages_payload(stream=True))
@@ -668,16 +677,13 @@ def test_messages_post_start_execution_failure_follows_closed_block() -> None:
         "message": f"provider overloaded\n\nRequest ID: {request_id}",
     }
     assert "message_stop" not in response.text
-    assert _terminal_trace(trace_mock) == {
-        "stage": "egress",
-        "event": "free_claude_code.api.response.terminal_execution_error",
-        "source": "api",
-        "wire_api": "messages",
+    assert _logical_failure_trace(trace_mock) == {
+        "stage": "execution",
+        "event": "free_claude_code.execution.failed",
+        "source": "application",
         "request_id": request_id,
+        "provider_id": "nvidia_nim",
         "status_code": 529,
-        "error_type": "overloaded_error",
-        "client_should_retry": False,
-        "exc_type": "ExecutionFailure",
         "failure_kind": "overloaded",
         "provider_retryable": True,
     }
@@ -826,7 +832,7 @@ def test_post_start_progress_timeout_is_terminal_protocol_event(path: str) -> No
 
     with (
         resolver_patch,
-        patch("free_claude_code.api.response_streams.trace_event") as trace_mock,
+        patch("free_claude_code.application.recovery.trace_event") as trace_mock,
         client,
     ):
         response = client.post(path, json=payload)
@@ -849,13 +855,9 @@ def test_post_start_progress_timeout_is_terminal_protocol_event(path: str) -> No
         "Provider execution made no progress for 600 seconds.\n\n"
         f"Request ID: {request_id}"
     )
-    if path == "/v1/messages":
-        trace = _terminal_trace(trace_mock)
-        assert trace["failure_kind"] == "timeout"
-        assert trace["provider_retryable"] is False
-        assert trace["client_should_retry"] is False
-    else:
-        trace_mock.assert_not_called()
+    trace = _logical_failure_trace(trace_mock)
+    assert trace["failure_kind"] == "timeout"
+    assert trace["provider_retryable"] is False
 
 
 def test_responses_application_progress_timeout_closes_committed_lifecycle() -> None:
@@ -882,7 +884,7 @@ def test_responses_application_progress_timeout_closes_committed_lifecycle() -> 
 
     with (
         resolver_patch,
-        patch("free_claude_code.api.response_streams.trace_event") as trace_mock,
+        patch("free_claude_code.application.recovery.trace_event") as trace_mock,
         client,
     ):
         response = client.post("/v1/responses", json=_responses_payload())
@@ -908,16 +910,13 @@ def test_responses_application_progress_timeout_closes_committed_lifecycle() -> 
         "code": None,
     }
     assert provider.close_calls == 1
-    assert _terminal_trace(trace_mock) == {
-        "stage": "egress",
-        "event": "free_claude_code.api.response.terminal_execution_error",
-        "source": "api",
-        "wire_api": "responses",
+    assert _logical_failure_trace(trace_mock) == {
+        "stage": "execution",
+        "event": "free_claude_code.execution.failed",
+        "source": "application",
         "request_id": request_id,
+        "provider_id": "nvidia_nim",
         "status_code": 504,
-        "error_type": "timeout_error",
-        "client_should_retry": False,
-        "exc_type": "ExecutionFailure",
         "failure_kind": "timeout",
         "provider_retryable": False,
     }

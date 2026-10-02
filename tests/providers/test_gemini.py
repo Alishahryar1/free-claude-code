@@ -18,6 +18,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    stream_messages,
 )
 
 
@@ -480,8 +481,8 @@ async def test_stream_messages_text(gemini_provider):
 
         events = [
             event
-            async for event in gemini_provider.stream_messages(
-                req, reasoning=reasoning_for(req)
+            async for event in stream_messages(
+                gemini_provider, req, reasoning=reasoning_for(req)
             )
         ]
 
@@ -534,7 +535,7 @@ async def test_stream_messages_preserves_tool_call_extra_content(gemini_provider
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in gemini_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(gemini_provider, req)]
 
     tool_starts = [
         event
@@ -611,7 +612,7 @@ async def test_colliding_stream_tool_id_rekeys_cached_thought_signature(
         new_callable=AsyncMock,
         return_value=SDKStreamDouble(mock_stream()),
     ):
-        events = [event async for event in gemini_provider.stream_messages(request)]
+        events = [event async for event in stream_messages(gemini_provider, request)]
 
     starts = [
         event.data["content_block"]
@@ -689,7 +690,7 @@ async def test_stream_messages_reasoning_content(gemini_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in gemini_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(gemini_provider, req)]
 
         assert any(
             '"thinking_delta"' in event and "Thinking..." in event for event in events

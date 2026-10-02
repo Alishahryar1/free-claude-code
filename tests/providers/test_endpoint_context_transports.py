@@ -24,7 +24,12 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_messages,
+    stream_responses,
+)
 
 
 class Context:
@@ -120,7 +125,8 @@ def _stream(
     responses_ingress: bool,
 ) -> AsyncIterator[str]:
     if responses_ingress:
-        return transport.stream_responses(
+        return stream_responses(
+            transport,
             OpenAIResponsesRequest(model="upstream", input="hi"),
             input_tokens=1,
             request_id=None,
@@ -128,7 +134,8 @@ def _stream(
             reasoning=DEFAULT_REASONING_POLICY,
             endpoint_context=context,
         )
-    return transport.stream_messages(
+    return stream_messages(
+        transport,
         MessagesRequest(model="upstream", messages=[{"role": "user", "content": "hi"}]),
         input_tokens=1,
         request_id=None,
@@ -415,7 +422,8 @@ async def test_stream_authentication_precedes_overlapping_request_correction(
         context = Context("a")
         try:
             await _consume(
-                provider.stream_messages(
+                stream_messages(
+                    provider,
                     request,
                     endpoint_context=context,
                     reasoning=ReasoningPolicy.prefer_off(),

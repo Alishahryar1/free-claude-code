@@ -10,10 +10,12 @@ import pytest
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import ReplayRecord, encode_replay
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.history_replay import replay_origin
+from tests.providers.support import stream_native_messages
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 
@@ -21,8 +23,8 @@ from tests.providers.test_anthropic_provider import native_body, provider
 async def collect(p, body=None, **kwargs):
     return [
         event
-        async for event in p.stream_native_messages(
-            NativeMessagesRequest(body or native_body()), **kwargs
+        async for event in stream_native_messages(
+            p, NativeMessagesRequest(body or native_body()), **kwargs
         )
     ]
 
@@ -211,7 +213,7 @@ async def test_http_failure_status_evidence_and_bounded_recovery(streaming, stat
         assert "test provider evidence" in result.value.message
         assert "local-request" in result.value.message
         assert "upstream-request" in result.value.message
-        assert len(wires) == (2 if status in {429, 529} else 1)
+        assert len(wires) == (2 if status == 429 else 1)
         assert all(wire.closed for wire in wires)
     finally:
         await p.cleanup()
@@ -235,7 +237,7 @@ async def test_connection_recovery_before_output_closes_failed_response(streamin
         )
     )
     try:
-        assert await collect(p, native_body(streaming))
+        assert await collect(p, {**native_body(streaming), "tools": []})
         assert first.closed and second.closed
     finally:
         await p.cleanup()
@@ -263,7 +265,11 @@ async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure):
     )
     try:
         output = parse_sse_text(
-            "".join(await collect(p, native_body(True), response_model="native"))
+            "".join(
+                await collect(
+                    p, {**native_body(True), "tools": []}, response_model="native"
+                )
+            )
         )
         assert [event.data for event in output] == events
         assert first.closed and second.closed
@@ -292,10 +298,11 @@ async def test_malformed_or_incomplete_stream_after_output_never_replays(bad_tai
 
     p = provider(handle)
     try:
-        stream = p.stream_native_messages(NativeMessagesRequest(native_body(True)))
+        stream = stream_native_messages(p, NativeMessagesRequest(native_body(True)))
         assert "message_start" in await anext(stream)
-        with pytest.raises(ExecutionFailure):
-            await anext(stream)
+        assert "event: error" in await anext(stream)
+        assert isinstance(stream, AsyncCloseable)
+        await stream.aclose()
         assert len(calls) == 1
         assert wire.closed
     finally:
@@ -310,9 +317,10 @@ async def test_early_consumer_exit_releases_admission_and_response():
             200, headers={"content-type": "text/event-stream"}, stream=wire
         )
     )
-    stream = p.stream_native_messages(NativeMessagesRequest(native_body(True)))
+    stream = stream_native_messages(p, NativeMessagesRequest(native_body(True)))
     try:
         await anext(stream)
+        assert isinstance(stream, AsyncCloseable)
         await stream.aclose()
         assert wire.closed
         assert await collect(p, native_body(True))

@@ -14,7 +14,7 @@ from free_claude_code.providers.admission_registry import ProviderAdmissionRegis
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from free_claude_code.providers.runtime.runtime import create_provider
 from tests.core.openai_responses.test_client_tool_discovery import AGENTS, SEARCH
-from tests.providers.support import immediate_admission
+from tests.providers.support import immediate_admission, stream_responses
 from tests.providers.test_opencode import (
     _catalog_payload,
     _provider_with_wire_transports,
@@ -292,7 +292,7 @@ async def test_provider_discovery_call_and_result_round_trip(
                 "max_output_tokens": 128,
             }
         )
-        output = "".join([chunk async for chunk in provider.stream_responses(request)])
+        output = "".join([chunk async for chunk in stream_responses(provider, request)])
         events = parse_sse_text(output)
         assert events[-1].event == "response.completed"
         response = events[-1].data["response"]

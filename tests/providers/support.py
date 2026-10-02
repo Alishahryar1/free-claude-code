@@ -2,14 +2,33 @@
 
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from copy import deepcopy
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import patch
 
 import httpx2
 from openai import AsyncOpenAI
 
+from free_claude_code.application.ports import ProviderCandidate
 from free_claude_code.application.reasoning import client_reasoning_policy
+from free_claude_code.application.recovery import RecoveryCoordinator, RecoveryWriter
+from free_claude_code.application.routing import ProviderModelTarget
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.anthropic.recovery_stream import (
+    MessagesRecoveryWriter,
+    NativeMessagesCompletionWriter,
+)
 from free_claude_code.core.async_iterators import AsyncCloseable
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.openai_responses import (
+    ResponsesRecoveryWriter,
+)
+from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.recovery import RecoveryCheckpoint
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_chat import (
@@ -20,6 +39,130 @@ from free_claude_code.providers.openai_chat import (
 REASONING_DEFAULT = ReasoningPolicy.provider_default()
 REASONING_ON = ReasoningPolicy.on()
 REASONING_OFF = ReasoningPolicy.off()
+
+
+async def successful_chat_stream():
+    """A minimal SDK stream with an explicit content-completion boundary."""
+    yield SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content="answer", tool_calls=None),
+                finish_reason="stop",
+            )
+        ],
+        usage=None,
+    )
+
+
+async def exercise_chat_body(provider: Any, body: dict) -> dict:
+    """Exercise correction of a prepared body through the real logical owner."""
+    request = MessagesRequest.model_validate(
+        {
+            "model": body["model"],
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "test"}],
+        }
+    )
+    async with provider.open_messages(request) as candidate:
+        with patch.object(
+            provider._chat, "_build_request_body", return_value=deepcopy(body)
+        ):
+            await candidate.prepare(RecoveryCheckpoint("messages"))
+
+        @asynccontextmanager
+        async def prepared():
+            yield candidate
+
+        frames = [
+            frame
+            async for frame in candidate_stream(
+                prepared(),
+                writer=MessagesRecoveryWriter(model=request.model, input_tokens=0),
+            )
+        ]
+        assert any("message_stop" in frame for frame in frames)
+        assert not any("event: error" in frame for frame in frames)
+        return deepcopy(candidate.body)
+
+
+def provider_stream(
+    provider: Any, wire: str, request: Any, **kwargs: Any
+) -> AsyncIterator[str]:
+    return (stream_messages if wire == "messages" else stream_responses)(
+        provider, request, **kwargs
+    )
+
+
+def stream_messages(
+    provider: Any,
+    request: MessagesRequest,
+    input_tokens: int = 0,
+    **kwargs: Any,
+) -> AsyncIterator[str]:
+    """Exercise a provider through the application owner of its retry lifecycle."""
+    context = provider.open_messages(request, input_tokens=input_tokens, **kwargs)
+    return candidate_stream(
+        context,
+        writer=MessagesRecoveryWriter(
+            model=kwargs.get("response_model") or request.model,
+            input_tokens=input_tokens,
+        ),
+    )
+
+
+def stream_responses(
+    provider: Any,
+    request: OpenAIResponsesRequest,
+    input_tokens: int = 0,
+    **kwargs: Any,
+) -> AsyncIterator[str]:
+    context = provider.open_responses(request, input_tokens=input_tokens, **kwargs)
+    return candidate_stream(
+        context,
+        writer=ResponsesRecoveryWriter(
+            model=kwargs.get("response_model") or request.model,
+            input_tokens=input_tokens,
+        ),
+    )
+
+
+def stream_native_messages(
+    provider: Any,
+    request: NativeMessagesRequest,
+    **kwargs: Any,
+) -> AsyncIterator[str]:
+    model = kwargs.get("response_model") or request.model
+    writer = (
+        MessagesRecoveryWriter(model=model, input_tokens=0, native=True)
+        if request.stream
+        else NativeMessagesCompletionWriter(model=model)
+    )
+    return candidate_stream(
+        provider.open_native_messages(request, **kwargs), writer=writer
+    )
+
+
+def candidate_stream(
+    context: AbstractAsyncContextManager[ProviderCandidate],
+    *,
+    writer: RecoveryWriter,
+) -> AsyncIterator[str]:
+    async def open_candidate(
+        index: int,
+        target: ProviderModelTarget,
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        return context
+
+    return RecoveryCoordinator(
+        candidates=(ProviderModelTarget("test", "model", "test/model"),),
+        opener=open_candidate,
+        writer=writer,
+        progress_timeout_seconds=30,
+        timeout_failure=lambda _provider: ExecutionFailure(
+            FailureKind.TIMEOUT, 504, "Test provider made no progress.", False
+        ),
+        request_id="test",
+    ).stream()
 
 
 class SDKStreamDouble[EventT](AsyncIterator[EventT]):

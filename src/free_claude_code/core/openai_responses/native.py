@@ -1,16 +1,13 @@
 """Native OpenAI Responses request and event handling."""
 
-import uuid
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import cast
 
-from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_events import StreamEvent
 
-from .errors import openai_error_from_failure
-from .events import format_response_sse_event
 from .ids import tool_item_id_for_kind
 from .models import OpenAIResponsesRequest
 from .reasoning import responses_reasoning_config, responses_reasoning_policy
@@ -80,7 +77,7 @@ class NativeResponsesRelay:
     def completed(self) -> bool:
         return self._terminal_type is not None
 
-    def feed(self, event_type: str, payload: Mapping[str, object]) -> str:
+    def feed(self, event_type: str, payload: Mapping[str, object]) -> StreamEvent:
         """Format public model metadata and canonical whole-second timestamps."""
 
         if self._terminal_type is not None:
@@ -110,38 +107,4 @@ class NativeResponsesRelay:
             )
         if event_type in _TERMINAL_EVENT_TYPES:
             self._terminal_type = event_type
-        return format_response_sse_event(event_type, data)
-
-    def synthesize_failure(self, failure: ExecutionFailure) -> str:
-        """Terminate one already-public truncated stream with a safe failure."""
-
-        if self._terminal_type is not None:
-            raise ValueError(
-                f"Cannot synthesize failure after {self._terminal_type!r}."
-            )
-        response = (
-            deepcopy(self._response)
-            if self._response is not None
-            else cast(
-                JsonObject,
-                {
-                    "id": self._response_id or f"resp_{uuid.uuid4().hex}",
-                    "object": "response",
-                    "output": [],
-                },
-            )
-        )
-        response["id"] = (
-            self._response_id or response.get("id") or (f"resp_{uuid.uuid4().hex}")
-        )
-        response["model"] = self._public_model
-        response["status"] = "failed"
-        response["error"] = cast(JsonValue, openai_error_from_failure(failure))
-        return self.feed(
-            "response.failed",
-            {
-                "type": "response.failed",
-                "sequence_number": self._next_sequence_number,
-                "response": response,
-            },
-        )
+        return StreamEvent(event_type, data)

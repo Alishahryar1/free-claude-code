@@ -23,7 +23,12 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_messages,
+    stream_responses,
+)
 
 
 def _messages_request() -> MessagesRequest:
@@ -286,7 +291,8 @@ async def test_chat_upstream_accepts_both_ingress_protocols_directly() -> None:
         )
     try:
         messages_body = await _collect(
-            provider.stream_messages(
+            stream_messages(
+                provider,
                 _messages_request(),
                 input_tokens=2,
                 request_id="req_matrix_messages_chat",
@@ -294,7 +300,8 @@ async def test_chat_upstream_accepts_both_ingress_protocols_directly() -> None:
             )
         )
         responses_body = await _collect(
-            provider.stream_responses(
+            stream_responses(
+                provider,
                 _responses_request(),
                 input_tokens=2,
                 request_id="req_matrix_responses_chat",
@@ -343,7 +350,8 @@ async def test_responses_upstream_accepts_both_ingress_protocols_directly() -> N
     )
     try:
         messages_body = await _collect(
-            transport.stream_messages(
+            stream_messages(
+                transport,
                 _messages_request(),
                 input_tokens=2,
                 request_id="req_matrix_messages_responses",
@@ -352,7 +360,8 @@ async def test_responses_upstream_accepts_both_ingress_protocols_directly() -> N
             )
         )
         responses_body = await _collect(
-            transport.stream_responses(
+            stream_responses(
+                transport,
                 _responses_request(),
                 input_tokens=2,
                 request_id="req_matrix_responses_responses",
@@ -436,7 +445,8 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
     )
     try:
         await _collect(
-            chat_provider.stream_messages(
+            stream_messages(
+                chat_provider,
                 _image_messages_request(),
                 input_tokens=2,
                 request_id="req_matrix_image_messages_chat",
@@ -444,7 +454,8 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
             )
         )
         await _collect(
-            chat_provider.stream_responses(
+            stream_responses(
+                chat_provider,
                 _image_responses_request(),
                 input_tokens=2,
                 request_id="req_matrix_image_responses_chat",
@@ -452,7 +463,8 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
             )
         )
         await _collect(
-            responses_transport.stream_messages(
+            stream_messages(
+                responses_transport,
                 _image_messages_request(),
                 input_tokens=2,
                 request_id="req_matrix_image_messages_responses",
@@ -461,7 +473,8 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
             )
         )
         await _collect(
-            responses_transport.stream_responses(
+            stream_responses(
+                responses_transport,
                 _image_responses_request(),
                 input_tokens=2,
                 request_id="req_matrix_image_responses_responses",

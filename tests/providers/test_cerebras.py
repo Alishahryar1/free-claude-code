@@ -13,6 +13,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    stream_messages,
 )
 
 
@@ -216,7 +217,7 @@ async def test_stream_messages_text(cerebras_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in cerebras_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(cerebras_provider, req)]
 
         assert any(
             '"text_delta"' in event and "Hello back!" in event for event in events
@@ -249,7 +250,7 @@ async def test_stream_messages_reasoning(cerebras_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in cerebras_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(cerebras_provider, req)]
 
         assert any(
             '"thinking_delta"' in event and "Thinking..." in event for event in events

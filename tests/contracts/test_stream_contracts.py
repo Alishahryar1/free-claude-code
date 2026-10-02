@@ -18,6 +18,8 @@ from free_claude_code.core.anthropic.stream_contracts import (
     thinking_content,
 )
 from free_claude_code.core.anthropic.streaming import format_sse_event
+from free_claude_code.core.stream_events import StreamEvent
+from tests.stream_helpers import serialize_events
 
 
 def test_interleaved_thinking_text_blocks_are_valid() -> None:
@@ -53,7 +55,7 @@ def test_mixed_reasoning_content_and_think_tags_keep_order() -> None:
     chunks.append(builder.message_delta("end_turn", 10))
     chunks.append(builder.message_stop())
 
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     assert_anthropic_stream_contract(events)
     assert thinking_content(events) == "reasoning fieldtagged"
     assert text_content(events) == " visible  done"
@@ -100,7 +102,7 @@ def test_redacted_thinking_block_start_stop_is_valid() -> None:
         ),
         format_sse_event("message_stop", {"type": "message_stop"}),
     ]
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     assert_anthropic_stream_contract(events)
 
 
@@ -138,9 +140,9 @@ def _events_from_text_chunks(
     builder: AnthropicStreamLedger | None = None,
     *,
     enable_thinking: bool = True,
-) -> list[str]:
+) -> list[StreamEvent]:
     sse = builder or AnthropicStreamLedger("msg_contract", "contract-model")
-    out: list[str] = [] if builder else [sse.message_start()]
+    out: list[StreamEvent] = [] if builder else [sse.message_start()]
     parser = ThinkTagParser()
 
     for chunk in chunks:
@@ -161,8 +163,8 @@ def _emit_parser_parts(
     builder: AnthropicStreamLedger,
     parts: Iterable,
     enable_thinking: bool,
-) -> list[str]:
-    out: list[str] = []
+) -> list[StreamEvent]:
+    out: list[StreamEvent] = []
     for part in parts:
         if part.type == ContentType.THINKING:
             if enable_thinking:
@@ -174,5 +176,5 @@ def _emit_parser_parts(
     return out
 
 
-def _parse_builder_events(chunks: Iterable[str]):
-    return parse_sse_text("".join(chunks))
+def _parse_builder_events(chunks: Iterable[StreamEvent | str]):
+    return parse_sse_text(serialize_events(chunks))

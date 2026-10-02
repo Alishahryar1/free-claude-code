@@ -15,6 +15,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    stream_messages,
 )
 
 LLAMACPP_MODEL = "llamacpp-community/qwen2.5-7b-instruct"
@@ -140,8 +141,8 @@ async def test_stream_messages_uses_shared_openai_chat_provider(
         output = "".join(
             [
                 event
-                async for event in provider.stream_messages(
-                    make_messages_request(LLAMACPP_MODEL)
+                async for event in stream_messages(
+                    provider, make_messages_request(LLAMACPP_MODEL)
                 )
             ]
         )

@@ -33,6 +33,7 @@ from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.provider_double import ScriptedProvider
 from tests.providers.support import make_provider_config
 
 
@@ -46,7 +47,7 @@ class TrackingRuntime(ProviderRuntime):
         await super().cleanup()
 
 
-class AdminModelProvider(BaseProvider):
+class AdminModelProvider(ScriptedProvider, BaseProvider):
     def __init__(
         self,
         model_infos: frozenset[ProviderModelInfo] = frozenset(),

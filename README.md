@@ -205,8 +205,10 @@ fcc-aider
 4. Click **Apply**.
 
 Optional: add an ordered **Fallback Models** list under **Model Config**. It
-applies to every connected client. A failed request may reach and consume usage
-from more than one provider before succeeding.
+applies to every connected client. FCC can continue an interrupted answer on the
+next compatible model while keeping the output already shown. Tool calls are sent
+when their input is complete. Native features can restrict which fallbacks are
+compatible. One request may consume usage from more than one provider.
 
 For another API endpoint, open **Providers → Custom providers → Add provider**. Enter its API base URL, optional key, and API format. Leave **Model IDs** empty to discover models automatically, or enter one upstream model ID per line. Save, then select a model in **Model Config**.
 

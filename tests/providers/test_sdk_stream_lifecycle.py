@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from functools import partial
 from unittest.mock import patch
 
 import httpx2
@@ -9,6 +10,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.config.nim import NimSettings
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
@@ -24,9 +26,12 @@ from free_claude_code.providers.nvidia_nim.native_tool_stream import (
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
-from tests.providers.support import make_provider_config, profiled_provider
+from tests.providers.support import (
+    make_provider_config,
+    profiled_provider,
+    provider_stream,
+)
 from tests.providers.test_openai_responses_transport import (
     _completed_event,
     _sse,
@@ -74,6 +79,113 @@ def _chat_chunk(text, *, finish_reason=None):
             ],
         }
     ).encode()
+
+
+def _finished_chat_call():
+    return _sse(
+        {
+            "id": "chat_test",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_complete",
+                                "type": "function",
+                                "function": {"name": "read", "arguments": "{}"},
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+    ).encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("tool", [False, True])
+async def test_successful_choice_is_not_replayed_if_usage_trailer_disconnects(
+    wire, tool
+):
+    class FailedTrailer(ResponseBody):
+        async def __aiter__(self):
+            yield self.prefix
+            raise httpx2.ReadError("usage trailer disconnected")
+
+    body = FailedTrailer(
+        _finished_chat_call()
+        if tool
+        else _chat_chunk("Complete answer.", finish_reason="stop")
+    )
+    requests = 0
+
+    def handler(request):
+        nonlocal requests
+        requests += 1
+        return _response(body)
+
+    async with _harness("chat", handler) as (provider, _, admission):
+        output = "".join([event async for event in _public_stream(provider, wire)])
+        assert requests == 1
+        assert "response.failed" not in output and "event: error" not in output
+        assert ("call_complete" if tool else "Complete answer.") in output
+        assert (
+            "message_stop" if wire == "messages" else "response.completed"
+        ) in output
+        assert body.close_count == 1
+        await _assert_admission_available(admission)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_complete_chat_call_is_released_before_waiting_for_usage(wire):
+    usage = _sse(
+        {
+            "id": "chat_test",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "model",
+            "choices": [],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 9, "total_tokens": 20},
+        }
+    ).encode()
+    body = ResponseBody(_finished_chat_call(), usage + b"data: [DONE]\n\n")
+    events = []
+    async with _harness("chat", lambda request: _response(body)) as (
+        provider,
+        _,
+        admission,
+    ):
+
+        async def consume():
+            async for event in _public_stream(provider, wire):
+                events.append(event)  # noqa: PERF401 - observe output before the trailer arrives
+
+        reading = asyncio.create_task(consume())
+        try:
+            await asyncio.wait_for(body.read_started.wait(), timeout=2)
+            assert "call_complete" in "".join(events)
+            body.read_release.set()
+            await reading
+            frames = parse_sse_text("".join(events))
+            terminal_usage = (
+                frames[-1].data["response"]["usage"]
+                if wire == "responses"
+                else frames[-2].data["usage"]
+            )
+            assert terminal_usage["input_tokens"] == 11
+            assert terminal_usage["output_tokens"] == 9
+            await _assert_admission_available(admission)
+        finally:
+            body.read_release.set()
+            await asyncio.gather(reading, return_exceptions=True)
 
 
 def _chunks(kind, text):
@@ -165,7 +277,7 @@ def _public_stream(provider, wire):
         if wire == "messages"
         else OpenAIResponsesRequest(model="model", input="hello")
     )
-    return getattr(provider, f"stream_{wire}")(request, **kwargs)
+    return partial(provider_stream, provider, wire)(request, **kwargs)
 
 
 async def _assert_admission_available(admission):
@@ -245,13 +357,7 @@ async def test_cancelled_normalizer_construction_cleanup_releases_admission():
             side_effect=ValueError("invalid normalization"),
         ):
             try:
-                task = asyncio.create_task(
-                    provider._chat._create_stream(
-                        {"model": "model", "messages": []},
-                        RequestRecovery(admission.start_execution()),
-                        ProviderOperationKind.GENERATION,
-                    )
-                )
+                task = asyncio.create_task(anext(_public_stream(provider, "messages")))
                 await asyncio.wait_for(body.close_started.wait(), timeout=2)
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
@@ -347,16 +453,15 @@ async def test_nim_parser_failure_closes_response_before_retry(wire):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "operation",
-    [
-        ProviderOperationKind.GENERATION,
-        ProviderOperationKind.CONTINUATION,
-        ProviderOperationKind.TOOL_REPAIR,
-    ],
-)
-async def test_normalizer_construction_failure_closes_response_before_retry(operation):
-    bodies = [ResponseBody(), ResponseBody()]
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_normalizer_construction_failure_closes_response_before_retry(wire):
+    bodies = [
+        ResponseBody(),
+        ResponseBody(
+            _chat_chunk("recovered", finish_reason="stop"), b"data: [DONE]\n\n"
+        ),
+    ]
+    bodies[1].read_release.set()
     remaining = iter(bodies)
 
     def handler(request):
@@ -381,17 +486,12 @@ async def test_normalizer_construction_failure_closes_response_before_retry(oper
             provider._behavior, "normalize_stream", side_effect=fail_once
         ):
             async with asyncio.timeout(2):
-                stream, _, attempt, _ = await provider._chat._create_stream(
-                    {"model": "model", "messages": []},
-                    RequestRecovery(admission.start_execution()),
-                    operation,
+                output = "".join(
+                    [event async for event in _public_stream(provider, wire)]
                 )
-        try:
-            assert calls == 2
-            assert bodies[0].close_count == 1
-            assert not client.is_closed()
-        finally:
-            await stream.aclose()
-            await attempt.aclose()
+        assert "recovered" in output
+        assert calls == 2
+        assert bodies[0].close_count == 1
+        assert not client.is_closed()
         assert bodies[1].close_count == 1
         await _assert_admission_available(admission)

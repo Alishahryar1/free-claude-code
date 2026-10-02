@@ -132,9 +132,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "model_list",
         settings_attr="model_fallbacks",
         description=(
-            "Tried in order when the selected provider/model fails before output "
-            "starts. Applies to every client. One request may reach multiple "
-            "providers and consume usage at each. Native Anthropic Messages requests "
+            "Tried in order when the selected provider/model fails, including "
+            "during an answer. Compatible models can continue the output already "
+            "shown. Tool calls are sent when their input is complete. Applies to "
+            "every client and may consume usage at multiple providers. Native "
+            "features can restrict recovery. Native Anthropic Messages requests "
             "use only other Anthropic models as fallbacks."
         ),
     ),

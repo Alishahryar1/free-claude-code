@@ -7,6 +7,7 @@ from free_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from free_claude_code.core.anthropic.usage import anthropic_input_usage_fields
 from free_claude_code.core.history_replay import is_replay
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
+from free_claude_code.core.stream_events import StreamEvent
 
 
 class ResponsesStreamFailure(RuntimeError):
@@ -58,17 +59,16 @@ class ResponsesProviderStream:
             log_raw_events=log_raw_events,
         )
         self.completed = False
-        self.generated_output = False
         self._tool_names = tool_names or OpenAIToolNameCodec.from_names(())
         self._tools: dict[str, _ToolState] = {}
         self._encrypted_reasoning: dict[str, str] = {}
 
-    def start(self) -> list[str]:
+    def start(self) -> list[StreamEvent]:
         """Return the Anthropic message_start event."""
 
         return [self.ledger.message_start()]
 
-    def feed(self, event_type: str, data: dict[str, Any]) -> list[str]:
+    def feed(self, event_type: str, data: dict[str, Any]) -> list[StreamEvent]:
         """Consume one Responses event and return zero or more Anthropic events."""
 
         if self.completed:
@@ -92,7 +92,7 @@ class ResponsesProviderStream:
             raise responses_stream_failure_from_event(event_type, data)
         return []
 
-    def _item_added(self, data: dict[str, Any]) -> list[str]:
+    def _item_added(self, data: dict[str, Any]) -> list[StreamEvent]:
         item = data.get("item")
         if not isinstance(item, dict):
             return []
@@ -109,25 +109,23 @@ class ResponsesProviderStream:
                 self._encrypted_reasoning[item_id] = encrypted
         return []
 
-    def _reasoning_delta(self, data: dict[str, Any]) -> list[str]:
+    def _reasoning_delta(self, data: dict[str, Any]) -> list[StreamEvent]:
         delta = data.get("delta")
         if not isinstance(delta, str) or not delta:
             return []
         events = list(self.ledger.ensure_thinking_block())
         events.append(self.ledger.emit_thinking_delta(delta))
-        self.generated_output = True
         return events
 
-    def _text_delta(self, data: dict[str, Any]) -> list[str]:
+    def _text_delta(self, data: dict[str, Any]) -> list[StreamEvent]:
         delta = data.get("delta")
         if not isinstance(delta, str) or not delta:
             return []
         events = list(self.ledger.ensure_text_block())
         events.append(self.ledger.emit_text_delta(delta))
-        self.generated_output = True
         return events
 
-    def _tool_delta(self, data: dict[str, Any]) -> list[str]:
+    def _tool_delta(self, data: dict[str, Any]) -> list[StreamEvent]:
         item_id = _string(data.get("item_id"))
         delta = data.get("delta")
         if not item_id or not isinstance(delta, str):
@@ -145,10 +143,9 @@ class ResponsesProviderStream:
         if delta:
             events.append(self.ledger.emit_tool_delta(state.tool_index, delta))
             state.received_delta = True
-            self.generated_output = True
         return events
 
-    def _item_done(self, data: dict[str, Any]) -> list[str]:
+    def _item_done(self, data: dict[str, Any]) -> list[StreamEvent]:
         item = data.get("item")
         if not isinstance(item, dict):
             return []
@@ -170,7 +167,6 @@ class ResponsesProviderStream:
             arguments = item.get("arguments")
             if not state.received_delta and isinstance(arguments, str) and arguments:
                 events.append(self.ledger.emit_tool_delta(state.tool_index, arguments))
-                self.generated_output = True
             if not state.stopped:
                 events.append(self.ledger.stop_tool_block(state.tool_index))
                 state.stopped = True
@@ -198,15 +194,13 @@ class ResponsesProviderStream:
                     )
                 )
                 events.append(self.ledger.content_block_stop(index))
-                self.generated_output = True
                 return events
         return []
 
-    def _ensure_tool_started(self, state: _ToolState) -> list[str]:
+    def _ensure_tool_started(self, state: _ToolState) -> list[StreamEvent]:
         if state.started:
             return []
         state.started = True
-        self.generated_output = True
         return [
             self.ledger.start_tool_block(
                 state.tool_index,
@@ -215,10 +209,21 @@ class ResponsesProviderStream:
             )
         ]
 
-    def _finish(self, data: dict[str, Any], *, incomplete: bool) -> list[str]:
+    def _finish(self, data: dict[str, Any], *, incomplete: bool) -> list[StreamEvent]:
         response = data.get("response")
         response = response if isinstance(response, dict) else {}
-        events = list(self.ledger.close_all_blocks())
+        events: list[StreamEvent] = []
+        output = response.get("output")
+        if isinstance(output, list):
+            for item in output:
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "function_call"
+                    and item.get("status") in {None, "completed"}
+                    and not incomplete
+                ):
+                    events.extend(self._item_done({"item": item}))
+        events.extend(self.ledger.close_content_blocks())
         if not self.ledger.has_content_block():
             events.extend(self.ledger.ensure_text_block())
             events.append(self.ledger.emit_text_delta(" "))

@@ -18,6 +18,7 @@ from free_claude_code.core.request_outcomes import (
 )
 from tests.api.support import create_test_app
 from tests.api.test_request_lifetime import _http_scope
+from tests.provider_double import ScriptedProvider
 
 
 @pytest.fixture
@@ -34,7 +35,7 @@ def outcomes():
         logger.remove(sink)
 
 
-class OutcomeProvider:
+class OutcomeProvider(ScriptedProvider):
     def __init__(self, result):
         self.result = result
         self.started = asyncio.Event()
@@ -77,6 +78,8 @@ class OutcomeProvider:
             # Framing must work even when a wire event is split between chunks.
             yield frame[:12]
             yield frame[12:]
+        elif wire_api == "responses":
+            yield 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_test","status":"completed","output":[]}}\n\n'
         else:
             yield 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
 
@@ -117,7 +120,7 @@ def test_one_final_outcome_for_streamed_inference(outcomes, wire_api, result):
             "success": None,
             "pre_start": "rate_limit",
             "exception": "rate_limit",
-            "wire_error": "rate_limit_error",
+            "wire_error": "rate_limit",
         }[result]
     )
     assert "private input" not in str(record)

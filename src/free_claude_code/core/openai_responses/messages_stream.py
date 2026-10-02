@@ -12,15 +12,14 @@ from free_claude_code.core.anthropic.native_stream import (
     CompletedMessagesBlock,
     NativeMessagesStreamState,
 )
-from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
     ReplayRecord,
     encode_replay,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.stream_events import StreamEvent
 
-from .errors import openai_error_from_failure
 from .ids import (
     new_message_item_id,
     new_reasoning_item_id,
@@ -138,12 +137,10 @@ class AnthropicToResponsesStream:
     def completed(self) -> bool:
         return self._terminal
 
-    def start(self) -> list[str]:
+    def start(self) -> list[StreamEvent]:
         return []
 
-    def _payload(
-        self, status: str, *, failure: ExecutionFailure | None = None
-    ) -> JsonObject:
+    def _payload(self, status: str) -> JsonObject:
         payload: JsonObject = {
             "id": self._response_id,
             "object": "response",
@@ -157,9 +154,7 @@ class AnthropicToResponsesStream:
             if self._request.parallel_tool_calls is not None
             else True,
             "usage": self._usage.payload(require_final=status != "in_progress"),
-            "error": cast(JsonValue, openai_error_from_failure(failure))
-            if failure is not None
-            else None,
+            "error": None,
             "incomplete_details": {"reason": "max_output_tokens"}
             if status == "incomplete"
             else None,
@@ -176,7 +171,9 @@ class AnthropicToResponsesStream:
                 payload[key] = value
         return payload
 
-    def feed(self, event_type: str, payload: Mapping[str, JsonValue]) -> list[str]:
+    def feed(
+        self, event_type: str, payload: Mapping[str, JsonValue]
+    ) -> list[StreamEvent]:
         if self._terminal:
             raise NativeMessagesError(
                 "Native event arrived after the Responses terminal event."
@@ -238,7 +235,9 @@ class AnthropicToResponsesStream:
             return self._finish_block(index, completed)
         raise NativeMessagesError(f"Unsupported native event {event_type!r}.")
 
-    def _start_block(self, index: int, block: Mapping[str, JsonValue]) -> list[str]:
+    def _start_block(
+        self, index: int, block: Mapping[str, JsonValue]
+    ) -> list[StreamEvent]:
         slot = self._ledger.reserve_output_slot()
         kind = block.get("type")
         if kind == "text":
@@ -314,7 +313,7 @@ class AnthropicToResponsesStream:
             self._events.output_item_added(slot, tool_item(tool, status="in_progress"))
         ]
 
-    def _delta(self, index: int, delta: Mapping[str, JsonValue]) -> list[str]:
+    def _delta(self, index: int, delta: Mapping[str, JsonValue]) -> list[StreamEvent]:
         state = self._ledger.active_block(index)
         kind = delta.get("type")
         if isinstance(state, TextBlockState) and kind == "text_delta":
@@ -344,7 +343,9 @@ class AnthropicToResponsesStream:
             "Responses cannot represent the native content delta."
         )
 
-    def _finish_block(self, index: int, completed: CompletedMessagesBlock) -> list[str]:
+    def _finish_block(
+        self, index: int, completed: CompletedMessagesBlock
+    ) -> list[StreamEvent]:
         state = self._ledger.active_block(index)
         if state is None:
             raise NativeMessagesError(
@@ -376,31 +377,4 @@ class AnthropicToResponsesStream:
             state.argument_parts.append(arguments)
         events = self._completer.complete_block(state)
         self._ledger.pop_active_block(index)
-        return events
-
-    def terminal_failure(self, failure: ExecutionFailure) -> list[str]:
-        """Terminate once without completing partial tools or inventing arguments."""
-
-        if self._terminal:
-            return []
-        events: list[str] = []
-        if not self._started:
-            self._started = True
-            events.append(self._events.response_created(self._payload("in_progress")))
-        for state in self._ledger.pop_active_blocks_by_output_order():
-            if isinstance(state, TextBlockState):
-                item = message_item(
-                    state.item_id, "".join(state.text_parts), "incomplete"
-                )
-            elif isinstance(state, ReasoningBlockState):
-                item = reasoning_item(
-                    state.item_id, "".join(state.text_parts), "incomplete"
-                )
-            else:
-                item = tool_item(state, status="incomplete")
-            self._ledger.commit_output(state.output_index, item)
-        self._terminal = True
-        events.append(
-            self._events.response_failed(self._payload("failed", failure=failure))
-        )
         return events

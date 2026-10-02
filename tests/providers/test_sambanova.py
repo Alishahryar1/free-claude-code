@@ -13,6 +13,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     profiled_provider,
+    stream_messages,
 )
 
 
@@ -129,7 +130,7 @@ async def test_stream_messages_text(sambanova_provider):
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event async for event in sambanova_provider.stream_messages(make_request())
+            event async for event in stream_messages(sambanova_provider, make_request())
         ]
 
     assert any(
@@ -164,7 +165,7 @@ async def test_stream_messages_tool_call(sambanova_provider):
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event async for event in sambanova_provider.stream_messages(make_request())
+            event async for event in stream_messages(sambanova_provider, make_request())
         ]
 
     assert any(
@@ -200,7 +201,7 @@ async def test_stream_messages_reasoning_content(sambanova_provider):
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event async for event in sambanova_provider.stream_messages(make_request())
+            event async for event in stream_messages(sambanova_provider, make_request())
         ]
 
     assert any(

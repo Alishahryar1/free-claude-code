@@ -20,6 +20,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatTransport,
 )
 from tests.providers.request_factory import make_messages_request
+from tests.providers.support import stream_messages, stream_responses
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,10 +66,10 @@ def _success() -> httpx2.Response:
 
 async def _consume(transport: OpenAIChatTransport, wire: str) -> str:
     stream = (
-        transport.stream_messages(make_messages_request("model"))
+        stream_messages(transport, make_messages_request("model"))
         if wire == "messages"
-        else transport.stream_responses(
-            OpenAIResponsesRequest(model="model", input="hello")
+        else stream_responses(
+            transport, OpenAIResponsesRequest(model="model", input="hello")
         )
     )
     return "".join([event async for event in stream])

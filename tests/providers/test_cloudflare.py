@@ -22,6 +22,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    stream_messages,
 )
 
 _ACCOUNT_ID = "account-123"
@@ -224,7 +225,7 @@ async def test_stream_uses_openai_chat_completions(
         return_value=SDKStreamDouble(_stream(_chunk(delta))),
     ) as mock_create:
         events = [
-            event async for event in cloudflare_provider.stream_messages(_request())
+            event async for event in stream_messages(cloudflare_provider, _request())
         ]
 
     parsed = parse_sse_text("".join(events))
@@ -255,7 +256,7 @@ async def test_stream_maps_cloudflare_reasoning_delta_to_thinking(
         return_value=SDKStreamDouble(_stream(_chunk(delta))),
     ):
         events = [
-            event async for event in cloudflare_provider.stream_messages(_request())
+            event async for event in stream_messages(cloudflare_provider, _request())
         ]
 
     parsed = parse_sse_text("".join(events))
@@ -307,7 +308,9 @@ async def test_stream_maps_openai_tool_calls_to_tool_use(
             _stream(_chunk(delta, finish_reason="tool_calls"))
         ),
     ):
-        events = [event async for event in cloudflare_provider.stream_messages(request)]
+        events = [
+            event async for event in stream_messages(cloudflare_provider, request)
+        ]
 
     parsed = parse_sse_text("".join(events))
     assert any(

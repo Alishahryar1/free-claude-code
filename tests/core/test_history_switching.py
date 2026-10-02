@@ -22,7 +22,12 @@ from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.deepseek.client import DeepSeekProvider
 from free_claude_code.providers.deepseek.compat import finalize_deepseek_chat_body
 from free_claude_code.providers.open_router import OpenRouterProvider
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_messages,
+    stream_responses,
+)
 
 
 def _chat(items):
@@ -392,7 +397,8 @@ def test_completed_native_hosted_tools_become_readable_chat_history():
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_malformed_carrier_fails_startup_before_inference(wire):
+@pytest.mark.asyncio
+async def test_malformed_carrier_fails_startup_before_inference(wire):
     from free_claude_code.application.errors import InvalidRequestError
 
     provider = OpenRouterProvider(
@@ -401,34 +407,40 @@ def test_malformed_carrier_fails_startup_before_inference(wire):
     )
     with pytest.raises(InvalidRequestError, match="replay"):
         if wire == "messages":
-            provider.stream_messages(
-                MessagesRequest.model_validate(
-                    {
-                        "model": "m",
-                        "messages": [
-                            {
-                                "role": "assistant",
-                                "content": [
-                                    {
-                                        "type": "redacted_thinking",
-                                        "data": "fcc:history:v2:unsupported",
-                                    }
-                                ],
-                            }
-                        ],
-                    }
+            await anext(
+                stream_messages(
+                    provider,
+                    MessagesRequest.model_validate(
+                        {
+                            "model": "m",
+                            "messages": [
+                                {
+                                    "role": "assistant",
+                                    "content": [
+                                        {
+                                            "type": "redacted_thinking",
+                                            "data": "fcc:history:v2:unsupported",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ),
                 )
             )
         else:
-            provider.stream_responses(
-                OpenAIResponsesRequest(
-                    model="m",
-                    input=[
-                        {
-                            "type": "reasoning",
-                            "encrypted_content": "fcc:history:v2:unsupported",
-                        }
-                    ],
+            await anext(
+                stream_responses(
+                    provider,
+                    OpenAIResponsesRequest(
+                        model="m",
+                        input=[
+                            {
+                                "type": "reasoning",
+                                "encrypted_content": "fcc:history:v2:unsupported",
+                            }
+                        ],
+                    ),
                 )
             )
 

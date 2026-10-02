@@ -23,6 +23,8 @@ from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from tests.api.model_fallback_support import responses_text_stream, text_stream
+from tests.provider_double import ScriptedProvider
 from tests.web_tools_support import StubWebToolsClient
 
 _LEGACY_CLASSIFIER_SYSTEM = (
@@ -38,15 +40,12 @@ _CLASSIFIER_USER = (
 )
 
 
-class FakeProvider:
+class FakeProvider(ScriptedProvider):
     def __init__(self, events: list[str] | None = None) -> None:
         self.requests: list[MessagesRequest] = []
         self.responses_requests: list[OpenAIResponsesRequest] = []
         self.stream_kwargs: list[dict[str, Any]] = []
-        self.events = events or [
-            'event: message_start\ndata: {"type":"message_start"}\n\n',
-            'event: message_stop\ndata: {"type":"message_stop"}\n\n',
-        ]
+        self.events = events or text_stream("answer", model="test-model")
 
     async def cleanup(self) -> None:
         return None
@@ -97,7 +96,8 @@ class FakeProvider:
                 "reasoning": reasoning,
             }
         )
-        yield 'event: response.completed\ndata: {"type":"response.completed"}\n\n'
+        for event in responses_text_stream("answer", model="test-model"):
+            yield event
 
 
 async def _streaming_body_text(response: StreamingResponse) -> str:
@@ -266,7 +266,7 @@ async def test_messages_handler_aggregates_provider_stream_when_stream_false() -
     assert body["id"] == "msg_test"
     assert body["type"] == "message"
     assert body["role"] == "assistant"
-    assert body["model"] == "test-model"
+    assert body["model"] == "nvidia_nim/test-model"
     assert body["content"] == [{"type": "text", "text": "OK"}]
     assert body["stop_reason"] == "end_turn"
     assert body["usage"] == {
@@ -304,7 +304,7 @@ async def test_messages_handler_returns_error_json_for_stream_false_sse_error() 
     response = await handler.create(request)
 
     assert isinstance(response, JSONResponse)
-    assert response.status_code == 500
+    assert response.status_code == 502
     assert response.headers["x-should-retry"] == "false"
     body = _json_response_content(response)
     assert body["type"] == "error"

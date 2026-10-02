@@ -10,6 +10,7 @@ from free_claude_code.core.openai_responses.provider_stream import (
     ResponsesStreamFailure,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
+from tests.stream_helpers import serialize_events
 
 
 def _terminal_usage(usage: dict[str, object]) -> dict[str, object]:
@@ -27,7 +28,7 @@ def _terminal_usage(usage: dict[str, object]) -> dict[str, object]:
     )
     return next(
         event.data["usage"]
-        for event in parse_sse_text("".join(output))
+        for event in parse_sse_text(serialize_events(output))
         if event.event == "message_delta"
     )
 
@@ -125,7 +126,7 @@ def test_responses_provider_stream_preserves_reasoning_tools_usage_and_ids() -> 
         )
     )
 
-    events = parse_sse_text("".join(output))
+    events = parse_sse_text(serialize_events(output))
     assert_anthropic_stream_contract(events)
     assert thinking_content(events) == "reasoning"
     starts = [
@@ -282,7 +283,7 @@ def test_responses_provider_stream_ignores_invalid_cache_partitions(
 
     message_delta = next(
         event
-        for event in parse_sse_text("".join(output))
+        for event in parse_sse_text(serialize_events(output))
         if event.event == "message_delta"
     )
     assert message_delta.data["usage"] == {
@@ -369,7 +370,7 @@ def test_responses_provider_stream_restores_added_and_done_only_tool_names() -> 
         )
     )
 
-    event_text = "".join(output)
+    event_text = serialize_events(output)
     starts = [
         event.data["content_block"]
         for event in parse_sse_text(event_text)

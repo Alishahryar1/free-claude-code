@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -15,6 +16,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.config.provider_catalog import LMSTUDIO_DEFAULT_BASE
 from free_claude_code.core.anthropic import MessagesRequest, get_token_count
+from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -37,6 +39,8 @@ from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    provider_stream,
+    stream_messages,
 )
 
 
@@ -130,7 +134,7 @@ def stream_request(provider, wire):
         if wire == "messages"
         else OpenAIResponsesRequest(model="model", input="hello")
     )
-    return getattr(provider, f"stream_{wire}")(request)
+    return partial(provider_stream, provider, wire)(request)
 
 
 def completion_chunk(*, finish_reason="stop", content="hello"):
@@ -207,11 +211,12 @@ async def test_context_metadata_wait_keeps_event_loop_responsive(
     ):
         try:
             with pytest.raises(ExecutionFailure) as error:
-                stream = getattr(lmstudio_provider, f"stream_{wire}")(request)
+                stream = partial(provider_stream, lmstudio_provider, wire)(request)
                 await anext(stream)
             assert error.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
         finally:
             if stream is not None:
+                assert isinstance(stream, AsyncCloseable)
                 await stream.aclose()
             await asyncio.sleep(0)
     assert events == ["peer ran", "metadata returned"]
@@ -292,7 +297,7 @@ async def test_startup_builds_before_context_budget_and_preserves_policy(
     original = getattr(lmstudio_provider._chat, name)
 
     def build(request_arg, *, reasoning):
-        assert request_arg is request
+        assert request_arg == request
         calls.append(("build", reasoning))
         return original(request_arg, reasoning=reasoning)
 
@@ -305,14 +310,12 @@ async def test_startup_builds_before_context_budget_and_preserves_policy(
         patch.object(
             lmstudio_provider, "_validate_context_budget", side_effect=check_context
         ),
-        patch.object(
-            lmstudio_provider._chat._admission, "start_execution"
-        ) as admission,
+        patch.object(lmstudio_provider._client.chat.completions, "create") as admission,
     ):
-        stream = getattr(lmstudio_provider, f"stream_{wire}")(
+        stream = partial(provider_stream, lmstudio_provider, wire)(
             request, reasoning=REASONING_OFF
         )
-        assert calls == [("build", REASONING_OFF)]
+        assert calls == []
         with pytest.raises(RuntimeError, match="stop before generation"):
             await anext(stream)
     estimate = (
@@ -325,7 +328,8 @@ async def test_startup_builds_before_context_budget_and_preserves_policy(
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_startup_conversion_failure_skips_context_budget(lmstudio_provider, wire):
+@pytest.mark.asyncio
+async def test_startup_conversion_failure_skips_context_budget(lmstudio_provider, wire):
     request = (
         make_request()
         if wire == "messages"
@@ -344,7 +348,11 @@ def test_startup_conversion_failure_skips_context_budget(lmstudio_provider, wire
         patch.object(lmstudio_provider, "_validate_context_budget") as context,
         pytest.raises(InvalidRequestError, match="invalid request conversion"),
     ):
-        getattr(lmstudio_provider, f"stream_{wire}")(request, reasoning=REASONING_ON)
+        await anext(
+            partial(provider_stream, lmstudio_provider, wire)(
+                request, reasoning=REASONING_ON
+            )
+        )
 
     context.assert_not_called()
 
@@ -363,15 +371,13 @@ async def test_context_rejection_never_starts_admission_or_generation(
         patch.object(
             lmstudio_provider, "_loaded_context_length", new=AsyncMock(return_value=1)
         ),
-        patch.object(
-            lmstudio_provider._chat._admission, "start_execution"
-        ) as admission,
+        patch.object(lmstudio_provider._client.chat.completions, "create") as admission,
         patch.object(
             lmstudio_provider._client.chat.completions, "create"
         ) as generation,
         pytest.raises(ExecutionFailure) as error,
     ):
-        await anext(getattr(lmstudio_provider, f"stream_{wire}")(request))
+        await anext(partial(provider_stream, lmstudio_provider, wire)(request))
     assert error.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
     admission.assert_not_called()
     generation.assert_not_called()
@@ -442,7 +448,7 @@ async def test_stream_messages_text(lmstudio_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in lmstudio_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(lmstudio_provider, req)]
 
         assert any(
             '"text_delta"' in event and "Hello back!" in event for event in events
@@ -478,7 +484,8 @@ async def test_stream_messages_passes_exact_reasoning_budget_via_extra_body(
 
         events = [
             event
-            async for event in lmstudio_provider.stream_messages(
+            async for event in stream_messages(
+                lmstudio_provider,
                 req,
                 reasoning=policy,
             )
@@ -885,7 +892,7 @@ async def test_context_rejection_before_first_event_allows_fallback(wire):
         assert output == [
             "event: message_stop\ndata: {}\n\n"
             if wire == "messages"
-            else "event: response.completed\ndata: {}\n\n"
+            else 'event: response.completed\ndata: {"type": "response.completed", "response": {"id": "fixture_response", "status": "completed", "output": []}, "sequence_number": 0}\n\n'
         ]
         assert len(fallback.stream_calls) == 1
         assert fallback.stream_close_calls == 1

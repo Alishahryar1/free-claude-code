@@ -3,7 +3,11 @@
 from typing import Any
 
 from free_claude_code.core.diagnostics import redact_sensitive_error_text
-from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.failures import (
+    ExecutionFailure,
+    FailureKind,
+    UnsupportedRequestFeature,
+)
 
 _FAILURE_ERROR_TYPES = {
     FailureKind.INVALID_REQUEST: "invalid_request_error",
@@ -20,6 +24,10 @@ _FAILURE_ERROR_TYPES = {
 
 class ResponsesConversionError(ValueError):
     """Raised when a Responses request cannot be converted deterministically."""
+
+
+class UnsupportedResponsesFeature(ResponsesConversionError, UnsupportedRequestFeature):
+    """A Responses feature is valid but unsupported by this protocol converter."""
 
 
 def openai_error_type_for_failure(

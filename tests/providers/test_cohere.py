@@ -14,6 +14,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    stream_messages,
 )
 
 
@@ -205,7 +206,7 @@ async def test_stream_messages_text(cohere_provider):
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event async for event in cohere_provider.stream_messages(make_request())
+            event async for event in stream_messages(cohere_provider, make_request())
         ]
 
     assert any(
@@ -240,7 +241,7 @@ async def test_stream_messages_tool_call(cohere_provider):
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event async for event in cohere_provider.stream_messages(make_request())
+            event async for event in stream_messages(cohere_provider, make_request())
         ]
 
     assert any(
@@ -275,7 +276,7 @@ async def test_stream_messages_reasoning_content(cohere_provider):
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event async for event in cohere_provider.stream_messages(make_request())
+            event async for event in stream_messages(cohere_provider, make_request())
         ]
 
     assert any(

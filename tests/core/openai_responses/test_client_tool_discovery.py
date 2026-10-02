@@ -28,6 +28,7 @@ from free_claude_code.providers.openai_responses.presentation import (
     NativeResponsesPresenter,
 )
 from tests.providers.test_opencode import _responses_event_stream
+from tests.stream_helpers import serialize_events
 
 SEARCH: JsonObject = {
     "type": "tool_search",
@@ -381,7 +382,7 @@ def test_interrupted_discovery_preserves_terminal_failure(
         presenter.feed("response.output_item.done", {"output_index": 1, "item": item})
     )
     chunks.extend(presenter.feed(f"response.{terminal}", {"response": response}))
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     assert [event.event for event in events] == [
         "response.output_item.added",
         "response.output_item.done",
@@ -1397,14 +1398,14 @@ def _completed_tool_events(
     ).tool_adapter
     writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
     frames = [*writer.start_events(), writer.start_tool_block(0, "call_test", name)]
-    frames.append(writer.emit_tool_delta(0, arguments))
+    frames.extend(writer.emit_tool_delta(0, arguments))
     frames.extend(
         writer.finish_success(
             stop_reason="tool_calls",
             usage=ChatStreamUsage(input_tokens=1, output_tokens=1),
         )
     )
-    return [frame.data for frame in parse_sse_text("".join(frames))]
+    return [event.payload for event in writer.project(frames)]
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -1617,14 +1618,13 @@ def test_discovery_preserves_outer_namespace_in_nested_tools(
 
 
 def test_chat_does_not_turn_missing_search_arguments_into_a_successful_call() -> None:
-    events = _completed_tool_events(
-        OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),
-        native=False,
-        name="fcc_tool_search",
-        arguments="",
-    )
-    assert events[-1]["type"] == "response.failed"
-    assert events[-1]["response"]["output"] == []
+    with pytest.raises(ResponsesConversionError, match="arguments"):
+        _completed_tool_events(
+            OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),
+            native=False,
+            name="fcc_tool_search",
+            arguments="",
+        )
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -1785,7 +1785,9 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
             frames.append(writer.start_tool_block(i, f"call_{i}", name))
         for part in range(2):
             frames.extend(
-                writer.emit_tool_delta(i, fragments[i][part]) for i in range(3)
+                event
+                for i in range(3)
+                for event in writer.emit_tool_delta(i, fragments[i][part])
             )
         frames.extend(
             writer.finish_success(
@@ -1793,7 +1795,7 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
                 usage=ChatStreamUsage(input_tokens=1, output_tokens=1),
             )
         )
-        events = [frame.data for frame in parse_sse_text("".join(frames))]
+        events = [event.payload for event in writer.project(frames)]
     final = events[-1]["response"]["output"]
     assert final == [
         event["item"]
@@ -1861,17 +1863,11 @@ def test_non_finite_arguments_are_opaque_except_in_object_conversion(
     )
     name = "fcc_tool_search" if search else "agents__spawn_agent"
     arguments = '{"nested":[{"limit":' + constant + "}]}"
-    if search and native:
+    if search:
         with pytest.raises(ResponsesConversionError, match="arguments"):
             _completed_tool_events(
                 request, native=native, name=name, arguments=arguments
             )
-    elif search:
-        events = _completed_tool_events(
-            request, native=native, name=name, arguments=arguments
-        )
-        assert events[-1]["type"] == "response.failed"
-        assert events[-1]["response"]["output"] == []
     else:
         events = _completed_tool_events(
             request, native=native, name=name, arguments=arguments
@@ -1990,7 +1986,7 @@ def test_argument_numbers_survive_sse_serialization(
         frames = [
             *writer.start_events(),
             writer.start_tool_block(0, "call", name),
-            writer.emit_tool_delta(0, arguments),
+            *writer.emit_tool_delta(0, arguments),
         ]
         frames.extend(
             writer.finish_success(
@@ -1998,9 +1994,10 @@ def test_argument_numbers_survive_sse_serialization(
                 usage=ChatStreamUsage(input_tokens=1, output_tokens=1),
             )
         )
+        frames = list(writer.project(frames))
     events = [
         json.loads(line[6:], parse_float=Decimal)
-        for line in "".join(frames).splitlines()
+        for line in serialize_events(frames).splitlines()
         if line.startswith("data: ")
     ]
     items = [

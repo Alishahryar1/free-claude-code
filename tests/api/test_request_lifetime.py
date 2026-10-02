@@ -25,6 +25,7 @@ from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from tests.provider_double import ScriptedProvider
 from tests.web_tools_support import StubWebToolsClient
 
 
@@ -393,7 +394,7 @@ async def test_outer_cancellation_drains_both_owned_tasks() -> None:
     assert receive_closed.is_set()
 
 
-class _ControlledProvider:
+class _ControlledProvider(ScriptedProvider):
     def __init__(self, chunks: tuple[str, ...]) -> None:
         self._chunks = chunks
         self.blocked = asyncio.Event()

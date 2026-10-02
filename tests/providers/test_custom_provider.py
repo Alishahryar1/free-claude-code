@@ -16,6 +16,7 @@ from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
+from tests.providers.support import stream_messages, stream_responses
 
 pytestmark = pytest.mark.asyncio
 
@@ -56,8 +57,8 @@ async def test_native_default_preserves_controls_without_advertised_support(thin
     try:
         assert [
             item
-            async for item in instance.stream_messages(
-                request, reasoning=ReasoningPolicy.off()
+            async for item in stream_messages(
+                instance, request, reasoning=ReasoningPolicy.off()
             )
         ]
         assert bodies[0].get("thinking") == thinking
@@ -94,7 +95,7 @@ async def test_messages_egress_obeys_request_model_limit(ingress, limit, cap, ex
                 max_tokens=limit,
                 messages=[{"role": "user", "content": "Hello"}],
             )
-            stream = instance.stream_messages(request, model_info=info)
+            stream = stream_messages(instance, request, model_info=info)
         else:
             request = OpenAIResponsesRequest(
                 model="m",
@@ -102,7 +103,7 @@ async def test_messages_egress_obeys_request_model_limit(ingress, limit, cap, ex
                 input="Hello",
                 reasoning={"effort": "high"},
             )
-            stream = instance.stream_responses(request, model_info=info)
+            stream = stream_responses(instance, request, model_info=info)
         before = request.model_dump()
         assert [item async for item in stream]
         assert bodies[0]["max_tokens"] == expected
@@ -140,7 +141,8 @@ async def test_manual_preset_respects_cap_before_resolving_budget(ingress, exact
 
     async def consume():
         if ingress == "messages":
-            stream = instance.stream_messages(
+            stream = stream_messages(
+                instance,
                 MessagesRequest(
                     model="m",
                     max_tokens=8192,
@@ -150,7 +152,8 @@ async def test_manual_preset_respects_cap_before_resolving_budget(ingress, exact
                 model_info=info,
             )
         else:
-            stream = instance.stream_responses(
+            stream = stream_responses(
+                instance,
                 OpenAIResponsesRequest(
                     model="m", max_output_tokens=8192, input="Hello"
                 ),
@@ -187,7 +190,8 @@ async def test_native_default_does_not_invent_or_shrink_exact_budget(thinking, e
     )
     try:
         with pytest.raises(InvalidRequestError, match=error):
-            stream = instance.stream_messages(
+            stream = stream_messages(
+                instance,
                 MessagesRequest(
                     model="m",
                     max_tokens=8192,
@@ -222,7 +226,8 @@ async def test_concurrent_models_keep_independent_limits():
     )
 
     async def call(model, cap):
-        stream = instance.stream_messages(
+        stream = stream_messages(
+            instance,
             MessagesRequest(
                 model=model,
                 max_tokens=8192,
@@ -423,12 +428,12 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
                 max_tokens=100,
                 messages=[{"role": "user", "content": "Hello"}],
             )
-            stream = instance.stream_messages(request, reasoning=policy)
+            stream = stream_messages(instance, request, reasoning=policy)
         else:
             request = OpenAIResponsesRequest(
                 model="m", input="Hello", reasoning={"effort": "medium"}
             )
-            stream = instance.stream_responses(request, reasoning=policy)
+            stream = stream_responses(instance, request, reasoning=policy)
         output = "".join([chunk async for chunk in stream])
         assert "Hello" in output
         assert len(requests) == 1
@@ -550,8 +555,10 @@ async def test_reasoning_presets_encode_controls_on_the_wire(
         )
         assert [
             chunk
-            async for chunk in instance.stream_messages(
-                request, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
+            async for chunk in stream_messages(
+                instance,
+                request,
+                reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
             )
         ]
         assert bodies[0][field] == expected
@@ -625,7 +632,7 @@ async def test_tool_continuation_keeps_tool_results_and_images(api_format, ingre
                     },
                 ],
             )
-            chunks = instance.stream_messages(request)
+            chunks = stream_messages(instance, request)
         else:
             request = OpenAIResponsesRequest(
                 model="m",
@@ -656,7 +663,7 @@ async def test_tool_continuation_keeps_tool_results_and_images(api_format, ingre
                     },
                 ],
             )
-            chunks = instance.stream_responses(request)
+            chunks = stream_responses(instance, request)
         assert [chunk async for chunk in chunks]
         body = json.dumps(bodies[0])
         assert (

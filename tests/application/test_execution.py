@@ -1,7 +1,8 @@
 """Application-owned provider execution contracts."""
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,13 +19,16 @@ from free_claude_code.application.routing import (
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningCapability, ReasoningPolicy
+from tests.api.model_fallback_support import responses_text_stream, text_stream
+from tests.provider_double import ScriptedProvider, progress_frame
 
 
-class FakeProvider:
+class FakeProvider(ScriptedProvider):
     def __init__(self) -> None:
         self.stream_calls: list[dict[str, object]] = []
         self.stream_close_calls = 0
@@ -96,7 +100,7 @@ class FakeProvider:
         )
 
 
-class ResponsesFakeProvider:
+class ResponsesFakeProvider(ScriptedProvider):
     def __init__(self) -> None:
         self.stream_calls: list[dict[str, object]] = []
         self.stream_close_calls = 0
@@ -136,7 +140,7 @@ class ResponsesFakeProvider:
             }
         )
         try:
-            yield "event: response.completed\ndata: {}\n\n"
+            yield 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"fixture_response","status":"completed","output":[]}}\n\n'
         finally:
             self.stream_close_calls += 1
 
@@ -163,7 +167,7 @@ type StreamStep = str | WaitStep | DelayStep | EmptyForever | BaseException
 
 
 class ControlledProvider(FakeProvider):
-    def __init__(self, steps: list[StreamStep]) -> None:
+    def __init__(self, steps: Sequence[StreamStep]) -> None:
         super().__init__()
         self._steps = steps
 
@@ -376,7 +380,11 @@ async def test_fallback_receives_its_own_cached_capability_in_stream(
     primary = MetadataProvider(
         [ExecutionFailure(FailureKind.UNAVAILABLE, 503, "unavailable", True)]
     )
-    fallback = MetadataProvider(["verdict"])
+    fallback = MetadataProvider(
+        (text_stream if ingress == "messages" else responses_text_stream)(
+            "verdict", model="gateway-model"
+        )
+    )
     providers = {"provider": primary, "fallback": fallback}
 
     async def resolve(name):
@@ -404,7 +412,7 @@ async def test_fallback_receives_its_own_cached_capability_in_stream(
             request_id="capability-fallback",
         )
     ]
-    assert output == ["verdict"]
+    assert "verdict" in "".join(output)
     assert seen == [
         ("stream", "provider-model", primary_info),
         ("stream", "fallback-model", fallback_info),
@@ -467,9 +475,9 @@ async def test_executor_routes_native_responses_without_messages_conversion() ->
     )
 
     assert provider.stream_calls == []
-    assert [chunk async for chunk in stream] == [
-        "event: response.completed\ndata: {}\n\n"
-    ]
+    events = parse_sse_text("".join([chunk async for chunk in stream]))
+    assert [event.event for event in events] == ["response.completed"]
+    assert events[0].data["response"]["status"] == "completed"
     assert provider.stream_calls == [
         {
             "request": request,
@@ -582,7 +590,7 @@ async def test_retryable_preframe_failure_selects_fallback_after_closing_primary
             )
         ]
 
-    assert chunks == ["fallback-frame"]
+    assert chunks == [progress_frame("fallback-frame")]
     assert order == ["fallback-resolved"]
     assert primary.stream_close_calls == 1
     assert fallback.stream_close_calls == 1
@@ -674,7 +682,7 @@ async def test_multiple_retryable_failures_walk_fallbacks_in_order() -> None:
         request_id="req_ordered_fallbacks",
     )
 
-    assert [chunk async for chunk in stream] == ["third-frame"]
+    assert [chunk async for chunk in stream] == [progress_frame("third-frame")]
     assert resolved_ids == ["provider", "second", "third"]
     assert all(provider.stream_close_calls == 1 for provider in providers.values())
 
@@ -778,7 +786,7 @@ async def test_nonretryable_provider_failure_selects_fallback_before_first_frame
     with patch("free_claude_code.application.execution.trace_event") as trace_mock:
         chunks = [chunk async for chunk in stream]
 
-    assert chunks == ["fallback-frame"]
+    assert chunks == [progress_frame("fallback-frame")]
     assert resolved_ids == ["provider", "fallback"]
     fallback_started = next(
         call.kwargs
@@ -811,7 +819,7 @@ async def test_primary_canonical_startup_failure_selects_fallback() -> None:
         request_id="req_startup_fallback",
     )
 
-    assert [chunk async for chunk in stream] == ["fallback-frame"]
+    assert [chunk async for chunk in stream] == [progress_frame("fallback-frame")]
     assert primary.stream_calls == []
     fallback_request = fallback.stream_calls[0]["request"]
     assert isinstance(fallback_request, MessagesRequest)
@@ -839,12 +847,12 @@ async def test_nonretryable_stream_construction_failure_selects_fallback() -> No
         request_id="req_construction_failure",
     )
 
-    assert [chunk async for chunk in stream] == ["fallback-frame"]
+    assert [chunk async for chunk in stream] == [progress_frame("fallback-frame")]
     assert fallback.stream_calls[0]["request_id"] == "req_construction_failure"
 
 
 @pytest.mark.asyncio
-async def test_failure_after_first_frame_never_selects_fallback() -> None:
+async def test_unknown_native_event_prevents_fallback() -> None:
     primary_failure = _execution_failure("after frame")
     primary = ControlledProvider(["first-frame", primary_failure])
     fallback = FakeProvider()
@@ -861,7 +869,7 @@ async def test_failure_after_first_frame_never_selects_fallback() -> None:
         request_id="req_committed",
     )
 
-    assert await anext(stream) == "first-frame"
+    assert await anext(stream) == progress_frame("first-frame")
     with pytest.raises(ExecutionFailure) as exc_info:
         await anext(stream)
 
@@ -1131,6 +1139,76 @@ async def test_provider_cleanup_cannot_delay_fallback_past_progress_deadline() -
 
 
 @pytest.mark.asyncio
+async def test_candidate_context_cleanup_uses_the_remaining_progress_deadline():
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class HeldContextProvider(FakeProvider):
+        @asynccontextmanager
+        async def open_messages(self, request, **kwargs):
+            async with super().open_messages(request, **kwargs) as candidate:
+                try:
+                    yield candidate
+                finally:
+                    entered.set()
+                    await release.wait()
+
+    provider = HeldContextProvider()
+    stream = _executor_stream(
+        provider, timeout_seconds=0.02, request_id="bounded_context"
+    )
+    reading = asyncio.ensure_future(anext(stream))
+    try:
+        await entered.wait()
+        done, _ = await asyncio.wait({reading}, timeout=0.15)
+        assert reading in done
+        with pytest.raises(ExecutionFailure) as error:
+            await reading
+        assert error.value.kind is FailureKind.TIMEOUT
+    finally:
+        release.set()
+        await asyncio.gather(reading, return_exceptions=True)
+        assert isinstance(stream, AsyncCloseable)
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_read_cannot_leave_stream_cleanup_running_past_deadline():
+    reading_started, closing_started, release = (
+        asyncio.Event(),
+        asyncio.Event(),
+        asyncio.Event(),
+    )
+
+    class HeldCloseProvider(FakeProvider):
+        async def stream_messages(self, *args, **kwargs):
+            try:
+                reading_started.set()
+                await asyncio.Event().wait()
+                yield ""
+            finally:
+                closing_started.set()
+                await release.wait()
+
+    stream = _executor_stream(
+        HeldCloseProvider(), timeout_seconds=0.02, request_id="cancelled_cleanup"
+    )
+    reading = asyncio.ensure_future(anext(stream))
+    try:
+        await reading_started.wait()
+        reading.cancel()
+        await closing_started.wait()
+        done, _ = await asyncio.wait({reading}, timeout=0.15)
+        assert reading in done
+        with pytest.raises(asyncio.CancelledError):
+            await reading
+    finally:
+        release.set()
+        await asyncio.gather(reading, return_exceptions=True)
+        assert isinstance(stream, AsyncCloseable)
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
 async def test_cleanup_warning_names_preserved_provider_failure(caplog) -> None:
     failure = _execution_failure("primary overloaded")
     provider = CloseControlledProvider(
@@ -1166,10 +1244,10 @@ async def test_progress_timeout_renews_after_output_without_crossing_yield() -> 
         request_id="req_progress_renewal",
     )
 
-    assert await anext(stream) == "first"
+    assert await anext(stream) == progress_frame("first")
     await asyncio.sleep(0.05)
     second_wait.release.set()
-    assert await anext(stream) == "second"
+    assert await anext(stream) == progress_frame("second")
 
     with pytest.raises(ExecutionFailure) as exc_info:
         await anext(stream)
@@ -1224,11 +1302,11 @@ async def test_fallback_transition_does_not_reset_shared_progress_deadline() -> 
 
     with (
         patch(
-            "free_claude_code.application.execution.monotonic", side_effect=[0, 1, 2, 4]
+            "free_claude_code.application.recovery.monotonic", side_effect=[0, 1, 2, 4]
         ),
         patch("free_claude_code.application.execution.trace_event") as trace_mock,
         patch(
-            "free_claude_code.application.execution.asyncio.timeout_at",
+            "free_claude_code.application.recovery.asyncio.timeout_at",
             controlled_timeout_at,
         ),
     ):

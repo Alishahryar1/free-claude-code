@@ -324,8 +324,8 @@ def prepare_provider(
             provider = factory(config, settings, admission)
             if (
                 descriptor.native_messages_passthrough
-                and type(provider).stream_native_messages
-                is BaseProvider.stream_native_messages
+                and type(provider).open_native_messages
+                is BaseProvider.open_native_messages
             ):
                 raise AssertionError(
                     f"Provider {provider_id!r} lacks native Messages execution"

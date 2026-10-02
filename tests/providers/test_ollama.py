@@ -21,6 +21,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    stream_messages,
 )
 
 OLLAMA_MODEL = "llama3.1:8b"
@@ -196,8 +197,8 @@ async def test_stream_messages_uses_shared_openai_chat_provider() -> None:
         output = "".join(
             [
                 event
-                async for event in provider.stream_messages(
-                    make_messages_request(OLLAMA_MODEL)
+                async for event in stream_messages(
+                    provider, make_messages_request(OLLAMA_MODEL)
                 )
             ]
         )
@@ -236,8 +237,8 @@ async def test_cloud_stream_maps_ollama_reasoning_delta_to_anthropic_thinking() 
         output = "".join(
             [
                 event
-                async for event in client.stream_messages(
-                    make_messages_request(OLLAMA_CLOUD_MODEL)
+                async for event in stream_messages(
+                    client, make_messages_request(OLLAMA_CLOUD_MODEL)
                 )
             ]
         )

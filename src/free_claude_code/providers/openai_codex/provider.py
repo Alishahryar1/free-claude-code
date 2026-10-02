@@ -3,7 +3,8 @@
 import asyncio
 import sys
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -12,6 +13,7 @@ from openai import AsyncOpenAI
 from packaging.version import Version
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.ports import ProviderCandidate
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
@@ -160,7 +162,7 @@ class OpenAICodexProvider(BaseProvider):
             finally:
                 execution.abandon()
 
-    def stream_messages(
+    def open_messages(
         self,
         request: MessagesRequest,
         input_tokens: int = 0,
@@ -170,8 +172,8 @@ class OpenAICodexProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
-        return self._responses.stream_messages(
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        return self._responses.open_messages(
             request,
             input_tokens=input_tokens,
             request_id=request_id,
@@ -181,7 +183,7 @@ class OpenAICodexProvider(BaseProvider):
             model_info=model_info,
         )
 
-    def stream_responses(
+    def open_responses(
         self,
         request: OpenAIResponsesRequest,
         input_tokens: int = 0,
@@ -191,8 +193,8 @@ class OpenAICodexProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
-        return self._responses.stream_responses(
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        return self._responses.open_responses(
             request,
             input_tokens=input_tokens,
             request_id=request_id,

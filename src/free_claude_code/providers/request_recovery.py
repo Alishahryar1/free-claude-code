@@ -9,12 +9,10 @@ from free_claude_code.providers.admission import (
     ProviderAttempt,
     ProviderCorrectionAction,
     ProviderExecution,
-    ProviderOperationKind,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.history_replay import history_retry_body
 from free_claude_code.providers.reasoning_compatibility import ReasoningCorrection
-from free_claude_code.providers.stream_recovery import RecoveryController
 
 
 class RequestRecovery:
@@ -25,20 +23,14 @@ class RequestRecovery:
         execution: ProviderExecution,
         *,
         endpoint: RequestEndpoint | None = None,
-        stream: RecoveryController | None = None,
     ) -> None:
         self._execution = execution
         self._endpoint = endpoint
-        self._stream = stream
         self._refreshed = False
 
     @property
     def execution(self) -> ProviderExecution:
         return self._execution
-
-    @property
-    def _committed(self) -> bool:
-        return self._stream is not None and self._stream.committed
 
     async def _authorize(self, error: Exception, attempt: ProviderAttempt) -> bool:
         return (
@@ -50,12 +42,7 @@ class RequestRecovery:
     async def retry_authentication(
         self, error: Exception, auth_status: int | None, attempt: ProviderAttempt
     ) -> bool:
-        if (
-            self._endpoint is None
-            or auth_status not in {401, 403}
-            or self._refreshed
-            or self._committed
-        ):
+        if self._endpoint is None or auth_status not in {401, 403} or self._refreshed:
             return False
         if not await self._authorize(error, attempt):
             return False
@@ -70,15 +57,10 @@ class RequestRecovery:
         attempt: ProviderAttempt,
         body: JsonObject,
         *,
-        operation_kind: ProviderOperationKind,
         propose_correction: Callable[[], JsonObject | None],
     ) -> JsonObject | None:
         if await self.retry_authentication(error, auth_status, attempt):
             return body
-        if operation_kind is ProviderOperationKind.GENERATION and self._committed:
-            return None
-        # A separately buffered continuation/repair body can still be corrected
-        # at creation, while authentication follows the original public stream.
         corrected = propose_correction()
         if corrected is not None and await self._authorize(error, attempt):
             return corrected

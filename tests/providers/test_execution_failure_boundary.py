@@ -22,6 +22,7 @@ from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    stream_messages,
 )
 
 
@@ -69,7 +70,7 @@ def _provider() -> NvidiaNimProvider:
 
 
 @pytest.mark.asyncio
-async def test_committed_provider_failure_closes_block_then_raises_canonical_value() -> (
+async def test_committed_provider_failure_closes_block_then_emits_canonical_error() -> (
     None
 ):
     provider = _provider()
@@ -82,7 +83,9 @@ async def test_committed_provider_failure_closes_block_then_raises_canonical_val
     # downstream-visible before the failure, so its close prelude must escape.
     stream = _FailingStream(
         [_chunk(content="x" * 65_536)],
-        RuntimeError("connection lost after commit"),
+        ExecutionFailure(
+            FailureKind.UPSTREAM, 502, "connection lost after commit", False
+        ),
     )
     emitted: deque[str] = deque()
 
@@ -93,22 +96,18 @@ async def test_committed_provider_failure_closes_block_then_raises_canonical_val
             new_callable=AsyncMock,
             return_value=stream,
         ),
-        pytest.raises(ExecutionFailure) as exc_info,
     ):
-        async for event in provider.stream_messages(
+        async for event in stream_messages(
+            provider,
             request,
             request_id="req_committed_failure",
         ):
             emitted.append(event)
 
     events = parse_sse_text("".join(emitted))
-    assert [event.event for event in events][-1] == "content_block_stop"
-    assert not any(event.event in {"error", "message_stop"} for event in events)
-    assert exc_info.value.kind is FailureKind.UPSTREAM
-    assert exc_info.value.status_code == 502
-    assert exc_info.value.retryable is False
-    assert "connection lost after commit" in exc_info.value.message
-    assert "Request ID: req_committed_failure" in exc_info.value.message
+    assert [event.event for event in events][-2:] == ["content_block_stop", "error"]
+    assert not any(event.event == "message_stop" for event in events)
+    assert "connection lost after commit" in events[-1].data["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -121,7 +120,7 @@ async def test_openai_stream_close_failure_cannot_mask_execution_failure() -> No
     )
     stream = _FailingStream(
         [],
-        RuntimeError("original provider failure"),
+        ExecutionFailure(FailureKind.UPSTREAM, 502, "original provider failure", False),
         close_error=RuntimeError("cleanup api_key=SECRET"),
     )
 
@@ -137,7 +136,8 @@ async def test_openai_stream_close_failure_cannot_mask_execution_failure() -> No
     ):
         [
             event
-            async for event in provider.stream_messages(
+            async for event in stream_messages(
+                provider,
                 request,
                 request_id="req_close_failure",
             )
@@ -155,7 +155,7 @@ async def test_openai_stream_close_failure_cannot_mask_execution_failure() -> No
         provider="NIM",
         request_id="req_close_failure",
         close_exc_type="RuntimeError",
-        preserved_exc_type="ExecutionFailure",
+        preserved_exc_type="AttemptFailure",
     )
     assert "SECRET" not in repr(trace_event.call_args)
 
@@ -275,7 +275,8 @@ async def test_completed_stream_close_failure_preserves_success_lifecycle(
     ):
         emitted = [
             event
-            async for event in provider.stream_messages(
+            async for event in stream_messages(
+                provider,
                 request,
                 request_id="req_successful_close_failure",
             )
@@ -351,7 +352,7 @@ async def test_closing_public_openai_stream_closes_raw_stream_once() -> None:
         new_callable=AsyncMock,
         return_value=raw_stream,
     ):
-        stream = provider.stream_messages(request, request_id="req_early_close")
+        stream = stream_messages(provider, request, request_id="req_early_close")
         await anext(stream)
         assert isinstance(stream, AsyncCloseable)
         await stream.aclose()

@@ -12,6 +12,7 @@ from free_claude_code.core.history_replay import (
     readable_reasoning,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.stream_events import StreamEvent
 
 from .stream_output import ChatStreamOutput
 
@@ -45,11 +46,11 @@ class StructuredReasoningStream:
     def active(self) -> bool:
         return self._group is not None
 
-    def before_reasoning(self, output: ChatStreamOutput) -> Iterator[str]:
+    def before_reasoning(self, output: ChatStreamOutput) -> Iterator[StreamEvent]:
         if self._group is not None and self._group.after_content:
             yield from self.finish(output)
 
-    def before_content(self, output: ChatStreamOutput) -> Iterator[str]:
+    def before_content(self, output: ChatStreamOutput) -> Iterator[StreamEvent]:
         if self._group is not None and not self._group.after_content:
             self._group.after_content = True
             yield from output.pause_reasoning_record(
@@ -62,7 +63,7 @@ class StructuredReasoningStream:
         output: ChatStreamOutput,
         *,
         native_reasoning: str | None,
-    ) -> Iterator[str]:
+    ) -> Iterator[StreamEvent]:
         details = _reasoning_details(delta)
         if self._text_source is None:
             if native_reasoning:
@@ -124,7 +125,7 @@ class StructuredReasoningStream:
             yield from output.ensure_reasoning_block()
             yield output.emit_reasoning_delta(text)
 
-    def finish(self, output: ChatStreamOutput) -> Iterator[str]:
+    def finish(self, output: ChatStreamOutput) -> Iterator[StreamEvent]:
         group, self._group = self._group, None
         if group is not None:
             yield from output.complete_reasoning_record(group.id, group.snapshot())

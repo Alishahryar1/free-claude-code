@@ -1,7 +1,6 @@
 """Reasoning stays complete and attached while answers stream."""
 
 import json
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -20,14 +19,12 @@ from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
     ChatStreamUsage,
 )
-from free_claude_code.providers.openai_chat.transport import _OpenAIChatStreamRunner
 from tests.providers.test_history_transports import (
-    _carrier,
     _chat_reasoning_events,
     _harness,
     _saved_reply,
 )
-from tests.providers.test_streaming_errors import _recovery_output
+from tests.stream_helpers import serialize_events
 
 
 @pytest.mark.asyncio
@@ -202,22 +199,20 @@ def _assert_serial(events):
     assert active is None
 
 
-@pytest.mark.parametrize(
-    "terminal", ["normal", "length", "failure", "tool", "continuation"]
-)
-def test_immediate_text_and_late_replay_survive_every_exit(terminal):
+@pytest.mark.parametrize("terminal", ["normal", "length", "tool"])
+def test_immediate_text_and_late_replay_survive_successful_completion(terminal):
     output, reasoning = _messages_writer()
     frames = output.start_events() + _readable(reasoning, output)
     frames += output.ensure_text_block()
     frames.append(output.emit_text_delta("Answer."))
     # Text has already been emitted, while upstream metadata and termination are pending.
-    early = parse_sse_text("".join(frames))
+    early = parse_sse_text(serialize_events(frames))
     assert any(e.data.get("delta", {}).get("text") == "Answer." for e in early)
     assert not any(e.event == "message_stop" for e in early)
     if terminal == "tool":
         frames += output.close_content_blocks()
         frames.append(output.start_tool_block(0, "call_a", "lookup"))
-        frames.append(output.emit_tool_delta(0, '{"query":"x"}'))
+        frames.extend(output.emit_tool_delta(0, '{"query":"x"}'))
     frames += list(
         reasoning.events(
             {
@@ -229,28 +224,18 @@ def test_immediate_text_and_late_replay_survive_every_exit(terminal):
             native_reasoning=None,
         )
     )
-    if terminal == "continuation":
-        frames += output.flush_reasoning_replay()
-        frames += output.ensure_reasoning_block()
-        frames.append(output.emit_reasoning_delta("Recovery thought."))
-        frames += output.ensure_text_block()
-        frames.append(output.emit_text_delta(" Continued."))
-    if terminal == "failure":
-        frames += output.close_unclosed_blocks()
-        assert output.close_unclosed_blocks() == []
-    else:
-        frames += output.finish_success(
-            stop_reason="max_tokens" if terminal == "length" else "end_turn",
+    frames += output.finish_success(
+        stop_reason="max_tokens" if terminal == "length" else "end_turn",
+        usage=ChatStreamUsage(input_tokens=1, output_tokens=4),
+    )
+    assert (
+        output.finish_success(
+            stop_reason="end_turn",
             usage=ChatStreamUsage(input_tokens=1, output_tokens=4),
         )
-        assert (
-            output.finish_success(
-                stop_reason="end_turn",
-                usage=ChatStreamUsage(input_tokens=1, output_tokens=4),
-            )
-            == []
-        )
-    events = parse_sse_text("".join(frames))
+        == []
+    )
+    events = parse_sse_text(serialize_events(frames))
     _assert_serial(events)
     finals = [
         decode_replay(e.data["content_block"]["data"])
@@ -277,7 +262,7 @@ def test_request_copy_preserves_routing_and_does_not_join_across_messages():
     frames += output.finish_success(
         stop_reason="end_turn", usage=ChatStreamUsage(input_tokens=1, output_tokens=1)
     )
-    events = parse_sse_text("".join(frames))
+    events = parse_sse_text(serialize_events(frames))
     anchor = next(
         e.data["delta"]["signature"]
         for e in events
@@ -319,12 +304,11 @@ def test_request_copy_preserves_routing_and_does_not_join_across_messages():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-@pytest.mark.parametrize("committed", [False, True])
-async def test_structured_replay_respects_retry_and_continuation_boundary(
-    wire, committed
+@pytest.mark.parametrize("large", [False, True])
+async def test_incomplete_structured_replay_prevents_recovery_at_any_output_size(
+    wire, large
 ):
-    prefix = "x" * 66000 if committed else "partial"
-    first = _chat_reasoning_events(
+    events = _chat_reasoning_events(
         [
             {
                 "reasoning_content": "Original thought.",
@@ -332,41 +316,22 @@ async def test_structured_replay_respects_retry_and_continuation_boundary(
                     {"type": "reasoning.encrypted", "data": "original", "index": 0}
                 ],
             },
-            {"content": prefix},
+            {"content": "x" * (66000 if large else 5)},
         ]
     )[:-1]
-    second = _chat_reasoning_events(
-        [
-            {
-                "reasoning_content": "Recovery thought.",
-                "reasoning_details": [
-                    {"type": "reasoning.encrypted", "data": "replacement", "index": 0}
-                ],
-            },
-            {"content": "continued"},
-        ]
-    )
-    async with _harness(
-        "chat", lambda bodies: (200, first if len(bodies) == 1 else second)
-    ) as (send, bodies, _):
-        saved = await _saved_reply(
-            send(wire, [{"role": "user", "content": "hello"}]), wire
+    async with _harness("chat", lambda _: (200, events)) as (send, bodies, _):
+        output = "".join(
+            [
+                frame
+                async for frame in send(wire, [{"role": "user", "content": "hello"}])
+            ]
         )
-    assert len(bodies) == 2
-    record = decode_replay(_carrier(saved, wire))
-    assert record.native["reasoning_content"] == (
-        "Original thought." if committed else "Recovery thought."
+    parsed = parse_sse_text(output)
+    assert len(bodies) == 1
+    assert parsed[-1].event == ("error" if wire == "messages" else "response.failed")
+    assert not any(
+        event.event in {"message_stop", "response.completed"} for event in parsed
     )
-    assert record.native["reasoning_details"] == [
-        {
-            "type": "reasoning.encrypted",
-            "data": "original" if committed else "replacement",
-            "index": 0,
-        }
-    ]
-    assert "continued" in json.dumps(saved)
-    if not committed:
-        assert "Original thought." not in json.dumps(saved)
 
 
 @pytest.mark.asyncio
@@ -388,7 +353,7 @@ async def test_first_metadata_after_text_does_not_invent_earlier_reasoning(wire)
                 part
                 async for part in send(wire, [{"role": "user", "content": "hello"}])
             ]
-            _assert_serial(parse_sse_text("".join(frames)))
+            _assert_serial(parse_sse_text(serialize_events(frames)))
         saved = await _saved_reply(
             send(wire, [{"role": "user", "content": "hello"}]), wire
         )
@@ -400,7 +365,7 @@ async def test_first_metadata_after_text_does_not_invent_earlier_reasoning(wire)
 
 
 @pytest.mark.asyncio
-async def test_finishing_replay_does_not_make_empty_continuation_successful():
+async def test_incomplete_replay_is_not_given_a_synthetic_success_terminal():
     events = _chat_reasoning_events(
         [
             {
@@ -412,19 +377,12 @@ async def test_finishing_replay_does_not_make_empty_continuation_successful():
             {"content": "x" * 66000},
         ]
     )[:-1]
-    async with _harness("chat", lambda _: (200, events)) as (send, _, _):
-        with patch.object(
-            _OpenAIChatStreamRunner,
-            "_collect_recovery_output",
-            new_callable=AsyncMock,
-            return_value=_recovery_output(),
-        ):
-            frames = [
-                frame
-                async for frame in send(
-                    "responses", [{"role": "user", "content": "hello"}]
-                )
-            ]
+    async with _harness("chat", lambda _: (200, events)) as (send, bodies, _):
+        frames = [
+            frame
+            async for frame in send("responses", [{"role": "user", "content": "hello"}])
+        ]
     parsed = parse_sse_text("".join(frames))
+    assert len(bodies) == 1
     assert parsed[-1].event == "response.failed"
     assert not any(event.event == "response.completed" for event in parsed)

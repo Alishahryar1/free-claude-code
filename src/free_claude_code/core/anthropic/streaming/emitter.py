@@ -6,6 +6,7 @@ from typing import Any
 from loguru import logger
 
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.stream_events import StreamEvent
 
 from ..errors import anthropic_error_payload, anthropic_failure_payload
 
@@ -49,14 +50,14 @@ def anthropic_terminal_failure_frame(failure: ExecutionFailure) -> str:
     return format_sse_event("error", anthropic_failure_payload(failure))
 
 
-class AnthropicSseEmitter:
-    """Serialize Anthropic SSE events and optionally log raw event bodies."""
+class AnthropicEventBuilder:
+    """Build decoded Anthropic events and optionally log raw event bodies."""
 
     def __init__(self, *, log_raw_events: bool = False) -> None:
         self._log_raw_events = log_raw_events
 
-    def event(self, event_type: str, data: dict[str, Any]) -> str:
-        event = format_sse_event(event_type, data)
+    def event(self, event_type: str, data: dict[str, Any]) -> StreamEvent:
+        event = StreamEvent(event_type, data)
         if self._log_raw_events:
-            logger.debug("SSE_EVENT: {} - {}", event_type, event.strip())
+            logger.debug("SSE_EVENT: {} - {}", event_type, data)
         return event

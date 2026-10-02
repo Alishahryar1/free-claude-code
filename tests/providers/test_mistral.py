@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx2
 import openai
 import pytest
 from httpx2 import Request, Response
@@ -19,6 +20,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    stream_messages,
 )
 
 
@@ -276,7 +278,7 @@ async def test_stream_messages_text(mistral_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(mistral_provider, req)]
 
         assert any(
             '"text_delta"' in event and "Hello back!" in event for event in events
@@ -309,7 +311,7 @@ async def test_stream_messages_reasoning_content(mistral_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(mistral_provider, req)]
 
         assert any(
             '"thinking_delta"' in event and "Thinking..." in event for event in events
@@ -346,7 +348,7 @@ async def test_stream_messages_native_mistral_thinking_chunk(mistral_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(mistral_provider, req)]
 
     assert any(
         '"thinking_delta"' in event and "Native thought." in event for event in events
@@ -378,7 +380,7 @@ async def test_stream_messages_native_mistral_text_chunk(mistral_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(mistral_provider, req)]
 
     assert any('"text_delta"' in event and "Native text." in event for event in events)
 
@@ -412,7 +414,7 @@ async def test_stream_messages_preserves_native_thinking_and_string_text(
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(mistral_provider, req)]
 
     event_text = "\n".join(events)
     assert '"thinking_delta"' in event_text
@@ -450,7 +452,7 @@ async def test_stream_messages_preserves_native_reasoning_and_string_text(
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(mistral_provider, req)]
 
     event_text = "\n".join(events)
     assert "Native reasoning." in event_text
@@ -490,7 +492,7 @@ async def test_stream_messages_preserves_mixed_native_content_array(
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(mistral_provider, req)]
 
     event_text = "\n".join(events)
     assert "Native thought." in event_text
@@ -529,7 +531,7 @@ async def test_stream_messages_ignores_unknown_native_content_chunks(
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(mistral_provider, req)]
 
     event_text = "\n".join(events)
     assert "reference_ids" not in event_text
@@ -571,8 +573,8 @@ async def test_stream_messages_suppresses_native_mistral_thinking_when_disabled(
 
         events = [
             event
-            async for event in mistral_provider.stream_messages(
-                req, reasoning=REASONING_OFF
+            async for event in stream_messages(
+                mistral_provider, req, reasoning=REASONING_OFF
             )
         ]
 
@@ -636,8 +638,8 @@ async def test_stream_messages_retries_without_mistral_reasoning_on_rejection(
 
         events = [
             e
-            async for e in mistral_provider.stream_messages(
-                req, reasoning=reasoning_for(req)
+            async for e in stream_messages(
+                mistral_provider, req, reasoning=reasoning_for(req)
             )
         ]
 
@@ -707,8 +709,8 @@ async def test_stream_messages_reasoning_retry_preserves_visible_text_and_tools(
 
         events = [
             e
-            async for e in mistral_provider.stream_messages(
-                req, reasoning=reasoning_for(req)
+            async for e in stream_messages(
+                mistral_provider, req, reasoning=reasoning_for(req)
             )
         ]
 
@@ -749,8 +751,8 @@ async def test_stream_messages_retries_on_mistral_422_reasoning_rejection(
 
         events = [
             e
-            async for e in mistral_provider.stream_messages(
-                req, reasoning=reasoning_for(req)
+            async for e in stream_messages(
+                mistral_provider, req, reasoning=reasoning_for(req)
             )
         ]
 
@@ -804,7 +806,7 @@ async def test_stream_messages_retries_when_model_disables_reasoning_input(
     ) as mock_create:
         mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
 
-        events = [e async for e in mistral_provider.stream_messages(req)]
+        events = [e async for e in stream_messages(mistral_provider, req)]
 
     assert mock_create.await_count == 2
     second_call = mock_create.await_args_list[1].kwargs
@@ -824,7 +826,7 @@ async def test_stream_messages_unrelated_bad_request_does_not_retry(mistral_prov
         mock_create.side_effect = error
 
         with pytest.raises(ExecutionFailure) as exc_info:
-            [e async for e in mistral_provider.stream_messages(req)]
+            [e async for e in stream_messages(mistral_provider, req)]
 
     assert mock_create.await_count == 1
     assert "Invalid request sent to provider" in exc_info.value.message
@@ -843,7 +845,7 @@ async def test_stream_messages_generic_thinking_error_does_not_retry(
         mock_create.side_effect = error
 
         with pytest.raises(ExecutionFailure) as exc_info:
-            [e async for e in mistral_provider.stream_messages(req)]
+            [e async for e in stream_messages(mistral_provider, req)]
 
     assert mock_create.await_count == 1
     assert "Invalid request sent to provider" in exc_info.value.message
@@ -877,8 +879,14 @@ def _make_bad_request_error(message: str) -> openai.BadRequestError:
     return openai.BadRequestError(message, response=response, body=body)
 
 
-class _StatusError(Exception):
+class _StatusError(openai.APIStatusError):
     def __init__(self, message: str, *, status_code: int, body: dict):
-        super().__init__(message)
+        super().__init__(
+            message,
+            response=httpx2.Response(
+                status_code, request=httpx2.Request("POST", "https://mistral.invalid")
+            ),
+            body=body,
+        )
         self.status_code = status_code
         self.body = body

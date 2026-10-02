@@ -17,6 +17,7 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.providers.anthropic.models import model_record
 from free_claude_code.providers.model_listing import ModelListResponseError
+from tests.providers.support import stream_messages, stream_responses
 from tests.providers.test_anthropic_messages_transport import _events, _sse
 from tests.providers.test_anthropic_provider import provider
 
@@ -159,7 +160,8 @@ async def test_concurrent_models_use_independent_conversion_capabilities():
         async def messages():
             return [
                 event
-                async for event in p.stream_messages(
+                async for event in stream_messages(
+                    p,
                     MessagesRequest(
                         model="manual",
                         messages=[{"role": "user", "content": "hello"}],
@@ -172,7 +174,8 @@ async def test_concurrent_models_use_independent_conversion_capabilities():
         async def responses():
             return [
                 event
-                async for event in p.stream_responses(
+                async for event in stream_responses(
+                    p,
                     OpenAIResponsesRequest(model="adaptive", input="hello"),
                     reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
                 )
@@ -224,7 +227,8 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
     async def run():
         return [
             event
-            async for event in p.stream_messages(
+            async for event in stream_messages(
+                p,
                 MessagesRequest(
                     model="same", messages=[{"role": "user", "content": "hi"}]
                 ),
@@ -268,7 +272,8 @@ async def test_fresh_owner_does_not_trust_stale_generic_capabilities():
         with pytest.raises(InvalidRequestError, match="thinking mode"):
             _ = [
                 event
-                async for event in p.stream_messages(
+                async for event in stream_messages(
+                    p,
                     MessagesRequest(
                         model="alias", messages=[{"role": "user", "content": "hi"}]
                     ),

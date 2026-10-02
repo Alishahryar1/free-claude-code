@@ -33,6 +33,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    stream_messages,
 )
 
 
@@ -336,7 +337,7 @@ async def test_stream_preserves_signed_details_without_duplicating_reasoning(
         return_value=stream,
     ):
         event_text = "".join(
-            [event async for event in zenmux_provider.stream_messages(_request())]
+            [event async for event in stream_messages(zenmux_provider, _request())]
         )
 
     events = parse_sse_text(event_text)

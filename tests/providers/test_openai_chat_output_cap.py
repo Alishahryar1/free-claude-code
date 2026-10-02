@@ -7,31 +7,39 @@ and learns the cap so later requests clamp proactively.
 
 from unittest.mock import AsyncMock, patch
 
+import httpx2
+import openai
 import pytest
 
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
-from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.openai_chat.output_cap import (
     clamp_output_tokens,
     parse_output_token_cap,
 )
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
+    exercise_chat_body,
     immediate_admission,
     make_provider_config,
+    successful_chat_stream,
 )
 
 
-class _BadRequest(Exception):
+class _BadRequest(openai.APIStatusError):
     """Stand-in for openai.BadRequestError (status_code + optional JSON body)."""
 
     def __init__(self, message: str, body: object | None = None):
-        super().__init__(message)
+        super().__init__(
+            message,
+            response=httpx2.Response(
+                400, request=httpx2.Request("POST", "https://groq.invalid")
+            ),
+            body=body,
+        )
         self.status_code = 400
-        self.body = body
+        self.body = {"message": message} if body is None else body
 
 
 # --------------------------------------------------------------------------- #
@@ -97,6 +105,7 @@ def test_parse_cap_ignores_unrecognized_ranges(message):
 def test_parse_cap_ignores_non_400():
     error = _BadRequest("max_tokens must be less than or equal to 40960")
     error.status_code = 500
+    error.response.status_code = 500
     assert parse_output_token_cap(error) is None
 
 
@@ -262,21 +271,10 @@ async def test_create_stream_clamps_and_learns_on_cap_rejection(groq_provider):
             "param": "max_completion_tokens",
         },
     )
-    create = AsyncMock(side_effect=[error, SDKStreamDouble(AsyncMock())])
+    create = AsyncMock(side_effect=[error, SDKStreamDouble(successful_chat_stream())])
 
     with patch.object(groq_provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            used_body,
-            attempt,
-            _sent_body,
-        ) = await groq_provider._chat._create_stream(
-            body,
-            RequestRecovery(groq_provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
-        await _stream.aclose()
-        await attempt.aclose()
+        used_body = await exercise_chat_body(groq_provider, body)
 
     assert create.call_count == 2
     assert create.call_args_list[1].kwargs["max_completion_tokens"] == 16384
@@ -296,20 +294,9 @@ async def test_learned_cap_clamps_next_request_without_a_400(groq_provider):
     model = body["model"]
     groq_provider._chat._model_output_caps[model] = 40960
 
-    create = AsyncMock(return_value=SDKStreamDouble(AsyncMock()))
+    create = AsyncMock(return_value=SDKStreamDouble(successful_chat_stream()))
     with patch.object(groq_provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            used_body,
-            attempt,
-            _sent_body,
-        ) = await groq_provider._chat._create_stream(
-            body,
-            RequestRecovery(groq_provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
-        await _stream.aclose()
-        await attempt.aclose()
+        used_body = await exercise_chat_body(groq_provider, body)
 
     assert create.call_count == 1
     assert create.call_args.kwargs["max_completion_tokens"] == 40960
@@ -331,11 +318,7 @@ async def test_unrelated_400_is_not_clamped_and_propagates(groq_provider):
         patch.object(groq_provider._client.chat.completions, "create", create),
         pytest.raises(Exception, match="wizard"),
     ):
-        await groq_provider._chat._create_stream(
-            body,
-            RequestRecovery(groq_provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await exercise_chat_body(groq_provider, body)
 
     assert create.call_count == 1
     assert groq_provider._chat._model_output_caps == {}
@@ -365,11 +348,7 @@ async def test_mixed_field_400_does_not_retry_or_poison_learned_cap(groq_provide
         patch.object(groq_provider._client.chat.completions, "create", create),
         pytest.raises(Exception, match="temperature"),
     ):
-        await groq_provider._chat._create_stream(
-            body,
-            RequestRecovery(groq_provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await exercise_chat_body(groq_provider, body)
 
     assert create.call_count == 1
     assert groq_provider._chat._model_output_caps == {}

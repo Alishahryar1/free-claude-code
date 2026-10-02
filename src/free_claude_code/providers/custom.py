@@ -1,12 +1,14 @@
 """Custom endpoint resource ownership using FCC's existing wire transports."""
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
 
 import httpx
 import httpx2
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.ports import ProviderCandidate
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.core.anthropic import MessagesRequest, ReasoningReplayMode
 from free_claude_code.core.openai_responses import (
@@ -209,7 +211,7 @@ class CustomProvider(BaseProvider):
             )
         return reasoning
 
-    def stream_messages(
+    def open_messages(
         self,
         request: MessagesRequest,
         input_tokens: int = 0,
@@ -219,7 +221,7 @@ class CustomProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
         reasoning = self._reasoning(reasoning)
         if (
             self._definition.reasoning_format == "provider_default"
@@ -236,7 +238,7 @@ class CustomProvider(BaseProvider):
                 }
             )
         if self._messages is not None:
-            return self._messages.stream_messages(
+            return self._messages.open_messages(
                 request,
                 endpoint_context=self,
                 request_id=request_id,
@@ -248,7 +250,7 @@ class CustomProvider(BaseProvider):
             )
         transport = self._chat if self._chat is not None else self._responses
         assert transport is not None
-        return transport.stream_messages(
+        return transport.open_messages(
             request,
             input_tokens=input_tokens,
             endpoint_context=self,
@@ -258,7 +260,7 @@ class CustomProvider(BaseProvider):
             model_info=model_info,
         )
 
-    def stream_responses(
+    def open_responses(
         self,
         request: OpenAIResponsesRequest,
         input_tokens: int = 0,
@@ -268,7 +270,7 @@ class CustomProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
         reasoning = (
             responses_reasoning_policy(request.reasoning)
             if self._definition.reasoning_format == "provider_default"
@@ -289,7 +291,7 @@ class CustomProvider(BaseProvider):
                 }
             )
         if self._messages is not None:
-            return self._messages.stream_responses(
+            return self._messages.open_responses(
                 request,
                 endpoint_context=self,
                 request_id=request_id,
@@ -299,7 +301,7 @@ class CustomProvider(BaseProvider):
             )
         transport = self._chat if self._chat is not None else self._responses
         assert transport is not None
-        return transport.stream_responses(
+        return transport.open_responses(
             request,
             input_tokens=input_tokens,
             endpoint_context=self,

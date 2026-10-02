@@ -15,7 +15,12 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.openai_api.provider import OpenAIAPIProvider
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_messages,
+    stream_responses,
+)
 
 
 def _sse(*events: tuple[str, dict[str, Any]]) -> str:
@@ -83,20 +88,22 @@ async def test_api_key_provider_uses_public_responses_endpoint(
     try:
         if ingress == "messages":
             output = await _collect(
-                provider.stream_messages(
+                stream_messages(
+                    provider,
                     MessagesRequest.model_validate(
                         {
                             "model": "gpt-test",
                             "max_tokens": 64,
                             "messages": [{"role": "user", "content": "hello"}],
                         }
-                    )
+                    ),
                 )
             )
             assert text_content(parse_sse_text(output)) == "hello"
         else:
             output = await _collect(
-                provider.stream_responses(
+                stream_responses(
+                    provider,
                     OpenAIResponsesRequest.model_validate(
                         {
                             "model": "gpt-test",
@@ -104,7 +111,7 @@ async def test_api_key_provider_uses_public_responses_endpoint(
                             "max_output_tokens": 64,
                             "metadata": {"source": "api-key-test"},
                         }
-                    )
+                    ),
                 )
             )
             assert "response.completed" in output
@@ -212,7 +219,8 @@ async def test_api_key_provider_preserves_tool_calls() -> None:
     try:
         events = parse_sse_text(
             await _collect(
-                provider.stream_messages(
+                stream_messages(
+                    provider,
                     MessagesRequest.model_validate(
                         {
                             "model": "gpt-test",
@@ -224,7 +232,7 @@ async def test_api_key_provider_preserves_tool_calls() -> None:
                                 }
                             ],
                         }
-                    )
+                    ),
                 )
             )
         )

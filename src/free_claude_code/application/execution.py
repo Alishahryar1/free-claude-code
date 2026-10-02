@@ -1,10 +1,9 @@
 """Provider execution shared by inbound API adapters."""
 
-import asyncio
+import json
 import math
-import sys
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from time import monotonic
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import AbstractAsyncContextManager
 from types import MappingProxyType
 from typing import Literal
 
@@ -14,21 +13,26 @@ from free_claude_code.core.anthropic import (
     anthropic_request_snapshot,
     get_token_count,
 )
+from free_claude_code.core.anthropic.recovery_stream import (
+    MessagesRecoveryWriter,
+    NativeMessagesCompletionWriter,
+)
 from free_claude_code.core.anthropic.tokens import TokenCounter
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
+    ResponsesRecoveryWriter,
     estimate_responses_input_tokens,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.core.request_outcomes import record_request_route
+from free_claude_code.core.token_estimation import estimate_text_tokens
 from free_claude_code.core.trace import (
-    close_stream_input,
     trace_event,
     traced_async_stream,
 )
 
-from .ports import ModelInfoLookup, ProviderResolver
+from .ports import ModelInfoLookup, ProviderCandidate, ProviderResolver
+from .recovery import CandidateOpener, RecoveryCoordinator, RecoveryWriter
 from .routing import (
     ProviderModelTarget,
     ResolvedModelRoute,
@@ -39,9 +43,6 @@ from .routing import (
 
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
 WireApi = Literal["messages", "responses"]
-CandidateStreamOpener = Callable[
-    [int, ProviderModelTarget], Awaitable[AsyncIterator[str]]
-]
 
 
 class ProviderExecutor:
@@ -166,9 +167,9 @@ class ProviderExecutor:
     ) -> AsyncIterator[str]:
         async def open_candidate(
             index: int, target: ProviderModelTarget
-        ) -> AsyncIterator[str]:
+        ) -> AbstractAsyncContextManager[ProviderCandidate]:
             provider = await self._provider_resolver(target.provider_id)
-            return provider.stream_native_messages(
+            return provider.open_native_messages(
                 routed.request.with_model(target.provider_model),
                 request_id=request_id,
                 response_model=routed.resolved.original_model,
@@ -192,6 +193,19 @@ class ProviderExecutor:
             ingress_count=len(messages),
             request_id=request_id,
             open_candidate=open_candidate,
+            writer=(
+                MessagesRecoveryWriter(
+                    model=routed.resolved.original_model,
+                    input_tokens=estimate_text_tokens(
+                        json.dumps(routed.request.body, ensure_ascii=False)
+                    ),
+                    native=True,
+                )
+                if routed.request.stream
+                else NativeMessagesCompletionWriter(
+                    model=routed.resolved.original_model
+                )
+            ),
         )
 
     def stream_messages(
@@ -213,7 +227,7 @@ class ProviderExecutor:
         async def open_candidate(
             index: int,
             target: ProviderModelTarget,
-        ) -> AsyncIterator[str]:
+        ) -> AbstractAsyncContextManager[ProviderCandidate]:
             provider = await self._provider_resolver(target.provider_id)
             request = (
                 primary_request
@@ -223,7 +237,7 @@ class ProviderExecutor:
                     deep=True,
                 )
             )
-            return provider.stream_messages(
+            return provider.open_messages(
                 request,
                 input_tokens=input_tokens,
                 request_id=request_id,
@@ -246,6 +260,9 @@ class ProviderExecutor:
             ingress_count=len(routed.request.messages),
             request_id=request_id,
             open_candidate=open_candidate,
+            writer=MessagesRecoveryWriter(
+                model=routed.resolved.original_model, input_tokens=input_tokens
+            ),
         )
 
     def stream_responses(
@@ -263,7 +280,7 @@ class ProviderExecutor:
         async def open_candidate(
             index: int,
             target: ProviderModelTarget,
-        ) -> AsyncIterator[str]:
+        ) -> AbstractAsyncContextManager[ProviderCandidate]:
             provider = await self._provider_resolver(target.provider_id)
             request = (
                 primary_request
@@ -273,7 +290,7 @@ class ProviderExecutor:
                     deep=True,
                 )
             )
-            return provider.stream_responses(
+            return provider.open_responses(
                 request,
                 input_tokens=input_tokens,
                 request_id=request_id,
@@ -306,6 +323,9 @@ class ProviderExecutor:
             ingress_count=input_item_count,
             request_id=request_id,
             open_candidate=open_candidate,
+            writer=ResponsesRecoveryWriter(
+                model=routed.resolved.original_model, input_tokens=input_tokens
+            ),
         )
 
     def _stream_candidates(
@@ -320,7 +340,8 @@ class ProviderExecutor:
         ingress_count_name: str,
         ingress_count: int,
         request_id: str,
-        open_candidate: CandidateStreamOpener,
+        open_candidate: CandidateOpener,
+        writer: RecoveryWriter,
     ) -> AsyncIterator[str]:
         """Start and consume candidates through one protocol-blind lifecycle."""
 
@@ -370,112 +391,35 @@ class ProviderExecutor:
                 f"{raw_log_label} [{{}}]: {{}}", lambda: request_id, raw_log_payload
             )
 
-        async def provider_body() -> AsyncIterator[str]:
-            loop = asyncio.get_running_loop()
-            progress_deadline = loop.time() + self._progress_timeout_seconds
-            for index, target in enumerate(candidates):
-                record_request_route(target.provider_id, target.provider_model)
-                provider_stream: AsyncIterator[str] | None = None
-                candidate_committed = False
-                candidate_failure: ExecutionFailure | None = None
-                try:
-                    opening_started = monotonic()
-                    try:
-                        provider_stream = await open_candidate(index, target)
-                    except ExecutionFailure as failure:
-                        candidate_failure = failure
-                    finally:
-                        # Initialization has its own request budget. Upstream progress
-                        # time is not spent waiting for a provider's startup task.
-                        progress_deadline += monotonic() - opening_started
-
-                    if provider_stream is None and candidate_failure is None:
-                        raise TypeError(
-                            "provider stream method must return an async iterator"
-                        )
-                    while provider_stream is not None:
-                        if loop.time() >= progress_deadline:
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            )
-                        progress_timeout = asyncio.timeout_at(progress_deadline)
-                        read_failure: ExecutionFailure | None = None
-                        try:
-                            async with progress_timeout:
-                                try:
-                                    chunk = await anext(provider_stream)
-                                except ExecutionFailure as failure:
-                                    read_failure = failure
-                        except StopAsyncIteration:
-                            break
-                        except TimeoutError as exc:
-                            if not progress_timeout.expired():
-                                raise
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            ) from exc
-                        if progress_timeout.expired():
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            )
-                        if read_failure is not None:
-                            candidate_failure = read_failure
-                            break
-                        if not chunk:
-                            await asyncio.sleep(0)
-                            continue
-                        if not candidate_committed:
-                            candidate_committed = True
-                            if index > 0:
-                                self._trace_fallback_selected(
-                                    request_id=request_id,
-                                    wire_api=wire_api,
-                                    selected=target,
-                                    candidate_index=index + 1,
-                                    candidate_count=len(candidates),
-                                )
-                        yield chunk
-                        progress_deadline = loop.time() + self._progress_timeout_seconds
-                finally:
-                    if provider_stream is not None:
-                        active_error = sys.exception()
-                        preserved_error = active_error or candidate_failure
-                        cleanup_timeout = asyncio.timeout_at(
-                            progress_deadline if active_error is None else None
-                        )
-                        try:
-                            async with cleanup_timeout:
-                                await close_stream_input(
-                                    provider_stream,
-                                    owner="provider_executor",
-                                    source="api",
-                                    preserved_error=preserved_error,
-                                )
-                        except TimeoutError as exc:
-                            if not cleanup_timeout.expired():
-                                raise
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            ) from exc
-
-                if candidate_failure is None:
-                    return
-                if candidate_committed or index + 1 >= len(candidates):
-                    raise candidate_failure
-                next_target = candidates[index + 1]
+        coordinator = RecoveryCoordinator(
+            candidates=candidates,
+            opener=open_candidate,
+            writer=writer,
+            progress_timeout_seconds=self._progress_timeout_seconds,
+            timeout_failure=lambda provider_id: self._progress_timeout_failure(
+                request_id=request_id,
+                provider_id=provider_id,
+            ),
+            request_id=request_id,
+            on_fallback=lambda failed, selected, failure, index: (
                 self._trace_fallback_started(
                     request_id=request_id,
                     wire_api=wire_api,
-                    failed=target,
-                    selected=next_target,
-                    failure=candidate_failure,
-                    candidate_index=index + 2,
+                    failed=failed,
+                    selected=selected,
+                    failure=failure,
+                    candidate_index=index + 1,
                     candidate_count=len(candidates),
                 )
+            ),
+            on_selected=lambda selected, index: self._trace_fallback_selected(
+                request_id=request_id,
+                wire_api=wire_api,
+                selected=selected,
+                candidate_index=index + 1,
+                candidate_count=len(candidates),
+            ),
+        )
 
         stream_trace: dict[str, object] = {
             "request_id": request_id,
@@ -486,7 +430,7 @@ class ProviderExecutor:
             stream_trace["generation_id"] = self._generation_id
 
         return traced_async_stream(
-            provider_body(),
+            coordinator.stream(),
             stage="egress",
             source="api",
             complete_event=(

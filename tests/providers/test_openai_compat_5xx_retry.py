@@ -15,6 +15,7 @@ from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    stream_messages,
 )
 
 
@@ -74,7 +75,7 @@ async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
             _internal_5xx(status_code),
             SDKStreamDouble(mock_stream()),
         ]
-        events = [e async for e in provider.stream_messages(req)]
+        events = [e async for e in stream_messages(provider, req)]
 
     assert mock_create.await_count == 2
     assert any("Hi" in e for e in events)
@@ -116,7 +117,7 @@ async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
         ) as mock_create,
     ):
         mock_create.side_effect = [_connection_error(), SDKStreamDouble(mock_stream())]
-        events = [e async for e in provider.stream_messages(req)]
+        events = [e async for e in stream_messages(provider, req)]
 
     assert mock_create.await_count == 2
     assert any("Recovered" in e for e in events)
@@ -146,10 +147,10 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
             new_callable=AsyncMock,
             side_effect=error,
         ) as mock_create,
-        patch("free_claude_code.providers.openai_chat.transport.trace_event") as trace,
+        patch("free_claude_code.providers.stream_candidate.trace_event") as trace,
         pytest.raises(ExecutionFailure) as exc_info,
     ):
-        [e async for e in provider.stream_messages(req, request_id="req_conn")]
+        [e async for e in stream_messages(provider, req, request_id="req_conn")]
 
     assert mock_create.await_count == 5
     error_traces = [
@@ -200,7 +201,7 @@ async def test_nim_stream_openai_5xx_exhausted_emits_user_message(
     ):
         mock_create.side_effect = _internal_5xx(status_code)
         with pytest.raises(ExecutionFailure) as exc_info:
-            [e async for e in provider.stream_messages(req)]
+            [e async for e in stream_messages(provider, req)]
 
     assert mock_create.await_count == 5
     assert expect_substr in exc_info.value.message.lower()

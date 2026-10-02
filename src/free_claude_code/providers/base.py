@@ -1,11 +1,13 @@
 """Base provider interface - extend this to implement your own provider."""
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.ports import ProviderCandidate
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -44,20 +46,20 @@ class BaseProvider(ABC):
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """Return the model metadata currently advertised by this provider."""
 
-    def stream_native_messages(
+    def open_native_messages(
         self,
         request: NativeMessagesRequest,
         *,
         request_id: str | None = None,
         response_model: str | None = None,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
         raise InvalidRequestError(
             "This provider does not support native Messages execution."
         )
 
     @abstractmethod
-    def stream_messages(
+    def open_messages(
         self,
         request: MessagesRequest,
         input_tokens: int = 0,
@@ -67,11 +69,11 @@ class BaseProvider(ABC):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
         """Validate the request before yielding a response in Anthropic SSE format."""
 
     @abstractmethod
-    def stream_responses(
+    def open_responses(
         self,
         request: OpenAIResponsesRequest,
         input_tokens: int = 0,
@@ -81,5 +83,5 @@ class BaseProvider(ABC):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
         """Validate the request before yielding OpenAI Responses SSE events."""

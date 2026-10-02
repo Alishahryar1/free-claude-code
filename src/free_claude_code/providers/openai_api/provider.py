@@ -1,12 +1,14 @@
 """OpenAI Platform provider using the shared Responses transport."""
 
 import re
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
 
 import httpx2
 from openai import APIError, APIStatusError, AsyncOpenAI, DefaultAsyncHttpx2Client
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.ports import ProviderCandidate
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
@@ -111,7 +113,7 @@ class OpenAIAPIProvider(BaseProvider):
         )
         return extract_openai_model_infos(payload, provider_name="OPENAI_API")
 
-    def stream_messages(
+    def open_messages(
         self,
         request: MessagesRequest,
         input_tokens: int = 0,
@@ -121,8 +123,8 @@ class OpenAIAPIProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
-        return self._responses.stream_messages(
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        return self._responses.open_messages(
             request,
             input_tokens=input_tokens,
             request_id=request_id,
@@ -131,7 +133,7 @@ class OpenAIAPIProvider(BaseProvider):
             model_info=model_info,
         )
 
-    def stream_responses(
+    def open_responses(
         self,
         request: OpenAIResponsesRequest,
         input_tokens: int = 0,
@@ -141,8 +143,8 @@ class OpenAIAPIProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
-        return self._responses.stream_responses(
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        return self._responses.open_responses(
             request,
             input_tokens=input_tokens,
             request_id=request_id,

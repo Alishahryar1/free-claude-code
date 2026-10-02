@@ -1,5 +1,7 @@
 """Block finalization for OpenAI Responses streams."""
 
+from free_claude_code.core.stream_events import StreamEvent
+
 from ..items import encrypted_reasoning_item, message_item, reasoning_item
 from ..tools import (
     custom_tool_input_text_from_arguments,
@@ -21,14 +23,14 @@ class ResponseBlockCompleter:
         self._ledger = ledger
         self._events = events
 
-    def complete_block(self, state: BlockState) -> list[str]:
+    def complete_block(self, state: BlockState) -> list[StreamEvent]:
         if isinstance(state, TextBlockState):
             return self._complete_text_block(state)
         if isinstance(state, ReasoningBlockState):
             return self._complete_reasoning_block(state)
         return self._complete_tool_block(state)
 
-    def _complete_text_block(self, state: TextBlockState) -> list[str]:
+    def _complete_text_block(self, state: TextBlockState) -> list[StreamEvent]:
         text = "".join(state.text_parts)
         item = message_item(state.item_id, text, "completed")
         self._ledger.commit_output(state.output_index, item)
@@ -38,10 +40,12 @@ class ResponseBlockCompleter:
             self._events.output_item_done(state.output_index, item),
         ]
 
-    def _complete_reasoning_block(self, state: ReasoningBlockState) -> list[str]:
+    def _complete_reasoning_block(
+        self, state: ReasoningBlockState
+    ) -> list[StreamEvent]:
         item = _reasoning_output_item(state, status="completed")
         self._ledger.commit_output(state.output_index, item)
-        chunks: list[str] = []
+        chunks: list[StreamEvent] = []
         text = "".join(state.text_parts)
         if text:
             self._ledger.add_reasoning_text(text)
@@ -53,12 +57,12 @@ class ResponseBlockCompleter:
         chunks.append(self._events.output_item_done(state.output_index, item))
         return chunks
 
-    def _complete_tool_block(self, state: ToolBlockState) -> list[str]:
+    def _complete_tool_block(self, state: ToolBlockState) -> list[StreamEvent]:
         if state.kind == "custom":
             return self._complete_custom_tool_block(state)
         arguments = "".join(state.argument_parts)
         item = tool_item(state, status="completed", arguments=arguments)
-        chunks: list[str] = []
+        chunks: list[StreamEvent] = []
         if arguments:
             chunks.append(
                 self._events.function_call_arguments_delta(
@@ -76,13 +80,13 @@ class ResponseBlockCompleter:
         self._ledger.commit_output(state.output_index, item)
         return chunks
 
-    def _complete_custom_tool_block(self, state: ToolBlockState) -> list[str]:
+    def _complete_custom_tool_block(self, state: ToolBlockState) -> list[StreamEvent]:
         input_text = custom_tool_input_text_from_arguments(
             "".join(state.argument_parts)
         )
         item = tool_item(state, status="completed", input_text=input_text)
         self._ledger.commit_output(state.output_index, item)
-        chunks: list[str] = []
+        chunks: list[StreamEvent] = []
         if input_text:
             chunks.append(
                 self._events.custom_tool_call_input_delta(

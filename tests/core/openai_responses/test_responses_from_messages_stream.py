@@ -10,7 +10,6 @@ from free_claude_code.core.anthropic.native import (
     NativeMessagesOptions,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_lines
-from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
     decode_replay,
@@ -21,6 +20,7 @@ from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     build_responses_messages_request,
 )
+from tests.stream_helpers import serialize_events
 
 _SCOPE = "github_copilot/anthropic_messages"
 
@@ -44,7 +44,7 @@ def _feed(
     chunks = stream.feed(kind, {"type": kind, **fields})
     return [
         cast(JsonObject, event.data)
-        for event in parse_sse_lines("".join(chunks).splitlines())
+        for event in parse_sse_lines(serialize_events(chunks).splitlines())
     ]
 
 
@@ -327,46 +327,6 @@ def test_invalid_final_usage_does_not_publish_stale_initial_counts(
     assert cast(Mapping[str, JsonValue], events[-1]["response"])["usage"] is None
 
 
-def test_failure_retains_partial_text_without_completing_partial_tool_arguments() -> (
-    None
-):
-    stream = _stream(tools=[{"type": "function", "name": "lookup"}])
-    _start(stream)
-    _feed(
-        stream,
-        "content_block_start",
-        index=0,
-        content_block={"type": "text", "text": "partial text"},
-    )
-    _feed(
-        stream,
-        "content_block_start",
-        index=1,
-        content_block={"type": "tool_use", "id": "c", "name": "lookup", "input": {}},
-    )
-    _feed(
-        stream,
-        "content_block_delta",
-        index=1,
-        delta={"type": "input_json_delta", "partial_json": '{"x":'},
-    )
-    failure = ExecutionFailure(FailureKind.TIMEOUT, 504, "timed out", False)
-    events = [
-        event.data
-        for event in parse_sse_lines(
-            "".join(stream.terminal_failure(failure)).splitlines()
-        )
-    ]
-    assert [event["type"] for event in events] == ["response.failed"]
-    output = events[0]["response"]["output"]
-    assert [item["status"] for item in output] == ["incomplete", "incomplete"]
-    assert output[0]["content"][0]["text"] == "partial text"
-    assert output[1]["arguments"] == ""
-    assert stream.terminal_failure(failure) == []
-    with pytest.raises(NativeMessagesError, match="terminal"):
-        _feed(stream, "message_stop")
-
-
 @pytest.mark.parametrize(
     "arguments", ['{"input":1}', '{"extra":"x"}', '{"input":"ok","extra":1}']
 )
@@ -389,13 +349,6 @@ def test_malformed_custom_tool_wrapper_cannot_become_completed_output(
     )
     with pytest.raises(NativeMessagesError, match="exactly one text"):
         _feed(stream, "content_block_stop", index=0)
-    failure = ExecutionFailure(FailureKind.UPSTREAM, 502, "invalid tool", False)
-    failed = parse_sse_lines("".join(stream.terminal_failure(failure)).splitlines())[
-        -1
-    ].data
-    output = failed["response"]["output"]
-    assert len(output) == 1
-    assert output[0]["call_id"] == "c" and output[0]["status"] == "incomplete"
 
 
 def test_terminal_usage_omits_missing_cache_and_provisional_thinking_details() -> None:

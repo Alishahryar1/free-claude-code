@@ -1,9 +1,7 @@
-import json
 from copy import deepcopy
 
 import pytest
 
-from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.openai_responses.native import (
@@ -11,11 +9,11 @@ from free_claude_code.core.openai_responses.native import (
     build_native_responses_request,
 )
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.stream_events import StreamEvent
 
 
-def _event_payload(frame: str) -> tuple[str, dict[str, object]]:
-    lines = frame.splitlines()
-    return lines[0].removeprefix("event: "), json.loads(lines[1].removeprefix("data: "))
+def _event_payload(frame: StreamEvent) -> tuple[str, dict[str, object]]:
+    return frame.kind, frame.payload
 
 
 def test_native_request_preserves_extensions_and_forces_stateless_streaming() -> None:
@@ -365,42 +363,3 @@ def test_native_relay_rejects_events_after_one_terminal() -> None:
                 "response": {"id": "resp_upstream", "model": "upstream-model"},
             },
         )
-
-
-def test_native_relay_synthesizes_one_failed_terminal_with_public_identity() -> None:
-    relay = NativeResponsesRelay(public_model="gateway-model")
-    relay.feed(
-        "response.created",
-        {
-            "type": "response.created",
-            "sequence_number": 0,
-            "response": {
-                "id": "resp_upstream",
-                "model": "upstream-model",
-                "status": "in_progress",
-                "output": [],
-            },
-        },
-    )
-    failure = ExecutionFailure(
-        kind=FailureKind.UPSTREAM,
-        status_code=502,
-        message="Provider stream ended before a terminal event.",
-        retryable=True,
-    )
-
-    event_type, payload = _event_payload(relay.synthesize_failure(failure))
-
-    assert event_type == "response.failed"
-    response = payload["response"]
-    assert isinstance(response, dict)
-    assert response["id"] == "resp_upstream"
-    assert response["model"] == "gateway-model"
-    assert response["status"] == "failed"
-    assert response["error"] == {
-        "message": "Provider stream ended before a terminal event.",
-        "type": "api_error",
-        "param": None,
-        "code": None,
-    }
-    assert relay.terminal_type == "response.failed"

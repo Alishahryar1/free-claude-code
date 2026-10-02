@@ -12,6 +12,7 @@ from free_claude_code.api.handlers import MessagesHandler, TokenCountHandler
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import AnthropicStreamLedger
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
+from tests.provider_double import ScriptedProvider
 from tests.web_tools_support import StubWebToolsClient
 
 
@@ -24,6 +25,9 @@ async def test_create_message_skips_full_payload_debug_log_by_default(caplog):
     async def fake_stream(*_a, **_kw):
         yield "event: ping\ndata: {}\n\n"
 
+    mock_provider.open_messages = lambda *args, **kwargs: (
+        ScriptedProvider.open_messages(mock_provider, *args, **kwargs)
+    )
     mock_provider.stream_messages = fake_stream
     service = MessagesHandler(
         settings,
@@ -54,6 +58,9 @@ async def test_create_message_logs_full_payload_when_opt_in(caplog):
     async def fake_stream(*_a, **_kw):
         yield "event: ping\ndata: {}\n\n"
 
+    mock_provider.open_messages = lambda *args, **kwargs: (
+        ScriptedProvider.open_messages(mock_provider, *args, **kwargs)
+    )
     mock_provider.stream_messages = fake_stream
     service = MessagesHandler(
         settings,
@@ -120,6 +127,9 @@ async def test_create_message_unexpected_error_default_logs_exclude_exception_te
     def stream_boom(*_a, **_kw):
         raise RuntimeError(secret)
 
+    mock_provider.open_messages = lambda *args, **kwargs: (
+        ScriptedProvider.open_messages(mock_provider, *args, **kwargs)
+    )
     mock_provider.stream_messages = stream_boom
     service = MessagesHandler(
         settings,
@@ -157,6 +167,9 @@ async def test_create_message_unexpected_error_terminal_json_ignores_status_code
     def stream_boom(*_a, **_kw):
         raise WeirdError("no")
 
+    mock_provider.open_messages = lambda *args, **kwargs: (
+        ScriptedProvider.open_messages(mock_provider, *args, **kwargs)
+    )
     mock_provider.stream_messages = stream_boom
     service = MessagesHandler(
         settings,

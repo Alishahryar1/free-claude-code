@@ -1,6 +1,5 @@
 """Tests for the provider-neutral Anthropic stream ledger."""
 
-import json
 from unittest.mock import patch
 
 import pytest
@@ -11,12 +10,11 @@ from free_claude_code.core.anthropic.streaming import (
     ToolSchema,
     map_stop_reason,
 )
+from free_claude_code.core.stream_events import StreamEvent
 
 
-def _payload(event: str) -> dict:
-    return json.loads(
-        next(line[6:] for line in event.splitlines() if line.startswith("data:"))
-    )
+def _payload(event: StreamEvent) -> dict:
+    return event.payload
 
 
 @pytest.mark.parametrize(

@@ -1,9 +1,12 @@
 """Copilot subscription models dispatched through FCC's three HTTP egresses."""
 
 import asyncio
-import sys
 from collections.abc import AsyncIterator, Mapping
-from contextlib import suppress
+from contextlib import (
+    AbstractAsyncContextManager,
+    AsyncExitStack,
+    asynccontextmanager,
+)
 from dataclasses import replace
 
 import httpx
@@ -12,6 +15,7 @@ from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.ports import ProviderCandidate
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -22,7 +26,6 @@ from free_claude_code.providers.anthropic_messages.transport import (
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import EndpointContext, HttpEndpoint
-from free_claude_code.providers.http import close_provider_stream
 from free_claude_code.providers.openai_chat import (
     OpenAIChatBehavior,
     OpenAIChatTransport,
@@ -132,7 +135,7 @@ class GitHubCopilotProvider(BaseProvider):
             model.info for model in (await self._auth.models(refresh=True)).values()
         )
 
-    def stream_messages(
+    def open_messages(
         self,
         request: MessagesRequest,
         input_tokens: int = 0,
@@ -142,7 +145,7 @@ class GitHubCopilotProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
         self._check_model(request.model)
         return self._dispatch(
             request,
@@ -152,7 +155,7 @@ class GitHubCopilotProvider(BaseProvider):
             reasoning,
         )
 
-    def stream_responses(
+    def open_responses(
         self,
         request: OpenAIResponsesRequest,
         input_tokens: int = 0,
@@ -162,7 +165,7 @@ class GitHubCopilotProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
         self._check_model(request.model)
         return self._dispatch(
             request,
@@ -188,6 +191,7 @@ class GitHubCopilotProvider(BaseProvider):
             return transport
         return cached[1]
 
+    @asynccontextmanager
     async def _dispatch(
         self,
         request: MessagesRequest | OpenAIResponsesRequest,
@@ -195,13 +199,14 @@ class GitHubCopilotProvider(BaseProvider):
         request_id: str | None,
         response_model: str,
         reasoning: ReasoningPolicy,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[ProviderCandidate]:
         async with self._condition:
             self._check_model(request.model)
             self._active += 1
         try:
             async with self._auth.lease(request.model) as lease:
-                selected: AsyncIterator[str] | None = None
+                selected: AbstractAsyncContextManager[ProviderCandidate]
+                resources = AsyncExitStack()
                 http: httpx.AsyncClient | None = None
                 try:
                     if lease.egress is CopilotEgress.MESSAGES:
@@ -214,6 +219,7 @@ class GitHubCopilotProvider(BaseProvider):
                                 write=self._config.http_write_timeout,
                             ),
                         )
+                        resources.push_async_callback(http.aclose)
                         native = AnthropicMessagesTransport(
                             client=http,
                             admission=self._admission,
@@ -224,7 +230,7 @@ class GitHubCopilotProvider(BaseProvider):
                         )
                         endpoint = _MessagesEndpoint(lease, http)
                         if isinstance(request, MessagesRequest):
-                            selected = native.stream_messages(
+                            selected = native.open_messages(
                                 request,
                                 endpoint_context=endpoint,
                                 request_id=request_id,
@@ -233,7 +239,7 @@ class GitHubCopilotProvider(BaseProvider):
                                 model_info=lease.model.info,
                             )
                         else:
-                            selected = native.stream_responses(
+                            selected = native.open_responses(
                                 request,
                                 endpoint_context=endpoint,
                                 request_id=request_id,
@@ -251,7 +257,7 @@ class GitHubCopilotProvider(BaseProvider):
                         )
                         if isinstance(request, MessagesRequest):
                             if lease.egress is CopilotEgress.RESPONSES:
-                                selected = self._responses.stream_messages(
+                                selected = self._responses.open_messages(
                                     request,
                                     input_tokens=input_tokens,
                                     request_id=request_id,
@@ -263,7 +269,7 @@ class GitHubCopilotProvider(BaseProvider):
                                     in (lease.model.supported_efforts or ()),
                                 )
                             else:
-                                selected = self._chat(lease.model).stream_messages(
+                                selected = self._chat(lease.model).open_messages(
                                     request,
                                     input_tokens=input_tokens,
                                     request_id=request_id,
@@ -273,7 +279,7 @@ class GitHubCopilotProvider(BaseProvider):
                                     model_info=lease.model.info,
                                 )
                         else:
-                            selected = transport.stream_responses(
+                            selected = transport.open_responses(
                                 request,
                                 input_tokens=input_tokens,
                                 request_id=request_id,
@@ -281,23 +287,10 @@ class GitHubCopilotProvider(BaseProvider):
                                 reasoning=resolved,
                                 endpoint_context=lease,
                             )
-                    while True:
-                        try:
-                            event = await _next_event(selected)
-                        except StopAsyncIteration:
-                            break
-                        yield event
+                    candidate = await resources.enter_async_context(selected)
+                    yield candidate
                 finally:
-                    await drain_owned(
-                        asyncio.create_task(
-                            _close_request(
-                                selected,
-                                http,
-                                active_error=sys.exception(),
-                                request_id=request_id,
-                            )
-                        )
-                    )
+                    await drain_owned(asyncio.create_task(resources.aclose()))
         finally:
             async with self._condition:
                 self._active -= 1
@@ -327,26 +320,6 @@ class GitHubCopilotProvider(BaseProvider):
         self._closed = True
 
 
-async def _close_request(
-    stream: AsyncIterator[str] | None,
-    client: httpx.AsyncClient | None,
-    *,
-    active_error: BaseException | None,
-    request_id: str | None,
-) -> None:
-    try:
-        if stream is not None:
-            await close_provider_stream(
-                stream,
-                active_error=active_error,
-                provider_name=PROVIDER_NAME,
-                request_id=request_id,
-            )
-    finally:
-        if client is not None:
-            await client.aclose()
-
-
 async def _endpoint_required() -> str:
     raise ExecutionFailure(
         FailureKind.UNAVAILABLE,
@@ -354,20 +327,3 @@ async def _endpoint_required() -> str:
         "Copilot inference requires a current account endpoint.",
         False,
     )
-
-
-async def _advance(stream: AsyncIterator[str]) -> str:
-    return await anext(stream)
-
-
-async def _next_event(stream: AsyncIterator[str]) -> str:
-    # Cancel transport work once, then protect its response-close finally blocks
-    # from repeated caller cancellation before releasing the account lease.
-    task = asyncio.create_task(_advance(stream))
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        task.cancel()
-        with suppress(Exception, asyncio.CancelledError):
-            await drain_owned(task)
-        raise

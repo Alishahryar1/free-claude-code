@@ -26,6 +26,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    stream_messages,
 )
 
 
@@ -272,7 +273,7 @@ async def test_stream_uses_reasoning_field_without_duplicating_plain_details(
         return_value=stream,
     ):
         event_text = "".join(
-            [event async for event in kilo_provider.stream_messages(request)]
+            [event async for event in stream_messages(kilo_provider, request)]
         )
 
     events = parse_sse_text(event_text)
@@ -292,7 +293,7 @@ async def test_stream_uses_reasoning_field_without_duplicating_plain_details(
 
 
 @pytest.mark.asyncio
-async def test_stream_restarts_reasoning_reconciliation_after_early_retry(
+async def test_interrupted_native_reasoning_does_not_invent_replay_metadata(
     kilo_provider,
 ):
     abandoned = AsyncStream([_chunk(reasoning="discarded ")])
@@ -315,15 +316,16 @@ async def test_stream_restarts_reasoning_reconciliation_after_early_retry(
         side_effect=[abandoned, recovered],
     ) as create:
         event_text = "".join(
-            [event async for event in kilo_provider.stream_messages(request)]
+            [event async for event in stream_messages(kilo_provider, request)]
         )
 
     events = parse_sse_text(event_text)
-    assert thinking_content(events) == "plan "
-    assert text_content(events) == "done"
-    assert create.await_count == 2
+    assert thinking_content(events) == "discarded "
+    assert text_content(events) == ""
+    assert events[-1].event == "error"
+    assert create.await_count == 1
     assert abandoned.closed
-    assert recovered.closed
+    assert not recovered.closed
 
 
 @pytest.mark.asyncio
@@ -357,7 +359,8 @@ async def test_stream_omits_all_reasoning_representations_when_disabled(
         event_text = "".join(
             [
                 event
-                async for event in kilo_provider.stream_messages(
+                async for event in stream_messages(
+                    kilo_provider,
                     request,
                     reasoning=ReasoningPolicy.off(),
                 )

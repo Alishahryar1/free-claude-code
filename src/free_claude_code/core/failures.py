@@ -4,6 +4,10 @@ from dataclasses import FrozenInstanceError, dataclass
 from enum import StrEnum
 
 
+class UnsupportedRequestFeature(ValueError):
+    """A valid request feature has no lossless representation at this target."""
+
+
 class FailureKind(StrEnum):
     """Stable failure categories shared across execution and wire adapters."""
 

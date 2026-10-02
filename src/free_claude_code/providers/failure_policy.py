@@ -57,8 +57,20 @@ class ProviderRecoveryExhausted(RuntimeError):
         self.last_error = last_error
 
 
+class ProviderRecoveryDeferred(RuntimeError):
+    """Another candidate can run while this provider's recovery gate is closed."""
+
+    def __init__(self, last_error: Exception) -> None:
+        super().__init__("Provider recovery would delay this candidate.")
+        self.last_error = last_error
+
+
 class RetryableProviderProtocolError(RuntimeError):
     """A malformed upstream protocol result eligible for provider retry."""
+
+
+class TruncatedProviderStreamError(RetryableProviderProtocolError):
+    """An upstream stream ended without its required terminal marker."""
 
 
 class RetryableToolProtocolError(RetryableProviderProtocolError):

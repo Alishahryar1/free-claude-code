@@ -15,10 +15,12 @@ from typing import TypeVar
 
 from loguru import logger
 
+from free_claude_code.core.async_iterators import complete_cleanup
 from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.failure_policy import (
     ProviderFailureOverride,
+    ProviderRecoveryDeferred,
     ProviderRecoveryExhausted,
     is_retryable_provider_error,
     retryable_upstream_status,
@@ -38,7 +40,6 @@ class ProviderOperationKind(StrEnum):
     MODEL_DISCOVERY = "model_discovery"
     GENERATION = "generation"
     CONTINUATION = "continuation"
-    TOOL_REPAIR = "tool_repair"
 
 
 class ProviderExecutionState(StrEnum):
@@ -90,6 +91,7 @@ class ProviderExecution:
         self._active_claim: _AttemptClaim | None = None
         self._last_failure: Exception | None = None
         self._state = ProviderExecutionState.ACTIVE
+        self._close_task: asyncio.Task[None] | None = None
 
     @property
     def execution_id(self) -> str:
@@ -131,9 +133,13 @@ class ProviderExecution:
     async def open_attempt(
         self,
         operation_kind: ProviderOperationKind,
+        *,
+        wait_for_recovery: bool = True,
     ) -> ProviderAttempt:
         """Open the sole active physical call for this execution."""
-        return await self._controller._open_attempt(self, operation_kind)
+        return await self._controller._open_attempt(
+            self, operation_kind, wait_for_recovery=wait_for_recovery
+        )
 
     async def run_call(
         self,
@@ -191,6 +197,17 @@ class ProviderExecution:
         """Mark an unfinished logical provider operation abandoned."""
         if self._state is ProviderExecutionState.ACTIVE:
             self._state = ProviderExecutionState.ABANDONED
+
+    async def aclose(self) -> None:
+        """Relinquish recovery ownership after the physical attempt is closed."""
+        if self._active_claim is not None:
+            raise RuntimeError("close the active provider attempt before its execution")
+        if self._close_task is None:
+            self.abandon()
+            self._close_task = asyncio.create_task(
+                self._controller._finalize_execution(self)
+            )
+        await complete_cleanup(self._close_task)
 
     def _claim_attempt(
         self,
@@ -260,6 +277,7 @@ class ProviderAttempt:
         self._resolved = False
         self._accepted = False
         self._closed = False
+        self._close_task: asyncio.Task[None] | None = None
 
     @property
     def accepted(self) -> bool:
@@ -346,17 +364,18 @@ class ProviderAttempt:
 
     async def aclose(self) -> None:
         """Release attempt ownership and its concurrency slot exactly once."""
-        if self._closed:
-            return
-        self._closed = True
+        if self._close_task is None:
+            self._closed = True
+            self._close_task = asyncio.create_task(self._release())
+        await complete_cleanup(self._close_task)
+
+    async def _release(self) -> None:
         try:
             if not self._resolved:
                 try:
-                    await asyncio.shield(
-                        self._controller._attempt_abandoned(
-                            self._execution,
-                            self._permit,
-                        )
+                    await self._controller._attempt_abandoned(
+                        self._execution,
+                        self._permit,
                     )
                 finally:
                     self._resolve("abandoned")
@@ -466,6 +485,8 @@ class ProviderAdmissionController:
         self,
         execution: ProviderExecution,
         operation_kind: ProviderOperationKind,
+        *,
+        wait_for_recovery: bool,
     ) -> ProviderAttempt:
         """Wait for provider admission and hold one active-operation slot."""
         if not isinstance(operation_kind, ProviderOperationKind):
@@ -478,7 +499,9 @@ class ProviderAdmissionController:
             raise RuntimeError("provider execution already has an active attempt")
 
         while True:
-            permit = await self._wait_for_gate(execution)
+            permit = await self._wait_for_gate(
+                execution, wait_for_recovery=wait_for_recovery
+            )
             slot_acquired = False
             claim: _AttemptClaim | None = None
             try:
@@ -511,7 +534,9 @@ class ProviderAdmissionController:
                 await self._abandon_probe_permit(execution, permit)
                 raise
 
-    async def _wait_for_gate(self, execution: ProviderExecution) -> _GatePermit:
+    async def _wait_for_gate(
+        self, execution: ProviderExecution, *, wait_for_recovery: bool
+    ) -> _GatePermit:
         while True:
             if (terminal_error := execution._terminal_failure()) is not None:
                 raise ProviderRecoveryExhausted(terminal_error)
@@ -523,6 +548,16 @@ class ProviderAdmissionController:
                     return _GatePermit(generation=None, probe=False)
 
                 now = time.monotonic()
+                if not wait_for_recovery and (
+                    (
+                        episode.terminal_until is not None
+                        and now < episode.terminal_until
+                    )
+                    or episode.ready_at > now
+                    or episode.probe_active
+                    or episode.leader not in (None, execution)
+                ):
+                    raise ProviderRecoveryDeferred(episode.last_error)
                 if episode.terminal_until is not None:
                     if now < episode.terminal_until:
                         raise ProviderRecoveryExhausted(episode.last_error)
@@ -877,6 +912,17 @@ class ProviderAdmissionController:
             ):
                 return
             episode.leader = None
+            self._notify_recovery_waiters()
+
+    async def _finalize_execution(self, execution: ProviderExecution) -> None:
+        async with self._condition:
+            episode = self._episode
+            if episode is None:
+                return
+            episode.waiters.discard(execution)
+            if episode.leader is execution:
+                episode.leader = None
+                episode.probe_active = False
             self._notify_recovery_waiters()
 
     def reconfigure(self, limits: ProviderAdmissionLimits) -> None:

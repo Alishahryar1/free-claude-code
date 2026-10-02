@@ -1,8 +1,8 @@
 """Controlled provider boundary for model-fallback API and product tests."""
 
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from contextlib import asynccontextmanager, contextmanager
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -11,11 +11,16 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.recovery import AttemptFailure, RecoveryCheckpoint
+from free_claude_code.core.recovery_request import continue_request
+from free_claude_code.core.stream_events import DecodedStreamEvent, StreamEvent
 from tests.api.support import create_test_app
 
 
@@ -110,6 +115,24 @@ def responses_text_stream(text: str, *, model: str) -> list[str]:
     return [
         responses_created_event(model=model),
         _responses_event(
+            "response.output_item.added",
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {**output, "status": "in_progress", "content": []},
+            },
+        ),
+        _responses_event(
+            "response.content_part.added",
+            {
+                "type": "response.content_part.added",
+                "output_index": 0,
+                "item_id": "msg_fallback",
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []},
+            },
+        ),
+        _responses_event(
             "response.output_text.delta",
             {
                 "type": "response.output_text.delta",
@@ -119,6 +142,14 @@ def responses_text_stream(text: str, *, model: str) -> list[str]:
                 "content_index": 0,
                 "delta": text,
                 "logprobs": [],
+            },
+        ),
+        _responses_event(
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": output,
             },
         ),
         _responses_event(
@@ -201,7 +232,8 @@ class ControlledFallbackProvider:
         self.response_models: list[str] = []
         self.close_calls = 0
 
-    async def stream_messages(
+    @asynccontextmanager
+    async def open_messages(
         self,
         request: MessagesRequest,
         input_tokens: int = 0,
@@ -211,25 +243,17 @@ class ControlledFallbackProvider:
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
-        del input_tokens, request_id, reasoning
-        if self._validation_error is not None:
-            raise self._validation_error
-        self.stream_models.append(request.model)
-        public_model = response_model or request.model
-        self.response_models.append(public_model)
+    ) -> AsyncIterator[_ControlledCandidate]:
+        candidate = _ControlledCandidate(
+            self, request, response_model or request.model, "messages"
+        )
         try:
-            for chunk in self._chunks_before_failure:
-                yield chunk
-            if self._failure is not None:
-                raise self._failure
-            assert self._text is not None
-            for chunk in text_stream(self._text, model=public_model):
-                yield chunk
+            yield candidate
         finally:
-            self.close_calls += 1
+            await candidate.aclose()
 
-    async def stream_responses(
+    @asynccontextmanager
+    async def open_responses(
         self,
         request: OpenAIResponsesRequest,
         input_tokens: int = 0,
@@ -239,26 +263,93 @@ class ControlledFallbackProvider:
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
-        del input_tokens, request_id, reasoning
-        if self._validation_error is not None:
-            raise self._validation_error
-        self.stream_models.append(request.model)
-        public_model = response_model or request.model
-        self.response_models.append(public_model)
+    ) -> AsyncIterator[_ControlledCandidate]:
+        candidate = _ControlledCandidate(
+            self, request, response_model or request.model, "responses"
+        )
         try:
-            for chunk in self._responses_chunks_before_failure:
-                yield chunk
-            if self._failure is not None:
-                if self._responses_chunks_before_failure:
-                    yield responses_failure_event(self._failure, model=public_model)
-                    return
-                raise self._failure
-            assert self._text is not None
-            for chunk in responses_text_stream(self._text, model=public_model):
-                yield chunk
+            yield candidate
         finally:
-            self.close_calls += 1
+            await candidate.aclose()
+
+
+class _ControlledCandidate:
+    def __init__(
+        self,
+        provider: ControlledFallbackProvider,
+        request: MessagesRequest | OpenAIResponsesRequest,
+        model: str,
+        wire_api: str,
+    ) -> None:
+        self._provider = provider
+        self._request = request
+        self._model = model
+        self._wire_api = wire_api
+        self._attempted = False
+        self._closed = False
+
+    @property
+    def can_attempt(self) -> bool:
+        return not self._attempted
+
+    async def prepare(self, checkpoint: RecoveryCheckpoint) -> None:
+        if self._provider._validation_error is not None:
+            raise self._provider._validation_error
+        self.continued_request = continue_request(self._request, checkpoint)
+
+    async def stream_attempt(
+        self,
+        checkpoint: RecoveryCheckpoint,
+        *,
+        wait_for_recovery: bool,
+        can_correct: Callable[[], bool],
+    ) -> AsyncIterator[DecodedStreamEvent]:
+        self._attempted = True
+        provider = self._provider
+        provider.stream_models.append(self._request.model)
+        provider.response_models.append(self._model)
+        origin = ReplayOrigin(
+            "controlled",
+            "messages" if self._wire_api == "messages" else "responses",
+            "",
+            "",
+            self._request.model,
+        )
+        prefix = (
+            provider._chunks_before_failure
+            if self._wire_api == "messages"
+            else provider._responses_chunks_before_failure
+        )
+        frames = list(prefix)
+        if provider._failure is None:
+            assert provider._text is not None
+            frames += (
+                text_stream(provider._text, model=self._model)
+                if self._wire_api == "messages"
+                else responses_text_stream(provider._text, model=self._model)
+            )
+        for frame in frames:
+            for parsed in parse_sse_text(frame):
+                event = StreamEvent(parsed.event, parsed.data)
+                yield DecodedStreamEvent(
+                    origin,
+                    event,
+                    (event,),
+                    progress=parsed.event
+                    in {"content_block_delta", "response.output_text.delta"},
+                    completed=parsed.event
+                    in {"message_stop", "response.completed", "response.incomplete"},
+                )
+        if provider._failure is not None:
+            raise AttemptFailure(provider._failure)
+
+    def finish(self, failure: ExecutionFailure | None) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._provider.close_calls += 1
 
 
 @contextmanager

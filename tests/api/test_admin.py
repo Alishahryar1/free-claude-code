@@ -788,7 +788,7 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
     assert fallback_field["value"] is None
     assert fallback_field["nullable"] is True
     assert fallback_field["restart_required"] is False
-    assert "fails before output" in fallback_field["description"]
+    assert "continue the output already shown" in fallback_field["description"]
     assert "every client" in fallback_field["description"]
     assert "multiple providers" in fallback_field["description"]
     reasoning_policy = next(

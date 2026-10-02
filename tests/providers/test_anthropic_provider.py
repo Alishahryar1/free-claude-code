@@ -5,9 +5,12 @@ import pytest
 
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
-from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.providers.anthropic import AnthropicProvider
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_native_messages,
+)
 
 
 def provider(handler, **kwargs):
@@ -61,7 +64,8 @@ async def test_native_json_preserves_body_and_owns_auth():
     try:
         result = [
             x
-            async for x in p.stream_native_messages(
+            async for x in stream_native_messages(
+                p,
                 NativeMessagesRequest(body),
                 request_id="r",
                 response_model="public",
@@ -125,14 +129,14 @@ async def test_native_sse_relays_unknown_tool_events_without_replay():
     p = provider(handle)
     output = []
     try:
-        with pytest.raises(ExecutionFailure):
-            async for chunk in p.stream_native_messages(
-                NativeMessagesRequest(native_body(True)),
-                request_id="r",
-                response_model="public",
-            ):
-                assert isinstance(chunk, str)
-                output.append(chunk)
+        async for chunk in stream_native_messages(
+            p,
+            NativeMessagesRequest(native_body(True)),
+            request_id="r",
+            response_model="public",
+        ):
+            assert isinstance(chunk, str)
+            output.append(chunk)
         assert len(calls) == 1
         assert '"model": "public"' in output[0]
         assert "input_json_delta" in "".join(output)

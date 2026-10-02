@@ -4,7 +4,6 @@ import asyncio
 import json
 import re
 from collections.abc import Callable, Mapping
-from copy import deepcopy
 from typing import Any
 
 import httpx2
@@ -34,7 +33,13 @@ from free_claude_code.providers.openai_chat.stream_output import (
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from tests.core.openai_responses.test_client_tool_discovery import AGENTS, SEARCH
-from tests.providers.support import REASONING_ON, immediate_admission
+from tests.providers.support import (
+    REASONING_ON,
+    immediate_admission,
+    stream_messages,
+    stream_responses,
+)
+from tests.stream_helpers import serialize_events
 
 
 @pytest.mark.asyncio
@@ -78,7 +83,8 @@ async def test_tolerant_classifier_corrects_required_reasoning(stream_error, err
     try:
         output = [
             event
-            async for event in _transport(client).stream_messages(
+            async for event in stream_messages(
+                _transport(client),
                 _request(max_tokens=64, thinking={"type": "disabled"}),
                 input_tokens=11,
                 request_id="classifier",
@@ -86,7 +92,10 @@ async def test_tolerant_classifier_corrects_required_reasoning(stream_error, err
                 reasoning=ReasoningPolicy.prefer_off(),
             )
         ]
-        assert text_content(parse_sse_text("".join(output))) == "<severity>0</severity>"
+        assert (
+            text_content(parse_sse_text(serialize_events(output)))
+            == "<severity>0</severity>"
+        )
         assert len(bodies) == 2
         assert bodies[0]["reasoning"]["effort"] == "none"
         assert "max_output_tokens" not in bodies[0]
@@ -216,7 +225,8 @@ async def _collect(
 ) -> list[str]:
     return [
         chunk
-        async for chunk in transport.stream_messages(
+        async for chunk in stream_messages(
+            transport,
             request or _request(),
             input_tokens=11,
             request_id="req_responses",
@@ -234,7 +244,8 @@ async def _collect_native(
 ) -> list[str]:
     return [
         chunk
-        async for chunk in transport.stream_responses(
+        async for chunk in stream_responses(
+            transport,
             request,
             input_tokens=11,
             request_id="req_native_responses",
@@ -321,9 +332,9 @@ async def test_tool_adaptation_retries_start_with_fresh_event_state() -> None:
         )
     finally:
         await client.close()
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     assert attempts == 2
-    assert [event.data["sequence_number"] for event in events] == [0, 1, 2]
+    assert [event.data["sequence_number"] for event in events] == [100, 101, 102]
 
 
 @pytest.mark.asyncio
@@ -414,7 +425,7 @@ async def test_concurrent_requests_do_not_share_tool_identities() -> None:
     finally:
         await client.close()
     custom_events, function_events = [
-        parse_sse_text("".join(output)) for output in chunks
+        parse_sse_text(serialize_events(output)) for output in chunks
     ]
     assert custom_events[-1].data["response"]["output"][0]["type"] == "custom_tool_call"
     assert function_events[-1].data["response"]["output"][0]["type"] == "function_call"
@@ -471,14 +482,15 @@ async def test_chat_custom_history_replays_with_native_wire_compatible_ids(
     writer = ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
     frames = writer.start_events()
     frames.append(writer.start_tool_block(0, "call_edit", "edit"))
-    frames.append(writer.emit_tool_delta(0, '{"input":"patch"}'))
+    frames.extend(writer.emit_tool_delta(0, '{"input":"patch"}'))
     frames.extend(
         writer.finish_success(
             stop_reason="tool_calls",
             usage=ChatStreamUsage(input_tokens=3, output_tokens=2),
         )
     )
-    item = parse_sse_text("".join(frames))[-1].data["response"]["output"][0]
+    projected = writer.project(frames)
+    item = projected[-1].payload["response"]["output"][0]
     if legacy:
         item["id"] = "fc_legacy"
     continuation = OpenAIResponsesRequest(
@@ -603,7 +615,7 @@ async def test_native_responses_preserves_request_and_upstream_event_identity() 
             "future_option": {"enabled": True},
         }
     ]
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     assert [event.event for event in events] == [
         "response.created",
         "response.output_text.delta",
@@ -711,15 +723,15 @@ async def test_native_response_failed_retries_before_public_commitment() -> None
     finally:
         await client.close()
 
-    body = "".join(chunks)
+    body = serialize_events(chunks)
     events = parse_sse_text(body)
     assert attempts == 2
     assert [event.event for event in events] == [
         "response.created",
         "response.completed",
     ]
-    assert "resp_attempt_1" not in body
-    assert events[0].data["response"]["id"] == "resp_attempt_2"
+    assert "resp_attempt_2" not in body
+    assert events[0].data["response"]["id"] == "resp_attempt_1"
 
 
 @pytest.mark.asyncio
@@ -841,7 +853,7 @@ async def test_native_committed_truncation_emits_one_failed_terminal() -> None:
     finally:
         await client.close()
 
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     assert attempts == 1
     assert [event.event for event in events][-1] == "response.failed"
     assert sum(event.event == "response.failed" for event in events) == 1
@@ -853,9 +865,8 @@ async def test_native_committed_truncation_emits_one_failed_terminal() -> None:
 @pytest.mark.asyncio
 async def test_interrupted_discovery_can_continue_through_native_transport() -> None:
     bodies: list[dict[str, Any]] = []
-    saved_text = "Saved work" * 7_000
+    saved_text = "Saved work"
     user: JsonObject = {"role": "user", "content": "Find an agent"}
-    retry: JsonObject = {"role": "user", "content": "Continue"}
     sibling: JsonObject = {
         "id": "item_text",
         "type": "message",
@@ -888,7 +899,20 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
         if len(bodies) == 1:
             events = [
                 created,
-                # Commit the attempt before its failure, using the existing buffer limit.
+                {
+                    "type": "response.output_item.added",
+                    "sequence_number": 1,
+                    "output_index": 0,
+                    "item": {**sibling, "status": "in_progress", "content": []},
+                },
+                {
+                    "type": "response.content_part.added",
+                    "sequence_number": 2,
+                    "output_index": 0,
+                    "item_id": "item_text",
+                    "content_index": 0,
+                    "part": {"type": "output_text", "text": "", "annotations": []},
+                },
                 _text_delta(saved_text, sequence=1),
                 {
                     "type": "response.output_item.done",
@@ -914,7 +938,10 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
                 },
             ]
         elif len(bodies) == 2:
-            assert body["input"] == [user, sibling, retry]
+            assert body["input"][:2] == [user, sibling]
+            assert len(body["input"]) == 3
+            assert body["input"][-1]["role"] == "user"
+            assert "search" not in json.dumps(body["input"])
             complete = {
                 **call,
                 "call_id": "retry_search",
@@ -969,27 +996,20 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
         original = first.model_dump()
         events = parse_sse_text("".join(await _collect_native(transport, first)))
         assert first.model_dump() == original
-        failed = events[-1].data["response"]
-        assert events[-1].event == "response.failed"
-        assert failed["error"] == error
-        assert failed["output"][0] == sibling
-        partial = failed["output"][1]
-        assert partial["type"] == "tool_search_call"
-        assert partial["arguments"] == '{"query":'
-        assert partial["status"] == "incomplete"
-        assert len(bodies) == 1
-        history.extend([*failed["output"], retry])
-        second = OpenAIResponsesRequest(model="example", input=history, tools=[SEARCH])
-        original = deepcopy(history)
-        events = parse_sse_text("".join(await _collect_native(transport, second)))
-        assert history == original
         assert events[-1].event == "response.completed"
-        complete = events[-1].data["response"]["output"][0]
+        output = events[-1].data["response"]["output"]
+        assert output[0] == sibling
+        assert len(output) == 2
+        assert len(bodies) == 2
+        assert all(
+            event.data.get("item", {}).get("call_id") != "search" for event in events
+        )
+        history.extend(output)
+        complete = output[1]
         assert complete["type"] == "tool_search_call"
         assert complete["arguments"] == {"query": "agent"}
         history.extend(
             [
-                complete,
                 {
                     "type": "tool_search_output",
                     "execution": "client",
@@ -1013,7 +1033,17 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
             await _collect_native(
                 transport,
                 OpenAIResponsesRequest(
-                    model="example", input=[partial], tools=[SEARCH]
+                    model="example",
+                    input=[
+                        {
+                            "type": "tool_search_call",
+                            "execution": "client",
+                            "call_id": "incomplete",
+                            "arguments": '{"query":',
+                            "status": "incomplete",
+                        }
+                    ],
+                    tools=[SEARCH],
                 ),
             )
         assert len(bodies) == 3
@@ -1045,7 +1075,7 @@ async def test_native_response_incomplete_is_a_normal_terminal() -> None:
     finally:
         await client.close()
 
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     assert [event.event for event in events] == ["response.incomplete"]
 
 
@@ -1105,7 +1135,7 @@ async def test_native_response_stops_at_terminal_before_trailing_ping() -> None:
     finally:
         await client.close()
 
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     assert [event.event for event in events] == ["response.completed"]
 
 
@@ -1134,7 +1164,7 @@ async def test_standard_responses_preserves_public_fields_and_usage() -> None:
     assert captured[0]["max_output_tokens"] == 123
     assert captured[0]["metadata"] == {"source": "test"}
     assert captured[0]["store"] is False
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     assert_anthropic_stream_contract(events)
     assert text_content(events) == "hello"
     final_usage = next(
@@ -1206,7 +1236,7 @@ async def test_standard_responses_maps_reasoning_and_tool_calls() -> None:
     finally:
         await client.close()
 
-    parsed = parse_sse_text("".join(chunks))
+    parsed = parse_sse_text(serialize_events(chunks))
     assert_anthropic_stream_contract(parsed)
     assert thinking_content(parsed) == "thinking"
     tool_start = next(
@@ -1255,7 +1285,7 @@ async def test_retryable_open_failure_retries_inside_one_transport() -> None:
         await client.close()
 
     assert attempts == 2
-    parsed = parse_sse_text("".join(chunks))
+    parsed = parse_sse_text(serialize_events(chunks))
     assert_anthropic_stream_contract(parsed)
     assert text_content(parsed) == "recovered"
 
@@ -1268,9 +1298,9 @@ async def test_early_truncated_retry_has_one_visible_lifecycle() -> None:
         nonlocal attempts
         attempts += 1
         body = (
-            _sse(_text_delta("discarded"))
+            _sse(_text_delta("First "))
             if attempts == 1
-            else _sse(_text_delta("kept"), _completed_event())
+            else _sse(_text_delta("continued"), _completed_event())
         )
         return httpx2.Response(
             200,
@@ -1284,10 +1314,9 @@ async def test_early_truncated_retry_has_one_visible_lifecycle() -> None:
     finally:
         await client.close()
 
-    parsed = parse_sse_text("".join(chunks))
+    parsed = parse_sse_text(serialize_events(chunks))
     assert attempts == 2
-    assert text_content(parsed) == "kept"
-    assert "discarded" not in "".join(chunks)
+    assert text_content(parsed) == "First continued"
     assert sum(event.event == "message_start" for event in parsed) == 1
     assert sum(event.event == "message_stop" for event in parsed) == 1
     assert_anthropic_stream_contract(parsed)
@@ -1346,7 +1375,7 @@ async def test_sdk_stream_interruptions_retry_before_commit(
     finally:
         await client.close()
     assert requests == 2
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     terminal = "message_stop" if wire_api == "messages" else "response.completed"
     assert [event.event for event in events].count(terminal) == 1
 
@@ -1375,7 +1404,9 @@ async def test_exhausted_5xx_uses_exact_attempt_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_commit_truncation_is_not_replayed() -> None:
+async def test_repeated_truncation_exhausts_budget_without_repeating_committed_text() -> (
+    None
+):
     attempts = 0
     committed = "x" * 70_000
 
@@ -1391,21 +1422,22 @@ async def test_post_commit_truncation_is_not_replayed() -> None:
     client = _client(handler)
     chunks: list[str] = []
     try:
-        with pytest.raises(ExecutionFailure):
-            async for chunk in _transport(client).stream_messages(
-                _request(),
-                input_tokens=1,
-                request_id="req_committed",
-                response_model="public-model",
-                reasoning=REASONING_ON,
-            ):
-                chunks.extend((chunk,))
+        async for chunk in stream_messages(
+            _transport(client),
+            _request(),
+            input_tokens=1,
+            request_id="req_committed",
+            response_model="public-model",
+            reasoning=REASONING_ON,
+        ):
+            chunks.extend((chunk,))
     finally:
         await client.close()
 
-    assert attempts == 1
-    assert "".join(chunks).count(committed) == 1
-    assert "".join(chunks).count("event: message_start") == 1
+    assert attempts == 5
+    assert serialize_events(chunks).count(committed) == 1
+    assert serialize_events(chunks).count("event: message_start") == 1
+    assert parse_sse_text(serialize_events(chunks))[-1].event == "error"
 
 
 class _BlockingBody(httpx2.AsyncByteStream):
@@ -1451,13 +1483,17 @@ async def test_startup_rejects_fields_responses_cannot_represent() -> None:
 
     try:
         with pytest.raises(InvalidRequestError, match="stop_sequences"):
-            transport.stream_messages(
-                request,
-                input_tokens=0,
-                request_id=None,
-                response_model=request.model,
-                reasoning=REASONING_ON,
-            )
+            _ = [
+                chunk
+                async for chunk in stream_messages(
+                    transport,
+                    request,
+                    input_tokens=0,
+                    request_id=None,
+                    response_model=request.model,
+                    reasoning=REASONING_ON,
+                )
+            ]
     finally:
         await client.close()
 

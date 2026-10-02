@@ -10,6 +10,7 @@ from free_claude_code.core.history_replay import (
     encode_replay,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.stream_events import StreamEvent
 
 from .native import NativeMessagesError
 
@@ -254,7 +255,9 @@ class NativeMessagesRelay:
     def stop_reason(self) -> str | None:
         return self._state.stop_reason
 
-    def feed(self, event_type: str, payload: Mapping[str, JsonValue]) -> str:
+    def feed(
+        self, event_type: str, payload: Mapping[str, JsonValue]
+    ) -> list[StreamEvent]:
         completed = self._state.accept(event_type, payload)
         body = dict(payload)
         if event_type == "message_start":
@@ -270,7 +273,7 @@ class NativeMessagesRelay:
                 self._replay_origin = replace(
                     self._replay_origin, model=message["model"]
                 )
-        prefix = ""
+        prefix: list[StreamEvent] = []
         if self._replay_origin is not None:
             block = body.get("content_block")
             if event_type == "content_block_start" and isinstance(block, dict):
@@ -287,7 +290,7 @@ class NativeMessagesRelay:
                 and isinstance(delta, dict)
                 and delta.get("type") == "signature_delta"
             ):
-                return ""
+                return []
             if (
                 completed is not None
                 and completed.body.get("type") == "thinking"
@@ -296,16 +299,17 @@ class NativeMessagesRelay:
                 signature = encode_replay(
                     ReplayRecord(self._replay_origin, completed.body)
                 )
-                prefix = _event(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": body["index"],
-                        "delta": {"type": "signature_delta", "signature": signature},
-                    },
-                )
-        return prefix + _event(event_type, body)
-
-
-def _event(kind: str, payload: JsonObject) -> str:
-    return f"event: {kind}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                prefix = [
+                    StreamEvent(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": body["index"],
+                            "delta": {
+                                "type": "signature_delta",
+                                "signature": signature,
+                            },
+                        },
+                    )
+                ]
+        return [*prefix, StreamEvent(event_type, body)]

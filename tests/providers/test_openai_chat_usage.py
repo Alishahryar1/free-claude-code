@@ -17,7 +17,6 @@ from free_claude_code.core.anthropic.sse_aggregation import (
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
-from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.openai_chat import (
     OpenAIChatBehavior,
     OpenAIChatProfile,
@@ -31,12 +30,15 @@ from free_claude_code.providers.openai_chat.usage import (
     request_stream_usage,
     usage_int,
 )
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
+    exercise_chat_body,
     immediate_admission,
     make_provider_config,
+    stream_messages,
+    stream_responses,
+    successful_chat_stream,
 )
 
 
@@ -383,7 +385,7 @@ async def test_openai_chat_stream_requests_usage_and_uses_provider_prompt_tokens
 
     with patch.object(provider._client.chat.completions, "create", create):
         events = [
-            event async for event in provider.stream_messages(request, input_tokens=7)
+            event async for event in stream_messages(provider, request, input_tokens=7)
         ]
 
     create.assert_awaited_once()
@@ -437,7 +439,7 @@ async def test_openai_chat_nonstream_message_uses_final_cache_partition():
 
     with patch.object(provider._client.chat.completions, "create", create):
         message, error, _complete = await aggregate_anthropic_sse_to_message(
-            provider.stream_messages(request, input_tokens=7)
+            stream_messages(provider, request, input_tokens=7)
         )
 
     assert error is None
@@ -476,7 +478,7 @@ async def test_openai_chat_responses_stream_preserves_cache_write_usage():
 
     with patch.object(provider._client.chat.completions, "create", create):
         events = [
-            event async for event in provider.stream_responses(request, input_tokens=7)
+            event async for event in stream_responses(provider, request, input_tokens=7)
         ]
 
     completed = next(
@@ -514,7 +516,8 @@ async def test_openai_chat_stream_keeps_response_model_separate_from_upstream_mo
     with patch.object(provider._client.chat.completions, "create", create):
         events = [
             event
-            async for event in provider.stream_messages(
+            async for event in stream_messages(
+                provider,
                 request,
                 response_model="anthropic/test/upstream/model",
             )
@@ -541,22 +544,12 @@ async def test_openai_chat_stream_retries_without_usage_when_option_is_rejected(
                 "stream_options is unsupported",
                 {"error": {"message": "stream_options is unsupported"}},
             ),
-            object(),
+            SDKStreamDouble(successful_chat_stream()),
         ]
     )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        (
-            _stream_obj,
-            used_body,
-            attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
-        await attempt.aclose()
+        used_body = await exercise_chat_body(provider, body)
 
     assert create.await_count == 2
     assert create.await_args_list[0].kwargs["stream_options"] == {"include_usage": True}

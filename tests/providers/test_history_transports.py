@@ -16,8 +16,10 @@ from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import (
+    AssociatedReplayRecord,
     decode_replay,
     encode_replay,
+    is_replay,
     resolve_messages_replay,
 )
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -28,7 +30,12 @@ from tests.application.test_execution import (
     _routed_request,
     _target,
 )
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_messages,
+    stream_responses,
+)
 from tests.providers.test_anthropic_messages_transport import Endpoint, _events
 from tests.providers.test_anthropic_messages_transport import (
     _transport as messages_transport,
@@ -194,13 +201,15 @@ async def _harness(protocol, responder=None, *, key="a", chat_provider_factory=N
             options.pop("input_tokens")
             options["reasoning"] = ReasoningPolicy.provider_default()
         if wire == "responses":
-            return provider.stream_responses(
+            return stream_responses(
+                provider,
                 OpenAIResponsesRequest.model_validate(
                     {"model": "requested", "input": history, "tools": tools}
                 ),
                 **options,
             )
-        return provider.stream_messages(
+        return stream_messages(
+            provider,
             MessagesRequest.model_validate(
                 {"model": "requested", "messages": history, "tools": tools}
             ),
@@ -409,9 +418,9 @@ async def test_stream_history_rejection_respects_the_public_commit_boundary(
     async with _harness(protocol, responder) as (send, bodies, _):
         if committed:
             output = ""
-            with pytest.raises(ExecutionFailure):
-                async for event in send("messages", history):
-                    output += event
+            async for event in send("messages", history):
+                output += event
+            assert parse_sse_text(output)[-1].event == "error"
             assert visible in output
             assert len(bodies) == 1
         else:
@@ -583,7 +592,8 @@ async def test_chat_buffered_content_preserves_reasoning_through_next_request(
 
     def send(history):
         if wire == "messages":
-            return provider.stream_messages(
+            return stream_messages(
+                provider,
                 MessagesRequest.model_validate(
                     {
                         "model": "requested",
@@ -593,7 +603,8 @@ async def test_chat_buffered_content_preserves_reasoning_through_next_request(
                 ),
                 reasoning=ReasoningPolicy.on(),
             )
-        return provider.stream_responses(
+        return stream_responses(
+            provider,
             OpenAIResponsesRequest.model_validate(
                 {
                     "model": "requested",
@@ -674,22 +685,27 @@ async def test_chat_encrypted_only_completion_does_not_add_blank_text(wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-@pytest.mark.parametrize("committed", [False, True])
-async def test_chat_pending_reasoning_is_finalized_on_failure_or_discarded_on_retry(
-    wire, committed
+@pytest.mark.parametrize("explicit_failure", [False, True])
+async def test_incomplete_native_reasoning_cannot_be_finalized_for_recovery(
+    wire, explicit_failure
 ):
-    text = "Plan." * (30000 if committed else 1)
-    first = {"type": "reasoning.encrypted", "data": "first", "index": 0}
-    second = {"type": "reasoning.encrypted", "data": "second", "index": 1}
     events = _chat_reasoning_events(
         [
-            {"reasoning_content": text, "reasoning_details": [first]},
-            {"content": "<"},
-            {"reasoning_details": [second]},
+            {
+                "reasoning_content": "Plan.",
+                "reasoning_details": [
+                    {"type": "reasoning.encrypted", "data": "first", "index": 0}
+                ],
+            },
+            {"content": "Answer."},
+            {
+                "reasoning_details": [
+                    {"type": "reasoning.encrypted", "data": "second", "index": 0}
+                ]
+            },
         ]
     )[:-1]
-    # A cutoff retries before commitment; a terminal API error closes visible output.
-    if committed:
+    if explicit_failure:
         events.append(
             {"error": {"type": "invalid_request_error", "message": "stream failed"}}
         )
@@ -698,36 +714,31 @@ async def test_chat_pending_reasoning_is_finalized_on_failure_or_discarded_on_re
         return 200, events if len(bodies) == 1 else _events_for("chat")
 
     async with _harness("chat", responder) as (send, bodies, _):
-        stream = send(wire, [{"role": "user", "content": "hello"}])
-        if not committed:
-            saved = await _saved_reply(stream, wire)
-            assert len(bodies) == 2
-            assert decode_replay(_carrier(saved, wire)).native == _native("chat")
-            return
-        if wire == "messages":
-            output = ""
-            with pytest.raises(ExecutionFailure):
-                async for frame in stream:
-                    output += frame
-
-            async def replay_frames():
-                yield output
-
-            message, _, saw_stop = await aggregate_anthropic_sse_to_message(
-                replay_frames()
-            )
-            assert not saw_stop
-            saved = [{"role": "assistant", "content": message["content"]}]
-        else:
-            frames = [frame async for frame in stream]
-            response = parse_sse_text("".join(frames))[-1].data["response"]
-            assert response["status"] == "failed"
-            saved = response["output"]
-        assert len(bodies) == 1
-        assert decode_replay(_carrier(saved, wire)).native == {
-            "reasoning_content": text,
-            "reasoning_details": [first, second],
-        }
+        output = "".join(
+            [
+                frame
+                async for frame in send(wire, [{"role": "user", "content": "hello"}])
+            ]
+        )
+    frames = parse_sse_text(output)
+    assert len(bodies) == 1
+    assert frames[-1].event == ("error" if wire == "messages" else "response.failed")
+    assert not any(
+        frame.event in {"message_stop", "response.completed"} for frame in frames
+    )
+    # A final opaque record must come from upstream completion, never a disconnect.
+    if wire == "messages":
+        carriers = [frame.data.get("delta", {}).get("signature") for frame in frames]
+        carriers += [
+            frame.data.get("content_block", {}).get("data") for frame in frames
+        ]
+        for value in carriers:
+            if value and is_replay(value):
+                record = decode_replay(value)
+                assert (
+                    isinstance(record, AssociatedReplayRecord)
+                    and record.part == "anchor"
+                )
 
 
 @pytest.mark.asyncio

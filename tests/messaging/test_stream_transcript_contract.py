@@ -8,6 +8,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.messaging.event_parser import parse_cli_event
 from free_claude_code.messaging.transcript import RenderCtx, TranscriptBuffer
+from tests.stream_helpers import serialize_events
 
 
 def test_thinking_tool_text_and_transcript_order_contract() -> None:
@@ -34,7 +35,7 @@ def test_thinking_tool_text_and_transcript_order_contract() -> None:
     chunks.append(builder.message_delta("end_turn", 20))
     chunks.append(builder.message_stop())
 
-    events = parse_sse_text("".join(chunks))
+    events = parse_sse_text(serialize_events(chunks))
     assert_anthropic_stream_contract(events)
     assert has_tool_use(events)
 

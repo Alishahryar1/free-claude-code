@@ -12,6 +12,7 @@ from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    stream_messages,
 )
 
 
@@ -237,7 +238,7 @@ async def test_stream_messages_text(groq_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in groq_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(groq_provider, req)]
 
         assert any(
             '"text_delta"' in event and "Hello back!" in event for event in events
@@ -270,7 +271,7 @@ async def test_stream_messages_reasoning_content(groq_provider):
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in groq_provider.stream_messages(req)]
+        events = [event async for event in stream_messages(groq_provider, req)]
 
         assert any(
             '"thinking_delta"' in event and "Thinking..." in event for event in events

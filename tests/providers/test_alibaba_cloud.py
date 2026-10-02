@@ -14,7 +14,11 @@ from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.runtime import build_provider_config
-from tests.providers.support import immediate_admission
+from tests.providers.support import (
+    immediate_admission,
+    stream_messages,
+    stream_responses,
+)
 
 BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
@@ -324,16 +328,18 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
     schema = {"type": "object", "properties": {"path": {"type": "string"}}}
     async with provider_for(handler) as provider:
         stream = (
-            provider.stream_messages(
+            stream_messages(
+                provider,
                 MessagesRequest(
                     model="qwen-coder",
                     max_tokens=2048,
                     messages=[{"role": "user", "content": "Inspect the README."}],
                     tools=[{"name": "inspect", "input_schema": schema}],
-                )
+                ),
             )
             if wire == "messages"
-            else provider.stream_responses(
+            else stream_responses(
+                provider,
                 OpenAIResponsesRequest(
                     model="qwen-coder",
                     input="Inspect the README.",
@@ -341,7 +347,7 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
                     tools=[
                         {"type": "function", "name": "inspect", "parameters": schema}
                     ],
-                )
+                ),
             )
         )
         output = "".join([event async for event in stream])

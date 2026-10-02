@@ -1,32 +1,57 @@
 """Typed capabilities consumed by application use cases."""
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from typing import Protocol
 
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.recovery import RecoveryCheckpoint
+from free_claude_code.core.stream_events import DecodedStreamEvent
 
 from .model_metadata import ProviderModelInfo
+
+
+class ProviderCandidate(Protocol):
+    """One candidate budget with individual physical attempts and owned resources."""
+
+    @property
+    def can_attempt(self) -> bool: ...
+
+    async def prepare(self, checkpoint: RecoveryCheckpoint) -> None: ...
+
+    def stream_attempt(
+        self,
+        checkpoint: RecoveryCheckpoint,
+        *,
+        wait_for_recovery: bool,
+        can_correct: Callable[[], bool],
+    ) -> AsyncIterator[DecodedStreamEvent]: ...
+
+    def finish(self, failure: ExecutionFailure | None) -> None: ...
+
+    async def aclose(self) -> None: ...
 
 
 class ProviderPort(Protocol):
     """Minimal provider capability required to execute one request."""
 
-    def stream_native_messages(
+    def open_native_messages(
         self,
         request: NativeMessagesRequest,
         *,
         request_id: str,
         response_model: str,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AsyncIterator[str]: ...
+    ) -> AbstractAsyncContextManager[ProviderCandidate]: ...
 
-    def stream_messages(
+    def open_messages(
         self,
         request: MessagesRequest,
         *,
@@ -36,9 +61,9 @@ class ProviderPort(Protocol):
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]: ...
+    ) -> AbstractAsyncContextManager[ProviderCandidate]: ...
 
-    def stream_responses(
+    def open_responses(
         self,
         request: OpenAIResponsesRequest,
         *,
@@ -48,7 +73,7 @@ class ProviderPort(Protocol):
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]: ...
+    ) -> AbstractAsyncContextManager[ProviderCandidate]: ...
 
 
 ProviderResolver = Callable[[str], Awaitable[ProviderPort]]

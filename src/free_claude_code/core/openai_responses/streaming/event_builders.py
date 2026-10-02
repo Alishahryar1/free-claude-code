@@ -1,49 +1,41 @@
 """OpenAI Responses SSE event builders."""
 
-from collections.abc import Callable, Iterable
-from typing import Any, cast
+from typing import Any
 
-from free_claude_code.core.json_types import JsonObject
-
-from ..events import format_response_sse_event
+from free_claude_code.core.stream_events import StreamEvent
 
 
 class ResponseEventBuilder:
     """Build one ordered Responses event stream."""
 
-    def __init__(
-        self,
-        transform: Callable[[str, JsonObject], Iterable[tuple[str, JsonObject]]]
-        | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         self._next_sequence_number = 0
-        self._transform = transform
 
-    def response_created(self, response: dict[str, Any]) -> str:
+    def response_created(self, response: dict[str, Any]) -> StreamEvent:
         return self._format(
             "response.created",
             {"type": "response.created", "response": response},
         )
 
-    def response_completed(self, response: dict[str, Any]) -> str:
+    def response_completed(self, response: dict[str, Any]) -> StreamEvent:
         return self._format(
             "response.completed",
             {"type": "response.completed", "response": response},
         )
 
-    def response_incomplete(self, response: dict[str, Any]) -> str:
+    def response_incomplete(self, response: dict[str, Any]) -> StreamEvent:
         return self._format(
             "response.incomplete",
             {"type": "response.incomplete", "response": response},
         )
 
-    def response_failed(self, response: dict[str, Any]) -> str:
+    def response_failed(self, response: dict[str, Any]) -> StreamEvent:
         return self._format(
             "response.failed",
             {"type": "response.failed", "response": response},
         )
 
-    def output_item_added(self, output_index: int, item: dict[str, Any]) -> str:
+    def output_item_added(self, output_index: int, item: dict[str, Any]) -> StreamEvent:
         return self._format(
             "response.output_item.added",
             {
@@ -53,7 +45,7 @@ class ResponseEventBuilder:
             },
         )
 
-    def output_item_done(self, output_index: int, item: dict[str, Any]) -> str:
+    def output_item_done(self, output_index: int, item: dict[str, Any]) -> StreamEvent:
         return self._format(
             "response.output_item.done",
             {
@@ -63,7 +55,7 @@ class ResponseEventBuilder:
             },
         )
 
-    def content_part_added(self, item_id: str, output_index: int) -> str:
+    def content_part_added(self, item_id: str, output_index: int) -> StreamEvent:
         return self._format(
             "response.content_part.added",
             {
@@ -75,7 +67,9 @@ class ResponseEventBuilder:
             },
         )
 
-    def output_text_delta(self, item_id: str, output_index: int, text: str) -> str:
+    def output_text_delta(
+        self, item_id: str, output_index: int, text: str
+    ) -> StreamEvent:
         return self._format(
             "response.output_text.delta",
             {
@@ -87,7 +81,9 @@ class ResponseEventBuilder:
             },
         )
 
-    def output_text_done(self, item_id: str, output_index: int, text: str) -> str:
+    def output_text_done(
+        self, item_id: str, output_index: int, text: str
+    ) -> StreamEvent:
         return self._format(
             "response.output_text.done",
             {
@@ -99,7 +95,9 @@ class ResponseEventBuilder:
             },
         )
 
-    def content_part_done(self, item_id: str, output_index: int, text: str) -> str:
+    def content_part_done(
+        self, item_id: str, output_index: int, text: str
+    ) -> StreamEvent:
         return self._format(
             "response.content_part.done",
             {
@@ -111,7 +109,9 @@ class ResponseEventBuilder:
             },
         )
 
-    def reasoning_text_delta(self, item_id: str, output_index: int, text: str) -> str:
+    def reasoning_text_delta(
+        self, item_id: str, output_index: int, text: str
+    ) -> StreamEvent:
         return self._format(
             "response.reasoning_text.delta",
             {
@@ -123,7 +123,9 @@ class ResponseEventBuilder:
             },
         )
 
-    def reasoning_text_done(self, item_id: str, output_index: int, text: str) -> str:
+    def reasoning_text_done(
+        self, item_id: str, output_index: int, text: str
+    ) -> StreamEvent:
         return self._format(
             "response.reasoning_text.done",
             {
@@ -137,7 +139,7 @@ class ResponseEventBuilder:
 
     def function_call_arguments_delta(
         self, item_id: str, output_index: int, arguments: str
-    ) -> str:
+    ) -> StreamEvent:
         return self._format(
             "response.function_call_arguments.delta",
             {
@@ -150,7 +152,7 @@ class ResponseEventBuilder:
 
     def function_call_arguments_done(
         self, item_id: str, output_index: int, arguments: str
-    ) -> str:
+    ) -> StreamEvent:
         return self._format(
             "response.function_call_arguments.done",
             {
@@ -163,7 +165,7 @@ class ResponseEventBuilder:
 
     def custom_tool_call_input_delta(
         self, item_id: str, output_index: int, input_text: str
-    ) -> str:
+    ) -> StreamEvent:
         return self._format(
             "response.custom_tool_call_input.delta",
             {
@@ -176,7 +178,7 @@ class ResponseEventBuilder:
 
     def custom_tool_call_input_done(
         self, item_id: str, output_index: int, input_text: str
-    ) -> str:
+    ) -> StreamEvent:
         return self._format(
             "response.custom_tool_call_input.done",
             {
@@ -187,12 +189,7 @@ class ResponseEventBuilder:
             },
         )
 
-    def _format(self, event_type: str, data: dict[str, Any]) -> str:
+    def _format(self, event_type: str, data: dict[str, Any]) -> StreamEvent:
         data["sequence_number"] = self._next_sequence_number
         self._next_sequence_number += 1
-        if self._transform is not None:
-            return "".join(
-                format_response_sse_event(kind, payload)
-                for kind, payload in self._transform(event_type, cast(JsonObject, data))
-            )
-        return format_response_sse_event(event_type, data)
+        return StreamEvent(event_type, data)

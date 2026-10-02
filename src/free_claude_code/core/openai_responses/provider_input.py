@@ -33,7 +33,7 @@ from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.tool_schema_patterns import translate_tool_schema_patterns
 
-from .errors import ResponsesConversionError
+from .errors import ResponsesConversionError, UnsupportedResponsesFeature
 from .reasoning import responses_reasoning_config
 
 
@@ -109,7 +109,7 @@ def build_responses_provider_request(
 
 def _validate_supported_request(request: MessagesRequest) -> None:
     if request.model_extra:
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             "OpenAI Responses does not support these request fields: "
             f"{sorted(str(key) for key in request.model_extra)}."
         )
@@ -117,7 +117,7 @@ def _validate_supported_request(request: MessagesRequest) -> None:
         {tool.type for tool in request.tools or () if tool.type is not None}
     )
     if provider_tool_types:
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             "OpenAI Responses cannot represent provider-managed tool types: "
             f"{provider_tool_types}."
         )
@@ -134,7 +134,7 @@ def _validate_supported_request(request: MessagesRequest) -> None:
     if request.extra_body:
         unsupported.append("extra_body")
     if unsupported:
-        raise ResponsesConversionError(
+        raise UnsupportedResponsesFeature(
             "OpenAI Responses cannot represent these fields without data loss: "
             f"{unsupported}."
         )
@@ -295,7 +295,7 @@ def _assistant_items(
                 )
             )
         else:
-            raise ResponsesConversionError(
+            raise UnsupportedResponsesFeature(
                 f"OpenAI Responses cannot represent assistant content block {kind!r}."
             )
     flush_text()
@@ -351,11 +351,11 @@ def _user_items(content: Any) -> list[dict[str, Any]]:
                 }
             )
         elif block_type == "document":
-            raise ResponsesConversionError(
+            raise UnsupportedResponsesFeature(
                 "OpenAI Responses provider does not support Anthropic document blocks."
             )
         else:
-            raise ResponsesConversionError(
+            raise UnsupportedResponsesFeature(
                 f"OpenAI Responses cannot represent user content block {block_type!r}."
             )
     flush_message()

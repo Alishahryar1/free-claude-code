@@ -22,11 +22,44 @@ from free_claude_code.core.history_replay import (
     resolve_messages_replay,
 )
 from free_claude_code.core.json_types import JsonValue
+from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 
 from .endpoint_types import HttpEndpoint
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
+
+
+_NATIVE_INPUT_FIELDS = {
+    None: {"role", "content", "name", "url", "detail"},
+    "message": {"role", "content", "status", "phase"},
+    "text": {"text", "citations", "media_type", "data"},
+    "input_text": {"text"},
+    "output_text": {"text", "annotations", "logprobs"},
+    "refusal": {"refusal"},
+    "image": {"source"},
+    "input_image": {"image_url", "file_id", "detail"},
+    "image_url": {"image_url", "detail"},
+    "document": {"source", "title", "context", "citations"},
+    "input_file": {"file_id", "file_data", "filename", "file_url"},
+    "file": {"file_data", "filename"},
+    "thinking": {"thinking", "signature"},
+    "redacted_thinking": {"data"},
+    "reasoning": {"summary", "content", "encrypted_content", "status"},
+    "summary_text": {"text"},
+    "reasoning_text": {"text"},
+    "tool_use": {"name", "input"},
+    "tool_result": {"tool_use_id", "content", "is_error"},
+    "function_call": {"call_id", "name", "arguments", "status", "namespace"},
+    "function_call_output": {"call_id", "output", "status"},
+    "custom_tool_call": {"call_id", "name", "input", "status", "namespace"},
+    "custom_tool_call_output": {"call_id", "output", "status"},
+    "tool_search_call": {"call_id", "execution", "arguments", "status"},
+    "tool_search_output": {"call_id", "execution", "tools", "status"},
+    "function": {"name", "arguments"},
+    "base64": {"media_type", "data"},
+    "url": {"url"},
+}
 
 
 def validate_history(body: Mapping[str, Any]) -> None:
@@ -40,6 +73,83 @@ def validate_history(body: Mapping[str, Any]) -> None:
                         decode_replay(value)
     except HistoryReplayError as error:
         raise InvalidRequestError(str(error)) from error
+
+
+def requires_native_origin(body: Mapping[str, Any], protocol: HistoryProtocol) -> bool:
+    """Retain the origin of opaque input, including state used before first output."""
+    if protocol != "chat":
+        fields = (
+            set(OpenAIResponsesRequest.model_fields)
+            | {
+                "text",
+                "include",
+                "truncation",
+                "background",
+                "max_tool_calls",
+                "service_tier",
+                "safety_identifier",
+                "user",
+                "top_logprobs",
+                "prompt_cache_key",
+                "prompt_cache_retention",
+                "stream_options",
+            }
+            if protocol == "responses"
+            else set(MessagesRequest.model_fields) | {"service_tier"}
+        )
+        if any(key not in fields and value is not None for key, value in body.items()):
+            return True
+    if any(
+        body.get(key)
+        for key in ("previous_response_id", "conversation", "container", "prompt")
+    ):
+        return True
+    for _, record in _reasoning_records(body, protocol):
+        if any(record.get(key) for key in ("encrypted_content", "signature", "data")):
+            return True
+    pending: list[object] = [
+        body.get("input" if protocol == "responses" else "messages")
+    ]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, list):
+            pending.extend(value)
+        elif isinstance(value, Mapping):
+            kind = value.get("type")
+            if kind not in _NATIVE_INPUT_FIELDS:
+                return True
+            if protocol != "chat" and set(value) - (
+                _NATIVE_INPUT_FIELDS[kind] | {"type", "id", "cache_control"}
+            ):
+                return True
+            if (
+                any(
+                    value.get(key)
+                    for key in ("file_id", "container_id", "thought_signature")
+                )
+                or value.get("type") == "item_reference"
+            ):
+                return True
+            # Tool arguments are user data. Their field names cannot establish
+            # provider ownership. Follow only protocol-defined content paths.
+            for key in (
+                "content",
+                "summary",
+                "source",
+                "image_url",
+                "file",
+                "tool_calls",
+                "extra_content",
+            ):
+                nested = value.get(key)
+                if isinstance(nested, list | Mapping):
+                    pending.append(nested)
+            if kind in {
+                "function_call_output",
+                "custom_tool_call_output",
+            } and isinstance(value.get("output"), list):
+                pending.append(value["output"])
+    return False
 
 
 def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:

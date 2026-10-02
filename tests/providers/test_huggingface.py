@@ -17,6 +17,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     profiled_provider,
+    stream_messages,
 )
 
 
@@ -265,7 +266,7 @@ async def test_stream_messages_text(huggingface_provider):
 
         events = [
             event
-            async for event in huggingface_provider.stream_messages(make_request())
+            async for event in stream_messages(huggingface_provider, make_request())
         ]
 
     assert any(
@@ -299,7 +300,7 @@ async def test_stream_messages_reasoning_content(huggingface_provider):
 
         events = [
             event
-            async for event in huggingface_provider.stream_messages(make_request())
+            async for event in stream_messages(huggingface_provider, make_request())
         ]
 
     assert any(

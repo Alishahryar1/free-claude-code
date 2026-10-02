@@ -6,9 +6,10 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+from free_claude_code.core.stream_events import StreamEvent
 from free_claude_code.core.token_estimation import estimate_text_tokens
 
-from .emitter import AnthropicSseEmitter
+from .emitter import AnthropicEventBuilder
 from .recovery import (
     ToolSchema,
     parse_complete_tool_input,
@@ -109,7 +110,7 @@ class AnthropicStreamLedger:
         self.model = model
         self.input_tokens = input_tokens
         self.blocks = StreamBlockLedger()
-        self._emitter = AnthropicSseEmitter(log_raw_events=log_raw_events)
+        self._emitter = AnthropicEventBuilder(log_raw_events=log_raw_events)
         self._text_parts: list[str] = []
         self._thinking_parts: list[str] = []
         self._open_stack: list[int] = []
@@ -118,7 +119,7 @@ class AnthropicStreamLedger:
         self.message_stopped = False
         self.stop_reason: str | None = None
 
-    def message_start(self) -> str:
+    def message_start(self) -> StreamEvent:
         self.message_started = True
         safe_input = _safe_usage_int(self.input_tokens)
         return self._emitter.event(
@@ -145,7 +146,7 @@ class AnthropicStreamLedger:
         *,
         input_tokens: int | None = None,
         usage_fields: Mapping[str, int] | None = None,
-    ) -> str:
+    ) -> StreamEvent:
         self.stop_reason = stop_reason
         safe_in = _safe_usage_int(
             self.input_tokens if input_tokens is None else input_tokens
@@ -169,11 +170,13 @@ class AnthropicStreamLedger:
             },
         )
 
-    def message_stop(self) -> str:
+    def message_stop(self) -> StreamEvent:
         self.message_stopped = True
         return self._emitter.event("message_stop", {"type": "message_stop"})
 
-    def content_block_start(self, index: int, block_type: str, **kwargs: Any) -> str:
+    def content_block_start(
+        self, index: int, block_type: str, **kwargs: Any
+    ) -> StreamEvent:
         content_block: dict[str, Any] = {"type": block_type}
         if block_type == "thinking":
             content_block["thinking"] = kwargs.get("thinking", "")
@@ -201,7 +204,9 @@ class AnthropicStreamLedger:
             },
         )
 
-    def content_block_delta(self, index: int, delta_type: str, content: str) -> str:
+    def content_block_delta(
+        self, index: int, delta_type: str, content: str
+    ) -> StreamEvent:
         delta: dict[str, Any] = {"type": delta_type}
         if delta_type == "thinking_delta":
             delta["thinking"] = content
@@ -222,36 +227,36 @@ class AnthropicStreamLedger:
             },
         )
 
-    def content_block_stop(self, index: int) -> str:
+    def content_block_stop(self, index: int) -> StreamEvent:
         self._record_block_stop(index)
         return self._emitter.event(
             "content_block_stop",
             {"type": "content_block_stop", "index": index},
         )
 
-    def start_thinking_block(self) -> str:
+    def start_thinking_block(self) -> StreamEvent:
         self.blocks.thinking_index = self.blocks.allocate_index()
         self.blocks.thinking_started = True
         return self.content_block_start(self.blocks.thinking_index, "thinking")
 
-    def emit_thinking_delta(self, content: str) -> str:
+    def emit_thinking_delta(self, content: str) -> StreamEvent:
         return self.content_block_delta(
             self.blocks.thinking_index, "thinking_delta", content
         )
 
-    def stop_thinking_block(self) -> str:
+    def stop_thinking_block(self) -> StreamEvent:
         self.blocks.thinking_started = False
         return self.content_block_stop(self.blocks.thinking_index)
 
-    def start_text_block(self) -> str:
+    def start_text_block(self) -> StreamEvent:
         self.blocks.text_index = self.blocks.allocate_index()
         self.blocks.text_started = True
         return self.content_block_start(self.blocks.text_index, "text")
 
-    def emit_text_delta(self, content: str) -> str:
+    def emit_text_delta(self, content: str) -> StreamEvent:
         return self.content_block_delta(self.blocks.text_index, "text_delta", content)
 
-    def stop_text_block(self) -> str:
+    def stop_text_block(self) -> StreamEvent:
         self.blocks.text_started = False
         return self.content_block_stop(self.blocks.text_index)
 
@@ -262,7 +267,7 @@ class AnthropicStreamLedger:
         name: str,
         *,
         extra_content: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> StreamEvent:
         block_idx = self.blocks.allocate_index()
         if tool_index in self.blocks.tool_states:
             state = self.blocks.tool_states[tool_index]
@@ -288,40 +293,40 @@ class AnthropicStreamLedger:
             extra_content=extra_content,
         )
 
-    def emit_tool_delta(self, tool_index: int, partial_json: str) -> str:
+    def emit_tool_delta(self, tool_index: int, partial_json: str) -> StreamEvent:
         state = self.blocks.tool_states[tool_index]
         return self.content_block_delta(
             state.block_index, "input_json_delta", partial_json
         )
 
-    def stop_tool_block(self, tool_index: int) -> str:
+    def stop_tool_block(self, tool_index: int) -> StreamEvent:
         return self.content_block_stop(self.blocks.tool_states[tool_index].block_index)
 
-    def ensure_thinking_block(self) -> Iterator[str]:
+    def ensure_thinking_block(self) -> Iterator[StreamEvent]:
         if self.blocks.text_started:
             yield self.stop_text_block()
         if not self.blocks.thinking_started:
             yield self.start_thinking_block()
 
-    def ensure_text_block(self) -> Iterator[str]:
+    def ensure_text_block(self) -> Iterator[StreamEvent]:
         if self.blocks.thinking_started:
             yield self.stop_thinking_block()
         if not self.blocks.text_started:
             yield self.start_text_block()
 
-    def close_content_blocks(self) -> Iterator[str]:
+    def close_content_blocks(self) -> Iterator[StreamEvent]:
         if self.blocks.thinking_started:
             yield self.stop_thinking_block()
         if self.blocks.text_started:
             yield self.stop_text_block()
 
-    def close_all_blocks(self) -> Iterator[str]:
+    def close_all_blocks(self) -> Iterator[StreamEvent]:
         yield from self.close_content_blocks()
         for tool_index, state in list(self.blocks.tool_states.items()):
             if state.started:
                 yield self.stop_tool_block(tool_index)
 
-    def close_unclosed_blocks(self) -> Iterator[str]:
+    def close_unclosed_blocks(self) -> Iterator[StreamEvent]:
         while self._open_stack:
             idx = self._open_stack.pop()
             state = self._content_blocks.get(idx)
@@ -367,6 +372,8 @@ class AnthropicStreamLedger:
         return bool(self._content_blocks)
 
     def final_stop_reason(self, fallback: str) -> str:
+        if fallback not in {"end_turn", "tool_use"}:
+            return fallback
         if self.has_emitted_tool_block():
             return "tool_use"
         return fallback

@@ -3,118 +3,14 @@
 import json
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass, field
-from typing import Any, NotRequired, TypedDict
+from typing import Any
 
-from free_claude_code.core.anthropic.streaming import (
-    ToolSchema,
-    parse_complete_tool_input,
-)
-from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
+from free_claude_code.core.stream_events import StreamEvent
 
 from .stream_output import ChatStreamOutput
 
 RecordToolExtraContent = Callable[[str, dict[str, Any]], None]
-
-
-@dataclass(slots=True)
-class _CollectedToolCall:
-    index: int
-    tool_id: str | None = None
-    name: str = ""
-    argument_parts: list[str] = field(default_factory=list)
-    extra_content: dict[str, Any] | None = None
-
-
-class _CompletedOpenAIToolFunction(TypedDict):
-    name: str
-    arguments: str
-
-
-class CompletedOpenAIToolCall(TypedDict):
-    """Schema-valid OpenAI tool-call payload collected for recovery emission."""
-
-    index: int
-    id: str | None
-    function: _CompletedOpenAIToolFunction
-    extra_content: NotRequired[JsonObject]
-
-
-class OpenAIToolCallCollector:
-    """Collect and validate one buffered OpenAI tool-call response."""
-
-    def __init__(self) -> None:
-        self._calls: dict[int, _CollectedToolCall] = {}
-
-    @property
-    def has_calls(self) -> bool:
-        return bool(self._calls)
-
-    def add(self, tool_call: Any) -> None:
-        """Add one SDK tool-call delta without emitting downstream state."""
-        raw_index = getattr(tool_call, "index", 0)
-        index = raw_index if isinstance(raw_index, int) and raw_index >= 0 else 0
-        state = self._calls.setdefault(index, _CollectedToolCall(index=index))
-
-        tool_id = getattr(tool_call, "id", None)
-        if tool_id:
-            state.tool_id = str(tool_id)
-
-        function = getattr(tool_call, "function", None)
-        incoming_name = getattr(function, "name", None)
-        if isinstance(incoming_name, str) and incoming_name:
-            state.name = _merge_tool_name(state.name, incoming_name)
-
-        arguments = getattr(function, "arguments", None)
-        if isinstance(arguments, str) and arguments:
-            state.argument_parts.append(arguments)
-
-        extra_content = tool_call_extra_content(tool_call)
-        if extra_content:
-            state.extra_content = extra_content
-
-    def completed_calls(
-        self,
-        schemas: dict[str, ToolSchema],
-        *,
-        tool_names: OpenAIToolNameCodec | None = None,
-        tool_argument_aliases: dict[str, dict[str, str]] | None = None,
-    ) -> tuple[CompletedOpenAIToolCall, ...] | None:
-        """Return complete schema-valid calls, or None when output is incomplete."""
-        completed: list[CompletedOpenAIToolCall] = []
-        for index in sorted(self._calls):
-            state = self._calls[index]
-            wire_name = state.name.strip()
-            name = tool_names.decode(wire_name) if tool_names is not None else wire_name
-            if not name or name not in schemas:
-                return None
-            arguments = "".join(state.argument_parts)
-            aliases = (
-                tool_argument_aliases.get(name, {})
-                if tool_argument_aliases is not None
-                else {}
-            )
-            if aliases:
-                restored = restore_tool_argument_aliases(arguments, aliases)
-                if restored is None:
-                    return None
-                arguments = restored
-            if parse_complete_tool_input(arguments, name, schemas) is None:
-                return None
-
-            call: CompletedOpenAIToolCall = {
-                "index": index,
-                "id": state.tool_id,
-                "function": {
-                    "name": name,
-                    "arguments": arguments,
-                },
-            }
-            if state.extra_content:
-                call["extra_content"] = state.extra_content
-            completed.append(call)
-        return tuple(completed)
 
 
 def tool_call_extra_content(tool_call: Any) -> dict[str, Any] | None:
@@ -165,7 +61,7 @@ class OpenAIToolCallAssembler:
         tool_name_buffers: dict[int, str] | None = None,
         tool_argument_aliases: dict[str, dict[str, str]] | None = None,
         tool_argument_alias_buffers: dict[int, str] | None = None,
-    ) -> Iterator[str]:
+    ) -> Iterator[StreamEvent]:
         """Process one tool-call delta and yield client-protocol events."""
         raw_index = tc.get("index", 0)
         tc_index = raw_index if isinstance(raw_index, int) else 0
@@ -278,7 +174,7 @@ class OpenAIToolCallAssembler:
         tool_name_buffers: dict[int, str],
         tool_argument_aliases: dict[str, dict[str, str]],
         tool_argument_alias_buffers: dict[int, str],
-    ) -> Iterator[str]:
+    ) -> Iterator[StreamEvent]:
         """Resolve names held only because they also prefix a generated alias."""
         for tool_index, name in list(tool_name_buffers.items()):
             tool_name_buffers.pop(tool_index, None)
@@ -298,7 +194,7 @@ class OpenAIToolCallAssembler:
         output: ChatStreamOutput,
         tool_argument_aliases: dict[str, dict[str, str]],
         tool_argument_alias_buffers: dict[int, str],
-    ) -> Iterator[str]:
+    ) -> Iterator[StreamEvent]:
         """Emit remaining aliased args without losing malformed JSON."""
         for tool_index, buffered_args in list(tool_argument_alias_buffers.items()):
             if not buffered_args:
@@ -311,7 +207,7 @@ class OpenAIToolCallAssembler:
             if not aliases:
                 continue
             restored = self._restore_aliased_tool_arguments(buffered_args, aliases)
-            yield output.emit_tool_delta(
+            yield from output.emit_tool_delta(
                 tool_index,
                 restored if restored is not None else buffered_args,
             )
@@ -325,7 +221,7 @@ class OpenAIToolCallAssembler:
         *,
         tool_argument_aliases: dict[str, dict[str, str]] | None = None,
         tool_argument_alias_buffers: dict[int, str] | None = None,
-    ) -> Iterator[str]:
+    ) -> Iterator[StreamEvent]:
         """Emit one argument fragment for a started tool block."""
         if not args:
             return
@@ -339,7 +235,7 @@ class OpenAIToolCallAssembler:
             if tool_argument_alias_buffers is None:
                 restored = self._restore_aliased_tool_arguments(args, aliases)
                 if restored is not None:
-                    yield output.emit_tool_delta(tc_index, restored)
+                    yield from output.emit_tool_delta(tc_index, restored)
                 return
 
             buffered_args = tool_argument_alias_buffers.get(tc_index, "") + args
@@ -348,9 +244,9 @@ class OpenAIToolCallAssembler:
                 tool_argument_alias_buffers[tc_index] = buffered_args
                 return
             tool_argument_alias_buffers.pop(tc_index, None)
-            yield output.emit_tool_delta(tc_index, restored)
+            yield from output.emit_tool_delta(tc_index, restored)
             return
-        yield output.emit_tool_delta(tc_index, args)
+        yield from output.emit_tool_delta(tc_index, args)
 
     def _restore_aliased_tool_arguments(
         self, argument_json: str, aliases: dict[str, str]

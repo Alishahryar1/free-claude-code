@@ -23,6 +23,7 @@ from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.github_copilot.types import CopilotEgress
+from tests.providers.support import stream_messages, stream_responses
 from tests.providers.test_github_copilot_provider import Harness, collect, responses_sse
 from tests.providers.test_openai_responses_transport import (
     _completed_event,
@@ -85,17 +86,20 @@ def _input(responses: bool, model: str) -> MessagesRequest | OpenAIResponsesRequ
 
 
 async def _run(
-    harness: Harness, request: MessagesRequest | OpenAIResponsesRequest
+    harness: Harness,
+    request: MessagesRequest | OpenAIResponsesRequest,
+    *,
+    allow_error: bool = False,
 ) -> list[JsonObject]:
     stream = (
-        harness.provider.stream_messages(request)
+        stream_messages(harness.provider, request)
         if isinstance(request, MessagesRequest)
-        else harness.provider.stream_responses(request)
+        else stream_responses(harness.provider, request)
     )
     raw = await collect(stream)
     parsed = parse_sse_text(raw)
     if isinstance(request, MessagesRequest):
-        assert_anthropic_stream_contract(parsed)
+        assert_anthropic_stream_contract(parsed, allow_error=allow_error)
     return [cast(JsonObject, event.data) for event in parsed]
 
 
@@ -279,9 +283,9 @@ async def test_copilot_argument_delta_without_item_metadata_fails_before_inventi
     try:
         request = _input(responses, harness.runtime.name)
         stream = (
-            harness.provider.stream_messages(request)
+            stream_messages(harness.provider, request)
             if isinstance(request, MessagesRequest)
-            else harness.provider.stream_responses(request)
+            else stream_responses(harness.provider, request)
         )
         try:
             async for chunk in stream:
@@ -299,7 +303,9 @@ async def test_copilot_argument_delta_without_item_metadata_fails_before_inventi
             event["type"] == "response.function_call_arguments.delta"
             for event in emitted
         )
-        assert failure is not None or emitted[-1]["type"] == "response.failed"
+        assert failure is not None or emitted[-1]["type"] == (
+            "response.failed" if responses else "error"
+        )
         assert all(wire.closed for wire in harness.wires)
     finally:
         await harness.close()
@@ -440,7 +446,9 @@ async def test_copilot_rejects_incomplete_or_changed_tool_identity(
     failed = False
     try:
         try:
-            events = await _run(harness, _input(responses, harness.runtime.name))
+            events = await _run(
+                harness, _input(responses, harness.runtime.name), allow_error=True
+            )
             failed = any(
                 event["type"] in {"error", "response.failed"} for event in events
             )
@@ -453,7 +461,7 @@ async def test_copilot_rejects_incomplete_or_changed_tool_identity(
 
 
 @pytest.mark.asyncio
-async def test_copilot_committed_failure_retains_public_response_and_item_identity(
+async def test_copilot_completed_call_is_salvaged_with_its_public_identity(
     tmp_path: Path,
 ) -> None:
     capture = _capture()
@@ -468,7 +476,7 @@ async def test_copilot_committed_failure_retains_public_response_and_item_identi
     harness.responses_content = responses_sse(*capture).encode()
     try:
         events = await _run(harness, _input(True, harness.runtime.name))
-        assert events[-1]["type"] == "response.failed"
+        assert events[-1]["type"] == "response.completed"
         output = _assert_native_identity(events)
         assert output[0]["id"] == _item(capture[2])["id"]
         assert len(harness.seen) == 1
@@ -511,7 +519,7 @@ async def test_copilot_partial_failure_output_does_not_mask_authentication_refre
         assert len(harness.seen) == 2
         if responses:
             output = _assert_native_identity(events)
-            assert _response(events[-1])["id"] == "recovered-response"
+            assert _response(events[-1])["id"] == _response(capture[0])["id"]
             assert output[0]["id"] == "recovered-tool"
     finally:
         await harness.close()

@@ -54,7 +54,12 @@ from free_claude_code.providers.openai_responses.transport import (
     OpenAIResponsesTransport,
 )
 from tests.providers.copilot_support import FakeRuntime, FakeSession
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_messages,
+    stream_responses,
+)
 from tests.providers.test_anthropic_messages_transport import _events as messages_events
 from tests.providers.test_anthropic_messages_transport import _sse as messages_sse
 from tests.providers.test_openai_responses_transport import (
@@ -286,11 +291,14 @@ class Harness:
     ) -> AsyncIterator[str]:
         request = _request(responses, self.runtime.name, history=history)
         if isinstance(request, MessagesRequest):
-            return self.provider.stream_messages(
-                request, response_model="public-alias", reasoning=reasoning
+            return stream_messages(
+                self.provider,
+                request,
+                response_model="public-alias",
+                reasoning=reasoning,
             )
-        return self.provider.stream_responses(
-            request, response_model="public-alias", reasoning=reasoning
+        return stream_responses(
+            self.provider, request, response_model="public-alias", reasoning=reasoning
         )
 
     async def close(self) -> None:
@@ -332,7 +340,8 @@ async def test_classifier_uses_current_lease_controls_and_clears_raw_hints(
     try:
         output = [
             event
-            async for event in harness.provider.stream_messages(
+            async for event in stream_messages(
+                harness.provider,
                 request,
                 reasoning=ReasoningPolicy.prefer_off(),
                 model_info=ProviderModelInfo(
@@ -602,8 +611,10 @@ async def test_native_messages_uses_capabilities_and_exact_budget(
             max_tokens=99999,
         )
         await collect(
-            harness.provider.stream_messages(
-                request, reasoning=ReasoningPolicy.on(budget_tokens=1024)
+            stream_messages(
+                harness.provider,
+                request,
+                reasoning=ReasoningPolicy.on(budget_tokens=1024),
             )
         )
         body = json.loads(harness.seen[0].content)
@@ -647,11 +658,11 @@ async def test_native_reasoning_carrier_replays_only_to_messages_egress(
     )
     try:
         if egress is CopilotEgress.MESSAGES:
-            await collect(harness.provider.stream_responses(request))
+            await collect(stream_responses(harness.provider, request))
             body = json.loads(harness.seen[0].content)
             assert body["messages"][0]["content"][0] == block
         else:
-            await collect(harness.provider.stream_responses(request))
+            await collect(stream_responses(harness.provider, request))
             body = json.loads(harness.seen[0].content)
             wire = json.dumps(body)
             assert "[Earlier reasoning]" in wire
@@ -740,8 +751,8 @@ async def test_auto_is_never_resolved_by_an_inference_turn(tmp_path: Path) -> No
     harness = Harness(tmp_path, CopilotEgress.CHAT)
     try:
         with pytest.raises(InvalidRequestError, match="concrete"):
-            harness.provider.stream_responses(
-                OpenAIResponsesRequest(model="auto", input="hi")
+            stream_responses(
+                harness.provider, OpenAIResponsesRequest(model="auto", input="hi")
             )
         assert not harness.seen and harness.runtime.session_calls == 0
     finally:

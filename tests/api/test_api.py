@@ -16,6 +16,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from tests.api.support import create_test_app
+from tests.provider_double import ScriptedProvider
 from tests.providers.support import immediate_admission, make_provider_config
 
 
@@ -57,8 +58,10 @@ _stream_messages_calls: list = []
 async def _mock_stream_messages(*args, **kwargs):
     """Minimal async generator for streaming tests."""
     _stream_messages_calls.append((args, kwargs))
-    yield "event: message_start\ndata: {}\n\n"
-    yield "[DONE]\n\n"
+    from tests.api.model_fallback_support import text_stream
+
+    for frame in text_stream("answer", model="test-model"):
+        yield frame
 
 
 async def _mock_pre_start_rate_limit(*args, **kwargs):
@@ -91,6 +94,9 @@ def _terminal_json_error(response, *, status_code: int):
 
 
 mock_provider.stream_messages = _mock_stream_messages
+mock_provider.open_messages = lambda *args, **kwargs: ScriptedProvider.open_messages(
+    mock_provider, *args, **kwargs
+)
 
 
 @pytest.fixture
@@ -190,7 +196,7 @@ def test_auto_mode_classifier_without_stream_returns_json(client: TestClient):
     assert response.headers["content-type"].startswith("application/json")
     body = response.json()
     assert body["type"] == "message"
-    assert body["usage"] == {"input_tokens": 0, "output_tokens": 0}
+    assert body["usage"] == {"input_tokens": 3, "output_tokens": 4}
     routed_request = _stream_messages_calls[0][0][0]
     assert routed_request.stream is False
     assert _stream_messages_calls[0][1]["reasoning"] == ReasoningPolicy.prefer_off()

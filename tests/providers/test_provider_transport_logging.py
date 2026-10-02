@@ -14,6 +14,7 @@ from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     immediate_admission,
     make_provider_config,
+    stream_messages,
 )
 
 
@@ -34,15 +35,15 @@ async def test_stream_failure_default_logs_exclude_exception_text(caplog) -> Non
     provider = _provider()
     with (
         patch.object(
-            provider._chat,
-            "_create_stream",
+            provider._client.chat.completions,
+            "create",
             new_callable=AsyncMock,
             side_effect=RuntimeError("SECRET_OPENAI_COMPAT"),
         ),
         caplog.at_level(logging.ERROR),
-        pytest.raises(ExecutionFailure),
+        pytest.raises(RuntimeError),
     ):
-        [event async for event in provider.stream_messages(make_messages_request())]
+        [event async for event in stream_messages(provider, make_messages_request())]
 
     messages = " | ".join(record.getMessage() for record in caplog.records)
     assert "SECRET_OPENAI_COMPAT" not in messages
@@ -58,15 +59,15 @@ async def test_stream_failure_default_logs_cause_types_only(caplog) -> None:
     error.__cause__ = httpx2.ConnectError("SECRET_CAUSE_DETAIL")
     with (
         patch.object(
-            provider._chat,
-            "_create_stream",
+            provider._client.chat.completions,
+            "create",
             new_callable=AsyncMock,
             side_effect=error,
         ),
         caplog.at_level(logging.ERROR),
         pytest.raises(ExecutionFailure),
     ):
-        [event async for event in provider.stream_messages(make_messages_request())]
+        [event async for event in stream_messages(provider, make_messages_request())]
 
     messages = " | ".join(record.getMessage() for record in caplog.records)
     assert "SECRET_CAUSE_DETAIL" not in messages
@@ -79,17 +80,17 @@ async def test_stream_failure_verbose_traceback_redacts_credentials(caplog) -> N
     provider = _provider(verbose=True)
     with (
         patch.object(
-            provider._chat,
-            "_create_stream",
+            provider._client.chat.completions,
+            "create",
             new_callable=AsyncMock,
             side_effect=RuntimeError(
                 "api_key=SECRET_OPENAI_COMPAT useful traceback detail"
             ),
         ),
         caplog.at_level(logging.ERROR),
-        pytest.raises(ExecutionFailure),
+        pytest.raises(RuntimeError),
     ):
-        [event async for event in provider.stream_messages(make_messages_request())]
+        [event async for event in stream_messages(provider, make_messages_request())]
 
     messages = " | ".join(record.getMessage() for record in caplog.records)
     assert "api_key=<redacted>" in messages

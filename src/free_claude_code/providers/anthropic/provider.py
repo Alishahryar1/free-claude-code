@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from types import MappingProxyType
 from typing import cast
 from urllib.parse import quote
@@ -10,6 +11,7 @@ import httpx
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.ports import ProviderCandidate
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.native import NativeMessagesError
 from free_claude_code.core.anthropic.passthrough import (
@@ -26,7 +28,7 @@ from free_claude_code.providers.admission import (
 )
 from free_claude_code.providers.anthropic_messages.discovery import list_messages_models
 from free_claude_code.providers.anthropic_messages.passthrough import (
-    stream_native_messages,
+    open_native_messages,
 )
 from free_claude_code.providers.anthropic_messages.request_policy import (
     MessagesModelCapabilities,
@@ -38,7 +40,6 @@ from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.history_replay import replay_origin
-from free_claude_code.providers.http import maybe_await_aclose
 from free_claude_code.providers.model_listing import ModelListResponseError
 
 from .headers import api_headers, native_request
@@ -147,14 +148,14 @@ class AnthropicProvider(BaseProvider):
             capabilities=record.messages,
         )
 
-    def stream_native_messages(
+    def open_native_messages(
         self,
         request: NativeMessagesRequest,
         *,
         request_id: str | None = None,
         response_model: str | None = None,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AbstractAsyncContextManager[ProviderCandidate]:
         body, headers = native_request(request.body, request_headers)
         try:
             body = restore_native_history(
@@ -165,7 +166,7 @@ class AnthropicProvider(BaseProvider):
             )
         except (NativeMessagesError, HistoryReplayError) as error:
             raise InvalidRequestError(str(error)) from error
-        return stream_native_messages(
+        return open_native_messages(
             self._http,
             self._admission,
             base_url=self._snapshot.base_url,
@@ -175,9 +176,13 @@ class AnthropicProvider(BaseProvider):
             provider_name="anthropic",
             read_timeout_s=self._config.http_read_timeout,
             request_id=request_id,
+            origin=replay_origin(
+                "anthropic", "messages", request.model, endpoint=self._snapshot
+            ),
         )
 
-    async def stream_messages(
+    @asynccontextmanager
+    async def open_messages(
         self,
         request: MessagesRequest,
         input_tokens: int = 0,
@@ -187,9 +192,9 @@ class AnthropicProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[ProviderCandidate]:
         record = await self.model_record(request.model)
-        stream = self._transport(record).stream_messages(
+        stream = self._transport(record).open_messages(
             request,
             endpoint_context=self,
             request_id=request_id,
@@ -197,13 +202,11 @@ class AnthropicProvider(BaseProvider):
             reasoning=reasoning,
             model_info=record.info,
         )
-        try:
-            async for event in stream:
-                yield event
-        finally:
-            await maybe_await_aclose(stream)
+        async with stream as candidate:
+            yield candidate
 
-    async def stream_responses(
+    @asynccontextmanager
+    async def open_responses(
         self,
         request: OpenAIResponsesRequest,
         input_tokens: int = 0,
@@ -213,9 +216,9 @@ class AnthropicProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[ProviderCandidate]:
         record = await self.model_record(request.model)
-        stream = self._transport(record).stream_responses(
+        stream = self._transport(record).open_responses(
             request,
             endpoint_context=self,
             request_id=request_id,
@@ -223,8 +226,5 @@ class AnthropicProvider(BaseProvider):
             reasoning=reasoning,
             model_info=record.info,
         )
-        try:
-            async for event in stream:
-                yield event
-        finally:
-            await maybe_await_aclose(stream)
+        async with stream as candidate:
+            yield candidate

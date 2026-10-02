@@ -32,6 +32,8 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    stream_messages,
+    stream_responses,
 )
 
 
@@ -861,7 +863,7 @@ def test_vision_model_strips_user_document():
         ),
         admission=immediate_admission(),
     )
-    provider.stream_messages(request, reasoning=REASONING_ON)
+    stream_messages(provider, request, reasoning=REASONING_ON)
     body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
     content = body["messages"][0]["content"]
     assert content
@@ -883,7 +885,8 @@ def test_vision_model_strips_user_document():
     assert "image" not in lowered
 
 
-def test_startup_rejects_mcp_servers():
+@pytest.mark.asyncio
+async def test_startup_rejects_mcp_servers():
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -897,10 +900,11 @@ def test_startup_rejects_mcp_servers():
         admission=immediate_admission(),
     )
     with pytest.raises(InvalidRequestError, match="mcp_servers"):
-        provider.stream_messages(request)
+        await anext(stream_messages(provider, request))
 
 
-def test_startup_rejects_listed_server_tools_in_tools_list():
+@pytest.mark.asyncio
+async def test_startup_rejects_listed_server_tools_in_tools_list():
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -914,7 +918,7 @@ def test_startup_rejects_listed_server_tools_in_tools_list():
         admission=immediate_admission(),
     )
     with pytest.raises(InvalidRequestError, match="web_search"):
-        provider.stream_messages(request)
+        await anext(stream_messages(provider, request))
 
 
 def test_startup_preserves_completed_server_tool_history():
@@ -948,7 +952,7 @@ def test_startup_preserves_completed_server_tool_history():
         ),
         admission=immediate_admission(),
     )
-    provider.stream_messages(request)
+    stream_messages(provider, request)
     body = provider._chat._build_request_body(request)
     assert "[Earlier tool record]" in body["messages"][0]["content"]
 
@@ -1146,8 +1150,8 @@ async def test_stream_uses_chat_completions_and_maps_cache_usage(deepseek_provid
     with patch.object(deepseek_provider._client.chat.completions, "create", create):
         chunks = [
             chunk
-            async for chunk in deepseek_provider.stream_messages(
-                request, input_tokens=7, request_id="r1"
+            async for chunk in stream_messages(
+                deepseek_provider, request, input_tokens=7, request_id="r1"
             )
         ]
 
@@ -1212,8 +1216,8 @@ async def test_responses_stream_maps_deepseek_cache_usage(deepseek_provider):
     with patch.object(deepseek_provider._client.chat.completions, "create", create):
         chunks = [
             chunk
-            async for chunk in deepseek_provider.stream_responses(
-                request, input_tokens=7, request_id="r1"
+            async for chunk in stream_responses(
+                deepseek_provider, request, input_tokens=7, request_id="r1"
             )
         ]
 
@@ -1903,7 +1907,7 @@ async def test_upstream_image_rejection_preserves_image_and_fails_once(
                 )
             ],
         )
-        stream = deepseek_provider.stream_messages(request, reasoning=REASONING_OFF)
+        stream = stream_messages(deepseek_provider, request, reasoning=REASONING_OFF)
     else:
         responses_request = OpenAIResponsesRequest.model_validate(
             {
@@ -1921,8 +1925,8 @@ async def test_upstream_image_rejection_preserves_image_and_fails_once(
                 ],
             }
         )
-        stream = deepseek_provider.stream_responses(
-            responses_request, reasoning=REASONING_OFF
+        stream = stream_responses(
+            deepseek_provider, responses_request, reasoning=REASONING_OFF
         )
     error = BadRequestError(
         "This model does not support image inputs",

@@ -1,17 +1,15 @@
 """Client-protocol presenters for the shared Responses transport."""
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
 from typing import Protocol
 
-from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     NativeResponsesRelay,
     ResponsesProviderStream,
-    ResponsesStreamFailure,
     ResponsesToolEventAdapter,
 )
+from free_claude_code.core.stream_events import StreamEvent
 
 
 class ResponsesStreamPresenter(Protocol):
@@ -20,18 +18,9 @@ class ResponsesStreamPresenter(Protocol):
     @property
     def completed(self) -> bool: ...
 
-    @property
-    def terminal_failure_completes_wire(self) -> bool: ...
+    def start(self) -> Iterable[StreamEvent]: ...
 
-    def start(self) -> Iterable[str]: ...
-
-    def feed(self, event_type: str, payload: JsonObject) -> Iterable[str]: ...
-
-    def terminal_failure(
-        self,
-        raw_error: Exception,
-        failure: ExecutionFailure,
-    ) -> Iterable[str]: ...
+    def feed(self, event_type: str, payload: JsonObject) -> Iterable[StreamEvent]: ...
 
 
 class MessagesResponsesPresenter:
@@ -44,23 +33,11 @@ class MessagesResponsesPresenter:
     def completed(self) -> bool:
         return self._stream.completed
 
-    @property
-    def terminal_failure_completes_wire(self) -> bool:
-        return False
-
-    def start(self) -> Iterable[str]:
+    def start(self) -> Iterable[StreamEvent]:
         return self._stream.start()
 
-    def feed(self, event_type: str, payload: JsonObject) -> Iterable[str]:
+    def feed(self, event_type: str, payload: JsonObject) -> Iterable[StreamEvent]:
         return self._stream.feed(event_type, payload)
-
-    def terminal_failure(
-        self,
-        raw_error: Exception,
-        failure: ExecutionFailure,
-    ) -> Iterable[str]:
-        del raw_error, failure
-        return self._stream.ledger.close_unclosed_blocks()
 
 
 class NativeResponsesPresenter:
@@ -76,40 +53,16 @@ class NativeResponsesPresenter:
     def completed(self) -> bool:
         return self._relay.completed
 
-    @property
-    def terminal_failure_completes_wire(self) -> bool:
-        return True
-
-    def start(self) -> Iterable[str]:
+    def start(self) -> Iterable[StreamEvent]:
         return ()
 
-    def feed(self, event_type: str, payload: JsonObject) -> Iterable[str]:
+    def feed(self, event_type: str, payload: JsonObject) -> Iterable[StreamEvent]:
         if self._tool_events is not None:
             return tuple(
                 self._relay.feed(kind, value)
                 for kind, value in self._tool_events.feed(event_type, payload)
             )
         return (self._relay.feed(event_type, payload),)
-
-    def terminal_failure(
-        self,
-        raw_error: Exception,
-        failure: ExecutionFailure,
-    ) -> Iterable[str]:
-        if (
-            isinstance(raw_error, ResponsesStreamFailure)
-            and raw_error.event_type == "response.failed"
-            and raw_error.payload is not None
-        ):
-            return self.feed(raw_error.event_type, raw_error.payload)
-        return (self._relay.synthesize_failure(failure),)
-
-
-@dataclass(slots=True)
-class ResponsesExecutionOutcome:
-    """Provider outcome retained when terminal failure is consumed on-wire."""
-
-    failure: Exception | None = None
 
 
 type ResponsesPresenterFactory = Callable[[], ResponsesStreamPresenter]

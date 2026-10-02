@@ -30,7 +30,12 @@ from free_claude_code.providers.openai_codex.auth import (
     OpenAIReconnectRequired,
 )
 from free_claude_code.providers.openai_codex.provider import OpenAICodexProvider
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_messages,
+    stream_responses,
+)
 
 
 class _FakeAuth(OpenAIAuthManager):
@@ -208,9 +213,9 @@ async def test_completion_followed_by_ping_stays_successful(
         transport=pool,
     )
     stream = (
-        provider.stream_responses(_responses_request())
+        stream_responses(provider, _responses_request())
         if responses_ingress
-        else provider.stream_messages(_request())
+        else stream_messages(provider, _request())
     )
     events = parse_sse_text(await _collect(stream))
     await provider.cleanup()
@@ -245,9 +250,9 @@ async def test_streamed_authentication_error_has_authentication_status(
         transport=pool,
     )
     stream = (
-        provider.stream_responses(_responses_request())
+        stream_responses(provider, _responses_request())
         if responses_ingress
-        else provider.stream_messages(_request())
+        else stream_messages(provider, _request())
     )
     with pytest.raises(ExecutionFailure) as failure:
         await _collect(stream)
@@ -351,7 +356,8 @@ async def test_provider_uses_subscription_headers_and_visible_model_catalog() ->
 
     infos = await provider.list_model_infos()
     body = await _collect(
-        provider.stream_messages(
+        stream_messages(
+            provider,
             _request(),
             input_tokens=3,
             request_id="req_test",
@@ -413,11 +419,11 @@ async def test_generation_close_failure_preserves_success_and_permit() -> None:
     )
 
     first = await asyncio.wait_for(
-        _collect(provider.stream_messages(_request(), response_model="claude-opus-4")),
+        _collect(stream_messages(provider, _request(), response_model="claude-opus-4")),
         timeout=1,
     )
     second = await asyncio.wait_for(
-        _collect(provider.stream_messages(_request(), response_model="claude-opus-4")),
+        _collect(stream_messages(provider, _request(), response_model="claude-opus-4")),
         timeout=1,
     )
 
@@ -448,7 +454,8 @@ async def test_generation_close_failure_preserves_provider_failure() -> None:
 
     with pytest.raises(ExecutionFailure) as exc_info:
         await _collect(
-            provider.stream_messages(
+            stream_messages(
+                provider,
                 _request(),
                 request_id="req_close_failure",
                 response_model="claude-opus-4",
@@ -483,7 +490,8 @@ async def test_provider_accepts_claude_client_controls_before_upstream_io() -> N
     original_request = request.model_dump()
     reasoning = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
 
-    stream = provider.stream_messages(
+    stream = stream_messages(
+        provider,
         request,
         request_id="req_client_controls",
         response_model="claude-opus-4",
@@ -527,7 +535,8 @@ async def test_provider_relays_native_responses_with_private_field_policy() -> N
     request = _responses_request()
     original = request.model_dump()
 
-    stream = provider.stream_responses(
+    stream = stream_responses(
+        provider,
         request,
         request_id="req_native_responses",
         response_model="openai/gpt-test",
@@ -605,7 +614,7 @@ async def test_provider_validation_rejects_unrepresentable_client_controls(
     }
 
     with pytest.raises(InvalidRequestError, match=error_path):
-        provider.stream_messages(MessagesRequest.model_validate(payload))
+        await anext(stream_messages(provider, MessagesRequest.model_validate(payload)))
 
     assert requests == []
     await provider.cleanup()
@@ -683,7 +692,7 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
         _config(), auth=_FakeAuth(), admission=_admission(), transport=pool
     )
 
-    body = await _collect(provider.stream_messages(request))
+    body = await _collect(stream_messages(provider, request))
 
     payload = payloads[0]
     alias = payload["tools"][0]["name"]
@@ -723,7 +732,8 @@ async def test_non_streaming_success_cannot_complete_generation() -> None:
 
     with pytest.raises(ExecutionFailure) as exc_info:
         await _collect(
-            provider.stream_messages(
+            stream_messages(
+                provider,
                 _request(),
                 request_id="req_non_stream",
                 response_model="claude-opus-4",
@@ -785,9 +795,9 @@ async def test_unauthorized_response_forces_one_auth_refresh(
     )
 
     body = await _collect(
-        provider.stream_responses(_responses_request(), request_id="req_auth")
+        stream_responses(provider, _responses_request(), request_id="req_auth")
         if responses_ingress
-        else provider.stream_messages(_request(), request_id="req_auth")
+        else stream_messages(provider, _request(), request_id="req_auth")
     )
 
     assert authorizations == ["Bearer access_1", "Bearer access_2"]
@@ -854,8 +864,8 @@ async def test_concurrent_credentials_keep_request_identity_and_pool_ownership()
     try:
         results = await asyncio.wait_for(
             asyncio.gather(
-                _collect(provider.stream_messages(_request())),
-                _collect(provider.stream_messages(_request())),
+                _collect(stream_messages(provider, _request())),
+                _collect(stream_messages(provider, _request())),
             ),
             timeout=3,
         )
@@ -931,9 +941,9 @@ async def test_nested_authentication_error_keeps_its_type(
     )
     try:
         stream = (
-            provider.stream_responses(_responses_request())
+            stream_responses(provider, _responses_request())
             if responses_ingress
-            else provider.stream_messages(_request())
+            else stream_messages(provider, _request())
         )
         with pytest.raises(ExecutionFailure) as failure:
             await _collect(stream)
@@ -970,9 +980,9 @@ async def test_disconnected_account_never_opens_or_refreshes_a_request(
             if operation == "catalog":
                 await provider.list_model_infos()
             elif operation == "responses":
-                await _collect(provider.stream_responses(_responses_request()))
+                await _collect(stream_responses(provider, _responses_request()))
             else:
-                await _collect(provider.stream_messages(_request()))
+                await _collect(stream_messages(provider, _request()))
         assert failure.value.kind is FailureKind.AUTHENTICATION
         assert auth.access_calls == 1
         assert auth.recovery_calls == 0
@@ -1074,7 +1084,8 @@ async def test_auth_refresh_failure_does_not_repeat_rejected_provider_call() -> 
 
     with pytest.raises(ExecutionFailure, match="refresh interrupted") as exc_info:
         await _collect(
-            provider.stream_messages(
+            stream_messages(
+                provider,
                 _request(),
                 request_id="req_auth_transient",
                 response_model="claude-opus-4",
@@ -1107,7 +1118,8 @@ async def test_second_unauthorized_response_is_terminal_without_refresh_loop() -
 
     with pytest.raises(ExecutionFailure) as exc_info:
         await _collect(
-            provider.stream_messages(
+            stream_messages(
+                provider,
                 _request(),
                 request_id="req_auth_terminal",
                 response_model="claude-opus-4",
@@ -1142,7 +1154,8 @@ async def test_final_attempt_unauthorized_preserves_the_provider_401() -> None:
 
     with pytest.raises(ExecutionFailure) as exc_info:
         await _collect(
-            provider.stream_messages(
+            stream_messages(
+                provider,
                 _request(),
                 request_id="req_final_401",
                 response_model="claude-opus-4",
@@ -1191,7 +1204,8 @@ async def test_stream_failure_redacts_credentials_from_customer_diagnostic() -> 
 
     with pytest.raises(ExecutionFailure) as exc_info:
         await _collect(
-            provider.stream_messages(
+            stream_messages(
+                provider,
                 _request(),
                 request_id="req_redaction",
                 response_model="claude-opus-4",

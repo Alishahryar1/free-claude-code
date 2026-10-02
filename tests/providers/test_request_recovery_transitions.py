@@ -29,7 +29,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
-from tests.providers.support import make_provider_config
+from tests.providers.support import make_provider_config, stream_messages
 from tests.providers.test_anthropic_messages_transport import _events
 from tests.providers.test_anthropic_messages_transport import (
     _transport as messages_transport,
@@ -163,7 +163,8 @@ def _request(protocol):
 
 
 def _stream(provider, endpoint, request):
-    return provider.stream_messages(
+    return stream_messages(
+        provider,
         request,
         endpoint_context=endpoint,
         reasoning=ReasoningPolicy.prefer_off(),
@@ -245,8 +246,8 @@ async def test_mixed_recovery_keeps_one_budget_and_correction_history(
     async with _transport(protocol, respond) as (provider, endpoint, bodies, wires, _):
         with patch("free_claude_code.providers.admission.trace_event") as trace:
             if exhausted:
-                with pytest.raises(ExecutionFailure):
-                    _ = [event async for event in _stream(provider, endpoint, request)]
+                output = [event async for event in _stream(provider, endpoint, request)]
+                assert parse_sse_text("".join(output))[-1].event == "error"
             else:
                 output = [event async for event in _stream(provider, endpoint, request)]
                 parsed = parse_sse_text("".join(output))
@@ -318,24 +319,12 @@ async def test_credential_resolution_preserves_admission_order(protocol, refresh
         wires,
         _,
     ):
-        if protocol == "responses":
-            with pytest.raises(
-                ExecutionFailure, match="credential service unavailable"
-            ):
-                _ = [
-                    event
-                    async for event in _stream(provider, endpoint, _request(protocol))
-                ]
-            assert endpoint.calls == ([False, True] if refresh else [False])
-            assert len(bodies) == int(refresh)
-        else:
-            assert [
+        with pytest.raises(ExecutionFailure, match="credential service unavailable"):
+            _ = [
                 event async for event in _stream(provider, endpoint, _request(protocol))
             ]
-            assert endpoint.calls == (
-                [False, True, True] if refresh else [False, False]
-            )
-            assert len(bodies) == 1 + int(refresh)
+        assert endpoint.calls == ([False, True] if refresh else [False])
+        assert len(bodies) == int(refresh)
         assert all(wire.close_calls == 1 for wire in wires)
 
 
@@ -364,9 +353,9 @@ async def test_committed_output_prevents_generation_corrections(protocol, failur
         _,
     ):
         output = StringIO()
-        with pytest.raises(ExecutionFailure):
-            async for event in _stream(provider, endpoint, _request(protocol)):
-                output.write(event)
+        async for event in _stream(provider, endpoint, _request(protocol)):
+            output.write(event)
+        assert parse_sse_text(output.getvalue())[-1].event == "error"
         assert "already visible" in output.getvalue()
         assert len(bodies) == 1 and endpoint.calls == [False]
         assert all(wire.close_calls == 1 for wire in wires)
@@ -433,21 +422,18 @@ async def test_committed_chat_continuation_has_separate_body_correction_scope(
             }
         return 200, _events_for("chat")
 
+    request = _request("chat")
+    request.messages = request.messages[-1:]
     async with _transport("chat", respond) as (provider, endpoint, bodies, wires, _):
-        output = StringIO()
-        if failure_kind == "authentication":
-            with pytest.raises(ExecutionFailure):
-                async for event in _stream(provider, endpoint, _request("chat")):
-                    output.write(event)
-            assert len(bodies) == 2
-        else:
-            async for event in _stream(provider, endpoint, _request("chat")):
-                output.write(event)
-            assert len(bodies) == 3
+        output = "".join(
+            [event async for event in _stream(provider, endpoint, request)]
+        )
+        assert len(bodies) == 3
+        if failure_kind == "stream_usage":
             assert bodies[1]["stream_options"] == {"include_usage": True}
             assert "stream_options" not in bodies[2]
-            parsed = parse_sse_text(output.getvalue())
-            assert sum(event.event == "message_stop" for event in parsed) == 1
-        assert "already visible" in output.getvalue()
-        assert endpoint.calls == [False] * len(bodies)
+        parsed = parse_sse_text(output)
+        assert sum(event.event == "message_stop" for event in parsed) == 1
+        assert "already visible" in output
+        assert endpoint.calls.count(True) == int(failure_kind == "authentication")
         assert all(wire.close_calls == 1 for wire in wires)

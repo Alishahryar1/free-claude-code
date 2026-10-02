@@ -49,13 +49,13 @@ def test_only_leading_pings_then_all_candidates_fail_returns_json_error():
         providers={"anthropic": provider(handle)},
     )
     with TestClient(app) as client:
-        response = client.post("/v1/messages", json=native_body(True))
+        response = client.post("/v1/messages", json={**native_body(True), "tools": []})
     assert response.status_code == 529, response.text
     assert response.headers["content-type"] == "application/json"
     assert response.headers["x-should-retry"] == "false"
     assert response.json()["error"]["type"] == "overloaded_error"
     assert "upstream-evidence" in response.text
-    assert calls == ["primary", "primary", "backup", "backup"]
+    assert calls == ["primary", "backup", "backup"]
     assert all(wire.closed for wire in wires)
     assert provider_manager_for_app(app)._current.active_leases == 0
 
@@ -191,7 +191,7 @@ def test_count_generate_and_continue_native_tool_history_with_recovery():
         Settings(MODEL="anthropic/primary", ENABLE_WEB_SERVER_TOOLS=False),
         providers={"anthropic": provider(handle)},
     )
-    body = {**count_body(), "max_tokens": 512, "stream": True}
+    body = {**count_body(), "max_tokens": 512, "stream": True, "tools": []}
     with TestClient(app) as client:
         with patch(
             "free_claude_code.runtime.provider_manager.ProviderGenerationLease.resolve_provider",
