@@ -1,39 +1,32 @@
 """Messaging-specific assertions built on neutral Anthropic stream contracts."""
 
-from free_claude_code.core.anthropic import AnthropicStreamLedger
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     has_tool_use,
     parse_sse_text,
 )
+from free_claude_code.core.chat_observations import ChatStreamUsage
 from free_claude_code.messaging.event_parser import parse_cli_event
 from free_claude_code.messaging.transcript import RenderCtx, TranscriptBuffer
+from tests.protocol_stream_support import ChatSourceHarness
 from tests.stream_helpers import serialize_events
 
 
 def test_thinking_tool_text_and_transcript_order_contract() -> None:
-    builder = AnthropicStreamLedger("msg_contract", "contract-model")
-    chunks = [builder.message_start()]
-    chunks.extend(builder.ensure_thinking_block())
-    chunks.append(builder.emit_thinking_delta("inspect first"))
-    chunks.extend(builder.close_content_blocks())
-    tool_block_index = builder.blocks.allocate_index()
-    chunks.append(
-        builder.content_block_start(
-            tool_block_index, "tool_use", id="toolu_1", name="Read"
-        )
-    )
-    chunks.append(
-        builder.content_block_delta(
-            tool_block_index, "input_json_delta", '{"file":"README.md"}'
-        )
-    )
-    chunks.append(builder.content_block_stop(tool_block_index))
-    chunks.extend(builder.ensure_text_block())
-    chunks.append(builder.emit_text_delta("done"))
-    chunks.extend(builder.close_all_blocks())
-    chunks.append(builder.message_delta("end_turn", 20))
-    chunks.append(builder.message_stop())
+    builder = ChatSourceHarness(model="contract-model", input_tokens=0)
+    changes = [
+        *builder.start_events(),
+        *builder.ensure_reasoning_block(),
+        builder.emit_reasoning_delta("inspect first"),
+        *builder.close_content_blocks(),
+        builder.start_tool_block(0, "toolu_1", "Read"),
+        *builder.emit_tool_delta(0, '{"file":"README.md"}'),
+        *builder.stop_tool_block(0),
+        *builder.ensure_text_block(),
+        builder.emit_text_delta("done"),
+        *builder.finish_success(stop_reason="end_turn", usage=ChatStreamUsage(0, 20)),
+    ]
+    chunks = builder.project(changes)
 
     events = parse_sse_text(serialize_events(chunks))
     assert_anthropic_stream_contract(events)

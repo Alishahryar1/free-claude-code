@@ -3,7 +3,6 @@
 import json
 import math
 from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import AbstractAsyncContextManager
 from types import MappingProxyType
 from typing import Literal
 
@@ -31,7 +30,7 @@ from free_claude_code.core.trace import (
     traced_async_stream,
 )
 
-from .ports import ModelInfoLookup, ProviderCandidate, ProviderResolver
+from .ports import CandidateContext, ModelInfoLookup, ProviderResolver
 from .recovery import CandidateOpener, RecoveryCoordinator, RecoveryWriter
 from .routing import (
     ProviderModelTarget,
@@ -167,7 +166,7 @@ class ProviderExecutor:
     ) -> AsyncIterator[str]:
         async def open_candidate(
             index: int, target: ProviderModelTarget
-        ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        ) -> CandidateContext:
             provider = await self._provider_resolver(target.provider_id)
             return provider.open_native_messages(
                 routed.request.with_model(target.provider_model),
@@ -227,7 +226,7 @@ class ProviderExecutor:
         async def open_candidate(
             index: int,
             target: ProviderModelTarget,
-        ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        ) -> CandidateContext:
             provider = await self._provider_resolver(target.provider_id)
             request = (
                 primary_request
@@ -280,7 +279,7 @@ class ProviderExecutor:
         async def open_candidate(
             index: int,
             target: ProviderModelTarget,
-        ) -> AbstractAsyncContextManager[ProviderCandidate]:
+        ) -> CandidateContext:
             provider = await self._provider_resolver(target.provider_id)
             request = (
                 primary_request
@@ -324,7 +323,9 @@ class ProviderExecutor:
             request_id=request_id,
             open_candidate=open_candidate,
             writer=ResponsesRecoveryWriter(
-                model=routed.resolved.original_model, input_tokens=input_tokens
+                model=routed.resolved.original_model,
+                input_tokens=input_tokens,
+                request=routed.request,
             ),
         )
 

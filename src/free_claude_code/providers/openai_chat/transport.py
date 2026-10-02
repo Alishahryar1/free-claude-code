@@ -1,7 +1,12 @@
 """Shared Chat Completions transport and per-request stream execution."""
 
-import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Mapping,
+)
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -28,6 +33,8 @@ from free_claude_code.core.anthropic.streaming import (
     map_stop_reason,
     tool_schemas_by_name,
 )
+from free_claude_code.core.anthropic.streaming.emitter import AnthropicEventBuilder
+from free_claude_code.core.chat_observations import ChatChange
 from free_claude_code.core.diagnostics import (
     exception_cause_types,
     redacted_exception_traceback,
@@ -43,6 +50,7 @@ from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesChatRequest,
     ResponsesConversionError,
+    ResponsesToolAdapter,
     build_responses_chat_request,
 )
 from free_claude_code.core.openai_tool_names import (
@@ -57,10 +65,10 @@ from free_claude_code.core.reasoning import (
 from free_claude_code.core.recovery import CandidateIncompatible, RecoveryCheckpoint
 from free_claude_code.core.recovery_request import continue_request
 from free_claude_code.core.request_preservation import require_preserved_body
-from free_claude_code.core.stream_events import (
+from free_claude_code.core.stream_events import RequestOutcome, StreamEvent
+from free_claude_code.core.stream_observations import (
+    ChatObservation,
     DecodedStreamEvent,
-    RequestOutcome,
-    StreamEvent,
 )
 from free_claude_code.core.tool_input import complete_json_object
 from free_claude_code.core.trace import provider_chat_body_snapshot, trace_event
@@ -88,9 +96,6 @@ from free_claude_code.providers.reasoning_compatibility import (
     ReasoningCorrection,
     prepare_messages_reasoning,
 )
-from free_claude_code.providers.request_recovery import (
-    RequestCorrections,
-)
 from free_claude_code.providers.stream_candidate import (
     StreamCandidate,
     content_progress,
@@ -103,11 +108,9 @@ from .reasoning_details import StructuredReasoningStream
 from .request_policy import (
     apply_openai_chat_body_policy,
 )
-from .stream_output import (
-    AnthropicChatStreamOutput,
-    ChatStreamOutput,
+from .source_state import (
+    ChatSourceState,
     ChatStreamUsage,
-    ResponsesChatStreamOutput,
 )
 from .tool_calls import (
     OpenAIToolCallAssembler,
@@ -122,14 +125,13 @@ from .usage import (
 )
 
 OpenAIAsyncCredentialProvider = Callable[[], Awaitable[str]]
-_ExtraReasoningEvents = Callable[[Any, ChatStreamOutput], Iterator[StreamEvent]]
-_ChatOutputFactory = Callable[[], ChatStreamOutput]
+_ExtraReasoningEvents = Callable[[Any, ChatSourceState], Iterator[ChatChange]]
 
 
 def _iter_visible_text_events(
-    output: ChatStreamOutput,
+    output: ChatSourceState,
     text: str,
-) -> Iterator[StreamEvent]:
+) -> Iterator[ChatChange]:
     yield from output.ensure_text_block()
     yield output.emit_text_delta(text)
 
@@ -159,7 +161,7 @@ class _OpenAIChatStreamAssembler:
     def __init__(
         self,
         *,
-        output: ChatStreamOutput,
+        output: ChatSourceState,
         profile: OpenAIChatProfile,
         provider_name: str,
         output_reasoning: bool,
@@ -198,7 +200,7 @@ class _OpenAIChatStreamAssembler:
         self.invalid_input = False
 
     @property
-    def output(self) -> ChatStreamOutput:
+    def output(self) -> ChatSourceState:
         return self._output
 
     @property
@@ -237,7 +239,7 @@ class _OpenAIChatStreamAssembler:
     def content_completed(self) -> bool:
         return self._completion is not None
 
-    def start_events(self) -> Iterator[StreamEvent]:
+    def start_events(self) -> Iterator[ChatChange]:
         if self._started:
             return
         self._started = True
@@ -249,7 +251,7 @@ class _OpenAIChatStreamAssembler:
         self._aliases_bound = True
         self._tool_argument_aliases = aliases
 
-    def feed(self, chunk: Any) -> Iterator[StreamEvent]:
+    def feed(self, chunk: Any) -> Iterator[ChatChange]:
         if not self._started:
             raise RuntimeError("stream assembler is not accepting chunks")
 
@@ -341,7 +343,7 @@ class _OpenAIChatStreamAssembler:
                     tool_argument_alias_buffers=self._tool_argument_alias_buffers,
                 )
 
-    def finish_upstream(self) -> Iterator[StreamEvent]:
+    def finish_upstream(self) -> Iterator[ChatChange]:
         if self._upstream_finished:
             return
         if self._finish_reason is None:
@@ -370,7 +372,7 @@ class _OpenAIChatStreamAssembler:
         yield from self._output.flush_reasoning_replay()
         self._upstream_finished = True
 
-    def prepare_completion(self) -> Iterator[StreamEvent]:
+    def prepare_completion(self) -> Iterator[ChatChange]:
         if not self._upstream_finished or self._completion is not None:
             raise RuntimeError("stream completion cannot be prepared")
 
@@ -420,7 +422,7 @@ class _OpenAIChatStreamAssembler:
             provider_input_tokens=provider_input,
         )
 
-    def terminal_events(self, *, usage: ChatStreamUsage) -> Iterator[StreamEvent]:
+    def terminal_events(self, *, usage: ChatStreamUsage) -> Iterator[ChatChange]:
         if self._completed:
             return
         completion = self.completion
@@ -451,7 +453,7 @@ class OpenAIChatTransport:
         self._profile = behavior.profile
         self._provider_name = self._profile.provider_name
         self._read_timeout_s = read_timeout_s
-        self._log_raw_sse_events = log_raw_sse_events
+        self._events = AnthropicEventBuilder(log_raw_events=log_raw_sse_events)
         self._log_api_error_tracebacks = log_api_error_tracebacks
         self._endpoint_transport = endpoint_transport
         self._model_output_caps: dict[str, int] = {}
@@ -649,6 +651,7 @@ class OpenAIChatTransport:
         model_info: ProviderModelInfo | None = None,
         endpoint_context: EndpointContext | None = None,
         extra_headers: Mapping[str, str] | None = None,
+        validate_request: Callable[[], Awaitable[None]] | None = None,
     ) -> AbstractAsyncContextManager[ProviderCandidate]:
         return self._open_candidate(
             request,
@@ -659,6 +662,7 @@ class OpenAIChatTransport:
             model_info=model_info,
             endpoint_context=endpoint_context,
             extra_headers=extra_headers,
+            validate_request=validate_request,
         )
 
     def open_responses(
@@ -671,6 +675,7 @@ class OpenAIChatTransport:
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         endpoint_context: EndpointContext | None = None,
         extra_headers: Mapping[str, str] | None = None,
+        validate_request: Callable[[], Awaitable[None]] | None = None,
     ) -> AbstractAsyncContextManager[ProviderCandidate]:
         return self._open_candidate(
             request,
@@ -681,6 +686,7 @@ class OpenAIChatTransport:
             model_info=None,
             endpoint_context=endpoint_context,
             extra_headers=extra_headers,
+            validate_request=validate_request,
         )
 
     @asynccontextmanager
@@ -695,6 +701,7 @@ class OpenAIChatTransport:
         model_info: ProviderModelInfo | None,
         endpoint_context: EndpointContext | None,
         extra_headers: Mapping[str, str] | None,
+        validate_request: Callable[[], Awaitable[None]] | None,
     ) -> AsyncIterator[ProviderCandidate]:
         candidate = _ChatCandidate(
             self,
@@ -706,6 +713,7 @@ class OpenAIChatTransport:
             model_info=model_info,
             endpoint_context=endpoint_context,
             extra_headers=extra_headers,
+            validate_request=validate_request,
         )
         try:
             yield candidate
@@ -726,6 +734,7 @@ class _ChatCandidate(StreamCandidate):
         model_info: ProviderModelInfo | None,
         endpoint_context: EndpointContext | None,
         extra_headers: Mapping[str, str] | None,
+        validate_request: Callable[[], Awaitable[None]] | None,
     ) -> None:
         super().__init__(
             admission=transport._admission,
@@ -738,6 +747,7 @@ class _ChatCandidate(StreamCandidate):
             else None,
             failure_override=transport._behavior.failure_override,
         )
+        self._validate = validate_request
         self._transport = transport
         self._request = request.model_copy(deep=True)
         self.original_body = request.model_dump(mode="json", exclude_unset=True)
@@ -751,7 +761,7 @@ class _ChatCandidate(StreamCandidate):
         self._extra_headers = dict(extra_headers or {})
         self._request_client = OpenAIRequestClient(transport._endpoint_transport)
         self._client = transport._client
-        self._output_factory: _ChatOutputFactory
+        self._tool_adapter: ResponsesToolAdapter | None = None
         self._tool_names: OpenAIToolNameCodec
         self._tool_schemas: dict[str, ToolSchema]
         self._reserved_tool_ids: frozenset[str]
@@ -786,12 +796,6 @@ class _ChatCandidate(StreamCandidate):
             self._tool_names = OpenAIToolNameCodec.from_request(request)
             self._tool_schemas = tool_schemas_by_name(request)
             self._reserved_tool_ids = _reserved_anthropic_tool_ids(request)
-            self._output_factory = lambda: AnthropicChatStreamOutput(
-                message_id=f"msg_{uuid.uuid4()}",
-                model=self._response_model,
-                input_tokens=self._input_tokens,
-                log_raw_events=self._transport._log_raw_sse_events,
-            )
         else:
             translated = self._transport._build_responses_request_body(
                 request,
@@ -805,11 +809,7 @@ class _ChatCandidate(StreamCandidate):
                 for name, schema in translated.tool_schemas.items()
             }
             self._reserved_tool_ids = translated.reserved_tool_ids
-            self._output_factory = lambda: ResponsesChatStreamOutput(
-                translated.tool_adapter,
-                input_tokens=self._input_tokens,
-                response_model=self._response_model,
-            )
+            self._tool_adapter = translated.tool_adapter
         self.body = self._transport._apply_learned_output_cap(self.body)
         # Corrections operate on the sent wire body, which excludes private
         # argument metadata. Keep the decoding map for this request revision.
@@ -817,7 +817,11 @@ class _ChatCandidate(StreamCandidate):
             self.body
         )
         request_stream_usage(self.body)
-        self.corrections = RequestCorrections("chat", correction)
+        self.corrections.reasoning = correction
+
+    async def _validate_request(self) -> None:
+        if self._validate is not None:
+            await self._validate()
 
     async def _prepare_endpoint(self) -> ReplayOrigin:
         self._client = (
@@ -861,7 +865,7 @@ class _ChatCandidate(StreamCandidate):
         self, scope: ProviderAttemptScope
     ) -> AsyncIterator[DecodedStreamEvent]:
         assert self.origin is not None
-        output = self._output_factory()
+        output = ChatSourceState(input_tokens=self._input_tokens)
         output.replay_origin = self.origin
         assembler = _OpenAIChatStreamAssembler(
             output=output,
@@ -883,6 +887,7 @@ class _ChatCandidate(StreamCandidate):
             ),
         )
         assembler.bind_tool_argument_aliases(self._tool_argument_aliases)
+        self._dispatch(scope)
         sdk = await self._client.chat.completions.create(
             **cast(dict[str, Any], self.sent_body), stream=True
         )
@@ -907,8 +912,8 @@ class _ChatCandidate(StreamCandidate):
                     )
                 yield DecodedStreamEvent(
                     output.replay_origin or self.origin,
-                    StreamEvent("chat.completion.chunk", raw),
-                    output.project(events),
+                    self._transport._events.event("chat.completion.chunk", raw),
+                    observation=ChatObservation(tuple(events), self._tool_adapter),
                     progress=content_progress("chat", "chat.completion.chunk", raw),
                     native_reasoning_pending=assembler.native_reasoning_pending,
                 )
@@ -957,7 +962,7 @@ class _ChatCandidate(StreamCandidate):
             StreamEvent(
                 "chat.completion.done", {"finish_reason": completion.finish_reason}
             ),
-            output.project(events),
+            observation=ChatObservation(tuple(events), self._tool_adapter),
             outcome=RequestOutcome.INCOMPLETE
             if completion.finish_reason in {"length", "content_filter"}
             else RequestOutcome.SUCCESS,
@@ -1000,6 +1005,18 @@ class _ChatCandidate(StreamCandidate):
                 False,
             )
         return error
+
+    def _retain_correction(self, error: Exception, body: JsonObject) -> None:
+        super()._retain_correction(error, body)
+        if body.get("messages") == self.body.get("messages"):
+            return
+        history = self._transport._behavior.retry_request_body(error, self.body)
+        if history is not None and history.get("messages") != self.body.get("messages"):
+            # Provider-specific history conversion is reapplied to the current
+            # history. Normalized tool IDs remain owned by RequestCorrections.
+            self.corrections.history_correction = partial(
+                self._transport._behavior.retry_request_body, error
+            )
 
     def _request_trace_fields(self) -> JsonObject:
         return {"body": provider_chat_body_snapshot(self.sent_body)}

@@ -3,14 +3,11 @@ from typing import cast
 import pytest
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.chat_observations import ChatStreamUsage
 from free_claude_code.core.openai_responses import build_responses_chat_request
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.core.stream_events import StreamEvent
-from free_claude_code.providers.openai_chat.stream_output import (
-    AnthropicChatStreamOutput,
-    ChatStreamUsage,
-    ResponsesChatStreamOutput,
-)
+from tests.protocol_stream_support import ChatSourceHarness
 
 
 def _parse_frame(frame: StreamEvent) -> tuple[str, dict[str, object]]:
@@ -28,11 +25,11 @@ def _object_dict(value: object) -> dict[str, object]:
 
 def _responses_output(
     request: OpenAIResponsesRequest, *, input_tokens: int
-) -> ResponsesChatStreamOutput:
+) -> ChatSourceHarness:
     prepared = build_responses_chat_request(
         request, reasoning_replay=ReasoningReplayMode.DISABLED
     )
-    return ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=input_tokens)
+    return ChatSourceHarness(prepared.tool_adapter, input_tokens=input_tokens)
 
 
 def _finished_responses_usage(usage: ChatStreamUsage) -> dict[str, object]:
@@ -42,14 +39,18 @@ def _finished_responses_usage(usage: ChatStreamUsage) -> dict[str, object]:
         ),
         input_tokens=1,
     )
-    frames = output.finish_success(stop_reason="stop", usage=usage)
+    frames = output.project(
+        [
+            *output.start_events(),
+            *output.finish_success(stop_reason="stop", usage=usage),
+        ]
+    )
     final = _object_dict(_parse_frame(frames[-1])[1]["response"])
     return _object_dict(final["usage"])
 
 
 def test_anthropic_chat_output_preserves_existing_wire_lifecycle() -> None:
-    output = AnthropicChatStreamOutput(
-        message_id="msg_test",
+    output = ChatSourceHarness(
         model="public-model",
         input_tokens=7,
     )
@@ -87,7 +88,7 @@ def test_anthropic_chat_output_preserves_existing_wire_lifecycle() -> None:
         "message_delta",
         "message_stop",
     ]
-    assert _object_dict(events[0][1]["message"])["id"] == "msg_test"
+    assert str(_object_dict(events[0][1]["message"])["id"]).startswith("msg_")
     assert events[-2][1]["usage"] == {"input_tokens": 9, "output_tokens": 4}
     assert output.accumulated_reasoning == "think"
     assert output.accumulated_text == "answer"
@@ -395,3 +396,59 @@ def test_responses_chat_output_completes_malformed_function_call_once() -> None:
     item = _object_dict(final_output[0])
     assert item["arguments"] == '{"q":'
     assert item["call_id"] == "call_bad"
+
+
+def test_projection_failure_keeps_checkpoint_equal_to_delivered_prefix() -> None:
+    from free_claude_code.core.history_replay import ReplayOrigin
+    from free_claude_code.core.openai_responses.errors import ResponsesConversionError
+    from free_claude_code.core.recovery import AttemptFailure
+    from free_claude_code.core.stream_observations import (
+        ChatObservation,
+        DecodedStreamEvent,
+    )
+
+    source = _responses_output(
+        OpenAIResponsesRequest(
+            model="public",
+            input="hi",
+            tools=[
+                {
+                    "type": "namespace",
+                    "name": namespace,
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "lookup",
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                }
+                for namespace in ("a", "b")
+            ],
+        ),
+        input_tokens=1,
+    )
+    changes = (
+        *source.start_events(),
+        *source.ensure_text_block(),
+        source.emit_text_delta("Visible prefix."),
+        *source.close_content_blocks(),
+        source.start_tool_block(0, "call", "lookup"),
+    )
+    delivered = []
+    with pytest.raises((ResponsesConversionError, AttemptFailure), match="Ambiguous"):
+        for event in source.writer.feed(
+            DecodedStreamEvent(
+                ReplayOrigin("test", "chat", "", "", "m"),
+                StreamEvent("chat.completion.chunk", {}),
+                observation=ChatObservation(changes, source.tools),
+            )
+        ):
+            assert event.kind != "response.completed"
+            delivered.append(event)
+    text = "".join(
+        event.payload["delta"]
+        for event in delivered
+        if event.kind == "response.output_text.delta"
+    )
+    assert text == source.writer.checkpoint.text == "Visible prefix."

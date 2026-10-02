@@ -74,7 +74,9 @@ class ResponsesToolAdapter:
         self._edits: list[_DefinitionEdit] = []
         self._search_name: str | None = None
         self._search_history = (
-            resolve_client_search_history(self.request.input)
+            resolve_client_search_history(
+                self.request.input, preserve_features=preserve_features
+            )
             if policy.client_tool_search
             else ClientSearchHistory(frozenset(), {})
         )
@@ -103,7 +105,9 @@ class ResponsesToolAdapter:
         )
         if client_search:
             self.request.tools = active_client_tools(
-                self.request.tools, self._search_history
+                self.request.tools,
+                self._search_history,
+                preserve_features=preserve_features,
             )
         if (
             policy.custom_tools_as_functions

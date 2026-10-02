@@ -126,16 +126,15 @@ async def test_dispatched_native_history_restricts_recovery_before_response_outp
             reasoning=DEFAULT_REASONING_POLICY,
         ) as candidate:
             checkpoint = RecoveryCheckpoint("responses")
-            await candidate.prepare(checkpoint)
-            source = candidate.stream_attempt(
-                checkpoint, wait_for_recovery=True, can_correct=lambda: True
-            )
+            source = candidate.open_attempt(checkpoint, wait_for_recovery=True)
             writer.begin_attempt()
             try:
-                event = await anext(source)
-                writer.feed(event)
+                event = await source.read()
+                assert source.dispatch is not None
+                writer.dispatch(source.dispatch)
+                list(writer.feed(event))
                 assert writer.checkpoint.required_origins == (event.origin,)
                 assert len(bodies) == 1
                 assert bodies[0]["input"][0] == _native("responses")
             finally:
-                await source.aclose()
+                await source.aclose(active_error=None)

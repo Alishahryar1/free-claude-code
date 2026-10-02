@@ -9,10 +9,16 @@ import httpx2
 import pytest
 from openai import AsyncOpenAI
 
+from free_claude_code.application.recovery import RecoveryCoordinator
+from free_claude_code.application.routing import ProviderModelTarget
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.async_iterators import AsyncCloseable
-from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.openai_responses import (
+    OpenAIResponsesRequest,
+    ResponsesRecoveryWriter,
+)
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -200,6 +206,101 @@ def _response(body):
     return httpx2.Response(
         200, headers={"content-type": "text/event-stream"}, stream=body
     )
+
+
+@pytest.mark.asyncio
+async def test_progress_timeout_allows_real_sdk_response_cleanup_to_finish():
+    closed = asyncio.Event()
+
+    class DelayedCloseBody(ResponseBody):
+        async def aclose(self):
+            await super().aclose()
+            await asyncio.sleep(0.05)
+            closed.set()
+
+    response = _completed_event()["response"]
+    assert isinstance(response, dict)
+    body = DelayedCloseBody(
+        _sse(
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {**response, "status": "in_progress", "output": []},
+            }
+        ).encode()
+    )
+    async with _harness("responses", lambda request: _response(body)) as (
+        provider,
+        _,
+        admission,
+    ):
+
+        async def opener(index, target):
+            return provider.open_responses(
+                OpenAIResponsesRequest(model="model", input="hello"),
+                input_tokens=0,
+                request_id="timeout-cleanup",
+                response_model="public",
+                reasoning=DEFAULT_REASONING_POLICY,
+            )
+
+        coordinator = RecoveryCoordinator(
+            candidates=(ProviderModelTarget("test", "model", "test/model"),),
+            opener=opener,
+            writer=ResponsesRecoveryWriter(model="public", input_tokens=0),
+            progress_timeout_seconds=2,
+            timeout_failure=lambda _: ExecutionFailure(
+                FailureKind.TIMEOUT, 504, "Provider progress timed out", False
+            ),
+            request_id="timeout-cleanup",
+        )
+        output = "".join([frame async for frame in coordinator.stream()])
+
+        assert "event: response.failed" in output
+        assert closed.is_set()
+        assert body.close_count == 1
+        await _assert_admission_available(admission)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhaust_grace", [False, True])
+async def test_repeated_cancellation_joins_sdk_close_and_releases_local_ownership(
+    monkeypatch, exhaust_grace
+):
+    if exhaust_grace:
+        monkeypatch.setattr(
+            "free_claude_code.core.async_iterators._CLEANUP_GRACE_SECONDS", 0.05
+        )
+    body = ResponseBody(block_close=True)
+    async with _harness("responses", lambda _: _response(body)) as (
+        provider,
+        client,
+        admission,
+    ):
+        existing_tasks = asyncio.all_tasks()
+        stream = _public_stream(provider, "responses")
+        task = asyncio.create_task(anext(stream))
+        try:
+            await asyncio.wait_for(body.read_started.wait(), timeout=2)
+            task.cancel()
+            await asyncio.wait_for(body.close_started.wait(), timeout=2)
+            task.cancel()
+            if not exhaust_grace:
+                await asyncio.sleep(0.02)
+                assert not task.done()
+                body.close_release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+            assert body.close_count == 1
+            assert not client.is_closed()
+            await _assert_admission_available(admission)
+            assert not asyncio.all_tasks() - existing_tasks
+        finally:
+            body.close_release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await stream.aclose()
 
 
 @asynccontextmanager

@@ -5,10 +5,10 @@ import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 
+from free_claude_code.core.chat_observations import ChatChange
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
-from free_claude_code.core.stream_events import StreamEvent
 
-from .stream_output import ChatStreamOutput
+from .source_state import ChatSourceState
 
 RecordToolExtraContent = Callable[[str, dict[str, Any]], None]
 
@@ -55,13 +55,13 @@ class OpenAIToolCallAssembler:
     def process_tool_call(
         self,
         tc: Mapping[str, Any],
-        output: ChatStreamOutput,
+        output: ChatSourceState,
         *,
         tool_names: OpenAIToolNameCodec | None = None,
         tool_name_buffers: dict[int, str] | None = None,
         tool_argument_aliases: dict[str, dict[str, str]] | None = None,
         tool_argument_alias_buffers: dict[int, str] | None = None,
-    ) -> Iterator[StreamEvent]:
+    ) -> Iterator[ChatChange]:
         """Process one tool-call delta and yield client-protocol events."""
         raw_index = tc.get("index", 0)
         tc_index = raw_index if isinstance(raw_index, int) else 0
@@ -168,13 +168,13 @@ class OpenAIToolCallAssembler:
 
     def flush_tool_name_buffers(
         self,
-        output: ChatStreamOutput,
+        output: ChatSourceState,
         *,
         tool_names: OpenAIToolNameCodec,
         tool_name_buffers: dict[int, str],
         tool_argument_aliases: dict[str, dict[str, str]],
         tool_argument_alias_buffers: dict[int, str],
-    ) -> Iterator[StreamEvent]:
+    ) -> Iterator[ChatChange]:
         """Resolve names held only because they also prefix a generated alias."""
         for tool_index, name in list(tool_name_buffers.items()):
             tool_name_buffers.pop(tool_index, None)
@@ -191,10 +191,10 @@ class OpenAIToolCallAssembler:
 
     def flush_tool_argument_alias_buffers(
         self,
-        output: ChatStreamOutput,
+        output: ChatSourceState,
         tool_argument_aliases: dict[str, dict[str, str]],
         tool_argument_alias_buffers: dict[int, str],
-    ) -> Iterator[StreamEvent]:
+    ) -> Iterator[ChatChange]:
         """Emit remaining aliased args without losing malformed JSON."""
         for tool_index, buffered_args in list(tool_argument_alias_buffers.items()):
             if not buffered_args:
@@ -215,13 +215,13 @@ class OpenAIToolCallAssembler:
 
     def _emit_tool_arg_delta(
         self,
-        output: ChatStreamOutput,
+        output: ChatSourceState,
         tc_index: int,
         args: str,
         *,
         tool_argument_aliases: dict[str, dict[str, str]] | None = None,
         tool_argument_alias_buffers: dict[int, str] | None = None,
-    ) -> Iterator[StreamEvent]:
+    ) -> Iterator[ChatChange]:
         """Emit one argument fragment for a started tool block."""
         if not args:
             return

@@ -11,7 +11,10 @@ import httpx
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.application.ports import ProviderCandidate
+from free_claude_code.application.ports import (
+    CandidateContext,
+    ProviderCandidate,
+)
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.native import NativeMessagesError
 from free_claude_code.core.anthropic.passthrough import (
@@ -38,7 +41,7 @@ from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
-from free_claude_code.providers.candidate_setup import CandidateSetup
+from free_claude_code.providers.candidate_setup import deferred_candidate
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.history_replay import replay_origin
@@ -201,7 +204,7 @@ class AnthropicProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         return self._candidate(
             request,
             request_id=request_id,
@@ -219,7 +222,7 @@ class AnthropicProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         return self._candidate(
             request,
             request_id=request_id,
@@ -234,7 +237,7 @@ class AnthropicProvider(BaseProvider):
         request_id: str | None,
         response_model: str | None,
         reasoning: ReasoningPolicy,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         discovery = self._admission.start_execution(request_id=request_id)
 
         async def initialize(
@@ -262,9 +265,9 @@ class AnthropicProvider(BaseProvider):
                 model_info=record.info,
             )
 
-        return CandidateSetup(
+        return deferred_candidate(
             initialize,
             provider_name="anthropic",
             request_id=request_id,
             discovery=discovery,
-        ).open()
+        )

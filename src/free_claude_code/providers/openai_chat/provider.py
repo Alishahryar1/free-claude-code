@@ -1,7 +1,6 @@
 """Provider identity, HTTP resource ownership, and model discovery."""
 
 from collections.abc import Mapping
-from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from typing import Any
 
@@ -9,7 +8,7 @@ import httpx2
 from openai import AsyncOpenAI
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.application.ports import ProviderCandidate
+from free_claude_code.application.ports import CandidateContext
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -215,7 +214,7 @@ class OpenAIChatProvider(BaseProvider):
         model_info: ProviderModelInfo | None = None,
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         return self._chat.open_messages(
             request,
             input_tokens=input_tokens,
@@ -237,7 +236,7 @@ class OpenAIChatProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         return self._chat.open_responses(
             request,
             input_tokens=input_tokens,

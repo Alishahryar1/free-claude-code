@@ -1,12 +1,11 @@
 """Stream/SSE contract tests. Strict transcript *ordering* is covered here for
-``AnthropicStreamLedger`` output; for integration ordering, add messaging or API
+the public Messages writer; for integration ordering, add messaging or API
 integration tests.
 """
 
 from collections.abc import Iterable
 
 from free_claude_code.core.anthropic import (
-    AnthropicStreamLedger,
     ContentType,
     ThinkTagParser,
 )
@@ -18,7 +17,9 @@ from free_claude_code.core.anthropic.stream_contracts import (
     thinking_content,
 )
 from free_claude_code.core.anthropic.streaming import format_sse_event
+from free_claude_code.core.chat_observations import ChatChange, ChatStreamUsage
 from free_claude_code.core.stream_events import StreamEvent
+from tests.protocol_stream_support import ChatSourceHarness
 from tests.stream_helpers import serialize_events
 
 
@@ -44,18 +45,19 @@ def test_split_think_tags_preserve_text_and_thinking() -> None:
 
 
 def test_mixed_reasoning_content_and_think_tags_keep_order() -> None:
-    builder = AnthropicStreamLedger("msg_contract", "contract-model")
-    chunks = [builder.message_start()]
-    chunks.extend(builder.ensure_thinking_block())
-    chunks.append(builder.emit_thinking_delta("reasoning field"))
+    builder = ChatSourceHarness(model="contract-model", input_tokens=0)
+    chunks = builder.start_events()
+    chunks.extend(builder.ensure_reasoning_block())
+    chunks.append(builder.emit_reasoning_delta("reasoning field"))
     chunks.extend(
-        _events_from_text_chunks([" visible <think>tagged</think> done"], builder)
+        _changes_from_text_chunks([" visible <think>tagged</think> done"], builder)
     )
     chunks.extend(builder.close_all_blocks())
-    chunks.append(builder.message_delta("end_turn", 10))
-    chunks.append(builder.message_stop())
+    chunks.extend(
+        builder.finish_success(stop_reason="end_turn", usage=ChatStreamUsage(0, 10))
+    )
 
-    events = parse_sse_text(serialize_events(chunks))
+    events = parse_sse_text(serialize_events(builder.project(chunks)))
     assert_anthropic_stream_contract(events)
     assert thinking_content(events) == "reasoning fieldtagged"
     assert text_content(events) == " visible  done"
@@ -120,56 +122,58 @@ def test_enable_thinking_false_suppresses_reasoning_only() -> None:
 def _interleaved_thinking_text_events(
     parts: tuple[str, str, str, str],
 ) -> Iterable[str]:
-    builder = AnthropicStreamLedger("msg_contract", "contract-model")
-    yield builder.message_start()
-    yield from builder.ensure_thinking_block()
-    yield builder.emit_thinking_delta(parts[0])
-    yield from builder.ensure_text_block()
-    yield builder.emit_text_delta(parts[1])
-    yield from builder.ensure_thinking_block()
-    yield builder.emit_thinking_delta(parts[2])
-    yield from builder.ensure_text_block()
-    yield builder.emit_text_delta(parts[3])
-    yield from builder.close_all_blocks()
-    yield builder.message_delta("end_turn", 20)
-    yield builder.message_stop()
+    builder = ChatSourceHarness(model="contract-model", input_tokens=0)
+    changes = [
+        *builder.start_events(),
+        *builder.ensure_reasoning_block(),
+        builder.emit_reasoning_delta(parts[0]),
+        *builder.ensure_text_block(),
+        builder.emit_text_delta(parts[1]),
+        *builder.ensure_reasoning_block(),
+        builder.emit_reasoning_delta(parts[2]),
+        *builder.ensure_text_block(),
+        builder.emit_text_delta(parts[3]),
+        *builder.finish_success(stop_reason="end_turn", usage=ChatStreamUsage(0, 20)),
+    ]
+    yield from builder.project(changes)
 
 
 def _events_from_text_chunks(
-    chunks: list[str],
-    builder: AnthropicStreamLedger | None = None,
-    *,
-    enable_thinking: bool = True,
+    chunks: list[str], *, enable_thinking: bool = True
 ) -> list[StreamEvent]:
-    sse = builder or AnthropicStreamLedger("msg_contract", "contract-model")
-    out: list[StreamEvent] = [] if builder else [sse.message_start()]
+    source = ChatSourceHarness(model="contract-model", input_tokens=0)
+    changes = [
+        *source.start_events(),
+        *_changes_from_text_chunks(chunks, source, enable_thinking=enable_thinking),
+        *source.finish_success(stop_reason="end_turn", usage=ChatStreamUsage(0, 20)),
+    ]
+    return source.project(changes)
+
+
+def _changes_from_text_chunks(
+    chunks: list[str], source: ChatSourceHarness, *, enable_thinking: bool = True
+) -> list[ChatChange]:
     parser = ThinkTagParser()
-
+    out: list[ChatChange] = []
     for chunk in chunks:
-        out.extend(_emit_parser_parts(sse, parser.feed(chunk), enable_thinking))
-
+        out.extend(_emit_parser_parts(source, parser.feed(chunk), enable_thinking))
     remaining = parser.flush()
     if remaining is not None:
-        out.extend(_emit_parser_parts(sse, [remaining], enable_thinking))
-
-    if builder is None:
-        out.extend(sse.close_all_blocks())
-        out.append(sse.message_delta("end_turn", 20))
-        out.append(sse.message_stop())
+        out.extend(_emit_parser_parts(source, [remaining], enable_thinking))
     return out
 
 
 def _emit_parser_parts(
-    builder: AnthropicStreamLedger,
+    builder: ChatSourceHarness,
     parts: Iterable,
     enable_thinking: bool,
-) -> list[StreamEvent]:
-    out: list[StreamEvent] = []
+) -> list[ChatChange]:
+    out: list[ChatChange] = []
     for part in parts:
         if part.type == ContentType.THINKING:
             if enable_thinking:
-                out.extend(builder.ensure_thinking_block())
-                out.append(builder.emit_thinking_delta(part.content))
+                out.extend(builder.ensure_reasoning_block())
+                out.append(builder.emit_reasoning_delta(part.content))
             continue
         out.extend(builder.ensure_text_block())
         out.append(builder.emit_text_delta(part.content))

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.request_preservation import require_supported_fields
 
 from .errors import ResponsesConversionError
 from .tools import optional_str, required_str
@@ -30,7 +31,9 @@ class ClientSearchHistory:
     omitted_items: frozenset[int] = frozenset()
 
 
-def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
+def resolve_client_search_history(
+    items: JsonValue, *, preserve_features: bool = False
+) -> ClientSearchHistory:
     """Infer omitted execution only from search records with the same call ID."""
     if not isinstance(items, list):
         return ClientSearchHistory(frozenset(), {})
@@ -87,7 +90,8 @@ def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
                     if accepted and isinstance(tools, list)
                     else [],
                     [],
-                ]
+                ],
+                preserve_features=preserve_features,
             )
     return ClientSearchHistory(
         frozenset(client_items), outputs, frozenset(omitted_items)
@@ -95,13 +99,21 @@ def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
 
 
 def active_client_tools(
-    tools: list[JsonObject] | None, history: ClientSearchHistory
+    tools: list[JsonObject] | None,
+    history: ClientSearchHistory,
+    *,
+    preserve_features: bool = False,
 ) -> list[JsonObject]:
     """Resolve discoveries in history order, with explicit current tools last."""
-    return _merge_tool_groups([*history.output_tools.values(), tools or []])
+    return _merge_tool_groups(
+        [*history.output_tools.values(), tools or []],
+        preserve_features=preserve_features,
+    )
 
 
-def _merge_tool_groups(groups: list[list[JsonObject]]) -> list[JsonObject]:
+def _merge_tool_groups(
+    groups: list[list[JsonObject]], *, preserve_features: bool = False
+) -> list[JsonObject]:
     active: dict[tuple[str, str | None, str], JsonObject] = {}
     hosted: list[JsonObject] = []
     for group in groups:
@@ -110,6 +122,10 @@ def _merge_tool_groups(groups: list[list[JsonObject]]) -> list[JsonObject]:
             namespace = None
             children = [tool]
             if tool.get("type") == "namespace":
+                if preserve_features:
+                    require_supported_fields(
+                        tool, {"type", "name", "tools"}, "Client tool search namespace"
+                    )
                 namespace = required_str(tool.get("name"), "tool.namespace.name")
                 value = tool.get("tools")
                 if not isinstance(value, list):

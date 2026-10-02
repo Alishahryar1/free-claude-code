@@ -8,9 +8,6 @@ from free_claude_code.core.stream_events import StreamEvent
 class ResponseEventBuilder:
     """Build one ordered Responses event stream."""
 
-    def __init__(self) -> None:
-        self._next_sequence_number = 0
-
     def response_created(self, response: dict[str, Any]) -> StreamEvent:
         return self._format(
             "response.created",
@@ -190,6 +187,4 @@ class ResponseEventBuilder:
         )
 
     def _format(self, event_type: str, data: dict[str, Any]) -> StreamEvent:
-        data["sequence_number"] = self._next_sequence_number
-        self._next_sequence_number += 1
         return StreamEvent(event_type, data)

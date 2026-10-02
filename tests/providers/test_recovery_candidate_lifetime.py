@@ -3,10 +3,12 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from unittest.mock import patch
 
 import httpx
 import pytest
 
+from free_claude_code.application.ports import CandidateInitializer
 from free_claude_code.application.recovery import RecoveryCoordinator
 from free_claude_code.application.routing import ProviderModelTarget
 from free_claude_code.core.anthropic.models import MessagesRequest
@@ -23,10 +25,10 @@ from free_claude_code.core.recovery import (
     CandidateIncompatible,
     RecoveryCheckpoint,
 )
-from free_claude_code.core.stream_events import (
+from free_claude_code.core.stream_events import RequestOutcome, StreamEvent
+from free_claude_code.core.stream_observations import (
     DecodedStreamEvent,
-    RequestOutcome,
-    StreamEvent,
+    MessagesObservation,
 )
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -34,10 +36,13 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.anthropic import AnthropicProvider
-from free_claude_code.providers.candidate_setup import CandidateSetup
 from free_claude_code.providers.failure_policy import ProviderRecoveryDeferred
 from free_claude_code.providers.stream_candidate import StreamCandidate
-from tests.providers.support import make_provider_config, stream_responses
+from tests.providers.support import (
+    attempt_events,
+    make_provider_config,
+    stream_responses,
+)
 from tests.providers.test_anthropic_messages_transport import _events
 from tests.providers.test_history_transports import _events_for
 from tests.providers.test_opencode import (
@@ -327,50 +332,49 @@ async def test_cold_opencode_candidate_retains_discovery_across_repeated_deferra
     attempt = await leader.open_attempt(ProviderOperationKind.GENERATION)
     await attempt.fail(httpx.ReadError("shared provider unavailable"))
     await attempt.aclose()
-    discovery = None
+    executions = []
+    start_execution = admission.start_execution
+
+    def record_execution(*args, **kwargs):
+        execution = start_execution(*args, **kwargs)
+        executions.append(execution)
+        return execution
+
     try:
-        async with provider.open_messages(
-            MessagesRequest(
-                model="chat-selector", messages=[{"role": "user", "content": "hello"}]
-            )
-        ) as candidate:
-            assert isinstance(candidate, CandidateSetup)
-            discovery = candidate._discovery
-            assert discovery is not None
-            checkpoint = RecoveryCheckpoint("messages", recovering=True)
-            for _ in range(3):
-                with pytest.raises(AttemptFailure) as failure:
-                    _ = [
-                        event
-                        async for event in candidate.stream_attempt(
-                            checkpoint,
-                            wait_for_recovery=False,
-                            can_correct=lambda: False,
-                        )
-                    ]
-                assert failure.value.deferred
-                await candidate.suspend()
-                assert (
-                    candidate._discovery is discovery
-                    and discovery.attempts_started == 0
+        with patch.object(admission, "start_execution", side_effect=record_execution):
+            async with provider.open_messages(
+                MessagesRequest(
+                    model="chat-selector",
+                    messages=[{"role": "user", "content": "hello"}],
                 )
-                assert not provider._catalog._lock.locked()
-                assert not requests and not catalog_requests
-            if resume:
-                await leader.suspend()
-                events = [
-                    event
-                    async for event in candidate.stream_attempt(
-                        checkpoint, wait_for_recovery=True, can_correct=lambda: False
+            ) as initializer:
+                assert isinstance(initializer, CandidateInitializer)
+                discovery = executions[0]
+                checkpoint = RecoveryCheckpoint("messages", recovering=True)
+                for _ in range(3):
+                    with pytest.raises(AttemptFailure) as failure:
+                        async with initializer.open(False):
+                            pytest.fail(
+                                "Gated discovery cannot open a generation candidate"
+                            )
+                    assert failure.value.deferred
+                    assert executions == [discovery] and discovery.attempts_started == 0
+                    assert not provider._catalog._lock.locked()
+                    assert not requests and not catalog_requests
+                if resume:
+                    await leader.suspend()
+                    async with initializer.open(True) as candidate:
+                        events = [
+                            event
+                            async for event in attempt_events(candidate, checkpoint)
+                        ]
+                    assert events[-1].completed
+                    assert (
+                        len(requests)
+                        == len(catalog_requests)
+                        == discovery.attempts_started
+                        == 1
                     )
-                ]
-                assert events[-1].completed
-                assert (
-                    len(requests)
-                    == len(catalog_requests)
-                    == discovery.attempts_started
-                    == 1
-                )
         assert discovery.state in {
             ProviderExecutionState.SUCCEEDED,
             ProviderExecutionState.ABANDONED,
@@ -419,6 +423,7 @@ async def test_deferred_target_is_resumed_before_predecessor_without_recreating_
             return ReplayOrigin(str(self.index), "messages", "", "", str(self.index))
 
         async def _read(self, scope):
+            self._dispatch(scope)
             reads.append(self.index)
             if self.index == 0 and reads.count(0) == 1:
                 raise httpx.ReadError("A failed")
@@ -431,7 +436,7 @@ async def test_deferred_target_is_resumed_before_predecessor_without_recreating_
                 yield DecodedStreamEvent(
                     self.origin,
                     event,
-                    (event,),
+                    observation=MessagesObservation(),
                     progress=event.kind == "content_block_delta",
                     outcome=RequestOutcome.SUCCESS
                     if event.kind == "message_stop"

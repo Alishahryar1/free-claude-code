@@ -16,6 +16,10 @@ from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
 )
+from free_claude_code.core.chat_observations import (
+    ChatChange,
+    ChatToolObservation,
+)
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
@@ -26,9 +30,7 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
-from free_claude_code.providers.openai_chat.stream_output import (
-    AnthropicChatStreamOutput,
-)
+from free_claude_code.providers.openai_chat.source_state import ChatSourceState
 from free_claude_code.providers.openai_chat.tool_calls import (
     OpenAIToolCallAssembler,
 )
@@ -132,10 +134,8 @@ def _make_tool_assembler(
     )
 
 
-def _make_anthropic_output() -> AnthropicChatStreamOutput:
-    return AnthropicChatStreamOutput(
-        message_id="msg_test",
-        model="test-model",
+def _make_anthropic_output() -> ChatSourceState:
+    return ChatSourceState(
         input_tokens=0,
     )
 
@@ -1935,6 +1935,14 @@ class TestStreamingExceptionHandling:
         assert "Response" in event_text
 
 
+def _source_tools(changes: Iterable[ChatChange]) -> list[ChatToolObservation]:
+    return [
+        change.tool
+        for change in changes
+        if change.kind == "tool.start" and change.tool is not None
+    ]
+
+
 class TestProcessToolCall:
     """Tests for OpenAI tool-call assembly."""
 
@@ -1948,14 +1956,7 @@ class TestProcessToolCall:
             "function": {"name": "search", "arguments": '{"q": "test"}'},
         }
         events = list(_make_tool_assembler(provider).process_tool_call(tc, sse))
-        assert _tool_use_starts(events) == [
-            {
-                "type": "tool_use",
-                "id": "call_123",
-                "name": "search",
-                "input": {},
-            }
-        ]
+        assert _source_tools(events) == [ChatToolObservation("call_123", "search")]
 
     @pytest.mark.parametrize("missing_id", [None, "", "   "])
     def test_missing_or_blank_tool_call_id_generates_public_id(self, missing_id):
@@ -1974,8 +1975,8 @@ class TestProcessToolCall:
             )
         )
 
-        [start] = _tool_use_starts(events)
-        assert start["id"].startswith("tool_")
+        [start] = _source_tools(events)
+        assert start.tool_id.startswith("tool_")
 
     def test_historical_tool_call_id_collision_is_remapped(self):
         """A later turn cannot reuse a tool identity already visible in history."""
@@ -2022,9 +2023,9 @@ class TestProcessToolCall:
             )
         )
 
-        [start] = _tool_use_starts(events)
-        assert start["id"].startswith("tool_")
-        assert start["id"] != "Bash:0"
+        [start] = _source_tools(events)
+        assert start.tool_id.startswith("tool_")
+        assert start.tool_id != "Bash:0"
 
     def test_current_response_tool_call_id_collision_is_remapped(self):
         """Two simultaneous calls cannot expose the same public identity."""
@@ -2053,10 +2054,10 @@ class TestProcessToolCall:
             )
         )
 
-        starts = _tool_use_starts(first + second)
-        assert starts[0]["id"] == "Bash:0"
-        assert starts[1]["id"].startswith("tool_")
-        assert starts[1]["id"] != starts[0]["id"]
+        starts = _source_tools(first + second)
+        assert starts[0].tool_id == "Bash:0"
+        assert starts[1].tool_id.startswith("tool_")
+        assert starts[1].tool_id != starts[0].tool_id
 
     def test_structured_tool_call_restores_portable_wire_alias(self):
         """A wire alias never escapes in the Anthropic tool block."""
@@ -2082,16 +2083,8 @@ class TestProcessToolCall:
             )
         )
 
-        event_text = serialize_events(events)
-        assert original in event_text
-        assert alias not in event_text
-        assert (
-            sum(
-                event.event == "content_block_start"
-                for event in parse_sse_text(event_text)
-            )
-            == 1
-        )
+        [tool] = _source_tools(events)
+        assert tool.name == original
 
     def test_tool_name_restores_before_nim_argument_alias_lookup(self):
         """Generic name decoding composes with original-name NIM arg metadata."""
@@ -2130,18 +2123,11 @@ class TestProcessToolCall:
             )
         )
 
-        parsed = parse_sse_text(serialize_events(events))
-        start = next(
-            event.data["content_block"]
-            for event in parsed
-            if event.event == "content_block_start"
-        )
+        [tool] = _source_tools(events)
         argument_delta = next(
-            event.data["delta"]["partial_json"]
-            for event in parsed
-            if event.event == "content_block_delta"
+            change.text for change in events if change.kind == "tool.delta"
         )
-        assert start["name"] == original
+        assert tool.name == original
         assert json.loads(argument_delta) == {"type": "file"}
 
     def test_fragmented_wire_alias_starts_one_original_tool_block(self):
@@ -2184,16 +2170,8 @@ class TestProcessToolCall:
         )
 
         assert first == []
-        event_text = serialize_events(second)
-        assert original in event_text
-        assert alias not in event_text
-        assert (
-            sum(
-                event.event == "content_block_start"
-                for event in parse_sse_text(event_text)
-            )
-            == 1
-        )
+        [tool] = _source_tools(second)
+        assert tool.name == original
         assert buffers == {}
 
     def test_valid_name_that_prefixes_alias_is_resolved_on_flush(self):
@@ -2236,7 +2214,7 @@ class TestProcessToolCall:
         )
 
         assert initial == []
-        assert original in serialize_events(flushed)
+        assert _source_tools(flushed)[0].name == original
         assert buffers == {}
 
     def test_tool_call_id_arrives_before_name_still_emits_id_and_name(self):
@@ -2259,13 +2237,12 @@ class TestProcessToolCall:
             "function": {"name": None, "arguments": "{}"},
         }
         assembler = _make_tool_assembler(provider)
-        b1 = serialize_events(assembler.process_tool_call(t1, sse))
-        b2 = serialize_events(assembler.process_tool_call(t2, sse))
-        b3 = serialize_events(assembler.process_tool_call(t3, sse))
+        b1 = list(assembler.process_tool_call(t1, sse))
+        b2 = list(assembler.process_tool_call(t2, sse))
+        b3 = list(assembler.process_tool_call(t3, sse))
         combined = b1 + b2 + b3
-        assert "call_split" in combined
-        assert "Grep" in combined
-        assert b1 == ""
+        assert _source_tools(combined) == [ChatToolObservation("call_split", "Grep")]
+        assert b1 == []
 
     def test_tool_call_arguments_buffered_until_name(self):
         """Argument deltas before tool name are emitted after the block starts."""
@@ -2282,13 +2259,14 @@ class TestProcessToolCall:
             "function": {"name": "Read", "arguments": "1}"},
         }
         assembler = _make_tool_assembler(provider)
-        b1 = serialize_events(assembler.process_tool_call(t1, sse))
-        b2 = serialize_events(assembler.process_tool_call(t2, sse))
-        assert b1 == ""
-        combined = b2
-        assert "Read" in combined
-        assert "call_buf" in combined
-        assert '{"x":' in combined or "partial_json" in combined
+        b1 = list(assembler.process_tool_call(t1, sse))
+        b2 = list(assembler.process_tool_call(t2, sse))
+        assert b1 == []
+        assert _source_tools(b2) == [ChatToolObservation("call_buf", "Read")]
+        assert (
+            "".join(change.text for change in b2 if change.kind == "tool.delta")
+            == '{"x":1}'
+        )
 
     def test_late_upstream_id_cannot_overwrite_started_public_id(self):
         """The identity emitted at block start stays authoritative."""
@@ -2306,8 +2284,8 @@ class TestProcessToolCall:
                 sse,
             )
         )
-        [start] = _tool_use_starts(initial)
-        generated_id = start["id"]
+        [start] = _source_tools(initial)
+        generated_id = start.tool_id
 
         later = list(
             assembler.process_tool_call(
@@ -2334,9 +2312,11 @@ class TestProcessToolCall:
             "function": {"name": "Task", "arguments": args},
         }
         events = list(_make_tool_assembler(provider).process_tool_call(tc, sse))
-        event_text = serialize_events(events)
+        argument_text = "".join(
+            change.text for change in events if change.kind == "tool.delta"
+        )
         assert sse.tool_states[0].content == args
-        assert "true" in event_text.lower()
+        assert "true" in argument_text.lower()
 
     def test_task_tool_streams_chunked_args(self):
         """Chunked Task args stream without changing the requested execution mode."""
@@ -2359,8 +2339,10 @@ class TestProcessToolCall:
         assert sse.tool_states[0].content == tc1["function"]["arguments"]
 
         events2 = list(assembler.process_tool_call(tc2, sse))
-        event_text = serialize_events(events1 + events2)
-        assert "true" in event_text.lower()
+        argument_text = "".join(
+            change.text for change in events1 + events2 if change.kind == "tool.delta"
+        )
+        assert "true" in argument_text.lower()
         assert json.loads(sse.tool_states[0].content) == {
             "run_in_background": True,
             "prompt": "test",
@@ -2404,10 +2386,8 @@ class TestProcessToolCall:
             "function": {"name": "test", "arguments": "{}"},
         }
         events = list(_make_tool_assembler(provider).process_tool_call(tc, sse))
-        event_text = serialize_events(events)
 
-        assert "tool_use" in event_text
-        assert "call_none" in event_text
+        assert _source_tools(events)[0].tool_id == "call_none"
 
     def test_tool_args_emitted_as_delta(self):
         """Arguments are emitted as input_json_delta events."""
@@ -2419,8 +2399,10 @@ class TestProcessToolCall:
             "function": {"name": "grep", "arguments": '{"pattern": "test"}'},
         }
         events = list(_make_tool_assembler(provider).process_tool_call(tc, sse))
-        event_text = serialize_events(events)
-        assert "input_json_delta" in event_text
+        argument_text = "".join(
+            change.text for change in events if change.kind == "tool.delta"
+        )
+        assert argument_text == '{"pattern": "test"}'
 
 
 class TestStreamChunkEdgeCases:
@@ -2524,8 +2506,7 @@ class TestStreamChunkEdgeCases:
         assembler = _make_tool_assembler(provider)
         events1 = list(assembler.process_tool_call(tc1, sse))
         events2 = list(assembler.process_tool_call(tc2, sse))
-        event_text = serialize_events(events1 + events2)
-        assert "tool_use" in event_text
+        assert _source_tools(events1 + events2)[0].tool_id == "call_malformed"
         assert sse.tool_states[0].content == '{"broken": never valid }'
 
 

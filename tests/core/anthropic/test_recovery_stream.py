@@ -1,12 +1,15 @@
 """One public lifecycle, completed-call publication, and resumable checkpoints."""
 
-from dataclasses import replace
 from weakref import WeakKeyDictionary
 
 from free_claude_code.core.anthropic.native_stream import NativeMessagesStreamState
 from free_claude_code.core.anthropic.recovery_stream import MessagesRecoveryWriter
 from free_claude_code.core.history_replay import ReplayOrigin
-from free_claude_code.core.stream_events import DecodedStreamEvent, StreamEvent
+from free_claude_code.core.stream_events import StreamEvent
+from free_claude_code.core.stream_observations import (
+    DecodedStreamEvent,
+    MessagesObservation,
+)
 
 ORIGIN = ReplayOrigin("first", "messages", "https://first.test", "key", "model")
 SOURCES: WeakKeyDictionary[MessagesRecoveryWriter, NativeMessagesStreamState] = (
@@ -22,13 +25,14 @@ def _feed(
         SOURCES[writer] = NativeMessagesStreamState(permissive=True)
     source = SOURCES[writer]
     completed = source.accept(kind, event.payload)
-    event = replace(event, item_completion=completed.completion if completed else None)
-    return writer.feed(
-        DecodedStreamEvent(
-            ORIGIN,
-            event,
-            (event,),
-            native_reasoning_pending=source.native_reasoning_pending,
+    return list(
+        writer.feed(
+            DecodedStreamEvent(
+                ORIGIN,
+                event,
+                observation=MessagesObservation(completed),
+                native_reasoning_pending=source.native_reasoning_pending,
+            )
         )
     )
 

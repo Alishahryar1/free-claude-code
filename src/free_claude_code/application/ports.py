@@ -1,6 +1,6 @@
 """Typed capabilities consumed by application use cases."""
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from typing import Protocol
@@ -12,10 +12,29 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.core.recovery import RecoveryCheckpoint
-from free_claude_code.core.stream_events import DecodedStreamEvent
+from free_claude_code.core.recovery import (
+    AttemptDispatch,
+    AttemptFailure,
+    RecoveryCheckpoint,
+)
+from free_claude_code.core.stream_observations import DecodedStreamEvent
 
 from .model_metadata import ProviderModelInfo
+
+
+class ProviderStreamAttempt(Protocol):
+    """One physical read and its resources, resolved before closure."""
+
+    @property
+    def dispatch(self) -> AttemptDispatch | None: ...
+
+    async def read(self) -> DecodedStreamEvent: ...
+
+    async def resolve_failure(
+        self, failure: AttemptFailure, *, can_correct: bool
+    ) -> AttemptFailure: ...
+
+    async def aclose(self, *, active_error: BaseException | None) -> None: ...
 
 
 class ProviderCandidate(Protocol):
@@ -24,22 +43,30 @@ class ProviderCandidate(Protocol):
     @property
     def can_attempt(self) -> bool: ...
 
-    async def prepare(self, checkpoint: RecoveryCheckpoint) -> None: ...
-
-    def stream_attempt(
+    def open_attempt(
         self,
         checkpoint: RecoveryCheckpoint,
         *,
         wait_for_recovery: bool,
-        can_correct: Callable[[], bool],
-        on_rejected: Callable[[], None] | None = None,
-    ) -> AsyncIterator[DecodedStreamEvent]: ...
+    ) -> ProviderStreamAttempt: ...
 
     async def suspend(self) -> None: ...
 
     def finish(self, failure: ExecutionFailure | None) -> None: ...
 
     async def aclose(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateInitializer:
+    """Provider setup recipe retained by the application's candidate session."""
+
+    open: Callable[[bool], AbstractAsyncContextManager[ProviderCandidate]]
+
+
+type CandidateContext = AbstractAsyncContextManager[
+    ProviderCandidate | CandidateInitializer
+]
 
 
 class ProviderPort(Protocol):
@@ -52,7 +79,7 @@ class ProviderPort(Protocol):
         request_id: str,
         response_model: str,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]: ...
+    ) -> CandidateContext: ...
 
     def open_messages(
         self,
@@ -64,7 +91,7 @@ class ProviderPort(Protocol):
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]: ...
+    ) -> CandidateContext: ...
 
     def open_responses(
         self,
@@ -76,7 +103,7 @@ class ProviderPort(Protocol):
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]: ...
+    ) -> CandidateContext: ...
 
 
 ProviderResolver = Callable[[str], Awaitable[ProviderPort]]

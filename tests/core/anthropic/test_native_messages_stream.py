@@ -7,13 +7,13 @@ import pytest
 
 from free_claude_code.core.anthropic.native import NativeMessagesError
 from free_claude_code.core.anthropic.native_stream import (
-    NativeMessagesRelay,
     NativeMessagesStreamState,
 )
 from free_claude_code.core.anthropic.sse_aggregation import (
     aggregate_anthropic_sse_to_message,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from tests.protocol_stream_support import MessagesSourceHarness
 from tests.stream_helpers import serialize_events
 
 _START: JsonObject = {
@@ -70,7 +70,7 @@ async def test_native_citations_survive_block_completion_and_fragmented_aggregat
         if block is not None:
             completed = block
     assert completed is not None and completed.body["citations"] == [citation]
-    relay = NativeMessagesRelay(public_model="public")
+    relay = MessagesSourceHarness(public_model="public")
 
     async def stream() -> AsyncIterator[str]:
         for event in events:
@@ -86,7 +86,7 @@ async def test_native_citations_survive_block_completion_and_fragmented_aggregat
 def test_relay_preserves_native_identity_and_extensions_without_mutating_input() -> (
     None
 ):
-    relay = NativeMessagesRelay(public_model="public")
+    relay = MessagesSourceHarness(public_model="public")
     result = relay.feed("message_start", _START)[0].payload
     assert result["message"]["model"] == "public"
     assert result["message"]["id"] == "upstream-id"
@@ -105,7 +105,7 @@ def test_relay_preserves_native_identity_and_extensions_without_mutating_input()
 async def test_fragmented_native_relay_preserves_nonstreaming_thinking_and_usage() -> (
     None
 ):
-    relay = NativeMessagesRelay(public_model="public")
+    relay = MessagesSourceHarness(public_model="public")
     events: list[JsonObject] = [
         _START,
         {
@@ -166,7 +166,7 @@ async def test_fragmented_native_relay_preserves_nonstreaming_thinking_and_usage
     ],
 )
 def test_invalid_lifecycles_are_not_reported_as_success(event: JsonObject) -> None:
-    relay = NativeMessagesRelay(public_model="public")
+    relay = MessagesSourceHarness(public_model="public")
     relay.feed("message_start", _START)
     with pytest.raises(NativeMessagesError):
         relay.feed(cast(str, event["type"]), event)
@@ -174,7 +174,7 @@ def test_invalid_lifecycles_are_not_reported_as_success(event: JsonObject) -> No
 
 
 def test_reused_block_indexes_and_events_after_terminal_are_rejected() -> None:
-    relay = NativeMessagesRelay(public_model="public")
+    relay = MessagesSourceHarness(public_model="public")
     relay.feed("message_start", _START)
     start: JsonObject = {
         "type": "content_block_start",
@@ -195,7 +195,7 @@ def test_reused_block_indexes_and_events_after_terminal_are_rejected() -> None:
 
 @pytest.mark.parametrize("partial", ['{"x":', "[]", '{"x":NaN}'])
 def test_invalid_json_tools_are_forwarded_for_harness_validation(partial: str) -> None:
-    relay = NativeMessagesRelay(public_model="public")
+    relay = MessagesSourceHarness(public_model="public")
     relay.feed("message_start", _START)
     relay.feed(
         "content_block_start",

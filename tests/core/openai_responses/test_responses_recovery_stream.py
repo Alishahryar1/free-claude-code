@@ -10,7 +10,8 @@ from free_claude_code.core.openai_responses import (
     ResponsesRecoveryWriter,
 )
 from free_claude_code.core.openai_responses.source_state import ResponsesSourceState
-from free_claude_code.core.stream_events import DecodedStreamEvent, StreamEvent
+from free_claude_code.core.stream_events import StreamEvent
+from free_claude_code.core.stream_observations import DecodedStreamEvent
 
 ORIGIN = ReplayOrigin("first", "responses", "https://first.test", "key", "model")
 SOURCES: WeakKeyDictionary[ResponsesRecoveryWriter, ResponsesSourceState] = (
@@ -25,18 +26,16 @@ def _feed(
     if kind == "response.created":
         SOURCES[writer] = ResponsesSourceState()
     source = SOURCES[writer]
-    return [
-        output
-        for observed in source.feed(event)
-        for output in writer.feed(
+    return list(
+        writer.feed(
             DecodedStreamEvent(
                 ORIGIN,
-                observed,
-                (observed,),
+                event,
+                observation=source.observe(event),
                 native_reasoning_pending=source.native_reasoning_pending,
             )
         )
-    ]
+    )
 
 
 def _start(

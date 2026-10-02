@@ -2,14 +2,52 @@
 
 import asyncio
 import inspect
+from collections.abc import AsyncIterator
 from typing import Any, TypeVar
 
+import httpx
+import httpx2
 from loguru import logger
 
+from free_claude_code.core.async_iterators import (
+    complete_cleanup,
+    current_cleanup_budget,
+)
 from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission import ProviderAttempt
 
 _ResourceT = TypeVar("_ResourceT")
+
+
+class _OwnedByteStream(httpx.AsyncByteStream, httpx2.AsyncByteStream):
+    """Join SDK-initiated and explicit close before either owner can exit."""
+
+    def __init__(self, stream: httpx.AsyncByteStream | httpx2.AsyncByteStream) -> None:
+        self._stream = stream
+        self._cleanup = current_cleanup_budget()
+        self._close_task: asyncio.Task[None] | None = None
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._stream:
+            yield chunk
+
+    async def aclose(self) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(
+                self._cleanup.run(self._stream.aclose())
+            )
+        await complete_cleanup(self._close_task)
+
+
+def own_response_close(response: object) -> _OwnedByteStream | None:
+    """Attach close ownership before any SDK or raw response iteration."""
+    if isinstance(response, (httpx.Response, httpx2.Response)) and isinstance(
+        response.stream, (httpx.AsyncByteStream, httpx2.AsyncByteStream)
+    ):
+        if not isinstance(response.stream, _OwnedByteStream):
+            response.stream = _OwnedByteStream(response.stream)
+        return response.stream
+    return None
 
 
 async def maybe_await_aclose(response: Any) -> None:
@@ -78,6 +116,8 @@ class ProviderAttemptScope:
         self._provider_name = provider_name
         self._request_id = request_id
         self._closed = False
+        self.dispatched = False
+        self._body: _OwnedByteStream | None = None
 
     def retain(self, resource: _ResourceT) -> _ResourceT:
         """Retain and return the sole transport resource owned by this scope."""
@@ -86,6 +126,7 @@ class ProviderAttemptScope:
         if self._resource is not None:
             raise RuntimeError("provider attempt scope already owns a resource")
         self._resource = resource
+        self._body = own_response_close(resource)
         return resource
 
     async def aclose(self, *, active_error: BaseException | None) -> None:
@@ -101,5 +142,12 @@ class ProviderAttemptScope:
                     provider_name=self._provider_name,
                     request_id=self._request_id,
                 )
+                if self._body is not None:
+                    await close_provider_stream(
+                        self._body,
+                        active_error=active_error,
+                        provider_name=self._provider_name,
+                        request_id=self._request_id,
+                    )
         finally:
             await self.attempt.aclose()

@@ -4,10 +4,12 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.tool_adaptation import (
+    ResponsesToolIdentity as ResponsesToolIdentity,
+)
 
 from .errors import ResponsesConversionError
 from .ids import new_call_id
@@ -15,13 +17,6 @@ from .ids import new_call_id
 _MAX_TOOL_NAME_LEN = 64
 _NAMESPACE_TOOL_SEPARATOR = "__"
 _INVALID_TOOL_NAME_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
-
-
-@dataclass(frozen=True, slots=True)
-class ResponsesToolIdentity:
-    kind: Literal["function", "custom"]
-    name: str
-    namespace: str | None = None
 
 
 def flatten_responses_tool_name(name: str, *, namespace: str | None = None) -> str:

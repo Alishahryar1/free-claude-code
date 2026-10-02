@@ -7,6 +7,10 @@ from typing import Any
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.recovery import AttemptFailure
 from free_claude_code.core.stream_events import ItemCompletion, StreamEvent
+from free_claude_code.core.stream_observations import (
+    ResponsesObservation,
+    ResponsesSnapshot,
+)
 from free_claude_code.core.tool_input import complete_json_object
 
 from .tool_search import is_client_search
@@ -48,6 +52,12 @@ class ResponsesSourceState:
     def __init__(self) -> None:
         self._items: dict[int, _Item] = {}
         self._indexes: dict[str, int] = {}
+        self._snapshots: list[ResponsesSnapshot] = []
+
+    def observe(self, event: StreamEvent) -> ResponsesObservation:
+        self._snapshots = []
+        events = self.feed(event)
+        return ResponsesObservation(tuple(events), tuple(self._snapshots))
 
     @property
     def native_reasoning_pending(self) -> bool:
@@ -107,6 +117,11 @@ class ResponsesSourceState:
                 event=StreamEvent(kind, {**payload, "output_index": index}),
             )
         index = payload.get("output_index")
+        if not isinstance(index, int) and isinstance(payload.get("item_id"), str):
+            index = self._indexes.get(payload["item_id"])
+            if index is not None:
+                payload = {**payload, "output_index": index}
+                event = StreamEvent(kind, payload, event.item_completion)
         if not isinstance(index, int):
             return [event]
         item = self._items.get(index)
@@ -127,6 +142,42 @@ class ResponsesSourceState:
                 self._indexes[identity] = index
         if item is None:
             return [event]
+        if kind in {
+            "response.content_part.added",
+            "response.content_part.done",
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_part.done",
+            "response.output_text.done",
+            "response.refusal.done",
+            "response.reasoning_text.done",
+            "response.reasoning_summary_text.done",
+        }:
+            summary = "summary" in kind
+            container, index_key = (
+                ("summary", "summary_index")
+                if summary
+                else ("content", "content_index")
+            )
+            part = payload.get("part")
+            if not isinstance(part, dict):
+                key = "refusal" if kind == "response.refusal.done" else "text"
+                part = {
+                    "type": "refusal" if key == "refusal" else "output_text",
+                    key: payload.get(key, ""),
+                }
+            position = payload.get(index_key, 0)
+            snapshot = {
+                "type": item.body.get("type"),
+                container: [*({} for _ in range(position)), part],
+            }
+            suffixes = self._text_suffixes(index, item, snapshot)
+            if kind.endswith(".added"):
+                key = "refusal" if part.get("type") == "refusal" else "text"
+                return [
+                    StreamEvent(kind, {**payload, "part": {**part, key: ""}}),
+                    *suffixes,
+                ]
+            return [*suffixes, event]
         if kind in _INPUT_DELTAS:
             delta = payload.get("delta")
             if isinstance(delta, str):
@@ -203,6 +254,8 @@ class ResponsesSourceState:
         if item.completion is ItemCompletion.COMPLETE:
             if completion is not ItemCompletion.COMPLETE:
                 self._conflict("Responses contradicted an already finalized item.")
+            item.body = deepcopy(body)
+            self._snapshots.append(ResponsesSnapshot(index, item.body))
             return output
         item.body = deepcopy(body)
         item.completion = completion
@@ -259,6 +312,8 @@ class ResponsesSourceState:
         suffix = value[len(observed) :]
         if not suffix:
             return []
+        if item.completion is ItemCompletion.COMPLETE:
+            self._conflict("Responses changed input after completing the invocation.")
         item.arguments.append(suffix)
         kind = (
             "response.function_call_arguments.delta"
@@ -306,6 +361,10 @@ class ResponsesSourceState:
                 suffix = value[len(observed) :]
                 if not suffix:
                     continue
+                if item.completion is ItemCompletion.COMPLETE:
+                    self._conflict(
+                        "Responses changed content after completing the item."
+                    )
                 fragments.append(suffix)
                 kind = (
                     "response.reasoning_summary_text.delta"

@@ -1,21 +1,14 @@
 """Native OpenAI Responses request and event handling."""
 
-from collections.abc import Mapping
-from copy import deepcopy
 from typing import cast
 
 from free_claude_code.core.failures import UnsupportedRequestFeature
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.core.stream_events import StreamEvent
 
 from .ids import tool_item_id_for_kind
 from .models import OpenAIResponsesRequest
 from .reasoning import responses_reasoning_config, responses_reasoning_policy
-
-_TERMINAL_EVENT_TYPES = frozenset(
-    {"response.completed", "response.incomplete", "response.failed"}
-)
 
 
 def build_native_responses_request(
@@ -63,58 +56,3 @@ def build_native_responses_request(
         else:
             body.pop("reasoning", None)
     return body
-
-
-class NativeResponsesRelay:
-    """Relay one native Responses lifecycle while retaining upstream identity."""
-
-    def __init__(self, *, public_model: str) -> None:
-        self._public_model = public_model
-        self._response: JsonObject | None = None
-        self._response_id: str | None = None
-        self._terminal_type: str | None = None
-        self._next_sequence_number = 0
-
-    @property
-    def response_id(self) -> str | None:
-        return self._response_id
-
-    @property
-    def terminal_type(self) -> str | None:
-        return self._terminal_type
-
-    @property
-    def completed(self) -> bool:
-        return self._terminal_type is not None
-
-    def feed(self, event_type: str, payload: Mapping[str, object]) -> StreamEvent:
-        """Format public model metadata and canonical whole-second timestamps."""
-
-        if self._terminal_type is not None:
-            raise ValueError(
-                f"Responses event {event_type!r} arrived after terminal "
-                f"event {self._terminal_type!r}."
-            )
-        data = cast(JsonObject, deepcopy(dict(payload)))
-        response = data.get("response")
-        if isinstance(response, dict):
-            response["model"] = self._public_model
-            # SDK models coerce integer timestamps to floats; strict clients
-            # require JSON integers. Preserve any actual fractional precision.
-            for field in ("created_at", "completed_at"):
-                timestamp = response.get(field)
-                if isinstance(timestamp, float) and timestamp.is_integer():
-                    response[field] = int(timestamp)
-            self._response = cast(JsonObject, deepcopy(response))
-            response_id = response.get("id")
-            if isinstance(response_id, str) and response_id:
-                self._response_id = response_id
-        sequence_number = data.get("sequence_number")
-        if isinstance(sequence_number, int) and not isinstance(sequence_number, bool):
-            self._next_sequence_number = max(
-                self._next_sequence_number,
-                sequence_number + 1,
-            )
-        if event_type in _TERMINAL_EVENT_TYPES:
-            self._terminal_type = event_type
-        return StreamEvent(event_type, data)

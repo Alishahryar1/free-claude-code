@@ -1,16 +1,11 @@
-"""Native Messages event validation and identity-preserving relay."""
+"""Native Messages source assembly and lifecycle validation."""
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
-from free_claude_code.core.history_replay import (
-    ReplayOrigin,
-    ReplayRecord,
-    encode_replay,
-)
 from free_claude_code.core.json_types import JsonObject, JsonValue
-from free_claude_code.core.stream_events import ItemCompletion, StreamEvent
+from free_claude_code.core.stream_events import ItemCompletion
 from free_claude_code.core.tool_input import complete_json_object
 
 from .native import NativeMessagesError
@@ -275,92 +270,3 @@ class NativeMessagesStreamState:
                 completion = ItemCompletion.INVALID_INPUT
         self._blocks.pop(index)
         return CompletedMessagesBlock(block.body, arguments, completion)
-
-
-class NativeMessagesRelay:
-    """Preserve upstream IDs, indexes, fields and event order for Messages clients."""
-
-    def __init__(
-        self, *, public_model: str, replay_origin: ReplayOrigin | None = None
-    ) -> None:
-        self._public_model = public_model
-        self._replay_origin = replay_origin
-        self._state = NativeMessagesStreamState()
-
-    @property
-    def completed(self) -> bool:
-        return self._state.completed
-
-    @property
-    def stop_reason(self) -> str | None:
-        return self._state.stop_reason
-
-    @property
-    def invalid_input(self) -> bool:
-        return self._state.invalid_input
-
-    @property
-    def native_reasoning_pending(self) -> bool:
-        return self._state.native_reasoning_pending
-
-    def feed(
-        self, event_type: str, payload: Mapping[str, JsonValue]
-    ) -> list[StreamEvent]:
-        completed = self._state.accept(event_type, payload)
-        body = dict(payload)
-        if event_type == "message_start":
-            message = body.get("message")
-            if not isinstance(message, dict):
-                raise AssertionError("Validated message_start must contain a message.")
-            body["message"] = {**message, "model": self._public_model}
-            if (
-                self._replay_origin is not None
-                and isinstance(message.get("model"), str)
-                and message["model"]
-            ):
-                self._replay_origin = replace(
-                    self._replay_origin, model=message["model"]
-                )
-        prefix: list[StreamEvent] = []
-        if self._replay_origin is not None:
-            block = body.get("content_block")
-            if event_type == "content_block_start" and isinstance(block, dict):
-                if block.get("type") == "thinking":
-                    body["content_block"] = {**block, "signature": ""}
-                elif block.get("type") == "redacted_thinking":
-                    body["content_block"] = {
-                        **block,
-                        "data": encode_replay(ReplayRecord(self._replay_origin, block)),
-                    }
-            delta = body.get("delta")
-            if (
-                event_type == "content_block_delta"
-                and isinstance(delta, dict)
-                and delta.get("type") == "signature_delta"
-            ):
-                return []
-            if (
-                completed is not None
-                and completed.body.get("type") == "thinking"
-                and completed.body.get("signature")
-            ):
-                signature = encode_replay(
-                    ReplayRecord(self._replay_origin, completed.body)
-                )
-                prefix = [
-                    StreamEvent(
-                        "content_block_delta",
-                        {
-                            "type": "content_block_delta",
-                            "index": body["index"],
-                            "delta": {
-                                "type": "signature_delta",
-                                "signature": signature,
-                            },
-                        },
-                    )
-                ]
-        return [
-            *prefix,
-            StreamEvent(event_type, body, completed.completion if completed else None),
-        ]

@@ -25,7 +25,7 @@ from .request_policy import (
     apply_openai_chat_body_policy,
     build_openai_chat_request_body,
 )
-from .stream_output import ChatStreamOutput
+from .source_state import ChatSourceState
 from .transport import OpenAIChatTransport
 from .usage import usage_int
 
@@ -52,7 +52,7 @@ def create_openai_chat_provider(
 __all__ = [
     "NO_REASONING",
     "OPENAI_CHAT_PROFILES",
-    "ChatStreamOutput",
+    "ChatSourceState",
     "ChatTemplateReasoning",
     "NamedEffortReasoning",
     "OpenAIAsyncCredentialProvider",

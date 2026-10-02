@@ -8,7 +8,11 @@ import httpx
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.application.ports import ProviderCandidate
+from free_claude_code.application.ports import (
+    CandidateContext,
+    CandidateInitializer,
+    ProviderCandidate,
+)
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import (
@@ -18,7 +22,7 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
-from free_claude_code.providers.candidate_setup import CandidateSetup
+from free_claude_code.providers.candidate_setup import deferred_candidate
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -180,7 +184,7 @@ class OpenCodeProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         return self._dispatch_stream(
             request,
             input_tokens=input_tokens,
@@ -202,7 +206,7 @@ class OpenCodeProvider(BaseProvider):
         reasoning: ReasoningPolicy,
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AsyncIterator[ProviderCandidate]:
+    ) -> AsyncIterator[CandidateInitializer]:
         discovery = self._admission.start_execution(request_id=request_id)
 
         async def initialize(
@@ -231,12 +235,12 @@ class OpenCodeProvider(BaseProvider):
                 model_info=route.model_info,
             )
 
-        async with CandidateSetup(
+        async with deferred_candidate(
             initialize,
             provider_name=self._opencode_profile.provider_name,
             request_id=request_id,
             discovery=discovery,
-        ).open() as candidate:
+        ) as candidate:
             yield candidate
 
     def open_responses(
@@ -250,7 +254,7 @@ class OpenCodeProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         return self._dispatch_responses_stream(
             request,
             input_tokens=input_tokens,
@@ -272,7 +276,7 @@ class OpenCodeProvider(BaseProvider):
         reasoning: ReasoningPolicy,
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AsyncIterator[ProviderCandidate]:
+    ) -> AsyncIterator[CandidateInitializer]:
         discovery = self._admission.start_execution(request_id=request_id)
 
         async def initialize(
@@ -300,12 +304,12 @@ class OpenCodeProvider(BaseProvider):
                 extra_headers=self._upstream_headers(request_headers or {}),
             )
 
-        async with CandidateSetup(
+        async with deferred_candidate(
             initialize,
             provider_name=self._opencode_profile.provider_name,
             request_id=request_id,
             discovery=discovery,
-        ).open() as candidate:
+        ) as candidate:
             yield candidate
 
     def _require_route(

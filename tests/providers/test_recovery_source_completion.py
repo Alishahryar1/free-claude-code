@@ -1,6 +1,7 @@
 """Recovery decisions use source completion before either public projection."""
 
 from copy import deepcopy
+from typing import Any
 
 import pytest
 
@@ -8,6 +9,7 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
 from free_claude_code.core.recovery import RecoveryCheckpoint
+from tests.providers.support import attempt_events
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
 from tests.providers.test_recovery_completion_limits import _limited_call
@@ -91,14 +93,19 @@ async def test_only_new_snapshot_input_counts_as_progress_in_real_transport():
     ):
         decoded = [
             event
-            async for event in candidate.stream_attempt(
+            async for event in attempt_events(
+                candidate,
                 RecoveryCheckpoint("responses"),
                 wait_for_recovery=True,
-                can_correct=lambda: False,
             )
         ]
     progress = [event for event in decoded if event.progress]
-    assert [event.source.payload["delta"] for event in progress] == ['{"x":', "1}"]
+    assert [event.source.kind for event in progress] == [
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+    ]
+    assert progress[0].source.payload["delta"] == '{"x":'
+    assert progress[1].source.payload["arguments"] == '{"x":1}'
     assert decoded[-1].completed and len(bodies) == 1
 
 
@@ -164,6 +171,51 @@ async def test_nonempty_added_text_and_matching_snapshot_publish_once(wire):
             parsed[-1].data["response"]["output"][0]["content"][0]["text"]
             == "Already supplied"
         )
+
+
+@pytest.mark.asyncio
+async def test_terminal_snapshot_refreshes_metadata_without_republishing_item():
+    events = _responses_call()
+    item: dict[str, Any] = {
+        "id": "msg_citation",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "Cited answer", "annotations": []}],
+    }
+    events[1]["item"] = {**item, "status": "in_progress", "content": []}
+    events[2] = {
+        "type": "response.output_text.delta",
+        "output_index": 0,
+        "item_id": item["id"],
+        "content_index": 0,
+        "delta": "Cited answer",
+    }
+    events[3]["item"] = deepcopy(item)
+    citation = {
+        "type": "url_citation",
+        "start_index": 0,
+        "end_index": 5,
+        "url": "https://example.invalid/source",
+        "title": "Source",
+    }
+    final_item = deepcopy(item)
+    final_item["content"][0]["annotations"] = [citation]
+    events[-1]["response"]["output"] = [final_item]
+
+    _, parsed, bodies = await _collect("responses", "responses", events)
+
+    assert len(bodies) == 1
+    assert parsed[-1].data["response"]["output"] == [final_item]
+    assert sum(event.event == "response.output_item.done" for event in parsed) == 1
+    assert (
+        "".join(
+            event.data["delta"]
+            for event in parsed
+            if event.event == "response.output_text.delta"
+        )
+        == "Cited answer"
+    )
 
 
 @pytest.mark.asyncio

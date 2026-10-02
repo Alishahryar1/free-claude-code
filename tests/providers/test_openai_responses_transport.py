@@ -19,6 +19,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
+from free_claude_code.core.chat_observations import ChatStreamUsage
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
@@ -27,12 +28,9 @@ from free_claude_code.core.openai_responses import (
     build_responses_chat_request,
 )
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
-from free_claude_code.providers.openai_chat.stream_output import (
-    ChatStreamUsage,
-    ResponsesChatStreamOutput,
-)
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from tests.core.openai_responses.test_client_tool_discovery import AGENTS, SEARCH
+from tests.protocol_stream_support import ChatSourceHarness
 from tests.providers.support import (
     REASONING_ON,
     immediate_admission,
@@ -479,7 +477,7 @@ async def test_chat_custom_history_replays_with_native_wire_compatible_ids(
     prepared = build_responses_chat_request(
         request, reasoning_replay=ReasoningReplayMode.DISABLED
     )
-    writer = ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
+    writer = ChatSourceHarness(prepared.tool_adapter, input_tokens=1)
     frames = writer.start_events()
     frames.append(writer.start_tool_block(0, "call_edit", "edit"))
     frames.extend(writer.emit_tool_delta(0, '{"input":"patch"}'))

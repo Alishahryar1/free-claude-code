@@ -31,6 +31,7 @@ class StreamEvent:
     kind: str
     payload: dict[str, Any]
     item_completion: ItemCompletion | None = None
+    replay_origin: ReplayOrigin | None = None
 
     def serialize(self) -> str:
         return (
@@ -47,26 +48,6 @@ class NativeMessage:
 
     def serialize(self) -> str:
         return simplejson.dumps(self.payload, use_decimal=True, ensure_ascii=False)
-
-
-@dataclass(frozen=True, slots=True)
-class DecodedStreamEvent:
-    """Retain the source payload alongside its lossless public projection."""
-
-    origin: ReplayOrigin
-    source: StreamEvent
-    projected: tuple[StreamEvent, ...]
-    progress: bool = False
-    outcome: RequestOutcome | None = None
-    stop_reason: str | None = None
-    replay_safe: bool = True
-    required_origins: tuple[ReplayOrigin, ...] = ()
-    native_reasoning_pending: bool = False
-    allow_empty_completion: bool = False
-
-    @property
-    def completed(self) -> bool:
-        return self.outcome is not None
 
 
 @dataclass(slots=True)

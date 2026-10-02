@@ -12,15 +12,17 @@ OpenAI provider layers its own native tool-call assembly and think-tag parsing o
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Mapping
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import Mapping
+from functools import partial
 
 import httpx2
 from loguru import logger
 from openai import Omit
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.application.ports import ProviderCandidate
+from free_claude_code.application.ports import (
+    CandidateContext,
+)
 from free_claude_code.core.anthropic import ReasoningReplayMode, get_token_count
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import (
@@ -32,10 +34,8 @@ from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
-from free_claude_code.core.recovery import RecoveryCheckpoint
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.candidate_setup import CandidateSetup
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
     context_window_exceeded_provider_failure,
@@ -100,22 +100,20 @@ class LMStudioProvider(OpenAIChatProvider):
         model_info: ProviderModelInfo | None = None,
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
-        stream = super().open_messages(
+    ) -> CandidateContext:
+        return self._chat.open_messages(
             request,
             input_tokens=input_tokens,
             request_id=request_id,
-            response_model=response_model,
+            response_model=response_model or request.model,
             reasoning=reasoning,
             model_info=model_info,
             endpoint_context=endpoint_context,
-            request_headers=request_headers,
-        )
-        return self._stream_with_context_budget(
-            stream,
-            estimate=get_token_count(request.messages, request.system, request.tools),
-            request_id=request_id,
-            checkpoint=RecoveryCheckpoint("messages"),
+            extra_headers=request_headers,
+            validate_request=partial(
+                self._validate_context_budget,
+                get_token_count(request.messages, request.system, request.tools),
+            ),
         )
 
     def open_responses(
@@ -129,55 +127,19 @@ class LMStudioProvider(OpenAIChatProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
-        stream = super().open_responses(
+    ) -> CandidateContext:
+        return self._chat.open_responses(
             request,
             input_tokens=input_tokens,
             request_id=request_id,
-            response_model=response_model,
+            response_model=response_model or request.model,
             reasoning=reasoning,
             endpoint_context=endpoint_context,
-            request_headers=request_headers,
-            model_info=model_info,
+            extra_headers=request_headers,
+            validate_request=partial(
+                self._validate_context_budget, estimate_responses_input_tokens(request)
+            ),
         )
-        return self._stream_with_context_budget(
-            stream,
-            estimate=estimate_responses_input_tokens(request),
-            request_id=request_id,
-            checkpoint=RecoveryCheckpoint("responses"),
-        )
-
-    def _stream_with_context_budget(
-        self,
-        stream: AbstractAsyncContextManager[ProviderCandidate],
-        *,
-        estimate: int,
-        request_id: str | None,
-        checkpoint: RecoveryCheckpoint,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
-        async def initialize(
-            wait_for_recovery: bool,
-        ) -> AbstractAsyncContextManager[ProviderCandidate]:
-            return self._validate_candidate(
-                stream, estimate=estimate, checkpoint=checkpoint
-            )
-
-        return CandidateSetup(
-            initialize, provider_name="LMSTUDIO", request_id=request_id
-        ).open()
-
-    @asynccontextmanager
-    async def _validate_candidate(
-        self,
-        stream: AbstractAsyncContextManager[ProviderCandidate],
-        *,
-        estimate: int,
-        checkpoint: RecoveryCheckpoint,
-    ) -> AsyncIterator[ProviderCandidate]:
-        async with stream as candidate:
-            await candidate.prepare(checkpoint)
-            await self._validate_context_budget(estimate)
-            yield candidate
 
     async def _validate_context_budget(self, estimate: int) -> None:
         loaded_context = await self._loaded_context_length()

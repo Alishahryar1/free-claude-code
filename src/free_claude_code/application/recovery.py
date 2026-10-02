@@ -3,7 +3,7 @@
 import asyncio
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, AsyncExitStack, suppress
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from time import monotonic
 
@@ -11,7 +11,7 @@ from free_claude_code.core.anthropic.recovery_stream import (
     MessagesRecoveryWriter,
     NativeMessagesCompletionWriter,
 )
-from free_claude_code.core.async_iterators import complete_cleanup
+from free_claude_code.core.async_iterators import CleanupBudget, complete_cleanup
 from free_claude_code.core.failures import (
     ExecutionFailure,
     FailureKind,
@@ -29,11 +29,15 @@ from free_claude_code.core.request_outcomes import (
     record_request_exception,
     record_request_route,
 )
-from free_claude_code.core.stream_events import DecodedStreamEvent
 from free_claude_code.core.trace import close_stream_input, trace_event
 
 from .errors import InvalidRequestError
-from .ports import ProviderCandidate
+from .ports import (
+    CandidateContext,
+    CandidateInitializer,
+    ProviderCandidate,
+    ProviderStreamAttempt,
+)
 from .routing import ProviderModelTarget
 
 type RecoveryWriter = (
@@ -41,7 +45,7 @@ type RecoveryWriter = (
 )
 type CandidateOpener = Callable[
     [int, ProviderModelTarget],
-    Awaitable[AbstractAsyncContextManager[ProviderCandidate]],
+    Awaitable[CandidateContext],
 ]
 type FallbackObserver = Callable[
     [ProviderModelTarget, ProviderModelTarget, ExecutionFailure, int], None
@@ -53,9 +57,31 @@ type SelectionObserver = Callable[[ProviderModelTarget, int], None]
 class _OpenedCandidate:
     index: int
     target: ProviderModelTarget
-    candidate: ProviderCandidate
+    candidate: ProviderCandidate | CandidateInitializer
     resources: AsyncExitStack
     closed: bool = False
+
+    @property
+    def can_attempt(self) -> bool:
+        return (
+            isinstance(self.candidate, CandidateInitializer)
+            or self.candidate.can_attempt
+        )
+
+    async def resolve(self, wait_for_recovery: bool) -> ProviderCandidate:
+        if isinstance(self.candidate, CandidateInitializer):
+            self.candidate = await self.resources.enter_async_context(
+                self.candidate.open(wait_for_recovery)
+            )
+        return self.candidate
+
+    def finish(self, failure: ExecutionFailure | None) -> None:
+        if not isinstance(self.candidate, CandidateInitializer):
+            self.candidate.finish(failure)
+
+    async def suspend(self) -> None:
+        if not isinstance(self.candidate, CandidateInitializer):
+            await self.candidate.suspend()
 
 
 class RecoveryCoordinator:
@@ -107,9 +133,7 @@ class RecoveryCoordinator:
     def _checkpoint(self) -> RecoveryCheckpoint:
         return replace(self._writer.checkpoint, recovering=self._recovering)
 
-    async def _open_next(
-        self, checkpoint: RecoveryCheckpoint
-    ) -> _OpenedCandidate | None:
+    async def _open_next(self) -> _OpenedCandidate | None:
         while self._cursor < len(self._candidates):
             index = self._cursor
             self._cursor += 1
@@ -124,13 +148,6 @@ class RecoveryCoordinator:
                 finally:
                     self._deadline += monotonic() - initialization_started
                 candidate = await self._bounded(resources.enter_async_context(context))
-                await self._bounded(
-                    candidate.prepare(
-                        replace(
-                            checkpoint, recovering=index > 0 or checkpoint.recovering
-                        )
-                    )
-                )
                 opened = _OpenedCandidate(index, target, candidate, resources)
                 self._opened.append(opened)
                 retained = True
@@ -165,18 +182,16 @@ class RecoveryCoordinator:
         if opened.closed:
             return
         opened.closed = True
-        opened.candidate.finish(failure)
+        opened.finish(failure)
         await complete_cleanup(self._close_resources(opened.resources, failure))
 
-    async def _next_candidate(
-        self, checkpoint: RecoveryCheckpoint
-    ) -> _OpenedCandidate | None:
-        candidate = await self._open_next(checkpoint)
+    async def _next_candidate(self) -> _OpenedCandidate | None:
+        candidate = await self._open_next()
         if candidate is not None:
             return candidate
         while self._suspended:
             candidate = self._suspended.pop()
-            if not candidate.closed and candidate.candidate.can_attempt:
+            if not candidate.closed and candidate.can_attempt:
                 return candidate
             await self._close(candidate, self._last_failure)
         return None
@@ -204,21 +219,31 @@ class RecoveryCoordinator:
     async def _close_resources(
         self, resources: AsyncExitStack, error: BaseException | None
     ) -> None:
-        await self._bounded(
-            close_stream_input(
-                resources,
-                owner="recovery_candidate",
-                source="application",
-                preserved_error=error,
+        try:
+            await CleanupBudget().run(
+                close_stream_input(
+                    resources,
+                    owner="recovery_candidate",
+                    source="application",
+                    preserved_error=error,
+                )
             )
-        )
+        except Exception as close_error:
+            trace_event(
+                stage="execution",
+                event="provider.candidate.close_failed",
+                source="application",
+                request_id=self._request_id,
+                close_exc_type=type(close_error).__name__,
+                preserved_exc_type=type(error).__name__ if error is not None else None,
+            )
 
     async def stream(self) -> AsyncIterator[str]:
         loop = asyncio.get_running_loop()
         self._deadline = loop.time() + self._timeout_seconds
         current: _OpenedCandidate | None = None
         try:
-            current = await self._open_next(self._checkpoint())
+            current = await self._open_next()
             if current is None:
                 if self._last_failure is not None:
                     raise self._last_failure
@@ -241,26 +266,24 @@ class RecoveryCoordinator:
                 completed = False
                 attempt_failure: AttemptFailure | None = None
                 incompatible: CandidateIncompatible | None = None
-                source = current.candidate.stream_attempt(
-                    checkpoint,
-                    wait_for_recovery=self._cursor >= len(self._candidates),
-                    can_correct=lambda revision=revision: (
-                        self._writer.revision == revision
-                        and self._checkpoint().blocked_reason is None
-                    ),
-                    on_rejected=self._writer.reject_attempt,
-                )
+                source: ProviderStreamAttempt | None = None
                 try:
+                    candidate = await self._bounded(
+                        current.resolve(self._cursor >= len(self._candidates))
+                    )
+                    source = candidate.open_attempt(
+                        checkpoint,
+                        wait_for_recovery=self._cursor >= len(self._candidates),
+                    )
                     while True:
                         try:
-                            event = await self._bounded(
-                                _next_event(source, self._deadline)
-                            )
+                            event = await self._bounded(source.read())
                         except StopAsyncIteration:
                             break
                         if event.progress:
                             self._deadline = loop.time() + self._timeout_seconds
-                        if event.source.kind == "request.dispatched":
+                        if not selected and source.dispatch is not None:
+                            self._writer.dispatch(source.dispatch)
                             await self._commit_dispatch(current)
                             selected = True
                         events = self._writer.feed(event)
@@ -282,18 +305,43 @@ class RecoveryCoordinator:
                     attempt_failure = AttemptFailure(failure)
                 finally:
                     active_error = sys.exception()
-                    closing = close_stream_input(
-                        source,
-                        owner="recovery_coordinator",
-                        source="application",
-                        preserved_error=active_error or attempt_failure,
-                    )
-                    if isinstance(
-                        active_error, (asyncio.CancelledError, GeneratorExit)
-                    ):
-                        await complete_cleanup(self._bounded(closing))
-                    else:
-                        await self._bounded(closing)
+                    if source is not None:
+                        try:
+                            if not selected and source.dispatch is not None:
+                                self._writer.dispatch(source.dispatch)
+                                await self._commit_dispatch(current)
+                                selected = True
+                            if attempt_failure is not None:
+                                if attempt_failure.request_rejected:
+                                    self._writer.reject_attempt()
+                                attempt_failure = await self._bounded(
+                                    source.resolve_failure(
+                                        attempt_failure,
+                                        can_correct=(
+                                            self._writer.revision == revision
+                                            and self._checkpoint().blocked_reason
+                                            is None
+                                        ),
+                                    )
+                                )
+                        finally:
+                            try:
+                                await complete_cleanup(
+                                    source.aclose(
+                                        active_error=active_error or attempt_failure
+                                    )
+                                )
+                            except Exception as close_error:
+                                trace_event(
+                                    stage="execution",
+                                    event="provider.attempt.close_failed",
+                                    source="application",
+                                    request_id=self._request_id,
+                                    close_exc_type=type(close_error).__name__,
+                                    preserved_exc_type=type(
+                                        active_error or attempt_failure
+                                    ).__name__,
+                                )
 
                 if incompatible is not None:
                     trace_event(
@@ -305,15 +353,13 @@ class RecoveryCoordinator:
                         reason=str(incompatible),
                     )
                     await self._close(current, self._last_failure)
-                    current = await self._next_candidate(self._checkpoint())
+                    current = await self._next_candidate()
                     if current is None:
                         if self._last_failure is not None:
                             raise self._last_failure
                         raise InvalidRequestError(str(incompatible))
                     continue
 
-                if attempt_failure is not None and attempt_failure.request_rejected:
-                    self._writer.reject_attempt()
                 if attempt_failure is not None and attempt_failure.corrected:
                     # A correction is authorized only before new committed content.
                     for output in self._writer.interrupt():
@@ -339,7 +385,7 @@ class RecoveryCoordinator:
                                 "Provider continuation produced no new output.",
                                 True,
                             ),
-                            retry_allowed=current.candidate.can_attempt,
+                            retry_allowed=current.can_attempt,
                         )
                     else:
                         if not selected and current.index > 0 and self._on_selected:
@@ -366,22 +412,22 @@ class RecoveryCoordinator:
                         yield output.serialize()
                     return
 
-                if current.candidate.can_attempt and (
+                if current.can_attempt and (
                     attempt_failure.deferred or attempt_failure.retry_allowed
                 ):
                     if self._cursor >= len(self._candidates) and not self._suspended:
                         continue
-                    await complete_cleanup(current.candidate.suspend())
+                    await complete_cleanup(current.suspend())
                     self._suspended.append(current)
                 else:
                     await self._close(current, failure)
-                current = await self._next_candidate(checkpoint)
+                current = await self._next_candidate()
                 if current is None:
                     raise self._last_failure
         except ExecutionFailure as failure:
             self._last_failure = failure
             if current is not None:
-                current.candidate.finish(failure)
+                current.finish(failure)
             record_request_exception(failure)
             trace_event(
                 stage="execution",
@@ -423,24 +469,3 @@ class RecoveryCoordinator:
                     )
             if cancelled:
                 raise asyncio.CancelledError
-
-
-async def _next_event(
-    source: AsyncIterator[DecodedStreamEvent], deadline: float
-) -> DecodedStreamEvent:
-    async def advance() -> DecodedStreamEvent:
-        return await anext(source)
-
-    task = asyncio.create_task(advance())
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        task.cancel()
-
-        async def finish_read() -> None:
-            async with asyncio.timeout_at(deadline):
-                await task
-
-        with suppress(Exception, asyncio.CancelledError):
-            await complete_cleanup(finish_read())
-        raise

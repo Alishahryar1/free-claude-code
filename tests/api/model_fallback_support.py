@@ -1,7 +1,7 @@
 """Controlled provider boundary for model-fallback API and product tests."""
 
 import json
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from unittest.mock import patch
 
@@ -11,21 +11,24 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
+from free_claude_code.core.anthropic.native_stream import NativeMessagesStreamState
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.openai_responses.source_state import ResponsesSourceState
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.recovery import AttemptFailure, RecoveryCheckpoint
 from free_claude_code.core.recovery_request import continue_request
-from free_claude_code.core.stream_events import (
+from free_claude_code.core.stream_events import RequestOutcome, StreamEvent
+from free_claude_code.core.stream_observations import (
     DecodedStreamEvent,
-    RequestOutcome,
-    StreamEvent,
+    MessagesObservation,
 )
 from tests.api.support import create_test_app
+from tests.provider_double import ScriptedAttempt
 
 
 def execution_failure(message: str, *, retryable: bool = True) -> ExecutionFailure:
@@ -296,19 +299,13 @@ class _ControlledCandidate:
     def can_attempt(self) -> bool:
         return not self._attempted
 
-    async def prepare(self, checkpoint: RecoveryCheckpoint) -> None:
+    def open_attempt(self, checkpoint: RecoveryCheckpoint, *, wait_for_recovery: bool):
         if self._provider._validation_error is not None:
             raise self._provider._validation_error
         self.continued_request = continue_request(self._request, checkpoint)
+        return ScriptedAttempt(self._read())
 
-    async def stream_attempt(
-        self,
-        checkpoint: RecoveryCheckpoint,
-        *,
-        wait_for_recovery: bool,
-        can_correct: Callable[[], bool],
-        on_rejected: Callable[[], None] | None = None,
-    ) -> AsyncIterator[DecodedStreamEvent]:
+    async def _read(self) -> AsyncIterator[DecodedStreamEvent]:
         self._attempted = True
         provider = self._provider
         provider.stream_models.append(self._request.model)
@@ -320,7 +317,6 @@ class _ControlledCandidate:
             "",
             self._request.model,
         )
-        yield DecodedStreamEvent(origin, StreamEvent("request.dispatched", {}), ())
         prefix = (
             provider._chunks_before_failure
             if self._wire_api == "messages"
@@ -334,13 +330,22 @@ class _ControlledCandidate:
                 if self._wire_api == "messages"
                 else responses_text_stream(provider._text, model=self._model)
             )
+        source = (
+            NativeMessagesStreamState(permissive=True)
+            if self._wire_api == "messages"
+            else ResponsesSourceState()
+        )
         for frame in frames:
             for parsed in parse_sse_text(frame):
                 event = StreamEvent(parsed.event, parsed.data)
                 yield DecodedStreamEvent(
                     origin,
                     event,
-                    (event,),
+                    observation=MessagesObservation(
+                        source.accept(event.kind, event.payload)
+                    )
+                    if isinstance(source, NativeMessagesStreamState)
+                    else source.observe(event),
                     progress=parsed.event
                     in {"content_block_delta", "response.output_text.delta"},
                     outcome=RequestOutcome.SUCCESS

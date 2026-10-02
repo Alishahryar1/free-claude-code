@@ -18,6 +18,7 @@ from free_claude_code.core.recovery import CandidateIncompatible, RecoveryCheckp
 from free_claude_code.providers.anthropic_messages.request_policy import (
     MessagesModelCapabilities,
 )
+from tests.providers.support import attempt_events
 from tests.providers.test_anthropic_messages_transport import Endpoint
 from tests.providers.test_history_transports import _harness
 
@@ -52,9 +53,7 @@ async def _send(candidate, wire, *, recovering=True):
     checkpoint = RecoveryCheckpoint(wire, recovering=recovering)
     return [
         event
-        async for event in candidate.stream_attempt(
-            checkpoint, wait_for_recovery=True, can_correct=lambda: False
-        )
+        async for event in attempt_events(candidate, checkpoint, wait_for_recovery=True)
     ]
 
 
@@ -248,6 +247,34 @@ async def test_chat_recovery_skips_features_its_builder_would_discard(raw):
 
 
 @pytest.mark.asyncio
+async def test_client_tool_search_cannot_hide_namespace_instructions_from_recovery():
+    raw = {
+        **_TEXT,
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "ops",
+                "description": "Never access production systems.",
+                "tools": [_FUNCTION],
+            },
+            {
+                "type": "tool_search",
+                "execution": "client",
+                "description": "Find tools",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                },
+            },
+        ],
+    }
+    async with _candidate("chat", "responses", raw) as (candidate, bodies):
+        with pytest.raises(CandidateIncompatible):
+            await _send(candidate, "responses")
+        assert bodies == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses"])
 @pytest.mark.parametrize(
     "raw",
@@ -346,10 +373,10 @@ async def test_portable_text_tools_and_caps_reach_real_http_client(protocol, wir
 async def test_same_revision_rebuilds_when_initial_route_enters_recovery():
     raw = {**_TEXT, "text": {"verbosity": "low"}}
     async with _candidate("chat", "responses", raw) as (candidate, bodies):
-        await candidate.prepare(RecoveryCheckpoint("responses"))
+        await _send(candidate, "responses", recovering=False)
         with pytest.raises(CandidateIncompatible):
             await _send(candidate, "responses")
-        assert bodies == []
+        assert len(bodies) == 1
 
 
 @pytest.mark.asyncio

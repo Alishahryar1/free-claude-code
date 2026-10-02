@@ -1,6 +1,5 @@
 """Shared OpenAI Responses execution over the official SDK."""
 
-import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import replace
@@ -15,6 +14,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.ports import ProviderCandidate
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.anthropic.streaming.emitter import AnthropicEventBuilder
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.failures import (
     ExecutionFailure,
@@ -24,13 +24,11 @@ from free_claude_code.core.failures import (
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
     prepare_history,
-    preserve_responses_reasoning,
 )
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesConversionError,
-    ResponsesProviderStream,
     ResponsesSourceState,
     ResponsesStreamFailure,
     ResponsesToolAdapter,
@@ -43,11 +41,8 @@ from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
 from free_claude_code.core.recovery import CandidateIncompatible, RecoveryCheckpoint
 from free_claude_code.core.recovery_request import continue_request
-from free_claude_code.core.stream_events import (
-    DecodedStreamEvent,
-    RequestOutcome,
-    StreamEvent,
-)
+from free_claude_code.core.stream_events import RequestOutcome, StreamEvent
+from free_claude_code.core.stream_observations import DecodedStreamEvent
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
 )
@@ -72,19 +67,10 @@ from free_claude_code.providers.reasoning_compatibility import (
     ReasoningCorrection,
     prepare_messages_reasoning,
 )
-from free_claude_code.providers.request_recovery import (
-    RequestCorrections,
-)
 from free_claude_code.providers.stream_candidate import (
     StreamCandidate,
     content_progress,
     request_may_run_server_tools,
-)
-
-from .presentation import (
-    MessagesResponsesPresenter,
-    NativeResponsesPresenter,
-    ResponsesPresenterFactory,
 )
 
 type ResponsesEventAdapter = Callable[[str, JsonObject], JsonObject]
@@ -123,7 +109,7 @@ class OpenAIResponsesTransport:
         self._admission = admission
         self._provider_name = provider_name
         self._read_timeout_s = read_timeout_s
-        self._log_raw_sse_events = log_raw_sse_events
+        self._events = AnthropicEventBuilder(log_raw_events=log_raw_sse_events)
 
     def open_messages(
         self,
@@ -352,11 +338,14 @@ class _ResponsesCandidate(StreamCandidate):
         self._extra_headers = dict(extra_headers or {})
         self._request_client = OpenAIRequestClient(transport._endpoint_transport)
         self._client = transport._client
-        self._presenter_factory: ResponsesPresenterFactory
+        self._native_tools: ResponsesToolAdapter | None = None
+        self._tool_names: OpenAIToolNameCodec | None = None
 
     def _build_body(self, checkpoint: RecoveryCheckpoint) -> None:
         request = continue_request(self._request, checkpoint)
         correction = None
+        self._native_tools = None
+        self._tool_names = None
         if isinstance(request, MessagesRequest):
             prepared, wire_reasoning = prepare_messages_reasoning(
                 request,
@@ -378,16 +367,7 @@ class _ResponsesCandidate(StreamCandidate):
                 correction = ReasoningCorrection(
                     (("reasoning",),), "max_output_tokens", None
                 )
-            tool_names = OpenAIToolNameCodec.from_request(request)
-            self._presenter_factory = lambda: MessagesResponsesPresenter(
-                ResponsesProviderStream(
-                    message_id=f"msg_{uuid.uuid4()}",
-                    model=self._response_model,
-                    input_tokens=self._input_tokens,
-                    tool_names=tool_names,
-                    log_raw_events=self._transport._log_raw_sse_events,
-                )
-            )
+            self._tool_names = OpenAIToolNameCodec.from_request(request)
         else:
             if checkpoint.recovering and request.previous_response_id:
                 raise CandidateIncompatible(
@@ -398,11 +378,8 @@ class _ResponsesCandidate(StreamCandidate):
                 reasoning=self._reasoning,
                 preserve_features=self.preserve_features,
             )
-            self._presenter_factory = lambda: NativeResponsesPresenter(
-                public_model=self._response_model,
-                tool_events=tools.event_adapter(),
-            )
-        self.corrections = RequestCorrections("responses", correction)
+            self._native_tools = tools
+        self.corrections.reasoning = correction
         self.replay_safe = not request_may_run_server_tools(self.body, "responses")
 
     async def _prepare_endpoint(self) -> ReplayOrigin:
@@ -429,14 +406,13 @@ class _ResponsesCandidate(StreamCandidate):
         self, scope: ProviderAttemptScope
     ) -> AsyncIterator[DecodedStreamEvent]:
         assert self.origin is not None
-        presenter = self._presenter_factory()
         source_state = ResponsesSourceState()
-        start_events = tuple(presenter.start())
         adapt = (
             self._transport._event_adapter_factory()
             if self._transport._event_adapter_factory is not None
             else None
         )
+        self._dispatch(scope)
         sdk_stream = await self._transport._create_sdk_stream(
             self.sent_body,
             client=self._client,
@@ -460,45 +436,60 @@ class _ResponsesCandidate(StreamCandidate):
                 and response["model"]
             ):
                 self.origin = replace(self.origin, model=response["model"])
-            for observed in source_state.feed(StreamEvent(upstream.type, payload)):
-                kind = observed.kind
-                if kind in {"response.failed", "error", "response.error"}:
-                    raise responses_stream_failure_from_event(kind, observed.payload)
-                if reports_context_window_incomplete(kind, observed.payload):
-                    raise context_window_exceeded_provider_failure()
-                if kind == "response.completed" and source_state.invalid_input:
-                    raise RetryableProviderProtocolError(
-                        "Provider completed a response with unfinished or invalid tool input."
-                    )
-                preserved = preserve_responses_reasoning(observed.payload, self.origin)
-                output = (*start_events, *presenter.feed(kind, preserved))
-                start_events = ()
-                details = (
-                    response.get("incomplete_details")
-                    if isinstance(response, dict)
-                    else None
+            original = self._transport._events.event(upstream.type, raw)
+            observation = source_state.observe(StreamEvent(upstream.type, payload))
+            kind = upstream.type
+            failure: Exception | None = None
+            if kind in {"response.failed", "error", "response.error"}:
+                failure = responses_stream_failure_from_event(kind, payload)
+            elif reports_context_window_incomplete(kind, payload):
+                failure = context_window_exceeded_provider_failure()
+            elif kind == "response.completed" and source_state.invalid_input:
+                failure = RetryableProviderProtocolError(
+                    "Provider completed a response with unfinished or invalid tool input."
                 )
-                reason = details.get("reason") if isinstance(details, dict) else None
-                yield DecodedStreamEvent(
-                    self.origin,
-                    observed,
-                    tuple(
-                        replace(event, item_completion=observed.item_completion)
-                        for event in output
-                    ),
-                    progress=content_progress("responses", kind, observed.payload),
-                    outcome=(
-                        RequestOutcome.INCOMPLETE
-                        if kind == "response.incomplete"
-                        else RequestOutcome.SUCCESS
-                    )
-                    if presenter.completed
-                    else None,
-                    stop_reason=reason if isinstance(reason, str) else None,
-                    native_reasoning_pending=source_state.native_reasoning_pending,
+            events = tuple(
+                event
+                for event in observation.events
+                if failure is None or event.kind != kind
+            )
+            details = (
+                response.get("incomplete_details")
+                if isinstance(response, dict)
+                else None
+            )
+            reason = details.get("reason") if isinstance(details, dict) else None
+            terminal = (
+                kind in {"response.completed", "response.incomplete"}
+                and failure is None
+            )
+            yield DecodedStreamEvent(
+                self.origin,
+                original,
+                progress=any(
+                    content_progress("responses", event.kind, event.payload)
+                    for event in events
+                ),
+                outcome=(
+                    RequestOutcome.INCOMPLETE
+                    if kind == "response.incomplete"
+                    else RequestOutcome.SUCCESS
                 )
-                if presenter.completed:
-                    return
+                if terminal
+                else None,
+                stop_reason=reason if isinstance(reason, str) else None,
+                native_reasoning_pending=source_state.native_reasoning_pending,
+                observation=replace(
+                    observation,
+                    events=events,
+                    tools=self._native_tools,
+                    tool_names=self._tool_names,
+                ),
+            )
+            if failure is not None:
+                raise failure
+            if terminal:
+                return
         raise _TruncatedResponsesStream(
             "Provider Responses stream ended without a terminal event."
         )

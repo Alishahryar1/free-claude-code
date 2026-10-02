@@ -1,4 +1,4 @@
-"""Opaque native Messages requests and lifecycle-only SSE relay."""
+"""Opaque native Messages requests and history restoration."""
 
 from copy import deepcopy
 from dataclasses import dataclass
@@ -9,7 +9,6 @@ from free_claude_code.core.history_replay import (
     is_replay,
 )
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.core.stream_events import StreamEvent
 
 from .native import NativeMessagesError, validate_messages_json
 
@@ -71,51 +70,3 @@ def restore_native_history(body: JsonObject, origin: ReplayOrigin) -> JsonObject
                 )
             content[index] = deepcopy(record.native)
     return result
-
-
-class NativeMessagesPassthrough:
-    """Inspect the envelope and preserve provider-owned event payloads."""
-
-    def __init__(self, public_model: str) -> None:
-        from .native_stream import NativeMessagesStreamState
-
-        self._state = NativeMessagesStreamState(permissive=True)
-        self.public_model = public_model
-        self.started = False
-        self.completed = False
-
-    @property
-    def invalid_input(self) -> bool:
-        return self._state.invalid_input
-
-    @property
-    def stop_reason(self) -> str | None:
-        return self._state.stop_reason
-
-    @property
-    def native_reasoning_pending(self) -> bool:
-        return self._state.native_reasoning_pending
-
-    def feed(self, kind: str, payload: JsonObject) -> StreamEvent | None:
-        if self.completed:
-            raise NativeMessagesError("Messages event arrived after message_stop.")
-        validate_messages_json(payload)
-        if payload.get("type") != kind:
-            raise NativeMessagesError("Messages event has an invalid payload type.")
-        if kind == "ping" and not self.started:
-            return None
-        body = dict(payload)
-        if kind == "message_start":
-            message = body.get("message")
-            if self.started or not isinstance(message, dict):
-                raise NativeMessagesError("Invalid native message_start.")
-            self.started = True
-            body["message"] = {**message, "model": self.public_model}
-        elif kind != "ping" and not self.started:
-            raise NativeMessagesError(
-                "Native Messages event arrived before message_start."
-            )
-        if kind == "message_stop":
-            self.completed = True
-        completed = self._state.accept(kind, payload)
-        return StreamEvent(kind, body, completed.completion if completed else None)

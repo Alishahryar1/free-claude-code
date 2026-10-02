@@ -1139,7 +1139,7 @@ async def test_provider_cleanup_cannot_delay_fallback_past_progress_deadline() -
 
 
 @pytest.mark.asyncio
-async def test_candidate_context_cleanup_uses_the_remaining_progress_deadline():
+async def test_candidate_context_cleanup_has_a_separate_bounded_grace():
     entered, release = asyncio.Event(), asyncio.Event()
 
     class HeldContextProvider(FakeProvider):
@@ -1159,11 +1159,10 @@ async def test_candidate_context_cleanup_uses_the_remaining_progress_deadline():
     reading = asyncio.ensure_future(anext(stream))
     try:
         await entered.wait()
-        done, _ = await asyncio.wait({reading}, timeout=0.15)
-        assert reading in done
-        with pytest.raises(ExecutionFailure) as error:
-            await reading
-        assert error.value.kind is FailureKind.TIMEOUT
+        done, _ = await asyncio.wait({reading}, timeout=0.03)
+        assert reading not in done
+        release.set()
+        assert "message_stop" in await reading
     finally:
         release.set()
         await asyncio.gather(reading, return_exceptions=True)
@@ -1172,7 +1171,7 @@ async def test_candidate_context_cleanup_uses_the_remaining_progress_deadline():
 
 
 @pytest.mark.asyncio
-async def test_cancelled_read_cannot_leave_stream_cleanup_running_past_deadline():
+async def test_cancelled_read_joins_cleanup_within_its_separate_grace():
     reading_started, closing_started, release = (
         asyncio.Event(),
         asyncio.Event(),
@@ -1192,11 +1191,14 @@ async def test_cancelled_read_cannot_leave_stream_cleanup_running_past_deadline(
     stream = _executor_stream(
         HeldCloseProvider(), timeout_seconds=0.02, request_id="cancelled_cleanup"
     )
+    grace = patch("free_claude_code.core.async_iterators._CLEANUP_GRACE_SECONDS", 0.05)
+    grace.start()
     reading = asyncio.ensure_future(anext(stream))
     try:
         await reading_started.wait()
         reading.cancel()
         await closing_started.wait()
+        reading.cancel()
         done, _ = await asyncio.wait({reading}, timeout=0.15)
         assert reading in done
         with pytest.raises(asyncio.CancelledError):
@@ -1206,6 +1208,7 @@ async def test_cancelled_read_cannot_leave_stream_cleanup_running_past_deadline(
         await asyncio.gather(reading, return_exceptions=True)
         assert isinstance(stream, AsyncCloseable)
         await stream.aclose()
+        grace.stop()
 
 
 @pytest.mark.asyncio
@@ -1314,13 +1317,13 @@ async def test_fallback_transition_does_not_reset_shared_progress_deadline() -> 
         await primary_wait.started.wait()
         primary_wait.release.set()
         await fallback_wait.started.wait()
+        read_deadlines = [deadline for deadline in deadlines if deadline is not None]
         # Expire the actual fallback read context after observing its admission;
         # machine load must not determine whether the shared deadline was reused.
         timeouts[-1].reschedule(asyncio.get_running_loop().time())
         with pytest.raises(ExecutionFailure) as exc_info:
             await reading
 
-    read_deadlines = [deadline for deadline in deadlines if deadline is not None]
     assert len(read_deadlines) >= 3
     assert read_deadlines[0] == read_deadlines[1]
     assert read_deadlines[-1] == read_deadlines[0] + 2

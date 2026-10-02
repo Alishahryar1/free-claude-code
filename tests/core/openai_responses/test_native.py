@@ -5,11 +5,11 @@ import pytest
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.openai_responses.native import (
-    NativeResponsesRelay,
     build_native_responses_request,
 )
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.core.stream_events import StreamEvent
+from tests.protocol_stream_support import ResponsesSourceHarness
 
 
 def _event_payload(frame: StreamEvent) -> tuple[str, dict[str, object]]:
@@ -237,7 +237,7 @@ def test_native_request_applies_fcc_reasoning_override(
 
 
 def test_native_relay_preserves_payload_and_rewrites_only_response_model() -> None:
-    relay = NativeResponsesRelay(public_model="gateway-model")
+    relay = ResponsesSourceHarness(public_model="gateway-model")
     created = {
         "type": "response.created",
         "sequence_number": 7,
@@ -281,15 +281,16 @@ def test_native_relay_preserves_payload_and_rewrites_only_response_model() -> No
     }
 
     frames = [
-        relay.feed("response.created", created),
-        relay.feed("response.output_item.added", item),
-        relay.feed("response.completed", completed),
+        *relay.feed("response.created", created),
+        *relay.feed("response.output_item.added", item),
+        *relay.feed("response.completed", completed),
     ]
 
     event_types_and_payloads = [_event_payload(frame) for frame in frames]
     assert [event_type for event_type, _ in event_types_and_payloads] == [
         "response.created",
         "response.output_item.added",
+        "response.output_item.done",
         "response.completed",
     ]
     assert event_types_and_payloads[0][1]["response"] == {
@@ -297,13 +298,12 @@ def test_native_relay_preserves_payload_and_rewrites_only_response_model() -> No
         "model": "gateway-model",
     }
     assert event_types_and_payloads[1][1] == item
-    assert event_types_and_payloads[2][1]["response"] == {
+    assert event_types_and_payloads[-1][1]["response"] == {
         **completed["response"],
         "model": "gateway-model",
     }
     assert created["response"]["model"] == "upstream-model"
-    assert relay.response_id == "resp_upstream"
-    assert relay.terminal_type == "response.completed"
+    assert relay.completed
 
 
 @pytest.mark.parametrize(
@@ -315,11 +315,11 @@ def test_native_relay_preserves_payload_and_rewrites_only_response_model() -> No
         (None, type(None)),
     ],
 )
-@pytest.mark.parametrize("event_type", ["response.created", "response.failed"])
+@pytest.mark.parametrize("event_type", ["response.created", "response.incomplete"])
 def test_native_relay_serializes_whole_second_timestamps_as_integers(
     timestamp: float | int | None, expected_type: type, event_type: str
 ) -> None:
-    relay = NativeResponsesRelay(public_model="gateway-model")
+    relay = ResponsesSourceHarness(public_model="gateway-model")
     original = {
         "type": event_type,
         "response": {
@@ -331,7 +331,7 @@ def test_native_relay_serializes_whole_second_timestamps_as_integers(
         },
     }
 
-    _, payload = _event_payload(relay.feed(event_type, original))
+    _, payload = _event_payload(relay.feed(event_type, original)[-1])
 
     response = payload["response"]
     assert isinstance(response, dict)
@@ -346,7 +346,7 @@ def test_native_relay_serializes_whole_second_timestamps_as_integers(
 
 
 def test_native_relay_rejects_events_after_one_terminal() -> None:
-    relay = NativeResponsesRelay(public_model="gateway-model")
+    relay = ResponsesSourceHarness(public_model="gateway-model")
     relay.feed(
         "response.incomplete",
         {

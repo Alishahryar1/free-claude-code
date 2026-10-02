@@ -300,6 +300,10 @@ class ProviderAttempt:
         """Return whether upstream acceptance has resolved this attempt."""
         return self._accepted
 
+    @property
+    def operation_kind(self) -> ProviderOperationKind:
+        return self._claim.operation_kind
+
     async def __aenter__(self) -> ProviderAttempt:
         return self
 

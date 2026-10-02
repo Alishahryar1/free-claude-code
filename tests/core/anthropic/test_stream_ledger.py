@@ -1,20 +1,13 @@
-"""Tests for the provider-neutral Anthropic stream ledger."""
+"""Source assembly and public Messages lifecycle contracts."""
 
 from unittest.mock import patch
 
 import pytest
 
-from free_claude_code.core.anthropic.streaming import (
-    AnthropicStreamLedger,
-    StreamBlockLedger,
-    ToolSchema,
-    map_stop_reason,
-)
-from free_claude_code.core.stream_events import StreamEvent
-
-
-def _payload(event: StreamEvent) -> dict:
-    return event.payload
+from free_claude_code.core.anthropic.recovery_stream import MessagesRecoveryWriter
+from free_claude_code.core.anthropic.streaming import map_stop_reason
+from free_claude_code.core.chat_observations import ChatStreamUsage
+from tests.protocol_stream_support import ChatSourceHarness
 
 
 @pytest.mark.parametrize(
@@ -31,99 +24,91 @@ def test_map_stop_reason(upstream: str | None, anthropic: str) -> None:
     assert map_stop_reason(upstream) == anthropic
 
 
-def test_stream_block_ledger_allocates_monotonic_indexes() -> None:
-    blocks = StreamBlockLedger()
-
-    assert (blocks.allocate_index(), blocks.allocate_index()) == (0, 1)
+def test_writer_allocates_monotonic_indexes() -> None:
+    writer = MessagesRecoveryWriter(model="model", input_tokens=0)
+    assert (writer.allocate_block_index(), writer.allocate_block_index()) == (0, 1)
 
 
 def test_message_lifecycle() -> None:
-    ledger = AnthropicStreamLedger("msg_1", "model", input_tokens=7)
-
-    start = _payload(ledger.message_start())
-    delta = _payload(ledger.message_delta("end_turn", 3))
-    stop = _payload(ledger.message_stop())
-
-    assert start["message"]["id"] == "msg_1"
+    source = ChatSourceHarness(model="model", input_tokens=7)
+    events = source.project(
+        [
+            *source.start_events(),
+            *source.finish_success(stop_reason="end_turn", usage=ChatStreamUsage(7, 3)),
+        ]
+    )
+    start, delta, stop = [event.payload for event in events]
+    assert start["message"]["id"].startswith("msg_")
     assert start["message"]["usage"]["input_tokens"] == 7
     assert delta["delta"]["stop_reason"] == "end_turn"
     assert delta["usage"]["output_tokens"] == 3
     assert stop == {"type": "message_stop"}
-    assert ledger.has_terminal_message()
 
 
 def test_text_and_thinking_blocks_accumulate_content() -> None:
-    ledger = AnthropicStreamLedger("msg_1", "model")
-
-    ledger.start_thinking_block()
-    ledger.emit_thinking_delta("step")
-    ledger.stop_thinking_block()
-    ledger.start_text_block()
-    ledger.emit_text_delta("answer")
-    ledger.stop_text_block()
-
-    assert ledger.accumulated_reasoning == "step"
-    assert ledger.accumulated_text == "answer"
+    source = ChatSourceHarness(model="model", input_tokens=0)
+    source.ensure_reasoning_block()
+    source.emit_reasoning_delta("step")
+    source.ensure_text_block()
+    source.emit_text_delta("answer")
+    source.close_content_blocks()
+    assert source.accumulated_reasoning == "step"
+    assert source.accumulated_text == "answer"
 
 
 def test_ensure_block_switches_close_the_previous_kind() -> None:
-    ledger = AnthropicStreamLedger("msg_1", "model")
-    ledger.start_thinking_block()
-
-    events = list(ledger.ensure_text_block())
-
-    assert [_payload(event)["type"] for event in events] == [
+    source = ChatSourceHarness(model="model", input_tokens=0)
+    source.project([*source.start_events(), *source.ensure_reasoning_block()])
+    events = source.project(source.ensure_text_block())
+    assert [event.kind for event in events] == [
         "content_block_stop",
         "content_block_start",
     ]
-    assert not ledger.blocks.thinking_started
-    assert ledger.blocks.text_started
+    assert events[-1].payload["content_block"]["type"] == "text"
 
 
-def test_tool_blocks_drive_stop_reason_and_salvage() -> None:
-    ledger = AnthropicStreamLedger("msg_1", "model")
-    ledger.start_tool_block(0, "toolu_1", "Read")
-    ledger.emit_tool_delta(0, '{"path":"test.py"}')
-
-    assert ledger.final_stop_reason("end_turn") == "tool_use"
-    assert ledger.can_salvage_tool_use(
-        {
-            "Read": ToolSchema(
-                name="Read",
-                input_schema={
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                },
-            )
-        }
+def test_complete_tool_controls_handoff_and_stop_reason() -> None:
+    source = ChatSourceHarness(model="model", input_tokens=0)
+    events = source.project(
+        [
+            *source.start_events(),
+            source.start_tool_block(0, "toolu_1", "Read"),
+            *source.emit_tool_delta(0, '{"path":"test.py"}'),
+        ]
     )
+    assert [event.kind for event in events] == ["message_start"]
+    assert not source.writer.checkpoint.published_tools
+    source.project(source.close_all_blocks())
+    assert source.writer.checkpoint.published_tools
+    assert source.final_stop_reason("end_turn") == "tool_use"
 
 
 def test_close_unclosed_blocks_closes_each_block_once() -> None:
-    ledger = AnthropicStreamLedger("msg_1", "model")
-    ledger.start_text_block()
-    ledger.start_tool_block(0, "toolu_1", "Read")
-
-    events = list(ledger.close_unclosed_blocks())
-
-    assert len(events) == 2
-    assert all(_payload(event)["type"] == "content_block_stop" for event in events)
-    assert list(ledger.close_unclosed_blocks()) == []
+    source = ChatSourceHarness(model="model", input_tokens=0)
+    source.project(
+        [
+            *source.start_events(),
+            *source.ensure_text_block(),
+            source.start_tool_block(0, "toolu_1", "Read"),
+            *source.emit_tool_delta(0, "{}"),
+        ]
+    )
+    events = source.project(source.close_all_blocks())
+    assert sum(event.kind == "content_block_stop" for event in events) == 2
+    assert source.project(source.close_all_blocks()) == []
 
 
 def test_output_token_estimate_combines_shared_estimates_and_block_overhead() -> None:
-    ledger = AnthropicStreamLedger("msg_1", "model")
-    ledger.start_thinking_block()
-    ledger.emit_thinking_delta("why")
-    ledger.stop_thinking_block()
-    ledger.start_text_block()
-    ledger.emit_text_delta("abcd")
-    ledger.stop_text_block()
-    ledger.start_tool_block(0, "toolu_1", "Read")
-    ledger.emit_tool_delta(0, "{}")
-
+    source = ChatSourceHarness(model="model", input_tokens=0)
+    source.ensure_reasoning_block()
+    source.emit_reasoning_delta("why")
+    source.ensure_text_block()
+    source.emit_text_delta("abcd")
+    source.close_content_blocks()
+    source.start_tool_block(0, "toolu_1", "Read")
+    source.emit_tool_delta(0, "{}")
     with patch(
-        "free_claude_code.core.anthropic.streaming.ledger.estimate_text_tokens",
+        "free_claude_code.providers.openai_chat.source_state.estimate_text_tokens",
         side_effect=len,
     ):
-        assert ledger.estimate_output_tokens() == 40
+        assert source.estimate_output_tokens() == 40

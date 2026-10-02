@@ -2,12 +2,11 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.application.ports import ProviderCandidate
+from free_claude_code.application.ports import CandidateContext
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -53,7 +52,7 @@ class BaseProvider(ABC):
         request_id: str | None = None,
         response_model: str | None = None,
         request_headers: Mapping[str, str] | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         raise InvalidRequestError(
             "This provider does not support native Messages execution."
         )
@@ -69,7 +68,7 @@ class BaseProvider(ABC):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         """Validate the request before yielding a response in Anthropic SSE format."""
 
     @abstractmethod
@@ -83,5 +82,5 @@ class BaseProvider(ABC):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         """Validate the request before yielding OpenAI Responses SSE events."""

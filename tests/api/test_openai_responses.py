@@ -13,6 +13,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
@@ -771,7 +772,12 @@ def test_create_response_relays_encrypted_reasoning() -> None:
         )
 
     assert response.status_code == 200
-    assert parse_sse_text(response.text)[-1].data["response"]["output"] == [reasoning]
+    output = parse_sse_text(response.text)[-1].data["response"]["output"]
+    assert len(output) == 1
+    item = output[0]
+    replay = decode_replay(item["encrypted_content"])
+    assert replay is not None and replay.native == reasoning
+    assert {**item, "encrypted_content": reasoning["encrypted_content"]} == reasoning
 
 
 def test_create_response_provider_rejects_unsupported_tool(

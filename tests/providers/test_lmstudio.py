@@ -16,6 +16,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.config.provider_catalog import LMSTUDIO_DEFAULT_BASE
 from free_claude_code.core.anthropic import MessagesRequest, get_token_count
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import (
@@ -891,11 +892,14 @@ async def test_context_rejection_before_first_event_allows_fallback(wire):
             request_id="context-fallback",
         )
         output = [event async for event in stream]
-        assert output == [
-            "event: message_stop\ndata: {}\n\n"
-            if wire == "messages"
-            else 'event: response.completed\ndata: {"type": "response.completed", "response": {"id": "fixture_response", "status": "completed", "output": []}, "sequence_number": 0}\n\n'
-        ]
+        frames = parse_sse_text("".join(output))
+        assert len(frames) == 1
+        assert frames[0].event == (
+            "message_stop" if wire == "messages" else "response.completed"
+        )
+        if wire == "responses":
+            assert frames[0].data["response"]["model"] == "gateway-model"
+            assert frames[0].data["response"]["output"] == []
         assert len(fallback.stream_calls) == 1
         assert fallback.stream_close_calls == 1
         assert [request.url.path for request in requests] == ["/api/v0/models"]

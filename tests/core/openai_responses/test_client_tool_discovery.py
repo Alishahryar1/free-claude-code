@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.chat_observations import ChatStreamUsage
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -20,13 +21,8 @@ from free_claude_code.core.openai_responses import (
     build_responses_chat_request,
 )
 from free_claude_code.core.openai_tool_names import encode_openai_chat_tool_names
-from free_claude_code.providers.openai_chat.stream_output import (
-    ChatStreamUsage,
-    ResponsesChatStreamOutput,
-)
-from free_claude_code.providers.openai_responses.presentation import (
-    NativeResponsesPresenter,
-)
+from free_claude_code.core.recovery import AttemptFailure
+from tests.protocol_stream_support import ChatSourceHarness, ToolEventHarness
 from tests.providers.test_opencode import _responses_event_stream
 from tests.stream_helpers import serialize_events
 
@@ -335,9 +331,7 @@ def test_interrupted_discovery_preserves_terminal_failure(
     terminal: str, arguments: JsonValue
 ) -> None:
     adapter = _native_adapter([SEARCH])
-    presenter = NativeResponsesPresenter(
-        public_model="example", tool_events=adapter.event_adapter()
-    )
+    presenter = ToolEventHarness(tool_events=adapter.event_adapter())
     item: JsonObject = {
         "type": "function_call",
         "id": "fc_search",
@@ -1396,7 +1390,7 @@ def _completed_tool_events(
     adapter = build_responses_chat_request(
         request, reasoning_replay=ReasoningReplayMode.DISABLED
     ).tool_adapter
-    writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
+    writer = ChatSourceHarness(adapter, input_tokens=1)
     frames = [*writer.start_events(), writer.start_tool_block(0, "call_test", name)]
     frames.extend(writer.emit_tool_delta(0, arguments))
     frames.extend(
@@ -1618,7 +1612,7 @@ def test_discovery_preserves_outer_namespace_in_nested_tools(
 
 
 def test_chat_does_not_turn_missing_search_arguments_into_a_successful_call() -> None:
-    with pytest.raises(ResponsesConversionError, match="arguments"):
+    with pytest.raises(AttemptFailure, match="arguments"):
         _completed_tool_events(
             OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),
             native=False,
@@ -1779,7 +1773,7 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
         prepared = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.DISABLED
         )
-        writer = ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
+        writer = ChatSourceHarness(prepared.tool_adapter, input_tokens=1)
         frames = [*writer.start_events()]
         for i, name in enumerate(names):
             frames.append(writer.start_tool_block(i, f"call_{i}", name))
@@ -1864,7 +1858,9 @@ def test_non_finite_arguments_are_opaque_except_in_object_conversion(
     name = "fcc_tool_search" if search else "agents__spawn_agent"
     arguments = '{"nested":[{"limit":' + constant + "}]}"
     if search:
-        with pytest.raises(ResponsesConversionError, match="arguments"):
+        with pytest.raises(
+            ResponsesConversionError if native else AttemptFailure, match="arguments"
+        ):
             _completed_tool_events(
                 request, native=native, name=name, arguments=arguments
             )
@@ -1943,9 +1939,7 @@ def test_argument_numbers_survive_sse_serialization(
                 client_tool_search=True,
             ),
         )
-        presenter = NativeResponsesPresenter(
-            public_model="example", tool_events=adapter.event_adapter()
-        )
+        presenter = ToolEventHarness(tool_events=adapter.event_adapter())
         item: JsonObject = {
             "type": "function_call",
             "id": "fc",
@@ -1982,7 +1976,7 @@ def test_argument_numbers_survive_sse_serialization(
         adapter = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.DISABLED
         ).tool_adapter
-        writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
+        writer = ChatSourceHarness(adapter, input_tokens=1)
         frames = [
             *writer.start_events(),
             writer.start_tool_block(0, "call", name),

@@ -6,6 +6,7 @@ import pytest
 
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.chat_observations import ChatStreamUsage
 from free_claude_code.core.history_replay import (
     AssociatedReplayRecord,
     ReplayOrigin,
@@ -15,10 +16,7 @@ from free_claude_code.providers.history_replay import normalize_messages_history
 from free_claude_code.providers.openai_chat.reasoning_details import (
     StructuredReasoningStream,
 )
-from free_claude_code.providers.openai_chat.stream_output import (
-    AnthropicChatStreamOutput,
-    ChatStreamUsage,
-)
+from tests.protocol_stream_support import ChatSourceHarness
 from tests.providers.test_history_transports import (
     _chat_reasoning_events,
     _harness,
@@ -163,9 +161,7 @@ async def test_associated_messages_replay_into_every_transport(destination, read
 
 
 def _messages_writer():
-    output = AnthropicChatStreamOutput(
-        message_id="msg_test", model="public", input_tokens=1
-    )
+    output = ChatSourceHarness(model="public", input_tokens=1)
     output.replay_origin = ReplayOrigin("test", "chat", "endpoint", "account", "model")
     reasoning = StructuredReasoningStream()
     output.reasoning_replay = reasoning
@@ -206,7 +202,9 @@ def test_immediate_text_and_late_replay_survive_successful_completion(terminal):
     frames += output.ensure_text_block()
     frames.append(output.emit_text_delta("Answer."))
     # Text has already been emitted, while upstream metadata and termination are pending.
-    early = parse_sse_text(serialize_events(frames))
+    early_frames = output.project(frames)
+    frames = []
+    early = parse_sse_text(serialize_events(early_frames))
     assert any(e.data.get("delta", {}).get("text") == "Answer." for e in early)
     assert not any(e.event == "message_stop" for e in early)
     if terminal == "tool":
@@ -235,7 +233,7 @@ def test_immediate_text_and_late_replay_survive_successful_completion(terminal):
         )
         == []
     )
-    events = parse_sse_text(serialize_events(frames))
+    events = parse_sse_text(serialize_events([*early_frames, *output.project(frames)]))
     _assert_serial(events)
     finals = [
         decode_replay(e.data["content_block"]["data"])
@@ -262,7 +260,7 @@ def test_request_copy_preserves_routing_and_does_not_join_across_messages():
     frames += output.finish_success(
         stop_reason="end_turn", usage=ChatStreamUsage(input_tokens=1, output_tokens=1)
     )
-    events = parse_sse_text(serialize_events(frames))
+    events = parse_sse_text(serialize_events(output.project(frames)))
     anchor = next(
         e.data["delta"]["signature"]
         for e in events

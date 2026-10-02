@@ -1,27 +1,70 @@
 """Scripted decoded candidates for application/API tests without provider HTTP."""
 
+import asyncio
 import sys
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
-from dataclasses import replace
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from free_claude_code.core.anthropic.native_stream import NativeMessagesStreamState
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
+from free_claude_code.core.async_iterators import CleanupBudget
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.openai_responses import ResponsesSourceState
-from free_claude_code.core.recovery import AttemptFailure, RecoveryCheckpoint
-from free_claude_code.core.stream_events import (
+from free_claude_code.core.recovery import (
+    AttemptDispatch,
+    AttemptFailure,
+    RecoveryCheckpoint,
+)
+from free_claude_code.core.stream_events import RequestOutcome, StreamEvent
+from free_claude_code.core.stream_observations import (
     DecodedStreamEvent,
-    RequestOutcome,
-    StreamEvent,
+    MessagesObservation,
+    ResponsesObservation,
 )
 from free_claude_code.core.trace import close_stream_input
 
 
 def progress_frame(text: str) -> str:
     return StreamEvent("fixture.progress", {"value": text}).serialize()
+
+
+class ScriptedAttempt:
+    def __init__(self, source: AsyncIterator[DecodedStreamEvent]) -> None:
+        self.source = source
+        self.dispatch: AttemptDispatch | None = None
+        self.read_task: asyncio.Task[DecodedStreamEvent] | None = None
+
+    async def read(self) -> DecodedStreamEvent:
+        self.dispatch = AttemptDispatch()
+
+        async def advance():
+            return await anext(self.source)
+
+        self.read_task = asyncio.create_task(advance())
+        return await asyncio.shield(self.read_task)
+
+    async def resolve_failure(
+        self, failure: AttemptFailure, *, can_correct: bool
+    ) -> AttemptFailure:
+        return failure
+
+    async def aclose(self, *, active_error: BaseException | None) -> None:
+        async def close():
+            if self.read_task is not None:
+                if not self.read_task.done():
+                    self.read_task.cancel()
+                with suppress(Exception, asyncio.CancelledError):
+                    await self.read_task
+            await close_stream_input(
+                self.source,
+                owner="fixture",
+                source="test",
+                preserved_error=active_error,
+            )
+
+        await CleanupBudget().run(close())
 
 
 class ScriptedProvider:
@@ -82,8 +125,9 @@ class _ScriptedCandidate:
         self.error: BaseException | None = None
         self.closed = False
 
-    async def prepare(self, checkpoint: RecoveryCheckpoint) -> None:
+    def open_attempt(self, checkpoint: RecoveryCheckpoint, *, wait_for_recovery: bool):
         checkpoint.require_origin(self.origin)
+        return ScriptedAttempt(self._read())
 
     def finish(self, failure: ExecutionFailure | None) -> None:
         self.error = failure or self.error
@@ -91,30 +135,25 @@ class _ScriptedCandidate:
     async def suspend(self) -> None:
         pass
 
-    async def stream_attempt(
-        self,
-        checkpoint: RecoveryCheckpoint,
-        *,
-        wait_for_recovery: bool,
-        can_correct: Callable[[], bool],
-        on_rejected: Callable[[], None] | None = None,
-    ):
+    async def _read(self):
         decoder = AnthropicSSEDecoder()
         native_source = NativeMessagesStreamState(permissive=True)
         responses_source = ResponsesSourceState()
         framed = False
         try:
-            yield DecodedStreamEvent(
-                self.origin, StreamEvent("request.dispatched", {}), ()
-            )
             async for chunk in self.source:
                 if not chunk:
-                    yield DecodedStreamEvent(self.origin, StreamEvent("ping", {}), ())
+                    yield DecodedStreamEvent(self.origin, StreamEvent("ping", {}))
                     continue
                 if not framed and not chunk.startswith(("event:", "data:", ":")):
                     event = StreamEvent("fixture.progress", {"value": chunk})
                     yield DecodedStreamEvent(
-                        self.origin, event, (event,), progress=True
+                        self.origin,
+                        event,
+                        observation=MessagesObservation()
+                        if self.origin.protocol == "messages"
+                        else ResponsesObservation(events=(event,)),
+                        progress=True,
                     )
                     continue
                 framed = True
@@ -142,46 +181,33 @@ class _ScriptedCandidate:
                             False,
                         )
                     if self.origin.protocol == "responses":
-                        observed = responses_source.feed(event)
-                    elif event.payload.get("type") == event.kind:
-                        completed = native_source.accept(event.kind, event.payload)
-                        observed = [
-                            replace(
-                                event,
-                                item_completion=completed.completion
-                                if completed
-                                else None,
-                            )
-                        ]
+                        observation = responses_source.observe(event)
                     else:
-                        # Bare fixture frames test port lifetimes, without a
-                        # native protocol envelope or executable client items.
-                        observed = [event]
-                    for event in observed:
-                        yield DecodedStreamEvent(
-                            self.origin,
-                            event,
-                            (event,),
-                            progress=event.kind
-                            not in {
-                                "ping",
-                                "message_start",
-                                "response.created",
-                                "response.in_progress",
-                            },
-                            outcome=RequestOutcome.SUCCESS
-                            if event.kind
-                            in {
-                                "message_stop",
-                                "response.completed",
-                                "response.incomplete",
-                            }
-                            else None,
+                        completed = (
+                            native_source.accept(event.kind, event.payload)
+                            if event.payload.get("type") == event.kind
+                            else None
                         )
+                        observation = MessagesObservation(completed)
+                    yield DecodedStreamEvent(
+                        self.origin,
+                        event,
+                        observation=observation,
+                        progress=event.kind
+                        not in {
+                            "ping",
+                            "message_start",
+                            "response.created",
+                            "response.in_progress",
+                        },
+                        outcome=RequestOutcome.SUCCESS
+                        if event.kind
+                        in {"message_stop", "response.completed", "response.incomplete"}
+                        else None,
+                    )
             yield DecodedStreamEvent(
                 self.origin,
                 StreamEvent("fixture.completed", {}),
-                (),
                 outcome=RequestOutcome.SUCCESS,
             )
         except ExecutionFailure as error:

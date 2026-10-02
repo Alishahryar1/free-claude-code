@@ -14,9 +14,7 @@ from free_claude_code.core.openai_responses import (
     ResponsesToolPolicy,
     build_responses_chat_request,
 )
-from free_claude_code.providers.openai_responses.presentation import (
-    NativeResponsesPresenter,
-)
+from tests.protocol_stream_support import ToolEventHarness
 from tests.stream_helpers import serialize_events
 
 
@@ -24,10 +22,8 @@ def _adapter(request: OpenAIResponsesRequest) -> ResponsesToolAdapter:
     return ResponsesToolAdapter(request, ResponsesToolPolicy(True, True, True))
 
 
-def _presenter(adapter: ResponsesToolAdapter) -> NativeResponsesPresenter:
-    return NativeResponsesPresenter(
-        public_model="example", tool_events=adapter.event_adapter()
-    )
+def _presenter(adapter: ResponsesToolAdapter) -> ToolEventHarness:
+    return ToolEventHarness(tool_events=adapter.event_adapter())
 
 
 @pytest.mark.parametrize("custom", [False, True])
@@ -681,7 +677,10 @@ def test_chat_and_native_adaptation_share_custom_input_and_description(
 def test_logical_failure_preserves_adapted_tool_metadata() -> None:
     from free_claude_code.core.history_replay import ReplayOrigin
     from free_claude_code.core.openai_responses import ResponsesRecoveryWriter
-    from free_claude_code.core.stream_events import DecodedStreamEvent
+    from free_claude_code.core.stream_observations import (
+        DecodedStreamEvent,
+        ResponsesObservation,
+    )
 
     tool: JsonObject = {
         "type": "custom",
@@ -708,7 +707,13 @@ def test_logical_failure_preserves_adapted_tool_metadata() -> None:
             },
         },
     ):
-        writer.feed(DecodedStreamEvent(origin, event, (event,)))
+        list(
+            writer.feed(
+                DecodedStreamEvent(
+                    origin, event, observation=ResponsesObservation(events=(event,))
+                )
+            )
+        )
     failure = ExecutionFailure(FailureKind.UPSTREAM, 502, "failed", False)
     [event] = writer.failure(failure)
     assert event.kind == "response.failed"

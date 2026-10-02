@@ -7,6 +7,7 @@ from free_claude_code.core.anthropic.models import Message, MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
 from free_claude_code.core.recovery import CandidateIncompatible, RecoveryCheckpoint
+from tests.providers.support import attempt_events
 from tests.providers.test_anthropic_messages_transport import Endpoint
 from tests.providers.test_history_transports import _harness
 
@@ -31,9 +32,12 @@ async def test_unrepresentable_responses_features_skip_candidate_without_http(
         kwargs = {"endpoint_context": Endpoint()} if protocol == "messages" else {}
         async with provider.open_responses(request, **kwargs) as candidate:
             with pytest.raises(CandidateIncompatible):
-                await candidate.prepare(
-                    RecoveryCheckpoint("responses", recovering=True)
-                )
+                _ = [
+                    event
+                    async for event in attempt_events(
+                        candidate, RecoveryCheckpoint("responses", recovering=True)
+                    )
+                ]
         assert bodies == []
 
 
@@ -53,7 +57,12 @@ async def test_unrepresentable_messages_control_skips_responses_candidate():
             reasoning=DEFAULT_REASONING_POLICY,
         ) as candidate:
             with pytest.raises(CandidateIncompatible):
-                await candidate.prepare(RecoveryCheckpoint("messages", recovering=True))
+                _ = [
+                    event
+                    async for event in attempt_events(
+                        candidate, RecoveryCheckpoint("messages", recovering=True)
+                    )
+                ]
         assert bodies == []
 
 
@@ -72,9 +81,12 @@ async def test_malformed_history_is_terminal_validation_not_candidate_incompatib
             reasoning=DEFAULT_REASONING_POLICY,
         ) as candidate:
             with pytest.raises(InvalidRequestError):
-                await candidate.prepare(
-                    RecoveryCheckpoint("responses", recovering=True)
-                )
+                _ = [
+                    event
+                    async for event in attempt_events(
+                        candidate, RecoveryCheckpoint("responses", recovering=True)
+                    )
+                ]
         assert bodies == []
 
 
@@ -92,7 +104,10 @@ async def test_stored_response_handle_is_not_dropped_to_admit_a_recovery_target(
             reasoning=DEFAULT_REASONING_POLICY,
         ) as candidate:
             with pytest.raises(CandidateIncompatible):
-                await candidate.prepare(
-                    RecoveryCheckpoint("responses", recovering=True)
-                )
+                _ = [
+                    event
+                    async for event in attempt_events(
+                        candidate, RecoveryCheckpoint("responses", recovering=True)
+                    )
+                ]
         assert bodies == []

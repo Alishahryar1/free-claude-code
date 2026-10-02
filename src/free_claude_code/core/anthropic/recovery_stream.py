@@ -1,25 +1,36 @@
 """One public Messages lifecycle spanning physical provider attempts."""
 
 import json
+import uuid
+from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.history_replay import ReplayOrigin, decode_replay, is_replay
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.core.recovery import RecoveryCheckpoint
+from free_claude_code.core.recovery import AttemptDispatch, RecoveryCheckpoint
 from free_claude_code.core.stream_events import (
-    DecodedStreamEvent,
     ExactPrefixFilter,
     ItemCompletion,
     NativeMessage,
     OrderedStreamBuffer,
     StreamEvent,
 )
+from free_claude_code.core.stream_observations import (
+    ChatObservation,
+    DecodedStreamEvent,
+    MessagesObservation,
+    ResponsesObservation,
+)
 from free_claude_code.core.token_estimation import estimate_text_tokens
 
+from .chat_projection import ChatMessagesProjection
 from .errors import anthropic_failure_payload
+from .native_projection import native_messages_events
+from .responses_projection import ResponsesMessagesProjection
+from .usage import anthropic_input_usage_fields
 
 
 @dataclass(slots=True)
@@ -62,6 +73,8 @@ class MessagesRecoveryWriter:
         self._origin: ReplayOrigin | None = None
         self._required_origins: set[ReplayOrigin] = set()
         self._attempt_origins: set[ReplayOrigin] = set()
+        self._responses_projection: ResponsesMessagesProjection | None = None
+        self._chat_projection: ChatMessagesProjection | None = None
 
     @property
     def revision(self) -> int:
@@ -96,9 +109,7 @@ class MessagesRecoveryWriter:
             elif kind in {"thinking", "redacted_thinking"}:
                 key = "signature" if kind == "thinking" else "data"
                 value = body.get(key)
-                if isinstance(value, str) and is_replay(value):
-                    required_origins.append(decode_replay(value).origin)
-                elif value:
+                if value:
                     required_origins.append(block.origin)
                 elif block.origin.protocol != "chat":
                     blocked = (
@@ -131,6 +142,8 @@ class MessagesRecoveryWriter:
         self._origin = None
         self._prefix = ExactPrefixFilter(self.checkpoint.text)
         self._recovered = self._recovered or self._started
+        self._responses_projection = None
+        self._chat_projection = None
 
     @property
     def allow_empty_completion(self) -> bool:
@@ -145,17 +158,107 @@ class MessagesRecoveryWriter:
         self._required_origins = self._attempt_origins.copy()
         self._uncertain_operation = False
 
-    def feed(self, event: DecodedStreamEvent) -> list[StreamEvent]:
+    def dispatch(self, evidence: AttemptDispatch) -> None:
+        self._required_origins.update(evidence.required_origins)
+        if not evidence.replay_safe:
+            self._uncertain_operation = True
+
+    def feed(self, event: DecodedStreamEvent) -> Iterator[StreamEvent]:
         self._origin = event.origin
         self._native_reasoning_pending = event.native_reasoning_pending
         self._explicit_stop = self._explicit_stop or event.allow_empty_completion
         self._required_origins.update(event.required_origins)
         if not event.replay_safe:
             self._uncertain_operation = True
-        result: list[StreamEvent] = []
-        for projected in event.projected:
-            result.extend(self._accept(projected))
-        return result
+        if isinstance(event.observation, ChatObservation):
+            if self._chat_projection is None:
+                self._chat_projection = ChatMessagesProjection(self)
+            yield from self._chat_projection.feed(event.observation)
+            return
+        if isinstance(event.observation, ResponsesObservation):
+            if self._responses_projection is None:
+                self._responses_projection = ResponsesMessagesProjection(
+                    self, event.observation.tool_names
+                )
+            yield from self._responses_projection.feed(event.observation, event.origin)
+            return
+        if isinstance(event.observation, MessagesObservation):
+            for observed in native_messages_events(
+                event, event.observation, opaque=self._native
+            ):
+                yield from self._accept(observed)
+
+    def allocate_block_index(self) -> int:
+        index = self._next_index
+        self._next_index += 1
+        self._indexes[index] = index
+        return index
+
+    def accept_event(self, event: StreamEvent) -> list[StreamEvent]:
+        return self._accept(event)
+
+    def start_message(self) -> list[StreamEvent]:
+        if self._started:
+            return []
+        return self._accept(
+            StreamEvent(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": f"msg_{uuid.uuid4()}",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": self._model,
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {
+                            "input_tokens": self._input_tokens,
+                            "output_tokens": 1,
+                        },
+                    },
+                },
+            )
+        )
+
+    def responses_terminal(self, response: dict[str, Any], *, incomplete: bool) -> None:
+        usage = response.get("usage") or {}
+        details = usage.get("input_tokens_details") or {}
+        input_tokens = usage.get("input_tokens", self._input_tokens)
+        output_tokens = usage.get(
+            "output_tokens", self._logical_usage()["output_tokens"]
+        )
+        if not isinstance(input_tokens, int) or isinstance(input_tokens, bool):
+            input_tokens = self._input_tokens
+        if not isinstance(output_tokens, int) or isinstance(output_tokens, bool):
+            output_tokens = self._logical_usage()["output_tokens"]
+        reason = (
+            "max_tokens"
+            if incomplete
+            else "tool_use"
+            if self.checkpoint.published_tools
+            else "end_turn"
+        )
+        self._terminal = [
+            StreamEvent(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": reason, "stop_sequence": None},
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        **anthropic_input_usage_fields(
+                            usage.get("input_tokens"),
+                            cache_read_tokens=details.get("cached_tokens"),
+                            cache_creation_tokens=details.get("cache_write_tokens"),
+                        ),
+                    },
+                },
+            ),
+            StreamEvent("message_stop", {"type": "message_stop"}),
+        ]
 
     def _accept(self, event: StreamEvent) -> list[StreamEvent]:
         kind, payload = event.kind, event.payload
@@ -242,14 +345,17 @@ class MessagesRecoveryWriter:
         kind, payload = event.kind, event.payload
         upstream_index = payload["index"]
         if kind == "content_block_start":
-            index = upstream_index if not self._recovered else self._next_index
+            index = self._indexes.get(
+                upstream_index,
+                upstream_index if not self._recovered else self._next_index,
+            )
             self._next_index = max(self._next_index, index + 1)
             self._indexes[upstream_index] = index
             body = deepcopy(payload["content_block"])
             if body.get("type") == "text":
                 body["text"] = self._prefix.feed(body.get("text", ""))
                 self._last_text_index = index
-            block = _PublishedBlock(body, self._origin)
+            block = _PublishedBlock(body, event.replay_origin or self._origin)
             self._blocks[index] = block
             if any(body.get(key) for key in ("text", "thinking", "data")):
                 self._revision += 1
@@ -258,6 +364,8 @@ class MessagesRecoveryWriter:
             ]
         index = self._indexes[upstream_index]
         block = self._blocks[index]
+        if event.replay_origin is not None:
+            block.origin = event.replay_origin
         if kind == "content_block_delta":
             delta = dict(payload["delta"])
             field = {
@@ -277,9 +385,10 @@ class MessagesRecoveryWriter:
                 if value:
                     self._revision += 1
             elif delta.get("type") == "citations_delta":
-                block.body.setdefault("citations", []).append(
-                    deepcopy(delta["citation"])
-                )
+                block.body["citations"] = [
+                    *(block.body.get("citations") or []),
+                    deepcopy(delta["citation"]),
+                ]
                 self._revision += 1
             else:
                 self._blocked_reason = (
@@ -443,6 +552,11 @@ class NativeMessagesCompletionWriter:
     def reject_attempt(self) -> None:
         self._required_origins = self._attempt_origins.copy()
         self._blocked_reason = None
+
+    def dispatch(self, evidence: AttemptDispatch) -> None:
+        self._required_origins.update(evidence.required_origins)
+        if not evidence.replay_safe:
+            self._blocked_reason = "A provider-owned operation may already have run."
 
     def feed(self, event: DecodedStreamEvent) -> list[StreamEvent]:
         self._required_origins.update(event.required_origins)

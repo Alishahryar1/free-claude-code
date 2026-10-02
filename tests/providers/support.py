@@ -28,7 +28,6 @@ from free_claude_code.core.openai_responses import (
 )
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.core.recovery import RecoveryCheckpoint
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_chat import (
@@ -54,6 +53,18 @@ async def successful_chat_stream():
     )
 
 
+async def attempt_events(candidate, checkpoint, *, wait_for_recovery=True):
+    attempt = candidate.open_attempt(checkpoint, wait_for_recovery=wait_for_recovery)
+    try:
+        while True:
+            try:
+                yield await attempt.read()
+            except StopAsyncIteration:
+                return
+    finally:
+        await attempt.aclose(active_error=None)
+
+
 async def exercise_chat_body(provider: Any, body: dict) -> dict:
     """Exercise correction of a prepared body through the real logical owner."""
     request = MessagesRequest.model_validate(
@@ -64,22 +75,23 @@ async def exercise_chat_body(provider: Any, body: dict) -> dict:
         }
     )
     async with provider.open_messages(request) as candidate:
-        with patch.object(
-            provider._chat, "_build_request_body", return_value=deepcopy(body)
-        ):
-            await candidate.prepare(RecoveryCheckpoint("messages"))
 
         @asynccontextmanager
         async def prepared():
             yield candidate
 
-        frames = [
-            frame
-            async for frame in candidate_stream(
-                prepared(),
-                writer=MessagesRecoveryWriter(model=request.model, input_tokens=0),
-            )
-        ]
+        with patch.object(
+            provider._chat,
+            "_build_request_body",
+            side_effect=lambda *a, **kw: deepcopy(body),
+        ):
+            frames = [
+                frame
+                async for frame in candidate_stream(
+                    prepared(),
+                    writer=MessagesRecoveryWriter(model=request.model, input_tokens=0),
+                )
+            ]
         assert any("message_stop" in frame for frame in frames)
         assert not any("event: error" in frame for frame in frames)
         return deepcopy(candidate.body)
@@ -120,6 +132,7 @@ def stream_responses(
     return candidate_stream(
         context,
         writer=ResponsesRecoveryWriter(
+            request=request,
             model=kwargs.get("response_model") or request.model,
             input_tokens=input_tokens,
         ),

@@ -11,8 +11,8 @@ from free_claude_code.core.anthropic.native import (
     NativeMessagesError,
     validate_messages_json,
 )
+from free_claude_code.core.anthropic.native_stream import NativeMessagesStreamState
 from free_claude_code.core.anthropic.passthrough import (
-    NativeMessagesPassthrough,
     NativeMessagesRequest,
     restore_native_history,
 )
@@ -25,10 +25,10 @@ from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.recovery import RecoveryCheckpoint
 from free_claude_code.core.recovery_request import continue_request
-from free_claude_code.core.stream_events import (
+from free_claude_code.core.stream_events import RequestOutcome, StreamEvent
+from free_claude_code.core.stream_observations import (
     DecodedStreamEvent,
-    RequestOutcome,
-    StreamEvent,
+    MessagesObservation,
 )
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.failure_policy import RetryableProviderProtocolError
@@ -120,17 +120,14 @@ class _NativeMessagesCandidate(StreamCandidate):
         self, scope: ProviderAttemptScope
     ) -> AsyncIterator[DecodedStreamEvent]:
         assert self.origin is not None
-        response = scope.retain(
-            await self._client.send(
-                self._client.build_request(
-                    "POST",
-                    self._base_url.rstrip("/") + "/messages",
-                    json=self.sent_body,
-                    headers=self._headers,
-                ),
-                stream=True,
-            )
+        request = self._client.build_request(
+            "POST",
+            self._base_url.rstrip("/") + "/messages",
+            json=self.sent_body,
+            headers=self._headers,
         )
+        self._dispatch(scope)
+        response = scope.retain(await self._client.send(request, stream=True))
         if not response.is_success:
             raise await messages_status_error(response)
         if not self._request.stream:
@@ -167,7 +164,6 @@ class _NativeMessagesCandidate(StreamCandidate):
             yield DecodedStreamEvent(
                 self.origin,
                 StreamEvent("message", message),
-                (),
                 progress=True,
                 outcome=RequestOutcome.INCOMPLETE
                 if message.get("stop_reason") in {"max_tokens", "pause_turn"}
@@ -179,37 +175,41 @@ class _NativeMessagesCandidate(StreamCandidate):
             raise RetryableProviderProtocolError(
                 "Messages upstream did not return an SSE stream."
             )
-        relay = NativeMessagesPassthrough(self._public_model)
+        source = NativeMessagesStreamState(permissive=True)
         async for kind, payload in messages_events(response):
             self.record_usage(payload)
             check_messages_failure(kind, payload, native=True)
-            output = relay.feed(kind, payload)
+            if kind == "ping" and not source.started:
+                continue
+            if kind == "message_start" and not isinstance(payload.get("message"), dict):
+                raise NativeMessagesError("Invalid native message_start.")
+            completed = source.accept(kind, payload)
             if (
-                relay.completed
-                and relay.invalid_input
-                and relay.stop_reason != "max_tokens"
+                source.completed
+                and source.invalid_input
+                and source.stop_reason != "max_tokens"
             ):
                 raise RetryableProviderProtocolError(
                     "Provider completed a response with unfinished or invalid tool input."
                 )
-            if output is not None and not scope.attempt.accepted:
+            if not scope.attempt.accepted:
                 await scope.attempt.accept()
             yield DecodedStreamEvent(
                 self.origin,
                 StreamEvent(kind, payload),
-                (output,) if output is not None else (),
+                observation=MessagesObservation(completed),
                 progress=content_progress("messages", kind, payload),
                 outcome=(
                     RequestOutcome.INCOMPLETE
-                    if relay.stop_reason in {"max_tokens", "pause_turn"}
+                    if source.stop_reason in {"max_tokens", "pause_turn"}
                     else RequestOutcome.SUCCESS
                 )
-                if relay.completed
+                if source.completed
                 else None,
-                stop_reason=relay.stop_reason,
-                native_reasoning_pending=relay.native_reasoning_pending,
+                stop_reason=source.stop_reason,
+                native_reasoning_pending=source.native_reasoning_pending,
             )
-            if relay.completed:
+            if source.completed:
                 return
         raise RetryableProviderProtocolError(
             "Messages stream ended without message_stop."

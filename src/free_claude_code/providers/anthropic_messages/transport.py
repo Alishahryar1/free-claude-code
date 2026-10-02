@@ -1,6 +1,6 @@
 """Native Messages HTTP execution with one admitted recovery budget."""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import replace
 
@@ -15,11 +15,10 @@ from free_claude_code.core.anthropic.native import (
     PreparedMessagesRequest,
     build_native_messages_request,
 )
-from free_claude_code.core.anthropic.native_stream import NativeMessagesRelay
+from free_claude_code.core.anthropic.native_stream import NativeMessagesStreamState
 from free_claude_code.core.failures import UnsupportedRequestFeature
 from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
 from free_claude_code.core.openai_responses import (
-    AnthropicToResponsesStream,
     OpenAIResponsesRequest,
     ResponsesConversionError,
     ResponsesMessagesRequest,
@@ -33,11 +32,12 @@ from free_claude_code.core.reasoning import (
 from free_claude_code.core.recovery import CandidateIncompatible, RecoveryCheckpoint
 from free_claude_code.core.recovery_request import continue_request
 from free_claude_code.core.request_preservation import require_preserved_body
-from free_claude_code.core.stream_events import (
+from free_claude_code.core.stream_events import RequestOutcome, StreamEvent
+from free_claude_code.core.stream_observations import (
     DecodedStreamEvent,
-    RequestOutcome,
-    StreamEvent,
+    MessagesObservation,
 )
+from free_claude_code.core.tool_adaptation import ResponsesToolIdentity
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
 )
@@ -56,9 +56,6 @@ from free_claude_code.providers.reasoning_compatibility import (
     ReasoningCorrection,
     prepare_messages_reasoning,
 )
-from free_claude_code.providers.request_recovery import (
-    RequestCorrections,
-)
 from free_claude_code.providers.stream_candidate import (
     StreamCandidate,
     content_progress,
@@ -71,8 +68,6 @@ from .request_policy import (
     resolve_messages_options,
 )
 from .wire import check_messages_failure, messages_events, messages_status_error
-
-type _Presenter = NativeMessagesRelay | AnthropicToResponsesStream
 
 
 class AnthropicMessagesTransport:
@@ -266,7 +261,7 @@ class _MessagesCandidate(StreamCandidate):
         self._model_info = model_info
         self._preserve_native_controls = preserve_native_controls
         self._betas: tuple[str, ...] = ()
-        self._presenter_factory: Callable[[ReplayOrigin], _Presenter]
+        self._tool_identities: dict[str, ResponsesToolIdentity] = {}
 
     def _build_body(self, checkpoint: RecoveryCheckpoint) -> None:
         request = continue_request(self._request, checkpoint)
@@ -317,10 +312,6 @@ class _MessagesCandidate(StreamCandidate):
                     DEFAULT_MESSAGES_OUTPUT_TOKENS,
                     capabilities.max_output_tokens,
                 )
-            self._presenter_factory = lambda origin: NativeMessagesRelay(
-                public_model=self._response_model,
-                replay_origin=origin,
-            )
         else:
             if checkpoint.recovering and request.previous_response_id:
                 raise CandidateIncompatible(
@@ -333,13 +324,8 @@ class _MessagesCandidate(StreamCandidate):
                 preserve_features=self.preserve_features,
             )
             self.body = prepared_responses.body
-            self._presenter_factory = lambda origin: AnthropicToResponsesStream(
-                request,
-                public_model=self._response_model,
-                tool_identities=prepared_responses.tool_identities,
-                replay_origin=origin,
-            )
-        self.corrections = RequestCorrections("messages", correction)
+            self._tool_identities = dict(prepared_responses.tool_identities)
+        self.corrections.reasoning = correction
         self.replay_safe = not request_may_run_server_tools(self.body, "messages")
 
     async def _prepare_endpoint(self) -> ReplayOrigin:
@@ -362,7 +348,7 @@ class _MessagesCandidate(StreamCandidate):
         assert self.endpoint is not None and self.endpoint.snapshot is not None
         assert self.origin is not None
         endpoint = self.endpoint.snapshot
-        presenter = self._presenter_factory(self.origin)
+        source = NativeMessagesStreamState()
         headers = httpx.Headers(
             {"anthropic-version": "2023-06-01", "Accept": "text/event-stream"}
         )
@@ -376,16 +362,15 @@ class _MessagesCandidate(StreamCandidate):
             headers["anthropic-beta"] = ",".join(
                 dict.fromkeys([*filter(None, existing.split(",")), *self._betas])
             )
+        request = self._transport._client.build_request(
+            "POST",
+            f"{endpoint.base_url.rstrip('/')}/messages",
+            json=self.sent_body,
+            headers=headers,
+        )
+        self._dispatch(scope)
         response = scope.retain(
-            await self._transport._client.send(
-                self._transport._client.build_request(
-                    "POST",
-                    f"{endpoint.base_url.rstrip('/')}/messages",
-                    json=self.sent_body,
-                    headers=headers,
-                ),
-                stream=True,
-            )
+            await self._transport._client.send(request, stream=True)
         )
         if not response.is_success:
             raise await messages_status_error(response)
@@ -405,11 +390,17 @@ class _MessagesCandidate(StreamCandidate):
                 native_paused = (
                     payload.get("delta", {}).get("stop_reason") == "pause_turn"
                 )
-            output = presenter.feed(kind, payload)
+            completed = source.accept(kind, payload)
+            if kind == "message_start":
+                message = payload["message"]
+                assert isinstance(message, dict)
+                model = message.get("model")
+                if isinstance(model, str) and model:
+                    self.origin = replace(self.origin, model=model)
             if (
-                presenter.completed
-                and presenter.invalid_input
-                and presenter.stop_reason != "max_tokens"
+                source.completed
+                and source.invalid_input
+                and source.stop_reason != "max_tokens"
             ):
                 raise RetryableProviderProtocolError(
                     "Provider completed a response with unfinished or invalid tool input."
@@ -419,21 +410,21 @@ class _MessagesCandidate(StreamCandidate):
             yield DecodedStreamEvent(
                 self.origin,
                 StreamEvent(kind, payload),
-                tuple(output),
+                observation=MessagesObservation(completed, self._tool_identities),
                 progress=content_progress("messages", kind, payload),
                 outcome=(
                     RequestOutcome.INCOMPLETE
-                    if presenter.stop_reason in {"max_tokens", "pause_turn"}
+                    if source.stop_reason in {"max_tokens", "pause_turn"}
                     else RequestOutcome.SUCCESS
                 )
-                if presenter.completed
+                if source.completed
                 else None,
-                stop_reason=presenter.stop_reason,
+                stop_reason=source.stop_reason,
                 allow_empty_completion=allow_empty_completion,
                 replay_safe=not native_paused,
-                native_reasoning_pending=presenter.native_reasoning_pending,
+                native_reasoning_pending=source.native_reasoning_pending,
             )
-            if presenter.completed:
+            if source.completed:
                 return
         raise RetryableProviderProtocolError(
             "Messages stream ended without message_stop."

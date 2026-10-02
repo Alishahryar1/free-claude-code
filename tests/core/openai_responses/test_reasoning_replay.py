@@ -18,12 +18,16 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
-    ReasoningBlockState,
     build_native_responses_request,
     build_responses_chat_request,
-    reasoning_output_item,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
+from tests.core.openai_responses.test_responses_from_messages_stream import (
+    _end,
+    _feed,
+    _start,
+    _stream,
+)
 
 _ORIGIN = ReplayOrigin(
     "github_copilot/anthropic_messages", "messages", "", "", "upstream"
@@ -85,12 +89,38 @@ def test_completed_reasoning_keeps_both_display_and_opaque_replay() -> None:
             _ORIGIN, {"type": "thinking", "thinking": "visible", "signature": "opaque"}
         )
     )
-    state = ReasoningBlockState(
-        0, 0, "rs_1", text_parts=["vis", "ible"], encrypted_content=carrier
+    stream = _stream()
+    _start(stream)
+    _feed(
+        stream,
+        "content_block_start",
+        index=0,
+        content_block={"type": "thinking", "thinking": ""},
     )
-    item = reasoning_output_item(state, status="completed")
+    _feed(
+        stream,
+        "content_block_delta",
+        index=0,
+        delta={"type": "thinking_delta", "thinking": "visible"},
+    )
+    _feed(
+        stream,
+        "content_block_delta",
+        index=0,
+        delta={"type": "signature_delta", "signature": "opaque"},
+    )
+    _feed(stream, "content_block_stop", index=0)
+    response = _end(stream)[-1]["response"]
+    assert isinstance(response, dict)
+    output = response["output"]
+    assert isinstance(output, list)
+    item = output[0]
+    assert isinstance(item, dict)
+    assert isinstance(item["encrypted_content"], str)
     assert item["content"] == [{"type": "reasoning_text", "text": "visible"}]
-    assert item["encrypted_content"] == carrier
+    assert (
+        decode_replay(item["encrypted_content"]).native == decode_replay(carrier).native
+    )
     for egress in ("chat", "responses"):
         request = OpenAIResponsesRequest.model_validate({"model": "m", "input": [item]})
         if egress == "chat":

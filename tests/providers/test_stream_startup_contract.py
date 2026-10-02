@@ -1,13 +1,12 @@
 """The shared OpenAI-chat provider owns request conversion during stream construction."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
-from free_claude_code.core.recovery import RecoveryCheckpoint
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatBehavior,
@@ -18,6 +17,8 @@ from free_claude_code.providers.openai_chat import (
 from tests.providers.support import (
     immediate_admission,
     make_provider_config,
+    stream_messages,
+    successful_chat_stream,
 )
 
 
@@ -39,7 +40,10 @@ class RecordingChatBehavior(OpenAIChatBehavior):
         preserve_features: bool = False,
     ) -> dict:
         self.build_calls.append((request, reasoning))
-        return {}
+        return {
+            "model": request.model,
+            "messages": [{"role": "user", "content": "hello"}],
+        }
 
 
 @pytest.mark.asyncio
@@ -56,9 +60,15 @@ async def test_provider_preparation_calls_builder_and_preserves_policy() -> None
         messages=[Message(role="user", content="hello")],
     )
 
-    async with provider.open_messages(
-        request, reasoning=ReasoningPolicy.off()
-    ) as candidate:
-        await candidate.prepare(RecoveryCheckpoint("messages"))
+    provider._client.chat.completions.create = AsyncMock(
+        return_value=successful_chat_stream()
+    )
+    frames = [
+        frame
+        async for frame in stream_messages(
+            provider, request, reasoning=ReasoningPolicy.off()
+        )
+    ]
+    assert any("message_stop" in frame for frame in frames)
 
     assert behavior.build_calls == [(request, ReasoningPolicy.off())]

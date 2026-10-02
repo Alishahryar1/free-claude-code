@@ -2,46 +2,20 @@ import json
 
 import pytest
 
-from free_claude_code.core.anthropic import ReasoningReplayMode
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.openai_responses import (
-    OpenAIResponsesRequest,
-    build_responses_chat_request,
-)
-from free_claude_code.core.stream_events import StreamEvent
-from free_claude_code.providers.openai_chat.stream_output import (
-    AnthropicChatStreamOutput,
-    ChatStreamOutput,
-    ChatStreamUsage,
-    ResponsesChatStreamOutput,
-)
+from free_claude_code.core.chat_observations import ChatChange, ChatStreamUsage
+from free_claude_code.providers.openai_chat.source_state import ChatSourceState
 from free_claude_code.providers.openai_chat.tool_calls import (
     OpenAIToolCallAssembler,
 )
-from tests.stream_helpers import serialize_events
 
 
-@pytest.fixture(params=["messages", "responses"])
-def output(request) -> ChatStreamOutput:
-    if request.param == "messages":
-        return AnthropicChatStreamOutput(
-            message_id="msg_test", model="test-model", input_tokens=1
-        )
-    prepared = build_responses_chat_request(
-        OpenAIResponsesRequest(model="test-model", input="hello"),
-        reasoning_replay=ReasoningReplayMode.DISABLED,
-    )
-    return ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
+@pytest.fixture
+def output() -> ChatSourceState:
+    return ChatSourceState(input_tokens=1)
 
 
-def _argument_deltas(frames: list[StreamEvent]) -> list[str]:
-    parts = []
-    for event in parse_sse_text(serialize_events(frames)):
-        if event.event == "response.function_call_arguments.delta":
-            parts.append(event.data["delta"])
-        elif event.data.get("delta", {}).get("type") == "input_json_delta":
-            parts.append(event.data["delta"]["partial_json"])
-    return parts
+def _argument_deltas(frames: list[ChatChange]) -> list[str]:
+    return [change.text for change in frames if change.kind == "tool.delta"]
 
 
 @pytest.mark.parametrize("name", ["Task", "ordinary_tool"])
@@ -72,8 +46,7 @@ def test_tool_arguments_stream_without_name_specific_rewrites(output, name, argu
                 output,
             )
         )
-        if isinstance(output, AnthropicChatStreamOutput):
-            assert _argument_deltas(emitted) == ([part] if part else [])
+        assert _argument_deltas(emitted) == ([part] if part else [])
         frames.extend(emitted)
     frames.extend(
         output.finish_success(
@@ -83,12 +56,7 @@ def test_tool_arguments_stream_without_name_specific_rewrites(output, name, argu
     )
     assert output.tool_states[0].content == arguments
     assert output.tool_states[0].tool_id == "call_task"
-    events = parse_sse_text(serialize_events(frames))
-    assert events[-1].event == (
-        "response.completed"
-        if isinstance(output, ResponsesChatStreamOutput)
-        else "message_stop"
-    )
+    assert frames[-1].kind == "complete"
     assert "".join(_argument_deltas(frames)) == arguments
 
 

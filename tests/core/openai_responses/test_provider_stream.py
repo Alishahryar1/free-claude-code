@@ -5,18 +5,19 @@ from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
     thinking_content,
 )
+from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.openai_responses.provider_stream import (
-    ResponsesProviderStream,
     ResponsesStreamFailure,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
+from tests.protocol_stream_support import ResponsesSourceHarness
 from tests.stream_helpers import serialize_events
 
 
 def _terminal_usage(usage: dict[str, object]) -> dict[str, object]:
-    stream = ResponsesProviderStream(
-        message_id="msg_test",
-        model="openai/gpt-test",
+    stream = ResponsesSourceHarness(
+        messages=True,
+        public_model="openai/gpt-test",
         input_tokens=12,
     )
     output = stream.start()
@@ -34,9 +35,9 @@ def _terminal_usage(usage: dict[str, object]) -> dict[str, object]:
 
 
 def test_responses_provider_stream_preserves_reasoning_tools_usage_and_ids() -> None:
-    stream = ResponsesProviderStream(
-        message_id="msg_test",
-        model="openai/gpt-test",
+    stream = ResponsesSourceHarness(
+        messages=True,
+        public_model="openai/gpt-test",
         input_tokens=12,
     )
     output = stream.start()
@@ -134,7 +135,12 @@ def test_responses_provider_stream_preserves_reasoning_tools_usage_and_ids() -> 
         for event in events
         if event.event == "content_block_start"
     ]
-    assert {"type": "redacted_thinking", "data": "opaque"} in starts
+    signature = next(
+        event.data["delta"]["signature"]
+        for event in events
+        if event.data.get("delta", {}).get("type") == "signature_delta"
+    )
+    assert decode_replay(signature).native["encrypted_content"] == "opaque"
     assert {
         "type": "tool_use",
         "id": "call_1",
@@ -260,9 +266,9 @@ def test_responses_provider_stream_ignores_invalid_cache_partitions(
     cached_tokens: int | bool,
     expected_input_tokens: int,
 ) -> None:
-    stream = ResponsesProviderStream(
-        message_id="msg_test",
-        model="openai/gpt-test",
+    stream = ResponsesSourceHarness(
+        messages=True,
+        public_model="openai/gpt-test",
         input_tokens=12,
     )
     output = stream.start()
@@ -293,9 +299,9 @@ def test_responses_provider_stream_ignores_invalid_cache_partitions(
 
 
 def test_responses_provider_stream_surfaces_failed_event() -> None:
-    stream = ResponsesProviderStream(
-        message_id="msg_test",
-        model="gpt-test",
+    stream = ResponsesSourceHarness(
+        messages=True,
+        public_model="gpt-test",
         input_tokens=0,
     )
 
@@ -321,9 +327,9 @@ def test_responses_provider_stream_restores_added_and_done_only_tool_names() -> 
         "mcp__responses_done__" + "y" * 70,
     )
     codec = OpenAIToolNameCodec.from_names(originals)
-    stream = ResponsesProviderStream(
-        message_id="msg_test",
-        model="gpt-test",
+    stream = ResponsesSourceHarness(
+        messages=True,
+        public_model="gpt-test",
         input_tokens=0,
         tool_names=codec,
     )

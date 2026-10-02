@@ -11,7 +11,7 @@ from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import CLOUDFLARE_AI_REST_ROOT
 from free_claude_code.core.anthropic import ReasoningReplayMode
-from free_claude_code.core.stream_events import StreamEvent
+from free_claude_code.core.chat_observations import ChatChange
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -23,7 +23,7 @@ from free_claude_code.providers.model_listing import (
     extract_openai_model_infos,
 )
 from free_claude_code.providers.openai_chat import (
-    ChatStreamOutput,
+    ChatSourceState,
     ChatTemplateReasoning,
     OpenAIChatBehavior,
     OpenAIChatProfile,
@@ -71,8 +71,8 @@ class CloudflareChatBehavior(OpenAIChatBehavior):
     """Cloudflare Chat adaptation without HTTP ownership."""
 
     def extra_reasoning_events(
-        self, delta: Any, output: ChatStreamOutput, *, output_reasoning: bool
-    ) -> Iterator[StreamEvent]:
+        self, delta: Any, output: ChatSourceState, *, output_reasoning: bool
+    ) -> Iterator[ChatChange]:
         """Map Cloudflare's ``reasoning`` delta field to Anthropic thinking."""
         reasoning = _cloudflare_reasoning(delta)
         if not output_reasoning or not reasoning:

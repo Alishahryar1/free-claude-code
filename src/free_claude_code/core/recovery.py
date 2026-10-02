@@ -10,6 +10,14 @@ from .json_types import JsonObject
 type WireApi = Literal["messages", "responses"]
 
 
+@dataclass(frozen=True, slots=True)
+class AttemptDispatch:
+    """Possible transmission and its native dependencies, recorded at send."""
+
+    replay_safe: bool = True
+    required_origins: tuple[ReplayOrigin, ...] = ()
+
+
 class CandidateIncompatible(Exception):
     """A candidate cannot represent the required request or recovery state."""
 

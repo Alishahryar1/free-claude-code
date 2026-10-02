@@ -10,7 +10,7 @@ from free_claude_code.core.anthropic import (
     get_token_count,
 )
 from free_claude_code.core.anthropic.native import NativeMessagesError
-from free_claude_code.core.anthropic.passthrough import NativeMessagesPassthrough
+from free_claude_code.core.anthropic.native_stream import NativeMessagesStreamState
 
 
 @pytest.mark.parametrize(
@@ -22,9 +22,9 @@ from free_claude_code.core.anthropic.passthrough import NativeMessagesPassthroug
     ],
 )
 def test_suppressed_leading_ping_still_validates_envelope(block):
-    relay = NativeMessagesPassthrough("alias")
+    relay = NativeMessagesStreamState(permissive=True)
     with pytest.raises(NativeMessagesError):
-        relay.feed("ping", block)
+        relay.accept("ping", block)
     assert not relay.started
 
 

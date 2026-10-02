@@ -1,7 +1,7 @@
 """Shared request correction and authentication recovery decisions."""
 
 from collections.abc import Callable, Mapping
-from copy import deepcopy
+from copy import copy, deepcopy
 from typing import Any
 
 from free_claude_code.core.history_replay import HistoryProtocol
@@ -80,23 +80,66 @@ class RequestCorrections:
         reasoning: ReasoningCorrection | None = None,
     ) -> None:
         self._protocol = protocol
-        self._reasoning = reasoning
+        self.reasoning = reasoning
         self._used_retry_kinds: set[str] = set()
         self._normalized_ids: dict[str, str] = {}
+        self._controls: JsonObject = {}
+        self._omitted_controls: set[str] = set()
+        self.history_correction: Callable[[JsonObject], JsonObject | None] | None = None
+
+    def copy(self) -> RequestCorrections:
+        """Copy request decisions while retaining provider-owned policies."""
+        result = copy(self)
+        result._used_retry_kinds = self._used_retry_kinds.copy()
+        result._normalized_ids = self._normalized_ids.copy()
+        result._controls = deepcopy(self._controls)
+        result._omitted_controls = self._omitted_controls.copy()
+        return result
+
+    def retain_controls(self, before: JsonObject, after: JsonObject) -> None:
+        """Remember accepted control choices without retaining an old history body."""
+        for key in before.keys() | after.keys():
+            if key in {"model", "input", "messages", "extra_headers"}:
+                continue
+            if key not in after:
+                self._omitted_controls.add(key)
+                self._controls.pop(key, None)
+            elif key not in before or before[key] != after[key]:
+                self._controls[key] = deepcopy(after[key])
+                self._omitted_controls.discard(key)
 
     def reapply(self, body: JsonObject) -> JsonObject:
         """Carry accepted optional controls across continuation preparation."""
         result = deepcopy(body)
         reapply_history_ids(result, self._protocol, self._normalized_ids)
-        if self._reasoning is not None and "reasoning" in self._used_retry_kinds:
-            result = self._reasoning.without_off_control(result)
+        if self.reasoning is not None and "reasoning" in self._used_retry_kinds:
+            result = self.reasoning.without_off_control(result)
         if "stream_usage" in self._used_retry_kinds:
             options = result.get("stream_options")
             if isinstance(options, dict):
                 options.pop("include_usage", None)
                 if not options:
                     result.pop("stream_options", None)
+        for key in self._omitted_controls:
+            result.pop(key, None)
+        for key, value in self._controls.items():
+            current = result.get(key)
+            if (
+                key in {"max_tokens", "max_completion_tokens", "max_output_tokens"}
+                and isinstance(current, int)
+                and isinstance(value, int)
+            ):
+                result[key] = min(current, value)
+            else:
+                result[key] = deepcopy(value)
         return result
+
+    def reapply_history(self, body: JsonObject) -> JsonObject:
+        """Apply accepted history choices after native replay has been restored."""
+        reapply_history_ids(body, self._protocol, self._normalized_ids)
+        return (
+            (self.history_correction(body) or body) if self.history_correction else body
+        )
 
     def next_body(
         self,
@@ -116,8 +159,8 @@ class RequestCorrections:
         )
         if corrected is not None:
             return corrected
-        if self._reasoning is not None and "reasoning" not in self._used_retry_kinds:
-            corrected = self._reasoning.retry_body(
+        if self.reasoning is not None and "reasoning" not in self._used_retry_kinds:
+            corrected = self.reasoning.retry_body(
                 reasoning_error, body, sent_body=reasoning_sent_body
             )
             if corrected is not None:

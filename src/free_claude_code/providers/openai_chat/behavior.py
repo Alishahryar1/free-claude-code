@@ -6,6 +6,7 @@ from typing import Any
 
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.usage import anthropic_input_usage_fields
+from free_claude_code.core.chat_observations import ChatChange
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import HistoryScope
 from free_claude_code.core.reasoning import (
@@ -13,14 +14,13 @@ from free_claude_code.core.reasoning import (
     ReasoningPolicy,
 )
 from free_claude_code.core.request_preservation import require_preserved_body
-from free_claude_code.core.stream_events import StreamEvent
 
 from .profiles import OpenAIChatProfile
 from .request_policy import (
     build_openai_chat_request_body,
 )
-from .stream_output import (
-    ChatStreamOutput,
+from .source_state import (
+    ChatSourceState,
 )
 from .usage import (
     nested_usage_int,
@@ -77,8 +77,8 @@ class OpenAIChatBehavior:
         return self.profile.history_scope
 
     def extra_reasoning_events(
-        self, delta: Any, output: ChatStreamOutput, *, output_reasoning: bool
-    ) -> Iterator[StreamEvent]:
+        self, delta: Any, output: ChatSourceState, *, output_reasoning: bool
+    ) -> Iterator[ChatChange]:
         """Hook for provider-specific reasoning."""
         return iter(())
 

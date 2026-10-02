@@ -15,7 +15,10 @@ from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.application.ports import ProviderCandidate
+from free_claude_code.application.ports import (
+    CandidateContext,
+    ProviderCandidate,
+)
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -25,7 +28,7 @@ from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
-from free_claude_code.providers.candidate_setup import CandidateSetup
+from free_claude_code.providers.candidate_setup import deferred_candidate
 from free_claude_code.providers.endpoint_types import EndpointContext, HttpEndpoint
 from free_claude_code.providers.openai_chat import (
     OpenAIChatBehavior,
@@ -146,7 +149,7 @@ class GitHubCopilotProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         self._check_model(request.model)
         return self._dispatch(
             request,
@@ -166,7 +169,7 @@ class GitHubCopilotProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         self._check_model(request.model)
         return self._dispatch(
             request,
@@ -199,7 +202,7 @@ class GitHubCopilotProvider(BaseProvider):
         request_id: str | None,
         response_model: str,
         reasoning: ReasoningPolicy,
-    ) -> AbstractAsyncContextManager[ProviderCandidate]:
+    ) -> CandidateContext:
         async def initialize(
             wait_for_recovery: bool,
         ) -> AbstractAsyncContextManager[ProviderCandidate]:
@@ -207,9 +210,9 @@ class GitHubCopilotProvider(BaseProvider):
                 request, input_tokens, request_id, response_model, reasoning
             )
 
-        return CandidateSetup(
+        return deferred_candidate(
             initialize, provider_name=PROVIDER_NAME, request_id=request_id
-        ).open()
+        )
 
     @asynccontextmanager
     async def _initialize_candidate(

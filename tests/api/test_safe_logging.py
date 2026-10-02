@@ -10,8 +10,8 @@ from fastapi.responses import JSONResponse
 from free_claude_code.api import request_errors
 from free_claude_code.api.handlers import MessagesHandler, TokenCountHandler
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.anthropic import AnthropicStreamLedger
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
+from free_claude_code.core.anthropic.streaming import AnthropicEventBuilder
 from tests.provider_double import ScriptedProvider
 from tests.web_tools_support import StubWebToolsClient
 
@@ -89,8 +89,8 @@ def test_stream_ledger_default_debug_has_no_serialized_json_content():
     with patch(
         "free_claude_code.core.anthropic.streaming.emitter.logger.debug"
     ) as mock_debug:
-        ledger = AnthropicStreamLedger("msg_x", "m", 1, log_raw_events=False)
-        ledger.message_start()
+        ledger = AnthropicEventBuilder(log_raw_events=False)
+        ledger.event("message_start", {"role": "assistant"})
 
     assert mock_debug.call_count == 0
 
@@ -99,8 +99,8 @@ def test_stream_ledger_raw_logging_includes_event_body_when_enabled():
     with patch(
         "free_claude_code.core.anthropic.streaming.emitter.logger.debug"
     ) as mock_debug:
-        ledger = AnthropicStreamLedger("msg_x", "m", 1, log_raw_events=True)
-        ledger.message_start()
+        ledger = AnthropicEventBuilder(log_raw_events=True)
+        ledger.event("message_start", {"role": "assistant"})
 
     assert mock_debug.call_count == 1
     message = str(mock_debug.call_args)

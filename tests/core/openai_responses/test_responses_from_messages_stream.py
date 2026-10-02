@@ -6,7 +6,6 @@ from typing import cast
 import pytest
 
 from free_claude_code.core.anthropic.native import (
-    NativeMessagesError,
     NativeMessagesOptions,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_lines
@@ -16,21 +15,22 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
-    AnthropicToResponsesStream,
     OpenAIResponsesRequest,
     build_responses_messages_request,
 )
+from free_claude_code.core.recovery import AttemptFailure
+from tests.protocol_stream_support import MessagesSourceHarness
 from tests.stream_helpers import serialize_events
 
 _SCOPE = "github_copilot/anthropic_messages"
 
 
-def _stream(*, tools: list[JsonObject] | None = None) -> AnthropicToResponsesStream:
+def _stream(*, tools: list[JsonObject] | None = None) -> MessagesSourceHarness:
     request = OpenAIResponsesRequest(model="public", input="hi", tools=tools)
     prepared = build_responses_messages_request(
         request, options=NativeMessagesOptions("upstream", 4096)
     )
-    return AnthropicToResponsesStream(
+    return MessagesSourceHarness(
         request,
         public_model="public",
         tool_identities=prepared.tool_identities,
@@ -39,7 +39,7 @@ def _stream(*, tools: list[JsonObject] | None = None) -> AnthropicToResponsesStr
 
 
 def _feed(
-    stream: AnthropicToResponsesStream, kind: str, **fields: JsonValue
+    stream: MessagesSourceHarness, kind: str, **fields: JsonValue
 ) -> list[JsonObject]:
     chunks = stream.feed(kind, {"type": kind, **fields})
     return [
@@ -48,7 +48,7 @@ def _feed(
     ]
 
 
-def _start(stream: AnthropicToResponsesStream) -> list[JsonObject]:
+def _start(stream: MessagesSourceHarness) -> list[JsonObject]:
     return _feed(
         stream,
         "message_start",
@@ -69,7 +69,7 @@ def _start(stream: AnthropicToResponsesStream) -> list[JsonObject]:
 
 
 def _end(
-    stream: AnthropicToResponsesStream,
+    stream: MessagesSourceHarness,
     reason: str = "end_turn",
     *,
     usage: JsonValue = None,
@@ -347,7 +347,7 @@ def test_malformed_custom_tool_wrapper_cannot_become_completed_output(
         index=0,
         delta={"type": "input_json_delta", "partial_json": arguments},
     )
-    with pytest.raises(NativeMessagesError, match="exactly one text"):
+    with pytest.raises(AttemptFailure, match="exactly one text"):
         _feed(stream, "content_block_stop", index=0)
 
 
