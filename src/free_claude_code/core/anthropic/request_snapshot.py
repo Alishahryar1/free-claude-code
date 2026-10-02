@@ -4,11 +4,11 @@ from typing import Any
 
 from free_claude_code.core.trace import sanitize_trace_value
 
-from .models import MessagesRequest, TokenCountRequest
+from .models import MessagesRequest, NativeTokenCountRequest, TokenCountRequest
 
 
 def anthropic_request_snapshot(
-    request: MessagesRequest | TokenCountRequest,
+    request: MessagesRequest | TokenCountRequest | NativeTokenCountRequest,
 ) -> dict[str, Any]:
     """Return the traceable public fields of an Anthropic request."""
     data = request.model_dump(mode="python")

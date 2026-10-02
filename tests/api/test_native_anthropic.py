@@ -104,6 +104,46 @@ def test_compatibility_ingress_still_rejects_unknown_blocks():
     assert response.status_code == 422
 
 
+def test_leading_pings_allow_exhausted_primary_to_reach_native_fallback():
+    from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+    from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
+
+    calls = []
+    wires = []
+
+    def handle(request):
+        model = json.loads(request.content)["model"]
+        calls.append(model)
+        events = (
+            [{"type": "error", "error": {"type": "overloaded_error"}}]
+            if model == "primary"
+            else _events()
+        )
+        wire = Wire([_sse({"type": "ping"}, *events)])
+        wires.append(wire)
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=wire
+        )
+
+    app = create_test_app(
+        Settings(
+            MODEL="anthropic/primary",
+            MODEL_FALLBACKS=["nvidia_nim/excluded", "anthropic/backup"],
+        ),
+        providers={"anthropic": provider(handle)},
+    )
+    body = native_body(True)
+    with TestClient(app) as client:
+        response = client.post("/v1/messages", json=body)
+    assert response.status_code == 200, response.text
+    events = parse_sse_text(response.text)
+    assert events[0].event == "message_start"
+    assert events[0].data["message"]["model"] == body["model"]
+    assert events[-1].event == "message_stop"
+    assert calls == ["primary", "primary", "backup"]
+    assert all(wire.closed for wire in wires)
+
+
 def test_stream_failure_after_start_emits_one_error_without_fallback():
     from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
     from tests.providers.test_anthropic_messages_transport import _events, _sse

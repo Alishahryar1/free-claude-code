@@ -15,10 +15,14 @@ from free_claude_code.config.model_refs import parse_provider_type
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
     MessagesRequest,
+    NativeTokenCountRequest,
     TokenCountRequest,
     get_token_count,
 )
-from free_claude_code.core.anthropic.native import NativeMessagesError
+from free_claude_code.core.anthropic.native import (
+    NativeMessagesError,
+    validate_messages_json,
+)
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -209,16 +213,44 @@ async def probe_responses(_auth=Depends(require_proxy_auth)):
 @router.post("/v1/messages/count_tokens")
 async def count_tokens(
     request: Request,
-    request_data: TokenCountRequest,
+    request_data: Annotated[dict[str, Any], Body()],
     services: ApiServices = Depends(get_services),
     _auth=Depends(require_anthropic_proxy_auth),
 ):
     """Count tokens for a request."""
     lease = await services.requests.acquire()
     try:
+        model_router = ModelRouter(lease.settings)
+        model = request_data.get("model")
+        if isinstance(model, str) and not model.strip():
+            raise InvalidRequestError("Messages model must not be empty.")
+        resolved = (
+            model_router.resolve(model)
+            if isinstance(model, str) and model.strip()
+            else None
+        )
+        try:
+            if resolved is not None and supports_native_messages(
+                resolved.primary.provider_id
+            ):
+                validate_messages_json(request_data)
+                counted = NativeTokenCountRequest.model_validate(request_data)
+            else:
+                counted = TokenCountRequest.model_validate(request_data)
+        except NativeMessagesError as error:
+            raise InvalidRequestError(str(error)) from error
+        except ValidationError as error:
+            raise RequestValidationError(
+                [{**item, "loc": ("body", *item["loc"])} for item in error.errors()],
+                body=request_data,
+            ) from error
         await lease.wait_for_token_estimation()
-        handler = TokenCountHandler(lease.settings, token_counter=get_token_count)
-        return handler.count(request_data, request_id=get_request_id(request))
+        handler = TokenCountHandler(
+            lease.settings, model_router=model_router, token_counter=get_token_count
+        )
+        return handler.count(
+            counted, request_id=get_request_id(request), resolved=resolved
+        )
     finally:
         await lease.release()
 

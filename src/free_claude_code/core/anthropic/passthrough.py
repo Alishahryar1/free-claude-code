@@ -81,12 +81,14 @@ class NativeMessagesPassthrough:
         self.started = False
         self.completed = False
 
-    def feed(self, kind: str, payload: JsonObject) -> str:
+    def feed(self, kind: str, payload: JsonObject) -> str | None:
         if self.completed:
             raise NativeMessagesError("Messages event arrived after message_stop.")
         validate_messages_json(payload)
         if payload.get("type") != kind:
             raise NativeMessagesError("Messages event has an invalid payload type.")
+        if kind == "ping" and not self.started:
+            return None
         body = dict(payload)
         if kind == "message_start":
             message = body.get("message")

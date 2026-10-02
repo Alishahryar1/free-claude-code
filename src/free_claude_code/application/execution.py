@@ -11,12 +11,10 @@ from typing import Literal
 from loguru import logger
 
 from free_claude_code.core.anthropic import (
-    Message,
-    SystemContent,
-    Tool,
     anthropic_request_snapshot,
     get_token_count,
 )
+from free_claude_code.core.anthropic.tokens import TokenCounter
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -39,10 +37,6 @@ from .routing import (
     RoutedResponsesRequest,
 )
 
-TokenCounter = Callable[
-    [list[Message], str | list[SystemContent] | None, list[Tool] | None],
-    int,
-]
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
 WireApi = Literal["messages", "responses"]
 CandidateStreamOpener = Callable[

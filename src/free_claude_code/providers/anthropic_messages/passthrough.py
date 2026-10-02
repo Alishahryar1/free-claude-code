@@ -105,6 +105,8 @@ async def stream_native_messages(
                 async for kind, payload in messages_events(response):
                     check_messages_failure(kind, payload, native=True)
                     output = relay.feed(kind, payload)
+                    if output is None:
+                        continue
                     if not attempt.accepted:
                         await attempt.accept()
                     committed = True

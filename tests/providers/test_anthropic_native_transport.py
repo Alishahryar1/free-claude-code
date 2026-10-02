@@ -242,6 +242,36 @@ async def test_connection_recovery_before_output_closes_failed_response(streamin
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["error", "connection", "eof"])
+async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure):
+    tail = {
+        "error": _sse({"type": "error", "error": {"type": "overloaded_error"}}),
+        "connection": httpx.ReadError("connection lost"),
+        "eof": b"",
+    }[failure]
+    first = Wire([_sse({"type": "ping"}), tail])
+    events = _events()
+    events.insert(1, {"type": "ping", "extension": "preserve after start"})
+    second = Wire([_sse({"type": "ping"}, *events)])
+    wires = iter([first, second])
+    p = provider(
+        lambda request: httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=next(wires),
+        )
+    )
+    try:
+        output = parse_sse_text(
+            "".join(await collect(p, native_body(True), response_model="native"))
+        )
+        assert [event.data for event in output] == events
+        assert first.closed and second.closed
+    finally:
+        await p.cleanup()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "bad_tail",
     [

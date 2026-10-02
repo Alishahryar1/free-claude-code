@@ -16,7 +16,11 @@ from free_claude_code.config.model_refs import (
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.anthropic import MessagesRequest, TokenCountRequest
+from free_claude_code.core.anthropic import (
+    MessagesRequest,
+    NativeTokenCountRequest,
+    TokenCountRequest,
+)
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.gateway_model_ids import (
     DESKTOP_MODEL_PREFIX,
@@ -83,7 +87,7 @@ class RoutedResponsesRequest:
 
 @dataclass(frozen=True, slots=True)
 class RoutedTokenCountRequest:
-    request: TokenCountRequest
+    request: TokenCountRequest | NativeTokenCountRequest
     resolved: ResolvedModelRoute
 
 
@@ -305,10 +309,13 @@ class ModelRouter:
         )
 
     def resolve_token_count_request(
-        self, request: TokenCountRequest
+        self,
+        request: TokenCountRequest | NativeTokenCountRequest,
+        *,
+        resolved: ResolvedModelRoute | None = None,
     ) -> RoutedTokenCountRequest:
         """Return an internal token-count request context."""
-        resolved = self.resolve(request.model)
+        resolved = resolved or self.resolve(request.model)
         routed = request.model_copy(
             update={"model": resolved.primary.provider_model}, deep=True
         )
