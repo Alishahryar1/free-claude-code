@@ -5,6 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
+from free_claude_code.core.stream_delivery import StreamDeliveryState
+
 from .failure_policy import RetryableProviderProtocolError
 
 EARLY_HOLDBACK_SECONDS = 0.75
@@ -88,8 +90,9 @@ class RecoveryHoldbackBuffer:
 class RecoveryController:
     """Own commit-boundary holdback for one provider stream lifecycle."""
 
-    def __init__(self) -> None:
+    def __init__(self, delivery: StreamDeliveryState | None = None) -> None:
         self._holdback = RecoveryHoldbackBuffer()
+        self._delivery = delivery
 
     @property
     def committed(self) -> bool:
@@ -121,14 +124,28 @@ class RecoveryController:
         generated_output: bool,
         complete_tool_salvageable: bool,
         attempts_remaining: int,
+        normal_stop_seen: bool = False,
     ) -> RecoveryDecision:
         committed = self._holdback.committed
         has_buffered = self._holdback.has_buffered
         retry_available = attempts_remaining > 0
         reserve_last_attempt_for_recovery = generated_output and attempts_remaining == 1
 
+        public_hidden = (
+            self._delivery is not None and not self._delivery.content_released
+        )
+
         if (
-            retryable
+            stream_opened
+            and can_retry_undelivered_stream(
+                self._delivery,
+                retryable=retryable,
+                attempts_remaining=attempts_remaining,
+                normal_stop_seen=normal_stop_seen,
+            )
+        ) or (
+            not public_hidden
+            and retryable
             and retry_available
             and stream_opened
             and not committed
@@ -145,7 +162,8 @@ class RecoveryController:
             )
 
         if (
-            retryable
+            not public_hidden
+            and retryable
             and generated_output
             and (retry_available or complete_tool_salvageable)
         ):
@@ -162,3 +180,20 @@ class RecoveryController:
             committed=committed,
             has_buffered=has_buffered,
         )
+
+
+def can_retry_undelivered_stream(
+    delivery: StreamDeliveryState | None,
+    *,
+    retryable: bool,
+    attempts_remaining: int,
+    normal_stop_seen: bool,
+) -> bool:
+    """A clean restart is safe only before content and a normal model stop."""
+    return (
+        delivery is not None
+        and not delivery.content_released
+        and retryable
+        and attempts_remaining > 0
+        and not normal_stop_seen
+    )

@@ -135,7 +135,9 @@ def _events_for(protocol):
 
 
 @asynccontextmanager
-async def _harness(protocol, responder=None, *, key="a", chat_provider_factory=None):
+async def _harness(
+    protocol, responder=None, *, key="a", chat_provider_factory=None, max_attempts=5
+):
     bodies: list[dict[str, Any]] = []
 
     def reply(request):
@@ -157,14 +159,16 @@ async def _harness(protocol, responder=None, *, key="a", chat_provider_factory=N
 
     if protocol == "messages":
         client = httpx.AsyncClient(transport=httpx.MockTransport(reply))
-        provider = messages_transport(client, immediate_admission(max_attempts=5))
+        provider = messages_transport(
+            client, immediate_admission(max_attempts=max_attempts)
+        )
         endpoint = Endpoint()
         endpoint.token = key
         extras = {"endpoint_context": endpoint}
     else:
         client = _client(reply, api_key=key)
         if protocol == "responses":
-            provider = responses_transport(client)
+            provider = responses_transport(client, max_attempts=max_attempts)
         else:
             with patch(
                 "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
@@ -177,7 +181,7 @@ async def _harness(protocol, responder=None, *, key="a", chat_provider_factory=N
                         make_provider_config(
                             api_key=key, base_url="https://provider.invalid/v1"
                         ),
-                        admission=immediate_admission(max_attempts=5),
+                        admission=immediate_admission(max_attempts=max_attempts),
                     )
                 )
         extras = {}

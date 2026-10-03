@@ -32,6 +32,7 @@ from free_claude_code.core.anthropic.server_tool_sse import (
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_delivery import bind_stream_delivery
 from free_claude_code.core.trace import close_stream_input, trace_event
 from free_claude_code.core.web_tools import WebSearchResult
 
@@ -142,15 +143,16 @@ class WebToolService:
             request_id=request_id,
         )
         chunks: list[str] = []
-        try:
-            chunks.extend([chunk async for chunk in provider_stream])
-        finally:
-            await close_stream_input(
-                provider_stream,
-                owner="automatic_web_search",
-                source="api",
-                preserved_error=sys.exception(),
-            )
+        with bind_stream_delivery(None):
+            try:
+                chunks.extend([chunk async for chunk in provider_stream])
+            finally:
+                await close_stream_input(
+                    provider_stream,
+                    owner="automatic_web_search",
+                    source="api",
+                    preserved_error=sys.exception(),
+                )
 
         message, stream_error, _complete = await aggregate_anthropic_sse_to_message(
             _iterate_chunks(chunks)

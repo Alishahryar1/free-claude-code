@@ -15,6 +15,10 @@ from typing import TypeVar
 
 from loguru import logger
 
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    current_stream_delivery,
+)
 from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.failure_policy import (
@@ -90,6 +94,11 @@ class ProviderExecution:
         self._active_claim: _AttemptClaim | None = None
         self._last_failure: Exception | None = None
         self._state = ProviderExecutionState.ACTIVE
+        self._delivery = current_stream_delivery()
+
+    @property
+    def delivery(self) -> StreamDeliveryState | None:
+        return self._delivery
 
     @property
     def execution_id(self) -> str:
@@ -133,7 +142,10 @@ class ProviderExecution:
         operation_kind: ProviderOperationKind,
     ) -> ProviderAttempt:
         """Open the sole active physical call for this execution."""
-        return await self._controller._open_attempt(self, operation_kind)
+        attempt = await self._controller._open_attempt(self, operation_kind)
+        if operation_kind is ProviderOperationKind.GENERATION and self._delivery:
+            self._delivery.begin_attempt()
+        return attempt
 
     async def run_call(
         self,

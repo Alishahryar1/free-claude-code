@@ -1,10 +1,25 @@
 """Provider stream commit-boundary and recovery policy."""
 
+from free_claude_code.core.stream_delivery import StreamDeliveryState
 from free_claude_code.providers.stream_recovery import (
     RecoveryController,
     RecoveryFailureAction,
     RecoveryHoldbackBuffer,
 )
+
+
+def test_exhausted_hidden_group_cannot_fall_through_to_salvage():
+    controller = RecoveryController(StreamDeliveryState())
+    controller.push("hidden")
+    controller.flush()
+    decision = controller.advance_failure(
+        retryable=True,
+        stream_opened=True,
+        generated_output=True,
+        complete_tool_salvageable=True,
+        attempts_remaining=0,
+    )
+    assert decision.action == RecoveryFailureAction.FINAL_ERROR
 
 
 def test_early_retry_discards_uncommitted_holdback() -> None:
