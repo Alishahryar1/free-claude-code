@@ -37,7 +37,9 @@ class DeliveryObservedStream(AsyncIterator[str]):
 def frame_data(frame: str) -> dict[str, Any] | None:
     """Read only SSE data, retaining decimal precision for envelope edits."""
     text = "\n".join(
-        line[5:].lstrip(" ") for line in frame.splitlines() if line.startswith("data:")
+        line[5:].lstrip(" ")
+        for line in re.split(r"\r\n|\r|\n", frame)
+        if line.startswith("data:")
     )
     try:
         value: object = simplejson.loads(text, use_decimal=True)
@@ -100,7 +102,8 @@ class PublicStreamEnvelope:
         payload = frame_data(frame)
         if payload is None:
             if any(
-                line.strip() and not line.startswith(":") for line in frame.splitlines()
+                line.strip() and not line.startswith(":")
+                for line in re.split(r"\r\n|\r|\n", frame)
             ):
                 self.state.release_content()
             return frame

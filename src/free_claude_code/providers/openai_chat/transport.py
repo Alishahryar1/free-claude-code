@@ -208,6 +208,7 @@ class _OpenAIChatStreamAssembler:
         if self._structured_reasoning is not None:
             self._output.reasoning_replay = self._structured_reasoning
         self._finish_reason: Any = None
+        self._raw_stop_seen = False
         self._usage_info: Any = None
         self._native_reasoning_seen = False
         self._tool_argument_aliases: dict[str, dict[str, str]] = {}
@@ -251,7 +252,11 @@ class _OpenAIChatStreamAssembler:
 
     @property
     def normal_stop_seen(self) -> bool:
-        return self._finish_reason is not None
+        return self._raw_stop_seen or self._finish_reason is not None
+
+    def observe_upstream_chunk(self, chunk: Any) -> None:
+        if chunk.choices and chunk.choices[0].finish_reason is not None:
+            self._raw_stop_seen = True
 
     def recovered_tool_call_events(
         self, tool_call: CompletedOpenAIToolCall
@@ -581,6 +586,7 @@ class OpenAIChatTransport:
         endpoint: RequestEndpoint | None = None,
         request_client: OpenAIRequestClient | None = None,
         extra_headers: Mapping[str, str] | None = None,
+        on_event: Callable[[Any], None] | None = None,
     ) -> tuple[Any, dict, ProviderAttempt, dict]:
         """Create a streaming chat completion with bounded request fallbacks."""
         execution = request_recovery.execution
@@ -633,7 +639,8 @@ class OpenAIChatTransport:
                     await client.chat.completions.create(
                         **create_body,
                         stream=True,
-                    )
+                    ),
+                    on_event=on_event,
                 )
                 stream = self._behavior.normalize_stream(stream, body)
                 retain_attempt = True
@@ -963,6 +970,7 @@ class _OpenAIChatStreamRunner:
                     endpoint=self._endpoint,
                     request_client=self._request_client,
                     extra_headers=self._extra_headers,
+                    on_event=assembler.observe_upstream_chunk,
                 )
                 scope = ProviderAttemptScope(
                     attempt,
@@ -1112,10 +1120,19 @@ class _OpenAIChatStreamRunner:
         execution = request_recovery.execution
         attempt_failure = None
         if scope is not None and not scope.attempt.accepted:
-            attempt_failure = await scope.attempt.fail(
-                error,
-                provider_failure_override=self._transport._behavior.failure_override,
-            )
+            if (
+                assembler.normal_stop_seen
+                and execution.delivery is not None
+                and not execution.delivery.content_released
+            ):
+                # The raw stop proves acceptance even if normalization rejected it.
+                # Do not reserve a retry probe for this terminal execution.
+                await scope.attempt.accept()
+            else:
+                attempt_failure = await scope.attempt.fail(
+                    error,
+                    provider_failure_override=self._transport._behavior.failure_override,
+                )
 
         retryable = (
             attempt_failure.retryable

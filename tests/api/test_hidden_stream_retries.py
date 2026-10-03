@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from copy import deepcopy
 from itertools import pairwise
 from unittest.mock import AsyncMock
 
@@ -10,19 +11,22 @@ import pytest
 
 from free_claude_code.api.response_streams import bind_response_lifetime
 from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.failure_policy import RetryableProviderProtocolError
+from free_claude_code.providers.nvidia_nim import NvidiaNimProvider, native_tool_stream
 from free_claude_code.providers.openai_chat.transport import _OpenAIChatStreamAssembler
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.application.test_execution import _routed_request
+from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
-from tests.providers.test_history_transports import _harness, _native
+from tests.providers.test_history_transports import _events_for, _harness, _native
 from tests.providers.test_native_tool_arguments import tool_events
 
 
@@ -158,6 +162,198 @@ async def test_raw_native_messages_hidden_cutoff_retries_and_closes_first():
         assert_winning_tool(result, "messages")
     finally:
         await p.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("separator", ["-", "\u2028", "\u2029", "\x85"])
+async def test_raw_native_unicode_metadata_keeps_hidden_retry_eligible(separator):
+    abandoned = partial_tool("messages")
+    abandoned[0]["message"]["extension"] = "a" + separator + "b"
+    first = Wire([_sse(*abandoned)])
+    second = Wire([_sse(*tool_events("messages", '{"path":"winning"}'))])
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        if len(bodies) == 2:
+            assert first.closed
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=first if len(bodies) == 1 else second,
+        )
+
+    p = provider(reply)
+    try:
+        result = await delivered(
+            p.stream_native_messages(NativeMessagesRequest(native_body(True))),
+            "messages",
+        )
+        assert len(bodies) == 2 and bodies[0] == bodies[1]
+        assert first.closed and second.closed
+        assert_winning_tool(result, "messages")
+        assert parse_sse_text(result)[0].data["message"]["extension"] == (
+            "a" + separator + "b"
+        )
+    finally:
+        await p.cleanup()
+
+
+def _nim_factory():
+    return NvidiaNimProvider(
+        make_provider_config("test", "https://provider.invalid/v1"),
+        nim_settings=NimSettings(),
+        admission=immediate_admission(max_attempts=3),
+    )
+
+
+def _nim_partial_terminal(reason):
+    first = deepcopy(_events_for("chat")[0])
+    first["choices"][0]["delta"] = {"role": "assistant"}
+    first["choices"][0]["finish_reason"] = None
+    stopped = deepcopy(first)
+    stopped["choices"][0]["delta"] = {"content": "]<]minimax[>[<tool_call>"}
+    stopped["choices"][0]["finish_reason"] = reason
+    return [first, stopped]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "content_filter"])
+async def test_normal_chat_stop_survives_nim_normalization_failure(
+    wire, reason, committed_holdback
+):
+    async with _harness(
+        "chat",
+        lambda bodies: (
+            200,
+            _nim_partial_terminal(reason)
+            if len(bodies) == 1
+            else tool_events("chat", '{"path":"winning"}'),
+        ),
+        chat_provider_factory=_nim_factory,
+    ) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)),
+            wire,
+        )
+    assert len(bodies) == 1
+    assert "]<]minimax" not in result and "winning" not in result
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_nim_unstopped_normalization_failure_can_retry(wire, committed_holdback):
+    async with _harness(
+        "chat",
+        lambda bodies: (
+            200,
+            _nim_partial_terminal(None)
+            if len(bodies) == 1
+            else tool_events("chat", '{"path":"winning"}'),
+        ),
+        chat_provider_factory=_nim_factory,
+    ) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)),
+            wire,
+        )
+    assert len(bodies) == 2 and bodies[0] == bodies[1]
+    assert_winning_tool(result, wire)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_replacement_nim_stop_prevents_third_generation(wire, committed_holdback):
+    async with _harness(
+        "chat",
+        lambda bodies: (
+            200,
+            _nim_partial_terminal(None if len(bodies) == 1 else "length")
+            if len(bodies) <= 2
+            else tool_events("chat", '{"path":"winning"}'),
+        ),
+        chat_provider_factory=_nim_factory,
+    ) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)),
+            wire,
+        )
+    assert len(bodies) == 2 and bodies[0] == bodies[1]
+    assert "winning" not in result
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_nim_requests_keep_stop_evidence_independent(
+    committed_holdback,
+):
+    attempts = {"stopped": 0, "retry": 0}
+
+    def reply(bodies):
+        label = bodies[-1]["messages"][-1]["content"]
+        attempts[label] += 1
+        if label == "retry" and attempts[label] > 1:
+            return 200, tool_events("chat", '{"path":"winning"}')
+        return 200, _nim_partial_terminal("stop" if label == "stopped" else None)
+
+    async with _harness("chat", reply, chat_provider_factory=_nim_factory) as (
+        send,
+        _,
+        _,
+    ):
+        stopped, winning = await asyncio.gather(
+            *[
+                delivered(
+                    send(
+                        "messages",
+                        [{"role": "user", "content": label}],
+                        tools=_tools("messages"),
+                    ),
+                    "messages",
+                )
+                for label in ("stopped", "retry")
+            ]
+        )
+    assert attempts == {"stopped": 1, "retry": 2}
+    assert parse_sse_text(stopped)[-1].event == "error"
+    assert_winning_tool(winning, "messages")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_raw_nim_stop_survives_later_null_and_empty_choices(
+    wire, committed_holdback, monkeypatch
+):
+    normalize = native_tool_stream._normalized_chunks
+
+    def suppress_terminal(chunk, choice, *args, **kwargs):
+        if choice.finish_reason is not None:
+            return []
+        return normalize(chunk, choice, *args, **kwargs)
+
+    monkeypatch.setattr(native_tool_stream, "_normalized_chunks", suppress_terminal)
+    first, terminal = _nim_partial_terminal("stop")
+    terminal["choices"][0]["delta"] = {"content": ""}
+    usage = {**deepcopy(first), "choices": []}
+    async with _harness(
+        "chat",
+        lambda _: (200, [first, terminal, deepcopy(first), usage]),
+        chat_provider_factory=_nim_factory,
+    ) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)),
+            wire,
+        )
+    assert len(bodies) == 1
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
 
 
 def overlapping_tools(protocol):

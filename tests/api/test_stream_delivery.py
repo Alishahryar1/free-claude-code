@@ -9,6 +9,7 @@ import simplejson
 from starlette.responses import StreamingResponse
 
 from free_claude_code.api.handlers.classifier_response import classifier_response
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _call, _end, _frames, _response, _start
@@ -26,6 +27,71 @@ async def drained(body, wire):
         return "".join([str(chunk) async for chunk in response.body_iterator])
     finally:
         await response.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85"])
+@pytest.mark.parametrize("ending", ["\r", "\n", "\r\n"])
+async def test_unicode_metadata_preserves_bytes_and_retry_eligibility(
+    wire, separator, ending
+):
+    start = _start(wire)
+    start[1]["message" if wire == "messages" else "response"]["extension"] = (
+        "before" + separator + "after"
+    )
+    raw = _frames(wire, [start])[0].replace("\n", ending)
+    released = []
+
+    async def source():
+        state = current_stream_delivery()
+        assert state is not None
+        yield raw
+        released.append(state.content_released)
+        yield "".join(_frames(wire, _end(wire)))
+
+    result = await drained(source(), wire)
+    assert released == [False]
+    assert result.startswith(raw)
+    payload = parse_sse_text(result)[0].data
+    assert payload["message" if wire == "messages" else "response"]["extension"] == (
+        "before" + separator + "after"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85"])
+async def test_unicode_comment_does_not_release_content(separator):
+    raw = ": before" + separator + "after\r\n\r\n"
+    released = []
+
+    async def source():
+        state = current_stream_delivery()
+        assert state is not None
+        yield raw
+        released.append(state.content_released)
+        yield "".join(_frames("messages", [_start("messages"), *_end("messages")]))
+
+    assert (await drained(source(), "messages")).startswith(raw)
+    assert released == [False]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85"])
+async def test_unicode_meaningful_frame_still_releases_content(separator):
+    raw = _frames("messages", [_start("messages")])[0]
+    raw += 'event: future\ndata: {"type":"future","text":"a' + separator + 'b"}\n\n'
+    released = []
+
+    async def source():
+        state = current_stream_delivery()
+        assert state is not None
+        yield raw
+        released.append(state.content_released)
+        yield "".join(_frames("messages", _end("messages")))
+
+    assert (await drained(source(), "messages")).startswith(raw)
+    assert released == [True]
 
 
 @pytest.mark.asyncio
@@ -84,7 +150,10 @@ async def test_retry_drops_hidden_group_tail_and_reused_call_aliases(wire):
 
 
 @pytest.mark.asyncio
-async def test_retry_sequence_offset_preserves_decimal_extensions_and_call_ids():
+@pytest.mark.parametrize("separator", ["", "\u2028", "\u2029", "\x85"])
+async def test_retry_sequence_offset_preserves_decimal_extensions_and_call_ids(
+    separator,
+):
     async def source():
         state = current_stream_delivery()
         assert state is not None
@@ -92,7 +161,11 @@ async def test_retry_sequence_offset_preserves_decimal_extensions_and_call_ids()
         yield 'event: response.created\r\ndata: {"type":"response.created","sequence_number":40,"response":{"id":"resp_old","created_at":7,"status":"in_progress","output":[]}}\r\n\r\n'
         state.begin_attempt()
         yield 'event: response.created\r\ndata: {"type":"response.created","sequence_number":0,"response":{"id":"resp_new","created_at":9,"status":"in_progress","output":[]}}\r\n\r\n'
-        yield 'id: native-event\r\nevent: response.completed\r\ndata: {"type":"response.completed","sequence_number":3,"response_id":"resp_new","response":{"id":"resp_new","created_at":9,"status":"completed","output":[]},"native":1.234567890123456789,"call_id":"resp_new"}\r\n\r\n'
+        yield (
+            'id: native-event\r\nevent: response.completed\r\ndata: {"type":"response.completed","sequence_number":3,"response_id":"resp_new","response":{"id":"resp_new","created_at":9,"status":"completed","output":[]},"native":1.234567890123456789,"call_id":"resp_new","extension":"a'
+            + separator
+            + 'b"}\r\n\r\n'
+        )
 
     output = await drained(source(), "responses")
     payload = simplejson.loads(output.split("data: ")[-1], use_decimal=True)
@@ -101,6 +174,7 @@ async def test_retry_sequence_offset_preserves_decimal_extensions_and_call_ids()
     assert payload["response"]["created_at"] == 7
     assert payload["call_id"] == "resp_new"
     assert payload["native"] == Decimal("1.234567890123456789")
+    assert payload["extension"] == "a" + separator + "b"
     assert "id: native-event\r\n" in output
     assert output.endswith("\r\n\r\n")
 
