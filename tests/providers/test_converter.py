@@ -285,16 +285,36 @@ def test_openai_build_rejects_non_text_inline_system_blocks() -> None:
         build_base_request_body(request)
 
 
-def test_openai_build_rejects_empty_inline_system_content() -> None:
+@pytest.mark.parametrize(
+    "content",
+    [[], "", [{"type": "text", "text": ""}]],
+    ids=["empty_list", "empty_string", "empty_text_block"],
+)
+@pytest.mark.parametrize("position", [0, 1, 2, 3])
+def test_openai_build_omits_empty_inline_system_content(content, position) -> None:
+    history = [
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+    ]
     request = MessagesRequest.model_validate(
         {
             "model": "model",
-            "messages": [{"role": "system", "content": []}],
+            "system": "Conversation-wide instructions",
+            "messages": [
+                *history[:position],
+                {"role": "system", "content": content},
+                *history[position:],
+            ],
         }
     )
 
-    with pytest.raises(OpenAIConversionError, match="contain text"):
-        build_base_request_body(request)
+    body = build_base_request_body(request)
+
+    assert body["messages"] == [
+        {"role": "system", "content": "Conversation-wide instructions"},
+        *history,
+    ]
 
 
 # --- Tool Conversion Tests ---
