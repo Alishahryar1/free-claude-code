@@ -12,6 +12,7 @@ from free_claude_code.application.model_catalog import (
     read_model_catalog,
 )
 from free_claude_code.application.ports import ModelCatalogPort
+from free_claude_code.application.routing import supports_native_messages
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import (
     desktop_model_id,
@@ -196,13 +197,16 @@ def _build_claude_models_response(
     models = list(SUPPORTED_CLAUDE_MODELS)
     for model in catalog.models:
         ref = model.provider_model_ref
-        if model.supports_reasoning is not False:
+        native = supports_native_messages(ref.partition("/")[0])
+        if native or model.supports_reasoning is not False:
             models.append(
                 _discovered_model_response(
                     desktop_model_id(ref) if desktop else gateway_model_id(ref),
                     display_name=ref,
                 )
             )
+        if native:
+            continue
         models.append(
             _discovered_model_response(
                 desktop_model_id(ref, no_thinking=True)
@@ -232,12 +236,19 @@ def _build_direct_models_response(
         else None
     )
 
+    default_model_id = catalog.default_model_id
     for model in catalog.models:
+        native = view is ModelCatalogView.MESSAGES and supports_native_messages(
+            model.provider_model_ref.partition("/")[0]
+        )
+        model_id = model.provider_model_ref if native else model.wire_slug
+        if model.wire_slug == catalog.default_model_id:
+            default_model_id = model_id
         allows_reasoning = model.supports_reasoning is not False
         models.append(
             ModelResponse(
-                id=model.wire_slug,
-                display_name=model.display_name,
+                id=model_id,
+                display_name=model.provider_model_ref if native else model.display_name,
                 created_at=DISCOVERED_MODEL_CREATED_AT,
                 provider_model_ref=model.provider_model_ref,
                 api_backend=(
@@ -266,7 +277,7 @@ def _build_direct_models_response(
 
     return ModelsListResponse(
         data=models,
-        default_model_id=catalog.default_model_id,
+        default_model_id=default_model_id,
         first_id=models[0].id if models else None,
         has_more=False,
         last_id=models[-1].id if models else None,

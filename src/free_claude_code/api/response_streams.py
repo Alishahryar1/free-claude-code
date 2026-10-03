@@ -33,7 +33,11 @@ from free_claude_code.core.request_outcomes import (
     record_request_exception,
     record_request_failure,
 )
+from free_claude_code.core.stream_delivery import StreamDeliveryState
 from free_claude_code.core.trace import close_stream_input, trace_event
+
+from .stream_delivery import DeliveryObservedStream, PublicStreamEnvelope
+from .tool_call_buffer import ToolCallBufferedStream
 
 TERMINAL_EXECUTION_ERROR_HEADERS = {"x-should-retry": "false"}
 
@@ -229,11 +233,15 @@ def trace_terminal_execution_error(
 async def _first_chunk_streaming_response(
     body: AsyncIterator[str],
     *,
+    wire_api: WireApi,
     headers: Mapping[str, str],
     pre_start_error_response: PreStartErrorResponse,
     terminal_frame: TerminalFrameEmitter | None,
     terminal_failure_observer: TerminalFailureObserver | None,
 ) -> Response:
+    state = StreamDeliveryState()
+    envelope = PublicStreamEnvelope(state, wire_api=wire_api)
+    body = DeliveryObservedStream(body, state)
     try:
         first_chunk = await anext(body)
     except StopAsyncIteration:
@@ -254,11 +262,16 @@ async def _first_chunk_streaming_response(
         return pre_start_error_response(exc)
 
     return ManagedStreamingResponse(
-        _PrefetchedStream(
-            first_chunk,
-            body,
-            terminal_frame=terminal_frame,
-            terminal_failure_observer=terminal_failure_observer,
+        ToolCallBufferedStream(
+            _PrefetchedStream(
+                first_chunk,
+                body,
+                terminal_frame=terminal_frame,
+                terminal_failure_observer=terminal_failure_observer,
+                envelope=envelope,
+            ),
+            wire_api=wire_api,
+            envelope=envelope,
         ),
         media_type="text/event-stream",
         headers=dict(headers),
@@ -292,6 +305,7 @@ class _PrefetchedStream(AsyncIterator[str]):
         *,
         terminal_frame: TerminalFrameEmitter | None,
         terminal_failure_observer: TerminalFailureObserver | None,
+        envelope: PublicStreamEnvelope,
     ) -> None:
         self._first_chunk: str | None = first_chunk
         self._initial_chunk = first_chunk
@@ -301,6 +315,8 @@ class _PrefetchedStream(AsyncIterator[str]):
         self._terminal_failure_observer = terminal_failure_observer
         self._done = False
         self._closed = False
+        self._envelope = envelope
+        self._revision = envelope.state.attempt_revision
 
     def __aiter__(self) -> _PrefetchedStream:
         return self
@@ -314,6 +330,7 @@ class _PrefetchedStream(AsyncIterator[str]):
             return first_chunk
         try:
             chunk = await anext(self._body)
+            self._synchronize()
             self._latest_chunk = chunk
             return chunk
         except StopAsyncIteration:
@@ -334,13 +351,24 @@ class _PrefetchedStream(AsyncIterator[str]):
             raise close_error
 
     def _terminal_chunk(self, exc: BaseException) -> str:
+        self._synchronize()
         terminal_frame = self._terminal_frame
         if terminal_frame is None:
             raise exc
         self._done = True
         if self._terminal_failure_observer is not None:
             self._terminal_failure_observer(exc)
-        return terminal_frame(self._initial_chunk, self._latest_chunk, exc)
+        return terminal_frame(
+            self._envelope.start_frame or self._initial_chunk, self._latest_chunk, exc
+        )
+
+    def _synchronize(self) -> None:
+        if self._revision == self._envelope.state.attempt_revision:
+            return
+        self._revision = self._envelope.state.attempt_revision
+        self._envelope.synchronize()
+        self._initial_chunk = self._envelope.start_frame
+        self._latest_chunk = ""
 
 
 async def anthropic_sse_streaming_response(
@@ -352,6 +380,7 @@ async def anthropic_sse_streaming_response(
     """Return a streaming response for Anthropic-style SSE streams."""
     return await _first_chunk_streaming_response(
         body,
+        wire_api="messages",
         headers=ANTHROPIC_SSE_RESPONSE_HEADERS,
         pre_start_error_response=pre_start_error_response,
         terminal_frame=_anthropic_terminal_frame,
@@ -402,6 +431,7 @@ async def openai_responses_sse_streaming_response(
     """Return a streaming response for OpenAI Responses-style SSE."""
     return await _first_chunk_streaming_response(
         body,
+        wire_api="responses",
         headers=headers,
         pre_start_error_response=pre_start_error_response,
         terminal_frame=committed_response_failure_frame,

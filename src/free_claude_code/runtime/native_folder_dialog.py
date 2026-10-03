@@ -1,9 +1,8 @@
-"""Short-lived OS dialog helper; stdout carries only its JSON result."""
+"""Prepare native dialogs and decode their platform-specific results."""
 
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -64,16 +63,13 @@ def _windows(initial: str | None) -> str | None:
         root.destroy()
 
 
-def _macos(initial: str | None) -> str | None:
-    result = subprocess.run(
-        ["/usr/bin/osascript", "-e", _MAC_SCRIPT, initial or ""],
-        capture_output=True,
-        check=True,
+def _macos(initial: str | None) -> None:
+    os.execv(
+        "/usr/bin/osascript", ["/usr/bin/osascript", "-e", _MAC_SCRIPT, initial or ""]
     )
-    return result.stdout.decode("utf-8").removesuffix("\n") or None
 
 
-def _linux(initial: str | None) -> str | None:
+def _linux(initial: str | None) -> None:
     env = os.environ.copy()
     if executable := shutil.which("zenity"):
         command = [executable, "--file-selection", "--directory", f"--title={_TITLE}"]
@@ -88,16 +84,34 @@ def _linux(initial: str | None) -> str | None:
             command.append(initial)
     else:
         raise RuntimeError("No desktop folder picker is available")
-    result = subprocess.run(command, capture_output=True, env=env, check=False)
-    path = result.stdout.decode("utf-8").removesuffix("\n")
-    if result.returncode == 0 and path:
+    os.execve(executable, command, env)
+
+
+def decode_result(
+    stdout: bytes, stderr: bytes, returncode: int, *, platform: str
+) -> str | None:
+    diagnostic = stderr.decode("utf-8", errors="replace")
+    if platform.startswith("linux"):
+        path = stdout.decode("utf-8").removesuffix("\n")
+        if returncode == 0 and path:
+            return path
+        if any(message in diagnostic.lower() for message in _DISPLAY_ERRORS):
+            raise RuntimeError(diagnostic)
+        if returncode == 1:
+            return None
+        raise RuntimeError(diagnostic or "Folder picker returned no directory")
+    if returncode != 0:
+        raise RuntimeError(diagnostic or "Folder picker failed")
+    if platform == "win32":
+        result = json.loads(stdout)
+        if not isinstance(result, dict) or "path" not in result:
+            raise ValueError("Missing folder selection")
+        path = result["path"]
+        if path is not None and not isinstance(path, str):
+            raise ValueError("Invalid folder selection")
         return path
-    diagnostic = result.stderr.decode("utf-8", errors="replace")
-    if any(message in diagnostic.lower() for message in _DISPLAY_ERRORS):
-        raise RuntimeError(diagnostic)
-    if result.returncode == 1:
-        return None
-    raise RuntimeError(diagnostic or "Folder picker returned no directory")
+    path = stdout.decode("utf-8").removesuffix("\n")
+    return path or None
 
 
 def main() -> int:
@@ -105,18 +119,17 @@ def main() -> int:
         initial = _initial_directory(sys.argv[1] if len(sys.argv) > 1 else "")
         if sys.platform == "win32":
             path = _windows(initial)
+            print(json.dumps({"path": path}, ensure_ascii=True))
         elif sys.platform == "darwin":
-            path = _macos(initial)
+            _macos(initial)
         elif sys.platform.startswith("linux"):
-            path = _linux(initial)
+            _linux(initial)
         else:
             raise RuntimeError("No native folder picker for this platform")
-        print(json.dumps({"path": path}, ensure_ascii=True))
         return 0
     except Exception as exc:
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
-        print(json.dumps({"error": "unavailable"}))
-        return 1
+        return 2
 
 
 if __name__ == "__main__":

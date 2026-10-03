@@ -40,6 +40,7 @@ from .tool_adaptation import (
     ResponsesToolEventAdapter,
     ResponsesToolPolicy,
 )
+from .tool_search import is_client_search
 from .tools import (
     ResponsesToolIdentity,
     flatten_responses_tool_name,
@@ -72,6 +73,7 @@ __all__ = [
     "committed_response_failure_frame",
     "estimate_responses_input_tokens",
     "flatten_responses_tool_name",
+    "is_client_search",
     "new_call_id",
     "new_message_item_id",
     "new_reasoning_item_id",

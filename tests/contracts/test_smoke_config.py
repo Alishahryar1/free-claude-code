@@ -72,6 +72,7 @@ def _settings(**overrides):
         "experiential_api_key": "",
         "cheaperinference_api_key": "",
         "orcarouter_api_key": "",
+        "xkiro_api_key": "",
         "fireworks_api_key": "",
         "novita_api_key": "",
         "cloudflare_api_token": "",
@@ -1353,3 +1354,53 @@ def test_smoke_config_returns_openrouter_free_cli_provider_models(monkeypatch) -
     assert models[0].provider == "open_router"
     assert models[0].full_model == "open_router/nvidia/nemotron-3-super-120b-a12b:free"
     assert models[0].source == "openrouter_free_cli_default"
+
+
+def test_xkiro_provider_configuration_uses_documented_free_model(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_XKIRO", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            xkiro_api_key="xkiro-key",
+        )
+    )
+
+    assert config.has_provider_configuration("xkiro")
+    models = config.provider_smoke_models()
+    assert [model.provider for model in models] == ["xkiro"]
+    assert models[0].full_model == "xkiro/qwen/qwen3.7-flash:free"
+    assert models[0].source == "provider_default"
+
+
+def test_xkiro_smoke_override_accepts_model_with_or_without_prefix(
+    monkeypatch,
+) -> None:
+    settings = _settings(
+        model="ollama/llama3.1",
+        ollama_base_url="",
+        xkiro_api_key="xkiro-key",
+    )
+    for override in (
+        "qwen/other-model",
+        "xkiro/qwen/other-model",
+    ):
+        monkeypatch.setenv("FCC_SMOKE_MODEL_XKIRO", override)
+        models = _smoke_config(settings=settings).provider_smoke_models()
+
+        assert [model.provider for model in models] == ["xkiro"]
+        assert models[0].full_model == "xkiro/qwen/other-model"
+        assert models[0].source == "FCC_SMOKE_MODEL_XKIRO"
+
+
+def test_xkiro_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_XKIRO", raising=False)
+    config = _smoke_config(
+        provider_matrix=frozenset({"xkiro"}),
+        settings=_settings(ollama_base_url="", xkiro_api_key=""),
+    )
+
+    assert not config.has_provider_configuration("xkiro")
+    assert config.provider_smoke_models() == []

@@ -404,6 +404,18 @@ class ApplicationRuntime:
     async def refresh_jetbrains_acp(self) -> JsonObject:
         return await self._integrations.refresh_jetbrains_acp()
 
+    async def dsh_desktop_status(self) -> JsonObject:
+        return await self._integrations.dsh_desktop_status()
+
+    async def connect_dsh_desktop(self) -> JsonObject:
+        return await self._integrations.connect_dsh_desktop()
+
+    async def disconnect_dsh_desktop(self) -> JsonObject:
+        return await self._integrations.disconnect_dsh_desktop()
+
+    async def refresh_dsh_desktop(self) -> JsonObject:
+        return await self._integrations.refresh_dsh_desktop()
+
     async def claude_desktop_status(self) -> JsonObject:
         return await self._integrations.claude_desktop_status()
 

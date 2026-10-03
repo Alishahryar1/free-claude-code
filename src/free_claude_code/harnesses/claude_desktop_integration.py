@@ -11,11 +11,9 @@ from typing import cast
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
-import json5
-
 from free_claude_code.config.server_urls import same_proxy_url
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.harnesses.config_file import atomic_write_text
+from free_claude_code.harnesses.config_file import atomic_write_text, decode_json
 
 _IDENTITY = (
     "https://github.com/Alishahryar1/free-claude-code/integrations/claude-desktop"
@@ -111,14 +109,11 @@ def check_unmanaged() -> None:
 
 def _read(path: Path) -> JsonObject | None:
     try:
-        value = json5.loads(
-            path.read_text(encoding="utf-8-sig"), allow_duplicate_keys=False
-        )
+        value = decode_json(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
         return None
     if not isinstance(value, dict):
         raise ValueError("Desktop settings must be objects")
-    json.dumps(value, allow_nan=False)
     return cast(JsonObject, value)
 
 

@@ -18,7 +18,16 @@ class AnthropicSSEDecoder:
     def feed(self, chunk: str) -> tuple[SSEEvent, ...]:
         """Consume one wire chunk and return its selected complete events."""
 
-        events: list[SSEEvent] = []
+        return tuple(
+            event
+            for raw in self.feed_frames(chunk)
+            for event in parse_sse_text(raw, event_names=self._event_names)
+        )
+
+    def feed_frames(self, chunk: str) -> tuple[str, ...]:
+        """Retain original framing, including comments and unknown SSE fields."""
+
+        frames: list[str] = []
         probe = self._boundary_tail + chunk
         prefix_length = len(self._boundary_tail)
         chunk_start = 0
@@ -27,7 +36,7 @@ class AnthropicSSEDecoder:
             self._parts.append(chunk[chunk_start:chunk_end])
             raw = "".join(self._parts)
             self._parts.clear()
-            events.extend(parse_sse_text(raw, event_names=self._event_names))
+            frames.append(raw)
             chunk_start = chunk_end
 
         remainder = chunk[chunk_start:]
@@ -37,14 +46,23 @@ class AnthropicSSEDecoder:
             self._boundary_tail = remainder[-3:]
         else:
             self._boundary_tail = (self._boundary_tail + chunk)[-3:]
-        return tuple(events)
+        return tuple(frames)
 
     def finish(self) -> tuple[SSEEvent, ...]:
         """Return a final unterminated event, if one is present."""
 
+        return tuple(
+            event
+            for raw in self.finish_frames()
+            for event in parse_sse_text(raw, event_names=self._event_names)
+        )
+
+    def finish_frames(self) -> tuple[str, ...]:
+        """Return the original trailing frame and clear framing state."""
+
         remainder = "".join(self._parts)
         self._parts.clear()
         self._boundary_tail = ""
-        if not remainder.strip():
+        if not remainder:
             return ()
-        return tuple(parse_sse_text(remainder, event_names=self._event_names))
+        return (remainder,)

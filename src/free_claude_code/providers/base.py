@@ -4,8 +4,10 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 
+from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 
@@ -41,6 +43,18 @@ class BaseProvider(ABC):
     @abstractmethod
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """Return the model metadata currently advertised by this provider."""
+
+    def stream_native_messages(
+        self,
+        request: NativeMessagesRequest,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[str]:
+        raise InvalidRequestError(
+            "This provider does not support native Messages execution."
+        )
 
     @abstractmethod
     def stream_messages(

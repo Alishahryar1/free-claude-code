@@ -27,6 +27,8 @@ def test_missing_configuration_still_produces_report(monkeypatch):
 def test_settings_projection_excludes_secrets_and_url_credentials():
     settings = Settings(
         OPENAI_API_KEY="secret-api-key",
+        ANTHROPIC_API_KEY="secret-anthropic-key",
+        ANTHROPIC_WORKSPACE_ID="secret-workspace",
         ANTHROPIC_AUTH_TOKEN="secret-proxy-token",
         TELEGRAM_BOT_TOKEN="secret-bot-token",
         ALLOWED_TELEGRAM_USER_ID="secret-user-id",

@@ -255,7 +255,11 @@ class ChatStreamOutput(ABC):
         return events
 
     def close_unclosed_blocks(self) -> list[str]:
-        return self.close_all_blocks()
+        events = self.finish_reasoning_group()
+        for state in self.tool_states.values():
+            state.open = False
+        events.extend(self.finish_replay_carriers())
+        return events
 
     def has_emitted_tool_block(self) -> bool:
         return any(state.started for state in self.tool_states.values())

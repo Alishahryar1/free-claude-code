@@ -72,7 +72,16 @@ class RequestRecovery:
         *,
         operation_kind: ProviderOperationKind,
         propose_correction: Callable[[], JsonObject | None],
+        normal_stop_seen: bool = False,
     ) -> JsonObject | None:
+        delivery = self.execution.delivery
+        if (
+            operation_kind is ProviderOperationKind.GENERATION
+            and normal_stop_seen
+            and delivery is not None
+            and not delivery.content_released
+        ):
+            return None
         if await self.retry_authentication(error, auth_status, attempt):
             return body
         if operation_kind is ProviderOperationKind.GENERATION and self._committed:

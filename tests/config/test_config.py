@@ -554,6 +554,7 @@ def test_configured_chat_model_refs_are_unique() -> None:
     [
         ("nvidia_nim/meta/llama", "nvidia_nim", "meta/llama"),
         ("open_router/deepseek/r1", "open_router", "deepseek/r1"),
+        ("xkiro/qwen/qwen3.7-flash:free", "xkiro", "qwen/qwen3.7-flash:free"),
         ("ollama_cloud/qwen3-coder:480b", "ollama_cloud", "qwen3-coder:480b"),
     ],
 )

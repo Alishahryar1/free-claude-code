@@ -6,31 +6,52 @@ import pytest
 from free_claude_code.runtime import native_folder_dialog as native
 
 
-@pytest.mark.parametrize(
-    ("status", "output", "diagnostic", "expected"),
-    [
-        (0, "/tmp/project café \n\n", "", "/tmp/project café \n"),
-        (1, "", "", None),
-        (1, "", "Gtk-WARNING: optional theme is missing", None),
-    ],
-)
-def test_linux_selection_preserves_paths_and_normal_cancel(
-    monkeypatch, status, output, diagnostic, expected
-):
-    monkeypatch.setattr(native.shutil, "which", lambda _tool: "/usr/bin/zenity")
-    monkeypatch.setenv("ZENITY_CANCEL", "42")
+@pytest.mark.parametrize("platform", ["macos", "linux"])
+def test_posix_dialog_replaces_helper_without_spawning_child(monkeypatch, platform):
     calls = []
 
-    def run(command, **kwargs):
-        calls.append((command, kwargs))
-        return subprocess.CompletedProcess(
-            command, status, output.encode("utf-8"), diagnostic.encode("utf-8")
-        )
+    def exec_command(path, arguments, *env):
+        calls.append((path, arguments, env))
+        raise SystemExit(0)
 
-    monkeypatch.setattr(native.subprocess, "run", run)
-    assert native._linux("/tmp/start") == expected
-    assert "--filename=/tmp/start/" in calls[0][0]
-    assert "ZENITY_CANCEL" not in calls[0][1]["env"]
+    def nested_child(*args, **kwargs):
+        pytest.fail("Native dialog must replace the owned helper process")
+
+    monkeypatch.setattr(native.os, "execv", exec_command)
+    monkeypatch.setattr(native.os, "execve", exec_command)
+    monkeypatch.setattr(subprocess, "run", nested_child)
+    monkeypatch.setattr(native.shutil, "which", lambda _: "/usr/bin/zenity")
+    with pytest.raises(SystemExit):
+        getattr(native, "_" + platform)("/tmp/start")
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("platform", "status", "output", "diagnostic", "expected"),
+    [
+        ("linux", 0, "/tmp/project café \n\n", "", "/tmp/project café \n"),
+        ("linux", 1, "", "", None),
+        ("linux", 1, "", "Gtk-WARNING: optional theme is missing", None),
+        (
+            "linux",
+            0,
+            "/tmp/project\n",
+            "optional component cannot open display",
+            "/tmp/project",
+        ),
+        ("darwin", 0, "/tmp/project café \n\n", "", "/tmp/project café \n"),
+        ("darwin", 0, "\n", "", None),
+    ],
+)
+def test_native_selection_preserves_paths_and_normal_cancel(
+    platform, status, output, diagnostic, expected
+):
+    assert (
+        native.decode_result(
+            output.encode(), diagnostic.encode(), status, platform=platform
+        )
+        == expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -41,49 +62,71 @@ def test_linux_selection_preserves_paths_and_normal_cancel(
         "Could not connect to display",
     ],
 )
-def test_linux_display_failure_is_not_user_cancellation(monkeypatch, diagnostic):
-    monkeypatch.setattr(native.shutil, "which", lambda _tool: "/usr/bin/zenity")
-    monkeypatch.setattr(
-        native.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args, 1, b"", diagnostic.encode()
-        ),
-    )
+def test_linux_display_failure_is_not_user_cancellation(diagnostic):
     with pytest.raises(RuntimeError, match=diagnostic):
-        native._linux(None)
+        native.decode_result(b"", diagnostic.encode(), 1, platform="linux")
 
 
-def test_linux_uses_installed_kdialog_or_reports_missing_tools(monkeypatch):
+def test_linux_uses_installed_tool_arguments_and_environment(monkeypatch):
+    calls = []
+    monkeypatch.setenv("ZENITY_CANCEL", "42")
+    monkeypatch.setattr(
+        native.os,
+        "execve",
+        lambda path, command, env: calls.append((path, command, env)),
+    )
+    monkeypatch.setattr(native.shutil, "which", lambda _: "/usr/bin/zenity")
+    native._linux("/tmp/start")
+    assert calls[0][0] == "/usr/bin/zenity"
+    assert "--filename=/tmp/start/" in calls[0][1]
+    assert "ZENITY_CANCEL" not in calls[0][2]
     monkeypatch.setattr(
         native.shutil,
         "which",
         lambda tool: "/usr/bin/kdialog" if tool == "kdialog" else None,
     )
-    calls = []
-
-    def run(command, **_kwargs):
-        calls.append(command)
-        return subprocess.CompletedProcess(command, 0, b"/tmp/project\n", b"")
-
-    monkeypatch.setattr(native.subprocess, "run", run)
-    assert native._linux("/tmp") == "/tmp/project"
-    assert calls[0][-2:] == ["--getexistingdirectory", "/tmp"]
-    monkeypatch.setattr(native.shutil, "which", lambda _tool: None)
+    native._linux("/tmp")
+    assert calls[1][0] == "/usr/bin/kdialog"
+    assert calls[1][1][-2:] == ["--getexistingdirectory", "/tmp"]
+    monkeypatch.setattr(native.shutil, "which", lambda _: None)
     with pytest.raises(RuntimeError, match="No desktop folder picker"):
         native._linux(None)
 
 
-def test_macos_passes_the_hint_as_data_and_preserves_path_characters(monkeypatch):
+def test_macos_passes_the_hint_as_data(monkeypatch):
     hint = '/tmp/quotes " and spaces'
+    calls = []
+    monkeypatch.setattr(
+        native.os, "execv", lambda path, command: calls.append((path, command))
+    )
+    native._macos(hint)
+    assert calls[0][0] == "/usr/bin/osascript"
+    assert calls[0][1][-1] == hint
+    assert hint not in calls[0][1][-2]
 
-    def run(command, **_kwargs):
-        assert command[-1] == hint
-        assert hint not in command[-2]
-        return subprocess.CompletedProcess(command, 0, b"/tmp/project \n\n", b"")
 
-    monkeypatch.setattr(native.subprocess, "run", run)
-    assert native._macos(hint) == "/tmp/project \n"
+@pytest.mark.parametrize("failure", ["missing_tool", "exec_error"])
+def test_helper_setup_failure_cannot_be_mistaken_for_cancel(
+    monkeypatch, capsys, failure
+):
+    monkeypatch.setattr(native.sys, "platform", "linux")
+    monkeypatch.setattr(
+        native.shutil,
+        "which",
+        lambda _: None if failure == "missing_tool" else "/missing/zenity",
+    )
+
+    def fail(*args):
+        raise FileNotFoundError("Native executable disappeared")
+
+    monkeypatch.setattr(native.os, "execve", fail)
+    assert native.main() == 2
+    captured = capsys.readouterr()
+    assert captured.err
+    with pytest.raises(RuntimeError):
+        native.decode_result(
+            captured.out.encode(), captured.err.encode(), 2, platform="linux"
+        )
 
 
 @pytest.mark.parametrize("selection", ["", "C:/Projects/café"])

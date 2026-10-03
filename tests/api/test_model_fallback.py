@@ -182,7 +182,7 @@ def test_postframe_failure_never_opens_fallback_for_streaming_messages() -> None
 
     assert response.status_code == 200
     events = parse_sse_text(response.text)
-    assert [event.event for event in events] == ["message_start", "error"]
+    assert [event.event for event in events] == ["error"]
     assert fallback.stream_models == []
 
 

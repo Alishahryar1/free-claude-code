@@ -7,7 +7,12 @@ from unittest.mock import patch
 import httpx2
 import pytest
 from openai import AsyncOpenAI
+from starlette.responses import StreamingResponse
 
+from free_claude_code.api.response_streams import (
+    anthropic_sse_streaming_response,
+    openai_responses_sse_streaming_response,
+)
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -21,10 +26,12 @@ from free_claude_code.providers.mistral.reasoning import normalize_mistral_strea
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.nvidia_nim.native_tool_stream import (
     NimNativeToolProtocolError,
+    normalize_nim_native_tool_stream,
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
 from free_claude_code.providers.request_recovery import RequestRecovery
+from tests.api.test_response_streams import _json_error, _serve
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import make_provider_config, profiled_provider
 from tests.providers.test_openai_responses_transport import (
@@ -343,6 +350,80 @@ async def test_nim_parser_failure_closes_response_before_retry(wire):
         assert namespace not in output
         assert requests == 2
         assert not client.is_closed()
+        await _assert_admission_available(admission)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_stopped_first_nim_chunk_returns_public_error_and_releases_admission(
+    wire,
+):
+    body = ResponseBody(_chat_chunk("]<]minimax[>[<tool_call>", finish_reason="length"))
+    requests = 0
+
+    def handler(request):
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            return _response(body)
+        assert body.close_count == 1
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_chat_chunk("unexpected retry", finish_reason="stop")
+            + b"data: [DONE]\n\n",
+        )
+
+    async with _harness("nim", handler) as (provider, client, admission):
+        options = {"pre_start_error_response": _json_error, "request_id": "raw-stop"}
+        source = _public_stream(provider, wire)
+        async with asyncio.timeout(2):
+            response = await (
+                anthropic_sse_streaming_response(source, **options)
+                if wire == "messages"
+                else openai_responses_sse_streaming_response(
+                    source, headers={}, **options
+                )
+            )
+            if isinstance(response, StreamingResponse):
+                await _serve(response)
+        assert response.status_code >= 400
+        assert requests == 1
+        assert body.close_count == 1 and not client.is_closed()
+        await _assert_admission_available(admission)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reject_normalization", [False, True])
+async def test_sdk_observer_runs_before_normalization_without_owning_cleanup(
+    reject_normalization,
+):
+    text = "]<]minimax[>[<tool_call>" if reject_normalization else "hello"
+    body = ResponseBody(_chat_chunk(text, finish_reason="stop"))
+    seen = []
+    async with _harness("nim", lambda _: _response(body)) as (_, client, admission):
+        sdk_stream = await client.chat.completions.create(
+            model="model", messages=[], stream=True
+        )
+        source = OpenAIStreamAdapter(sdk_stream, on_event=seen.append)
+        normalized = (
+            normalize_nim_native_tool_stream(source, {})
+            if reject_normalization
+            else source
+        )
+        try:
+            if reject_normalization:
+                with pytest.raises(NimNativeToolProtocolError):
+                    await anext(normalized)
+            else:
+                event = await anext(normalized)
+                assert seen[0] is event
+            assert len(seen) == 1
+            assert seen[0].choices[0].finish_reason == "stop"
+        finally:
+            assert isinstance(normalized, AsyncCloseable)
+            await normalized.aclose()
+        assert body.close_count == 1 and not client.is_closed()
         await _assert_admission_available(admission)
 
 

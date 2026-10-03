@@ -11,11 +11,17 @@ import httpx
 import httpx2
 import pytest
 from openai import AsyncOpenAI
+from starlette.responses import StreamingResponse
 
+from free_claude_code.api.response_streams import (
+    anthropic_sse_streaming_response,
+    openai_responses_sse_streaming_response,
+)
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -29,6 +35,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
+from tests.api.test_response_streams import _json_error, _serve
 from tests.providers.support import make_provider_config
 from tests.providers.test_anthropic_messages_transport import _events
 from tests.providers.test_anthropic_messages_transport import (
@@ -219,6 +226,103 @@ def _partial(protocol, text=""):
         "finish_reason": None,
     }
     return [chunk]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ["chat", "messages"])
+@pytest.mark.parametrize(
+    "wire,failure_kind",
+    [
+        ("messages", "authentication"),
+        ("responses", "authentication"),
+        ("messages", "history"),
+        ("messages", "reasoning"),
+    ],
+)
+@pytest.mark.parametrize("stopped,public", [(True, True), (False, True), (True, False)])
+async def test_hidden_normal_stop_prevents_request_corrections(
+    protocol, wire, failure_kind, stopped, public
+):
+    error = (
+        {
+            "type": "authentication_error",
+            "code": "invalid_api_key",
+            "message": "expired",
+        }
+        if failure_kind == "authentication"
+        else _history_error(protocol)
+        if failure_kind == "history"
+        else _reasoning_error()
+    )
+    events = _partial(protocol)
+    if stopped:
+        if protocol == "messages":
+            events.append(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {"output_tokens": 0},
+                }
+            )
+        else:
+            terminal = deepcopy(events[0])
+            terminal["choices"][0].update(delta={}, finish_reason="stop")
+            events.append(terminal)
+    events.append({"type": "error", "error": error})
+
+    async with _transport(
+        protocol,
+        lambda ordinal: (200, events if ordinal == 1 else _events_for(protocol)),
+    ) as (provider, endpoint, bodies, wires, admission):
+        if wire == "messages":
+            source = _stream(provider, endpoint, _request(protocol))
+        else:
+            source = provider.stream_responses(
+                OpenAIResponsesRequest(model="upstream", input="continue"),
+                endpoint_context=endpoint,
+                reasoning=ReasoningPolicy.prefer_off(),
+                response_model="public",
+            )
+        if public:
+            options = {"pre_start_error_response": _json_error, "request_id": "stopped"}
+            response = await (
+                anthropic_sse_streaming_response(source, **options)
+                if wire == "messages"
+                else openai_responses_sse_streaming_response(
+                    source, headers={}, **options
+                )
+            )
+            if isinstance(response, StreamingResponse):
+                await _serve(response)
+            if stopped:
+                assert response.status_code >= 400
+                assert error["message"] in bytes(response.body).decode()
+            else:
+                assert isinstance(response, StreamingResponse)
+        else:
+            output = "".join([event async for event in source])
+            assert parse_sse_text(output)[-1].event == (
+                "message_stop" if wire == "messages" else "response.completed"
+            )
+        calls = 1 if public and stopped else 2
+        assert len(bodies) == calls
+        assert all(item.close_calls == 1 for item in wires)
+        assert admission._episode is None
+        assert endpoint.calls == (
+            [False, True]
+            if calls == 2 and failure_kind == "authentication"
+            else [False] * calls
+        )
+        if calls == 2:
+            first, second = bodies
+            if failure_kind == "authentication":
+                assert first == second
+            elif failure_kind == "history":
+                assert "opaque-original" in json.dumps(first)
+                assert "opaque-original" not in json.dumps(second)
+            else:
+                field = "thinking" if protocol == "messages" else "reasoning_effort"
+                assert field in first and field not in second
 
 
 @pytest.mark.asyncio

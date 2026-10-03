@@ -5,8 +5,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
-import json5
-
 from free_claude_code.application.model_catalog import (
     CatalogModel,
     context_window_for_client,
@@ -20,6 +18,7 @@ from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.harnesses.claude_integration import settings_path
 from free_claude_code.harnesses.config_file import (
     atomic_write_text,
+    decode_json,
     ensure_private_permissions,
 )
 from free_claude_code.harnesses.model_policy import (
@@ -65,10 +64,9 @@ def _read(path: Path) -> tuple[list[JsonObject], JsonObject | None]:
         source = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         return [], None
-    document = json5.loads(source, allow_duplicate_keys=False)
+    document = decode_json(source)
     if not isinstance(document, list) or any(not isinstance(g, dict) for g in document):
         raise ValueError("Model configuration must be an array of groups")
-    json.dumps(document, allow_nan=False)
     groups = cast(list[JsonObject], document)
     owned = [g for g in groups if g.get(_MARKER) == "vscode"]
     if len(owned) > 1:

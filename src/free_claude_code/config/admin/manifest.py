@@ -134,7 +134,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Tried in order when the selected provider/model fails before output "
             "starts. Applies to every client. One request may reach multiple "
-            "providers and consume usage at each."
+            "providers and consume usage at each. Native Anthropic Messages requests "
+            "use only other Anthropic models as fallbacks."
         ),
     ),
     ConfigFieldSpec(
@@ -146,7 +147,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         options=_reasoning_options(ROOT_REASONING_PREFERENCES),
         description=(
             "From client preserves CLI effort. Providers translate only the controls "
-            "their API supports."
+            "their API supports. Native Anthropic Messages requests always use the "
+            "client thinking controls."
         ),
     ),
     ConfigFieldSpec(

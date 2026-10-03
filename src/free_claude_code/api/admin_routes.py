@@ -1,6 +1,5 @@
 """Local admin UI routes and APIs."""
 
-import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 
@@ -161,26 +160,22 @@ async def admin_status(
     return await services.admin.admin_status()
 
 
-@router.get("/admin/api/providers/local-status")
+@router.get("/admin/api/providers/{provider_id}/local-status")
 async def local_provider_status(
-    request: Request, services: ApiServices = Depends(get_services)
+    provider_id: str, request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
+    if provider_id not in LOCAL_PROVIDER_PATHS:
+        raise HTTPException(status_code=404, detail="Local provider not found")
     values = {
         key: entry.value or ""
         for key, entry in (await services.admin.admin_values()).items()
     }
-    checks = await asyncio.gather(
-        *(
-            _check_local_provider(
-                provider_id,
-                _local_provider_url(provider_id, values),
-                path,
-            )
-            for provider_id, path in LOCAL_PROVIDER_PATHS.items()
-        )
+    return await _check_local_provider(
+        provider_id,
+        _local_provider_url(provider_id, values),
+        LOCAL_PROVIDER_PATHS[provider_id],
     )
-    return {"providers": checks}
 
 
 @router.post("/admin/api/providers/{provider_id}/test")
@@ -334,6 +329,38 @@ async def disconnect_claude_vscode(
 ):
     require_loopback_admin(request)
     return await _integration_response(services.admin.disconnect_claude_vscode)
+
+
+@router.get("/admin/api/integrations/dsh-desktop")
+async def dsh_desktop_status(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.dsh_desktop_status)
+
+
+@router.post("/admin/api/integrations/dsh-desktop/connect")
+async def connect_dsh_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_dsh_desktop)
+
+
+@router.post("/admin/api/integrations/dsh-desktop/disconnect")
+async def disconnect_dsh_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_dsh_desktop)
+
+
+@router.post("/admin/api/integrations/dsh-desktop/refresh")
+async def refresh_dsh_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_dsh_desktop)
 
 
 @router.get("/admin/api/integrations/claude-desktop")

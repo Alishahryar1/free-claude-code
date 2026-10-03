@@ -107,7 +107,8 @@ def test_unverified_warning_survives_apply(
 ):
     availability: list[Route] = []
     page.route(
-        "**/admin/api/providers/local-status", lambda route: availability.append(route)
+        "**/admin/api/providers/lmstudio/local-status",
+        lambda route: availability.append(route),
     )
     page.route(
         "**/admin/api/config/apply",
@@ -148,16 +149,17 @@ def test_unverified_warning_survives_apply(
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
 
     current = page.locator('[data-provider-check-result="lmstudio"]')
-    with page.expect_response("**/admin/api/providers/local-status") as response:
+    with page.expect_response(
+        "**/admin/api/providers/lmstudio/local-status"
+    ) as response:
         old = availability.pop(0)
         if restart:
             old.fulfill(status=503, json={"detail": "Old check failed"})
         else:
             payload = old.fetch().json()
-            for provider in payload["providers"]:
-                provider.update(
-                    status="offline", label="Offline", message="Old availability result"
-                )
+            payload.update(
+                status="offline", label="Offline", message="Old availability result"
+            )
             old.fulfill(json=payload)
     response.value.finished()
     page.evaluate("() => new Promise(requestAnimationFrame)")

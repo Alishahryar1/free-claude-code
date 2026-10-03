@@ -66,9 +66,11 @@ def test_product_coverage_is_not_satisfied_by_prereq_probes() -> None:
 
 def test_provider_and_platform_registries_include_builtins() -> None:
     from free_claude_code.providers.alibaba_cloud import AlibabaCloudProvider
+    from free_claude_code.providers.anthropic import AnthropicProvider
 
     specialized_provider_classes = {
         "alibaba_cloud": AlibabaCloudProvider,
+        "anthropic": AnthropicProvider,
         "openai": OpenAICodexProvider,
         "openai_api": OpenAIAPIProvider,
         "github_copilot": GitHubCopilotProvider,

@@ -25,7 +25,7 @@
 
 ## What You Get
 
-- **56 ToS-friendly providers. 1.3B+ free tokens every month.** Use free, paid, subscription, and local models from one searchable UI without putting your account at risk. FCC follows provider terms and removes integrations if they stop being allowed.
+- **59 ToS-friendly providers. 1.3B+ free tokens every month.** Use free, paid, subscription, and local models from one searchable UI without putting your account at risk. FCC follows provider terms and removes integrations if they stop being allowed.
 - **11 coding agents. One model catalog.** Run [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [OpenCode](https://github.com/anomalyco/opencode), [Cline](https://github.com/cline/cline), [Hermes](https://github.com/NousResearch/hermes-agent), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Grok Build](https://github.com/xai-org/grok-build), [Muse Code](https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2/), [Aider](https://aider.chat/), or [VS Code Chat](https://code.visualstudio.com/) with your FCC models.
 - **Keep coding through provider outages.** After retries are exhausted, FCC automatically tries your next configured model without making you restart the turn. This works across every client.
 - **Up to 90% fewer terminal-output tokens.** Optional [RTK](https://github.com/rtk-ai/rtk) filters common command output, while five FCC optimizations handle quota probes, command-prefix detection, titles, suggestions, and filepaths without calling a provider.
@@ -160,6 +160,16 @@ DeepSeek Harness Web:
 fcc-dsh
 ```
 
+For DeepSeek Harness Desktop, install and open the app once, then select **Connect** under **Integrations → DeepSeek Harness Desktop** in FCC. Keep FCC running while using its models. FCC becomes the default for new sessions. Select **Disconnect** to remove the connection. Native DeepSeek account features still need a DeepSeek login.
+
+Use DeepSeek Harness 0.2.0-rc.2 or newer. Update the CLI with:
+
+```bash
+npm install -g @deepseek-ai/dsh@latest
+```
+
+For headless tasks, run `fcc-dsh headless "your task"`. Extra `--patch` files apply after FCC's settings. After disconnecting Desktop, select another model to continue an existing FCC session. If another DSH setting uses FCC's Desktop credential, Disconnect keeps that credential and reports why.
+
 Grok Build:
 
 ```bash
@@ -225,6 +235,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 | [Agnes AI](https://agnes-ai.com/) | `AGNES_API_KEY` | `agnes/agnes-2.0-flash` |
 | [ZenMux](https://zenmux.ai/platform/pay-as-you-go) | `ZENMUX_API_KEY` | `zenmux/deepseek/deepseek-v4-flash-free` |
 | [W&B Inference](https://wandb.ai/settings) | `WANDB_API_KEY` | `wandb/openai/gpt-oss-20b` |
+| [Anthropic](https://platform.claude.com/settings/keys) | `ANTHROPIC_API_KEY` | `anthropic/<model-id>` |
 | [Azure OpenAI](https://learn.microsoft.com/azure/foundry/openai/how-to/chatgpt) | `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_BASE_URL` | `azure_openai/<deployment-name>` |
 | [Google AI Studio (Gemini)](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` | `gemini/models/gemini-3.1-flash-lite` |
 | [Google Vertex AI](https://cloud.google.com/vertex-ai/generative-ai/docs/start/openai) | `VERTEX_PROJECT_ID` + ADC | `vertex/google/gemini-3.5-flash` |
@@ -258,6 +269,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 | [Experiential Labs](https://platform.experientiallabs.ai/) | `EXPLABS_API_KEY` | `experiential/union-alpha` |
 | [Cheaper Inference](https://cheaperinference.com/signup) | `CHEAPER_INFERENCE_API_KEY` | `cheaperinference/gpt-5.4-mini` |
 | [OrcaRouter](https://www.orcarouter.ai/) | `ORCAROUTER_API_KEY` | `orcarouter/deepseek/deepseek-v4-flash-free` |
+| [xKiro](https://xkiro.com/) | `XKIRO_API_KEY` | `xkiro/qwen/qwen3.7-flash:free` |
 | [Ollama Cloud](https://ollama.com/settings/keys) | `OLLAMA_API_KEY` | `ollama_cloud/qwen3-coder:480b` |
 | [LM Studio](https://lmstudio.ai/) | `LM_STUDIO_BASE_URL` | `lmstudio/<model-id>` |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) | `LLAMACPP_BASE_URL` | `llamacpp/<model-id>` |
@@ -271,6 +283,12 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 - OpenAI / ChatGPT uses your ChatGPT subscription rather than an API key. Connect from
   **Providers → OAuth providers → OpenAI / ChatGPT → Connect** in the Admin UI
   and finish signing in through your browser. Restart an already-running agent after connecting.
+- Anthropic uses a separately billed API key. Add it under
+  **Providers → Cloud providers → Anthropic → Configure**, then choose a discovered
+  model. Multi-workspace keys also require `ANTHROPIC_WORKSPACE_ID`.
+  Messages requests use Anthropic's native tools and the client's thinking controls.
+  FCC local web tools and prompt optimizations apply to other routes. Native requests
+  can fall back only to other Anthropic models. Anthropic tool access and charges apply.
 - OpenAI API uses a separate Platform API key. Enter it under
   **Providers → Cloud providers → OpenAI API → Configure**. The model list may
   include IDs that cannot handle coding requests. Choose a text-generation model.

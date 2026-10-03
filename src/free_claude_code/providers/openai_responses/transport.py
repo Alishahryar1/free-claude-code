@@ -313,7 +313,7 @@ class OpenAIResponsesTransport:
         extra_headers: Mapping[str, str] | None = None,
         reasoning_correction: ReasoningCorrection | None = None,
     ) -> AsyncIterator[str]:
-        recovery = RecoveryController()
+        recovery = RecoveryController(execution.delivery)
         request_recovery = RequestRecovery(
             execution, endpoint=endpoint, stream=recovery
         )
@@ -331,6 +331,7 @@ class OpenAIResponsesTransport:
         )
 
         while execution.can_attempt:
+            normal_stop_seen = False
             presenter = presenter_factory()
             start_events = tuple(presenter.start())
             presenter_started = False
@@ -372,6 +373,10 @@ class OpenAIResponsesTransport:
                 stream_opened = True
 
                 async for upstream_event in stream:
+                    normal_stop_seen |= upstream_event.type in {
+                        "response.completed",
+                        "response.incomplete",
+                    }
                     if not scope.attempt.accepted:
                         await scope.attempt.accept()
                     if not presenter_started:
@@ -449,6 +454,7 @@ class OpenAIResponsesTransport:
                         scope.attempt,
                         body,
                         operation_kind=ProviderOperationKind.GENERATION,
+                        normal_stop_seen=normal_stop_seen,
                         propose_correction=partial(
                             corrections.next_body,
                             raw_error,
@@ -487,6 +493,7 @@ class OpenAIResponsesTransport:
                     generated_output=recovery.committed,
                     complete_tool_salvageable=False,
                     attempts_remaining=execution.attempts_remaining,
+                    normal_stop_seen=normal_stop_seen,
                 )
                 if decision.action is RecoveryFailureAction.EARLY_RETRY:
                     recovery.discard()

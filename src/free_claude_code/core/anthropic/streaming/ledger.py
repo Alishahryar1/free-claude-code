@@ -328,6 +328,8 @@ class AnthropicStreamLedger:
             if state is not None:
                 state.open = False
                 self._clear_active_content_block(state)
+                if state.block_type == "tool_use":
+                    continue
             yield self._emitter.event(
                 "content_block_stop",
                 {"type": "content_block_stop", "index": idx},

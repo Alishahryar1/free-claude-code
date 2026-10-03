@@ -105,7 +105,7 @@ jobs:
           prepare-node: "true"
 
       - name: Run pytest
-        run: uv run --locked pytest -v --tb=short --durations=50
+        run: uv run --locked pytest -v --tb=short -o thread_dump_timeout=15 --durations=50
 
   playwright:
     name: playwright (${{ matrix.os }})

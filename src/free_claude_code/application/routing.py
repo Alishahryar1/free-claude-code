@@ -1,6 +1,6 @@
 """Model routing for Claude-compatible requests."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from loguru import logger
 
@@ -13,9 +13,15 @@ from free_claude_code.config.model_refs import (
     parse_model_name,
     parse_provider_type,
 )
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.anthropic import MessagesRequest, TokenCountRequest
+from free_claude_code.core.anthropic import (
+    MessagesRequest,
+    NativeTokenCountRequest,
+    TokenCountRequest,
+)
+from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.gateway_model_ids import (
     DESKTOP_MODEL_PREFIX,
     DESKTOP_NO_THINKING_PREFIX,
@@ -23,6 +29,7 @@ from free_claude_code.core.gateway_model_ids import (
 )
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.trace import trace_event
 
 from .reasoning import resolve_reasoning_policy, resolve_responses_reasoning_policy
 
@@ -61,6 +68,17 @@ class RoutedMessagesRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class RoutedNativeMessagesRequest:
+    request: NativeMessagesRequest
+    resolved: ResolvedModelRoute
+
+
+def supports_native_messages(provider_id: str) -> bool:
+    descriptor = PROVIDER_CATALOG.get(provider_id)
+    return descriptor is not None and descriptor.native_messages_passthrough
+
+
+@dataclass(frozen=True, slots=True)
 class RoutedResponsesRequest:
     request: OpenAIResponsesRequest
     resolved: ResolvedModelRoute
@@ -69,7 +87,7 @@ class RoutedResponsesRequest:
 
 @dataclass(frozen=True, slots=True)
 class RoutedTokenCountRequest:
-    request: TokenCountRequest
+    request: TokenCountRequest | NativeTokenCountRequest
     resolved: ResolvedModelRoute
 
 
@@ -230,6 +248,31 @@ class ModelRouter:
             None,
         )
 
+    def route_native_messages(
+        self,
+        request: NativeMessagesRequest,
+        resolved: ResolvedModelRoute,
+    ) -> RoutedNativeMessagesRequest:
+        eligible = tuple(
+            target
+            for target in resolved.fallbacks
+            if supports_native_messages(target.provider_id)
+        )
+        trace_event(
+            stage="routing",
+            event="free_claude_code.api.route.messages_contract",
+            source="application",
+            contract="native",
+            excluded_fallbacks=tuple(
+                target.provider_model_ref
+                for target in resolved.fallbacks
+                if target not in eligible
+            ),
+        )
+        return RoutedNativeMessagesRequest(
+            request, replace(resolved, fallbacks=eligible)
+        )
+
     def resolve_messages_request(
         self, request: MessagesRequest
     ) -> RoutedMessagesRequest:
@@ -266,10 +309,13 @@ class ModelRouter:
         )
 
     def resolve_token_count_request(
-        self, request: TokenCountRequest
+        self,
+        request: TokenCountRequest | NativeTokenCountRequest,
+        *,
+        resolved: ResolvedModelRoute | None = None,
     ) -> RoutedTokenCountRequest:
         """Return an internal token-count request context."""
-        resolved = self.resolve(request.model)
+        resolved = resolved or self.resolve(request.model)
         routed = request.model_copy(
             update={"model": resolved.primary.provider_model}, deep=True
         )

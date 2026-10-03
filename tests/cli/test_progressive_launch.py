@@ -6,9 +6,11 @@ import subprocess
 import sys
 import threading
 from contextlib import asynccontextmanager
+from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from urllib.error import HTTPError, URLError
 
 import pytest
 import uvicorn
@@ -200,6 +202,73 @@ def test_browser_warning_retains_owning_instance_after_server_exit(
             worker.join(2)
     assert len(caplog.records) == 2
     assert {record.extra["instance_id"] for record in caplog.records} == set(instances)
+
+
+@pytest.mark.parametrize(
+    ("occupant", "expected"),
+    [
+        ("running", "FCC is already running on port 8082. Use it at http://"),
+        ("stopping", "The FCC instance on port 8082 is still stopping."),
+        ("other", "port 8082 is already in use by another program"),
+        ("not_found", "port 8082 is already in use by another program"),
+        ("forbidden", "port 8082 is already in use. If FCC is not already running"),
+        ("unreachable", "port 8082 is already in use. If FCC is not already running"),
+    ],
+)
+def test_terminal_serve_explains_busy_port(monkeypatch, caplog, occupant, expected):
+    settings = Settings()
+    monkeypatch.setattr(commands, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        commands.ServerSupervisor,
+        "run",
+        MagicMock(side_effect=OSError(errno.EADDRINUSE, "Address already in use")),
+    )
+    if occupant == "unreachable":
+        request = MagicMock(side_effect=URLError("refused"))
+    elif occupant in {"not_found", "forbidden"}:
+        code = 404 if occupant == "not_found" else 403
+        error = HTTPError("url", code, "error", Message(), None)
+        error.close()  # Only the status code matters; release its body up front.
+        request = MagicMock(side_effect=error)
+    else:
+        payload = {"unrelated": "server"}
+        if occupant != "other":
+            payload = {
+                "instance_id": "a" * 32,
+                "status": occupant,
+                "host": settings.host,
+                "port": settings.port,
+                "provider_status": [],
+                "cached_models": {},
+            }
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+        request = MagicMock(return_value=response)
+    monkeypatch.setattr(commands, "open_local_request", request)
+
+    with pytest.raises(SystemExit) as exited:
+        commands.serve()
+
+    assert exited.value.code == 1
+    assert expected in caplog.text
+    request.assert_called_once()
+
+
+def test_terminal_serve_reports_other_startup_errors_unchanged(monkeypatch, caplog):
+    monkeypatch.setattr(
+        commands.ServerSupervisor,
+        "run",
+        MagicMock(side_effect=OSError(errno.EACCES, "Permission denied")),
+    )
+    request = MagicMock()
+    monkeypatch.setattr(commands, "open_local_request", request)
+
+    with pytest.raises(SystemExit) as exited:
+        commands.serve()
+
+    assert exited.value.code == 1
+    assert "Could not start FCC: [Errno" in caplog.text
+    request.assert_not_called()
 
 
 @pytest.mark.parametrize("change", ["none", "stop", "restart", "settings"])

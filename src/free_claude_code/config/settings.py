@@ -244,6 +244,11 @@ class Settings(BaseModel):
         default=None, validation_alias="ORCAROUTER_API_KEY"
     )
 
+    # ==================== xKiro (OpenAI-compatible gateway) ====================
+    xkiro_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="XKIRO_API_KEY"
+    )
+
     # ==================== Fireworks AI Config ====================
     fireworks_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_API_KEY"
@@ -291,6 +296,15 @@ class Settings(BaseModel):
     )
 
     # ==================== Alibaba Cloud Model Studio ====================
+    anthropic_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ANTHROPIC_API_KEY"
+    )
+    anthropic_workspace_id: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ANTHROPIC_WORKSPACE_ID"
+    )
+    anthropic_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ANTHROPIC_PROXY"
+    )
     alibaba_cloud_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="ALIBABA_CLOUD_API_KEY"
     )
@@ -563,6 +577,9 @@ class Settings(BaseModel):
     )
     orcarouter_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="ORCAROUTER_PROXY"
+    )
+    xkiro_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="XKIRO_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"

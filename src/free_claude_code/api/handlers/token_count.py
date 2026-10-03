@@ -11,9 +11,10 @@ from free_claude_code.api.request_errors import (
 from free_claude_code.api.request_ids import new_request_id
 from free_claude_code.application.errors import ApplicationError
 from free_claude_code.application.execution import TokenCounter
-from free_claude_code.application.routing import ModelRouter
+from free_claude_code.application.routing import ModelRouter, ResolvedModelRoute
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
+    NativeTokenCountRequest,
     TokenCountRequest,
     TokenCountResponse,
     anthropic_request_snapshot,
@@ -38,14 +39,20 @@ class TokenCountHandler:
         self._token_counter = token_counter
 
     def count(
-        self, request_data: TokenCountRequest, *, request_id: str | None = None
+        self,
+        request_data: TokenCountRequest | NativeTokenCountRequest,
+        *,
+        request_id: str | None = None,
+        resolved: ResolvedModelRoute | None = None,
     ) -> TokenCountResponse:
         """Count tokens for a request after applying configured model routing."""
         request_id = request_id or new_request_id()
         with logger.contextualize(request_id=request_id):
             try:
                 require_non_empty_messages(request_data.messages)
-                routed = self._model_router.resolve_token_count_request(request_data)
+                routed = self._model_router.resolve_token_count_request(
+                    request_data, resolved=resolved
+                )
                 tokens = self._token_counter(
                     routed.request.messages, routed.request.system, routed.request.tools
                 )

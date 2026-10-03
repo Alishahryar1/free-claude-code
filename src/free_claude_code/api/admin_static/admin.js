@@ -145,6 +145,7 @@ function renderStartup() {
   renderJetBrainsIntegration();
   renderCodexIntegration();
   renderClaudeDesktopIntegration();
+  renderDshDesktopIntegration();
 }
 
 async function refreshStartup() {
@@ -296,6 +297,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
     refreshJetBrainsIntegration();
     refreshCodexIntegration();
     refreshClaudeDesktopIntegration();
+    refreshDshDesktopIntegration();
   }
 }
 
@@ -1390,41 +1392,26 @@ async function refreshLocalStatus(config) {
   };
   state.localStatusRequest = request;
   try {
-    const result = await api("/admin/api/providers/local-status");
-    if (state.localStatusRequest !== request) return;
-    result.providers.forEach((provider) => {
-      if (!request.providerIds.has(provider.provider_id) || provider.status === "missing_url") return;
-      if (provider.status === "reachable") {
-        updateProviderCheckResult(
-          provider.provider_id,
-          "ok",
-          `Reachable: ${provider.base_url}`,
-          "availability",
-        );
-        return;
+    await Promise.all([...request.providerIds].map(async (providerId) => {
+      try {
+        const provider = await api(`/admin/api/providers/${providerId}/local-status`);
+        if (state.localStatusRequest !== request || !request.providerIds.has(providerId)) return;
+        if (provider.status === "missing_url") return;
+        if (provider.status === "reachable") {
+          updateProviderCheckResult(providerId, "ok", `Reachable: ${provider.base_url}`, "availability");
+          return;
+        }
+        const detail = provider.message
+          ? provider.message
+          : provider.status_code
+            ? `${provider.base_url} returned HTTP ${provider.status_code}`
+            : "The local provider did not respond.";
+        updateProviderCheckResult(providerId, "error", `Unavailable: ${detail}`, "availability");
+      } catch {
+        if (state.localStatusRequest !== request || !request.providerIds.has(providerId)) return;
+        updateProviderCheckResult(providerId, "error", "Availability check failed. Use Test to retry.", "availability");
       }
-      const detail = provider.message
-        ? provider.message
-        : provider.status_code
-          ? `${provider.base_url} returned HTTP ${provider.status_code}`
-          : "The local provider did not respond.";
-      updateProviderCheckResult(
-        provider.provider_id,
-        "error",
-        `Unavailable: ${detail}`,
-        "availability",
-      );
-    });
-  } catch {
-    if (state.localStatusRequest !== request) return;
-    request.providerIds.forEach((providerId) => {
-      updateProviderCheckResult(
-        providerId,
-        "error",
-        "Availability check failed. Use Test to retry.",
-        "availability",
-      );
-    });
+    }));
   } finally {
     if (state.localStatusRequest === request) state.localStatusRequest = null;
   }
@@ -1605,6 +1592,26 @@ function integrationUpdating(integration, id) {
     state.startup?.startup?.integrations?.[id]?.state === "starting";
 }
 
+function beginIntegrationCheck(integration) {
+  if (integration.busy && (!integration.checkRequest || integration.checkRequest.config === state.config)) return null;
+  const request = { config: state.config };
+  integration.checkRequest = request;
+  integration.busy = true;
+  return request;
+}
+
+function currentIntegrationCheck(integration, request) {
+  return integration.checkRequest === request && request.config === state.config;
+}
+
+function finishIntegrationCheck(integration, request, render) {
+  if (integration.checkRequest !== request) return;
+  integration.checkRequest = null;
+  integration.busy = false;
+  render();
+  if (request.config === state.config && integration.update?.state === "starting") void refreshStartup();
+}
+
 function refreshIntegrationUpdates(previous, current) {
   if (state.activeView !== "integrations") return;
   for (const [id, integration, refresh, messageId, message] of [
@@ -1613,6 +1620,7 @@ function refreshIntegrationUpdates(previous, current) {
     ["jetbrains-acp", jetBrainsIntegration, refreshJetBrainsIntegration, "jetBrainsIntegrationMessage", "Settings updated. Reopen JetBrains and start a new chat."],
     ["codex", codexIntegration, refreshCodexIntegration, "codexIntegrationMessage", "Settings updated. Restart Codex."],
     ["claude-desktop", claudeDesktopIntegration, refreshClaudeDesktopIntegration, "claudeDesktopIntegrationMessage", "Settings updated. Reopen Claude Desktop."],
+    ["dsh-desktop", dshDesktopIntegration, refreshDshDesktopIntegration, "dshDesktopIntegrationMessage", "DSH Desktop configuration updated."],
   ]) {
     const phase = current?.[id]?.state;
     // Successful actions clear update metadata, not the last observed state.
@@ -1660,25 +1668,25 @@ function renderClaudeIntegration() {
 
 async function refreshClaudeIntegration(retry = false, { background = false } = {}) {
   if (!background) integrationMessage("claudeIntegrationMessage", "");
-  if (claudeIntegration.busy) return;
-  claudeIntegration.busy = true;
+  const request = beginIntegrationCheck(claudeIntegration);
+  if (!request) return;
   renderClaudeIntegration();
   try {
     if (retry) await api(`${claudeIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(claudeIntegrationPath);
+    if (!currentIntegrationCheck(claudeIntegration, request)) return;
     claudeIntegration.connected = result.connected;
     claudeIntegration.paths = result.paths;
     claudeIntegration.update = result.update;
     if (result.update?.state === "failed") integrationMessage("claudeIntegrationMessage", result.update.message, true);
     else if (byId("claudeIntegrationMessage").classList.contains("error")) integrationMessage("claudeIntegrationMessage", "");
   } catch (error) {
+    if (!currentIntegrationCheck(claudeIntegration, request)) return;
     claudeIntegration.connected = null;
     claudeIntegration.update = null;
     integrationMessage("claudeIntegrationMessage", error.message, true);
   } finally {
-    claudeIntegration.busy = false;
-    renderClaudeIntegration();
-    if (claudeIntegration.update?.state === "starting") void refreshStartup();
+    finishIntegrationCheck(claudeIntegration, request, renderClaudeIntegration);
   }
 }
 
@@ -1758,25 +1766,25 @@ function renderVSCodeChatIntegration() {
 
 async function refreshVSCodeChatIntegration(retry = false, { background = false } = {}) {
   if (!background) integrationMessage("vscodeChatIntegrationMessage", "");
-  if (vscodeChatIntegration.busy) return;
-  vscodeChatIntegration.busy = true;
+  const request = beginIntegrationCheck(vscodeChatIntegration);
+  if (!request) return;
   renderVSCodeChatIntegration();
   try {
     if (retry) await api(`${vscodeChatIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(vscodeChatIntegrationPath);
+    if (!currentIntegrationCheck(vscodeChatIntegration, request)) return;
     vscodeChatIntegration.connected = result.connected;
     vscodeChatIntegration.paths = result.paths;
     vscodeChatIntegration.update = result.update;
     if (result.update?.state === "failed") integrationMessage("vscodeChatIntegrationMessage", result.update.message, true);
     else if (byId("vscodeChatIntegrationMessage").classList.contains("error")) integrationMessage("vscodeChatIntegrationMessage", "");
   } catch (error) {
+    if (!currentIntegrationCheck(vscodeChatIntegration, request)) return;
     vscodeChatIntegration.connected = null;
     vscodeChatIntegration.update = null;
     integrationMessage("vscodeChatIntegrationMessage", error.message, true);
   } finally {
-    vscodeChatIntegration.busy = false;
-    renderVSCodeChatIntegration();
-    if (vscodeChatIntegration.update?.state === "starting") void refreshStartup();
+    finishIntegrationCheck(vscodeChatIntegration, request, renderVSCodeChatIntegration);
   }
 }
 
@@ -1860,25 +1868,25 @@ function renderCodexIntegration() {
 
 async function refreshCodexIntegration(retry = false, { background = false } = {}) {
   if (!background) integrationMessage("codexIntegrationMessage", "");
-  if (codexIntegration.busy) return;
-  codexIntegration.busy = true;
+  const request = beginIntegrationCheck(codexIntegration);
+  if (!request) return;
   renderCodexIntegration();
   try {
     if (retry) await api(`${codexIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(codexIntegrationPath);
+    if (!currentIntegrationCheck(codexIntegration, request)) return;
     codexIntegration.connected = result.connected;
     codexIntegration.paths = result.paths;
     codexIntegration.update = result.update;
     if (result.update?.state === "failed") integrationMessage("codexIntegrationMessage", result.update.message, true);
     else if (byId("codexIntegrationMessage").classList.contains("error")) integrationMessage("codexIntegrationMessage", "");
   } catch (error) {
+    if (!currentIntegrationCheck(codexIntegration, request)) return;
     codexIntegration.connected = null;
     codexIntegration.update = null;
     integrationMessage("codexIntegrationMessage", error.message, true);
   } finally {
-    codexIntegration.busy = false;
-    renderCodexIntegration();
-    if (codexIntegration.update?.state === "starting") void refreshStartup();
+    finishIntegrationCheck(codexIntegration, request, renderCodexIntegration);
   }
 }
 
@@ -1957,25 +1965,25 @@ function renderJetBrainsIntegration() {
 
 async function refreshJetBrainsIntegration(retry = false, { background = false } = {}) {
   if (!background) integrationMessage("jetBrainsIntegrationMessage", "");
-  if (jetBrainsIntegration.busy) return;
-  jetBrainsIntegration.busy = true;
+  const request = beginIntegrationCheck(jetBrainsIntegration);
+  if (!request) return;
   renderJetBrainsIntegration();
   try {
     if (retry) await api(`${jetBrainsIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(jetBrainsIntegrationPath);
+    if (!currentIntegrationCheck(jetBrainsIntegration, request)) return;
     jetBrainsIntegration.connected = result.connected;
     jetBrainsIntegration.paths = result.paths;
     jetBrainsIntegration.update = result.update;
     if (result.update?.state === "failed") integrationMessage("jetBrainsIntegrationMessage", result.update.message, true);
     else if (byId("jetBrainsIntegrationMessage").classList.contains("error")) integrationMessage("jetBrainsIntegrationMessage", "");
   } catch (error) {
+    if (!currentIntegrationCheck(jetBrainsIntegration, request)) return;
     jetBrainsIntegration.connected = null;
     jetBrainsIntegration.update = null;
     integrationMessage("jetBrainsIntegrationMessage", error.message, true);
   } finally {
-    jetBrainsIntegration.busy = false;
-    renderJetBrainsIntegration();
-    if (jetBrainsIntegration.update?.state === "starting") void refreshStartup();
+    finishIntegrationCheck(jetBrainsIntegration, request, renderJetBrainsIntegration);
   }
 }
 
@@ -2056,12 +2064,13 @@ function renderClaudeDesktopIntegration() {
 
 async function refreshClaudeDesktopIntegration(retry = false, { background = false } = {}) {
   if (!background) integrationMessage("claudeDesktopIntegrationMessage", "");
-  if (claudeDesktopIntegration.busy) return;
-  claudeDesktopIntegration.busy = true;
+  const request = beginIntegrationCheck(claudeDesktopIntegration);
+  if (!request) return;
   renderClaudeDesktopIntegration();
   try {
     if (retry) await api(`${claudeDesktopIntegrationPath}/refresh`, { method: "POST" });
     const result = await api(claudeDesktopIntegrationPath);
+    if (!currentIntegrationCheck(claudeDesktopIntegration, request)) return;
     claudeDesktopIntegration.connected = result.connected;
     claudeDesktopIntegration.disconnectPending = result.disconnect_pending;
     claudeDesktopIntegration.paths = result.paths;
@@ -2069,14 +2078,13 @@ async function refreshClaudeDesktopIntegration(retry = false, { background = fal
     if (result.update?.state === "failed") integrationMessage("claudeDesktopIntegrationMessage", result.update.message, true);
     else if (byId("claudeDesktopIntegrationMessage").classList.contains("error")) integrationMessage("claudeDesktopIntegrationMessage", "");
   } catch (error) {
+    if (!currentIntegrationCheck(claudeDesktopIntegration, request)) return;
     claudeDesktopIntegration.connected = null;
     claudeDesktopIntegration.disconnectPending = false;
     claudeDesktopIntegration.update = null;
     integrationMessage("claudeDesktopIntegrationMessage", error.message, true);
   } finally {
-    claudeDesktopIntegration.busy = false;
-    renderClaudeDesktopIntegration();
-    if (claudeDesktopIntegration.update?.state === "starting") void refreshStartup();
+    finishIntegrationCheck(claudeDesktopIntegration, request, renderClaudeDesktopIntegration);
   }
 }
 
@@ -2130,6 +2138,123 @@ claudeDesktopIntegrationDialog.addEventListener("click", (event) => {
   const bounds = claudeDesktopIntegrationDialog.getBoundingClientRect();
   if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
     claudeDesktopIntegrationDialog.close();
+  }
+});
+
+const dshDesktopIntegrationDialog = byId("dshDesktopIntegrationDialog");
+const dshDesktopIntegration = { connected: null, actionRevision: 0, busy: false, paths: null, update: null };
+const dshDesktopIntegrationPath = "/admin/api/integrations/dsh-desktop";
+
+function applyDshDesktopStatus(result) {
+  dshDesktopIntegration.connected = result.connected;
+  dshDesktopIntegration.paths = result.paths ?? dshDesktopIntegration.paths;
+  dshDesktopIntegration.update = result.update ?? null;
+}
+
+function renderDshDesktopIntegration() {
+  const { connected, paths } = dshDesktopIntegration;
+  const updating = integrationUpdating(dshDesktopIntegration, "dsh-desktop");
+  const busy = dshDesktopIntegration.busy || (updating && !connected);
+  byId("retryDshDesktopIntegration").hidden = dshDesktopIntegration.update?.state !== "failed";
+  byId("retryDshDesktopIntegration").disabled = busy || updating;
+  const action = connected === null ? "Retry" : connected ? "Disconnect" : "Connect";
+  byId("openDshDesktopIntegration").textContent = busy ? "Loading…" : action;
+  byId("openDshDesktopIntegration").disabled = busy;
+  byId("openDshDesktopIntegration").setAttribute("aria-busy", String(busy));
+  byId("confirmDshDesktopIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmDshDesktopIntegration").disabled = busy || connected === null;
+  byId("openDshDesktopIntegration").className = connected && !busy ? "danger-button" : "primary-button";
+  byId("confirmDshDesktopIntegration").className = connected ? "danger-button" : "primary-button";
+  byId("dshDesktopIntegrationDescription").textContent = connected
+    ? "Remove FCC's Desktop connection. Existing FCC sessions need another model selected to continue."
+    : "Install and open DSH Desktop once, then connect FCC as the default for new sessions.";
+  const files = byId("dshDesktopIntegrationFiles");
+  files.replaceChildren();
+  if (paths) {
+    const targets = Object.values(paths);
+    targets.forEach((path) => {
+      const item = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = path;
+      item.appendChild(code);
+      files.appendChild(item);
+    });
+  }
+}
+
+async function refreshDshDesktopIntegration(retry = false, { background = false } = {}) {
+  if (!background) integrationMessage("dshDesktopIntegrationMessage", "");
+  const request = beginIntegrationCheck(dshDesktopIntegration);
+  if (!request) return;
+  renderDshDesktopIntegration();
+  try {
+    if (retry) await api(`${dshDesktopIntegrationPath}/refresh`, { method: "POST" });
+    const result = await api(dshDesktopIntegrationPath);
+    if (!currentIntegrationCheck(dshDesktopIntegration, request)) return;
+    applyDshDesktopStatus(result);
+    if (result.update?.state === "failed") integrationMessage("dshDesktopIntegrationMessage", result.update.message, true);
+    else if (byId("dshDesktopIntegrationMessage").classList.contains("error")) integrationMessage("dshDesktopIntegrationMessage", "");
+  } catch (error) {
+    if (!currentIntegrationCheck(dshDesktopIntegration, request)) return;
+    integrationMessage("dshDesktopIntegrationMessage", error.message, true);
+  } finally {
+    finishIntegrationCheck(dshDesktopIntegration, request, renderDshDesktopIntegration);
+  }
+}
+
+byId("openDshDesktopIntegration").addEventListener("click", () => {
+  if (dshDesktopIntegration.connected === null) {
+    refreshDshDesktopIntegration(dshDesktopIntegration.update?.state === "failed");
+    return;
+  }
+  integrationMessage("dshDesktopIntegrationDialogMessage", "");
+  dshDesktopIntegrationDialog.showModal();
+});
+byId("confirmDshDesktopIntegration").addEventListener("click", async () => {
+  if (byId("confirmDshDesktopIntegration").disabled) return;
+  const disconnect = dshDesktopIntegration.connected === true;
+  const config = state.config;
+  const actionRevision = ++dshDesktopIntegration.actionRevision;
+  const current = () => config === state.config && actionRevision === dshDesktopIntegration.actionRevision;
+  dshDesktopIntegration.checkRequest = null;
+  dshDesktopIntegration.busy = true;
+  renderDshDesktopIntegration();
+  integrationMessage("dshDesktopIntegrationDialogMessage", "");
+  integrationMessage("dshDesktopIntegrationMessage", "");
+  try {
+    const result = await api(`${dshDesktopIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    if (!current()) return;
+    applyDshDesktopStatus(result);
+    dshDesktopIntegrationDialog.close();
+    integrationMessage("dshDesktopIntegrationMessage", result.connected
+      ? "Connected. New DSH sessions use FCC. Reopen DSH if it does not reload the changes."
+      : "DSH Desktop is disconnected. Select another model in existing DSH sessions.");
+  } catch (error) {
+    if (!current()) return;
+    try {
+      const result = await api(dshDesktopIntegrationPath);
+      if (!current()) return;
+      applyDshDesktopStatus(result);
+    } catch {
+      // Keep the last known status if the follow-up read also fails.
+    }
+    if (!current()) return;
+    integrationMessage("dshDesktopIntegrationDialogMessage", error.message, true);
+    integrationMessage("dshDesktopIntegrationMessage", error.message, true);
+  } finally {
+    if (actionRevision !== dshDesktopIntegration.actionRevision) return;
+    dshDesktopIntegration.busy = false;
+    renderDshDesktopIntegration();
+    if (config !== state.config) void refreshDshDesktopIntegration();
+  }
+});
+byId("retryDshDesktopIntegration").addEventListener("click", () => refreshDshDesktopIntegration(true));
+byId("closeDshDesktopIntegration").addEventListener("click", () => dshDesktopIntegrationDialog.close());
+dshDesktopIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== dshDesktopIntegrationDialog) return;
+  const bounds = dshDesktopIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    dshDesktopIntegrationDialog.close();
   }
 });
 

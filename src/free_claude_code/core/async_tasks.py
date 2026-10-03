@@ -8,7 +8,11 @@ from anyio import to_thread
 
 async def run_sync_owned[T](function: Callable[[], T]) -> T:
     """Drain a finite worker before propagating cancellation; never abandon it."""
-    worker = asyncio.create_task(to_thread.run_sync(function))
+    return await wait_owned(asyncio.create_task(to_thread.run_sync(function)))
+
+
+async def wait_owned[T](worker: asyncio.Task[T]) -> T:
+    """Finish owned work before propagating any caller cancellation."""
     cancellation: asyncio.CancelledError | None = None
     while not worker.done():
         try:

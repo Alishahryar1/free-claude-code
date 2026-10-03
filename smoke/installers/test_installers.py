@@ -80,7 +80,7 @@ def _posix_command(name: str, *, version_output: str | None = None) -> str:
         "opencode": "v2.0.10",
         "cline": "3.0.55",
         "hermes": "0.20.4",
-        "dsh": "0.1.0-rc.8",
+        "dsh": "0.2.0-rc.2",
         "grok": "1.0.5",
         "muse": "0.2.1",
         "node": "22.19.0",
@@ -132,7 +132,7 @@ if [ "${1:-}" = "install" ] && [ "${2:-}" = "-g" ] && [ "${3:-}" = "cline" ]; th
     chmod +x "$FAKE_NPM_PREFIX/bin/cline"
     exit 0
 fi
-if [ "${1:-}" = "install" ] && [ "${2:-}" = "-g" ] && [ "${3:-}" = "@deepseek-ai/dsh@0.1.0-rc.8" ]; then
+if [ "${1:-}" = "install" ] && [ "${2:-}" = "-g" ] && [ "${3:-}" = "@deepseek-ai/dsh@latest" ]; then
     [ "$FAIL_STEP" = "dsh-install" ] && exit 73
     mkdir -p "$FAKE_NPM_PREFIX/bin"
     cp "$FAKE_FIXTURES/dsh-command.sh" "$FAKE_NPM_PREFIX/bin/dsh"
@@ -826,7 +826,7 @@ def test_install_sh_fresh_install_is_verified(posix_harness: PosixHarness) -> No
     assert calls.index("hermes-install:--non-interactive --skip-setup") < calls.index(
         "hermes:--version"
     )
-    assert calls.index("npm:install -g @deepseek-ai/dsh@0.1.0-rc.8") < calls.index(
+    assert calls.index("npm:install -g @deepseek-ai/dsh@latest") < calls.index(
         "dsh:--version"
     )
     assert calls.index("grok-install") < calls.index("grok:--version")
@@ -1075,7 +1075,7 @@ def test_install_sh_rejects_broken_existing_aider_without_replacing_it(
     assert not any("aider.chat" in call for call in calls)
 
 
-def test_install_sh_installs_selected_dsh_at_exact_preview(
+def test_install_sh_installs_latest_selected_dsh(
     posix_harness: PosixHarness,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
@@ -1083,8 +1083,8 @@ def test_install_sh_installs_selected_dsh_at_exact_preview(
 
     assert result.returncode == 0, result.stdout
     calls = posix_harness.calls()
-    assert "npm:install -g @deepseek-ai/dsh@0.1.0-rc.8" in calls
-    assert calls.index("npm:install -g @deepseek-ai/dsh@0.1.0-rc.8") < calls.index(
+    assert "npm:install -g @deepseek-ai/dsh@latest" in calls
+    assert calls.index("npm:install -g @deepseek-ai/dsh@latest") < calls.index(
         "dsh:--version"
     )
     assert "Run DeepSeek Harness with: fcc-dsh" in result.stdout
@@ -1092,13 +1092,13 @@ def test_install_sh_installs_selected_dsh_at_exact_preview(
 
 
 @pytest.mark.parametrize("interactive", (False, True))
-def test_install_sh_replaces_mismatched_dsh_preview(
+def test_install_sh_upgrades_older_dsh_to_latest(
     posix_harness: PosixHarness,
     interactive: bool,
 ) -> None:
     _write_executable(
         posix_harness.bin_dir / "dsh",
-        _posix_command("dsh").replace("0.1.0-rc.8", "0.1.0-rc.7"),
+        _posix_command("dsh").replace("0.2.0-rc.2", "0.1.0-rc.7"),
     )
 
     result = (
@@ -1106,8 +1106,8 @@ def test_install_sh_replaces_mismatched_dsh_preview(
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "does not match 0.1.0-rc.8" in result.stdout
-    assert "npm:install -g @deepseek-ai/dsh@0.1.0-rc.8" in posix_harness.calls()
+    assert "requires >=0.2.0-rc.2" in result.stdout
+    assert "npm:install -g @deepseek-ai/dsh@latest" in posix_harness.calls()
 
 
 def test_install_sh_rejects_exact_dsh_on_unsupported_node(
@@ -2007,7 +2007,7 @@ def _batch_client(name: str, *, version_output: str | None = None) -> str:
         "opencode": "v2.0.10",
         "cline": "3.0.55",
         "hermes": "0.20.4",
-        "dsh": "0.1.0-rc.8",
+        "dsh": "0.2.0-rc.2",
         "grok": "1.0.5",
         "muse": "0.2.1",
         "node": "22.19.0",
@@ -2017,7 +2017,7 @@ def _batch_client(name: str, *, version_output: str | None = None) -> str:
     elif name == "hermes":
         version_command = (
             f'if "%1"=="--version" echo Hermes Agent v{version} '
-            "(2026.8.18) · upstream deadbeef\n"
+            "(2026.8.18) Â· upstream deadbeef\n"
             'if "%1"=="--version" echo Install directory: C:\\fake-hermes\n'
             'if "%1"=="--version" echo Install method: git\n'
             'if "%1"=="--version" echo Python: 3.12.11\n'
@@ -2062,7 +2062,7 @@ def _batch_npm() -> str:
     return r"""@echo off
 echo npm:%*>>"%CALL_LOG%"
 if "%1"=="install" if "%2"=="-g" if "%3"=="cline" goto install_cline
-if "%1"=="install" if "%2"=="-g" if "%3"=="@deepseek-ai/dsh@0.1.0-rc.8" goto install_dsh
+if "%1"=="install" if "%2"=="-g" if "%3"=="@deepseek-ai/dsh@latest" goto install_dsh
 if "%1"=="prefix" if "%2"=="-g" echo %FAKE_NPM_PREFIX%& exit /b 0
 if "%1"=="config" if "%2"=="get" if "%3"=="prefix" echo %FAKE_NPM_PREFIX%& exit /b 0
 exit /b 71
@@ -2851,7 +2851,7 @@ def _assert_setup_preserves_other_commands(
     if installing == "dsh":
         _write_executable(
             npm_bin / f"dsh{suffix}",
-            make_command("dsh").replace("0.1.0-rc.8", "0.1.0-rc.7"),
+            make_command("dsh").replace("0.2.0-rc.2", "0.1.0-rc.7"),
         )
         installed.add("dsh")
     answers = [
@@ -3174,7 +3174,7 @@ def test_install_ps1_fresh_install_is_verified(
     assert calls.index("npm:install -g cline") < calls.index("cline:--version")
     assert any("hermes-agent.nousresearch.com/install.ps1" in call for call in calls)
     assert "hermes-install:True" in calls
-    assert calls.index("npm:install -g @deepseek-ai/dsh@0.1.0-rc.8") < calls.index(
+    assert calls.index("npm:install -g @deepseek-ai/dsh@latest") < calls.index(
         "dsh:--version"
     )
     assert calls.index("grok-install") < calls.index("grok:--version")
@@ -3422,31 +3422,35 @@ def test_install_ps1_rejects_broken_existing_aider_without_replacing_it(
     assert not any("aider.chat" in call for call in calls)
 
 
-def test_install_ps1_preserves_exact_dsh_preview(
+@pytest.mark.parametrize(
+    "version", ["0.2.0-rc.2", "0.2.0-rc.10", "0.2.0", "1.0.0", "0.2.0-rc.2+build.7"]
+)
+def test_install_ps1_preserves_supported_dsh(
     powershell_harness: PowerShellHarness,
+    version: str,
 ) -> None:
     powershell_harness.add_uv("0.12.13")
-    powershell_harness.add_client("dsh")
+    (powershell_harness.bin_dir / "dsh.cmd").write_text(
+        _batch_client("dsh").replace("0.2.0-rc.2", version), encoding="utf-8"
+    )
 
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Dsh"
     )
 
     assert result.returncode == 0, result.stderr
-    assert "already matches the supported preview" in result.stdout
-    assert "npm:install -g @deepseek-ai/dsh@0.1.0-rc.8" not in (
-        powershell_harness.calls()
-    )
+    assert "already satisfies >=0.2.0-rc.2" in result.stdout
+    assert "npm:install -g @deepseek-ai/dsh@latest" not in (powershell_harness.calls())
 
 
 @pytest.mark.parametrize("interactive", (False, True))
-def test_install_ps1_replaces_mismatched_dsh_preview(
+def test_install_ps1_upgrades_older_dsh_to_latest(
     powershell_harness: PowerShellHarness,
     interactive: bool,
 ) -> None:
     powershell_harness.add_uv("0.12.13")
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
-        _batch_client("dsh").replace("0.1.0-rc.8", "0.1.0-rc.7"),
+        _batch_client("dsh").replace("0.2.0-rc.2", "0.1.0-rc.7"),
         encoding="utf-8",
     )
 
@@ -3459,8 +3463,8 @@ def test_install_ps1_replaces_mismatched_dsh_preview(
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "does not match 0.1.0-rc.8" in result.stdout
-    assert "npm:install -g @deepseek-ai/dsh@0.1.0-rc.8" in (powershell_harness.calls())
+    assert "requires >=0.2.0-rc.2" in result.stdout
+    assert "npm:install -g @deepseek-ai/dsh@latest" in (powershell_harness.calls())
 
 
 def test_install_ps1_rejects_exact_dsh_on_unsupported_node(
@@ -3491,7 +3495,7 @@ def test_install_ps1_rejects_incompatible_node_for_selected_dsh(
 ) -> None:
     powershell_harness.add_uv("0.12.13")
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
-        _batch_client("dsh").replace("0.1.0-rc.8", "0.1.0-rc.7"),
+        _batch_client("dsh").replace("0.2.0-rc.2", "0.1.0-rc.7"),
         encoding="utf-8",
     )
     (powershell_harness.bin_dir / "node.cmd").write_text(

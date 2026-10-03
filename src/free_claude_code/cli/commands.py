@@ -8,7 +8,7 @@ import time
 import webbrowser
 from collections.abc import Callable
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
@@ -73,8 +73,52 @@ def serve(*, console_logging: bool = True) -> None:
     try:
         ServerSupervisor(console_logging=console_logging).run()
     except OSError as exc:
-        logger.error("Could not start FCC: {}", exc)
+        if exc.errno == errno.EADDRINUSE:
+            _log_port_in_use(get_settings())
+        else:
+            logger.error("Could not start FCC: {}", exc)
         raise SystemExit(1) from None
+
+
+def _log_port_in_use(settings: Settings) -> None:
+    """Explain a busy port, telling a running FCC apart from another program."""
+    status = None
+    try:
+        status = _external_fcc_status(settings, timeout=1.5)
+        other_program = status is None
+    except HTTPError as exc:
+        # Admin rejects non-loopback requests, so a 403 cannot rule out FCC.
+        other_program = exc.code != 403
+    except ValueError:
+        other_program = True
+    except OSError:
+        other_program = False
+    if status is not None and status["status"] == "running":
+        logger.error(
+            "FCC is already running on port {}. Use it at {}, or stop it before "
+            "starting another instance.",
+            settings.port,
+            local_admin_url(settings),
+        )
+    elif status is not None:
+        logger.error(
+            "The FCC instance on port {} is still stopping. Try again in a moment.",
+            settings.port,
+        )
+    elif other_program:
+        logger.error(
+            "Could not start FCC: port {} is already in use by another program. "
+            "Stop that program, or set PORT to a free port in {}.",
+            settings.port,
+            managed_env_path(),
+        )
+    else:
+        logger.error(
+            "Could not start FCC: port {} is already in use. If FCC is not already "
+            "running, stop the program using it, or set PORT to a free port in {}.",
+            settings.port,
+            managed_env_path(),
+        )
 
 
 class ServerStatus(StrEnum):
@@ -364,32 +408,42 @@ def load_server_settings() -> Settings:
     return get_settings()
 
 
+def _external_fcc_status(
+    settings: Settings, *, timeout: float
+) -> dict[str, Any] | None:
+    """Return the status payload an FCC instance reports on this port, or None for other servers."""
+    url = f"{local_proxy_root_url(settings)}/admin/api/status"
+    with open_local_request(Request(url), timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict) or not (
+        isinstance(payload.get("instance_id"), str)
+        and len(payload["instance_id"]) == 32
+        and payload.get("status") in {"running", "stopping"}
+        and isinstance(payload.get("host"), str)
+        and payload.get("port") == settings.port
+        and isinstance(payload.get("provider_status"), list)
+        and isinstance(payload.get("cached_models"), dict)
+    ):
+        return None
+    return payload
+
+
 def open_admin_when_ready(
     settings: Settings, *, stop_event: threading.Event | None = None
 ) -> bool:
     """Recognize an external FCC instance and attempt to open its local Admin page."""
     stop = stop_event or threading.Event()
     deadline = time.monotonic() + 30.0
-    url = f"{local_proxy_root_url(settings)}/admin/api/status"
     while not stop.is_set() and time.monotonic() < deadline:
         try:
-            with open_local_request(Request(url), timeout=1.5) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            if not isinstance(payload, dict) or not (
-                isinstance(payload.get("instance_id"), str)
-                and len(payload["instance_id"]) == 32
-                and payload.get("status") in {"running", "stopping"}
-                and isinstance(payload.get("host"), str)
-                and payload.get("port") == settings.port
-                and isinstance(payload.get("provider_status"), list)
-                and isinstance(payload.get("cached_models"), dict)
-            ):
+            status = _external_fcc_status(settings, timeout=1.5)
+            if status is None:
                 return False
-            if payload["status"] == "running" and not stop.is_set():
+            if status["status"] == "running" and not stop.is_set():
                 completed = _start_admin_browser(
                     settings,
                     lambda: not stop.is_set(),
-                    instance_id=payload["instance_id"],
+                    instance_id=status["instance_id"],
                 )
                 # This extra launcher is about to exit: allow a brief URL handoff.
                 handoff_deadline = time.monotonic() + _BROWSER_HANDOFF_SECONDS

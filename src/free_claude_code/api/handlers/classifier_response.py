@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
+from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.trace import close_stream_input
 
 
@@ -14,6 +15,17 @@ async def classifier_response(source: AsyncIterator[str]) -> AsyncIterator[str]:
     decoder = AnthropicSSEDecoder()
     indices: dict[int, int | None] = {}
     next_index = 0
+    delivery = current_stream_delivery()
+    revision = delivery.attempt_revision if delivery else 0
+
+    def synchronize() -> None:
+        nonlocal decoder, next_index, revision
+        if delivery is None or revision == delivery.attempt_revision:
+            return
+        revision = delivery.attempt_revision
+        decoder = AnthropicSSEDecoder()
+        indices.clear()
+        next_index = 0
 
     def project(event: SSEEvent) -> str | None:
         nonlocal next_index
@@ -49,15 +61,18 @@ async def classifier_response(source: AsyncIterator[str]) -> AsyncIterator[str]:
 
     try:
         async for chunk in source:
+            synchronize()
             for event in decoder.feed(chunk):
                 projected = project(event)
                 if projected is not None:
                     yield projected
+        synchronize()
         for event in decoder.finish():
             projected = project(event)
             if projected is not None:
                 yield projected
     finally:
+        synchronize()
         await close_stream_input(
             source,
             owner="classifier_response",

@@ -13,6 +13,7 @@ from playwright.sync_api import expect
             "openClaudeDesktopIntegration",
             "claudeDesktopIntegrationMessage",
         ),
+        ("dsh-desktop", "openDshDesktopIntegration", "dshDesktopIntegrationMessage"),
     ]
 )
 def notice(page, admin_base_url, request):
@@ -28,7 +29,14 @@ def notice(page, admin_base_url, request):
         route.fulfill(response=response, json=payload)
 
     def status(route):
-        route.fulfill(json={"connected": True, "paths": None, "update": dict(progress)})
+        route.fulfill(
+            json={
+                "connected": True,
+                "configured": True,
+                "paths": None,
+                "update": dict(progress),
+            }
+        )
 
     page.route("**/admin/api/status", startup)
     page.route(f"**/admin/api/integrations/{integration}", status)
@@ -54,10 +62,13 @@ def notice(page, admin_base_url, request):
 
 
 def test_notices_require_a_live_changed_completion(page, notice):
-    _, button, message, observe = notice
+    integration, button, message, observe = notice
     expect(message).to_be_hidden()
     observe("starting")
-    expect(button).to_be_disabled()
+    if integration == "dsh-desktop":
+        expect(button).to_be_enabled()
+    else:
+        expect(button).to_be_disabled()
     observe("ready", changed=True)
     expect(message).to_be_visible()
     expect(message).not_to_have_class("message-area error")
@@ -97,12 +108,15 @@ def test_settled_poll_after_mutation_preserves_next_action(page, notice):
     endpoint = f"**/admin/api/integrations/{integration}"
     page.route(endpoint, fail_status)
     dialog = page.get_by_role("dialog")
-    for action, connected in [("Disconnect", False), ("Connect", True)]:
+    connect_label = "Connect"
+    for action, connected in [("Disconnect", False), (connect_label, True)]:
+        operation = "connect" if connected else "disconnect"
         page.route(
-            f"{endpoint}/{action.lower()}",
+            f"{endpoint}/{operation}",
             lambda route: route.fulfill(
                 json={
                     "connected": route.request.url.endswith("/connect"),
+                    "configured": route.request.url.endswith("/connect"),
                     "disconnect_pending": False,
                     "paths": None,
                 }
@@ -111,7 +125,7 @@ def test_settled_poll_after_mutation_preserves_next_action(page, notice):
         button.click()
         dialog.get_by_role("button", name=action, exact=True).click()
         expect(dialog).not_to_be_visible()
-        next_action = "Disconnect" if connected else "Connect"
+        next_action = "Disconnect" if connected else connect_label
         expect(button).to_have_text(next_action)
         button.click()
         observe("ready")
@@ -177,6 +191,7 @@ def test_busy_status_recovery_preserves_notice_without_replaying_it(
         lambda route: route.fulfill(
             json={
                 "connected": True,
+                "configured": True,
                 "paths": None,
                 "update": {"state": "ready", "changed": True},
             }
@@ -234,6 +249,7 @@ def test_missed_transition_during_status_read_is_reconciled(page, notice):
     pending[0].fulfill(
         json={
             "connected": True,
+            "configured": True,
             "paths": None,
             "update": {"state": "ready", "changed": False, "message": None},
         }

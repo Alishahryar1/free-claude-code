@@ -8,6 +8,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | Asset | Source |
 | --- | --- |
 | `agnesai.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/agnesai.svg |
+| `anthropic.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/anthropic.svg |
 | `azure-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/azure-color.svg |
 | `bedrock-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/bedrock-color.svg |
 | `cerebras-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cerebras-color.svg |
@@ -42,6 +43,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `opencode.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/opencode.svg |
 | `openrouter.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/openrouter.svg |
 | `orcarouter.png` | https://www.orcarouter.ai/apple-touch-icon.png |
+| `xkiro.png` | https://xkiro.com/images/logo/logo-xt-green.png |
 | `poolside-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/poolside-color.svg |
 | `qwen-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/qwen-color.svg |
 | `sambanova-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/sambanova-color.svg |
