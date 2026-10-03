@@ -1,4 +1,4 @@
-"""Pinned official Copilot SDK boundary; never run SDK agent turns."""
+"""Official Copilot SDK boundary; never run SDK agent turns."""
 
 import asyncio
 import re
