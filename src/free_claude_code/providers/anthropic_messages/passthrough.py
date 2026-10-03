@@ -23,6 +23,11 @@ from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
 )
+from free_claude_code.providers.continuation import (
+    SourceRecoveryState,
+    public_recovery,
+    require_continuation_progress,
+)
 from free_claude_code.providers.failure_policy import (
     RetryableProviderProtocolError,
     classify_provider_failure,
@@ -81,11 +86,14 @@ async def stream_native_messages(
             )
             return
         committed = False
+        base_body = body
+        operation_kind = ProviderOperationKind.GENERATION
         while execution.can_attempt:
             normal_stop_seen = False
+            source = SourceRecoveryState(execution)
             scope = None
             try:
-                attempt = await execution.open_attempt(ProviderOperationKind.GENERATION)
+                attempt = await execution.open_attempt(operation_kind)
                 scope = ProviderAttemptScope(
                     attempt, provider_name=provider_name, request_id=request_id
                 )
@@ -113,6 +121,13 @@ async def stream_native_messages(
                 async for kind, payload in messages_events(response):
                     normal_stop_seen |= is_messages_stop(kind, payload)
                     check_messages_failure(kind, payload, native=True)
+                    source.observe(
+                        "messages",
+                        payload,
+                        continuing=operation_kind is ProviderOperationKind.CONTINUATION,
+                    )
+                    if is_messages_stop(kind, payload):
+                        require_continuation_progress(execution)
                     output = relay.feed(kind, payload)
                     if output is None:
                         continue
@@ -155,6 +170,25 @@ async def stream_native_messages(
                             normal_stop_seen=normal_stop_seen,
                         ):
                             continue
+                if scope is not None:
+                    await scope.aclose(active_error=error)
+                recovered = public_recovery(
+                    execution,
+                    body=base_body,
+                    protocol="messages",
+                    retryable=is_retryable_stream_error(error),
+                    normal_stop_seen=normal_stop_seen,
+                    source=source,
+                )
+                if recovered is not None:
+                    if recovered.body is None:
+                        for event in recovered.events:
+                            yield event
+                        execution.succeed()
+                        return
+                    body = recovered.body
+                    operation_kind = ProviderOperationKind.CONTINUATION
+                    continue
                 if error is not raw_error:
                     raise error from raw_error
                 raise

@@ -79,7 +79,7 @@ class ToolCallBufferedStream(AsyncIterator[str]):
             try:
                 chunk = await anext(self._body)
             except StopAsyncIteration:
-                self._synchronize()
+                boundary = self._synchronize()
                 self._done = True
                 frames = self._decoder.finish_frames()
             except BaseException:
@@ -89,15 +89,25 @@ class ToolCallBufferedStream(AsyncIterator[str]):
                     self._envelope.discard_pending_starts()
                 raise
             else:
-                self._synchronize()
+                boundary = self._synchronize()
                 frames = self._decoder.feed_frames(chunk)
-            ready = [value for frame in frames for value in self._accept(frame)]
-            if self._envelope is not None:
-                ready = [
-                    value
-                    for frame in ready
-                    if (value := self._envelope.publish(frame)) is not None
-                ]
+            ready: list[str] = []
+            for frame in boundary:
+                if self._envelope is not None:
+                    value = self._envelope.publish(frame)
+                    if value is not None:
+                        ready.append(value)
+            for frame in frames:
+                prepared = self._envelope.prepare(frame) if self._envelope else [frame]
+                for item in prepared:
+                    for released in self._accept(item):
+                        value = (
+                            self._envelope.publish(released)
+                            if self._envelope
+                            else released
+                        )
+                        if value is not None:
+                            ready.append(value)
             if self._done:
                 self._discard_group()
                 if self._envelope is not None:
@@ -106,17 +116,23 @@ class ToolCallBufferedStream(AsyncIterator[str]):
                 return "".join(ready)
         raise StopAsyncIteration
 
-    def _synchronize(self) -> None:
+    def _synchronize(self) -> list[str]:
         envelope = self._envelope
         if envelope is None or self._revision == envelope.state.attempt_revision:
-            return
+            return []
         self._revision = envelope.state.attempt_revision
         self._discard_group()
         self._decoder = AnthropicSSEDecoder()
         self._ids.clear()
         self._indices.clear()
-        self._delivered.clear()
+        if (
+            envelope.state.continuation is None
+            or not envelope.state.continuation.active
+        ):
+            self._delivered.clear()
         self._discarded.clear()
+        envelope.synchronize()
+        return envelope.boundary()
 
     async def aclose(self) -> None:
         if self._closed:
@@ -131,6 +147,9 @@ class ToolCallBufferedStream(AsyncIterator[str]):
         self._delivered.clear()
         self._discarded.clear()
         close_error = await try_close_async_iterator(self._body)
+        if self._envelope is not None:
+            self._envelope.state.response = None
+            self._envelope.state.continuation = None
         if close_error is not None:
             raise close_error
 

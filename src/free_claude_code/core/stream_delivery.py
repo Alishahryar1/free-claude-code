@@ -4,6 +4,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
+from .continuation_stream import ContinuationStream
+from .delivered_response import DeliveredResponse
+
 
 class StreamDeliveryState:
     """Retain public commitment while identifying invisible generation attempts."""
@@ -11,6 +14,8 @@ class StreamDeliveryState:
     def __init__(self) -> None:
         self._content_released = False
         self._attempt_revision = 0
+        self.response: DeliveredResponse | None = None
+        self.continuation: ContinuationStream | None = None
 
     @property
     def content_released(self) -> bool:
@@ -26,6 +31,11 @@ class StreamDeliveryState:
     def begin_attempt(self) -> None:
         if not self._content_released:
             self._attempt_revision += 1
+
+    def begin_continuation(self, *, handoff: bool = False) -> None:
+        assert self.continuation is not None
+        self.continuation.begin(handoff=handoff)
+        self._attempt_revision += 1
 
 
 _delivery: ContextVar[StreamDeliveryState | None] = ContextVar(

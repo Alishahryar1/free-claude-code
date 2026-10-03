@@ -76,10 +76,12 @@ class RequestRecovery:
     ) -> JsonObject | None:
         delivery = self.execution.delivery
         if (
-            operation_kind is ProviderOperationKind.GENERATION
-            and normal_stop_seen
+            normal_stop_seen
             and delivery is not None
-            and not delivery.content_released
+            and (
+                not delivery.content_released
+                or operation_kind is ProviderOperationKind.CONTINUATION
+            )
         ):
             return None
         if await self.retry_authentication(error, auth_status, attempt):

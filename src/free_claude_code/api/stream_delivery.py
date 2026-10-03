@@ -7,6 +7,8 @@ from typing import Any, Literal
 import simplejson
 
 from free_claude_code.core.async_iterators import try_close_async_iterator
+from free_claude_code.core.continuation_stream import ContinuationStream
+from free_claude_code.core.delivered_response import DeliveredResponse
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
@@ -86,12 +88,16 @@ class PublicStreamEnvelope:
         self._offset: int | None = None
         self._pending_starts: list[str] = []
         self.start_frame = ""
+        state.response = DeliveredResponse(wire_api)
+        state.continuation = ContinuationStream(state.response)
 
     def synchronize(self) -> None:
         if self._revision == self.state.attempt_revision:
             return
         self._revision = self.state.attempt_revision
         self._replacement = bool(self._published_starts)
+        if self.state.continuation is not None and self.state.continuation.active:
+            self._replacement = False
         self._seen_starts.clear()
         self._offset = None
         self.discard_pending_starts()
@@ -102,6 +108,9 @@ class PublicStreamEnvelope:
 
     def _release_content(self, frame: str) -> str:
         self.state.release_content()
+        for start in self._pending_starts:
+            self._record(start)
+        self._record(frame)
         if not self._pending_starts:
             return frame
         self.start_frame = self._pending_starts[0]
@@ -109,6 +118,37 @@ class PublicStreamEnvelope:
         prefix = "".join(self._pending_starts)
         self.discard_pending_starts()
         return prefix + frame
+
+    def _record(self, frame: str) -> None:
+        payload = frame_data(frame)
+        if self.state.response is not None:
+            if payload is not None:
+                self.state.response.observe(payload)
+            elif any(line.startswith("data:") for line in frame.splitlines()):
+                self.state.response.unsafe_reason = "unknown_event"
+
+    def prepare(self, frame: str) -> list[str]:
+        continuation = self.state.continuation
+        if continuation is None or not continuation.active:
+            return [frame]
+        payload = frame_data(frame)
+        if payload is None:
+            return [frame]
+        return [
+            replace_frame_data(frame, item)
+            if item.get("type") == payload.get("type")
+            else f"event: {item['type']}\ndata: {simplejson.dumps(item)}\n\n"
+            for item in continuation.prepare(payload)
+        ]
+
+    def boundary(self) -> list[str]:
+        continuation = self.state.continuation
+        if continuation is None:
+            return []
+        return [
+            f"event: {item['type']}\ndata: {simplejson.dumps(item)}\n\n"
+            for item in continuation.boundary()
+        ]
 
     def publish(self, frame: str) -> str | None:
         """Normalize only a replacement envelope and mark actually released frames."""
@@ -181,7 +221,10 @@ class PublicStreamEnvelope:
                 number += self._offset
             self._sequence = max(self._sequence, number)
         frame = replace_frame_data(frame, payload) if changed else frame
-        return frame if metadata else self._release_content(frame)
+        if metadata:
+            self._record(frame)
+            return frame
+        return self._release_content(frame)
 
     def _metadata(self, kind: str, payload: dict[str, Any]) -> bool:
         if kind == "ping":

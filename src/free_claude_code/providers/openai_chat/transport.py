@@ -60,6 +60,11 @@ from free_claude_code.providers.admission import (
     ProviderAttempt,
     ProviderOperationKind,
 )
+from free_claude_code.providers.continuation import (
+    SourceRecoveryState,
+    public_recovery,
+    require_continuation_progress,
+)
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
@@ -941,6 +946,8 @@ class _OpenAIChatStreamRunner:
             yield from recovery.push(event)
 
         body = self._body
+        base_body = body
+        operation_kind = ProviderOperationKind.GENERATION
         request_stream_usage(body)
         output_reasoning = self._reasoning.output_enabled
         corrections = RequestCorrections("chat", self._reasoning_correction)
@@ -960,18 +967,61 @@ class _OpenAIChatStreamRunner:
 
         while True:
             assembler = self._new_stream_assembler(output_reasoning=output_reasoning)
+            source = SourceRecoveryState(execution)
+
+            def observe_chunk(
+                chunk: Any,
+                assembler: _OpenAIChatStreamAssembler = assembler,
+                source: SourceRecoveryState = source,
+                operation_kind: ProviderOperationKind = operation_kind,
+            ) -> None:
+                assembler.observe_upstream_chunk(chunk)
+                source.observe(
+                    "chat",
+                    {
+                        "usage": {
+                            key: value
+                            for key in (
+                                "prompt_tokens",
+                                "completion_tokens",
+                                "total_tokens",
+                            )
+                            if (value := usage_int(getattr(chunk, "usage", None), key))
+                            is not None
+                        },
+                        "choices": [
+                            {
+                                "delta": {
+                                    "reasoning_details": getattr(
+                                        getattr(choice, "delta", None),
+                                        "reasoning_details",
+                                        None,
+                                    ),
+                                    "audio": getattr(
+                                        getattr(choice, "delta", None), "audio", None
+                                    ),
+                                }
+                            }
+                            for choice in (getattr(chunk, "choices", None) or ())
+                        ],
+                    },
+                    continuing=operation_kind is ProviderOperationKind.CONTINUATION,
+                )
+
             scope: ProviderAttemptScope | None = None
             try:
                 stream, body, attempt, sent_body = await self._transport._create_stream(
                     body,
                     request_recovery,
-                    ProviderOperationKind.GENERATION,
+                    operation_kind,
                     corrections=corrections,
                     endpoint=self._endpoint,
                     request_client=self._request_client,
                     extra_headers=self._extra_headers,
-                    on_event=assembler.observe_upstream_chunk,
+                    on_event=observe_chunk,
                 )
+                if operation_kind is ProviderOperationKind.GENERATION:
+                    base_body = body
                 scope = ProviderAttemptScope(
                     attempt,
                     provider_name=tag,
@@ -1012,7 +1062,7 @@ class _OpenAIChatStreamRunner:
                         provider_authentication_status(error),
                         scope.attempt,
                         body,
-                        operation_kind=ProviderOperationKind.GENERATION,
+                        operation_kind=operation_kind,
                         normal_stop_seen=assembler.normal_stop_seen,
                         propose_correction=partial(
                             corrections.next_body,
@@ -1025,7 +1075,35 @@ class _OpenAIChatStreamRunner:
                     )
                     if corrected_body is not None:
                         body = corrected_body
+                        if operation_kind is ProviderOperationKind.GENERATION:
+                            base_body = body
                         recovery.discard()
+                        continue
+                if (
+                    execution.delivery is not None
+                    and execution.delivery.content_released
+                ):
+                    if scope is not None:
+                        await scope.aclose(active_error=error)
+                    recovered = public_recovery(
+                        execution,
+                        body=base_body,
+                        protocol="chat",
+                        retryable=is_retryable_stream_error(error),
+                        normal_stop_seen=assembler.normal_stop_seen,
+                        source=source,
+                    )
+                    if recovered is not None:
+                        recovery.discard()
+                        if recovered.body is None:
+                            for event in recovered.events:
+                                yield event
+                            return
+                        body = recovered.body
+                        operation_kind = ProviderOperationKind.CONTINUATION
+                        corrections = RequestCorrections(
+                            "chat", self._reasoning_correction
+                        )
                         continue
                 resolution = await self._resolve_attempt_failure(
                     error=error,
@@ -1055,6 +1133,7 @@ class _OpenAIChatStreamRunner:
         for event in assembler.prepare_completion():
             for out_event in hold_event(event):
                 yield out_event
+        require_continuation_progress(execution)
         completion = assembler.completion
         if completion.provider_input_tokens is not None:
             logger.debug(
@@ -1164,7 +1243,10 @@ class _OpenAIChatStreamRunner:
             )
             return _OpenAIChatFailureResolution(outcome=_OpenAIChatFailureOutcome.RETRY)
 
-        if decision.action == RecoveryFailureAction.MIDSTREAM_RECOVERY:
+        if (
+            decision.action == RecoveryFailureAction.MIDSTREAM_RECOVERY
+            and execution.delivery is None
+        ):
             if scope is not None:
                 await scope.aclose(active_error=error)
             try:
