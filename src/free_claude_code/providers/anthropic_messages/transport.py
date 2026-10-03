@@ -69,7 +69,12 @@ from .request_policy import (
     MessagesModelCapabilities,
     resolve_messages_options,
 )
-from .wire import check_messages_failure, messages_events, messages_status_error
+from .wire import (
+    check_messages_failure,
+    is_messages_stop,
+    messages_events,
+    messages_status_error,
+)
 
 type _Presenter = NativeMessagesRelay | AnthropicToResponsesStream
 
@@ -264,13 +269,14 @@ class AnthropicMessagesTransport:
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
     ) -> AsyncIterator[str]:
-        recovery = RecoveryController()
+        recovery = RecoveryController(execution.delivery)
         request_endpoint = RequestEndpoint(endpoint_context)
         request_recovery = RequestRecovery(
             execution, endpoint=request_endpoint, stream=recovery
         )
         corrections = RequestCorrections("messages", reasoning_correction)
         while execution.can_attempt:
+            normal_stop_seen = False
             scope: ProviderAttemptScope | None = None
             stream_opened = False
             sent_body = body
@@ -328,6 +334,7 @@ class AnthropicMessagesTransport:
                     )
                 stream_opened = True
                 async for event_type, payload in messages_events(response):
+                    normal_stop_seen |= is_messages_stop(event_type, payload)
                     check_messages_failure(event_type, payload)
                     output = presenter.feed(event_type, payload)
                     if event_type != "ping" and not attempt.accepted:
@@ -381,7 +388,15 @@ class AnthropicMessagesTransport:
                         continue
                 if scope is not None and not scope.attempt.accepted:
                     attempt_failure = await scope.attempt.fail(error)
-                if attempt_failure is not None and attempt_failure.retry_allowed:
+                if (
+                    attempt_failure is not None
+                    and attempt_failure.retry_allowed
+                    and not (
+                        normal_stop_seen
+                        and execution.delivery is not None
+                        and not execution.delivery.content_released
+                    )
+                ):
                     recovery.discard()
                     continue
                 decision = recovery.advance_failure(
@@ -392,6 +407,7 @@ class AnthropicMessagesTransport:
                     generated_output=recovery.committed,
                     complete_tool_salvageable=False,
                     attempts_remaining=execution.attempts_remaining,
+                    normal_stop_seen=normal_stop_seen,
                 )
                 if decision.action is RecoveryFailureAction.EARLY_RETRY:
                     recovery.discard()

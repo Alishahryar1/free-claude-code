@@ -249,6 +249,10 @@ class _OpenAIChatStreamAssembler:
     def tool_argument_alias_buffers(self) -> Mapping[int, str]:
         return self._tool_argument_alias_buffers
 
+    @property
+    def normal_stop_seen(self) -> bool:
+        return self._finish_reason is not None
+
     def recovered_tool_call_events(
         self, tool_call: CompletedOpenAIToolCall
     ) -> Iterator[str]:
@@ -288,7 +292,7 @@ class _OpenAIChatStreamAssembler:
             )
         choice = chunk.choices[0]
         delta = choice.delta
-        if choice.finish_reason:
+        if choice.finish_reason is not None:
             self._finish_reason = choice.finish_reason
         if delta is None:
             return
@@ -889,7 +893,7 @@ class _OpenAIChatStreamRunner:
         execution = self._transport._admission.start_execution(
             request_id=self._request_id
         )
-        recovery = RecoveryController()
+        recovery = RecoveryController(execution.delivery)
         request_recovery = RequestRecovery(
             execution, endpoint=self._endpoint, stream=recovery
         )
@@ -1126,6 +1130,7 @@ class _OpenAIChatStreamRunner:
             generated_output=generated_output,
             complete_tool_salvageable=complete_tool_salvageable,
             attempts_remaining=execution.attempts_remaining,
+            normal_stop_seen=assembler.normal_stop_seen,
         )
         tag = self._transport._provider_name
         if decision.action == RecoveryFailureAction.EARLY_RETRY:

@@ -46,6 +46,16 @@ async def messages_events(
         yield kind, payload
 
 
+def is_messages_stop(event_type: str, payload: JsonObject) -> bool:
+    """Capture a model stop before presentation or validation can reject it."""
+    delta = payload.get("delta")
+    return event_type == "message_stop" or (
+        event_type == "message_delta"
+        and isinstance(delta, Mapping)
+        and delta.get("stop_reason") is not None
+    )
+
+
 def check_messages_failure(
     event_type: str, payload: JsonObject, *, native: bool = False
 ) -> None:

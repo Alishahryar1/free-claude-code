@@ -144,7 +144,7 @@ def test_leading_pings_allow_exhausted_primary_to_reach_native_fallback():
     assert all(wire.closed for wire in wires)
 
 
-def test_stream_failure_after_start_emits_one_error_without_fallback():
+def test_stream_failure_after_metadata_retries_same_provider_without_fallback():
     from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
     from tests.providers.test_anthropic_messages_transport import _events, _sse
 
@@ -177,7 +177,11 @@ def test_stream_failure_after_start_emits_one_error_without_fallback():
     events = parse_sse_text(response.text)
     assert [event.event for event in events] == ["message_start", "error"]
     assert "anthropic-req-evidence" in response.text
-    assert len(requests) == 1
+    assert len(requests) == 2
+    assert json.loads(requests[0].content) == json.loads(requests[1].content)
+    assert all(
+        json.loads(request.content)["model"] == "primary" for request in requests
+    )
 
 
 @pytest.mark.parametrize("view", ["claude", "claude-desktop", "messages"])

@@ -26,10 +26,17 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.failure_policy import (
     RetryableProviderProtocolError,
     classify_provider_failure,
+    is_retryable_stream_error,
 )
 from free_claude_code.providers.http import ProviderAttemptScope
+from free_claude_code.providers.stream_recovery import can_retry_undelivered_stream
 
-from .wire import check_messages_failure, messages_events, messages_status_error
+from .wire import (
+    check_messages_failure,
+    is_messages_stop,
+    messages_events,
+    messages_status_error,
+)
 
 
 async def stream_native_messages(
@@ -75,6 +82,7 @@ async def stream_native_messages(
             return
         committed = False
         while execution.can_attempt:
+            normal_stop_seen = False
             scope = None
             try:
                 attempt = await execution.open_attempt(ProviderOperationKind.GENERATION)
@@ -103,6 +111,7 @@ async def stream_native_messages(
                     )
                 relay = NativeMessagesPassthrough(public_model)
                 async for kind, payload in messages_events(response):
+                    normal_stop_seen |= is_messages_stop(kind, payload)
                     check_messages_failure(kind, payload, native=True)
                     output = relay.feed(kind, payload)
                     if output is None:
@@ -129,7 +138,20 @@ async def stream_native_messages(
                 )
                 if scope is not None:
                     decision = await scope.attempt.fail(error)
-                    if not committed and decision.retry_allowed:
+                    hidden_stop = (
+                        normal_stop_seen
+                        and execution.delivery is not None
+                        and not execution.delivery.content_released
+                    )
+                    if not hidden_stop and (
+                        (not committed and decision.retry_allowed)
+                        or can_retry_undelivered_stream(
+                            execution.delivery,
+                            retryable=is_retryable_stream_error(error),
+                            attempts_remaining=execution.attempts_remaining,
+                            normal_stop_seen=normal_stop_seen,
+                        )
+                    ):
                         continue
                 if error is not raw_error:
                     raise error from raw_error

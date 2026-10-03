@@ -1,16 +1,15 @@
 """Withhold incomplete client tool calls at the public SSE delivery boundary."""
 
-import re
 from collections.abc import AsyncIterator, Mapping
 from typing import Literal, cast
-
-import simplejson
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.async_iterators import try_close_async_iterator
 from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.openai_responses import is_client_search
+
+from .stream_delivery import PublicStreamEnvelope, frame_data, replace_frame_data
 
 type CallKey = int | str
 
@@ -51,7 +50,11 @@ class ToolCallBufferedStream(AsyncIterator[str]):
     """Keep overlapping calls and intervening frames in their original order."""
 
     def __init__(
-        self, body: AsyncIterator[str], *, wire_api: Literal["messages", "responses"]
+        self,
+        body: AsyncIterator[str],
+        *,
+        wire_api: Literal["messages", "responses"],
+        envelope: PublicStreamEnvelope | None = None,
     ) -> None:
         self._body = body
         self._wire_api = wire_api
@@ -65,6 +68,8 @@ class ToolCallBufferedStream(AsyncIterator[str]):
         self._indices: dict[int, CallKey] = {}
         self._done = False
         self._closed = False
+        self._envelope = envelope
+        self._revision = envelope.state.attempt_revision if envelope else 0
 
     def __aiter__(self) -> ToolCallBufferedStream:
         return self
@@ -74,19 +79,40 @@ class ToolCallBufferedStream(AsyncIterator[str]):
             try:
                 chunk = await anext(self._body)
             except StopAsyncIteration:
+                self._synchronize()
                 self._done = True
                 frames = self._decoder.finish_frames()
             except BaseException:
+                self._synchronize()
                 self._discard_group()
                 raise
             else:
+                self._synchronize()
                 frames = self._decoder.feed_frames(chunk)
             ready = [value for frame in frames for value in self._accept(frame)]
+            if self._envelope is not None:
+                ready = [
+                    value
+                    for frame in ready
+                    if (value := self._envelope.publish(frame)) is not None
+                ]
             if self._done:
                 self._discard_group()
             if ready:
                 return "".join(ready)
         raise StopAsyncIteration
+
+    def _synchronize(self) -> None:
+        envelope = self._envelope
+        if envelope is None or self._revision == envelope.state.attempt_revision:
+            return
+        self._revision = envelope.state.attempt_revision
+        self._discard_group()
+        self._decoder = AnthropicSSEDecoder()
+        self._ids.clear()
+        self._indices.clear()
+        self._delivered.clear()
+        self._discarded.clear()
 
     async def aclose(self) -> None:
         if self._closed:
@@ -206,14 +232,8 @@ class ToolCallBufferedStream(AsyncIterator[str]):
     def _filter_snapshot(self, frame: str) -> str:
         # Parse only frames we may edit using decimal-aware JSON; all other
         # payloads, including argument strings and SSE framing, stay verbatim.
-        lines = re.split(r"(\r\n|\r|\n)", frame)
-        text = "\n".join(
-            line[5:].lstrip(" ") for line in lines[::2] if line.startswith("data:")
-        )
-        if not text:
-            return frame
-        value: object = simplejson.loads(text, use_decimal=True)
-        if not isinstance(value, dict):
+        value = frame_data(frame)
+        if value is None:
             return frame
         response = value.get("response")
         if not isinstance(response, dict):
@@ -233,21 +253,7 @@ class ToolCallBufferedStream(AsyncIterator[str]):
         if len(retained) == len(output):
             return frame
         response["output"] = retained
-        replacement = "data: " + simplejson.dumps(
-            value, use_decimal=True, ensure_ascii=False
-        )
-        parts: list[str] = []
-        replaced = False
-        for index in range(0, len(lines), 2):
-            line = lines[index]
-            ending = lines[index + 1] if index + 1 < len(lines) else ""
-            if line.startswith("data:"):
-                if replaced:
-                    continue
-                line = replacement
-                replaced = True
-            parts.extend((line, ending))
-        return "".join(parts)
+        return replace_frame_data(frame, value)
 
     def _withheld_item(
         self, item: Mapping[str, object], response_status: object
