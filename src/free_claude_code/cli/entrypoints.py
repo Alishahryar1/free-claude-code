@@ -14,7 +14,8 @@ def serve(argv: Sequence[str] | None = None) -> None:
     # Keep the server composition root off metadata-only command paths.
     from free_claude_code.cli.commands import serve as run_server
 
-    run_server()
+    args = sys.argv[1:] if argv is None else argv
+    run_server(console_logging="--auto-started" not in args)
 
 
 def _print_version_if_requested(argv: Sequence[str] | None) -> bool:
