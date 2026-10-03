@@ -48,10 +48,11 @@ class ContinuationStream:
         self._initial_progress = self.delivered.progress
         self._trimmed = 0
         self._text_target = None
-        self._prefix_items = [
-            {**deepcopy(item), "status": "completed"}
-            for _, item in sorted(self.delivered.items.items())
-        ]
+        finalized = deepcopy(self.delivered.items)
+        for event in self._boundary:
+            if event["type"] == "response.output_item.done":
+                finalized[event["output_index"]] = deepcopy(event["item"])
+        self._prefix_items = [item for _, item in sorted(finalized.items())]
 
     def boundary(self) -> list[dict[str, Any]]:
         events, self._boundary = self._boundary, []
@@ -117,14 +118,29 @@ class ContinuationStream:
             ]
 
         before: list[dict[str, Any]] = []
-        if self._prefix_pending and kind in {
-            "content_block_stop",
-            "response.output_text.done",
-            "message_delta",
+        terminal = kind in {
+            "message_stop",
+            "error",
             "response.completed",
             "response.incomplete",
             "response.failed",
-        }:
+        } or (
+            kind == "message_delta"
+            and data.get("delta", {}).get("stop_reason") is not None
+        )
+        target = self._text_target
+        text_closed = target is not None and (
+            (kind == "content_block_stop" and data.get("index") == target[0])
+            or (
+                kind == "response.output_item.done"
+                and data.get("output_index") == target[0]
+            )
+            or (
+                kind in {"response.output_text.done", "response.content_part.done"}
+                and (data.get("output_index"), data.get("content_index", 0)) == target
+            )
+        )
+        if self._prefix_pending and (terminal or text_closed):
             before = self._flush_candidate()
 
         if self.delivered.wire_api == "messages":
@@ -132,43 +148,26 @@ class ContinuationStream:
                 data["usage"] = {"output_tokens": self.delivered.output_tokens()}
         else:
             index = data.get("output_index")
-            recorded = self.delivered.items.get(index, {})
-            if kind == "response.output_text.done":
-                parts = recorded.get("content", [])
-                position = data.get("content_index", 0)
-                if position < len(parts):
-                    data["text"] = parts[position].get("text", "") + self._pending_text(
-                        before
-                    )
-                elif self._text_target == (index, position):
-                    data["text"] = data.get("text", "")[self._trimmed :]
+            target_part = self._text_target == (index, data.get("content_index", 0))
+            if kind == "response.output_text.done" and target_part:
+                data["text"] = data.get("text", "")[self._trimmed :]
             if (
                 kind == "response.content_part.done"
                 and data.get("part", {}).get("type") == "output_text"
+                and target_part
             ):
-                parts = recorded.get("content", [])
-                position = data.get("content_index", 0)
-                if position < len(parts):
-                    data["part"] = deepcopy(parts[position])
-                elif self._text_target == (index, position):
-                    data["part"]["text"] = data["part"].get("text", "")[self._trimmed :]
-            if (
-                kind == "response.output_item.done"
-                and recorded.get("type") == "message"
-            ):
-                data["item"] = {
-                    **deepcopy(recorded),
-                    "status": data["item"].get("status", "completed"),
-                }
-            elif kind == "response.output_item.done" and isinstance(index, int):
+                data["part"]["text"] = data["part"].get("text", "")[self._trimmed :]
+            if kind == "response.output_item.done" and isinstance(index, int):
                 self._trim_item(data["item"], index)
             response = data.get("response")
             if isinstance(response, dict):
                 response["id"] = self.delivered.header.get("id", response.get("id"))
                 if "created_at" in self.delivered.header:
                     response["created_at"] = self.delivered.header["created_at"]
-                if not self.handoff:
-                    if self.delivered.unsafe_reason == "retention_limit":
+                if self.delivered.unsafe_reason == "retention_limit":
+                    if self.handoff:
+                        response["output"] = deepcopy(self._prefix_items)
+                    else:
                         for position, item in enumerate(response.get("output", [])):
                             if isinstance(item.get("id"), str):
                                 item["id"] = self._item_id(item["id"])
@@ -177,11 +176,11 @@ class ContinuationStream:
                             *deepcopy(self._prefix_items),
                             *response.get("output", []),
                         ]
-                    else:
-                        response["output"] = [
-                            deepcopy(item)
-                            for _, item in sorted(self.delivered.items.items())
-                        ]
+                else:
+                    response["output"] = [
+                        deepcopy(item)
+                        for _, item in sorted(self.delivered.items.items())
+                    ]
                 response["usage"] = self.delivered.usage(response.get("output"))
         return [*before, self._sequence(data)]
 
@@ -207,13 +206,10 @@ class ContinuationStream:
         else:
             data["delta"]["text"] = text
 
-    def _pending_text(self, events: list[dict[str, Any]]) -> str:
-        return "".join(
-            self._get_text(event) for event in events if self._is_text_delta(event)
-        )
-
     def _text(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         text = self._get_text(data)
+        if not text:
+            return []
         if self._prefix_pending:
             self._candidate += text
             self._candidate_event = data

@@ -48,6 +48,8 @@ class DeliveredResponse:
         self.wire_api = wire_api
         self.items: dict[int, dict[str, Any]] = {}
         self.closed: set[int] = set()
+        self._text_closed: set[tuple[int, str, int]] = set()
+        self._part_closed: set[tuple[int, str, int]] = set()
         self.header: dict[str, Any] = {}
         self.sequence = -1
         self.unsafe_reason: str | None = None
@@ -70,6 +72,8 @@ class DeliveredResponse:
             self.unsafe_reason = "retention_limit"
             self.items.clear()
             self.closed.clear()
+            self._text_closed.clear()
+            self._part_closed.clear()
             return False
         return True
 
@@ -98,6 +102,8 @@ class DeliveredResponse:
             text += block.get("text", "") + block.get("thinking", "")
         if (
             text
+            or data.get("part", {}).get("refusal")
+            or (kind == "response.refusal.done" and data.get("refusal"))
             or (kind == "content_block_start" and block.get("type") == "tool_use")
             or (
                 kind == "response.output_item.done"
@@ -189,14 +195,27 @@ class DeliveredResponse:
                 self.unsafe_reason = "native_content"
             if item.get("encrypted_content"):
                 self.unsafe_reason = "opaque_reasoning"
+            if any(part.get("type") == "refusal" for part in item.get("content", [])):
+                self.unsafe_reason = "refusal"
             if kind.endswith(".done"):
                 self.closed.add(index)
         elif kind in {
             "response.content_part.added",
             "response.reasoning_summary_part.added",
+            "response.content_part.done",
+            "response.reasoning_summary_part.done",
         }:
             part = data.get("part", {})
-            if not self._retain(part):
+            if not self._retain(part) or (
+                kind.endswith(".done")
+                and not self._retain(
+                    (
+                        kind,
+                        index,
+                        data.get("content_index", data.get("summary_index", 0)),
+                    )
+                )
+            ):
                 return
             item = self.items.get(index)
             if item is None:
@@ -210,15 +229,39 @@ class DeliveredResponse:
             while len(parts) <= position:
                 parts.append({})
             parts[position] = deepcopy(part)
-            if part.get("type") not in {"output_text", "summary_text"}:
+            if kind.endswith(".done"):
+                self._part_closed.add((index, field, position))
+            if part.get("type") == "refusal":
+                self.unsafe_reason = "refusal"
+            elif part.get("type") not in {
+                "output_text",
+                "summary_text",
+                "reasoning_text",
+            }:
                 self.unsafe_reason = "native_content"
         elif kind in {
             "response.output_text.delta",
             "response.reasoning_summary_text.delta",
             "response.reasoning_text.delta",
+            "response.refusal.delta",
+            "response.output_text.done",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_text.done",
+            "response.refusal.done",
         }:
-            delta = data.get("delta", "")
-            if not self._retain(delta):
+            done = kind.endswith(".done")
+            text_field = "refusal" if "refusal" in kind else "text"
+            delta = data.get(text_field if done else "delta", "")
+            if not self._retain(delta) or (
+                done
+                and not self._retain(
+                    (
+                        kind,
+                        index,
+                        data.get("content_index", data.get("summary_index", 0)),
+                    )
+                )
+            ):
                 return
             item = self.items.get(index)
             if item is None:
@@ -236,22 +279,25 @@ class DeliveredResponse:
                         if field == "summary"
                         else "reasoning_text"
                         if "reasoning" in kind
+                        else "refusal"
+                        if text_field == "refusal"
                         else "output_text",
-                        "text": "",
+                        text_field: "",
                     }
                 )
-            parts[position]["text"] = parts[position].get("text", "") + delta
+            parts[position][text_field] = (
+                delta if done else parts[position].get(text_field, "") + delta
+            )
+            if done:
+                self._text_closed.add((index, field, position))
+            if text_field == "refusal":
+                self.unsafe_reason = "refusal"
         elif kind.endswith(".delta") and kind not in {
             "response.function_call_arguments.delta",
             "response.custom_tool_call_input.delta",
         }:
             self.unsafe_reason = "native_delta"
         elif kind not in {
-            "response.output_text.done",
-            "response.content_part.done",
-            "response.reasoning_text.done",
-            "response.reasoning_summary_text.done",
-            "response.reasoning_summary_part.done",
             "response.function_call_arguments.delta",
             "response.function_call_arguments.done",
             "response.custom_tool_call_input.delta",
@@ -314,55 +360,42 @@ class DeliveredResponse:
             if self.wire_api == "messages":
                 events.append({"type": "content_block_stop", "index": index})
             else:
-                for position, part in enumerate(item.get("content", [])):
-                    if part.get("type") == "reasoning_text":
-                        events.append(
-                            {
-                                "type": "response.reasoning_text.done",
-                                "item_id": item["id"],
-                                "output_index": index,
-                                "content_index": position,
-                                "text": part.get("text", ""),
-                            }
-                        )
-                        continue
-                    events.extend(
-                        [
-                            {
-                                "type": "response.output_text.done",
-                                "item_id": item["id"],
-                                "output_index": index,
-                                "content_index": position,
-                                "text": part.get("text", ""),
-                            },
-                            {
-                                "type": "response.content_part.done",
-                                "item_id": item["id"],
-                                "output_index": index,
-                                "content_index": position,
-                                "part": deepcopy(part),
-                            },
-                        ]
-                    )
-                for position, part in enumerate(item.get("summary", [])):
-                    events.extend(
-                        [
-                            {
-                                "type": "response.reasoning_summary_text.done",
-                                "item_id": item["id"],
-                                "output_index": index,
-                                "summary_index": position,
-                                "text": part.get("text", ""),
-                            },
-                            {
-                                "type": "response.reasoning_summary_part.done",
-                                "item_id": item["id"],
-                                "output_index": index,
-                                "summary_index": position,
-                                "part": deepcopy(part),
-                            },
-                        ]
-                    )
+                for field in ("content", "summary"):
+                    for position, part in enumerate(item.get(field, [])):
+                        key = (index, field, position)
+                        if key in self._part_closed:
+                            continue
+                        summary = field == "summary"
+                        identity = {
+                            "item_id": item["id"],
+                            "output_index": index,
+                            "summary_index" if summary else "content_index": position,
+                        }
+                        if key not in self._text_closed:
+                            text_kind = (
+                                "response.reasoning_summary_text.done"
+                                if summary
+                                else "response.reasoning_text.done"
+                                if part.get("type") == "reasoning_text"
+                                else "response.output_text.done"
+                            )
+                            events.append(
+                                {
+                                    "type": text_kind,
+                                    **identity,
+                                    "text": part.get("text", ""),
+                                }
+                            )
+                        if part.get("type") != "reasoning_text":
+                            events.append(
+                                {
+                                    "type": "response.reasoning_summary_part.done"
+                                    if summary
+                                    else "response.content_part.done",
+                                    **identity,
+                                    "part": deepcopy(part),
+                                }
+                            )
                 events.append(
                     {
                         "type": "response.output_item.done",
@@ -373,21 +406,20 @@ class DeliveredResponse:
         return events
 
     def handoff_events(self) -> list[dict[str, Any]]:
+        """Signal handoff; the public writer fills output and usage after closure."""
         if self.wire_api == "messages":
             return [
                 {
                     "type": "message_delta",
                     "delta": {"stop_reason": "tool_use", "stop_sequence": None},
-                    "usage": {"output_tokens": self.output_tokens()},
+                    "usage": {},
                 },
                 {"type": "message_stop"},
             ]
         response = {
             **deepcopy(self.header),
             "status": "completed",
-            "output": [deepcopy(item) for _, item in sorted(self.items.items())],
         }
-        response["usage"] = self.usage()
         return [{"type": "response.completed", "response": response}]
 
     def usage(self, output: list[dict[str, Any]] | None = None) -> dict[str, Any]:
