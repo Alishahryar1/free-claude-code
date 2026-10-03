@@ -35,6 +35,8 @@ from free_claude_code.core.request_outcomes import (
 )
 from free_claude_code.core.trace import close_stream_input, trace_event
 
+from .tool_call_buffer import ToolCallBufferedStream
+
 TERMINAL_EXECUTION_ERROR_HEADERS = {"x-should-retry": "false"}
 
 PreStartErrorResponse = Callable[[BaseException], Response]
@@ -229,6 +231,7 @@ def trace_terminal_execution_error(
 async def _first_chunk_streaming_response(
     body: AsyncIterator[str],
     *,
+    wire_api: WireApi,
     headers: Mapping[str, str],
     pre_start_error_response: PreStartErrorResponse,
     terminal_frame: TerminalFrameEmitter | None,
@@ -254,11 +257,14 @@ async def _first_chunk_streaming_response(
         return pre_start_error_response(exc)
 
     return ManagedStreamingResponse(
-        _PrefetchedStream(
-            first_chunk,
-            body,
-            terminal_frame=terminal_frame,
-            terminal_failure_observer=terminal_failure_observer,
+        ToolCallBufferedStream(
+            _PrefetchedStream(
+                first_chunk,
+                body,
+                terminal_frame=terminal_frame,
+                terminal_failure_observer=terminal_failure_observer,
+            ),
+            wire_api=wire_api,
         ),
         media_type="text/event-stream",
         headers=dict(headers),
@@ -352,6 +358,7 @@ async def anthropic_sse_streaming_response(
     """Return a streaming response for Anthropic-style SSE streams."""
     return await _first_chunk_streaming_response(
         body,
+        wire_api="messages",
         headers=ANTHROPIC_SSE_RESPONSE_HEADERS,
         pre_start_error_response=pre_start_error_response,
         terminal_frame=_anthropic_terminal_frame,
@@ -402,6 +409,7 @@ async def openai_responses_sse_streaming_response(
     """Return a streaming response for OpenAI Responses-style SSE."""
     return await _first_chunk_streaming_response(
         body,
+        wire_api="responses",
         headers=headers,
         pre_start_error_response=pre_start_error_response,
         terminal_frame=committed_response_failure_frame,

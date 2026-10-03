@@ -23,3 +23,20 @@ def test_incremental_sse_terminators_preserve_unicode_text(
         events.extend(decoder.feed(raw[start : start + width]))
     assert [event.data for event in events] == [payload, payload]
     assert decoder.finish() == ()
+
+
+@pytest.mark.parametrize("newline", ["\r", "\n", "\r\n"])
+@pytest.mark.parametrize("width", range(1, 8))
+def test_raw_frames_preserve_comments_fields_delimiters_and_unicode(newline, width):
+    payload = json.dumps({"text": "left\u2028middle\u2029right"}, ensure_ascii=False)
+    raw = (
+        f": keepalive{newline}{newline}"
+        f"id: upstream{newline}event: custom{newline}"
+        f"data: {payload}{newline}{newline}"
+    )
+    decoder = AnthropicSSEDecoder()
+    frames = []
+    for start in range(0, len(raw), width):
+        frames.extend(decoder.feed_frames(raw[start : start + width]))
+    frames.extend(decoder.finish_frames())
+    assert "".join(frames) == raw

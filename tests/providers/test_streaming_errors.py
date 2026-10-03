@@ -453,8 +453,8 @@ class TestStreamingExceptionHandling:
         assert "Connection lost" in error.message
 
     @pytest.mark.asyncio
-    async def test_error_after_native_tool_call_closes_block_then_raises(self):
-        """A provider closes tool state, then leaves terminal serialization to API."""
+    async def test_error_after_native_tool_call_keeps_tool_incomplete_and_raises(self):
+        """A failure never marks an unfinished tool complete for the API."""
         provider = _make_provider()
         request = _make_request()
         tool_chunk = _make_tool_calls_chunk(
@@ -475,7 +475,7 @@ class TestStreamingExceptionHandling:
         event_text = "".join(events)
         parsed = parse_sse_text(event_text)
         assert "tool_use" in event_text
-        assert parsed[-1].event == "content_block_stop"
+        assert not any(event.event == "content_block_stop" for event in parsed)
         assert "Connection lost after tool" in error.message
         assert "Connection lost after tool" not in event_text
         assert "event: error\n" not in event_text
@@ -847,7 +847,7 @@ class TestStreamingExceptionHandling:
 
     @pytest.mark.asyncio
     async def test_error_after_native_tool_call_failure_includes_body(self):
-        """Detailed failure data survives after the provider closes tool state."""
+        """Detailed failure data survives without completing an unfinished tool."""
         provider = _make_provider()
         request = _make_request()
         tool_chunk = _make_tool_calls_chunk(
@@ -876,7 +876,7 @@ class TestStreamingExceptionHandling:
         event_text = "".join(events)
         parsed = parse_sse_text(event_text)
         assert "tool_use" in event_text
-        assert parsed[-1].event == "content_block_stop"
+        assert not any(event.event == "content_block_stop" for event in parsed)
         assert "event: error\n" not in event_text
         assert "bad after tool" not in event_text
         assert "Request ID: REQ_TOOL_BODY" not in event_text
