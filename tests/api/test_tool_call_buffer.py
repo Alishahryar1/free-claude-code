@@ -192,7 +192,7 @@ async def test_call_is_hidden_until_completion_then_sent_before_response_end(
     task = asyncio.create_task(_serve(response, send=send))
     try:
         await asyncio.wait_for(waiting_for_completion.wait(), 1)
-        assert frames[0] in "".join(sent)
+        assert "".join(sent) == (frames[0] if wire == "responses" else "")
         assert "call_0" not in "".join(sent)
         complete.set()
         await asyncio.wait_for(waiting_for_tail.wait(), 1)
@@ -284,7 +284,7 @@ async def test_overlapping_group_keeps_order_and_is_discarded_on_failure(wire, f
     task = asyncio.create_task(_serve(await _response(wire, body()), send=send))
     try:
         await asyncio.wait_for(waiting.wait(), 1)
-        assert "".join(sent) == frames[0]
+        assert "".join(sent) == (frames[0] if wire == "responses" else "")
     finally:
         finish.set()
         await asyncio.wait_for(task, 1)
@@ -334,7 +334,7 @@ async def test_unfinished_call_is_discarded_at_eof(wire):
     response = await _response(wire, body())
     result = "".join([str(chunk) async for chunk in response.body_iterator])
     await response.aclose()
-    assert result == frames[0]
+    assert result == (frames[0] if wire == "responses" else "")
 
 
 @pytest.mark.asyncio
@@ -530,7 +530,7 @@ async def test_cancellation_discards_pending_group_and_closes_body_once(wire):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 1)
-    assert sent == [frames[0]]
+    assert sent == ([frames[0]] if wire == "responses" else [])
     assert closed == released == 1
 
 

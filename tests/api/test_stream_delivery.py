@@ -30,6 +30,61 @@ async def drained(body, wire):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ending", ["activity", "empty", "stop", "error", "raise", "eof"]
+)
+async def test_messages_start_is_published_only_with_committed_activity(ending):
+    start = _frames("messages", [_start("messages")])[0]
+    harmless = ': keepalive\r\n\r\nevent: ping\r\ndata: {"type":"ping"}\r\n\r\n'
+    activity = (
+        'event: future\ndata: {"type":"future","extension":0.1234567890123456789}\n\n'
+    )
+
+    async def source():
+        yield start
+        yield harmless
+        if ending == "activity":
+            yield activity
+        if ending in {"activity", "empty"}:
+            yield "".join(_frames("messages", _end("messages")))
+        elif ending == "stop":
+            yield 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+        elif ending == "error":
+            yield "".join(_frames("messages", _end("messages", failed=True)))
+        elif ending == "raise":
+            raise RuntimeError("stream interrupted")
+
+    response = await _response("messages", source())
+    try:
+        iterator = aiter(response.body_iterator)
+        assert await anext(iterator) == harmless
+        remaining = "".join([str(chunk) async for chunk in iterator])
+        if ending in {"activity", "empty", "stop"}:
+            assert remaining.startswith(start)
+            assert parse_sse_text(remaining)[-1].event == "message_stop"
+            if ending == "activity":
+                assert activity in remaining
+        else:
+            assert "message_start" not in remaining
+            if ending != "eof":
+                assert parse_sse_text(remaining)[-1].event == "error"
+    finally:
+        await response.aclose()
+
+
+@pytest.mark.asyncio
+async def test_messages_deferral_preserves_duplicate_starts_within_one_attempt():
+    raw = "".join(
+        _frames("messages", [_start("messages"), _start("messages"), *_end("messages")])
+    )
+
+    async def source():
+        yield raw
+
+    assert await drained(source(), "messages") == raw
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85"])
 @pytest.mark.parametrize("ending", ["\r", "\n", "\r\n"])
@@ -224,8 +279,11 @@ async def test_prefetch_read_and_close_can_migrate_tasks_without_context_leak():
     async def read():
         return await anext(iterator)
 
+    async def finish():
+        return [chunk async for chunk in iterator]
+
     await asyncio.create_task(read())
-    await asyncio.create_task(read())
+    await asyncio.create_task(finish())
     await asyncio.create_task(response.aclose())
     assert closed == seen and current_stream_delivery() is None
 

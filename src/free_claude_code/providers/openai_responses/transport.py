@@ -454,6 +454,7 @@ class OpenAIResponsesTransport:
                         scope.attempt,
                         body,
                         operation_kind=ProviderOperationKind.GENERATION,
+                        normal_stop_seen=normal_stop_seen,
                         propose_correction=partial(
                             corrections.next_body,
                             raw_error,

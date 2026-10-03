@@ -374,6 +374,7 @@ class AnthropicMessagesTransport:
                         scope.attempt,
                         body,
                         operation_kind=ProviderOperationKind.GENERATION,
+                        normal_stop_seen=normal_stop_seen,
                         propose_correction=partial(
                             corrections.next_body,
                             raw_error,
@@ -387,16 +388,15 @@ class AnthropicMessagesTransport:
                         recovery.discard()
                         continue
                 if scope is not None and not scope.attempt.accepted:
-                    attempt_failure = await scope.attempt.fail(error)
-                if (
-                    attempt_failure is not None
-                    and attempt_failure.retry_allowed
-                    and not (
+                    if (
                         normal_stop_seen
                         and execution.delivery is not None
                         and not execution.delivery.content_released
-                    )
-                ):
+                    ):
+                        await scope.attempt.accept()
+                    else:
+                        attempt_failure = await scope.attempt.fail(error)
+                if attempt_failure is not None and attempt_failure.retry_allowed:
                     recovery.discard()
                     continue
                 decision = recovery.advance_failure(

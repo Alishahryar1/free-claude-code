@@ -84,7 +84,7 @@ class PublicStreamEnvelope:
         self._created_at: object = None
         self._sequence: int = -1
         self._offset: int | None = None
-        self._initial_usage: dict[str, Any] = {}
+        self._pending_starts: list[str] = []
         self.start_frame = ""
 
     def synchronize(self) -> None:
@@ -94,7 +94,21 @@ class PublicStreamEnvelope:
         self._replacement = bool(self._published_starts)
         self._seen_starts.clear()
         self._offset = None
-        self._initial_usage.clear()
+        self.discard_pending_starts()
+
+    def discard_pending_starts(self) -> None:
+        """Discard metadata that no client has observed."""
+        self._pending_starts.clear()
+
+    def _release_content(self, frame: str) -> str:
+        self.state.release_content()
+        if not self._pending_starts:
+            return frame
+        self.start_frame = self._pending_starts[0]
+        self._published_starts.add("message_start")
+        prefix = "".join(self._pending_starts)
+        self.discard_pending_starts()
+        return prefix + frame
 
     def publish(self, frame: str) -> str | None:
         """Normalize only a replacement envelope and mark actually released frames."""
@@ -105,18 +119,20 @@ class PublicStreamEnvelope:
                 line.strip() and not line.startswith(":")
                 for line in re.split(r"\r\n|\r|\n", frame)
             ):
-                self.state.release_content()
+                return self._release_content(frame)
             return frame
 
         raw_kind = payload.get("type")
         kind = raw_kind if isinstance(raw_kind, str) else ""
         metadata = self._metadata(kind, payload)
+        if self._wire_api == "messages":
+            if kind == "message_start" and metadata and not self.state.content_released:
+                self._pending_starts.append(frame)
+                return None
+            if kind == "error":
+                self.discard_pending_starts()
         start = kind in {"message_start", "response.created", "response.in_progress"}
         if start and metadata:
-            if kind == "message_start":
-                message = payload.get("message")
-                if isinstance(message, dict) and isinstance(message.get("usage"), dict):
-                    self._initial_usage = dict(message["usage"])
             if kind not in self._seen_starts:
                 self._seen_starts.add(kind)
                 if self._replacement and kind in self._published_starts:
@@ -154,26 +170,6 @@ class PublicStreamEnvelope:
             ):
                 payload["response_id"] = self._public_id
                 changed = True
-        if self._replacement and kind == "message_delta":
-            delta = payload.get("delta")
-            usage = payload.get("usage")
-            if (
-                isinstance(delta, dict)
-                and delta.get("stop_reason") is not None
-                and isinstance(usage, dict)
-            ):
-                for field in (
-                    "input_tokens",
-                    "cache_creation_input_tokens",
-                    "cache_read_input_tokens",
-                ):
-                    if (
-                        usage.get(field) is None
-                        and self._initial_usage.get(field) is not None
-                    ):
-                        usage[field] = self._initial_usage[field]
-                        changed = True
-
         number = payload.get("sequence_number")
         if isinstance(number, int) and not isinstance(number, bool):
             if self._replacement:
@@ -184,9 +180,8 @@ class PublicStreamEnvelope:
                     changed = True
                 number += self._offset
             self._sequence = max(self._sequence, number)
-        if not metadata:
-            self.state.release_content()
-        return replace_frame_data(frame, payload) if changed else frame
+        frame = replace_frame_data(frame, payload) if changed else frame
+        return frame if metadata else self._release_content(frame)
 
     def _metadata(self, kind: str, payload: dict[str, Any]) -> bool:
         if kind == "ping":

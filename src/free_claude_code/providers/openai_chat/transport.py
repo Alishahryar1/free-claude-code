@@ -1013,6 +1013,7 @@ class _OpenAIChatStreamRunner:
                         scope.attempt,
                         body,
                         operation_kind=ProviderOperationKind.GENERATION,
+                        normal_stop_seen=assembler.normal_stop_seen,
                         propose_correction=partial(
                             corrections.next_body,
                             error,

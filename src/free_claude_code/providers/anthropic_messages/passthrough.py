@@ -137,22 +137,24 @@ async def stream_native_messages(
                     else raw_error
                 )
                 if scope is not None:
-                    decision = await scope.attempt.fail(error)
                     hidden_stop = (
                         normal_stop_seen
                         and execution.delivery is not None
                         and not execution.delivery.content_released
                     )
-                    if not hidden_stop and (
-                        (not committed and decision.retry_allowed)
-                        or can_retry_undelivered_stream(
+                    if hidden_stop:
+                        await scope.attempt.accept()
+                    else:
+                        decision = await scope.attempt.fail(error)
+                        if (
+                            not committed and decision.retry_allowed
+                        ) or can_retry_undelivered_stream(
                             execution.delivery,
                             retryable=is_retryable_stream_error(error),
                             attempts_remaining=execution.attempts_remaining,
                             normal_stop_seen=normal_stop_seen,
-                        )
-                    ):
-                        continue
+                        ):
+                            continue
                 if error is not raw_error:
                     raise error from raw_error
                 raise

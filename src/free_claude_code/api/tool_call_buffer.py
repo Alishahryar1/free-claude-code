@@ -85,6 +85,8 @@ class ToolCallBufferedStream(AsyncIterator[str]):
             except BaseException:
                 self._synchronize()
                 self._discard_group()
+                if self._envelope is not None:
+                    self._envelope.discard_pending_starts()
                 raise
             else:
                 self._synchronize()
@@ -98,6 +100,8 @@ class ToolCallBufferedStream(AsyncIterator[str]):
                 ]
             if self._done:
                 self._discard_group()
+                if self._envelope is not None:
+                    self._envelope.discard_pending_starts()
             if ready:
                 return "".join(ready)
         raise StopAsyncIteration
@@ -119,6 +123,8 @@ class ToolCallBufferedStream(AsyncIterator[str]):
             return
         self._closed = True
         self._discard_group()
+        if self._envelope is not None:
+            self._envelope.discard_pending_starts()
         self._decoder.finish_frames()
         self._ids.clear()
         self._indices.clear()

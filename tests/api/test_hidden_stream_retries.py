@@ -12,6 +12,7 @@ import pytest
 from free_claude_code.api.response_streams import bind_response_lifetime
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.config.nim import NimSettings
+from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.reasoning import ReasoningPolicy
@@ -170,7 +171,9 @@ async def test_raw_native_unicode_metadata_keeps_hidden_retry_eligible(separator
     abandoned = partial_tool("messages")
     abandoned[0]["message"]["extension"] = "a" + separator + "b"
     first = Wire([_sse(*abandoned)])
-    second = Wire([_sse(*tool_events("messages", '{"path":"winning"}'))])
+    winner = tool_events("messages", '{"path":"winning"}')
+    winner[0]["message"]["extension"] = "winner" + separator + "b"
+    second = Wire([_sse(*winner)])
     bodies = []
 
     def reply(request):
@@ -193,7 +196,7 @@ async def test_raw_native_unicode_metadata_keeps_hidden_retry_eligible(separator
         assert first.closed and second.closed
         assert_winning_tool(result, "messages")
         assert parse_sse_text(result)[0].data["message"]["extension"] == (
-            "a" + separator + "b"
+            "winner" + separator + "b"
         )
     finally:
         await p.cleanup()
@@ -672,21 +675,39 @@ async def test_raw_native_published_activity_prevents_clean_retry(kind):
 
 
 @pytest.mark.asyncio
-async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides():
+@pytest.mark.parametrize("cache_details", ["missing", "null", "zero", "partial"])
+async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides(
+    cache_details,
+):
     first = partial_tool("messages")
     first[0]["message"]["usage"] = {
         "input_tokens": 1,
-        "cache_read_input_tokens": 2,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 70,
+        "cache_creation": {
+            "ephemeral_5m_input_tokens": 70,
+            "ephemeral_1h_input_tokens": 0,
+        },
+        "abandoned_extension": {"old": 7},
         "output_tokens": 0,
     }
     winner = tool_events("messages", '{"path":"winning"}')
     winner[0]["message"]["id"] = "msg_winning"
     winner[0]["message"]["usage"] = {
-        "input_tokens": 300,
-        "cache_read_input_tokens": 40,
-        "cache_creation_input_tokens": 70,
+        "input_tokens": 0,
+        "cache_read_input_tokens": 70,
+        "cache_creation_input_tokens": 0,
         "output_tokens": 1,
+        "winning_extension": {"note": "a\u2028b", "counts": [0, None]},
     }
+    if cache_details != "missing":
+        winner[0]["message"]["usage"]["cache_creation"] = (
+            None
+            if cache_details == "null"
+            else {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}
+            if cache_details == "zero"
+            else {"ephemeral_1h_input_tokens": 0}
+        )
     winner[-2]["usage"] = {"input_tokens": 25, "output_tokens": 10}
     bodies = []
 
@@ -695,24 +716,31 @@ async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides()
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            stream=Wire([_sse(*(first if len(bodies) == 1 else winner))]),
+            stream=Wire([_sse(*(first if len(bodies) < 3 else winner))]),
         )
 
-    p = provider(reply)
+    p = provider(reply, max_attempts=3)
     try:
         result = await delivered(
             p.stream_native_messages(NativeMessagesRequest(native_body(True))),
             "messages",
         )
-        assert len(bodies) == 2
+        assert len(bodies) == 3 and bodies[0] == bodies[1] == bodies[2]
         events = parse_sse_text(result)
-        assert events[0].data["message"]["id"] == first[0]["message"]["id"]
-        assert events[-2].data["usage"] == {
-            "input_tokens": 25,
-            "output_tokens": 10,
-            "cache_read_input_tokens": 40,
-            "cache_creation_input_tokens": 70,
+        assert events[0].data["message"]["id"] == "msg_winning"
+        assert events[0].data["message"]["usage"] == winner[0]["message"]["usage"]
+        assert events[-2].data["usage"] == winner[-2]["usage"]
+
+        async def emitted():
+            yield result
+
+        message, error, complete = await aggregate_anthropic_sse_to_message(emitted())
+        assert complete and error is None
+        assert message["usage"] == {
+            **winner[0]["message"]["usage"],
+            **winner[-2]["usage"],
         }
+        assert "abandoned_extension" not in result
     finally:
         await p.cleanup()
 
@@ -759,10 +787,9 @@ async def test_raw_native_cancellation_closes_once_without_replacement(
         await bind_response_lifetime(response, release)
         if not before_first_read:
             iterator = aiter(response.body_iterator)
-            await anext(iterator)
 
             async def read():
-                return await anext(iterator)
+                return [chunk async for chunk in iterator]
 
             task = asyncio.create_task(read())
             await asyncio.wait_for(reading.wait(), 1)

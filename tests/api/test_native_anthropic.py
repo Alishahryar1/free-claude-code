@@ -175,7 +175,7 @@ def test_stream_failure_after_metadata_retries_same_provider_without_fallback():
         response = client.post("/v1/messages", json=native_body(True))
     assert response.status_code == 200
     events = parse_sse_text(response.text)
-    assert [event.event for event in events] == ["message_start", "error"]
+    assert [event.event for event in events] == ["error"]
     assert "anthropic-req-evidence" in response.text
     assert len(requests) == 2
     assert json.loads(requests[0].content) == json.loads(requests[1].content)

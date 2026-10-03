@@ -10,11 +10,11 @@ from free_claude_code.providers.anthropic import AnthropicProvider
 from tests.providers.support import immediate_admission, make_provider_config
 
 
-def provider(handler, **kwargs):
+def provider(handler, *, max_attempts=2, **kwargs):
     return AnthropicProvider(
         make_provider_config("upstream-secret", "https://api.anthropic.com/v1"),
         workspace_id="wrkspc_test",
-        admission=immediate_admission(max_attempts=2),
+        admission=immediate_admission(max_attempts=max_attempts),
         transport=httpx.MockTransport(handler),
         **kwargs,
     )
