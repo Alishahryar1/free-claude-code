@@ -490,11 +490,11 @@ fcc-update
 
 If FCC is already up to date, the command stops without running the installer. Otherwise, it shows the installed and available versions before updating. If the version check fails, retry the command.
 
-To reinstall FCC or change optional components while already up to date, run the [installer](#install) directly.
+To reinstall FCC or change optional components while already up to date, run the [installer](#1-install) directly.
 
 For local voice support, include `--voice-local` (macOS/Linux) or `-VoiceLocal` (Windows), plus your `--torch-backend` or `-TorchBackend` option if used.
 
-If your installation does not have `fcc-update` yet, run the [installer](#install) once to add it.
+If your installation does not have `fcc-update` yet, run the [installer](#1-install) once to add it.
 
 ### Muse Code on native Windows
 
