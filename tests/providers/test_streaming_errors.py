@@ -2844,6 +2844,34 @@ class TestProcessToolCall:
         assert calls is not None
         assert calls[0]["function"]["name"] == original
 
+    @pytest.mark.parametrize("index", [None, 0])
+    def test_buffered_collector_keeps_parallel_calls_without_distinct_index(
+        self, index
+    ):
+        """Recovery path: Gemini's parallel calls (null or repeated index) stay separate calls."""
+        collector = OpenAIToolCallCollector()
+        for tool_id, path in (("call_a", "a.py"), ("call_b", "b.py")):
+            collector.add(
+                SimpleNamespace(
+                    index=index,
+                    id=tool_id,
+                    function=SimpleNamespace(
+                        name="test", arguments=json.dumps({"p": path})
+                    ),
+                )
+            )
+
+        request = _make_request(
+            tools=[{"name": "test", "input_schema": {"type": "object"}}]
+        )
+        calls = collector.completed_calls(tool_schemas_by_name(request))
+
+        assert calls is not None
+        assert [(c["id"], json.loads(c["function"]["arguments"])) for c in calls] == [
+            ("call_a", {"p": "a.py"}),
+            ("call_b", {"p": "b.py"}),
+        ]
+
     def test_tool_call_id_arrives_before_name_still_emits_id_and_name(self):
         """Split-stream tool: id (no name) then name then args; id preserved on start."""
         provider = _make_provider()
@@ -3013,6 +3041,77 @@ class TestProcessToolCall:
 
         assert "tool_use" in event_text
         assert "call_none" in event_text
+
+    @staticmethod
+    def _tool_blocks(deltas: list[dict]) -> dict[int, tuple[str, object]]:
+        """Feed deltas through one assembler; return {block index: (id, parsed input)}."""
+        assembler = _make_tool_assembler(_make_provider())
+        sse = _make_anthropic_output()
+        ids: dict[int, str] = {}
+        args: dict[int, str] = {}
+        for delta in deltas:
+            for event in assembler.process_tool_call(delta, sse):
+                data = json.loads(event.split("data: ", 1)[1])
+                if data["type"] == "content_block_start":
+                    ids[data["index"]] = data["content_block"]["id"]
+                    args[data["index"]] = ""
+                elif data["type"] == "content_block_delta":
+                    args[data["index"]] += data["delta"]["partial_json"]
+        return {index: (ids[index], json.loads(args[index])) for index in ids}
+
+    @pytest.mark.parametrize("index", [None, 0])
+    def test_parallel_calls_without_distinct_index_stay_separate(self, index):
+        """Gemini sends parallel calls whole, with a null or repeated index: each id is its own block."""
+        blocks = self._tool_blocks(
+            [
+                {
+                    "index": index,
+                    "id": "call_a",
+                    "function": {"name": "test", "arguments": '{"p": "a.py"}'},
+                },
+                {
+                    "index": index,
+                    "id": "call_b",
+                    "function": {"name": "test", "arguments": '{"p": "b.py"}'},
+                },
+            ]
+        )
+
+        assert blocks == {0: ("call_a", {"p": "a.py"}), 1: ("call_b", {"p": "b.py"})}
+
+    def test_streamed_args_follow_the_newest_call_at_a_repeated_index(self):
+        blocks = self._tool_blocks(
+            [
+                {
+                    "index": 0,
+                    "id": "call_a",
+                    "function": {"name": "test", "arguments": '{"p": '},
+                },
+                {"index": 0, "function": {"arguments": '"a.py"}'}},
+                {
+                    "index": 0,
+                    "id": "call_b",
+                    "function": {"name": "test", "arguments": '{"p": '},
+                },
+                {"index": 0, "function": {"arguments": '"b.py"}'}},
+            ]
+        )
+
+        assert blocks == {0: ("call_a", {"p": "a.py"}), 1: ("call_b", {"p": "b.py"})}
+
+    def test_an_id_repeated_on_every_delta_is_one_call(self):
+        blocks = self._tool_blocks(
+            [
+                {
+                    "index": 0,
+                    "id": "call_a",
+                    "function": {"name": "test", "arguments": '{"p": '},
+                },
+                {"index": 0, "id": "call_a", "function": {"arguments": '"a.py"}'}},
+            ]
+        )
+
+        assert blocks == {0: ("call_a", {"p": "a.py"})}
 
     def test_tool_args_emitted_as_delta(self):
         """Arguments are emitted as input_json_delta events."""

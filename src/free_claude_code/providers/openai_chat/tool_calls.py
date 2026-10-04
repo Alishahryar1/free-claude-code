@@ -46,6 +46,7 @@ class OpenAIToolCallCollector:
 
     def __init__(self) -> None:
         self._calls: dict[int, _CollectedToolCall] = {}
+        self._wire_slots: dict[int | None, int] = {}
 
     @property
     def has_calls(self) -> bool:
@@ -53,11 +54,17 @@ class OpenAIToolCallCollector:
 
     def add(self, tool_call: Any) -> None:
         """Add one SDK tool-call delta without emitting downstream state."""
-        raw_index = getattr(tool_call, "index", 0)
-        index = raw_index if isinstance(raw_index, int) and raw_index >= 0 else 0
+        raw_index = getattr(tool_call, "index", None)
+        wire = raw_index if isinstance(raw_index, int) and raw_index >= 0 else None
+        index = self._wire_slots.get(wire, 0 if wire is None else wire)
+        tool_id = getattr(tool_call, "id", None)
+        bound = self._calls[index].tool_id if index in self._calls else None
+        if tool_id and bound is not None and bound != str(tool_id):
+            # A new call at an occupied index (Gemini's null or repeated index): give it its own slot.
+            index = max(self._calls) + 1
+        self._wire_slots[wire] = index
         state = self._calls.setdefault(index, _CollectedToolCall(index=index))
 
-        tool_id = getattr(tool_call, "id", None)
         if tool_id:
             state.tool_id = str(tool_id)
 
@@ -155,6 +162,31 @@ class OpenAIToolCallAssembler:
         self._reserved_tool_ids = {tool_id for tool_id in reserved_tool_ids if tool_id}
         self._candidate_tool_ids: dict[int, str] = {}
         self._public_tool_ids: dict[int, str] = {}
+        self._wire_slots: dict[int | None, int] = {}
+
+    def _tool_slot(self, tc: Mapping[str, Any], output: ChatStreamOutput) -> int:
+        """Slot for one delta. Gemini's OpenAI endpoint sends parallel calls with a null or repeated
+        ``index``; a new id where another call already sits is a new call, and later id-less deltas
+        at that wire index follow it."""
+        raw_index = tc.get("index")
+        wire = raw_index if isinstance(raw_index, int) else None
+        if wire is not None and wire < 0:
+            return len(output.tool_states)
+        slot = self._wire_slots.get(wire, 0 if wire is None else wire)
+        tool_id = tc.get("id")
+        if isinstance(tool_id, str) and tool_id.strip():
+            bound = self._public_tool_ids.get(slot) or self._candidate_tool_ids.get(
+                slot
+            )
+            if bound is not None and bound != tool_id:
+                taken = (
+                    set(output.tool_states)
+                    | set(self._candidate_tool_ids)
+                    | set(self._public_tool_ids)
+                )
+                slot = max(taken, default=-1) + 1
+        self._wire_slots[wire] = slot
+        return slot
 
     def process_tool_call(
         self,
@@ -167,10 +199,7 @@ class OpenAIToolCallAssembler:
         tool_argument_alias_buffers: dict[int, str] | None = None,
     ) -> Iterator[str]:
         """Process one tool-call delta and yield client-protocol events."""
-        raw_index = tc.get("index", 0)
-        tc_index = raw_index if isinstance(raw_index, int) else 0
-        if tc_index < 0:
-            tc_index = len(output.tool_states)
+        tc_index = self._tool_slot(tc, output)
 
         fn_delta = tc.get("function", {})
         incoming_name = fn_delta.get("name")
