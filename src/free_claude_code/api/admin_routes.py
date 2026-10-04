@@ -1,5 +1,6 @@
 """Local admin UI routes and APIs."""
 
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 
@@ -521,39 +522,72 @@ def _local_provider_url(provider_id: str, values: dict[str, str]) -> str:
 async def _check_local_provider(
     provider_id: str, base_url: str, path: str
 ) -> JsonObject:
+    descriptor = PROVIDER_CATALOG.get(provider_id)
+    display_name = descriptor.display_name if descriptor else provider_id
     clean_url = base_url.strip().rstrip("/")
     if not clean_url:
         return {
             "provider_id": provider_id,
+            "display_name": display_name,
+            "probe_path": path,
             "status": "missing_url",
             "label": "Missing URL",
             "base_url": base_url,
+            "http_status": None,
+            "latency_ms": None,
+            "error_type": None,
+            "error_message": "No base URL configured.",
         }
 
     url = f"{clean_url}{path}"
+    started = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
             response = await client.get(url)
+        latency_ms = round((time.perf_counter() - started) * 1000, 2)
         ok = 200 <= response.status_code < 300
+        error_message = (
+            None if ok else f"Unexpected status code: {response.status_code}"
+        )
         return {
             "provider_id": provider_id,
-            "status": "reachable" if ok else "offline",
-            "label": "Reachable" if ok else "Offline",
+            "display_name": display_name,
+            "probe_path": path,
+            "status": "reachable" if ok else "unreachable",
+            "label": "Reachable" if ok else "Unreachable",
             "base_url": base_url,
             "status_code": response.status_code,
+            "http_status": response.status_code,
+            "latency_ms": latency_ms,
+            "error_type": None if ok else "HTTPStatusError",
+            "error_message": error_message,
+            "message": error_message,
         }
     except Exception as exc:
+        latency_ms = round((time.perf_counter() - started) * 1000, 2)
         logger.debug(
             "Admin local provider check failed: provider={} exc_type={}",
             provider_id,
             type(exc).__name__,
         )
+        if isinstance(exc, httpx.TimeoutException):
+            error_message = "The local provider did not respond before the timeout."
+        elif isinstance(exc, httpx.HTTPError):
+            error_message = "Could not connect to the local provider."
+        else:
+            error_message = _LOCAL_PROVIDER_CHECK_FAILURE_MESSAGE
         return {
             "provider_id": provider_id,
-            "status": "offline",
-            "label": "Offline",
+            "display_name": display_name,
+            "probe_path": path,
+            "status": "unreachable",
+            "label": "Unreachable",
             "base_url": base_url,
-            "message": _LOCAL_PROVIDER_CHECK_FAILURE_MESSAGE,
+            "http_status": None,
+            "latency_ms": latency_ms,
+            "error_type": type(exc).__name__,
+            "error_message": error_message,
+            "message": error_message,
         }
 
 

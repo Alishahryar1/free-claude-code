@@ -2189,8 +2189,29 @@ def test_admin_local_provider_status_reports_reachable(
         )
 
     assert response.status_code == 200
-    assert response.json()["provider_id"] == provider_id
-    assert response.json()["status"] == "reachable"
+    provider = response.json()
+    assert provider["provider_id"] == provider_id
+    assert (
+        provider["display_name"]
+        == {
+            "lmstudio": "LM Studio",
+            "llamacpp": "LLaMA.cpp",
+            "ollama": "Ollama",
+        }[provider_id]
+    )
+    assert (
+        provider["probe_path"]
+        == {
+            "lmstudio": "/models",
+            "llamacpp": "/models",
+            "ollama": "/api/tags",
+        }[provider_id]
+    )
+    assert provider["status"] == "reachable"
+    assert provider["http_status"] == provider["status_code"] == 200
+    assert provider["latency_ms"] >= 0
+    assert provider["error_type"] is None
+    assert provider["error_message"] is None
 
 
 def test_admin_local_provider_status_checks_only_requested_provider(
@@ -2274,13 +2295,76 @@ def test_admin_local_provider_failure_does_not_return_exception_text(
 
     assert response.status_code == 200
     provider = response.json()
-    assert provider["status"] == "offline"
-    assert provider["message"] == (
+    assert provider["status"] == "unreachable"
+    assert provider["display_name"] == "LM Studio"
+    assert provider["probe_path"] == "/models"
+    assert provider["error_type"] == "RuntimeError"
+    assert provider["error_message"] == (
         "Could not connect. Verify the URL and that the local provider is running."
     )
-    assert "CREDENTIAL[unrecognized-format-987654321]" not in provider["message"]
-    assert "RuntimeError" not in provider["message"]
-    assert "error_type" not in provider
+    assert provider["message"] == provider["error_message"]
+    assert provider["latency_ms"] >= 0
+    assert provider["http_status"] is None
+    assert "CREDENTIAL[unrecognized-format-987654321]" not in provider["error_message"]
+    assert "RuntimeError" not in provider["error_message"]
+
+
+def test_admin_local_provider_status_reports_http_failure_details(
+    monkeypatch, tmp_path
+):
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    app = create_test_app()
+
+    class FailingStatusAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url: str):
+            return httpx.Response(503)
+
+    with patch(
+        "free_claude_code.api.admin_routes.httpx.AsyncClient",
+        return_value=FailingStatusAsyncClient(),
+    ):
+        response = _local_client(app).get("/admin/api/providers/lmstudio/local-status")
+
+    assert response.status_code == 200
+    provider = response.json()
+    assert provider["status"] == "unreachable"
+    assert provider["label"] == "Unreachable"
+    assert provider["http_status"] == provider["status_code"] == 503
+    assert provider["error_type"] == "HTTPStatusError"
+    assert provider["error_message"] == "Unexpected status code: 503"
+    assert provider["latency_ms"] >= 0
+
+
+def test_admin_local_provider_status_reports_missing_url(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    app = create_test_app()
+
+    with patch(
+        "free_claude_code.api.admin_routes._local_provider_url", return_value=""
+    ):
+        response = _local_client(app).get("/admin/api/providers/lmstudio/local-status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider_id": "lmstudio",
+        "display_name": "LM Studio",
+        "probe_path": "/models",
+        "status": "missing_url",
+        "label": "Missing URL",
+        "base_url": "",
+        "http_status": None,
+        "latency_ms": None,
+        "error_type": None,
+        "error_message": "No base URL configured.",
+    }
 
 
 @pytest.mark.parametrize(

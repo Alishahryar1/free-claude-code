@@ -1398,15 +1398,25 @@ async function refreshLocalStatus(config) {
         if (state.localStatusRequest !== request || !request.providerIds.has(providerId)) return;
         if (provider.status === "missing_url") return;
         if (provider.status === "reachable") {
-          updateProviderCheckResult(providerId, "ok", `Reachable: ${provider.base_url}`, "availability");
+          const latency = Number.isFinite(provider.latency_ms)
+            ? ` (${provider.latency_ms} ms)`
+            : "";
+          updateProviderCheckResult(providerId, "ok", `Reachable: ${provider.base_url}${latency}`, "availability");
           return;
         }
-        const detail = provider.message
-          ? provider.message
-          : provider.status_code
-            ? `${provider.base_url} returned HTTP ${provider.status_code}`
-            : "The local provider did not respond.";
-        updateProviderCheckResult(providerId, "error", `Unavailable: ${detail}`, "availability");
+        const httpStatus = provider.error_message
+          ? provider.http_status ?? provider.status_code
+          : provider.status_code ?? provider.http_status;
+        const detail = provider.error_message || provider.message || (httpStatus
+          ? `${provider.base_url} returned HTTP ${httpStatus}`
+          : "The local provider did not respond.");
+        const diagnostics = [
+          provider.error_type,
+          httpStatus && !detail.includes(String(httpStatus)) ? `HTTP ${httpStatus}` : null,
+          Number.isFinite(provider.latency_ms) ? `${provider.latency_ms} ms` : null,
+        ].filter(Boolean).join(" · ");
+        const suffix = diagnostics ? ` (${diagnostics})` : "";
+        updateProviderCheckResult(providerId, "error", `Unavailable: ${detail}${suffix}`, "availability");
       } catch {
         if (state.localStatusRequest !== request || !request.providerIds.has(providerId)) return;
         updateProviderCheckResult(providerId, "error", "Availability check failed. Use Test to retry.", "availability");
