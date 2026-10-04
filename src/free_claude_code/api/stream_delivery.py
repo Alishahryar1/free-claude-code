@@ -139,7 +139,8 @@ class PublicResponseStream(AsyncIterator[str]):
                     "message": f"{message}\n\nThe partial answer was already streamed. "
                     "A complete final snapshot is unavailable.",
                 }
-            elif self._continuation.active:
+            elif self._continuation.active or self.state.transition is not None:
+                # A timeout can precede the first frame that activates recovery.
                 response["output"] = [
                     deepcopy(item) for _, item in sorted(self._delivered.items.items())
                 ]
