@@ -43,6 +43,7 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.continuation import (
+    ContinuationRequest,
     SourceRecoveryState,
     public_recovery,
 )
@@ -159,13 +160,14 @@ class OpenAIResponsesTransport:
             extra_headers=dict(extra_headers or {}),
             request_id=request_id,
             response_model=response_model,
-            presenter_factory=lambda: MessagesResponsesPresenter(
+            presenter_factory=lambda pad_empty: MessagesResponsesPresenter(
                 ResponsesProviderStream(
                     message_id=message_id,
                     model=response_model,
                     input_tokens=input_tokens,
                     tool_names=tool_names,
                     log_raw_events=self._log_raw_sse_events,
+                    pad_empty=pad_empty,
                 )
             ),
         )
@@ -189,7 +191,7 @@ class OpenAIResponsesTransport:
             extra_headers=dict(extra_headers or {}),
             request_id=request_id,
             response_model=response_model,
-            presenter_factory=lambda: NativeResponsesPresenter(
+            presenter_factory=lambda _pad_empty: NativeResponsesPresenter(
                 public_model=response_model, tool_events=tools.event_adapter()
             ),
         )
@@ -322,7 +324,7 @@ class OpenAIResponsesTransport:
             execution, endpoint=endpoint, stream=recovery
         )
         corrections = RequestCorrections("responses", reasoning_correction)
-        base_body = body
+        continuation_request = ContinuationRequest("responses")
         operation_kind = ProviderOperationKind.GENERATION
         trace_event(
             stage="provider",
@@ -339,7 +341,9 @@ class OpenAIResponsesTransport:
         while execution.can_attempt:
             normal_stop_seen = False
             source = SourceRecoveryState(execution)
-            presenter = presenter_factory()
+            presenter = presenter_factory(
+                operation_kind is ProviderOperationKind.GENERATION
+            )
             start_events = tuple(presenter.start())
             presenter_started = False
             adapt_event = (
@@ -484,8 +488,6 @@ class OpenAIResponsesTransport:
                     )
                     if corrected_body is not None:
                         body = corrected_body
-                        if operation_kind is ProviderOperationKind.GENERATION:
-                            base_body = body
                         recovery.discard()
                         continue
                 attempt_failure = None
@@ -526,8 +528,8 @@ class OpenAIResponsesTransport:
                     await scope.aclose(active_error=error)
                 recovered = public_recovery(
                     execution,
-                    body=base_body,
-                    protocol="responses",
+                    body=body,
+                    request=continuation_request,
                     retryable=decision.retryable,
                     normal_stop_seen=normal_stop_seen,
                     source=source,

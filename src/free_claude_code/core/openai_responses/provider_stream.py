@@ -50,6 +50,7 @@ class ResponsesProviderStream:
         input_tokens: int,
         log_raw_events: bool = False,
         tool_names: OpenAIToolNameCodec | None = None,
+        pad_empty: bool = True,
     ) -> None:
         self.ledger = AnthropicStreamLedger(
             message_id,
@@ -58,6 +59,7 @@ class ResponsesProviderStream:
             log_raw_events=log_raw_events,
         )
         self.completed = False
+        self._pad_empty = pad_empty
         self.generated_output = False
         self._tool_names = tool_names or OpenAIToolNameCodec.from_names(())
         self._tools: dict[str, _ToolState] = {}
@@ -219,7 +221,7 @@ class ResponsesProviderStream:
         response = data.get("response")
         response = response if isinstance(response, dict) else {}
         events = list(self.ledger.close_all_blocks())
-        if not self.ledger.has_content_block():
+        if self._pad_empty and not self.ledger.has_content_block():
             events.extend(self.ledger.ensure_text_block())
             events.append(self.ledger.emit_text_delta(" "))
             events.append(self.ledger.stop_text_block())

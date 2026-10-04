@@ -154,47 +154,56 @@ class PublicRecovery:
     body: dict[str, Any] | None = None
 
 
-def continuation_body(
-    body: dict[str, Any], protocol: UpstreamProtocol, text: str, thinking: str
-) -> dict[str, Any]:
-    result = deepcopy(body)
-    instruction = "The previous provider stream was interrupted. Continue the assistant response exactly where it stopped. Do not repeat text already written."
-    if result.get("tools"):
-        instruction += " No tool calls from this interrupted assistant turn were delivered or executed. Any unfinished calls were discarded. Emit the required tool calls using the provided tools."
-    if thinking:
-        instruction = f"{reasoning_context(thinking)}\n\n{instruction}"
-    if protocol == "responses":
-        original = result.get("input", [])
-        if isinstance(original, str):
-            original = [{"role": "user", "content": original}]
-        result["input"] = [
-            *original,
-            *(
-                [
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": text}],
-                    }
-                ]
-                if text
-                else []
-            ),
-            {"role": "user", "content": [{"type": "input_text", "text": instruction}]},
-        ]
-    else:
-        result["messages"] = [
-            *result.get("messages", []),
-            *([{"role": "assistant", "content": text}] if text else []),
-            {"role": "user", "content": instruction},
-        ]
-    return result
+class ContinuationRequest:
+    """Replace our private history suffix while retaining accepted corrections."""
+
+    def __init__(self, protocol: UpstreamProtocol) -> None:
+        self._protocol = protocol
+        self._injected_rows = 0
+
+    def build(self, body: dict[str, Any], text: str, thinking: str) -> dict[str, Any]:
+        result = deepcopy(body)
+        responses = self._protocol == "responses"
+        field = "input" if responses else "messages"
+        history = result.get(field, [])
+        if responses and isinstance(history, str):
+            history = [{"role": "user", "content": history}]
+        if self._injected_rows:
+            # Request corrections preserve these trailing plain-text turns.
+            history = history[: -self._injected_rows]
+        instruction = "The previous provider stream was interrupted. Continue the assistant response exactly where it stopped. Do not repeat text already written."
+        if result.get("tools"):
+            instruction += " No tool calls from this interrupted assistant turn were delivered or executed. Any unfinished calls were discarded. Emit the required tool calls using the provided tools."
+        if thinking:
+            instruction = f"{reasoning_context(thinking)}\n\n{instruction}"
+        tail = []
+        if text:
+            tail.append(
+                {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text}]
+                    if responses
+                    else text,
+                }
+            )
+        tail.append(
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": instruction}]
+                if responses
+                else instruction,
+            }
+        )
+        result[field] = [*history, *tail]
+        self._injected_rows = len(tail)
+        return result
 
 
 def public_recovery(
     execution: ProviderExecution,
     *,
     body: dict[str, Any],
-    protocol: UpstreamProtocol,
+    request: ContinuationRequest,
     retryable: bool,
     normal_stop_seen: bool,
     source: SourceRecoveryState,
@@ -239,7 +248,7 @@ def public_recovery(
         return None
     if not (prefix.text or prefix.thinking):
         return None
-    replacement = continuation_body(body, protocol, prefix.text, prefix.thinking)
+    replacement = request.build(body, prefix.text, prefix.thinking)
     delivery.begin_continuation()
     trace_event(
         stage="provider",

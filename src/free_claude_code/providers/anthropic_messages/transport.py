@@ -39,6 +39,7 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.continuation import (
+    ContinuationRequest,
     SourceRecoveryState,
     public_recovery,
 )
@@ -279,7 +280,7 @@ class AnthropicMessagesTransport:
             execution, endpoint=request_endpoint, stream=recovery
         )
         corrections = RequestCorrections("messages", reasoning_correction)
-        base_body = body
+        continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
         while execution.can_attempt:
             normal_stop_seen = False
@@ -397,8 +398,6 @@ class AnthropicMessagesTransport:
                     )
                     if corrected_body is not None:
                         body = corrected_body
-                        if operation_kind is ProviderOperationKind.GENERATION:
-                            base_body = body
                         recovery.discard()
                         continue
                 if scope is not None and not scope.attempt.accepted:
@@ -430,8 +429,8 @@ class AnthropicMessagesTransport:
                     await scope.aclose(active_error=error)
                 recovered = public_recovery(
                     execution,
-                    body=base_body,
-                    protocol="messages",
+                    body=body,
+                    request=continuation_request,
                     retryable=decision.retryable,
                     normal_stop_seen=normal_stop_seen,
                     source=source,

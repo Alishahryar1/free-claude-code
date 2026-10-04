@@ -112,4 +112,4 @@ class ResponsesExecutionOutcome:
     failure: Exception | None = None
 
 
-type ResponsesPresenterFactory = Callable[[], ResponsesStreamPresenter]
+type ResponsesPresenterFactory = Callable[[bool], ResponsesStreamPresenter]
