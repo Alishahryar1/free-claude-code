@@ -159,9 +159,7 @@ def test_unusable_index_keeps_fragments_of_one_id_together(call_consumer, index)
     [
         (call(0, None, '{"path":', name=None), call(0, "call_a", '"a"}')),
         (call(None, "call_a", '{"path":', name=None), call(4, "call_a", '"a"}')),
-        (call(None, None, '{"path":', name=None), call(4, "call_a", '"a"}')),
         (call(0, "call_a", '{"path":'), call(0, None, '"a"}', name=None)),
-        (call(None, "call_a", '{"path":'), call(None, None, '"a"}', name=None)),
     ],
 )
 def test_partial_identity_can_learn_missing_fields(call_consumer, first, second):
@@ -172,12 +170,69 @@ def test_partial_identity_can_learn_missing_fields(call_consumer, first, second)
 
 
 @pytest.mark.parametrize(
+    "identities",
+    [
+        [(None, "call_a"), (1, None), (1, "call_b")],
+        [(0, None), (None, "call_b"), (0, "call_a")],
+    ],
+)
+def test_disjoint_partial_identities_keep_content_separate(call_consumer, identities):
+    add, completed = call_consumer
+    for (index, tool_id), path in zip(identities[:2], ("a", "b"), strict=True):
+        add(
+            call(
+                index,
+                tool_id,
+                '{"path":"' + path + '"}',
+                metadata={"google": {"thought_signature": path}},
+            )
+        )
+    index, tool_id = identities[2]
+    add(call(index, tool_id, "", name=None))
+    assert [(item["arguments"], item["metadata"]) for item in completed()] == [
+        ('{"path":"a"}', {"google": {"thought_signature": "a"}}),
+        ('{"path":"b"}', {"google": {"thought_signature": "b"}}),
+    ]
+
+
+def test_new_index_does_not_attach_to_unindexed_calls(call_consumer):
+    add, completed = call_consumer
+    add(call(None, "call_a", '{"path":"a"}'))
+    add(call(None, "call_b", '{"path":"b"}'))
+    add(call(3, None, '{"path":"c"}'))
+    assert [item["arguments"] for item in completed()] == [
+        '{"path":"a"}',
+        '{"path":"b"}',
+        '{"path":"c"}',
+    ]
+
+
+@pytest.mark.parametrize(
+    "index,tool_id",
+    [(None, None), ("missing", None), (-1, ""), ("invalid", " "), (False, None)],
+)
+@pytest.mark.parametrize("existing", [False, True])
+def test_unidentified_fragment_is_rejected_before_content_changes(
+    call_consumer, index, tool_id, existing
+):
+    add, completed = call_consumer
+    if existing:
+        add(call(0, "call_a", '{"path":"a"}', metadata={"original": True}))
+    before = deepcopy(completed())
+    with pytest.raises(RetryableToolProtocolError):
+        add(call(index, tool_id, '{"path":"b"}', metadata={"wrong": True}))
+    assert completed() == before
+
+
+@pytest.mark.parametrize(
     "initial,fragment",
     [
         ([call(0, "call_a"), call(0, "call_b")], call(0, None, "bad")),
         ([call(0, "same"), call(1, "same")], call(None, "same", "bad")),
         ([call(0, None), call(1, None)], call(None, None, "bad")),
-        ([call(None, "call_a"), call(None, "call_b")], call(3, None, "bad")),
+        ([call(0, "call_a"), call(None, "call_b")], call(0, None, "bad")),
+        ([call(0, "call_a"), call(1, None)], call(None, "call_a", "bad")),
+        ([call(0, None), call(None, "call_a")], call(0, "call_a", "bad")),
     ],
 )
 def test_ambiguous_fragment_is_rejected_before_content_changes(
@@ -325,7 +380,10 @@ async def test_recovery_import_discards_unstarted_call_state(recovered_ids):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stop", [None, "same", "before"])
-async def test_collector_identity_failure_respects_stop_and_closes_attempts(stop):
+@pytest.mark.parametrize("fragment_index", [0, None])
+async def test_collector_identity_failure_respects_stop_and_closes_attempts(
+    stop, fragment_index
+):
     provider = _make_provider()
     runner = _make_stream_runner(
         provider,
@@ -342,7 +400,7 @@ async def test_collector_identity_failure_respects_stop_and_closes_attempts(stop
         chunks.append(_make_chunk(finish_reason="tool_calls"))
     chunks.append(
         _make_chunk(
-            tool_calls=[sdk_call(call(0, None, "uncertain", name=None))],
+            tool_calls=[sdk_call(call(fragment_index, None, "uncertain", name=None))],
             finish_reason="tool_calls" if stop == "same" else None,
         )
     )

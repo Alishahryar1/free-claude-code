@@ -31,25 +31,8 @@ def chat_chunk(delta, finish=None):
     }
 
 
-@pytest.mark.parametrize(
-    "indexes", [(0, 1), (0, 0), (None, None), ("missing", "missing")]
-)
-@pytest.mark.parametrize(
-    "wire,streaming", [("messages", True), ("messages", False), ("responses", True)]
-)
-def test_gemini_parallel_calls_reach_public_api(monkeypatch, indexes, wire, streaming):
+def gemini_api_response(monkeypatch, events, wire, streaming, *, max_attempts=2):
     sent = []
-    events = [
-        chat_chunk(
-            {
-                "tool_calls": [
-                    call(indexes[0], "call_a", '{"path":"a"}'),
-                    call(indexes[1], "call_b", '{"path":"b"}'),
-                ]
-            }
-        ),
-        chat_chunk({}, "tool_calls"),
-    ]
     upstream = (
         "".join(f"data: {json.dumps(event)}\n\n" for event in events)
         + "data: [DONE]\n\n"
@@ -72,7 +55,7 @@ def test_gemini_parallel_calls_reach_public_api(monkeypatch, indexes, wire, stre
     )
     provider = GeminiProvider(
         make_provider_config(api_key="fixture", base_url="https://fixture.invalid/v1"),
-        admission=immediate_admission(max_attempts=2),
+        admission=immediate_admission(max_attempts=max_attempts),
     )
     app = create_test_app(
         Settings(MODEL="gemini/test-model", ENABLE_WEB_SERVER_TOOLS=False),
@@ -96,6 +79,70 @@ def test_gemini_parallel_calls_reach_public_api(monkeypatch, indexes, wire, stre
         }
     with TestClient(app) as client:
         response = client.post(f"/v1/{wire}", json=body)
+    return response, sent
+
+
+@pytest.mark.parametrize(
+    "deltas,expected_ids",
+    [
+        (
+            [
+                [
+                    call(first, "call_a", '{"path":"a"}'),
+                    call(second, "call_b", '{"path":"b"}'),
+                ]
+            ],
+            ("call_a", "call_b"),
+        )
+        for first, second in [(0, 1), (0, 0), (None, None), ("missing", "missing")]
+    ]
+    + [
+        (
+            [
+                [call(None, "call_a", '{"path":"a"}')],
+                [call(1, None, '{"path":"b"}')],
+                [call(1, "call_b", "", name=None)],
+            ],
+            ("call_a", None),
+        ),
+        (
+            [
+                [call(0, None, '{"path":"a"}')],
+                [call(None, "call_b", '{"path":"b"}')],
+                [call(0, "call_a", "", name=None)],
+            ],
+            (None, "call_b"),
+        ),
+        (
+            [
+                [
+                    call(0, "call_a", '{"path":'),
+                    call(0, None, '"a"}', name=None),
+                    call(1, "call_b", '{"path":"b"}'),
+                ]
+            ],
+            ("call_a", "call_b"),
+        ),
+    ],
+    ids=[
+        "distinct",
+        "reused",
+        "null",
+        "missing",
+        "late_id",
+        "late_index",
+        "same_chunk",
+    ],
+)
+@pytest.mark.parametrize(
+    "wire,streaming", [("messages", True), ("messages", False), ("responses", True)]
+)
+def test_gemini_parallel_calls_reach_public_api(
+    monkeypatch, deltas, expected_ids, wire, streaming
+):
+    events = [chat_chunk({"tool_calls": calls}) for calls in deltas]
+    events.append(chat_chunk({}, "tool_calls"))
+    response, sent = gemini_api_response(monkeypatch, events, wire, streaming)
     assert response.status_code == 200, response.text
     assert len(sent) == 1
 
@@ -132,10 +179,61 @@ def test_gemini_parallel_calls_reach_public_api(monkeypatch, indexes, wire, stre
             for item in events[-1].data["response"]["output"]
             if item["type"] == "function_call"
         ]
-    assert values == [
-        ("call_a", "read", {"path": "a"}),
-        ("call_b", "read", {"path": "b"}),
+    assert [(name, arguments) for _, name, arguments in values] == [
+        ("read", {"path": "a"}),
+        ("read", {"path": "b"}),
     ]
+    assert len({tool_id for tool_id, _, _ in values}) == 2
+    for (tool_id, _, _), expected_id in zip(values, expected_ids, strict=True):
+        if expected_id is None:
+            assert tool_id.startswith("tool_")
+        else:
+            assert tool_id == expected_id
+
+
+@pytest.mark.parametrize("anonymous", [True, False])
+@pytest.mark.parametrize(
+    "wire,streaming", [("messages", True), ("messages", False), ("responses", True)]
+)
+def test_gemini_unresolvable_calls_cannot_complete(
+    monkeypatch, anonymous, wire, streaming
+):
+    if anonymous:
+        events = [
+            chat_chunk(
+                {
+                    "tool_calls": [
+                        call(None, None, '{"path":"a"}'),
+                        call(None, None, '{"path":"b"}'),
+                    ]
+                }
+            )
+        ]
+    else:
+        # Either call could own the index-only fragment. Both assignments
+        # would produce valid JSON, so argument validation cannot decide.
+        events = [
+            chat_chunk(
+                {
+                    "tool_calls": [
+                        call(0, "call_a", '{"path":"a'),
+                        call(None, "call_b", '{"path":"b'),
+                    ]
+                }
+            ),
+            chat_chunk({"tool_calls": [call(0, None, "_part", name=None)]}),
+            chat_chunk({"tool_calls": [call(0, "call_b", '"}', name=None)]}),
+            chat_chunk({"tool_calls": [call(0, "call_a", '"}', name=None)]}),
+        ]
+    events.append(chat_chunk({}, "tool_calls"))
+    response, sent = gemini_api_response(
+        monkeypatch, events, wire, streaming, max_attempts=1
+    )
+    assert len(sent) == 1
+    # The public tool buffer has not committed a response, so failure can
+    # still be reported as an HTTP error for streaming requests too.
+    assert response.status_code == 502
+    assert isinstance(response.json().get("error"), dict)
 
 
 def completed_arguments(events, wire):
@@ -153,7 +251,7 @@ def completed_arguments(events, wire):
     )
 
 
-def ambiguous_events(stop, *, incomplete=False):
+def ambiguous_events(stop, *, incomplete=False, fragment_index=0):
     events = [
         chat_chunk(
             {
@@ -176,7 +274,7 @@ def ambiguous_events(stop, *, incomplete=False):
         events.append(chat_chunk({}, "tool_calls"))
     events.append(
         chat_chunk(
-            {"tool_calls": [call(0, None, "uncertain", name=None)]},
+            {"tool_calls": [call(fragment_index, None, "uncertain", name=None)]},
             "tool_calls" if stop == "same" else None,
         )
     )
@@ -188,14 +286,15 @@ def ambiguous_events(stop, *, incomplete=False):
 @pytest.mark.parametrize("prefix", [None, "content", "reasoning_content"])
 @pytest.mark.parametrize("stop", [None, "same", "before"])
 @pytest.mark.parametrize("max_attempts", [1, 2])
+@pytest.mark.parametrize("fragment_index", [0, None])
 async def test_public_identity_failure_respects_delivery_stop_and_budget(
-    monkeypatch, wire, prefix, stop, max_attempts
+    monkeypatch, wire, prefix, stop, max_attempts, fragment_index
 ):
     monkeypatch.setattr(
         "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
         lambda: RecoveryHoldbackBuffer(max_bytes=1),
     )
-    first = ambiguous_events(stop)
+    first = ambiguous_events(stop, fragment_index=fragment_index)
     if prefix:
         first.insert(0, chat_chunk({prefix: "already visible"}))
     async with _harness(
@@ -248,6 +347,7 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("incomplete", [False, True])
+@pytest.mark.parametrize("fragment_index", [0, None])
 @pytest.mark.parametrize(
     "committed,stop,max_attempts",
     [
@@ -260,7 +360,7 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
     ],
 )
 async def test_private_identity_failure_never_salvages_or_repairs(
-    monkeypatch, wire, incomplete, committed, stop, max_attempts
+    monkeypatch, wire, incomplete, committed, stop, max_attempts, fragment_index
 ):
     monkeypatch.setattr(
         "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
@@ -268,7 +368,7 @@ async def test_private_identity_failure_never_salvages_or_repairs(
             holdback_seconds=60, max_bytes=1 if committed else 1_000_000
         ),
     )
-    first = ambiguous_events(stop, incomplete=incomplete)
+    first = ambiguous_events(stop, incomplete=incomplete, fragment_index=fragment_index)
     emitted = []
     failure = None
     async with _harness(

@@ -6,7 +6,7 @@ from free_claude_code.providers.failure_policy import RetryableToolProtocolError
 
 
 class AmbiguousToolCallIdentityError(RetryableToolProtocolError):
-    """A fragment cannot be assigned to exactly one existing tool call."""
+    """A fragment lacks sufficient identity to assign its content safely."""
 
 
 @dataclass(slots=True)
@@ -28,42 +28,33 @@ class ToolCallIdentityResolver:
         return slot
 
     def resolve(self, raw_index: object, raw_id: object) -> int:
-        index = raw_index if isinstance(raw_index, int) and raw_index >= 0 else None
+        index = (
+            raw_index
+            if isinstance(raw_index, int)
+            and not isinstance(raw_index, bool)
+            and raw_index >= 0
+            else None
+        )
         tool_id = raw_id if isinstance(raw_id, str) and raw_id.strip() else None
+        if index is None and tool_id is None:
+            raise AmbiguousToolCallIdentityError(
+                "Upstream tool-call fragment has neither a usable index nor an ID."
+            )
 
-        if index is not None and tool_id is not None:
-            matches = [
-                slot
-                for slot, call in enumerate(self._calls)
-                if call.index == index and call.tool_id == tool_id
-            ]
-            if not matches:
-                matches = [
-                    slot
-                    for slot, call in enumerate(self._calls)
-                    if call.index in (None, index) and call.tool_id in (None, tool_id)
-                ]
-        elif index is not None:
-            matches = [
-                slot for slot, call in enumerate(self._calls) if call.index == index
-            ]
-            if not matches:
-                matches = [
-                    slot for slot, call in enumerate(self._calls) if call.index is None
-                ]
-        elif tool_id is not None:
-            matches = [
-                slot for slot, call in enumerate(self._calls) if call.tool_id == tool_id
-            ]
-            if not matches:
-                matches = [
-                    slot
-                    for slot, call in enumerate(self._calls)
-                    if call.tool_id is None
-                ]
-        else:
-            matches = list(range(len(self._calls)))
-
+        matches = [
+            slot
+            for slot, call in enumerate(self._calls)
+            if (index is None or call.index in (None, index))
+            and (tool_id is None or call.tool_id in (None, tool_id))
+        ]
+        # A new identifier starts a call unless a known field links it to one.
+        # Once linked, missing fields on other calls still make it ambiguous.
+        if not any(
+            (index is not None and self._calls[slot].index == index)
+            or (tool_id is not None and self._calls[slot].tool_id == tool_id)
+            for slot in matches
+        ):
+            matches = []
         if len(matches) > 1:
             raise AmbiguousToolCallIdentityError(
                 "Upstream tool-call fragment has ambiguous identity."
