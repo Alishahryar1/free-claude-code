@@ -120,26 +120,14 @@ class ContinuationStream:
                 retryable=False,
             )
         if isinstance(response, dict):
-            if kind == "response.failed":
-                # Failure snapshots may still describe the pre-output start.
-                response["output"] = self.failure_output()
-            else:
-                response["output"] = [
-                    *deepcopy(self._prefix_items),
-                    *([] if self.handoff else output),
-                ]
+            response["output"] = [
+                *deepcopy(self._prefix_items),
+                *([] if self.handoff else output),
+            ]
             response["usage"] = self.delivered.usage(response["output"])
         elif kind == "message_delta" and "usage" in data:
             data["usage"] = {"output_tokens": self.delivered.output_tokens()}
         return data
-
-    def failure_output(self) -> list[dict[str, Any]]:
-        """Retain public content when a failure has no authoritative snapshot."""
-        return (
-            deepcopy(self._prefix_items)
-            if self.delivered.unsafe_reason == "retention_limit"
-            else [deepcopy(item) for _, item in sorted(self.delivered.items.items())]
-        )
 
     @staticmethod
     def _has_output(items: list[dict[str, Any]]) -> bool:

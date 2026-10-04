@@ -79,7 +79,11 @@ class DeliveredResponse:
             return False
         return True
 
-    def observe(self, data: dict[str, Any]) -> None:
+    @property
+    def retention_exhausted(self) -> bool:
+        return self._limited
+
+    def observe(self, data: dict[str, Any], *, count_progress: bool = True) -> None:
         kind = data.get("type", "")
         if not isinstance(kind, str):
             self.unsafe_reason = "unknown_event"
@@ -102,7 +106,7 @@ class DeliveredResponse:
         block = data.get("content_block", {})
         if kind == "content_block_start":
             text += block.get("text", "") + block.get("thinking", "")
-        if (
+        if count_progress and (
             text
             or self._new_snapshot_text(data)
             or data.get("part", {}).get("refusal")

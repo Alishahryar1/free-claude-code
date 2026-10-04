@@ -99,6 +99,14 @@ class SourceRecoveryState:
                         self._response_item(
                             item, completed=item.get("status") == "completed"
                         )
+            part = payload.get("part")
+            if (
+                kind in {"response.content_part.added", "response.content_part.done"}
+                and isinstance(part, dict)
+                and part.get("annotations")
+            ):
+                self.unsafe_reason = "native_content"
+                self._handoff_blocked = True
             if kind.startswith(
                 (
                     "response.web_search",

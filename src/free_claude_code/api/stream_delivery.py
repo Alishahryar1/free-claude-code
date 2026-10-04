@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator
+from copy import deepcopy
 from typing import Any, Literal
 
 import simplejson
@@ -93,12 +94,7 @@ class PublicResponseStream(AsyncIterator[str]):
         try:
             while True:
                 frame, synthetic = await anext(self._events)
-                if self._continuation.active:
-                    payload = frame_data(frame)
-                    if payload is not None:
-                        frame = replace_frame_data(
-                            frame, self._continuation.finalize(payload)
-                        )
+                frame = self._finalize_frame(frame)
                 value = self._publish(frame, synthetic=synthetic)
                 if value is not None:
                     self._latest_chunk = value
@@ -118,15 +114,43 @@ class PublicResponseStream(AsyncIterator[str]):
             frame = self._terminal_frame(
                 self.start_frame or self._initial_chunk, self._latest_chunk, failure
             )
-            # Error framing uses only public identity/evidence, never a failed mapper.
-            payload = frame_data(frame)
-            if self._continuation.active and payload is not None:
-                response = payload.get("response")
-                if isinstance(response, dict):
-                    response["output"] = self._continuation.failure_output()
-                    response["usage"] = self._delivered.usage(response["output"])
-                    frame = replace_frame_data(frame, payload)
+            frame = self._finalize_frame(frame)
             return self._publish(frame, synthetic=True) or frame
+
+    def _finalize_frame(self, frame: str) -> str:
+        payload = frame_data(frame)
+        if payload is None:
+            return frame
+        kind = payload.get("type")
+        if kind == "response.failed":
+            response = payload.get("response")
+            if not isinstance(response, dict):
+                return frame
+            # Failure snapshots may be based on the provider's empty start frame.
+            # Use only retained public evidence, independently of a failed mapper.
+            if self._delivered.retention_exhausted:
+                response["output"] = []
+                response["usage"] = None
+                error = response.get("error")
+                error = error if isinstance(error, dict) else {}
+                message = error.get("message") or "Provider response failed."
+                response["error"] = {
+                    **error,
+                    "message": f"{message}\n\nThe partial answer was already streamed. "
+                    "A complete final snapshot is unavailable.",
+                }
+            elif self._continuation.active:
+                response["output"] = [
+                    deepcopy(item) for _, item in sorted(self._delivered.items.items())
+                ]
+                response["usage"] = self._delivered.usage(response["output"])
+            else:
+                return frame
+        elif not self._continuation.active or kind in {"error", "response.error"}:
+            return frame
+        else:
+            payload = self._continuation.finalize(payload)
+        return replace_frame_data(frame, payload)
 
     async def _iterate(self) -> AsyncGenerator[tuple[str, bool]]:
         while True:
@@ -219,8 +243,8 @@ class PublicResponseStream(AsyncIterator[str]):
     def _release_content(self, frame: str, *, synthetic: bool) -> str:
         self.state.release_content(synthetic=synthetic)
         for start in self._pending_starts:
-            self._record(start)
-        self._record(frame)
+            self._record(start, synthetic=synthetic)
+        self._record(frame, synthetic=synthetic)
         if not self._pending_starts:
             return frame
         self.start_frame = self._pending_starts[0]
@@ -229,10 +253,10 @@ class PublicResponseStream(AsyncIterator[str]):
         self._pending_starts.clear()
         return prefix + frame
 
-    def _record(self, frame: str) -> None:
+    def _record(self, frame: str, *, synthetic: bool) -> None:
         payload = frame_data(frame)
         if payload is not None:
-            self._delivered.observe(payload)
+            self._delivered.observe(payload, count_progress=not synthetic)
         elif any(line.startswith("data:") for line in frame.splitlines()):
             self._delivered.unsafe_reason = "unknown_event"
 
@@ -307,7 +331,7 @@ class PublicResponseStream(AsyncIterator[str]):
             self._sequence = max(self._sequence, number)
         frame = replace_frame_data(frame, payload) if changed else frame
         if metadata:
-            self._record(frame)
+            self._record(frame, synthetic=synthetic)
             return frame
         return self._release_content(frame, synthetic=synthetic)
 
