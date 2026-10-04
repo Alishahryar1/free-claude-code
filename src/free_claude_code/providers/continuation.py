@@ -143,7 +143,7 @@ class SourceRecoveryState:
             part.get("annotations")
             or part.get("type")
             not in {"output_text", "refusal", "reasoning_text", "summary_text"}
-            for part in [*item.get("content", []), *item.get("summary", [])]
+            for part in [*(item.get("content") or []), *(item.get("summary") or [])]
         ):
             self.unsafe_reason = "native_content"
             self._handoff_blocked = True

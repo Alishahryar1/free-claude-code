@@ -6,6 +6,12 @@ from typing import Any, Literal
 
 import simplejson
 
+from .history_replay import (
+    ReplayRecord,
+    encode_replay,
+    readable_reasoning,
+    unencrypted_responses_replay,
+)
 from .openai_responses import is_client_search
 from .token_estimation import estimate_text_tokens
 
@@ -106,6 +112,12 @@ class DeliveredResponse:
         block = data.get("content_block", {})
         if kind == "content_block_start":
             text += block.get("text", "") + block.get("thinking", "")
+            if (
+                block.get("type") == "redacted_thinking"
+                and (record := unencrypted_responses_replay(block.get("data")))
+                is not None
+            ):
+                text += "".join(text for text, _ in readable_reasoning(record.native))
         if count_progress and (
             text
             or self._new_snapshot_text(data)
@@ -130,12 +142,12 @@ class DeliveredResponse:
         """Cumulative text is progress only when it adds published characters."""
         kind = data.get("type")
         recorded = self.items.get(data.get("output_index"), {})
-        previous = recorded.get("content", [])
+        previous = recorded.get("content") or []
         if kind in {"response.output_item.added", "response.output_item.done"}:
             item = data.get("item", {})
             if item.get("type") != "message":
                 return False
-            parts = enumerate(item.get("content", []))
+            parts = enumerate(item.get("content") or [])
         elif kind in {"response.content_part.added", "response.content_part.done"}:
             parts = [(data.get("content_index", 0), data.get("part", {}))]
         elif kind == "response.output_text.done":
@@ -179,7 +191,13 @@ class DeliveredResponse:
             }:
                 self.unsafe_reason = "native_content"
             if block.get("signature") or block.get("type") == "redacted_thinking":
-                self.unsafe_reason = "opaque_reasoning"
+                value = (
+                    block.get("data")
+                    if block.get("type") == "redacted_thinking"
+                    else block.get("signature")
+                )
+                if unencrypted_responses_replay(value) is None:
+                    self.unsafe_reason = "opaque_reasoning"
         elif kind == "content_block_delta":
             delta = data.get("delta", {})
             if not self._retain(delta):
@@ -195,12 +213,14 @@ class DeliveredResponse:
             }.get(delta.get("type"))
             if field:
                 block[field] = block.get(field, "") + delta.get(field, "")
+            elif delta.get("type") == "signature_delta":
+                block["signature"] = block.get("signature", "") + delta.get(
+                    "signature", ""
+                )
+                if unencrypted_responses_replay(block["signature"]) is None:
+                    self.unsafe_reason = "opaque_delta"
             else:
                 self.unsafe_reason = "opaque_delta"
-                if delta.get("type") == "signature_delta":
-                    block["signature"] = block.get("signature", "") + delta.get(
-                        "signature", ""
-                    )
         elif kind == "content_block_stop":
             self.closed.add(index)
 
@@ -228,9 +248,12 @@ class DeliveredResponse:
                 item
             ):
                 self.unsafe_reason = "native_content"
-            if item.get("encrypted_content"):
+            if (
+                item.get("encrypted_content")
+                and unencrypted_responses_replay(item["encrypted_content"]) is None
+            ):
                 self.unsafe_reason = "opaque_reasoning"
-            if any(part.get("type") == "refusal" for part in item.get("content", [])):
+            if any(part.get("type") == "refusal" for part in item.get("content") or []):
                 self.unsafe_reason = "refusal"
             if kind.endswith(".done"):
                 self.closed.add(index)
@@ -260,7 +283,7 @@ class DeliveredResponse:
             position = data.get(
                 "summary_index" if field == "summary" else "content_index", 0
             )
-            parts = item.setdefault(field, [])
+            parts = item[field] = item.get(field) or []
             while len(parts) <= position:
                 parts.append({})
             parts[position] = deepcopy(part)
@@ -306,7 +329,7 @@ class DeliveredResponse:
             position = data.get(
                 "summary_index" if field == "summary" else "content_index", 0
             )
-            parts = item.setdefault(field, [])
+            parts = item[field] = item.get(field) or []
             while len(parts) <= position:
                 parts.append(
                     {
@@ -351,14 +374,24 @@ class DeliveredResponse:
                     text.append(item.get("text", ""))
                 elif kind == "thinking":
                     thinking.append(item.get("thinking", ""))
+                elif kind == "redacted_thinking":
+                    if (
+                        record := unencrypted_responses_replay(item.get("data"))
+                    ) is not None:
+                        thinking.extend(
+                            text for text, _ in readable_reasoning(record.native)
+                        )
                 elif kind == "tool_use" and index in self.closed:
                     has_calls = True
             elif kind == "message":
-                text.extend(part.get("text", "") for part in item.get("content", []))
+                text.extend(part.get("text", "") for part in item.get("content") or [])
             elif kind == "reasoning":
                 thinking.extend(
                     part.get("text", "")
-                    for part in [*item.get("summary", []), *item.get("content", [])]
+                    for part in [
+                        *(item.get("summary") or []),
+                        *(item.get("content") or []),
+                    ]
                 )
             elif client_call(item) and index in self.closed:
                 has_calls = True
@@ -401,7 +434,7 @@ class DeliveredResponse:
                 events.append({"type": "content_block_stop", "index": index})
             else:
                 for field in ("content", "summary"):
-                    for position, part in enumerate(item.get(field, [])):
+                    for position, part in enumerate(item.get(field) or []):
                         key = (index, field, position)
                         if key in self._part_closed:
                             continue
@@ -436,11 +469,24 @@ class DeliveredResponse:
                                     "part": deepcopy(part),
                                 }
                             )
+                closed_item = {**deepcopy(item), "status": "completed"}
+                if (
+                    record := unencrypted_responses_replay(
+                        item.get("encrypted_content")
+                    )
+                ) is not None:
+                    native = {**record.native, "status": "completed"}
+                    for field in ("content", "summary"):
+                        if field in closed_item:
+                            native[field] = deepcopy(closed_item[field])
+                    closed_item["encrypted_content"] = encode_replay(
+                        ReplayRecord(record.origin, native)
+                    )
                 events.append(
                     {
                         "type": "response.output_item.done",
                         "output_index": index,
-                        "item": {**deepcopy(item), "status": "completed"},
+                        "item": closed_item,
                     }
                 )
         return events

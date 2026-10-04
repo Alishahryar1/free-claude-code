@@ -135,7 +135,7 @@ class ContinuationStream:
             client_call(item)
             or any(
                 part.get("text") or part.get("refusal")
-                for part in [*item.get("content", []), *item.get("summary", [])]
+                for part in [*(item.get("content") or []), *(item.get("summary") or [])]
             )
             for item in items
         )

@@ -395,16 +395,23 @@ class OpenAIResponsesTransport:
                         JsonObject,
                         upstream_event.to_dict(mode="json"),
                     )
-                    source.observe(
-                        "responses",
-                        payload,
-                        continuing=operation_kind is ProviderOperationKind.CONTINUATION,
-                    )
-                    if upstream_event.type in {
+                    failed = upstream_event.type in {
                         "response.failed",
                         "error",
                         "response.error",
-                    }:
+                    }
+                    context_exceeded = reports_context_window_incomplete(
+                        upstream_event.type, payload
+                    )
+                    # Failed snapshots constrain recovery without replacing the
+                    # provider's own error with an output-eligibility failure.
+                    source.observe(
+                        "responses",
+                        payload,
+                        continuing=operation_kind is ProviderOperationKind.CONTINUATION
+                        and not (failed or context_exceeded),
+                    )
+                    if failed:
                         stream_failure = responses_stream_failure_from_event(
                             upstream_event.type,
                             payload,
@@ -420,10 +427,7 @@ class OpenAIResponsesTransport:
                                 # cannot retain a consistent public identity.
                                 stream_failure.payload = None
                         raise stream_failure
-                    if reports_context_window_incomplete(
-                        upstream_event.type,
-                        payload,
-                    ):
+                    if context_exceeded:
                         raise context_window_exceeded_provider_failure()
                     if adapt_event is not None:
                         payload = adapt_event(upstream_event.type, payload)
