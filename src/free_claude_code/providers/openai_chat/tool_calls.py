@@ -58,12 +58,14 @@ class OpenAIToolCallCollector:
         raw_index = getattr(tool_call, "index", None)
         wire = raw_index if isinstance(raw_index, int) and raw_index >= 0 else None
         tool_id = getattr(tool_call, "id", None)
-        index = self._wire_slots.get(wire, 0 if wire is None else wire)
+        # Slots follow arrival order, never the wire index, as in OpenAIToolCallAssembler.
+        next_slot = max([*self._calls, *self._wire_slots.values()], default=-1) + 1
+        index = self._wire_slots.get(wire, next_slot)
         bound = self._calls[index].tool_id if index in self._calls else None
         if tool_id and bound is not None and bound != str(tool_id):
             # Another call holds this index (Gemini's null or repeated index): go back to this id's
             # call when seen before (interleaved deltas), else give it its own slot.
-            index = self._slots_by_id.get(str(tool_id), max(self._calls) + 1)
+            index = self._slots_by_id.get(str(tool_id), next_slot)
         if tool_id:
             self._slots_by_id.setdefault(str(tool_id), index)
         self._wire_slots[wire] = index
@@ -171,32 +173,39 @@ class OpenAIToolCallAssembler:
 
     def _tool_slot(self, tc: Mapping[str, Any], output: ChatStreamOutput) -> int:
         """Slot for one upstream delta. Gemini's OpenAI endpoint sends parallel calls with a null or
-        repeated ``index``. The index decides unless its slot already holds a different upstream id
-        (a generated id is not one, so a late id attaches): then an id seen before goes back to its
-        call (interleaved deltas) and a new one opens a slot. Id-less deltas follow the newest call
-        at that wire index."""
+        repeated ``index``. Slots are handed out in arrival order, never taken from the wire index,
+        so a call moved off a repeated index cannot collide with a later index. The index decides
+        unless its slot already holds a different upstream id (a generated id is not one, so a late
+        id attaches): then an id seen before goes back to its call (interleaved deltas) and a new
+        one opens a slot. Id-less deltas follow the newest call at that wire index."""
         raw_index = tc.get("index")
         wire = raw_index if isinstance(raw_index, int) else None
         if wire is not None and wire < 0:
             return len(output.tool_states)
         raw_id = tc.get("id")
         tool_id = raw_id if isinstance(raw_id, str) and raw_id.strip() else None
-        slot = self._wire_slots.get(wire, 0 if wire is None else wire)
+        slot = self._wire_slots.get(wire)
+        if slot is None:
+            slot = self._next_slot(output)
         upstream = self._candidate_tool_ids.get(slot)
         if tool_id is not None and upstream is not None and upstream != tool_id:
             if tool_id in self._slots_by_upstream_id:
                 slot = self._slots_by_upstream_id[tool_id]
             else:
-                taken = (
-                    set(output.tool_states)
-                    | set(self._candidate_tool_ids)
-                    | set(self._public_tool_ids)
-                )
-                slot = max(taken, default=-1) + 1
+                slot = self._next_slot(output)
         if tool_id is not None:
             self._slots_by_upstream_id.setdefault(tool_id, slot)
         self._wire_slots[wire] = slot
         return slot
+
+    def _next_slot(self, output: ChatStreamOutput) -> int:
+        taken = (
+            set(output.tool_states)
+            | set(self._candidate_tool_ids)
+            | set(self._public_tool_ids)
+            | set(self._wire_slots.values())
+        )
+        return max(taken, default=-1) + 1
 
     def process_tool_call(
         self,

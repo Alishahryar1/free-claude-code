@@ -3070,7 +3070,7 @@ class TestProcessToolCall:
         assert "call_none" in event_text
 
     @staticmethod
-    def _tool_blocks(deltas: list[dict]) -> dict[int, tuple[str, object]]:
+    def _tool_blocks(deltas: list[dict]) -> dict[int, tuple[str, dict[str, str]]]:
         """Feed deltas through one assembler; return {block index: (id, parsed input)}."""
         assembler = _make_tool_assembler(_make_provider())
         sse = _make_anthropic_output()
@@ -3125,6 +3125,35 @@ class TestProcessToolCall:
         )
 
         assert blocks == {0: ("call_a", {"p": "a.py"}), 1: ("call_b", {"p": "b.py"})}
+
+    def test_a_later_wire_index_does_not_land_on_a_moved_call(self):
+        """Two calls at index 0 take two slots; a third call at index 1 must not share the second's."""
+        blocks = self._tool_blocks(
+            [
+                {
+                    "index": 0,
+                    "id": "call_a",
+                    "function": {"name": "test", "arguments": '{"p": "a.py"}'},
+                },
+                {
+                    "index": 0,
+                    "id": "call_b",
+                    "function": {"name": "test", "arguments": '{"p": "b.py"}'},
+                },
+                {"index": 1, "function": {"name": "test", "arguments": '{"p": '}},
+                {"index": 1, "id": "call_c", "function": {"arguments": '"c.py"}'}},
+            ]
+        )
+
+        assert sorted(args["p"] for _id, args in blocks.values()) == [
+            "a.py",
+            "b.py",
+            "c.py",
+        ]
+        assert [tool_id for tool_id, _args in blocks.values()][:2] == [
+            "call_a",
+            "call_b",
+        ]
 
     def test_late_upstream_id_attaches_to_the_started_call(self):
         """A call that started without an id got a generated one; its upstream id arriving later is
