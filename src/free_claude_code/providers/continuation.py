@@ -4,7 +4,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from free_claude_code.core.delivered_response import client_call
+from free_claude_code.core.delivered_response import (
+    client_call,
+    is_structured_text_format,
+)
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import reasoning_context
 from free_claude_code.core.trace import trace_event
@@ -158,12 +161,12 @@ class ContinuationRequest:
     """Replace our private history suffix while retaining accepted corrections."""
 
     def __init__(self, protocol: UpstreamProtocol) -> None:
-        self._protocol = protocol
+        self.protocol = protocol
         self._injected_rows = 0
 
     def build(self, body: dict[str, Any], text: str, thinking: str) -> dict[str, Any]:
         result = deepcopy(body)
-        responses = self._protocol == "responses"
+        responses = self.protocol == "responses"
         field = "input" if responses else "messages"
         history = result.get(field, [])
         if responses and isinstance(history, str):
@@ -199,6 +202,16 @@ class ContinuationRequest:
         return result
 
 
+def _structured_output(body: dict[str, Any], protocol: UpstreamProtocol) -> bool:
+    if protocol == "chat":
+        extra = body.get("extra_body") or {}
+        value = extra.get("response_format", body.get("response_format"))
+    else:
+        options = body.get("text" if protocol == "responses" else "output_config") or {}
+        value = options.get("format")
+    return is_structured_text_format(value)
+
+
 def public_recovery(
     execution: ProviderExecution,
     *,
@@ -216,14 +229,22 @@ def public_recovery(
     prefix = delivery.prefix
     if prefix is None:
         return None
-    handoff = prefix.has_calls and source.can_handoff and prefix.can_handoff
-    if not handoff and (source.unsafe_reason or not prefix.eligible):
+    structured = _structured_output(body, request.protocol)
+    handoff = (
+        not structured
+        and prefix.has_calls
+        and source.can_handoff
+        and prefix.can_handoff
+    )
+    if not handoff and (structured or source.unsafe_reason or not prefix.eligible):
         trace_event(
             stage="provider",
             event="provider.recovery.ineligible",
             source="provider",
             request_id=execution.request_id,
-            reason=source.unsafe_reason or prefix.unsafe_reason,
+            reason="structured_output"
+            if structured
+            else source.unsafe_reason or prefix.unsafe_reason,
         )
         return None
     if handoff:

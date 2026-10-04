@@ -5,7 +5,11 @@ from typing import Any
 from uuid import uuid4, uuid5
 
 from .continuation_overlap import ContinuationOverlap
-from .delivered_response import DeliveredResponse, client_call
+from .delivered_response import (
+    DeliveredResponse,
+    client_call,
+    responses_text_constraint,
+)
 from .failures import ExecutionFailure, FailureKind
 
 
@@ -63,6 +67,18 @@ class ContinuationStream:
     def prepare(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         if not self.active:
             return [payload]
+        if (
+            self.delivered.wire_api == "responses"
+            and payload.get("type")
+            not in {"response.failed", "response.error", "error"}
+            and responses_text_constraint(payload)
+        ):
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message="The continuation returned text with a native output contract that cannot be reconstructed.",
+                retryable=False,
+            )
         if payload.get("type") in {
             "message_start",
             "response.created",

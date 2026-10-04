@@ -39,6 +39,34 @@ def client_call(item: dict[str, Any]) -> bool:
     )
 
 
+def is_structured_text_format(value: object) -> bool:
+    return isinstance(value, dict) and value.get("type") in (
+        "json_schema",
+        "json_object",
+    )
+
+
+def responses_text_constraint(data: dict[str, Any]) -> str | None:
+    """Identify public text contracts that cannot survive synthetic completion."""
+    response = data.get("response")
+    response = response if isinstance(response, dict) else {}
+    text = response.get("text")
+    if isinstance(text, dict) and is_structured_text_format(text.get("format")):
+        return "structured_output"
+    part = data.get("part")
+    if data.get("logprobs") or (isinstance(part, dict) and part.get("logprobs")):
+        return "text_logprobs"
+    items = [data.get("item"), *(response.get("output") or [])]
+    if any(
+        part.get("logprobs")
+        for item in items
+        if isinstance(item, dict)
+        for part in item.get("content") or []
+    ):
+        return "text_logprobs"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class DeliveredPrefix:
     text: str
@@ -61,6 +89,7 @@ class DeliveredResponse:
         self.header: dict[str, Any] = {}
         self.sequence = -1
         self.unsafe_reason: str | None = None
+        self._text_constraint: str | None = None
         self._bytes = 0
         self._limited = False
         self._limited_output_tokens = 0
@@ -225,6 +254,7 @@ class DeliveredResponse:
             self.closed.add(index)
 
     def _responses(self, kind: str, data: dict[str, Any]) -> None:
+        self._text_constraint = self._text_constraint or responses_text_constraint(data)
         index = data.get("output_index")
         if not isinstance(index, int):
             if kind not in {
@@ -395,13 +425,14 @@ class DeliveredResponse:
                 )
             elif client_call(item) and index in self.closed:
                 has_calls = True
+        unsafe_reason = self._text_constraint or self.unsafe_reason
         return DeliveredPrefix(
             "".join(text),
             "".join(thinking),
             has_calls,
-            self.unsafe_reason is None,
+            unsafe_reason is None,
             self.can_handoff,
-            self.unsafe_reason,
+            unsafe_reason,
         )
 
     def output_tokens(self, output: list[dict[str, Any]] | None = None) -> int:
@@ -417,7 +448,11 @@ class DeliveredResponse:
 
     @property
     def can_handoff(self) -> bool:
-        if self.unsafe_reason not in {None, "opaque_reasoning", "opaque_delta"}:
+        if self._text_constraint or self.unsafe_reason not in {
+            None,
+            "opaque_reasoning",
+            "opaque_delta",
+        }:
             return False
         return all(
             index in self.closed
