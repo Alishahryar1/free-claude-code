@@ -47,6 +47,7 @@ class OpenAIToolCallCollector:
     def __init__(self) -> None:
         self._calls: dict[int, _CollectedToolCall] = {}
         self._wire_slots: dict[int | None, int] = {}
+        self._slots_by_id: dict[str, int] = {}
 
     @property
     def has_calls(self) -> bool:
@@ -56,12 +57,15 @@ class OpenAIToolCallCollector:
         """Add one SDK tool-call delta without emitting downstream state."""
         raw_index = getattr(tool_call, "index", None)
         wire = raw_index if isinstance(raw_index, int) and raw_index >= 0 else None
-        index = self._wire_slots.get(wire, 0 if wire is None else wire)
         tool_id = getattr(tool_call, "id", None)
+        index = self._wire_slots.get(wire, 0 if wire is None else wire)
         bound = self._calls[index].tool_id if index in self._calls else None
         if tool_id and bound is not None and bound != str(tool_id):
-            # A new call at an occupied index (Gemini's null or repeated index): give it its own slot.
-            index = max(self._calls) + 1
+            # Another call holds this index (Gemini's null or repeated index): go back to this id's
+            # call when seen before (interleaved deltas), else give it its own slot.
+            index = self._slots_by_id.get(str(tool_id), max(self._calls) + 1)
+        if tool_id:
+            self._slots_by_id.setdefault(str(tool_id), index)
         self._wire_slots[wire] = index
         state = self._calls.setdefault(index, _CollectedToolCall(index=index))
 
@@ -163,28 +167,34 @@ class OpenAIToolCallAssembler:
         self._candidate_tool_ids: dict[int, str] = {}
         self._public_tool_ids: dict[int, str] = {}
         self._wire_slots: dict[int | None, int] = {}
+        self._slots_by_upstream_id: dict[str, int] = {}
 
     def _tool_slot(self, tc: Mapping[str, Any], output: ChatStreamOutput) -> int:
-        """Slot for one delta. Gemini's OpenAI endpoint sends parallel calls with a null or repeated
-        ``index``; a new id where another call already sits is a new call, and later id-less deltas
-        at that wire index follow it."""
+        """Slot for one upstream delta. Gemini's OpenAI endpoint sends parallel calls with a null or
+        repeated ``index``. The index decides unless its slot already holds a different upstream id
+        (a generated id is not one, so a late id attaches): then an id seen before goes back to its
+        call (interleaved deltas) and a new one opens a slot. Id-less deltas follow the newest call
+        at that wire index."""
         raw_index = tc.get("index")
         wire = raw_index if isinstance(raw_index, int) else None
         if wire is not None and wire < 0:
             return len(output.tool_states)
+        raw_id = tc.get("id")
+        tool_id = raw_id if isinstance(raw_id, str) and raw_id.strip() else None
         slot = self._wire_slots.get(wire, 0 if wire is None else wire)
-        tool_id = tc.get("id")
-        if isinstance(tool_id, str) and tool_id.strip():
-            bound = self._public_tool_ids.get(slot) or self._candidate_tool_ids.get(
-                slot
-            )
-            if bound is not None and bound != tool_id:
+        upstream = self._candidate_tool_ids.get(slot)
+        if tool_id is not None and upstream is not None and upstream != tool_id:
+            if tool_id in self._slots_by_upstream_id:
+                slot = self._slots_by_upstream_id[tool_id]
+            else:
                 taken = (
                     set(output.tool_states)
                     | set(self._candidate_tool_ids)
                     | set(self._public_tool_ids)
                 )
                 slot = max(taken, default=-1) + 1
+        if tool_id is not None:
+            self._slots_by_upstream_id.setdefault(tool_id, slot)
         self._wire_slots[wire] = slot
         return slot
 
@@ -199,8 +209,28 @@ class OpenAIToolCallAssembler:
         tool_argument_alias_buffers: dict[int, str] | None = None,
     ) -> Iterator[str]:
         """Process one tool-call delta and yield client-protocol events."""
-        tc_index = self._tool_slot(tc, output)
+        yield from self._process_at(
+            self._tool_slot(tc, output),
+            tc,
+            output,
+            tool_names=tool_names,
+            tool_name_buffers=tool_name_buffers,
+            tool_argument_aliases=tool_argument_aliases,
+            tool_argument_alias_buffers=tool_argument_alias_buffers,
+        )
 
+    def _process_at(
+        self,
+        tc_index: int,
+        tc: Mapping[str, Any],
+        output: ChatStreamOutput,
+        *,
+        tool_names: OpenAIToolNameCodec | None = None,
+        tool_name_buffers: dict[int, str] | None = None,
+        tool_argument_aliases: dict[str, dict[str, str]] | None = None,
+        tool_argument_alias_buffers: dict[int, str] | None = None,
+    ) -> Iterator[str]:
+        """Apply one delta to an already-resolved slot."""
         fn_delta = tc.get("function", {})
         incoming_name = fn_delta.get("name")
         arguments = fn_delta.get("arguments", "") or ""
@@ -311,11 +341,10 @@ class OpenAIToolCallAssembler:
         """Resolve names held only because they also prefix a generated alias."""
         for tool_index, name in list(tool_name_buffers.items()):
             tool_name_buffers.pop(tool_index, None)
-            yield from self.process_tool_call(
-                {
-                    "index": tool_index,
-                    "function": {"name": name, "arguments": ""},
-                },
+            # Buffers are keyed by slot, not wire index: skip the upstream index mapping.
+            yield from self._process_at(
+                tool_index,
+                {"function": {"name": name, "arguments": ""}},
                 output,
                 tool_names=tool_names,
                 tool_argument_aliases=tool_argument_aliases,

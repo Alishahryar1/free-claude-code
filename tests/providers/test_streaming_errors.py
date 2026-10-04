@@ -2872,6 +2872,33 @@ class TestProcessToolCall:
             ("call_b", {"p": "b.py"}),
         ]
 
+    def test_buffered_collector_returns_interleaved_deltas_to_their_call(self):
+        collector = OpenAIToolCallCollector()
+        for tool_id, arguments in (
+            ("call_a", '{"p": '),
+            ("call_b", '{"p": '),
+            ("call_a", '"a.py"}'),
+            ("call_b", '"b.py"}'),
+        ):
+            collector.add(
+                SimpleNamespace(
+                    index=None,
+                    id=tool_id,
+                    function=SimpleNamespace(name="test", arguments=arguments),
+                )
+            )
+
+        request = _make_request(
+            tools=[{"name": "test", "input_schema": {"type": "object"}}]
+        )
+        calls = collector.completed_calls(tool_schemas_by_name(request))
+
+        assert calls is not None
+        assert [(c["id"], json.loads(c["function"]["arguments"])) for c in calls] == [
+            ("call_a", {"p": "a.py"}),
+            ("call_b", {"p": "b.py"}),
+        ]
+
     def test_tool_call_id_arrives_before_name_still_emits_id_and_name(self):
         """Split-stream tool: id (no name) then name then args; id preserved on start."""
         provider = _make_provider()
@@ -3098,6 +3125,84 @@ class TestProcessToolCall:
         )
 
         assert blocks == {0: ("call_a", {"p": "a.py"}), 1: ("call_b", {"p": "b.py"})}
+
+    def test_late_upstream_id_attaches_to_the_started_call(self):
+        """A call that started without an id got a generated one; its upstream id arriving later is
+        the same call, not a new one."""
+        blocks = self._tool_blocks(
+            [
+                {"index": 0, "function": {"name": "test", "arguments": '{"p": '}},
+                {"index": 0, "id": "call_late", "function": {"arguments": '"a.py"}'}},
+            ]
+        )
+
+        assert [args for _id, args in blocks.values()] == [{"p": "a.py"}]
+
+    @pytest.mark.parametrize("index", [None, 0])
+    def test_interleaved_calls_return_to_their_own_block_by_id(self, index):
+        blocks = self._tool_blocks(
+            [
+                {
+                    "index": index,
+                    "id": "call_a",
+                    "function": {"name": "test", "arguments": '{"p": '},
+                },
+                {
+                    "index": index,
+                    "id": "call_b",
+                    "function": {"name": "test", "arguments": '{"p": '},
+                },
+                {"index": index, "id": "call_a", "function": {"arguments": '"a.py"}'}},
+                {"index": index, "id": "call_b", "function": {"arguments": '"b.py"}'}},
+            ]
+        )
+
+        assert blocks == {
+            0: ("call_a", {"p": "a.py"}),
+            1: ("call_b", {"p": "b.py"}),
+        }
+
+    @pytest.mark.parametrize("index", [None, 0])
+    def test_buffered_names_flush_to_their_own_calls(self, index):
+        """Names held as alias prefixes are flushed by slot, not through the upstream index map."""
+        long_name = "tool." + "x" * 70
+        request = _make_request(
+            tools=[
+                {"name": n, "input_schema": {"type": "object"}}
+                for n in ("tool", "tool_", long_name)
+            ]
+        )
+        codec = OpenAIToolNameCodec.from_request(request)
+        assert codec.is_alias_prefix("tool") and codec.is_alias_prefix("tool_")
+        assembler = _make_tool_assembler(_make_provider())
+        sse = _make_anthropic_output()
+        buffers: dict[int, str] = {}
+        events = []
+        for tool_id, name in (("call_a", "tool"), ("call_b", "tool_")):
+            events += assembler.process_tool_call(
+                {
+                    "index": index,
+                    "id": tool_id,
+                    "function": {"name": name, "arguments": "{}"},
+                },
+                sse,
+                tool_names=codec,
+                tool_name_buffers=buffers,
+            )
+        events += assembler.flush_tool_name_buffers(
+            sse,
+            tool_names=codec,
+            tool_name_buffers=buffers,
+            tool_argument_aliases={},
+            tool_argument_alias_buffers={},
+        )
+
+        starts = [
+            (e.data["content_block"]["id"], e.data["content_block"]["name"])
+            for e in parse_sse_text("".join(events))
+            if e.event == "content_block_start"
+        ]
+        assert sorted(starts) == [("call_a", "tool"), ("call_b", "tool_")]
 
     def test_an_id_repeated_on_every_delta_is_one_call(self):
         blocks = self._tool_blocks(
