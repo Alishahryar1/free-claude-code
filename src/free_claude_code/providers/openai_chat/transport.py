@@ -97,6 +97,7 @@ from free_claude_code.providers.request_recovery import (
 )
 from free_claude_code.providers.stream_recovery import (
     RecoveryController,
+    RecoveryDecision,
     RecoveryFailureAction,
     TruncatedProviderStreamError,
 )
@@ -114,6 +115,7 @@ from .stream_output import (
     ChatStreamUsage,
     ResponsesChatStreamOutput,
 )
+from .tool_call_identity import AmbiguousToolCallIdentityError
 from .tool_calls import (
     CompletedOpenAIToolCall,
     OpenAIToolCallAssembler,
@@ -264,10 +266,14 @@ class _OpenAIChatStreamAssembler:
             self._raw_stop_seen = True
 
     def recovered_tool_call_events(
-        self, tool_call: CompletedOpenAIToolCall
+        self, tool_calls: tuple[CompletedOpenAIToolCall, ...]
     ) -> Iterator[str]:
-        """Emit one buffered recovery call through this attempt's ID scope."""
-        yield from self._tool_calls.process_tool_call(tool_call, self._output)
+        """Import a complete recovery batch without inheriting abandoned tools."""
+        if self._output.has_emitted_tool_block():
+            raise RuntimeError("cannot replace started tool calls with recovery output")
+        self._tool_name_buffers.clear()
+        self._tool_argument_alias_buffers.clear()
+        yield from self._tool_calls.process_completed_calls(tool_calls, self._output)
 
     def start_events(self) -> Iterator[str]:
         if self._started:
@@ -1218,15 +1224,37 @@ class _OpenAIChatStreamRunner:
             else is_retryable_stream_error(error)
         )
         generated_output = assembler.generated_output
-        complete_tool_salvageable = assembler.complete_tool_salvageable
-        decision = recovery.advance_failure(
-            retryable=retryable,
-            stream_opened=scope is not None,
-            generated_output=generated_output,
-            complete_tool_salvageable=complete_tool_salvageable,
-            attempts_remaining=execution.attempts_remaining,
-            normal_stop_seen=assembler.normal_stop_seen,
+        identity_failure = isinstance(error, AmbiguousToolCallIdentityError)
+        complete_tool_salvageable = (
+            not identity_failure and assembler.complete_tool_salvageable
         )
+        if identity_failure and execution.delivery is None:
+            # Schema-valid arguments cannot prove which call owned a fragment.
+            # Only private output still held here can be discarded and replayed.
+            action = RecoveryFailureAction.FINAL_ERROR
+            if (
+                retryable
+                and not recovery.committed
+                and not assembler.normal_stop_seen
+                and execution.can_attempt
+            ):
+                recovery.discard()
+                action = RecoveryFailureAction.EARLY_RETRY
+            decision = RecoveryDecision(
+                action=action,
+                retryable=retryable,
+                committed=recovery.committed,
+                has_buffered=recovery.has_buffered,
+            )
+        else:
+            decision = recovery.advance_failure(
+                retryable=retryable,
+                stream_opened=scope is not None,
+                generated_output=generated_output,
+                complete_tool_salvageable=complete_tool_salvageable,
+                attempts_remaining=execution.attempts_remaining,
+                normal_stop_seen=assembler.normal_stop_seen,
+            )
         tag = self._transport._provider_name
         if decision.action == RecoveryFailureAction.EARLY_RETRY:
             trace_event(
@@ -1359,6 +1387,7 @@ class _OpenAIChatStreamRunner:
         last_error: Exception | None = None
         while execution.can_attempt:
             scope: ProviderAttemptScope | None = None
+            terminal_seen = False
             try:
                 (
                     stream,
@@ -1382,7 +1411,6 @@ class _OpenAIChatStreamRunner:
                 text_parts: list[str] = []
                 thinking_parts: list[str] = []
                 tool_calls = OpenAIToolCallCollector()
-                terminal_seen = False
                 async for chunk in stream:
                     if not scope.attempt.accepted:
                         await scope.attempt.accept()
@@ -1439,7 +1467,14 @@ class _OpenAIChatStreamRunner:
                         ),
                     )
                     retryable = failure.retryable
-                if not retryable or not execution.can_attempt:
+                if (
+                    not retryable
+                    or not execution.can_attempt
+                    or (
+                        isinstance(error, AmbiguousToolCallIdentityError)
+                        and terminal_seen
+                    )
+                ):
                     raise
                 trace_event(
                     stage="provider",
@@ -1542,8 +1577,7 @@ class _OpenAIChatStreamRunner:
             events.append(output.emit_text_delta(text_suffix))
         if recovered.tool_calls:
             events.extend(output.close_content_blocks())
-            for tool_call in recovered.tool_calls:
-                events.extend(assembler.recovered_tool_call_events(tool_call))
+            events.extend(assembler.recovered_tool_call_events(recovered.tool_calls))
         if not events:
             return None
         events.extend(
