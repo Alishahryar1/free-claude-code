@@ -104,6 +104,7 @@ class DeliveredResponse:
             text += block.get("text", "") + block.get("thinking", "")
         if (
             text
+            or self._new_snapshot_text(data)
             or data.get("part", {}).get("refusal")
             or (kind == "response.refusal.done" and data.get("refusal"))
             or (kind == "content_block_start" and block.get("type") == "tool_use")
@@ -120,6 +121,34 @@ class DeliveredResponse:
                 self._responses(kind, data)
         if self._limited:
             self._limited_output_tokens += estimate_text_tokens(text)
+
+    def _new_snapshot_text(self, data: dict[str, Any]) -> bool:
+        """Cumulative text is progress only when it adds published characters."""
+        kind = data.get("type")
+        recorded = self.items.get(data.get("output_index"), {})
+        previous = recorded.get("content", [])
+        if kind in {"response.output_item.added", "response.output_item.done"}:
+            item = data.get("item", {})
+            if item.get("type") != "message":
+                return False
+            parts = enumerate(item.get("content", []))
+        elif kind in {"response.content_part.added", "response.content_part.done"}:
+            parts = [(data.get("content_index", 0), data.get("part", {}))]
+        elif kind == "response.output_text.done":
+            parts = [
+                (
+                    data.get("content_index", 0),
+                    {"type": "output_text", "text": data.get("text", "")},
+                )
+            ]
+        else:
+            return False
+        return any(
+            part.get("type") == "output_text"
+            and len(part.get("text", ""))
+            > len(previous[index].get("text", "") if index < len(previous) else "")
+            for index, part in parts
+        )
 
     def _messages(self, kind: str, data: dict[str, Any]) -> None:
         index = data.get("index")
