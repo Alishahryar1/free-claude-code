@@ -26,7 +26,9 @@ from free_claude_code.api.web_tools.egress import (
     WebFetchEgressPolicy,
     web_fetch_allowed_scheme_set,
 )
+from free_claude_code.api.web_tools.execution import stream_local_web_tool_response
 from free_claude_code.api.web_tools.request import (
+    is_local_web_tool_request,
     is_web_server_tool_request,
     unsupported_server_tool_error,
 )
@@ -88,7 +90,6 @@ class MessagesHandler:
             log_raw_payloads=settings.log_raw_api_payloads,
         )
         self._message_intercepts: tuple[MessageIntercept, ...] = (
-            self._intercept_web_server_tool,
             self._intercept_local_optimization,
         )
 
@@ -103,7 +104,9 @@ class MessagesHandler:
             routed = self._apply_message_routing_policies(routed)
             self._reject_unsupported_server_tools(routed)
 
-            result = self._run_message_intercepts(routed)
+            result = self._intercept_web_server_tool(routed, request_id=request_id)
+            if result is None:
+                result = self._run_message_intercepts(routed)
             if result is None:
                 logger.debug("No optimization matched, routing to provider")
                 result = _MessagesStreamResult(
@@ -294,11 +297,11 @@ class MessagesHandler:
         return None
 
     def _intercept_web_server_tool(
-        self, routed: RoutedMessagesRequest
+        self, routed: RoutedMessagesRequest, *, request_id: str | None = None
     ) -> _MessagesResult | None:
         if not self._settings.enable_web_server_tools:
             return None
-        if not is_web_server_tool_request(routed.request):
+        if not is_local_web_tool_request(routed.request):
             return None
 
         input_tokens = self._token_counter(
@@ -316,6 +319,15 @@ class MessagesHandler:
                 self._settings.web_fetch_allowed_schemes
             ),
         )
+        if not is_web_server_tool_request(routed.request):
+            return _MessagesStreamResult(
+                stream_local_web_tool_response(
+                    routed,
+                    self._provider_executor,
+                    web_fetch_egress=egress,
+                    request_id=request_id or new_request_id(),
+                )
+            )
         return _MessagesStreamResult(
             stream_web_server_tool_response(
                 routed.request,

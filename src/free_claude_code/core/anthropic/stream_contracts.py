@@ -14,11 +14,9 @@ from .server_tool_sse import (
     WEB_SEARCH_TOOL_RESULT,
 )
 
-# Content blocks that only use content_block_start/stop (no deltas), including
-# Anthropic server tools and eager text emitted in a single start event.
+# Result blocks and eager text use content_block_start/stop without deltas.
 _NO_DELTA_BLOCK_KINDS = frozenset(
     {
-        SERVER_TOOL_USE,
         WEB_SEARCH_TOOL_RESULT,
         WEB_FETCH_TOOL_RESULT,
         "text_eager",
@@ -150,6 +148,7 @@ def assert_anthropic_stream_contract(
             expected = {
                 "text": "text_delta",
                 "tool_use": "input_json_delta",
+                SERVER_TOOL_USE: "input_json_delta",
             }[kind]
             assert delta_type == expected, f"block {index} is {kind}, got {delta_type}"
             continue

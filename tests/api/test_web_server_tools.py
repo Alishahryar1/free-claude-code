@@ -226,7 +226,7 @@ def _aiohttp_response(
     if location is not None:
         hdrs["location"] = location
     r.headers = hdrs
-    r.get_encoding = MagicMock(return_value="utf-8")
+    r.charset = "utf-8"
     r.raise_for_status = MagicMock()
     r.request_info = MagicMock()
     r.history = ()

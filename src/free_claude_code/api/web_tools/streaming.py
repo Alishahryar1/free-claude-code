@@ -1,7 +1,9 @@
-"""SSE streaming for local web_search / web_fetch server tool results."""
+"""SSE streaming and shared results for local web server tools."""
 
+import json
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from free_claude_code.core.anthropic import MessagesRequest
@@ -13,17 +15,26 @@ from free_claude_code.core.anthropic.server_tool_sse import (
     WEB_SEARCH_TOOL_RESULT_ERROR,
 )
 from free_claude_code.core.anthropic.streaming import format_sse_event
-from free_claude_code.core.json_types import JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from . import outbound
 from .constants import _MAX_FETCH_CHARS
-from .egress import WebFetchEgressPolicy
+from .egress import WebFetchEgressPolicy, web_url_allowed_by_domains
 from .parsers import extract_query, extract_url
 from .request import (
+    LocalWebTool,
     forced_server_tool_name,
     forced_tool_turn_text,
-    has_tool_named,
+    local_web_tools,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class WebToolResult:
+    content: JsonValue
+    summary: str
+    result_block_type: str
+    is_error: bool = False
 
 
 def _search_summary(query: str, results: list[dict[str, str]]) -> str:
@@ -35,6 +46,160 @@ def _search_summary(query: str, results: list[dict[str, str]]) -> str:
     return "\n\n".join(lines)
 
 
+async def execute_web_tool(
+    tool: LocalWebTool,
+    tool_input: dict[str, str],
+    *,
+    web_fetch_egress: WebFetchEgressPolicy,
+    verbose_client_errors: bool = False,
+) -> WebToolResult:
+    """Run validated local input and return the same evidence to both execution paths."""
+    tool_name = tool.name
+    result_type = (
+        WEB_SEARCH_TOOL_RESULT if tool_name == "web_search" else WEB_FETCH_TOOL_RESULT
+    )
+    try:
+        if tool_name == "web_search":
+            query = tool_input["query"]
+            results = await outbound._run_web_search(query)
+            results = [
+                result
+                for result in results
+                if web_url_allowed_by_domains(
+                    result["url"], tool.allowed_domains, tool.blocked_domains
+                )
+            ]
+            content: JsonValue = [
+                {
+                    "type": "web_search_result",
+                    "title": result["title"],
+                    "url": result["url"],
+                }
+                for result in results
+            ]
+            return WebToolResult(content, _search_summary(query, results), result_type)
+        scoped = replace(
+            web_fetch_egress,
+            allowed_domains=tool.allowed_domains,
+            blocked_domains=tool.blocked_domains,
+        )
+        fetched = await outbound._run_web_fetch(tool_input["url"], scoped)
+        content = {
+            "type": "web_fetch_result",
+            "url": fetched["url"],
+            "content": {
+                "type": "document",
+                "source": {
+                    "type": "text",
+                    "media_type": fetched["media_type"],
+                    "data": fetched["data"],
+                },
+                "title": fetched["title"],
+                "citations": {"enabled": True},
+            },
+            "retrieved_at": datetime.now(UTC).isoformat(),
+        }
+        return WebToolResult(content, fetched["data"][:_MAX_FETCH_CHARS], result_type)
+    except Exception as error:
+        outbound._log_web_tool_failure(
+            tool_name, error, fetch_url=tool_input.get("url")
+        )
+        error_type = (
+            WEB_SEARCH_TOOL_RESULT_ERROR
+            if tool_name == "web_search"
+            else WEB_FETCH_TOOL_ERROR
+        )
+        return WebToolResult(
+            {"type": error_type, "error_code": "unavailable"},
+            outbound._web_tool_client_error_summary(
+                tool_name, error, verbose=verbose_client_errors
+            ),
+            result_type,
+            is_error=True,
+        )
+
+
+async def stream_web_message(
+    blocks: list[JsonObject],
+    *,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    server_tool_use: dict[str, int],
+    stop_reason: str = "end_turn",
+    stop_sequence: str | None = None,
+) -> AsyncIterator[str]:
+    """Serialize one public turn, never concatenate internal provider messages."""
+    yield format_sse_event(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": f"msg_{uuid.uuid4()}",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": input_tokens, "output_tokens": 0},
+            },
+        },
+    )
+    for index, block in enumerate(blocks):
+        text = block.get("text") if block.get("type") == "text" else None
+        start: JsonObject = (
+            {"type": "text", "text": ""} if isinstance(text, str) else dict(block)
+        )
+        if block.get("type") == SERVER_TOOL_USE:
+            start["input"] = {}
+        yield format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": start,
+            },
+        )
+        if block.get("type") == SERVER_TOOL_USE:
+            yield format_sse_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": json.dumps(block["input"]),
+                    },
+                },
+            )
+        if isinstance(text, str) and text:
+            yield format_sse_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "text_delta", "text": text},
+                },
+            )
+        yield format_sse_event(
+            "content_block_stop", {"type": "content_block_stop", "index": index}
+        )
+    yield format_sse_event(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": stop_sequence},
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "server_tool_use": server_tool_use,
+            },
+        },
+    )
+    yield format_sse_event("message_stop", {"type": "message_stop"})
+
+
 async def stream_web_server_tool_response(
     request: MessagesRequest,
     input_tokens: int,
@@ -43,164 +208,43 @@ async def stream_web_server_tool_response(
     response_model: str | None = None,
     verbose_client_errors: bool = False,
 ) -> AsyncIterator[str]:
-    """Stream a minimal Anthropic-shaped turn for forced `web_search` / `web_fetch` (local fallback).
-
-    When `ENABLE_WEB_SERVER_TOOLS` is on, this is a proxy-side execution path — not a full
-    hosted Anthropic citation or encrypted-content pipeline.
-    """
+    """Forced local fallback, not a hosted citation or encrypted-content pipeline."""
     tool_name = forced_server_tool_name(request)
-    if tool_name is None or not has_tool_named(request, tool_name):
+    if tool_name is None:
         return
-
+    tool = next(item for item in local_web_tools(request) if item.name == tool_name)
     text = forced_tool_turn_text(request)
-    message_id = f"msg_{uuid.uuid4()}"
-    tool_id = f"srvtoolu_{uuid.uuid4().hex}"
-    usage_key = (
-        "web_search_requests" if tool_name == "web_search" else "web_fetch_requests"
-    )
     tool_input = (
         {"query": extract_query(text)}
         if tool_name == "web_search"
         else {"url": extract_url(text)}
     )
-    _result_block_for_tool = {
-        "web_search": WEB_SEARCH_TOOL_RESULT,
-        "web_fetch": WEB_FETCH_TOOL_RESULT,
-    }
-    _error_payload_type_for_tool = {
-        "web_search": WEB_SEARCH_TOOL_RESULT_ERROR,
-        "web_fetch": WEB_FETCH_TOOL_ERROR,
-    }
-
-    wire_model = request.model if response_model is None else response_model
-    yield format_sse_event(
-        "message_start",
+    result = await execute_web_tool(
+        tool,
+        tool_input,
+        web_fetch_egress=web_fetch_egress,
+        verbose_client_errors=verbose_client_errors,
+    )
+    tool_id = f"srvtoolu_{uuid.uuid4().hex}"
+    blocks: list[JsonObject] = [
         {
-            "type": "message_start",
-            "message": {
-                "id": message_id,
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": wire_model,
-                "stop_reason": None,
-                "stop_sequence": None,
-                "usage": {"input_tokens": input_tokens, "output_tokens": 1},
-            },
+            "type": SERVER_TOOL_USE,
+            "id": tool_id,
+            "name": tool_name,
+            "input": tool_input,
         },
-    )
-    yield format_sse_event(
-        "content_block_start",
         {
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {
-                "type": SERVER_TOOL_USE,
-                "id": tool_id,
-                "name": tool_name,
-                "input": tool_input,
-            },
+            "type": result.result_block_type,
+            "tool_use_id": tool_id,
+            "content": result.content,
         },
-    )
-    yield format_sse_event(
-        "content_block_stop", {"type": "content_block_stop", "index": 0}
-    )
-
-    try:
-        if tool_name == "web_search":
-            query = str(tool_input["query"])
-            results = await outbound._run_web_search(query)
-            result_content: JsonValue = [
-                {
-                    "type": "web_search_result",
-                    "title": result["title"],
-                    "url": result["url"],
-                }
-                for result in results
-            ]
-            summary = _search_summary(query, results)
-            result_block_type = WEB_SEARCH_TOOL_RESULT
-        else:
-            fetched = await outbound._run_web_fetch(
-                str(tool_input["url"]), web_fetch_egress
-            )
-            result_content = {
-                "type": "web_fetch_result",
-                "url": fetched["url"],
-                "content": {
-                    "type": "document",
-                    "source": {
-                        "type": "text",
-                        "media_type": fetched["media_type"],
-                        "data": fetched["data"],
-                    },
-                    "title": fetched["title"],
-                    "citations": {"enabled": True},
-                },
-                "retrieved_at": datetime.now(UTC).isoformat(),
-            }
-            summary = fetched["data"][:_MAX_FETCH_CHARS]
-            result_block_type = WEB_FETCH_TOOL_RESULT
-    except Exception as error:
-        fetch_url = str(tool_input["url"]) if tool_name == "web_fetch" else None
-        outbound._log_web_tool_failure(tool_name, error, fetch_url=fetch_url)
-        result_block_type = _result_block_for_tool[tool_name]
-        result_content = {
-            "type": _error_payload_type_for_tool[tool_name],
-            "error_code": "unavailable",
-        }
-        summary = outbound._web_tool_client_error_summary(
-            tool_name, error, verbose=verbose_client_errors
-        )
-
-    output_tokens = max(1, len(summary) // 4)
-
-    yield format_sse_event(
-        "content_block_start",
-        {
-            "type": "content_block_start",
-            "index": 1,
-            "content_block": {
-                "type": result_block_type,
-                "tool_use_id": tool_id,
-                "content": result_content,
-            },
-        },
-    )
-    yield format_sse_event(
-        "content_block_stop", {"type": "content_block_stop", "index": 1}
-    )
-    # Model-facing summary: stream as normal text deltas (CLI/transcript code reads `text_delta`,
-    # not eager `text` on `content_block_start`).
-    yield format_sse_event(
-        "content_block_start",
-        {
-            "type": "content_block_start",
-            "index": 2,
-            "content_block": {"type": "text", "text": ""},
-        },
-    )
-    yield format_sse_event(
-        "content_block_delta",
-        {
-            "type": "content_block_delta",
-            "index": 2,
-            "delta": {"type": "text_delta", "text": summary},
-        },
-    )
-    yield format_sse_event(
-        "content_block_stop", {"type": "content_block_stop", "index": 2}
-    )
-    yield format_sse_event(
-        "message_delta",
-        {
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "server_tool_use": {usage_key: 1},
-            },
-        },
-    )
-    yield format_sse_event("message_stop", {"type": "message_stop"})
+        {"type": "text", "text": result.summary},
+    ]
+    async for event in stream_web_message(
+        blocks,
+        model=request.model if response_model is None else response_model,
+        input_tokens=input_tokens,
+        output_tokens=max(1, len(result.summary) // 4),
+        server_tool_use={f"{tool_name}_requests": 1},
+    ):
+        yield event

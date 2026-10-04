@@ -251,7 +251,7 @@ async def _run_web_fetch(url: str, egress: WebFetchEgressPolicy) -> dict[str, st
                 response.raise_for_status()
                 content_type = response.headers.get("content-type", "text/plain")
                 final_url = str(response.url)
-                encoding = response.get_encoding() or "utf-8"
+                encoding = response.charset or "utf-8"
                 body_bytes = await _read_aiohttp_body_capped(
                     response, constants._MAX_WEB_FETCH_RESPONSE_BYTES
                 )

@@ -1132,14 +1132,29 @@ so Claude Code receives a parser-readable `<block>yes</block>` or
 
 Local `web_search` and `web_fetch` handling lives under
 [api/web_tools/](src/free_claude_code/api/web_tools/). When `ENABLE_WEB_SERVER_TOOLS` is true, the
-Messages handler can stream local Anthropic server-tool responses without sending the
-request upstream. [api/web_tools/egress.py](src/free_claude_code/api/web_tools/egress.py) enforces URL
+Messages handler can emit local Anthropic-shaped server-tool responses without sending
+hosted server-tool definitions upstream. [api/web_tools/egress.py](src/free_claude_code/api/web_tools/egress.py) enforces URL
 scheme and private-network restrictions for `web_fetch`.
 
-Anthropic server-tool definitions are never passed to upstream OpenAI Chat
-providers because that conversion would be lossy. Forced `web_search` or
-`web_fetch` requests are handled locally when `ENABLE_WEB_SERVER_TOOLS` is true;
-otherwise the Messages handler rejects them before provider execution.
+Anthropic hosted server-tool definitions are never passed to upstream OpenAI Chat
+providers. With `ENABLE_WEB_SERVER_TOOLS=true`, forced web calls retain the local
+fallback. Web-only tool sets with automatic choice use a bounded internal loop:
+FCC exposes ordinary query/URL function schemas to the already-routed provider,
+validates its selected calls, executes local HTTP, and supplies ordinary tool
+results for model synthesis. Only one public message with correlated server-tool
+results and optional final text is emitted. Explicit `none` performs no web HTTP. Calls are
+bounded by four local uses, three selection turns plus one tools-disabled synthesis,
+the original total output-token budget, and a 120-second overall deadline.
+
+This fallback supports `web_search_20250305` and `web_fetch_20250910`, positive
+`max_uses`, and domain allow/block filters. Fetch domain restrictions apply before
+DNS and on every redirect alongside private-network rejection and DNS pinning.
+Unsupported hosted options (including `search_profile: "fast"`), dynamic-filtering
+versions, and mixed client/server tool sets are rejected explicitly; local DuckDuckGo
+search does not claim to provide Anthropic's hosted fast-search profile. Local search links/titles are discovery evidence,
+not proof of a page's content. This is not a hosted encrypted-content or citation
+pipeline; do not replay its public server blocks to a real Anthropic endpoint.
+Disabled local tools still reject hosted definitions before provider execution.
 
 ## CLI Launchers And Managed Claude
 

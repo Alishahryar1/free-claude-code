@@ -1,7 +1,11 @@
 """Detect forced Anthropic web server tool requests."""
 
+from dataclasses import dataclass
+
+from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic import MessagesRequest, Tool
 
+from .egress import normalize_web_domain
 from .parsers import content_text
 
 
@@ -57,20 +61,124 @@ def has_listed_anthropic_server_tools(request: MessagesRequest) -> bool:
     return any(is_anthropic_server_tool_definition(t) for t in (request.tools or []))
 
 
+@dataclass(frozen=True, slots=True)
+class LocalWebTool:
+    name: str
+    max_uses: int
+    allowed_domains: tuple[str, ...] = ()
+    blocked_domains: tuple[str, ...] = ()
+
+
+_SUPPORTED_TYPES = {
+    "web_search": frozenset({"web_search_20250305"}),
+    "web_fetch": frozenset({"web_fetch_20250910"}),
+}
+_SUPPORTED_OPTIONS = frozenset(
+    {"max_uses", "allowed_domains", "blocked_domains", "cache_control"}
+)
+
+
+def _domains_option(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise InvalidRequestError(
+            "Local web-tool domain options must be lists of domains."
+        )
+    try:
+        return tuple(normalize_web_domain(str(item)) for item in value)
+    except ValueError as exc:
+        raise InvalidRequestError(
+            "Local web-tool domain options contain an invalid domain."
+        ) from exc
+
+
+def local_web_tools(request: MessagesRequest) -> tuple[LocalWebTool, ...]:
+    """Validate the local fallback's supported subset before any side effects."""
+    tools: list[LocalWebTool] = []
+    for tool in request.tools or ():
+        if (
+            tool.name not in _SUPPORTED_TYPES
+            or tool.type not in _SUPPORTED_TYPES[tool.name]
+        ):
+            raise InvalidRequestError(
+                "Local web tools support web_search_20250305 and web_fetch_20250910 only; "
+                "hosted dynamic-filtering tools and mixed client/server tools are unsupported."
+            )
+        extra = tool.model_extra or {}
+        unknown = set(extra) - _SUPPORTED_OPTIONS
+        if unknown or tool.input_schema is not None:
+            raise InvalidRequestError(
+                "Local web tools cannot honour these definition fields: "
+                f"{sorted(unknown | ({'input_schema'} if tool.input_schema is not None else set()))}."
+            )
+        max_uses = extra.get("max_uses", 4)
+        if not isinstance(max_uses, int) or isinstance(max_uses, bool) or max_uses <= 0:
+            raise InvalidRequestError(
+                "Local web-tool max_uses must be a positive integer."
+            )
+        allowed = _domains_option(extra.get("allowed_domains"))
+        blocked = _domains_option(extra.get("blocked_domains"))
+        if allowed and blocked:
+            raise InvalidRequestError(
+                "Specify allowed_domains or blocked_domains, not both."
+            )
+        if any(item.name == tool.name for item in tools):
+            raise InvalidRequestError(
+                "Duplicate local web-tool definitions are unsupported."
+            )
+        tools.append(LocalWebTool(tool.name, min(max_uses, 4), allowed, blocked))
+    if not tools:
+        raise InvalidRequestError(
+            "A forced web tool must have a matching supported definition."
+        )
+    choice = request.tool_choice
+    if choice is not None:
+        if set(choice) - {"type", "name", "disable_parallel_tool_use"}:
+            raise InvalidRequestError("Unsupported local web-tool choice fields.")
+        if choice.get("type") not in {"auto", "any", "none", "tool"}:
+            raise InvalidRequestError("Unsupported local web-tool choice type.")
+        if "disable_parallel_tool_use" in choice and not isinstance(
+            choice["disable_parallel_tool_use"], bool
+        ):
+            raise InvalidRequestError("disable_parallel_tool_use must be a boolean.")
+        if choice.get("type") != "tool" and "name" in choice:
+            raise InvalidRequestError("Only a named tool choice may specify name.")
+        if choice.get("type") == "tool" and choice.get("name") not in {
+            item.name for item in tools
+        }:
+            raise InvalidRequestError(
+                "A forced web tool must have a matching supported definition."
+            )
+    return tuple(tools)
+
+
+def is_local_web_tool_request(request: MessagesRequest) -> bool:
+    """Detect a web-only tool set without interpreting user text as tool intent."""
+    return bool(request.tools) and all(
+        is_anthropic_server_tool_definition(tool) for tool in request.tools
+    )
+
+
 def unsupported_server_tool_error(
     request: MessagesRequest, *, web_tools_enabled: bool
 ) -> str | None:
-    """Return the user-facing error when the resolved provider cannot run server tools."""
+    """Reject unsupported hosted tools before they can reach OpenAI Chat upstreams."""
     forced = forced_server_tool_name(request)
-    if forced and not web_tools_enabled:
+    if not forced and not has_listed_anthropic_server_tools(request):
+        return None
+    if not web_tools_enabled:
+        if forced:
+            return (
+                f"tool_choice forces Anthropic server tool {forced!r}, but local web server tools are "
+                "disabled (ENABLE_WEB_SERVER_TOOLS=false). Enable them or remove the forced server tool."
+            )
         return (
-            f"tool_choice forces Anthropic server tool {forced!r}, but local web server tools are "
-            "disabled (ENABLE_WEB_SERVER_TOOLS=false). Enable them or remove the forced server tool."
+            "FCC cannot pass listed Anthropic server tools to OpenAI Chat upstreams. "
+            "Enable local handling with ENABLE_WEB_SERVER_TOOLS=true, or remove these tools."
         )
-    if not forced and has_listed_anthropic_server_tools(request):
-        return (
-            "FCC cannot pass listed Anthropic server tools (web_search / web_fetch) "
-            "to OpenAI Chat upstreams. Set ENABLE_WEB_SERVER_TOOLS=true and force the "
-            "tool with tool_choice, or remove these tools from the request."
-        )
+    try:
+        local_web_tools(request)
+    except InvalidRequestError as exc:
+        return exc.message
     return None

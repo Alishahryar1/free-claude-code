@@ -29,6 +29,7 @@ async def aggregate_anthropic_sse_to_message(
     message: dict[str, Any] = {}
     blocks: dict[int, dict[str, Any]] = {}
     parts: dict[int, list[str]] = {}
+    signature_parts: dict[int, list[str]] = {}
     error: dict[str, Any] | None = None
 
     def handle_payload(payload: dict[str, Any]) -> None:
@@ -60,7 +61,9 @@ async def aggregate_anthropic_sse_to_message(
             elif dtype == "input_json_delta":
                 parts[idx].append(str(delta.get("partial_json", "")))
             elif dtype == "signature_delta":
-                blocks[idx]["signature"] = str(delta.get("signature", ""))
+                signature_parts.setdefault(idx, []).append(
+                    str(delta.get("signature", ""))
+                )
         elif ptype == "message_delta":
             delta = payload.get("delta")
             if isinstance(delta, dict):
@@ -103,8 +106,10 @@ async def aggregate_anthropic_sse_to_message(
             block["text"] = str(block.get("text", "")) + accumulated
         elif btype == "thinking":
             block["thinking"] = str(block.get("thinking", "")) + accumulated
-            block.setdefault("signature", "")
-        elif btype == "tool_use":
+            block["signature"] = str(block.get("signature", "")) + "".join(
+                signature_parts.get(idx, [])
+            )
+        elif btype in {"tool_use", "server_tool_use"}:
             if accumulated.strip():
                 try:
                     block["input"] = json.loads(accumulated)
