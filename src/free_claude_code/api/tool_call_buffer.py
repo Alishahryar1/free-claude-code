@@ -1,15 +1,13 @@
 """Withhold incomplete client tool calls at the public SSE delivery boundary."""
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
 from typing import Literal, cast
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
-from free_claude_code.core.async_iterators import try_close_async_iterator
 from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.openai_responses import is_client_search
 
-from .stream_delivery import PublicStreamEnvelope, frame_data, replace_frame_data
+from .stream_frames import frame_data, replace_frame_data
 
 type CallKey = int | str
 
@@ -46,19 +44,11 @@ def _client_call(item: Mapping[str, object]) -> bool:
     )
 
 
-class ToolCallBufferedStream(AsyncIterator[str]):
-    """Keep overlapping calls and intervening frames in their original order."""
+class ToolCallBuffer:
+    """Select complete groups in source order, without owning public delivery."""
 
-    def __init__(
-        self,
-        body: AsyncIterator[str],
-        *,
-        wire_api: Literal["messages", "responses"],
-        envelope: PublicStreamEnvelope | None = None,
-    ) -> None:
-        self._body = body
+    def __init__(self, wire_api: Literal["messages", "responses"]) -> None:
         self._wire_api = wire_api
-        self._decoder = AnthropicSSEDecoder()
         self._frames: list[str] = []
         self._calls: set[CallKey] = set()
         self._pending: set[CallKey] = set()
@@ -66,94 +56,8 @@ class ToolCallBufferedStream(AsyncIterator[str]):
         self._discarded: set[CallKey] = set()
         self._ids: dict[str, CallKey] = {}
         self._indices: dict[int, CallKey] = {}
-        self._done = False
-        self._closed = False
-        self._envelope = envelope
-        self._revision = envelope.state.attempt_revision if envelope else 0
 
-    def __aiter__(self) -> ToolCallBufferedStream:
-        return self
-
-    async def __anext__(self) -> str:
-        while not self._closed and not self._done:
-            try:
-                chunk = await anext(self._body)
-            except StopAsyncIteration:
-                boundary = self._synchronize()
-                self._done = True
-                frames = self._decoder.finish_frames()
-            except BaseException:
-                self._synchronize()
-                self._discard_group()
-                if self._envelope is not None:
-                    self._envelope.discard_pending_starts()
-                raise
-            else:
-                boundary = self._synchronize()
-                frames = self._decoder.feed_frames(chunk)
-            ready: list[str] = []
-            for frame in boundary:
-                if self._envelope is not None:
-                    value = self._envelope.publish(frame)
-                    if value is not None:
-                        ready.append(value)
-            for frame in frames:
-                prepared = self._envelope.prepare(frame) if self._envelope else [frame]
-                for item in prepared:
-                    for released in self._accept(item):
-                        value = (
-                            self._envelope.publish(released)
-                            if self._envelope
-                            else released
-                        )
-                        if value is not None:
-                            ready.append(value)
-            if self._done:
-                self._discard_group()
-                if self._envelope is not None:
-                    self._envelope.discard_pending_starts()
-            if ready:
-                return "".join(ready)
-        raise StopAsyncIteration
-
-    def _synchronize(self) -> list[str]:
-        envelope = self._envelope
-        if envelope is None or self._revision == envelope.state.attempt_revision:
-            return []
-        self._revision = envelope.state.attempt_revision
-        self._discard_group()
-        self._decoder = AnthropicSSEDecoder()
-        self._ids.clear()
-        self._indices.clear()
-        if (
-            envelope.state.continuation is None
-            or not envelope.state.continuation.active
-        ):
-            self._delivered.clear()
-        self._discarded.clear()
-        envelope.synchronize()
-        return envelope.boundary()
-
-    async def aclose(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self._discard_group()
-        if self._envelope is not None:
-            self._envelope.discard_pending_starts()
-        self._decoder.finish_frames()
-        self._ids.clear()
-        self._indices.clear()
-        self._delivered.clear()
-        self._discarded.clear()
-        close_error = await try_close_async_iterator(self._body)
-        if self._envelope is not None:
-            self._envelope.state.response = None
-            self._envelope.state.continuation = None
-        if close_error is not None:
-            raise close_error
-
-    def _accept(self, frame: str) -> list[str]:
+    def feed(self, frame: str) -> list[str]:
         events = parse_sse_text(frame)
         if not events:
             return self._publish(frame)

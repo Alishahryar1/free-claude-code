@@ -4,8 +4,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import simplejson
-
 from free_claude_code.core.delivered_response import client_call
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import reasoning_context
@@ -14,23 +12,6 @@ from free_claude_code.core.trace import trace_event
 from .admission import ProviderExecution
 
 type UpstreamProtocol = Literal["chat", "messages", "responses"]
-
-
-def require_continuation_progress(execution: ProviderExecution) -> None:
-    delivery = execution.delivery
-    continuation = delivery.continuation if delivery is not None else None
-    if (
-        continuation is not None
-        and continuation.active
-        and not continuation.handoff
-        and not continuation.made_progress
-    ):
-        raise ExecutionFailure(
-            kind=FailureKind.UPSTREAM,
-            status_code=502,
-            message="The provider continuation completed without adding output.",
-            retryable=False,
-        )
 
 
 class SourceRecoveryState:
@@ -110,17 +91,14 @@ class SourceRecoveryState:
         else:
             item = payload.get("item")
             if isinstance(item, dict):
-                if item.get("type") not in {"message", "reasoning"} and not client_call(
-                    item
-                ):
-                    self.unsafe_reason = "hosted_or_native_content"
-                    self._handoff_blocked = True
-                if item.get("encrypted_content"):
-                    self.unsafe_reason = "opaque_reasoning"
-                    if kind != "response.output_item.done":
-                        self._pending_reasoning.add(item.get("id", ""))
-                if kind == "response.output_item.done":
-                    self._pending_reasoning.discard(item.get("id", ""))
+                self._response_item(item, completed=kind == "response.output_item.done")
+            response = payload.get("response")
+            if isinstance(response, dict):
+                for item in response.get("output", []):
+                    if isinstance(item, dict):
+                        self._response_item(
+                            item, completed=item.get("status") == "completed"
+                        )
             if kind.startswith(
                 (
                     "response.web_search",
@@ -143,11 +121,29 @@ class SourceRecoveryState:
                 retryable=False,
             )
 
+    def _response_item(self, item: dict[str, Any], *, completed: bool) -> None:
+        if item.get("type") not in {"message", "reasoning"} and not client_call(item):
+            self.unsafe_reason = "hosted_or_native_content"
+            self._handoff_blocked = True
+        if item.get("encrypted_content"):
+            self.unsafe_reason = "opaque_reasoning"
+            if not completed:
+                self._pending_reasoning.add(item.get("id", ""))
+        if completed:
+            self._pending_reasoning.discard(item.get("id", ""))
+        if any(
+            part.get("annotations")
+            or part.get("type")
+            not in {"output_text", "refusal", "reasoning_text", "summary_text"}
+            for part in [*item.get("content", []), *item.get("summary", [])]
+        ):
+            self.unsafe_reason = "native_content"
+            self._handoff_blocked = True
+
 
 @dataclass(frozen=True, slots=True)
 class PublicRecovery:
     body: dict[str, Any] | None = None
-    events: tuple[str, ...] = ()
 
 
 def continuation_body(
@@ -196,19 +192,21 @@ def public_recovery(
     source: SourceRecoveryState,
 ) -> PublicRecovery | None:
     delivery = execution.delivery
-    if delivery is None or not delivery.content_released or delivery.response is None:
+    if delivery is None or not delivery.content_released:
         return None
     if not retryable or normal_stop_seen:
         return None
-    prefix = delivery.response.snapshot()
-    handoff = prefix.has_calls and source.can_handoff and delivery.response.can_handoff
+    prefix = delivery.prefix
+    if prefix is None:
+        return None
+    handoff = prefix.has_calls and source.can_handoff and prefix.can_handoff
     if not handoff and (source.unsafe_reason or not prefix.eligible):
         trace_event(
             stage="provider",
             event="provider.recovery.ineligible",
             source="provider",
             request_id=execution.request_id,
-            reason=source.unsafe_reason or delivery.response.unsafe_reason,
+            reason=source.unsafe_reason or prefix.unsafe_reason,
         )
         return None
     if handoff:
@@ -220,11 +218,7 @@ def public_recovery(
             request_id=execution.request_id,
             usage_estimated=True,
         )
-        events = tuple(
-            f"event: {event['type']}\ndata: {simplejson.dumps(event, use_decimal=True)}\n\n"
-            for event in delivery.response.handoff_events()
-        )
-        return PublicRecovery(events=events)
+        return PublicRecovery()
     if not execution.can_attempt:
         trace_event(
             stage="provider",

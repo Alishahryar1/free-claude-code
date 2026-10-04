@@ -32,7 +32,9 @@ from tests.providers.test_request_recovery_transitions import Wire
 async def _response(source, wire):
     options = {"pre_start_error_response": _json_error, "request_id": "stopped"}
     return await (
-        anthropic_sse_streaming_response(source, **options)
+        anthropic_sse_streaming_response(
+            source, pre_start_error_response=_json_error, request_id="stopped"
+        )
         if wire == "messages"
         else openai_responses_sse_streaming_response(source, headers={}, **options)
     )

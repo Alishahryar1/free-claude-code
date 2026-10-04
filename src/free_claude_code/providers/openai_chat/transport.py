@@ -63,7 +63,6 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.continuation import (
     SourceRecoveryState,
     public_recovery,
-    require_continuation_progress,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
@@ -1096,8 +1095,6 @@ class _OpenAIChatStreamRunner:
                     if recovered is not None:
                         recovery.discard()
                         if recovered.body is None:
-                            for event in recovered.events:
-                                yield event
                             return
                         body = recovered.body
                         operation_kind = ProviderOperationKind.CONTINUATION
@@ -1133,7 +1130,6 @@ class _OpenAIChatStreamRunner:
         for event in assembler.prepare_completion():
             for out_event in hold_event(event):
                 yield out_event
-        require_continuation_progress(execution)
         completion = assembler.completion
         if completion.provider_input_tokens is not None:
             logger.debug(

@@ -199,5 +199,7 @@ def test_handoff_fallback_preserves_already_closed_item_status(monkeypatch):
     )
     for event in continuation.boundary():
         response.observe(event)
-    result = continuation.prepare(response.handoff_events()[0])[0]["response"]
+    result = continuation.finalize(
+        continuation.prepare(response.handoff_events()[0])[0]
+    )["response"]
     assert [item["status"] for item in result["output"]] == ["incomplete", "completed"]

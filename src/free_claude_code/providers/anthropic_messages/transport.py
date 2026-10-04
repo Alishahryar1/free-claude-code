@@ -41,7 +41,6 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.continuation import (
     SourceRecoveryState,
     public_recovery,
-    require_continuation_progress,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
@@ -349,8 +348,6 @@ class AnthropicMessagesTransport:
                         payload,
                         continuing=operation_kind is ProviderOperationKind.CONTINUATION,
                     )
-                    if is_messages_stop(event_type, payload):
-                        require_continuation_progress(execution)
                     output = presenter.feed(event_type, payload)
                     if event_type != "ping" and not attempt.accepted:
                         await attempt.accept()
@@ -442,8 +439,6 @@ class AnthropicMessagesTransport:
                 if recovered is not None:
                     recovery.discard()
                     if recovered.body is None:
-                        for event in recovered.events:
-                            yield event
                         return
                     body = recovered.body
                     operation_kind = ProviderOperationKind.CONTINUATION

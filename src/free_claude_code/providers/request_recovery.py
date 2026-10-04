@@ -86,10 +86,13 @@ class RequestRecovery:
             return None
         if await self.retry_authentication(error, auth_status, attempt):
             return body
-        if operation_kind is ProviderOperationKind.GENERATION and self._committed:
+        if (
+            delivery.attempt_content_released
+            if delivery is not None
+            else operation_kind is ProviderOperationKind.GENERATION and self._committed
+        ):
             return None
-        # A separately buffered continuation/repair body can still be corrected
-        # at creation, while authentication follows the original public stream.
+        # Correct only an attempt whose public content can still be replaced.
         corrected = propose_correction()
         if corrected is not None and await self._authorize(error, attempt):
             return corrected

@@ -26,7 +26,6 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.continuation import (
     SourceRecoveryState,
     public_recovery,
-    require_continuation_progress,
 )
 from free_claude_code.providers.failure_policy import (
     RetryableProviderProtocolError,
@@ -126,8 +125,6 @@ async def stream_native_messages(
                         payload,
                         continuing=operation_kind is ProviderOperationKind.CONTINUATION,
                     )
-                    if is_messages_stop(kind, payload):
-                        require_continuation_progress(execution)
                     output = relay.feed(kind, payload)
                     if output is None:
                         continue
@@ -182,8 +179,6 @@ async def stream_native_messages(
                 )
                 if recovered is not None:
                     if recovered.body is None:
-                        for event in recovered.events:
-                            yield event
                         execution.succeed()
                         return
                     body = recovered.body

@@ -39,6 +39,8 @@ class DeliveredPrefix:
     thinking: str
     has_calls: bool
     eligible: bool
+    can_handoff: bool
+    unsafe_reason: str | None
 
 
 class DeliveredResponse:
@@ -328,7 +330,12 @@ class DeliveredResponse:
             elif client_call(item) and index in self.closed:
                 has_calls = True
         return DeliveredPrefix(
-            "".join(text), "".join(thinking), has_calls, self.unsafe_reason is None
+            "".join(text),
+            "".join(thinking),
+            has_calls,
+            self.unsafe_reason is None,
+            self.can_handoff,
+            self.unsafe_reason,
         )
 
     def output_tokens(self, output: list[dict[str, Any]] | None = None) -> int:

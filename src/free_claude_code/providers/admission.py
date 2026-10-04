@@ -143,7 +143,10 @@ class ProviderExecution:
     ) -> ProviderAttempt:
         """Open the sole active physical call for this execution."""
         attempt = await self._controller._open_attempt(self, operation_kind)
-        if operation_kind is ProviderOperationKind.GENERATION and self._delivery:
+        if self._delivery and operation_kind in {
+            ProviderOperationKind.GENERATION,
+            ProviderOperationKind.CONTINUATION,
+        }:
             self._delivery.begin_attempt()
         return attempt
 

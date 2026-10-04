@@ -4,7 +4,8 @@ from copy import deepcopy
 from typing import Any
 from uuid import uuid4, uuid5
 
-from .delivered_response import DeliveredResponse
+from .delivered_response import DeliveredResponse, client_call
+from .failures import ExecutionFailure, FailureKind
 
 
 class ContinuationStream:
@@ -25,34 +26,35 @@ class ContinuationStream:
         self._prefix_items: list[dict[str, Any]] = []
         self._trimmed = 0
         self._text_target: tuple[int, int] | None = None
+        self._text_item_id: str | None = None
 
     @property
     def made_progress(self) -> bool:
-        pending_visible_text = (
-            self._text_target is not None
-            and self._text_target[0] in self.delivered.items
-            and bool(self._candidate[self._overlap_size() :])
-        )
-        return self.delivered.progress > self._initial_progress or pending_visible_text
+        return self.delivered.progress > self._initial_progress
 
     def begin(self, *, handoff: bool) -> None:
         self.active = True
         self.handoff = handoff
         self._offset = max(self.delivered.items, default=-1) + 1
-        self._namespace = uuid4()
         self._boundary = self.delivered.closing_events()
         self._expected = self.delivered.snapshot().text
+        self.restart_attempt()
+        finalized = deepcopy(self.delivered.items)
+        for event in self._boundary:
+            if event["type"] == "response.output_item.done":
+                finalized[event["output_index"]] = deepcopy(event["item"])
+        self._prefix_items = [item for _, item in sorted(finalized.items())]
+
+    def restart_attempt(self) -> None:
+        """Replace an invisible attempt without losing its finalized prefix."""
+        self._namespace = uuid4()
         self._candidate = ""
         self._candidate_event = None
         self._prefix_pending = bool(self._expected)
         self._initial_progress = self.delivered.progress
         self._trimmed = 0
         self._text_target = None
-        finalized = deepcopy(self.delivered.items)
-        for event in self._boundary:
-            if event["type"] == "response.output_item.done":
-                finalized[event["output_index"]] = deepcopy(event["item"])
-        self._prefix_items = [item for _, item in sorted(finalized.items())]
+        self._text_item_id = None
 
     def boundary(self) -> list[dict[str, Any]]:
         events, self._boundary = self._boundary, []
@@ -67,9 +69,17 @@ class ContinuationStream:
     def _item_id(self, value: str) -> str:
         return f"{value.split('_')[0]}_{uuid5(self._namespace, value).hex}"
 
-    def _trim_item(self, item: dict[str, Any], index: int) -> None:
-        if self._text_target is None or self._text_target[0] != index:
+    def _trim_item(self, item: dict[str, Any], index: int | None = None) -> None:
+        if self._text_target is None:
             return
+        if (
+            item.get("id") != self._text_item_id
+            if self._text_item_id is not None
+            else self._text_target[0] != index
+        ):
+            return
+        if self._text_item_id is None:
+            self._text_item_id = item.get("id")
         position = self._text_target[1]
         parts = item.get("content", [])
         if position < len(parts):
@@ -143,10 +153,7 @@ class ContinuationStream:
         if self._prefix_pending and (terminal or text_closed):
             before = self._flush_candidate()
 
-        if self.delivered.wire_api == "messages":
-            if kind == "message_delta" and "usage" in data:
-                data["usage"] = {"output_tokens": self.delivered.output_tokens()}
-        else:
+        if self.delivered.wire_api == "responses":
             index = data.get("output_index")
             target_part = self._text_target == (index, data.get("content_index", 0))
             if kind == "response.output_text.done" and target_part:
@@ -164,25 +171,81 @@ class ContinuationStream:
                 response["id"] = self.delivered.header.get("id", response.get("id"))
                 if "created_at" in self.delivered.header:
                     response["created_at"] = self.delivered.header["created_at"]
-                if self.delivered.unsafe_reason == "retention_limit":
-                    if self.handoff:
-                        response["output"] = deepcopy(self._prefix_items)
-                    else:
-                        for position, item in enumerate(response.get("output", [])):
-                            if isinstance(item.get("id"), str):
-                                item["id"] = self._item_id(item["id"])
-                            self._trim_item(item, position + self._offset)
-                        response["output"] = [
-                            *deepcopy(self._prefix_items),
-                            *response.get("output", []),
-                        ]
-                else:
-                    response["output"] = [
-                        deepcopy(item)
-                        for _, item in sorted(self.delivered.items.items())
-                    ]
-                response["usage"] = self.delivered.usage(response.get("output"))
+                if not self.handoff:
+                    for item in response.get("output", []):
+                        if isinstance(item.get("id"), str):
+                            item["id"] = self._item_id(item["id"])
+                        if self._text_target is None:
+                            self._bind_snapshot_text(item)
+                        self._trim_item(item)
         return [*before, self._sequence(data)]
+
+    def _bind_snapshot_text(self, item: dict[str, Any]) -> None:
+        for position, part in enumerate(item.get("content", [])):
+            if part.get("type") == "output_text" and part.get("text"):
+                self._candidate = part["text"]
+                self._trimmed = self._overlap_size()
+                self._candidate = ""
+                self._text_item_id = item.get("id")
+                self._text_target = (-1, position)
+                self._prefix_pending = False
+                return
+
+    def finalize(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Finish the response only after preceding frames have been published."""
+        if not self.active:
+            return data
+        kind = data.get("type")
+        response = data.get("response")
+        output = response.get("output", []) if isinstance(response, dict) else []
+        terminal = kind in {"response.completed", "response.incomplete", "message_stop"}
+        terminal |= (
+            kind == "message_delta"
+            and data.get("delta", {}).get("stop_reason") is not None
+        )
+        if (
+            terminal
+            and not self.handoff
+            and not (self.made_progress or self._has_output(output))
+        ):
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message="The provider continuation completed without adding output.",
+                retryable=False,
+            )
+        if isinstance(response, dict):
+            if kind == "response.failed":
+                # Failure snapshots may still describe the pre-output start.
+                response["output"] = self.failure_output()
+            else:
+                response["output"] = [
+                    *deepcopy(self._prefix_items),
+                    *([] if self.handoff else output),
+                ]
+            response["usage"] = self.delivered.usage(response["output"])
+        elif kind == "message_delta" and "usage" in data:
+            data["usage"] = {"output_tokens": self.delivered.output_tokens()}
+        return data
+
+    def failure_output(self) -> list[dict[str, Any]]:
+        """Retain public content when a failure has no authoritative snapshot."""
+        return (
+            deepcopy(self._prefix_items)
+            if self.delivered.unsafe_reason == "retention_limit"
+            else [deepcopy(item) for _, item in sorted(self.delivered.items.items())]
+        )
+
+    @staticmethod
+    def _has_output(items: list[dict[str, Any]]) -> bool:
+        return any(
+            client_call(item)
+            or any(
+                part.get("text") or part.get("refusal")
+                for part in [*item.get("content", []), *item.get("summary", [])]
+            )
+            for item in items
+        )
 
     @staticmethod
     def _is_text_delta(data: dict[str, Any]) -> bool:
@@ -218,6 +281,9 @@ class ContinuationStream:
                     data.get("output_index", data.get("index", 0)),
                     data.get("content_index", 0),
                 )
+                self._text_item_id = data.get("item_id") or self.delivered.items.get(
+                    self._text_target[0], {}
+                ).get("id")
             # A substring may still grow into a longer suffix match. Wait until
             # it diverges or this text part ends before choosing the longest one.
             if self._candidate in self._expected:

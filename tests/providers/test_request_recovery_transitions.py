@@ -286,7 +286,9 @@ async def test_hidden_normal_stop_prevents_request_corrections(
         if public:
             options = {"pre_start_error_response": _json_error, "request_id": "stopped"}
             response = await (
-                anthropic_sse_streaming_response(source, **options)
+                anthropic_sse_streaming_response(
+                    source, pre_start_error_response=_json_error, request_id="stopped"
+                )
                 if wire == "messages"
                 else openai_responses_sse_streaming_response(
                     source, headers={}, **options

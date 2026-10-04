@@ -1,18 +1,24 @@
-"""Observe public delivery and retain one response envelope across hidden retries."""
+"""Own public projection, tool release, recovery mapping and wire termination."""
 
 import re
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator
 from typing import Any, Literal
 
 import simplejson
 
+from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.async_iterators import try_close_async_iterator
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.delivered_response import DeliveredResponse
+from free_claude_code.core.failures import find_execution_failure
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
 )
+
+from .classifier_projection import ClassifierProjection
+from .stream_frames import frame_data, replace_frame_data
+from .tool_call_buffer import ToolCallBuffer
 
 
 class DeliveryObservedStream(AsyncIterator[str]):
@@ -36,78 +42,182 @@ class DeliveryObservedStream(AsyncIterator[str]):
             raise error
 
 
-def frame_data(frame: str) -> dict[str, Any] | None:
-    """Read only SSE data, retaining decimal precision for envelope edits."""
-    text = "\n".join(
-        line[5:].lstrip(" ")
-        for line in re.split(r"\r\n|\r|\n", frame)
-        if line.startswith("data:")
-    )
-    try:
-        value: object = simplejson.loads(text, use_decimal=True)
-    except ValueError:
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def replace_frame_data(frame: str, payload: Mapping[str, object]) -> str:
-    """Replace data lines while preserving other SSE fields and line endings."""
-    lines = re.split(r"(\r\n|\r|\n)", frame)
-    replacement = "data: " + simplejson.dumps(
-        payload, use_decimal=True, ensure_ascii=False
-    )
-    parts: list[str] = []
-    replaced = False
-    for index in range(0, len(lines), 2):
-        line = lines[index]
-        ending = lines[index + 1] if index + 1 < len(lines) else ""
-        if line.startswith("data:"):
-            if replaced:
-                continue
-            line = replacement
-            replaced = True
-        parts.extend((line, ending))
-    return "".join(parts)
-
-
-class PublicStreamEnvelope:
-    """Own published metadata without reconstructing content or tool arguments."""
+class PublicResponseStream(AsyncIterator[str]):
+    """Publish one response while providers retain their physical request loops."""
 
     def __init__(
-        self, state: StreamDeliveryState, *, wire_api: Literal["messages", "responses"]
+        self,
+        body: AsyncIterator[str],
+        state: StreamDeliveryState,
+        *,
+        wire_api: Literal["messages", "responses"],
+        first_chunk: str,
+        terminal_frame: Callable[[str, str, BaseException], str] | None,
+        terminal_failure_observer: Callable[[BaseException], None] | None,
+        hide_reasoning: bool = False,
     ) -> None:
+        self._body = body
         self.state = state
         self._wire_api = wire_api
         self._revision = state.attempt_revision
+        self._hide_reasoning = hide_reasoning
+        self._decoder = AnthropicSSEDecoder()
+        self._projection = ClassifierProjection() if hide_reasoning else None
+        self._tools = ToolCallBuffer(wire_api)
+        self._delivered = DeliveredResponse(wire_api)
+        self._continuation = ContinuationStream(self._delivered)
+        state.bind_prefix(self._delivered.snapshot)
         self._published_starts: set[str] = set()
         self._seen_starts: set[str] = set()
         self._replacement = False
         self._public_id: str | None = None
         self._created_at: object = None
-        self._sequence: int = -1
+        self._sequence = -1
         self._offset: int | None = None
         self._pending_starts: list[str] = []
         self.start_frame = ""
-        state.response = DeliveredResponse(wire_api)
-        state.continuation = ContinuationStream(state.response)
+        self._initial_chunk = first_chunk
+        self._latest_chunk = ""
+        self._terminal_frame = terminal_frame
+        self._terminal_failure_observer = terminal_failure_observer
+        self._done = False
+        self._closed = False
+        self._events = self._iterate()
 
-    def synchronize(self) -> None:
-        if self._revision == self.state.attempt_revision:
+    def __aiter__(self) -> PublicResponseStream:
+        return self
+
+    async def __anext__(self) -> str:
+        if self._closed or self._done:
+            raise StopAsyncIteration
+        try:
+            while True:
+                frame, synthetic = await anext(self._events)
+                if self._continuation.active:
+                    payload = frame_data(frame)
+                    if payload is not None:
+                        frame = replace_frame_data(
+                            frame, self._continuation.finalize(payload)
+                        )
+                value = self._publish(frame, synthetic=synthetic)
+                if value is not None:
+                    self._latest_chunk = value
+                    return value
+        except StopAsyncIteration:
+            self._done = True
+            raise
+        except (Exception, BaseExceptionGroup) as exc:
+            self._done = True
+            self._pending_starts.clear()
+            self._tools = ToolCallBuffer(self._wire_api)
+            failure = find_execution_failure(exc) or exc
+            if self._terminal_frame is None:
+                raise
+            if self._terminal_failure_observer is not None:
+                self._terminal_failure_observer(failure)
+            frame = self._terminal_frame(
+                self.start_frame or self._initial_chunk, self._latest_chunk, failure
+            )
+            # Error framing uses only public identity/evidence, never a failed mapper.
+            payload = frame_data(frame)
+            if self._continuation.active and payload is not None:
+                response = payload.get("response")
+                if isinstance(response, dict):
+                    response["output"] = self._continuation.failure_output()
+                    response["usage"] = self._delivered.usage(response["output"])
+                    frame = replace_frame_data(frame, payload)
+            return self._publish(frame, synthetic=True) or frame
+
+    async def _iterate(self) -> AsyncGenerator[tuple[str, bool]]:
+        while True:
+            try:
+                chunk = await anext(self._body)
+            except StopAsyncIteration:
+                for frame in self._synchronize():
+                    yield frame, True
+                if self._continuation.handoff:
+                    for payload in self._delivered.handoff_events():
+                        for frame in self._prepare(self._format(payload)):
+                            yield frame, True
+                else:
+                    for frame in self._decoder.finish_frames():
+                        for ready in self._process(frame):
+                            yield ready, False
+                return
+            for frame in self._synchronize():
+                yield frame, True
+            for frame in self._decoder.feed_frames(chunk):
+                for ready in self._process(frame):
+                    yield ready, False
+
+    def _synchronize(self) -> Iterator[str]:
+        transition = self.state.transition
+        if self._revision == self.state.attempt_revision and transition is None:
             return
         self._revision = self.state.attempt_revision
-        self._replacement = bool(self._published_starts)
-        if self.state.continuation is not None and self.state.continuation.active:
-            self._replacement = False
+        self.state.transition = None
+        self._decoder = AnthropicSSEDecoder()
+        self._tools = ToolCallBuffer(self._wire_api)
+        self._projection = ClassifierProjection() if self._hide_reasoning else None
         self._seen_starts.clear()
-        self._offset = None
-        self.discard_pending_starts()
-
-    def discard_pending_starts(self) -> None:
-        """Discard metadata that no client has observed."""
         self._pending_starts.clear()
+        self._offset = None
+        if transition is not None:
+            self._continuation.begin(handoff=transition == "handoff")
+        elif self._continuation.active:
+            self._continuation.restart_attempt()
+        self._replacement = (
+            bool(self._published_starts) and not self._continuation.active
+        )
+        for event in self._continuation.boundary():
+            yield self._format(event)
 
-    def _release_content(self, frame: str) -> str:
-        self.state.release_content()
+    def _process(self, frame: str) -> Iterator[str]:
+        if self._projection is not None:
+            projected = self._projection.feed(frame)
+            if projected is None:
+                return
+            frame = projected
+        for released in self._tools.feed(frame):
+            yield from self._prepare(released)
+
+    def _prepare(self, frame: str) -> Iterator[str]:
+        if not self._continuation.active:
+            yield frame
+            return
+        payload = frame_data(frame)
+        if payload is None:
+            yield frame
+            return
+        for item in self._continuation.prepare(payload):
+            yield (
+                replace_frame_data(frame, item)
+                if item.get("type") == payload.get("type")
+                else self._format(item)
+            )
+
+    @staticmethod
+    def _format(payload: dict[str, Any]) -> str:
+        return f"event: {payload['type']}\ndata: {simplejson.dumps(payload, use_decimal=True)}\n\n"
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = self._done = True
+        await self._events.aclose()
+        self._pending_starts.clear()
+        self._decoder = AnthropicSSEDecoder()
+        self._tools = ToolCallBuffer(self._wire_api)
+        self.state.bind_prefix(None)
+        self._delivered = DeliveredResponse(self._wire_api)
+        self._continuation = ContinuationStream(self._delivered)
+        self.start_frame = self._initial_chunk = self._latest_chunk = ""
+        error = await try_close_async_iterator(self._body)
+        if error is not None:
+            raise error
+
+    def _release_content(self, frame: str, *, synthetic: bool) -> str:
+        self.state.release_content(synthetic=synthetic)
         for start in self._pending_starts:
             self._record(start)
         self._record(frame)
@@ -116,50 +226,25 @@ class PublicStreamEnvelope:
         self.start_frame = self._pending_starts[0]
         self._published_starts.add("message_start")
         prefix = "".join(self._pending_starts)
-        self.discard_pending_starts()
+        self._pending_starts.clear()
         return prefix + frame
 
     def _record(self, frame: str) -> None:
         payload = frame_data(frame)
-        if self.state.response is not None:
-            if payload is not None:
-                self.state.response.observe(payload)
-            elif any(line.startswith("data:") for line in frame.splitlines()):
-                self.state.response.unsafe_reason = "unknown_event"
+        if payload is not None:
+            self._delivered.observe(payload)
+        elif any(line.startswith("data:") for line in frame.splitlines()):
+            self._delivered.unsafe_reason = "unknown_event"
 
-    def prepare(self, frame: str) -> list[str]:
-        continuation = self.state.continuation
-        if continuation is None or not continuation.active:
-            return [frame]
-        payload = frame_data(frame)
-        if payload is None:
-            return [frame]
-        return [
-            replace_frame_data(frame, item)
-            if item.get("type") == payload.get("type")
-            else f"event: {item['type']}\ndata: {simplejson.dumps(item)}\n\n"
-            for item in continuation.prepare(payload)
-        ]
-
-    def boundary(self) -> list[str]:
-        continuation = self.state.continuation
-        if continuation is None:
-            return []
-        return [
-            f"event: {item['type']}\ndata: {simplejson.dumps(item)}\n\n"
-            for item in continuation.boundary()
-        ]
-
-    def publish(self, frame: str) -> str | None:
+    def _publish(self, frame: str, *, synthetic: bool = False) -> str | None:
         """Normalize only a replacement envelope and mark actually released frames."""
-        self.synchronize()
         payload = frame_data(frame)
         if payload is None:
             if any(
                 line.strip() and not line.startswith(":")
                 for line in re.split(r"\r\n|\r|\n", frame)
             ):
-                return self._release_content(frame)
+                return self._release_content(frame, synthetic=synthetic)
             return frame
 
         raw_kind = payload.get("type")
@@ -170,7 +255,7 @@ class PublicStreamEnvelope:
                 self._pending_starts.append(frame)
                 return None
             if kind == "error":
-                self.discard_pending_starts()
+                self._pending_starts.clear()
         start = kind in {"message_start", "response.created", "response.in_progress"}
         if start and metadata:
             if kind not in self._seen_starts:
@@ -224,7 +309,7 @@ class PublicStreamEnvelope:
         if metadata:
             self._record(frame)
             return frame
-        return self._release_content(frame)
+        return self._release_content(frame, synthetic=synthetic)
 
     def _metadata(self, kind: str, payload: dict[str, Any]) -> bool:
         if kind == "ping":

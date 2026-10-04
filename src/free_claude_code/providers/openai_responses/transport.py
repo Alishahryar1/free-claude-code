@@ -45,7 +45,6 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.continuation import (
     SourceRecoveryState,
     public_recovery,
-    require_continuation_progress,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
@@ -426,11 +425,6 @@ class OpenAIResponsesTransport:
                         payload,
                     ):
                         raise context_window_exceeded_provider_failure()
-                    if upstream_event.type in {
-                        "response.completed",
-                        "response.incomplete",
-                    }:
-                        require_continuation_progress(execution)
                     if adapt_event is not None:
                         payload = adapt_event(upstream_event.type, payload)
                     response = payload.get("response")
@@ -537,8 +531,6 @@ class OpenAIResponsesTransport:
                 if recovered is not None:
                     recovery.discard()
                     if recovered.body is None:
-                        for event in recovered.events:
-                            yield event
                         return
                     body = recovered.body
                     operation_kind = ProviderOperationKind.CONTINUATION

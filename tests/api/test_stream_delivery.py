@@ -8,10 +8,10 @@ import pytest
 import simplejson
 from starlette.responses import StreamingResponse
 
-from free_claude_code.api.handlers.classifier_response import classifier_response
+from free_claude_code.api.response_streams import anthropic_sse_streaming_response
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.stream_delivery import current_stream_delivery
-from tests.api.test_response_streams import _serve
+from tests.api.test_response_streams import _json_error, _serve
 from tests.api.test_tool_call_buffer import _call, _end, _frames, _response, _start
 from tests.api.test_web_server_tools import (
     ScriptedSelectionProvider,
@@ -57,7 +57,7 @@ async def test_messages_start_is_published_only_with_committed_activity(ending):
     response = await _response("messages", source())
     try:
         iterator = aiter(response.body_iterator)
-        assert await anext(iterator) == harmless
+        assert str(await anext(iterator)) + str(await anext(iterator)) == harmless
         remaining = "".join([str(chunk) async for chunk in iterator])
         if ending in {"activity", "empty", "stop"}:
             assert remaining.startswith(start)
@@ -251,7 +251,16 @@ async def test_classifier_resets_projection_when_hidden_attempt_is_replaced():
             )
         )
 
-    output = await drained(classifier_response(source()), "messages")
+    response = await anthropic_sse_streaming_response(
+        source(),
+        pre_start_error_response=_json_error,
+        request_id="classifier-retry",
+        hide_reasoning=True,
+    )
+    assert isinstance(response, StreamingResponse)
+    output = b"".join(
+        message.get("body", b"") for message in await _serve(response)
+    ).decode()
     assert "hidden" not in output
     assert "call_0" in output and "message_stop" in output
     assert '"index": 0' in output
