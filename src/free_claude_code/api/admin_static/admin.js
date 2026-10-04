@@ -1396,7 +1396,10 @@ async function refreshLocalStatus(config) {
       try {
         const provider = await api(`/admin/api/providers/${providerId}/local-status`);
         if (state.localStatusRequest !== request || !request.providerIds.has(providerId)) return;
-        if (provider.status === "missing_url") return;
+        if (provider.status === "missing_url") {
+          updateProviderCheckResult(providerId, "error", `Missing URL: ${provider.error_message || provider.message || "No base URL configured."}`, "availability");
+          return;
+        }
         if (provider.status === "reachable") {
           const latency = Number.isFinite(provider.latency_ms)
             ? ` (${provider.latency_ms} ms)`
@@ -1411,6 +1414,7 @@ async function refreshLocalStatus(config) {
           ? `${provider.base_url} returned HTTP ${httpStatus}`
           : "The local provider did not respond.");
         const diagnostics = [
+          provider.base_url && !detail.includes(provider.base_url) ? provider.base_url : null,
           provider.error_type,
           httpStatus && !detail.includes(String(httpStatus)) ? `HTTP ${httpStatus}` : null,
           Number.isFinite(provider.latency_ms) ? `${provider.latency_ms} ms` : null,

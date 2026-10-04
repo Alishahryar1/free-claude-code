@@ -1,9 +1,12 @@
 """Rendered provider-setup regressions for the local Admin UI."""
 
+import httpx
 import pytest
 from playwright.sync_api import ConsoleMessage, Page, Route, ViewportSize, expect
 
 from e2e.provider_support import close_provider, open_provider
+from free_claude_code.api import admin_routes
+from free_claude_code.api.admin_routes import _check_local_provider
 
 
 @pytest.mark.parametrize(
@@ -316,17 +319,34 @@ def test_admin_loading_finishes_before_local_availability_checks(
     for route in pending:
         payload = route.fetch().json()
         if payload["provider_id"] == "llamacpp":
-            payload.update(status="offline", label="Offline", status_code=503)
+            payload.update(
+                status="unreachable",
+                label="Unreachable",
+                status_code=503,
+                http_status=503,
+                error_type="HTTPStatusError",
+                error_message="Unexpected status code: 503",
+                message="Unexpected status code: 503",
+                latency_ms=12.5,
+            )
         elif payload["provider_id"] == "ollama":
-            payload.update(status="missing_url", label="Missing URL", base_url="")
+            payload.update(
+                status="missing_url",
+                label="Missing URL",
+                base_url="",
+                error_message="No base URL configured.",
+            )
         route.fulfill(json=payload)
     expect(page.locator('[data-provider-check-result="lmstudio"]')).to_have_text(
         "Reachable: http://localhost:1234/v1"
     )
     expect(page.locator('[data-provider-check-result="llamacpp"]')).to_have_text(
-        "Unavailable: http://localhost:8080/v1 returned HTTP 503"
+        "Unavailable: Unexpected status code: 503 "
+        "(http://localhost:8080/v1 · HTTPStatusError · 12.5 ms)"
     )
-    expect(page.locator('[data-provider-check-result="ollama"]')).to_be_hidden()
+    expect(page.locator('[data-provider-check-result="ollama"]')).to_have_text(
+        "Missing URL: No base URL configured."
+    )
     expect(
         page.locator('[data-provider="lmstudio"]').get_by_role(
             "button", name="Edit", exact=True
@@ -335,6 +355,49 @@ def test_admin_loading_finishes_before_local_availability_checks(
     expect(key).to_have_value("unsaved-key")
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     expect(page.locator("#messageArea")).to_have_text("")
+
+
+@pytest.mark.parametrize("failure", ["http", "missing_url"])
+def test_local_provider_api_diagnostics_reach_card_and_dialog(
+    page: Page,
+    admin_base_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    client_class = httpx.AsyncClient
+
+    def client(*args, **kwargs):
+        return client_class(
+            *args,
+            transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+            **kwargs,
+        )
+
+    async def diagnostics(provider_id: str, base_url: str, path: str):
+        if failure == "missing_url" and provider_id == "lmstudio":
+            # Exercise the defensive API response; Settings rejects empty URLs.
+            base_url = ""
+        return await _check_local_provider(provider_id, base_url, path)
+
+    monkeypatch.setattr(admin_routes.httpx, "AsyncClient", client)
+    monkeypatch.setattr(admin_routes, "_check_local_provider", diagnostics)
+    with page.expect_response(
+        "**/admin/api/providers/lmstudio/local-status"
+    ) as response:
+        _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
+    payload = response.value.json()
+    result = page.locator('[data-provider-check-result="lmstudio"]')
+    if failure == "http":
+        assert payload["http_status"] == 503
+        expect(result).to_contain_text(payload["error_message"])
+        expect(result).to_contain_text(payload["base_url"])
+        expect(result).to_contain_text(payload["error_type"])
+        expect(result).to_contain_text(f"{payload['latency_ms']} ms")
+    else:
+        assert payload["status"] == "missing_url"
+        expect(result).to_have_text("Missing URL: No base URL configured.")
+    dialog = open_provider(page, "lmstudio")
+    expect(dialog.locator("#providerDialogCheck")).to_have_text(result.inner_text())
 
 
 @pytest.mark.parametrize("failure", ["http", "network"])
