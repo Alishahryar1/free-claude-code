@@ -77,6 +77,7 @@ from free_claude_code.providers.request_recovery import (
     RequestRecovery,
 )
 from free_claude_code.providers.stream_recovery import (
+    HoldbackSignal,
     RecoveryController,
     RecoveryFailureAction,
 )
@@ -398,71 +399,77 @@ class OpenAIResponsesTransport:
                 stream = scope.retain(OpenAIStreamAdapter(sdk_stream))
                 stream_opened = True
 
-                async for upstream_event in stream:
-                    normal_stop_seen |= upstream_event.type in {
-                        "response.completed",
-                        "response.incomplete",
-                    }
-                    if not scope.attempt.accepted:
-                        await scope.attempt.accept()
-                    if not presenter_started:
-                        presenter_started = True
-                        for event in start_events:
+                async with recovery.read_stream(stream) as events:
+                    async for upstream_event in events:
+                        if upstream_event is HoldbackSignal.EXPIRED:
+                            for held in recovery.flush():
+                                yield held
+                            continue
+                        normal_stop_seen |= upstream_event.type in {
+                            "response.completed",
+                            "response.incomplete",
+                        }
+                        if not scope.attempt.accepted:
+                            await scope.attempt.accept()
+                        if not presenter_started:
+                            presenter_started = True
+                            for event in start_events:
+                                for held in recovery.push(event):
+                                    yield held
+                        payload = cast(
+                            JsonObject,
+                            upstream_event.to_dict(mode="json"),
+                        )
+                        failed = upstream_event.type in {
+                            "response.failed",
+                            "error",
+                            "response.error",
+                        }
+                        context_exceeded = reports_context_window_incomplete(
+                            upstream_event.type, payload
+                        )
+                        # Failed snapshots constrain recovery without replacing the
+                        # provider's own error with an output-eligibility failure.
+                        source.observe(
+                            "responses",
+                            payload,
+                            continuing=operation_kind
+                            is ProviderOperationKind.CONTINUATION
+                            and not (failed or context_exceeded),
+                        )
+                        if failed:
+                            stream_failure = responses_stream_failure_from_event(
+                                upstream_event.type,
+                                payload,
+                            )
+                            if adapt_event is not None:
+                                try:
+                                    stream_failure.payload = adapt_event(
+                                        upstream_event.type, payload
+                                    )
+                                except RetryableProviderProtocolError:
+                                    # Preserve the upstream failure classification.
+                                    # Synthesize the terminal event if partial output
+                                    # cannot retain a consistent public identity.
+                                    stream_failure.payload = None
+                            raise stream_failure
+                        if context_exceeded:
+                            raise context_window_exceeded_provider_failure()
+                        if adapt_event is not None:
+                            payload = adapt_event(upstream_event.type, payload)
+                        response = payload.get("response")
+                        if (
+                            isinstance(response, dict)
+                            and isinstance(response.get("model"), str)
+                            and response["model"]
+                        ):
+                            origin = replace(origin, model=response["model"])
+                        payload = preserve_responses_reasoning(payload, origin)
+                        for event in presenter.feed(upstream_event.type, payload):
                             for held in recovery.push(event):
                                 yield held
-                    payload = cast(
-                        JsonObject,
-                        upstream_event.to_dict(mode="json"),
-                    )
-                    failed = upstream_event.type in {
-                        "response.failed",
-                        "error",
-                        "response.error",
-                    }
-                    context_exceeded = reports_context_window_incomplete(
-                        upstream_event.type, payload
-                    )
-                    # Failed snapshots constrain recovery without replacing the
-                    # provider's own error with an output-eligibility failure.
-                    source.observe(
-                        "responses",
-                        payload,
-                        continuing=operation_kind is ProviderOperationKind.CONTINUATION
-                        and not (failed or context_exceeded),
-                    )
-                    if failed:
-                        stream_failure = responses_stream_failure_from_event(
-                            upstream_event.type,
-                            payload,
-                        )
-                        if adapt_event is not None:
-                            try:
-                                stream_failure.payload = adapt_event(
-                                    upstream_event.type, payload
-                                )
-                            except RetryableProviderProtocolError:
-                                # Preserve the upstream failure classification.
-                                # Synthesize the terminal event if partial output
-                                # cannot retain a consistent public identity.
-                                stream_failure.payload = None
-                        raise stream_failure
-                    if context_exceeded:
-                        raise context_window_exceeded_provider_failure()
-                    if adapt_event is not None:
-                        payload = adapt_event(upstream_event.type, payload)
-                    response = payload.get("response")
-                    if (
-                        isinstance(response, dict)
-                        and isinstance(response.get("model"), str)
-                        and response["model"]
-                    ):
-                        origin = replace(origin, model=response["model"])
-                    payload = preserve_responses_reasoning(payload, origin)
-                    for event in presenter.feed(upstream_event.type, payload):
-                        for held in recovery.push(event):
-                            yield held
-                    if presenter.completed:
-                        break
+                        if presenter.completed:
+                            break
                 if not presenter.completed:
                     raise _TruncatedResponsesStream(
                         "Provider Responses stream ended without a terminal event."

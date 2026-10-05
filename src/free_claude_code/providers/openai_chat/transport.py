@@ -98,6 +98,7 @@ from free_claude_code.providers.request_recovery import (
     RequestRecovery,
 )
 from free_claude_code.providers.stream_recovery import (
+    HoldbackSignal,
     RecoveryController,
     RecoveryDecision,
     RecoveryFailureAction,
@@ -1059,15 +1060,20 @@ class _OpenAIChatStreamRunner:
                     else None,
                 )
                 assembler.bind_tool_argument_aliases(self._tool_argument_aliases)
-                async for chunk in stream:
-                    if not scope.attempt.accepted:
-                        await scope.attempt.accept()
-                    for event in assembler.start_events():
-                        for out_event in hold_event(event):
-                            yield out_event
-                    for event in assembler.feed(chunk):
-                        for out_event in hold_event(event):
-                            yield out_event
+                async with recovery.read_stream(stream) as chunks:
+                    async for chunk in chunks:
+                        if chunk is HoldbackSignal.EXPIRED:
+                            for event in recovery.flush():
+                                yield event
+                            continue
+                        if not scope.attempt.accepted:
+                            await scope.attempt.accept()
+                        for event in assembler.start_events():
+                            for out_event in hold_event(event):
+                                yield out_event
+                        for event in assembler.feed(chunk):
+                            for out_event in hold_event(event):
+                                yield out_event
 
                 for event in assembler.finish_upstream():
                     for out_event in hold_event(event):

@@ -148,6 +148,10 @@ async def _harness(
         module = httpx if protocol == "messages" else httpx2
         if status != 200:
             return module.Response(status, json={"error": payload})
+        if isinstance(payload, module.AsyncByteStream):
+            return module.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=payload
+            )
         raw = "".join(
             (f"event: {event['type']}\n" if protocol == "messages" else "")
             + f"data: {json.dumps(event)}\n\n"

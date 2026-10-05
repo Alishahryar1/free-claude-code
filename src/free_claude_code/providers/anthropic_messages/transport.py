@@ -67,6 +67,7 @@ from free_claude_code.providers.request_recovery import (
     RequestRecovery,
 )
 from free_claude_code.providers.stream_recovery import (
+    HoldbackSignal,
     RecoveryController,
     RecoveryFailureAction,
 )
@@ -357,22 +358,35 @@ class AnthropicMessagesTransport:
                         "Messages upstream did not return an SSE stream."
                     )
                 stream_opened = True
-                async for event_type, payload in messages_events(response):
-                    normal_stop_seen |= is_messages_stop(event_type, payload)
-                    check_messages_failure(event_type, payload)
-                    source.observe(
-                        "messages",
-                        payload,
-                        continuing=operation_kind is ProviderOperationKind.CONTINUATION,
-                    )
-                    output = presenter.feed(event_type, payload)
-                    if event_type != "ping" and not attempt.accepted:
-                        await attempt.accept()
-                    for event in (output,) if isinstance(output, str) else output:
-                        for held in recovery.push(event):
-                            yield held
-                    if presenter.completed:
-                        break
+                upstream = messages_events(response)
+                try:
+                    async with recovery.read_stream(upstream) as events:
+                        async for item in events:
+                            if item is HoldbackSignal.EXPIRED:
+                                for held in recovery.flush():
+                                    yield held
+                                continue
+                            event_type, payload = item
+                            normal_stop_seen |= is_messages_stop(event_type, payload)
+                            check_messages_failure(event_type, payload)
+                            source.observe(
+                                "messages",
+                                payload,
+                                continuing=operation_kind
+                                is ProviderOperationKind.CONTINUATION,
+                            )
+                            output = presenter.feed(event_type, payload)
+                            if event_type != "ping" and not attempt.accepted:
+                                await attempt.accept()
+                            for event in (
+                                (output,) if isinstance(output, str) else output
+                            ):
+                                for held in recovery.push(event):
+                                    yield held
+                            if presenter.completed:
+                                break
+                finally:
+                    await maybe_await_aclose(upstream)
                 if not presenter.completed:
                     raise RetryableProviderProtocolError(
                         "Messages stream ended without message_stop."

@@ -1,10 +1,13 @@
 """Provider-owned stream holdback and recovery decisions."""
 
+import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum, StrEnum, auto
 
+from free_claude_code.core.async_tasks import wait_owned
 from free_claude_code.core.stream_delivery import StreamDeliveryState
 
 from .failure_policy import RetryableProviderProtocolError
@@ -23,6 +26,12 @@ class RecoveryFailureAction(StrEnum):
     EARLY_RETRY = "early_retry"
     MIDSTREAM_RECOVERY = "midstream_recovery"
     FINAL_ERROR = "final_error"
+
+
+class HoldbackSignal(Enum):
+    """Wake a transport to release its buffer without cancelling its read."""
+
+    EXPIRED = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +95,59 @@ class RecoveryHoldbackBuffer:
     def has_buffered(self) -> bool:
         return bool(self._events)
 
+    @property
+    def remaining_delay(self) -> float | None:
+        if self.committed or self._started_at is None:
+            return None
+        return max(0.0, self._holdback_seconds - (self._now() - self._started_at))
+
+
+class _HoldbackReader[EventT](AsyncIterator[EventT | HoldbackSignal]):
+    """Borrow a source and retain only the read interrupted by a buffer deadline."""
+
+    def __init__(
+        self, source: AsyncIterator[EventT], remaining_delay: Callable[[], float | None]
+    ) -> None:
+        self._source = source
+        self._remaining_delay = remaining_delay
+        self._pending: asyncio.Task[EventT] | None = None
+
+    def __aiter__(self) -> _HoldbackReader[EventT]:
+        return self
+
+    async def __anext__(self) -> EventT | HoldbackSignal:
+        pending = self._pending
+        if pending is not None and pending.done():
+            self._pending = None
+            return pending.result()
+        delay = self._remaining_delay()
+        if delay == 0:
+            return HoldbackSignal.EXPIRED
+        if pending is None:
+            if delay is None:
+                return await anext(self._source)
+            pending = self._pending = asyncio.create_task(self._read())
+        await asyncio.wait({pending}, timeout=delay)
+        if pending.done():
+            self._pending = None
+            return pending.result()
+        return HoldbackSignal.EXPIRED
+
+    async def _read(self) -> EventT:
+        return await anext(self._source)
+
+    async def aclose(self) -> None:
+        pending, self._pending = self._pending, None
+        if pending is None:
+            return
+        if not pending.done():
+            pending.cancel()
+
+        async def drain() -> None:
+            await asyncio.gather(pending, return_exceptions=True)
+
+        await wait_owned(asyncio.create_task(drain()))
+
 
 class RecoveryController:
     """Own commit-boundary holdback for one provider stream lifecycle."""
@@ -101,6 +163,20 @@ class RecoveryController:
     @property
     def has_buffered(self) -> bool:
         return self._holdback.has_buffered
+
+    @property
+    def remaining_delay(self) -> float | None:
+        return self._holdback.remaining_delay
+
+    @asynccontextmanager
+    async def read_stream[EventT](
+        self, source: AsyncIterator[EventT]
+    ) -> AsyncIterator[_HoldbackReader[EventT]]:
+        reader = _HoldbackReader(source, lambda: self.remaining_delay)
+        try:
+            yield reader
+        finally:
+            await reader.aclose()
 
     def push(self, event: str) -> list[str]:
         return self._holdback.push(event)
