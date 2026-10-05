@@ -7,6 +7,8 @@ from itertools import pairwise
 import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
     after_text,
@@ -100,6 +102,145 @@ async def test_final_native_snapshot_cannot_release_a_withheld_call():
         "message"
     ]
     assert public_text(events, "responses") == "Before. "
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+async def test_zero_call_final_candidate_keeps_published_response_identity(protocol):
+    admission = ProviderAdmissionController(
+        provider_name="cooled",
+        rate_limit=1000,
+        max_attempts=1,
+        base_delay=60,
+        max_delay=60,
+        jitter=0,
+    )
+    async with (
+        _harness(
+            "responses",
+            lambda _: (200, text_events("responses", "")[:1]),
+            max_attempts=1,
+        ) as (first, first_bodies, _),
+        _harness(
+            protocol,
+            lambda _: (503, {"type": "server_error", "message": "Unavailable"}),
+            max_attempts=1,
+        ) as (last, last_bodies, provider),
+    ):
+        transport = provider._chat if protocol == "chat" else provider
+        transport._admission = admission
+        warmup = last("responses", [{"role": "user", "content": "earlier request"}])
+        try:
+            with pytest.raises(ExecutionFailure):
+                await anext(warmup)
+        finally:
+            await warmup.aclose()
+        prior_calls = len(last_bodies)
+        raw = await delivered_candidates([first, last], "responses")
+        assert len(last_bodies) == prior_calls == 1
+    assert len(first_bodies) == 1
+    events = parse_sse_text(raw)
+    assert [event.event for event in events] == ["response.created", "response.failed"]
+    first_event, final = (event.data for event in events)
+    assert final["response"]["id"] == first_event["response"]["id"]
+    assert final["response"]["created_at"] == first_event["response"]["created_at"]
+    assert final["sequence_number"] > first_event["sequence_number"]
+
+
+def failed_overlapping_calls():
+    template = tool_events("responses", '{"path":"finished"}')
+    response = deepcopy(template[-1]["response"])
+    finished = {
+        **response["output"][0],
+        "id": "fc_finished",
+        "call_id": "call_finished",
+        "status": "completed",
+    }
+    unfinished = {
+        **finished,
+        "id": "fc_unfinished",
+        "call_id": "call_unfinished",
+        "arguments": '{"path":',
+        "status": "incomplete",
+    }
+    events = [
+        {
+            **template[0],
+            "response": {**response, "status": "in_progress", "output": []},
+        },
+        *(
+            {
+                "type": "response.output_item.added",
+                "output_index": index,
+                "item": {**item, "status": "in_progress", "arguments": ""},
+            }
+            for index, item in enumerate([finished, unfinished])
+        ),
+        {"type": "response.output_item.done", "output_index": 0, "item": finished},
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "item_id": "fc_unfinished",
+            "delta": unfinished["arguments"],
+        },
+        {
+            "type": "response.failed",
+            "response": {
+                **response,
+                "output": [finished, unfinished],
+                "status": "failed",
+                "error": {"code": "server_error", "message": "cut"},
+            },
+        },
+    ]
+    return [{**event, "sequence_number": index} for index, event in enumerate(events)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("same_candidate", [False, True])
+@pytest.mark.parametrize("hold_final_attempt", [False, True])
+async def test_failed_snapshot_cannot_release_an_overlapping_group_hidden_by_provider(
+    monkeypatch, same_candidate, hold_final_attempt
+):
+    buffers = []
+
+    def buffer():
+        value = RecoveryHoldbackBuffer(
+            max_bytes=1_000_000 if buffers and hold_final_attempt else 1,
+            holdback_seconds=60,
+        )
+        buffers.append(value)
+        return value
+
+    monkeypatch.setattr(
+        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer", buffer
+    )
+    async with (
+        _harness(
+            "responses",
+            lambda bodies: (
+                200,
+                failed_overlapping_calls()
+                if same_candidate and len(bodies) > 1
+                else text_events("responses", "")[:1],
+            ),
+            max_attempts=2 if same_candidate else 1,
+        ) as (first, first_bodies, _),
+        _harness(
+            "responses", lambda _: (200, failed_overlapping_calls()), max_attempts=1
+        ) as (last, last_bodies, _),
+    ):
+        raw = await delivered_candidates(
+            [first] if same_candidate else [first, last],
+            "responses",
+            tools=_tools("responses"),
+        )
+    assert len(first_bodies) == (2 if same_candidate else 1)
+    assert len(last_bodies) == (0 if same_candidate else 1)
+    events = parse_sse_text(raw)
+    assert [event.event for event in events] == ["response.created", "response.failed"]
+    assert events[-1].data["response"]["output"] == []
+    assert "call_finished" not in raw and "call_unfinished" not in raw
 
 
 @pytest.mark.asyncio

@@ -264,7 +264,7 @@ class PublicResponseStream(AsyncIterator[str]):
             self._delivered.unsafe_reason = "unknown_event"
 
     def _publish(self, frame: str, *, synthetic: bool = False) -> str | None:
-        """Normalize only a replacement envelope and mark actually released frames."""
+        """Keep replacement and failure envelopes in the public response lifecycle."""
         payload = frame_data(frame)
         if payload is None:
             if any(
@@ -300,12 +300,8 @@ class PublicResponseStream(AsyncIterator[str]):
                     self._created_at = value.get("created_at")
 
         changed = False
-        replacement_failure = kind == "response.failed" and (
-            self._continuation.active
-            or self.state.transition is not None
-            or self._revision != self.state.attempt_revision
-        )
-        if (self._replacement or replacement_failure) and self._wire_api == "responses":
+        failure = kind == "response.failed"
+        if (self._replacement or failure) and self._wire_api == "responses":
             response = payload.get("response")
             if isinstance(response, dict):
                 if (
@@ -328,12 +324,12 @@ class PublicResponseStream(AsyncIterator[str]):
                 payload["response_id"] = self._public_id
                 changed = True
         number = payload.get("sequence_number")
-        if replacement_failure:
+        if failure:
             number = self._sequence + 1
             payload["sequence_number"] = number
             changed = True
         if isinstance(number, int) and not isinstance(number, bool):
-            if self._replacement and not replacement_failure:
+            if self._replacement and not failure:
                 if self._offset is None:
                     self._offset = max(0, self._sequence + 1 - number)
                 if self._offset:

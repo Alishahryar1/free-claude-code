@@ -66,7 +66,7 @@ class ToolCallBuffer:
         kind = event.event or data.get("type")
         if kind in _FAILURES:
             self._discard_group()
-            return [self._filter_snapshot(frame)]
+            return [self._filter_snapshot(frame, failed=True)]
         if self._wire_api == "messages":
             index = data.get("index")
             block = data.get("content_block")
@@ -158,7 +158,7 @@ class ToolCallBuffer:
         self._calls.clear()
         self._pending.clear()
 
-    def _filter_snapshot(self, frame: str) -> str:
+    def _filter_snapshot(self, frame: str, *, failed: bool = False) -> str:
         # Parse only frames we may edit using decimal-aware JSON; all other
         # payloads, including argument strings and SSE framing, stay verbatim.
         value = frame_data(frame)
@@ -176,7 +176,7 @@ class ToolCallBuffer:
             if not (
                 isinstance(item, Mapping)
                 and _client_call(item)
-                and (self._withheld_item(item, response.get("status")))
+                and self._withheld_item(item, response.get("status"), failed=failed)
             )
         ]
         if len(retained) == len(output):
@@ -185,13 +185,18 @@ class ToolCallBuffer:
         return replace_frame_data(frame, value)
 
     def _withheld_item(
-        self, item: Mapping[str, object], response_status: object
+        self,
+        item: Mapping[str, object],
+        response_status: object,
+        *,
+        failed: bool = False,
     ) -> bool:
         key = self._key({}, item)
         status = item.get("status")
         return (
             key in self._discarded
             or status in _UNFINISHED
+            or (failed and key not in self._delivered)
             or (
                 status is None
                 and response_status != "completed"
