@@ -438,27 +438,30 @@ async def test_device_login_persists_account_and_reports_only_safe_state(
         client=client,
     )
 
-    pending = await manager.start_login(ConnectedAccountLoginMode.DEVICE)
-    assert pending.state == "connecting"
-    assert pending.user_code == "ABCD-EFGH"
-    for _ in range(50):
+    try:
+        pending = await manager.start_login(ConnectedAccountLoginMode.DEVICE)
+        assert pending.state == "connecting"
+        assert pending.user_code == "ABCD-EFGH"
+        login = manager._login_task
+        assert login is not None
+        await asyncio.wait_for(login, timeout=5)
         status = manager.status()
-        if status.state != "connecting":
-            break
-        await asyncio.sleep(0.01)
 
-    assert status.state == "connected"
-    assert status.email == "device@example.com"
-    serialized = json.dumps(status.as_dict())
-    assert "device_private" not in serialized
-    assert "refresh_private" not in serialized
-    assert calls == [
-        "/api/accounts/deviceauth/usercode",
-        "/api/accounts/deviceauth/token",
-        "/oauth/token",
-    ]
-    await manager.close()
-    await client.aclose()
+        assert status.state == "connected"
+        assert status.email == "device@example.com"
+        saved = json.loads((tmp_path / "openai.json").read_text(encoding="utf-8"))
+        assert saved["credentials"]["account_id"] == "account_device"
+        serialized = json.dumps(status.as_dict())
+        assert "device_private" not in serialized
+        assert "refresh_private" not in serialized
+        assert calls == [
+            "/api/accounts/deviceauth/usercode",
+            "/api/accounts/deviceauth/token",
+            "/oauth/token",
+        ]
+    finally:
+        await manager.close()
+        await client.aclose()
 
 
 @pytest.mark.asyncio
