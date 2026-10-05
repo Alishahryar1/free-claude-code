@@ -233,13 +233,22 @@ def test_new_attempt_deadline_starts_with_its_first_buffered_event(monkeypatch):
 @pytest.mark.parametrize(
     "error", [None, TimeoutError("upstream"), StopAsyncIteration()]
 )
-async def test_deadline_preserves_the_pending_read_and_its_outcome(monkeypatch, error):
+@pytest.mark.parametrize("expired_before_read", [False, True])
+async def test_deadline_preserves_the_pending_read_and_its_outcome(
+    monkeypatch, error, expired_before_read
+):
+    now = [0.0]
     monkeypatch.setattr(
         "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(holdback_seconds=0.01),
+        lambda: RecoveryHoldbackBuffer(
+            holdback_seconds=0.01,
+            now=(lambda: now[0]) if expired_before_read else None,
+        ),
     )
     recovery = RecoveryController()
     recovery.push("buffered")
+    if expired_before_read:
+        now[0] = 1.0
     release = asyncio.Event()
     reads = []
 
@@ -269,7 +278,10 @@ async def test_deadline_preserves_the_pending_read_and_its_outcome(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_events_without_output_cannot_extend_a_buffer_deadline(monkeypatch):
+@pytest.mark.parametrize("expired_before_read", [False, True])
+async def test_events_without_output_cannot_extend_a_buffer_deadline(
+    monkeypatch, expired_before_read
+):
     now = [0.0]
     monkeypatch.setattr(
         "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
@@ -277,6 +289,8 @@ async def test_events_without_output_cannot_extend_a_buffer_deadline(monkeypatch
     )
     recovery = RecoveryController()
     recovery.push("held")
+    if expired_before_read:
+        now[0] = 1.0
     reads = []
 
     async def source():

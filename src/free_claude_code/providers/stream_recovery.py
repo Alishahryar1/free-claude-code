@@ -111,17 +111,20 @@ class _HoldbackReader[EventT](AsyncIterator[EventT | HoldbackSignal]):
         self._source = source
         self._remaining_delay = remaining_delay
         self._pending: asyncio.Task[EventT] | None = None
+        self._deadline_checked = False
 
     def __aiter__(self) -> _HoldbackReader[EventT]:
         return self
 
     async def __anext__(self) -> EventT | HoldbackSignal:
         pending = self._pending
+        delay = self._remaining_delay()
         if pending is not None and pending.done():
             self._pending = None
+            self._deadline_checked = delay == 0
             return pending.result()
-        delay = self._remaining_delay()
-        if delay == 0:
+        # Check one ready event at expiry, then release even if it was metadata.
+        if delay == 0 and self._deadline_checked:
             return HoldbackSignal.EXPIRED
         if pending is None:
             if delay is None:
@@ -130,6 +133,7 @@ class _HoldbackReader[EventT](AsyncIterator[EventT | HoldbackSignal]):
         await asyncio.wait({pending}, timeout=delay)
         if pending.done():
             self._pending = None
+            self._deadline_checked = self._remaining_delay() == 0
             return pending.result()
         return HoldbackSignal.EXPIRED
 

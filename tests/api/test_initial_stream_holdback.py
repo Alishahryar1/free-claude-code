@@ -124,13 +124,27 @@ async def test_initial_text_reaches_http_without_another_upstream_event(
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("ending", ["eof", "error"])
+@pytest.mark.parametrize("read_state", ["pending", "between_reads"])
 async def test_ready_failure_at_deadline_retries_without_releasing_old_text(
-    protocol, wire, ending, monkeypatch
+    protocol, wire, ending, read_state, monkeypatch
 ):
     now = [0.0]
+
+    class ClockedBuffer(RecoveryHoldbackBuffer):
+        def __init__(self):
+            super().__init__(now=lambda: now[0])
+
+        def push(self, event):
+            output = super().push(event)
+            if read_state == "between_reads" and "abandoned" in event:
+                # Time passes after buffering text, before asking for the next
+                # event already available in this same HTTP body.
+                now[0] = 1.0
+            return output
+
     monkeypatch.setattr(
         "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(now=lambda: now[0]),
+        ClockedBuffer,
     )
     error = {"type": "api_error", "message": "internal server error"}
     if protocol == "responses":
@@ -145,10 +159,13 @@ async def test_ready_failure_at_deadline_retries_without_releasing_old_text(
         }
     else:
         failure = {"type": "error", "error": error}
-    first = GatedBody(
-        encode(protocol, text_events(protocol, "abandoned", complete=False)),
-        encode(protocol, [failure]) if ending == "error" else b"",
-    )
+    prefix = encode(protocol, text_events(protocol, "abandoned", complete=False))
+    suffix = encode(protocol, [failure]) if ending == "error" else b""
+    if read_state == "pending":
+        first = GatedBody(prefix, suffix)
+    else:
+        first = GatedBody(prefix + suffix, b"")
+        first.release.set()
 
     def reply(bodies):
         if len(bodies) == 1:
@@ -170,11 +187,12 @@ async def test_ready_failure_at_deadline_retries_without_releasing_old_text(
 
         serving = asyncio.create_task(serve())
         try:
-            await asyncio.wait_for(first.waiting.wait(), 2)
-            # The pending read completes after its logical deadline. Its failure
-            # must be validated before the transport adds a deadline flush.
-            now[0] = 1.0
-            first.release.set()
+            if read_state == "pending":
+                await asyncio.wait_for(first.waiting.wait(), 2)
+                # The pending read completes after its logical deadline. Its
+                # failure must be validated before the transport flushes.
+                now[0] = 1.0
+                first.release.set()
             await asyncio.wait_for(serving, 2)
         finally:
             first.release.set()
