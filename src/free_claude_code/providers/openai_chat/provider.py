@@ -16,6 +16,7 @@ from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -213,6 +214,7 @@ class OpenAIChatProvider(BaseProvider):
         model_info: ProviderModelInfo | None = None,
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         return self._chat.stream_messages(
             request,
@@ -222,6 +224,7 @@ class OpenAIChatProvider(BaseProvider):
             reasoning=reasoning,
             endpoint_context=endpoint_context,
             model_info=model_info,
+            continuation=continuation,
         )
 
     def stream_responses(
@@ -235,6 +238,7 @@ class OpenAIChatProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         return self._chat.stream_responses(
             request,
@@ -243,4 +247,5 @@ class OpenAIChatProvider(BaseProvider):
             response_model=response_model,
             reasoning=reasoning,
             endpoint_context=endpoint_context,
+            continuation=continuation,
         )

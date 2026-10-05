@@ -379,7 +379,9 @@ async def test_stopped_first_nim_chunk_returns_public_error_and_releases_admissi
         source = _public_stream(provider, wire)
         async with asyncio.timeout(2):
             response = await (
-                anthropic_sse_streaming_response(source, **options)
+                anthropic_sse_streaming_response(
+                    source, pre_start_error_response=_json_error, request_id="raw-stop"
+                )
                 if wire == "messages"
                 else openai_responses_sse_streaming_response(
                     source, headers={}, **options

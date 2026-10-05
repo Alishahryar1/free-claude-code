@@ -10,6 +10,7 @@ from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 
 from .model_metadata import ProviderModelInfo
 
@@ -24,6 +25,7 @@ class ProviderPort(Protocol):
         request_id: str,
         response_model: str,
         request_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]: ...
 
     def stream_messages(
@@ -36,6 +38,7 @@ class ProviderPort(Protocol):
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]: ...
 
     def stream_responses(
@@ -48,6 +51,7 @@ class ProviderPort(Protocol):
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]: ...
 
 

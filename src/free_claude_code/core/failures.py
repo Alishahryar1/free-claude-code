@@ -3,6 +3,8 @@
 from dataclasses import FrozenInstanceError, dataclass
 from enum import StrEnum
 
+from .stream_recovery import StreamFailureContext
+
 
 class FailureKind(StrEnum):
     """Stable failure categories shared across execution and wire adapters."""
@@ -26,6 +28,7 @@ class ExecutionFailure(Exception):
     status_code: int
     message: str
     retryable: bool
+    stream_context: StreamFailureContext | None = None
 
     def __post_init__(self) -> None:
         Exception.__init__(self, self.message)

@@ -16,6 +16,7 @@ from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
@@ -142,6 +143,7 @@ class GitHubCopilotProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         self._check_model(request.model)
         return self._dispatch(
@@ -150,6 +152,7 @@ class GitHubCopilotProvider(BaseProvider):
             request_id,
             response_model or request.model,
             reasoning,
+            continuation=continuation,
         )
 
     def stream_responses(
@@ -162,6 +165,7 @@ class GitHubCopilotProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         self._check_model(request.model)
         return self._dispatch(
@@ -170,6 +174,7 @@ class GitHubCopilotProvider(BaseProvider):
             request_id,
             response_model or request.model,
             reasoning,
+            continuation=continuation,
         )
 
     def _chat(self, model: CopilotModel) -> OpenAIChatTransport:
@@ -195,6 +200,7 @@ class GitHubCopilotProvider(BaseProvider):
         request_id: str | None,
         response_model: str,
         reasoning: ReasoningPolicy,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         async with self._condition:
             self._check_model(request.model)
@@ -231,6 +237,7 @@ class GitHubCopilotProvider(BaseProvider):
                                 response_model=response_model,
                                 reasoning=reasoning,
                                 model_info=lease.model.info,
+                                continuation=continuation,
                             )
                         else:
                             selected = native.stream_responses(
@@ -239,6 +246,7 @@ class GitHubCopilotProvider(BaseProvider):
                                 request_id=request_id,
                                 response_model=response_model,
                                 reasoning=reasoning,
+                                continuation=continuation,
                             )
                     else:
                         resolved = non_messages_reasoning(
@@ -261,6 +269,7 @@ class GitHubCopilotProvider(BaseProvider):
                                     model_info=lease.model.info,
                                     can_disable_reasoning="none"
                                     in (lease.model.supported_efforts or ()),
+                                    continuation=continuation,
                                 )
                             else:
                                 selected = self._chat(lease.model).stream_messages(
@@ -271,6 +280,7 @@ class GitHubCopilotProvider(BaseProvider):
                                     reasoning=resolved,
                                     endpoint_context=lease,
                                     model_info=lease.model.info,
+                                    continuation=continuation,
                                 )
                         else:
                             selected = transport.stream_responses(
@@ -280,6 +290,7 @@ class GitHubCopilotProvider(BaseProvider):
                                 response_model=response_model,
                                 reasoning=resolved,
                                 endpoint_context=lease,
+                                continuation=continuation,
                             )
                     while True:
                         try:

@@ -31,8 +31,10 @@ from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.continuation import ContinuationRequest
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
     context_window_exceeded_provider_failure,
@@ -98,6 +100,7 @@ class LMStudioProvider(OpenAIChatProvider):
         model_info: ProviderModelInfo | None = None,
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         stream = super().stream_messages(
             request,
@@ -108,10 +111,24 @@ class LMStudioProvider(OpenAIChatProvider):
             model_info=model_info,
             endpoint_context=endpoint_context,
             request_headers=request_headers,
+            continuation=continuation,
         )
+        estimate_request = request
+        if continuation is not None:
+            estimate_request = MessagesRequest.model_validate(
+                ContinuationRequest("messages").build(
+                    request.model_dump(mode="json"),
+                    continuation.text,
+                    continuation.thinking,
+                )
+            )
         return self._stream_with_context_budget(
             stream,
-            estimate=get_token_count(request.messages, request.system, request.tools),
+            estimate=get_token_count(
+                estimate_request.messages,
+                estimate_request.system,
+                estimate_request.tools,
+            ),
             request_id=request_id,
         )
 
@@ -126,6 +143,7 @@ class LMStudioProvider(OpenAIChatProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         stream = super().stream_responses(
             request,
@@ -136,10 +154,20 @@ class LMStudioProvider(OpenAIChatProvider):
             endpoint_context=endpoint_context,
             request_headers=request_headers,
             model_info=model_info,
+            continuation=continuation,
         )
+        estimate_request = request
+        if continuation is not None:
+            estimate_request = OpenAIResponsesRequest.model_validate(
+                ContinuationRequest("responses").build(
+                    request.model_dump(mode="json"),
+                    continuation.text,
+                    continuation.thinking,
+                )
+            )
         return self._stream_with_context_budget(
             stream,
-            estimate=estimate_responses_input_tokens(request),
+            estimate=estimate_responses_input_tokens(estimate_request),
             request_id=request_id,
         )
 

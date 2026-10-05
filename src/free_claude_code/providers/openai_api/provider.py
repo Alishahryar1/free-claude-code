@@ -14,6 +14,7 @@ from free_claude_code.core.openai_responses import (
     ResponsesStreamFailure,
 )
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -121,6 +122,7 @@ class OpenAIAPIProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         return self._responses.stream_messages(
             request,
@@ -129,6 +131,7 @@ class OpenAIAPIProvider(BaseProvider):
             response_model=response_model or request.model,
             reasoning=reasoning,
             model_info=model_info,
+            continuation=continuation,
         )
 
     def stream_responses(
@@ -141,6 +144,7 @@ class OpenAIAPIProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         return self._responses.stream_responses(
             request,
@@ -148,4 +152,5 @@ class OpenAIAPIProvider(BaseProvider):
             request_id=request_id,
             response_model=response_model or request.model,
             reasoning=reasoning,
+            continuation=continuation,
         )

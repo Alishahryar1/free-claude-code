@@ -57,6 +57,7 @@ from free_claude_code.core.openai_responses.provider_input import (
     build_responses_provider_request,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.version import package_version
 from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
 from free_claude_code.messaging.event_parser import parse_cli_event
@@ -185,6 +186,7 @@ class ScriptedSelectionProvider:
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         raise AssertionError("Web-search selection received a Responses request")
         yield ""
@@ -199,6 +201,7 @@ class ScriptedSelectionProvider:
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         self.requests.append(request)
         self.stream_kwargs.append(

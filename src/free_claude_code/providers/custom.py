@@ -18,6 +18,7 @@ from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -219,6 +220,7 @@ class CustomProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         reasoning = self._reasoning(reasoning)
         if (
@@ -245,6 +247,7 @@ class CustomProvider(BaseProvider):
                 model_info=model_info,
                 preserve_native_controls=self._definition.reasoning_format
                 == "provider_default",
+                continuation=continuation,
             )
         transport = self._chat if self._chat is not None else self._responses
         assert transport is not None
@@ -256,6 +259,7 @@ class CustomProvider(BaseProvider):
             response_model=response_model or request.model,
             reasoning=reasoning,
             model_info=model_info,
+            continuation=continuation,
         )
 
     def stream_responses(
@@ -268,6 +272,7 @@ class CustomProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         reasoning = (
             responses_reasoning_policy(request.reasoning)
@@ -296,6 +301,7 @@ class CustomProvider(BaseProvider):
                 response_model=response_model,
                 reasoning=reasoning,
                 model_info=model_info,
+                continuation=continuation,
             )
         transport = self._chat if self._chat is not None else self._responses
         assert transport is not None
@@ -306,6 +312,7 @@ class CustomProvider(BaseProvider):
             request_id=request_id,
             response_model=response_model or request.model,
             reasoning=reasoning,
+            continuation=continuation,
         )
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:

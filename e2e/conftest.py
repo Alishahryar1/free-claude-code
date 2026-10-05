@@ -102,6 +102,7 @@ class _ModelListingProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation=None,
     ) -> AsyncIterator[str]:
         if False:
             yield ""
@@ -116,6 +117,7 @@ class _ModelListingProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation=None,
     ) -> AsyncIterator[str]:
         if False:
             yield ""

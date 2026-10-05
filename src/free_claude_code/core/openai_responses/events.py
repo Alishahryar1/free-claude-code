@@ -33,6 +33,15 @@ def committed_response_failure_frame(
 ) -> str:
     """Close an already-public Responses lifecycle after a boundary failure."""
 
+    failure = find_execution_failure(exc)
+    if (
+        failure is not None
+        and failure.stream_context is not None
+        and failure.stream_context.responses_failure_payload is not None
+    ):
+        return format_response_sse_event(
+            "response.failed", failure.stream_context.responses_failure_payload
+        )
     created = _response_event_payload(first_chunk)
     response_value = created.get("response") if created is not None else None
     if not isinstance(response_value, Mapping) or not isinstance(
@@ -41,7 +50,6 @@ def committed_response_failure_frame(
         raise exc
 
     response = cast(JsonObject, deepcopy(dict(response_value)))
-    failure = find_execution_failure(exc)
     if failure is not None:
         error = openai_error_from_failure(failure)
     else:

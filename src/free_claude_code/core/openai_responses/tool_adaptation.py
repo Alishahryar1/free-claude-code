@@ -687,9 +687,16 @@ class ResponsesToolEventAdapter:
         response = data.get("response")
         if isinstance(response, dict):
             if isinstance(output := response.get("output"), list):
-                response["output"] = [
-                    self._tools.restore_item(value) for value in output
-                ]
+                restored: list[JsonValue] = []
+                for value in output:
+                    try:
+                        restored.append(self._tools.restore_item(value))
+                    except ResponsesConversionError:
+                        if event_type != "response.failed":
+                            raise
+                        # An unusable call in a failed snapshot must not replace
+                        # the provider's error or prevent safe model fallback.
+                response["output"] = restored
             if "tools" in response:
                 response["tools"] = (
                     deepcopy(self._tools.original.tools or [])

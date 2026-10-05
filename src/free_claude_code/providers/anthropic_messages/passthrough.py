@@ -19,9 +19,16 @@ from free_claude_code.core.diagnostics import (
 )
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
+)
+from free_claude_code.providers.continuation import (
+    ContinuationRequest,
+    SourceRecoveryState,
+    public_recovery,
+    public_stream_failure,
 )
 from free_claude_code.providers.failure_policy import (
     RetryableProviderProtocolError,
@@ -50,9 +57,12 @@ async def stream_native_messages(
     provider_name: str,
     read_timeout_s: float,
     request_id: str | None,
+    continuation: ContinuationSeed | None = None,
 ) -> AsyncIterator[str]:
     execution = admission.start_execution(request_id=request_id)
     streaming = body.get("stream", False) is True
+    source = SourceRecoveryState(execution)
+    normal_stop_seen = False
 
     async def complete() -> str:
         async with client.stream(
@@ -81,11 +91,19 @@ async def stream_native_messages(
             )
             return
         committed = False
+        continuation_request = ContinuationRequest("messages")
+        operation_kind = ProviderOperationKind.GENERATION
+        if continuation is not None:
+            body = continuation_request.build(
+                body, continuation.text, continuation.thinking
+            )
+            operation_kind = ProviderOperationKind.CONTINUATION
         while execution.can_attempt:
             normal_stop_seen = False
+            source = SourceRecoveryState(execution, previous=source)
             scope = None
             try:
-                attempt = await execution.open_attempt(ProviderOperationKind.GENERATION)
+                attempt = await execution.open_attempt(operation_kind)
                 scope = ProviderAttemptScope(
                     attempt, provider_name=provider_name, request_id=request_id
                 )
@@ -113,6 +131,11 @@ async def stream_native_messages(
                 async for kind, payload in messages_events(response):
                     normal_stop_seen |= is_messages_stop(kind, payload)
                     check_messages_failure(kind, payload, native=True)
+                    source.observe(
+                        "messages",
+                        payload,
+                        continuing=operation_kind is ProviderOperationKind.CONTINUATION,
+                    )
                     output = relay.feed(kind, payload)
                     if output is None:
                         continue
@@ -155,6 +178,23 @@ async def stream_native_messages(
                             normal_stop_seen=normal_stop_seen,
                         ):
                             continue
+                if scope is not None:
+                    await scope.aclose(active_error=error)
+                recovered = public_recovery(
+                    execution,
+                    body=body,
+                    request=continuation_request,
+                    retryable=is_retryable_stream_error(error),
+                    normal_stop_seen=normal_stop_seen,
+                    source=source,
+                )
+                if recovered is not None:
+                    if recovered.body is None:
+                        execution.succeed()
+                        return
+                    body = recovered.body
+                    operation_kind = ProviderOperationKind.CONTINUATION
+                    continue
                 if error is not raw_error:
                     raise error from raw_error
                 raise
@@ -182,6 +222,14 @@ async def stream_native_messages(
                 provider_name=provider_name,
                 read_timeout_s=read_timeout_s,
                 request_id=request_id,
+            )
+        if streaming and execution.delivery is not None:
+            failure = public_stream_failure(
+                failure,
+                source=source,
+                body=body,
+                protocol="messages",
+                normal_stop_seen=normal_stop_seen,
             )
         execution.fail(failure)
         raise failure from error

@@ -314,6 +314,19 @@ def has_readable_replay(value: object) -> bool:
     )
 
 
+def unencrypted_responses_replay(value: object) -> ReplayRecord | None:
+    """Identify local Responses carriers without native encrypted reasoning."""
+    if not isinstance(value, str) or not is_replay(value):
+        return None
+    try:
+        record = decode_replay(value)
+    except HistoryReplayError:
+        return None
+    if record.origin.protocol != "responses" or record.native.get("encrypted_content"):
+        return None
+    return record
+
+
 def _replay_readable(
     item: Mapping[str, JsonValue], record: ReplayRecord | None
 ) -> list[tuple[str, bool]]:

@@ -14,13 +14,13 @@ from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 from .stream_output import ChatStreamOutput
+from .tool_call_identity import ToolCallIdentityResolver
 
 RecordToolExtraContent = Callable[[str, dict[str, Any]], None]
 
 
 @dataclass(slots=True)
 class _CollectedToolCall:
-    index: int
     tool_id: str | None = None
     name: str = ""
     argument_parts: list[str] = field(default_factory=list)
@@ -35,7 +35,6 @@ class _CompletedOpenAIToolFunction(TypedDict):
 class CompletedOpenAIToolCall(TypedDict):
     """Schema-valid OpenAI tool-call payload collected for recovery emission."""
 
-    index: int
     id: str | None
     function: _CompletedOpenAIToolFunction
     extra_content: NotRequired[JsonObject]
@@ -45,6 +44,7 @@ class OpenAIToolCallCollector:
     """Collect and validate one buffered OpenAI tool-call response."""
 
     def __init__(self) -> None:
+        self._identities = ToolCallIdentityResolver()
         self._calls: dict[int, _CollectedToolCall] = {}
 
     @property
@@ -53,13 +53,11 @@ class OpenAIToolCallCollector:
 
     def add(self, tool_call: Any) -> None:
         """Add one SDK tool-call delta without emitting downstream state."""
-        raw_index = getattr(tool_call, "index", 0)
-        index = raw_index if isinstance(raw_index, int) and raw_index >= 0 else 0
-        state = self._calls.setdefault(index, _CollectedToolCall(index=index))
-
-        tool_id = getattr(tool_call, "id", None)
-        if tool_id:
-            state.tool_id = str(tool_id)
+        index = self._identities.resolve(
+            getattr(tool_call, "index", None), getattr(tool_call, "id", None)
+        )
+        state = self._calls.setdefault(index, _CollectedToolCall())
+        state.tool_id = self._identities.tool_id(index)
 
         function = getattr(tool_call, "function", None)
         incoming_name = getattr(function, "name", None)
@@ -83,7 +81,7 @@ class OpenAIToolCallCollector:
     ) -> tuple[CompletedOpenAIToolCall, ...] | None:
         """Return complete schema-valid calls, or None when output is incomplete."""
         completed: list[CompletedOpenAIToolCall] = []
-        for index in sorted(self._calls):
+        for index in sorted(self._calls, key=self._identities.order_key):
             state = self._calls[index]
             wire_name = state.name.strip()
             name = tool_names.decode(wire_name) if tool_names is not None else wire_name
@@ -104,7 +102,6 @@ class OpenAIToolCallCollector:
                 return None
 
             call: CompletedOpenAIToolCall = {
-                "index": index,
                 "id": state.tool_id,
                 "function": {
                     "name": name,
@@ -153,6 +150,7 @@ class OpenAIToolCallAssembler:
     ) -> None:
         self._record_extra_content = record_extra_content
         self._reserved_tool_ids = {tool_id for tool_id in reserved_tool_ids if tool_id}
+        self._identities = ToolCallIdentityResolver()
         self._candidate_tool_ids: dict[int, str] = {}
         self._public_tool_ids: dict[int, str] = {}
 
@@ -167,10 +165,29 @@ class OpenAIToolCallAssembler:
         tool_argument_alias_buffers: dict[int, str] | None = None,
     ) -> Iterator[str]:
         """Process one tool-call delta and yield client-protocol events."""
-        raw_index = tc.get("index", 0)
-        tc_index = raw_index if isinstance(raw_index, int) else 0
-        if tc_index < 0:
-            tc_index = len(output.tool_states)
+        tc_index = self._identities.resolve(tc.get("index"), tc.get("id"))
+        yield from self._process_resolved_tool_call(
+            tc_index,
+            tc,
+            output,
+            tool_names=tool_names,
+            tool_name_buffers=tool_name_buffers,
+            tool_argument_aliases=tool_argument_aliases,
+            tool_argument_alias_buffers=tool_argument_alias_buffers,
+        )
+
+    def _process_resolved_tool_call(
+        self,
+        tc_index: int,
+        tc: Mapping[str, Any],
+        output: ChatStreamOutput,
+        *,
+        tool_names: OpenAIToolNameCodec | None = None,
+        tool_name_buffers: dict[int, str] | None = None,
+        tool_argument_aliases: dict[str, dict[str, str]] | None = None,
+        tool_argument_alias_buffers: dict[int, str] | None = None,
+    ) -> Iterator[str]:
+        """Apply content to a slot already owned by this assembler."""
 
         fn_delta = tc.get("function", {})
         incoming_name = fn_delta.get("name")
@@ -253,6 +270,21 @@ class OpenAIToolCallAssembler:
             tool_argument_alias_buffers=tool_argument_alias_buffers,
         )
 
+    def process_completed_calls(
+        self,
+        calls: Iterable[CompletedOpenAIToolCall],
+        output: ChatStreamOutput,
+    ) -> Iterator[str]:
+        """Replace abandoned, unstarted tools with collected recovery calls."""
+        self._identities = ToolCallIdentityResolver()
+        self._candidate_tool_ids.clear()
+        self._public_tool_ids.clear()
+        output.tool_states.clear()
+        for call in calls:
+            yield from self._process_resolved_tool_call(
+                self._identities.allocate(), call, output
+            )
+
     def _assign_public_tool_id(self, tool_index: int) -> str:
         assigned = self._public_tool_ids.get(tool_index)
         if assigned is not None:
@@ -282,9 +314,9 @@ class OpenAIToolCallAssembler:
         """Resolve names held only because they also prefix a generated alias."""
         for tool_index, name in list(tool_name_buffers.items()):
             tool_name_buffers.pop(tool_index, None)
-            yield from self.process_tool_call(
+            yield from self._process_resolved_tool_call(
+                tool_index,
                 {
-                    "index": tool_index,
                     "function": {"name": name, "arguments": ""},
                 },
                 output,

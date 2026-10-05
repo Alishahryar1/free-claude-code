@@ -129,7 +129,10 @@ async def test_real_transport_cutoff_cannot_complete_partial_tool(protocol, wire
         )
 
     async with _harness(
-        protocol, lambda _: (200, events), chat_provider_factory=chat_provider
+        protocol,
+        lambda _: (200, events),
+        chat_provider_factory=chat_provider,
+        max_attempts=1,
     ) as (send, bodies, _):
         response = await _response(
             wire, send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire))

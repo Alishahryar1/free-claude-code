@@ -59,7 +59,7 @@ def partial_tool(protocol):
 
 
 def executed(body, wire):
-    async def open_candidate(_index, _target):
+    async def open_candidate(_index, _target, _continuation):
         return body
 
     return ProviderExecutor(

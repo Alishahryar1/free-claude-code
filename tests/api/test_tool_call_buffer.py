@@ -323,6 +323,28 @@ async def test_completed_call_survives_later_incomplete_call_and_generated_error
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_status", [None, "failed", "completed"])
+async def test_failed_snapshot_retains_only_previously_released_client_calls(
+    response_status,
+):
+    terminal = _end("responses", failed=True, output=[_item(0), _item(1)])[0]
+    terminal[1]["response"]["status"] = response_status
+    frames = _frames("responses", [_start("responses"), *_call("responses"), terminal])
+
+    async def body():
+        for frame in frames:
+            yield frame
+
+    response = await _response("responses", body())
+    result = "".join([str(chunk) async for chunk in response.body_iterator])
+    await response.aclose()
+    final = parse_sse_text(result)[-1]
+    assert final.event == "response.failed"
+    assert final.data["response"]["output"] == [_item(0)]
+    assert "call_1" not in result
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_unfinished_call_is_discarded_at_eof(wire):
     frames = _frames(wire, [_start(wire), *_call(wire)[:-1]])

@@ -81,6 +81,9 @@ class NativeResponsesRelay:
         return self._terminal_type is not None
 
     def feed(self, event_type: str, payload: Mapping[str, object]) -> str:
+        return format_response_sse_event(event_type, self.project(event_type, payload))
+
+    def project(self, event_type: str, payload: Mapping[str, object]) -> JsonObject:
         """Format public model metadata and canonical whole-second timestamps."""
 
         if self._terminal_type is not None:
@@ -110,9 +113,14 @@ class NativeResponsesRelay:
             )
         if event_type in _TERMINAL_EVENT_TYPES:
             self._terminal_type = event_type
-        return format_response_sse_event(event_type, data)
+        return data
 
     def synthesize_failure(self, failure: ExecutionFailure) -> str:
+        return format_response_sse_event(
+            "response.failed", self.failure_payload(failure)
+        )
+
+    def failure_payload(self, failure: ExecutionFailure) -> JsonObject:
         """Terminate one already-public truncated stream with a safe failure."""
 
         if self._terminal_type is not None:
@@ -137,7 +145,7 @@ class NativeResponsesRelay:
         response["model"] = self._public_model
         response["status"] = "failed"
         response["error"] = cast(JsonValue, openai_error_from_failure(failure))
-        return self.feed(
+        return self.project(
             "response.failed",
             {
                 "type": "response.failed",

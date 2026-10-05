@@ -46,6 +46,9 @@ from free_claude_code.providers.opencode.catalog import (
     OpenCodeUpstreamTransport,
     parse_open_code_catalog,
 )
+from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from tests.api.test_response_streams import _serve
+from tests.api.test_tool_call_buffer import _response
 from tests.providers.support import (
     capture_openai_chat_wire_body,
     immediate_admission,
@@ -1047,6 +1050,7 @@ async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
     ),
 )
 @pytest.mark.asyncio
+@pytest.mark.parametrize("midstream", [False, True])
 async def test_candidate_fallback_resolves_each_opencode_transport(
     wire_api: str,
     primary_model: str,
@@ -1054,9 +1058,28 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
     failed_path: str,
     fallback_path: str,
     fallback_text: str,
+    midstream: bool,
+    monkeypatch,
 ) -> None:
+    from tests.api.test_delivered_stream_recovery import text_events
+
+    monkeypatch.setattr(
+        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
+        lambda: RecoveryHoldbackBuffer(max_bytes=1),
+    )
+
     def generation_response(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == failed_path:
+            if midstream:
+                protocol = "responses" if failed_path.endswith("/responses") else "chat"
+                return httpx2.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    text="".join(
+                        f"data: {json.dumps(event)}\n\n"
+                        for event in text_events(protocol, "Before. ", complete=False)
+                    ),
+                )
             return httpx2.Response(503, json={"error": "temporary overload"})
         if request.url.path == "/zen/v1/responses":
             body = _responses_event_stream(fallback_text)
@@ -1120,7 +1143,12 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
                 raw_log_payload=dict,
                 request_id="req_opencode_cross_transport_messages",
             )
-        body = "".join([chunk async for chunk in stream])
+        if midstream:
+            response = await _response(wire_api, stream)
+            messages = await _serve(response)
+            body = b"".join(message.get("body", b"") for message in messages).decode()
+        else:
+            body = "".join([chunk async for chunk in stream])
     finally:
         await provider.cleanup()
 
@@ -1131,6 +1159,9 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
         fallback_path,
     ]
     payloads = [json.loads(request.content) for request in generation_requests]
+    if midstream:
+        history = payloads[-1].get("messages", payloads[-1].get("input"))
+        assert "Before. " in str(history[-2])
     assert [payload["model"] for payload in payloads] == [
         upstream_id(primary_model),
         upstream_id(primary_model),
@@ -1141,15 +1172,18 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
         assert [event.event for event in events].count("response.created") == 1
         assert [event.event for event in events].count("response.completed") == 1
         assert events[-1].data["response"]["model"] == "public-model"
-        assert [
-            event.data["delta"]
-            for event in events
-            if event.event == "response.output_text.delta"
-        ] == [fallback_text]
+        assert (
+            "".join(
+                event.data["delta"]
+                for event in events
+                if event.event == "response.output_text.delta"
+            )
+            == ("Before. " if midstream else "") + fallback_text
+        )
     else:
         assert_anthropic_stream_contract(events)
         assert events[0].data["message"]["model"] == "public-model"
-        assert text_content(events) == fallback_text
+        assert text_content(events) == ("Before. " if midstream else "") + fallback_text
     assert "temporary overload" not in body
 
 

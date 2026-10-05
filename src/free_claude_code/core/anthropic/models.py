@@ -111,7 +111,7 @@ class ThinkingConfig(BaseModel):
     enabled: bool | None = True
     type: str | None = None
     budget_tokens: int | None = None
-    display: Literal["summarized", "omitted"] | None = None
+    display: Literal["summarized", "omitted", "updates"] | None = None
 
 
 class MessagesRequest(BaseModel):

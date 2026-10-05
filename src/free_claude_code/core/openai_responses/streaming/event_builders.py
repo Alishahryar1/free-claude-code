@@ -38,10 +38,16 @@ class ResponseEventBuilder:
         )
 
     def response_failed(self, response: dict[str, Any]) -> str:
-        return self._format(
+        return format_response_sse_event(
+            "response.failed", self.response_failed_payload(response)
+        )
+
+    def response_failed_payload(self, response: dict[str, Any]) -> JsonObject:
+        ((_, payload),) = self._project(
             "response.failed",
             {"type": "response.failed", "response": response},
         )
+        return payload
 
     def output_item_added(self, output_index: int, item: dict[str, Any]) -> str:
         return self._format(
@@ -188,11 +194,16 @@ class ResponseEventBuilder:
         )
 
     def _format(self, event_type: str, data: dict[str, Any]) -> str:
+        return "".join(
+            format_response_sse_event(kind, payload)
+            for kind, payload in self._project(event_type, data)
+        )
+
+    def _project(
+        self, event_type: str, data: dict[str, Any]
+    ) -> Iterable[tuple[str, JsonObject]]:
         data["sequence_number"] = self._next_sequence_number
         self._next_sequence_number += 1
         if self._transform is not None:
-            return "".join(
-                format_response_sse_event(kind, payload)
-                for kind, payload in self._transform(event_type, cast(JsonObject, data))
-            )
-        return format_response_sse_event(event_type, data)
+            return self._transform(event_type, cast(JsonObject, data))
+        return ((event_type, cast(JsonObject, data)),)

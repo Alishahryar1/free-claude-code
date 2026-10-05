@@ -22,6 +22,12 @@ from free_claude_code.core.openai_responses import (
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.request_outcomes import record_request_route
+from free_claude_code.core.stream_delivery import current_stream_delivery
+from free_claude_code.core.stream_recovery import (
+    ContinuationSeed,
+    RecoveryAction,
+    assess_recovery,
+)
 from free_claude_code.core.trace import (
     close_stream_input,
     trace_event,
@@ -40,7 +46,7 @@ from .routing import (
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
 WireApi = Literal["messages", "responses"]
 CandidateStreamOpener = Callable[
-    [int, ProviderModelTarget], Awaitable[AsyncIterator[str]]
+    [int, ProviderModelTarget, ContinuationSeed | None], Awaitable[AsyncIterator[str]]
 ]
 
 
@@ -105,6 +111,8 @@ class ProviderExecutor:
         failure: ExecutionFailure,
         candidate_index: int,
         candidate_count: int,
+        recovery_action: str,
+        recovery_reason: str | None,
     ) -> None:
         fields: dict[str, object] = {
             "stage": "execution",
@@ -119,6 +127,8 @@ class ProviderExecutor:
             "failure_kind": failure.kind.value,
             "status_code": failure.status_code,
             "provider_retryable": failure.retryable,
+            "recovery_action": recovery_action,
+            "recovery_reason": recovery_reason,
         }
         if self._generation_id is not None:
             fields["generation_id"] = self._generation_id
@@ -165,7 +175,9 @@ class ProviderExecutor:
         request_id: str,
     ) -> AsyncIterator[str]:
         async def open_candidate(
-            index: int, target: ProviderModelTarget
+            index: int,
+            target: ProviderModelTarget,
+            continuation: ContinuationSeed | None,
         ) -> AsyncIterator[str]:
             provider = await self._provider_resolver(target.provider_id)
             return provider.stream_native_messages(
@@ -173,6 +185,7 @@ class ProviderExecutor:
                 request_id=request_id,
                 response_model=routed.resolved.original_model,
                 request_headers=self._request_headers,
+                continuation=continuation,
             )
 
         messages = routed.request.body["messages"]
@@ -213,6 +226,7 @@ class ProviderExecutor:
         async def open_candidate(
             index: int,
             target: ProviderModelTarget,
+            continuation: ContinuationSeed | None,
         ) -> AsyncIterator[str]:
             provider = await self._provider_resolver(target.provider_id)
             request = (
@@ -233,6 +247,7 @@ class ProviderExecutor:
                     target.provider_id, target.provider_model
                 ),
                 request_headers=self._request_headers,
+                continuation=continuation,
             )
 
         return self._stream_candidates(
@@ -263,6 +278,7 @@ class ProviderExecutor:
         async def open_candidate(
             index: int,
             target: ProviderModelTarget,
+            continuation: ContinuationSeed | None,
         ) -> AsyncIterator[str]:
             provider = await self._provider_resolver(target.provider_id)
             request = (
@@ -280,6 +296,7 @@ class ProviderExecutor:
                 response_model=routed.resolved.original_model,
                 reasoning=routed.reasoning,
                 request_headers=self._request_headers,
+                continuation=continuation,
                 model_info=self._model_info_lookup(
                     target.provider_id, target.provider_model
                 ),
@@ -373,6 +390,8 @@ class ProviderExecutor:
         async def provider_body() -> AsyncIterator[str]:
             loop = asyncio.get_running_loop()
             progress_deadline = loop.time() + self._progress_timeout_seconds
+            delivery = current_stream_delivery()
+            continuation: ContinuationSeed | None = None
             for index, target in enumerate(candidates):
                 record_request_route(target.provider_id, target.provider_model)
                 provider_stream: AsyncIterator[str] | None = None
@@ -381,7 +400,9 @@ class ProviderExecutor:
                 try:
                     opening_started = monotonic()
                     try:
-                        provider_stream = await open_candidate(index, target)
+                        provider_stream = await open_candidate(
+                            index, target, continuation
+                        )
                     except ExecutionFailure as failure:
                         candidate_failure = failure
                     finally:
@@ -464,8 +485,31 @@ class ProviderExecutor:
 
                 if candidate_failure is None:
                     return
-                if candidate_committed or index + 1 >= len(candidates):
+                recovery_action = "continue" if continuation is not None else "restart"
+                recovery_reason = "no_candidate_output"
+                context = candidate_failure.stream_context
+                if delivery is None or context is None:
+                    if candidate_committed:
+                        raise candidate_failure
+                else:
+                    assessment = assess_recovery(
+                        content_released=delivery.content_released,
+                        prefix=delivery.prefix,
+                        source=context.source,
+                        retryable=candidate_failure.retryable,
+                    )
+                    if assessment.action is RecoveryAction.STOP:
+                        raise candidate_failure
+                    if assessment.action is RecoveryAction.HANDOFF:
+                        delivery.begin_continuation(handoff=True)
+                        return
+                    continuation = assessment.seed
+                    recovery_action = assessment.action.value
+                    recovery_reason = assessment.reason
+                if index + 1 >= len(candidates):
                     raise candidate_failure
+                if delivery is not None and continuation is not None:
+                    delivery.begin_continuation()
                 next_target = candidates[index + 1]
                 self._trace_fallback_started(
                     request_id=request_id,
@@ -475,6 +519,8 @@ class ProviderExecutor:
                     failure=candidate_failure,
                     candidate_index=index + 2,
                     candidate_count=len(candidates),
+                    recovery_action=recovery_action,
+                    recovery_reason=recovery_reason,
                 )
 
         stream_trace: dict[str, object] = {

@@ -20,6 +20,7 @@ from free_claude_code.core.history_replay import HistoryReplayError
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -154,6 +155,7 @@ class AnthropicProvider(BaseProvider):
         request_id: str | None = None,
         response_model: str | None = None,
         request_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         body, headers = native_request(request.body, request_headers)
         try:
@@ -175,6 +177,7 @@ class AnthropicProvider(BaseProvider):
             provider_name="anthropic",
             read_timeout_s=self._config.http_read_timeout,
             request_id=request_id,
+            continuation=continuation,
         )
 
     async def stream_messages(
@@ -187,6 +190,7 @@ class AnthropicProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_messages(
@@ -196,6 +200,7 @@ class AnthropicProvider(BaseProvider):
             response_model=response_model,
             reasoning=reasoning,
             model_info=record.info,
+            continuation=continuation,
         )
         try:
             async for event in stream:
@@ -213,6 +218,7 @@ class AnthropicProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_responses(
@@ -222,6 +228,7 @@ class AnthropicProvider(BaseProvider):
             response_model=response_model,
             reasoning=reasoning,
             model_info=record.info,
+            continuation=continuation,
         )
         try:
             async for event in stream:

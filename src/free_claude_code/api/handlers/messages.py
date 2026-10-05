@@ -157,14 +157,11 @@ class MessagesHandler:
                         request_id=request_id,
                     )
                 )
-            if routed.reasoning.control is ReasoningControl.PREFER_OFF and isinstance(
-                result, _MessagesStreamResult
-            ):
-                result = _MessagesStreamResult(classifier_response(result.body))
             return await self._to_public_response(
                 result,
                 stream=request_data.stream,
                 request_id=request_id,
+                hide_reasoning=routed.reasoning.control is ReasoningControl.PREFER_OFF,
             )
         except ApplicationError:
             raise
@@ -184,6 +181,7 @@ class MessagesHandler:
         *,
         stream: bool,
         request_id: str,
+        hide_reasoning: bool = False,
     ) -> object:
         if isinstance(result, _MessagesCompleteResult):
             return result.response
@@ -193,7 +191,7 @@ class MessagesHandler:
             # serving that raw here breaks the client SDK's response parse.
             try:
                 message, error, _complete = await aggregate_anthropic_sse_to_message(
-                    result.body
+                    classifier_response(result.body) if hide_reasoning else result.body
                 )
             except GeneratorExit:
                 raise
@@ -244,6 +242,7 @@ class MessagesHandler:
                 exc, request_id=request_id
             ),
             request_id=request_id,
+            hide_reasoning=hide_reasoning,
         )
 
     def _pre_start_error_response(
