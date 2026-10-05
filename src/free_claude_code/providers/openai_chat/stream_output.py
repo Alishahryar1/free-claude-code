@@ -327,6 +327,9 @@ class ChatStreamOutput(ABC):
         self._terminal = True
         return events
 
+    def failure_payload(self, failure: ExecutionFailure) -> JsonObject | None:
+        return None
+
     @abstractmethod
     def _start_events(self) -> list[str]: ...
 
@@ -754,6 +757,15 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
             error=openai_error_from_failure(failure),
         )
         return [self._events.response_failed(response)]
+
+    def failure_payload(self, failure: ExecutionFailure) -> JsonObject:
+        self._completer.retain_incomplete_blocks()
+        self._terminal = True
+        return self._events.response_failed_payload(
+            self._response_payload(
+                status="failed", error=openai_error_from_failure(failure)
+            )
+        )
 
 
 def _responses_usage(usage: ChatStreamUsage) -> dict[str, object]:

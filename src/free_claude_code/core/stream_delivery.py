@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Literal
 
-from .delivered_response import DeliveredPrefix
+from .stream_recovery import DeliveredPrefix
 
 
 class StreamDeliveryState:

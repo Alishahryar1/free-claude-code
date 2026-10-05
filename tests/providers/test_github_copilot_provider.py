@@ -35,6 +35,7 @@ from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.anthropic_messages.request_policy import (
     MessagesModelCapabilities,
 )
@@ -69,8 +70,9 @@ from tests.providers.test_openai_responses_transport import (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", list(CopilotEgress))
 @pytest.mark.parametrize("responses", [False, True])
+@pytest.mark.parametrize("seeded", [False, True])
 async def test_conversion_runs_once_under_current_account_lease(
-    tmp_path, egress, responses
+    tmp_path, egress, responses, seeded
 ):
     harness = Harness(tmp_path, egress)
     cls, name = {
@@ -101,8 +103,20 @@ async def test_conversion_runs_once_under_current_account_lease(
 
     try:
         with patch.object(cls, name, autospec=True, side_effect=build) as conversion:
-            assert "ok" in await collect(harness.stream(responses))
+            assert "ok" in await collect(
+                harness.stream(
+                    responses,
+                    continuation=ContinuationSeed("Prefix text", "Prior reasoning")
+                    if seeded
+                    else None,
+                )
+            )
         assert conversion.call_count == len(harness.seen) == 1
+        if seeded:
+            body = json.loads(harness.seen[0].content)
+            history = body.get("messages", body.get("input"))
+            assert "Prefix text" in str(history[-2])
+            assert "Prior reasoning" in str(history[-1])
         assert harness.provider._active == 0
     finally:
         await harness.close()
@@ -283,14 +297,21 @@ class Harness:
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         history: bool = False,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         request = _request(responses, self.runtime.name, history=history)
         if isinstance(request, MessagesRequest):
             return self.provider.stream_messages(
-                request, response_model="public-alias", reasoning=reasoning
+                request,
+                response_model="public-alias",
+                reasoning=reasoning,
+                continuation=continuation,
             )
         return self.provider.stream_responses(
-            request, response_model="public-alias", reasoning=reasoning
+            request,
+            response_model="public-alias",
+            reasoning=reasoning,
+            continuation=continuation,
         )
 
     async def close(self) -> None:

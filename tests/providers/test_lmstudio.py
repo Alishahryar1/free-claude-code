@@ -21,6 +21,7 @@ from free_claude_code.core.openai_responses import (
     estimate_responses_input_tokens,
 )
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.lmstudio import LMStudioProvider
 from tests.application.test_execution import (
@@ -373,6 +374,43 @@ async def test_context_rejection_never_starts_admission_or_generation(
     ):
         await anext(getattr(lmstudio_provider, f"stream_{wire}")(request))
     assert error.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
+    admission.assert_not_called()
+    generation.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_continuation_prefix_counts_before_context_admission(
+    lmstudio_provider, wire
+):
+    request = (
+        make_request()
+        if wire == "messages"
+        else OpenAIResponsesRequest(model="model", input="hello")
+    )
+    original = request.model_dump(mode="json")
+    with (
+        patch.object(
+            lmstudio_provider,
+            "_loaded_context_length",
+            new=AsyncMock(return_value=2000),
+        ),
+        patch.object(
+            lmstudio_provider._chat._admission, "start_execution"
+        ) as admission,
+        patch.object(
+            lmstudio_provider._client.chat.completions, "create"
+        ) as generation,
+        pytest.raises(ExecutionFailure) as error,
+    ):
+        await anext(
+            getattr(lmstudio_provider, f"stream_{wire}")(
+                request,
+                continuation=ContinuationSeed("large " * 10000, "consider this"),
+            )
+        )
+    assert error.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
+    assert request.model_dump(mode="json") == original
     admission.assert_not_called()
     generation.assert_not_called()
 

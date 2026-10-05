@@ -36,6 +36,7 @@ from free_claude_code.core.openai_responses import (
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -46,6 +47,7 @@ from free_claude_code.providers.continuation import (
     ContinuationRequest,
     SourceRecoveryState,
     public_recovery,
+    public_stream_failure,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
@@ -136,6 +138,7 @@ class OpenAIResponsesTransport:
         extra_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         can_disable_reasoning: bool = True,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         prepared, wire_reasoning = prepare_messages_reasoning(
             request,
@@ -170,6 +173,7 @@ class OpenAIResponsesTransport:
                     pad_empty=pad_empty,
                 )
             ),
+            continuation=continuation,
         )
 
     def stream_responses(
@@ -182,6 +186,7 @@ class OpenAIResponsesTransport:
         reasoning: ReasoningPolicy,
         endpoint_context: EndpointContext | None = None,
         extra_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         del input_tokens
         body, tools = self._build_native_body(request, reasoning=reasoning)
@@ -194,6 +199,7 @@ class OpenAIResponsesTransport:
             presenter_factory=lambda _pad_empty: NativeResponsesPresenter(
                 public_model=response_model, tool_events=tools.event_adapter()
             ),
+            continuation=continuation,
         )
 
     def _build_messages_body(
@@ -264,6 +270,7 @@ class OpenAIResponsesTransport:
         endpoint_context: EndpointContext | None = None,
         extra_headers: Mapping[str, str] | None = None,
         reasoning_correction: ReasoningCorrection | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         execution = self._admission.start_execution(request_id=request_id)
         outcome = ResponsesExecutionOutcome()
@@ -282,6 +289,7 @@ class OpenAIResponsesTransport:
             endpoint=endpoint,
             request_client=request_client,
             extra_headers=extra_headers,
+            continuation=continuation,
         )
         try:
             async for event in provider_stream:
@@ -318,6 +326,7 @@ class OpenAIResponsesTransport:
         request_client: OpenAIRequestClient,
         extra_headers: Mapping[str, str] | None = None,
         reasoning_correction: ReasoningCorrection | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         recovery = RecoveryController(execution.delivery)
         request_recovery = RequestRecovery(
@@ -326,6 +335,11 @@ class OpenAIResponsesTransport:
         corrections = RequestCorrections("responses", reasoning_correction)
         continuation_request = ContinuationRequest("responses")
         operation_kind = ProviderOperationKind.GENERATION
+        if continuation is not None:
+            body = continuation_request.build(
+                body, continuation.text, continuation.thinking
+            )
+            operation_kind = ProviderOperationKind.CONTINUATION
         trace_event(
             stage="provider",
             event="provider.request.sent",
@@ -338,9 +352,10 @@ class OpenAIResponsesTransport:
             transport="responses",
         )
 
+        source: SourceRecoveryState | None = None
         while execution.can_attempt:
             normal_stop_seen = False
-            source = SourceRecoveryState(execution)
+            source = SourceRecoveryState(execution, previous=source)
             presenter = presenter_factory(
                 operation_kind is ProviderOperationKind.GENERATION
             )
@@ -561,6 +576,18 @@ class OpenAIResponsesTransport:
                     status_code=failure.status_code,
                     provider_retryable=failure.retryable,
                 )
+                if execution.delivery is not None:
+                    recovery.discard()
+                    raise public_stream_failure(
+                        failure,
+                        source=source,
+                        body=body,
+                        protocol="responses",
+                        normal_stop_seen=normal_stop_seen,
+                        responses_failure_payload=presenter.failure_payload(
+                            raw_error, failure
+                        ),
+                    ) from raw_error
                 if not decision.committed:
                     recovery.discard()
                     raise failure from raw_error

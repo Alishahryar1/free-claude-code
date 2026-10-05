@@ -21,6 +21,7 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .errors import openai_error_from_failure
+from .events import format_response_sse_event
 from .ids import (
     new_message_item_id,
     new_reasoning_item_id,
@@ -387,20 +388,14 @@ class AnthropicToResponsesStream:
         if not self._started:
             self._started = True
             events.append(self._events.response_created(self._payload("in_progress")))
-        for state in self._ledger.pop_active_blocks_by_output_order():
-            if isinstance(state, TextBlockState):
-                item = message_item(
-                    state.item_id, "".join(state.text_parts), "incomplete"
-                )
-            elif isinstance(state, ReasoningBlockState):
-                item = reasoning_item(
-                    state.item_id, "".join(state.text_parts), "incomplete"
-                )
-            else:
-                item = tool_item(state, status="incomplete")
-            self._ledger.commit_output(state.output_index, item)
-        self._terminal = True
         events.append(
-            self._events.response_failed(self._payload("failed", failure=failure))
+            format_response_sse_event("response.failed", self.failure_payload(failure))
         )
         return events
+
+    def failure_payload(self, failure: ExecutionFailure) -> JsonObject:
+        self._completer.retain_incomplete_blocks()
+        self._terminal = True
+        return self._events.response_failed_payload(
+            self._payload("failed", failure=failure)
+        )

@@ -21,6 +21,7 @@ from free_claude_code.core.openai_responses import (
     openai_error_from_failure,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.api.support import create_test_app
 
 _PARTIAL_CONTENT = "PARTIAL_ASSISTANT_CONTENT"
@@ -110,6 +111,7 @@ class StalledProvider:
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         del input_tokens, request_id, response_model, reasoning
         try:
@@ -128,6 +130,7 @@ class StalledProvider:
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         del input_tokens, request_id, response_model, reasoning
         try:

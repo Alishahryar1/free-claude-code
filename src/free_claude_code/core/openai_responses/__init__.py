@@ -8,7 +8,11 @@ from .errors import (
     openai_error_type_for_failure,
     openai_failure_payload,
 )
-from .events import OPENAI_RESPONSES_SSE_HEADERS, committed_response_failure_frame
+from .events import (
+    OPENAI_RESPONSES_SSE_HEADERS,
+    committed_response_failure_frame,
+    format_response_sse_event,
+)
 from .ids import (
     new_call_id,
     new_message_item_id,
@@ -73,6 +77,7 @@ __all__ = [
     "committed_response_failure_frame",
     "estimate_responses_input_tokens",
     "flatten_responses_tool_name",
+    "format_response_sse_event",
     "is_client_search",
     "new_call_id",
     "new_message_item_id",

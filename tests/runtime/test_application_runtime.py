@@ -18,6 +18,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.messaging.command_context import StopOutcome
 from free_claude_code.messaging.platforms.ports import (
     InboundMessageHandler,
@@ -80,6 +81,7 @@ class AdminModelProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         if False:
             yield ""
@@ -94,6 +96,7 @@ class AdminModelProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         if False:
             yield ""

@@ -54,6 +54,7 @@ from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.trace import provider_chat_body_snapshot, trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -64,6 +65,7 @@ from free_claude_code.providers.continuation import (
     ContinuationRequest,
     SourceRecoveryState,
     public_recovery,
+    public_stream_failure,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
@@ -786,6 +788,7 @@ class OpenAIChatTransport:
         model_info: ProviderModelInfo | None = None,
         endpoint_context: EndpointContext | None = None,
         extra_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         """Stream response in Anthropic SSE format."""
         prepared_request, wire_reasoning = self._prepare_messages_reasoning(
@@ -828,6 +831,7 @@ class OpenAIChatTransport:
             endpoint_context=endpoint_context,
             extra_headers=extra_headers or {},
             reasoning_correction=correction,
+            continuation=continuation,
         )
         return runner.run()
 
@@ -841,6 +845,7 @@ class OpenAIChatTransport:
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         endpoint_context: EndpointContext | None = None,
         extra_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         """Stream a Chat upstream directly as OpenAI Responses SSE."""
         translated = self._build_responses_request_body(request, reasoning=reasoning)
@@ -866,6 +871,7 @@ class OpenAIChatTransport:
             reasoning=reasoning,
             endpoint_context=endpoint_context,
             extra_headers=extra_headers or {},
+            continuation=continuation,
         )
         return runner.run()
 
@@ -889,9 +895,11 @@ class _OpenAIChatStreamRunner:
         endpoint_context: EndpointContext | None = None,
         extra_headers: Mapping[str, str] | None = None,
         reasoning_correction: ReasoningCorrection | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> None:
         self._transport = transport
         self._body = body
+        self._continuation = continuation
         self._tool_argument_aliases = transport._behavior.tool_argument_aliases(body)
         self._tool_names = tool_names
         self._tool_schemas = tool_schemas
@@ -957,6 +965,11 @@ class _OpenAIChatStreamRunner:
         body = self._body
         continuation_request = ContinuationRequest("chat")
         operation_kind = ProviderOperationKind.GENERATION
+        if self._continuation is not None:
+            body = continuation_request.build(
+                body, self._continuation.text, self._continuation.thinking
+            )
+            operation_kind = ProviderOperationKind.CONTINUATION
         request_stream_usage(body)
         output_reasoning = self._reasoning.output_enabled
         corrections = RequestCorrections("chat", self._reasoning_correction)
@@ -974,9 +987,10 @@ class _OpenAIChatStreamRunner:
             tool_count=len(body.get("tools", [])),
         )
 
+        source: SourceRecoveryState | None = None
         while True:
             assembler = self._new_stream_assembler(output_reasoning=output_reasoning)
-            source = SourceRecoveryState(execution)
+            source = SourceRecoveryState(execution, previous=source)
 
             def observe_chunk(
                 chunk: Any,
@@ -1112,6 +1126,7 @@ class _OpenAIChatStreamRunner:
                     error=error,
                     scope=scope,
                     assembler=assembler,
+                    source=source,
                     body=body,
                     request_recovery=request_recovery,
                     recovery=recovery,
@@ -1195,6 +1210,7 @@ class _OpenAIChatStreamRunner:
         error: Exception,
         scope: ProviderAttemptScope | None,
         assembler: _OpenAIChatStreamAssembler,
+        source: SourceRecoveryState,
         body: dict[str, Any],
         request_recovery: RequestRecovery,
         recovery: RecoveryController,
@@ -1342,6 +1358,20 @@ class _OpenAIChatStreamRunner:
         if self._transport._log_api_error_tracebacks:
             error_trace["error_message"] = failure.message
         trace_event(**error_trace)
+
+        if execution.delivery is not None:
+            recovery.discard()
+            return _OpenAIChatFailureResolution(
+                outcome=_OpenAIChatFailureOutcome.RAISE,
+                failure=public_stream_failure(
+                    failure,
+                    source=source,
+                    body=body,
+                    protocol="chat",
+                    normal_stop_seen=assembler.normal_stop_seen,
+                    responses_failure_payload=assembler.output.failure_payload(failure),
+                ),
+            )
 
         failure_events: list[str] = []
         if (

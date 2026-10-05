@@ -19,6 +19,7 @@ from free_claude_code.core.diagnostics import (
 )
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -27,6 +28,7 @@ from free_claude_code.providers.continuation import (
     ContinuationRequest,
     SourceRecoveryState,
     public_recovery,
+    public_stream_failure,
 )
 from free_claude_code.providers.failure_policy import (
     RetryableProviderProtocolError,
@@ -55,9 +57,12 @@ async def stream_native_messages(
     provider_name: str,
     read_timeout_s: float,
     request_id: str | None,
+    continuation: ContinuationSeed | None = None,
 ) -> AsyncIterator[str]:
     execution = admission.start_execution(request_id=request_id)
     streaming = body.get("stream", False) is True
+    source = SourceRecoveryState(execution)
+    normal_stop_seen = False
 
     async def complete() -> str:
         async with client.stream(
@@ -88,9 +93,14 @@ async def stream_native_messages(
         committed = False
         continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
+        if continuation is not None:
+            body = continuation_request.build(
+                body, continuation.text, continuation.thinking
+            )
+            operation_kind = ProviderOperationKind.CONTINUATION
         while execution.can_attempt:
             normal_stop_seen = False
-            source = SourceRecoveryState(execution)
+            source = SourceRecoveryState(execution, previous=source)
             scope = None
             try:
                 attempt = await execution.open_attempt(operation_kind)
@@ -212,6 +222,14 @@ async def stream_native_messages(
                 provider_name=provider_name,
                 read_timeout_s=read_timeout_s,
                 request_id=request_id,
+            )
+        if streaming and execution.delivery is not None:
+            failure = public_stream_failure(
+                failure,
+                source=source,
+                body=body,
+                protocol="messages",
+                normal_stop_seen=normal_stop_seen,
             )
         execution.fail(failure)
         raise failure from error

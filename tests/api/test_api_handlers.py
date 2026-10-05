@@ -23,6 +23,7 @@ from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.web_tools_support import StubWebToolsClient
 
 _LEGACY_CLASSIFIER_SYSTEM = (
@@ -64,6 +65,7 @@ class FakeProvider:
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         self.requests.append(request)
         self.stream_kwargs.append(
@@ -87,6 +89,7 @@ class FakeProvider:
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         self.responses_requests.append(request)
         self.stream_kwargs.append(
@@ -398,6 +401,7 @@ async def test_messages_handler_stream_false_provider_exception_keeps_status() -
             reasoning: ReasoningPolicy,
             request_headers: Mapping[str, str] | None = None,
             model_info: ProviderModelInfo | None = None,
+            continuation: ContinuationSeed | None = None,
         ) -> AsyncIterator[str]:
             self.requests.append(request)
             self.stream_kwargs.append(

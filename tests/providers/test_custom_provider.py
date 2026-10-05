@@ -13,6 +13,7 @@ from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
@@ -393,8 +394,9 @@ def completion(api_format):
 )
 @pytest.mark.parametrize("ingress", ["messages", "responses"])
 @pytest.mark.parametrize("key", [None, "custom-key"])
+@pytest.mark.parametrize("seeded", [False, True])
 async def test_six_paths_use_exact_endpoint_and_credentials(
-    api_format, path, ingress, key, monkeypatch
+    api_format, path, ingress, key, seeded, monkeypatch
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-key")
     monkeypatch.setenv("OPENAI_ORG_ID", "unrelated-org")
@@ -417,18 +419,25 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
     )
     try:
         policy = ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM)
+        continuation = (
+            ContinuationSeed("Prefix text", "Prior reasoning") if seeded else None
+        )
         if ingress == "messages":
             request = MessagesRequest(
                 model="m",
                 max_tokens=100,
                 messages=[{"role": "user", "content": "Hello"}],
             )
-            stream = instance.stream_messages(request, reasoning=policy)
+            stream = instance.stream_messages(
+                request, reasoning=policy, continuation=continuation
+            )
         else:
             request = OpenAIResponsesRequest(
                 model="m", input="Hello", reasoning={"effort": "medium"}
             )
-            stream = instance.stream_responses(request, reasoning=policy)
+            stream = instance.stream_responses(
+                request, reasoning=policy, continuation=continuation
+            )
         output = "".join([chunk async for chunk in stream])
         assert "Hello" in output
         assert len(requests) == 1
@@ -443,6 +452,11 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
         assert "openai-organization" not in sent.headers
         assert "openai-project" not in sent.headers
         body = json.loads(sent.content)
+        if seeded:
+            history = body.get("messages", body.get("input"))
+            assert "Prefix text" in str(history[-2])
+            assert "Prior reasoning" in str(history[-1])
+            assert "Prefix text" not in str(request.model_dump())
         if ingress == "responses" and api_format == "openai_responses":
             assert body["reasoning"]["effort"] == "medium"
         else:

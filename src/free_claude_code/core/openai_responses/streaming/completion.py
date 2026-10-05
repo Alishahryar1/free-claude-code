@@ -28,6 +28,19 @@ class ResponseBlockCompleter:
             return self._complete_reasoning_block(state)
         return self._complete_tool_block(state)
 
+    def retain_incomplete_blocks(self) -> None:
+        """Keep a failure snapshot without publishing synthetic completions."""
+        for state in self._ledger.pop_active_blocks_by_output_order():
+            if isinstance(state, TextBlockState):
+                item = message_item(
+                    state.item_id, "".join(state.text_parts), "incomplete"
+                )
+            elif isinstance(state, ReasoningBlockState):
+                item = reasoning_output_item(state, status="incomplete")
+            else:
+                item = tool_item(state, status="incomplete")
+            self._ledger.commit_output(state.output_index, item)
+
     def _complete_text_block(self, state: TextBlockState) -> list[str]:
         text = "".join(state.text_parts)
         item = message_item(state.item_id, text, "completed")

@@ -186,7 +186,7 @@ async def _harness(
                 )
         extras = {}
 
-    def stream(wire, history, *, tools=None):
+    def stream(wire, history, *, tools=None, model="requested", continuation=None):
         options: dict[str, Any] = dict(
             input_tokens=0,
             request_id="history-test",
@@ -197,16 +197,18 @@ async def _harness(
         if protocol == "messages":
             options.pop("input_tokens")
             options["reasoning"] = ReasoningPolicy.provider_default()
+        if continuation is not None:
+            options["continuation"] = continuation
         if wire == "responses":
             return provider.stream_responses(
                 OpenAIResponsesRequest.model_validate(
-                    {"model": "requested", "input": history, "tools": tools}
+                    {"model": model, "input": history, "tools": tools}
                 ),
                 **options,
             )
         return provider.stream_messages(
             MessagesRequest.model_validate(
-                {"model": "requested", "messages": history, "tools": tools}
+                {"model": model, "messages": history, "tools": tools}
             ),
             **options,
         )

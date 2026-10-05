@@ -32,6 +32,7 @@ from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -42,6 +43,7 @@ from free_claude_code.providers.continuation import (
     ContinuationRequest,
     SourceRecoveryState,
     public_recovery,
+    public_stream_failure,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
@@ -169,6 +171,7 @@ class AnthropicMessagesTransport:
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         model_info: ProviderModelInfo | None = None,
         preserve_native_controls: bool = False,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         capabilities = self._effective_capabilities(model_info)
         if preserve_native_controls:
@@ -203,6 +206,7 @@ class AnthropicMessagesTransport:
             presenter_factory=lambda origin: NativeMessagesRelay(
                 public_model=response_model or request.model, replay_origin=origin
             ),
+            continuation=continuation,
         )
 
     def stream_responses(
@@ -214,6 +218,7 @@ class AnthropicMessagesTransport:
         response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         prepared = self._responses_body(
             request, reasoning, self._effective_capabilities(model_info)
@@ -229,6 +234,7 @@ class AnthropicMessagesTransport:
                 tool_identities=prepared.tool_identities,
                 replay_origin=origin,
             ),
+            continuation=continuation,
         )
 
     async def _stream(
@@ -240,6 +246,7 @@ class AnthropicMessagesTransport:
         request_id: str | None,
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         execution = self._admission.start_execution(request_id=request_id)
         run = self._run(
@@ -249,6 +256,7 @@ class AnthropicMessagesTransport:
             endpoint_context=endpoint_context,
             execution=execution,
             presenter_factory=presenter_factory,
+            continuation=continuation,
         )
         try:
             async for event in run:
@@ -273,6 +281,7 @@ class AnthropicMessagesTransport:
         execution: ProviderExecution,
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         recovery = RecoveryController(execution.delivery)
         request_endpoint = RequestEndpoint(endpoint_context)
@@ -282,12 +291,19 @@ class AnthropicMessagesTransport:
         corrections = RequestCorrections("messages", reasoning_correction)
         continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
+        if continuation is not None:
+            body = continuation_request.build(
+                body, continuation.text, continuation.thinking
+            )
+            operation_kind = ProviderOperationKind.CONTINUATION
+        source: SourceRecoveryState | None = None
         while execution.can_attempt:
             normal_stop_seen = False
-            source = SourceRecoveryState(execution)
+            source = SourceRecoveryState(execution, previous=source)
             scope: ProviderAttemptScope | None = None
             stream_opened = False
             sent_body = body
+            presenter: _Presenter | None = None
             try:
                 attempt = await execution.open_attempt(operation_kind)
                 scope = ProviderAttemptScope(
@@ -458,6 +474,20 @@ class AnthropicMessagesTransport:
                     transport="messages",
                     failure_kind=failure.kind.value,
                 )
+                if execution.delivery is not None:
+                    recovery.discard()
+                    raise public_stream_failure(
+                        failure,
+                        source=source,
+                        body=body,
+                        protocol="messages",
+                        normal_stop_seen=normal_stop_seen,
+                        responses_failure_payload=(
+                            presenter.failure_payload(failure)
+                            if isinstance(presenter, AnthropicToResponsesStream)
+                            else None
+                        ),
+                    ) from raw_error
                 if decision.committed and isinstance(
                     presenter, AnthropicToResponsesStream
                 ):

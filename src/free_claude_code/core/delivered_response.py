@@ -1,7 +1,6 @@
 """Bounded, request-local evidence of output released to a stream consumer."""
 
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import Any, Literal
 
 import simplejson
@@ -13,6 +12,7 @@ from .history_replay import (
     unencrypted_responses_replay,
 )
 from .openai_responses import is_client_search
+from .stream_recovery import DeliveredPrefix
 from .token_estimation import estimate_text_tokens
 
 RECOVERY_RETENTION_BYTES = 1_048_576
@@ -65,16 +65,6 @@ def responses_text_constraint(data: dict[str, Any]) -> str | None:
     ):
         return "text_logprobs"
     return None
-
-
-@dataclass(frozen=True, slots=True)
-class DeliveredPrefix:
-    text: str
-    thinking: str
-    has_calls: bool
-    eligible: bool
-    can_handoff: bool
-    unsafe_reason: str | None
 
 
 class DeliveredResponse:

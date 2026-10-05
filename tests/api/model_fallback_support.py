@@ -16,6 +16,7 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.api.support import create_test_app
 
 
@@ -211,6 +212,7 @@ class ControlledFallbackProvider:
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         del input_tokens, request_id, reasoning
         if self._validation_error is not None:
@@ -239,6 +241,7 @@ class ControlledFallbackProvider:
         reasoning: ReasoningPolicy,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         del input_tokens, request_id, reasoning
         if self._validation_error is not None:

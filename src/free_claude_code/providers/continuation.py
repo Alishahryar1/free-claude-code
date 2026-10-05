@@ -1,7 +1,7 @@
 """Same-provider continuation using evidence from the public delivery boundary."""
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from free_claude_code.core.delivered_response import (
@@ -10,6 +10,14 @@ from free_claude_code.core.delivered_response import (
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import reasoning_context
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_recovery import (
+    ContinuationSeed,
+    RecoveryAction,
+    SourceRecoverySnapshot,
+    StreamFailureContext,
+    assess_recovery,
+)
 from free_claude_code.core.trace import trace_event
 
 from .admission import ProviderExecution
@@ -20,8 +28,18 @@ type UpstreamProtocol = Literal["chat", "messages", "responses"]
 class SourceRecoveryState:
     """Native source evidence cannot be inferred from buffered public events."""
 
-    def __init__(self, execution: ProviderExecution) -> None:
+    def __init__(
+        self,
+        execution: ProviderExecution,
+        *,
+        previous: SourceRecoveryState | None = None,
+    ) -> None:
         self._execution = execution
+        self._prior_unsafe_reason = (
+            previous.unsafe_reason or previous._prior_unsafe_reason
+            if previous is not None
+            else None
+        )
         self.unsafe_reason: str | None = None
         self._pending_reasoning: set[int | str] = set()
         self._signed: set[int | str] = set()
@@ -30,6 +48,22 @@ class SourceRecoveryState:
     @property
     def can_handoff(self) -> bool:
         return not self._handoff_blocked and not self._pending_reasoning
+
+    def snapshot(
+        self,
+        *,
+        body: dict[str, Any],
+        protocol: UpstreamProtocol,
+        normal_stop_seen: bool,
+        for_model_fallback: bool = False,
+    ) -> SourceRecoverySnapshot:
+        return SourceRecoverySnapshot(
+            normal_stop_seen=normal_stop_seen,
+            structured_output=_structured_output(body, protocol),
+            unsafe_reason=self.unsafe_reason
+            or (self._prior_unsafe_reason if for_model_fallback else None),
+            can_handoff=self.can_handoff,
+        )
 
     def observe(
         self,
@@ -174,32 +208,62 @@ class ContinuationRequest:
         if self._injected_rows:
             # Request corrections preserve these trailing plain-text turns.
             history = history[: -self._injected_rows]
-        instruction = "The previous provider stream was interrupted. Continue the assistant response exactly where it stopped. Do not repeat text already written."
-        if result.get("tools"):
-            instruction += " No tool calls from this interrupted assistant turn were delivered or executed. Any unfinished calls were discarded. Emit the required tool calls using the provided tools."
-        if thinking:
-            instruction = f"{reasoning_context(thinking)}\n\n{instruction}"
-        tail = []
-        if text:
-            tail.append(
-                {
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": text}]
-                    if responses
-                    else text,
-                }
-            )
-        tail.append(
-            {
-                "role": "user",
-                "content": [{"type": "input_text", "text": instruction}]
-                if responses
-                else instruction,
-            }
+        tail = continuation_tail(
+            ContinuationSeed(text, thinking), tools=bool(result.get("tools"))
         )
+        if responses:
+            tail = [
+                {
+                    "role": row["role"],
+                    "content": [
+                        {
+                            "type": "output_text"
+                            if row["role"] == "assistant"
+                            else "input_text",
+                            "text": row["content"],
+                        }
+                    ],
+                }
+                for row in tail
+            ]
         result[field] = [*history, *tail]
         self._injected_rows = len(tail)
         return result
+
+
+def continuation_tail(seed: ContinuationSeed, *, tools: bool) -> list[dict[str, Any]]:
+    """Materialize the same private context for construction and estimation."""
+    instruction = "The previous provider stream was interrupted. Continue the assistant response exactly where it stopped. Do not repeat text already written."
+    if tools:
+        instruction += " No tool calls from this interrupted assistant turn were delivered or executed. Any unfinished calls were discarded. Emit the required tool calls using the provided tools."
+    if seed.thinking:
+        instruction = f"{reasoning_context(seed.thinking)}\n\n{instruction}"
+    tail = [{"role": "assistant", "content": seed.text}] if seed.text else []
+    return [*tail, {"role": "user", "content": instruction}]
+
+
+def public_stream_failure(
+    failure: ExecutionFailure,
+    *,
+    source: SourceRecoveryState,
+    body: dict[str, Any],
+    protocol: UpstreamProtocol,
+    normal_stop_seen: bool,
+    responses_failure_payload: JsonObject | None = None,
+) -> ExecutionFailure:
+    """Retain source evidence until routing has decided the public outcome."""
+    return replace(
+        failure,
+        stream_context=StreamFailureContext(
+            source.snapshot(
+                body=body,
+                protocol=protocol,
+                normal_stop_seen=normal_stop_seen,
+                for_model_fallback=True,
+            ),
+            responses_failure_payload,
+        ),
+    )
 
 
 def _structured_output(body: dict[str, Any], protocol: UpstreamProtocol) -> bool:
@@ -224,30 +288,26 @@ def public_recovery(
     delivery = execution.delivery
     if delivery is None or not delivery.content_released:
         return None
-    if not retryable or normal_stop_seen:
+    if not retryable:
         return None
-    prefix = delivery.prefix
-    if prefix is None:
-        return None
-    structured = _structured_output(body, request.protocol)
-    handoff = (
-        not structured
-        and prefix.has_calls
-        and source.can_handoff
-        and prefix.can_handoff
+    assessment = assess_recovery(
+        content_released=True,
+        prefix=delivery.prefix,
+        source=source.snapshot(
+            body=body, protocol=request.protocol, normal_stop_seen=normal_stop_seen
+        ),
+        retryable=retryable,
     )
-    if not handoff and (structured or source.unsafe_reason or not prefix.eligible):
+    if assessment.action is RecoveryAction.STOP:
         trace_event(
             stage="provider",
             event="provider.recovery.ineligible",
             source="provider",
             request_id=execution.request_id,
-            reason="structured_output"
-            if structured
-            else source.unsafe_reason or prefix.unsafe_reason,
+            reason=assessment.reason,
         )
         return None
-    if handoff:
+    if assessment.action is RecoveryAction.HANDOFF:
         delivery.begin_continuation(handoff=True)
         trace_event(
             stage="provider",
@@ -267,9 +327,10 @@ def public_recovery(
             max_attempts=execution.max_attempts,
         )
         return None
-    if not (prefix.text or prefix.thinking):
+    seed = assessment.seed
+    if seed is None:
         return None
-    replacement = request.build(body, prefix.text, prefix.thinking)
+    replacement = request.build(body, seed.text, seed.thinking)
     delivery.begin_continuation()
     trace_event(
         stage="provider",
