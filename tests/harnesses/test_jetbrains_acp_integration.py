@@ -104,6 +104,19 @@ def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(files):
     assert entry["args"] == [str(script), "--hide-claude-auth"]
     assert entry["env"]["ANTHROPIC_AUTH_TOKEN"] == "token"
     assert entry["env"]["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
+    lifetime_policy = {
+        "API_TIMEOUT_MS": "2147483647",
+        "API_FORCE_IDLE_TIMEOUT": "0",
+        "CLAUDE_ENABLE_STREAM_WATCHDOG": "0",
+        "CLAUDE_ENABLE_BYTE_WATCHDOG": "0",
+        "CLAUDE_CODE_MAX_RETRIES": "0",
+        "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES": "0",
+        "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
+    }
+    assert lifetime_policy.items() <= entry["env"].items()
+    for key in lifetime_policy:
+        del entry["env"][key]
+    entry["env"]["API_TIMEOUT_MS"] = "1000"
     entry["env"]["KEEP"] = "yes"
     entry["use_idea_mcp"] = False
     write(config, saved)
@@ -112,6 +125,7 @@ def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(files):
     refreshed = json.loads(config.read_text())["agent_servers"]["Claude Code (FCC)"]
     assert refreshed["args"][0] == str(updated)
     assert refreshed["env"]["ANTHROPIC_AUTH_TOKEN"] == "rotated"
+    assert lifetime_policy.items() <= refreshed["env"].items()
     assert refreshed["env"]["KEEP"] == "yes"
     assert refreshed["use_idea_mcp"] is False
     before = config.stat().st_mtime_ns

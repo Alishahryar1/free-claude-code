@@ -13,6 +13,15 @@ def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
     return {
         "ANTHROPIC_BASE_URL": proxy_root_url,
         "ANTHROPIC_AUTH_TOKEN": auth_token,
+        # FCC owns provider recovery and progress timeouts, including hidden output.
+        # Claude's SDK has no off switch; this is its largest safe timer value.
+        "API_TIMEOUT_MS": "2147483647",
+        "API_FORCE_IDLE_TIMEOUT": "0",
+        "CLAUDE_ENABLE_STREAM_WATCHDOG": "0",
+        "CLAUDE_ENABLE_BYTE_WATCHDOG": "0",
+        "CLAUDE_CODE_MAX_RETRIES": "0",
+        "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES": "0",
+        "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         # FCC uses Claude's separate classifier requests, not Anthropic server checks.
         "CLAUDE_CODE_AUTO_MODE_SERVER": "0",

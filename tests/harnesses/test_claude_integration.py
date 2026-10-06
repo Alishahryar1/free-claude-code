@@ -145,6 +145,8 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
         {"name": "ANTHROPIC_AUTH_TOKEN", "value": "old", "extra": "keep"},
         {"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "value": "0"},
         {"name": "CLAUDE_CODE_AUTO_MODE_SERVER", "value": "1"},
+        {"name": "API_TIMEOUT_MS", "value": "1000"},
+        {"name": "CLAUDE_ENABLE_BYTE_WATCHDOG", "value": "1"},
       ],
     }""",
         encoding="utf-8",
@@ -157,6 +159,13 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
         "KEEP",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_AUTH_TOKEN",
+        "API_TIMEOUT_MS",
+        "API_FORCE_IDLE_TIMEOUT",
+        "CLAUDE_ENABLE_STREAM_WATCHDOG",
+        "CLAUDE_ENABLE_BYTE_WATCHDOG",
+        "CLAUDE_CODE_MAX_RETRIES",
+        "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES",
+        "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK",
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         "CLAUDE_CODE_DISABLE_ADVISOR_TOOL",
         "CLAUDE_CODE_AUTO_MODE_SERVER",
@@ -173,6 +182,13 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
     assert entries["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]["value"] == "190000"
     assert entries["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"]["value"] == "1"
     assert entries["CLAUDE_CODE_AUTO_MODE_SERVER"]["value"] == "0"
+    assert entries["API_TIMEOUT_MS"]["value"] == "2147483647"
+    assert entries["API_FORCE_IDLE_TIMEOUT"]["value"] == "0"
+    assert entries["CLAUDE_ENABLE_STREAM_WATCHDOG"]["value"] == "0"
+    assert entries["CLAUDE_ENABLE_BYTE_WATCHDOG"]["value"] == "0"
+    assert entries["CLAUDE_CODE_MAX_RETRIES"]["value"] == "0"
+    assert entries["CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES"]["value"] == "0"
+    assert entries["CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"]["value"] == "1"
     assert "//" not in path.read_text().replace("http://", "")
     assert operate(path, False) == {"connected": False}
     assert json.loads(path.read_text()) == {
@@ -262,6 +278,35 @@ def test_manual_setup_only_requires_connection_fields(tmp_path, url):
         entry["name"]: entry["value"] for entry in json.loads(path.read_text())[ENV]
     }
     assert entries["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
+
+
+def test_refresh_connected_applies_lifetime_policy_to_existing_connection(tmp_path):
+    path = tmp_path / "settings.json"
+    operate(path, True)
+    document = json.loads(path.read_text())
+    document[ENV] = [
+        entry
+        for entry in document[ENV]
+        if entry["name"]
+        in {
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+        }
+    ]
+    path.write_text(json.dumps(document))
+
+    assert claude_integration.refresh_connected(
+        path, tmp_path / ".claude.json", URL, TOKEN
+    )
+    entries = {
+        entry["name"]: entry["value"] for entry in json.loads(path.read_text())[ENV]
+    }
+    assert entries["API_TIMEOUT_MS"] == "2147483647"
+    assert entries["CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"] == "1"
+    assert not claude_integration.refresh_connected(
+        path, tmp_path / ".claude.json", URL, TOKEN
+    )
 
 
 @pytest.mark.parametrize(
