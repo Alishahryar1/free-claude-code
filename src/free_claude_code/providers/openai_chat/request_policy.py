@@ -52,6 +52,7 @@ def build_openai_chat_request_body(
     reasoning: ReasoningPolicy,
     policy: OpenAIChatRequestPolicy,
     postprocessors: Iterable[OpenAIChatPostprocessor] = (),
+    structured_reasoning_details: bool = False,
 ) -> dict[str, Any]:
     """Build an OpenAI-compatible chat request body from an Anthropic request."""
     request_data = normalize_messages_history(request_data)
@@ -66,6 +67,7 @@ def build_openai_chat_request_body(
             request_data,
             default_max_tokens=policy.default_max_tokens,
             reasoning_replay=policy.reasoning_replay,
+            structured_reasoning_details=structured_reasoning_details,
         )
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc

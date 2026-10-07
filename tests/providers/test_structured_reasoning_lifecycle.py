@@ -71,7 +71,8 @@ async def test_encrypted_only_reasoning_stays_with_its_answer():
         saved = await _saved_reply(
             send("responses", [{"role": "user", "content": "hello"}]), "responses"
         )
-        assert [item["type"] for item in saved] == ["reasoning", "message"]
+        assert [item["type"] for item in saved] == ["message", "reasoning"]
+        assert saved[1]["encrypted_content"] == "opaque"
         await _saved_reply(
             send("responses", [*saved, {"role": "user", "content": "next"}]),
             "responses",
@@ -127,7 +128,7 @@ async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
             send("messages", [*saved, {"role": "user", "content": "next"}]), "messages"
         )
     assert bodies[-1]["messages"][0]["reasoning_details"] == [
-        {"type": "reasoning.encrypted", "data": "firstsecond"}
+        {"type": "reasoning.text", "text": "Plan.", "signature": "firstsecond"}
     ]
 
 

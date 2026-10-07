@@ -87,8 +87,9 @@ class ChatStreamOutput(ABC):
         self.tool_states: dict[int, ChatToolState] = {}
         self._text_parts: list[str] = []
         self._reasoning_parts: list[str] = []
+        self._pending_opaque: list[str] = []
         self._text_started = False
-        self._reasoning_started = False
+        self._open_reasoning_sources: set[int] = set()
         self._content_started = False
         self._terminal = False
 
@@ -107,33 +108,38 @@ class ChatStreamOutput(ABC):
     def start_events(self) -> list[str]:
         return self._start_events()
 
-    def ensure_reasoning_block(self) -> list[str]:
+    def ensure_reasoning_block(self, *, source: int = 0) -> list[str]:
         events: list[str] = []
         if self.reasoning_replay is not None:
             events.extend(self.reasoning_replay.before_reasoning(self))
         if self._text_started:
             events.extend(self._stop_text_block())
             self._text_started = False
-        if not self._reasoning_started:
-            events.extend(self._start_reasoning_block())
-            self._reasoning_started = True
-            self._content_started = True
+        events.extend(self.begin_reasoning_record(source=source))
         return events
 
-    def emit_reasoning_delta(self, content: str, *, summary: bool = False) -> str:
+    def emit_reasoning_delta(
+        self, content: str, *, summary: bool = False, source: int = 0
+    ) -> str:
         self._reasoning_parts.append(content)
-        return self._emit_reasoning_delta(content, summary=summary)
+        return self._emit_reasoning_delta(content, summary=summary, source=source)
 
-    def begin_reasoning_record(self) -> list[str]:
-        return []
+    def begin_reasoning_record(self, *, source: int = 0) -> list[str]:
+        if source in self._open_reasoning_sources:
+            return []
+        self._open_reasoning_sources.add(source)
+        self._content_started = True
+        return self._start_reasoning_block(source)
 
-    def complete_reasoning_record(self, opaque: list[str]) -> list[str]:
+    def complete_reasoning_record(
+        self, opaque: list[str], *, source: int = 0
+    ) -> list[str]:
         events: list[str] = []
-        if self._reasoning_started:
+        if source in self._open_reasoning_sources:
             if opaque:
-                events.extend(self._attach_reasoning_replay(opaque.pop(0)))
-            events.extend(self._stop_reasoning_block())
-            self._reasoning_started = False
+                events.extend(self._attach_reasoning_replay(opaque.pop(0), source))
+            events.extend(self._stop_reasoning_block(source))
+            self._open_reasoning_sources.remove(source)
         for data in opaque:
             events.extend(self.emit_opaque_reasoning(data))
         return events
@@ -144,20 +150,31 @@ class ChatStreamOutput(ABC):
         self._content_started = True
         return self._emit_opaque_reasoning(data)
 
+    def defer_opaque_reasoning(self, data: str) -> None:
+        if data:
+            self._pending_opaque.append(data)
+
     def flush_reasoning_replay(self, *, completed: bool = True) -> list[str]:
-        if self.reasoning_replay is None:
-            return []
-        return list(self.reasoning_replay.finish(self, completed=completed))
+        events = (
+            list(self.reasoning_replay.finish(self, completed=completed))
+            if self.reasoning_replay is not None
+            else []
+        )
+        opaque, self._pending_opaque = self._pending_opaque, []
+        if completed:
+            for data in opaque:
+                events.extend(self.emit_opaque_reasoning(data))
+        return events
 
     def _pause_reasoning(self) -> list[str]:
         events: list[str] = []
         if self.reasoning_replay is not None:
             events.extend(self.reasoning_replay.before_content(self))
-        if self._reasoning_started and not (
+        if self._open_reasoning_sources and not (
             self.reasoning_replay and self.reasoning_replay.active
         ):
-            events.extend(self._stop_reasoning_block())
-            self._reasoning_started = False
+            for source in sorted(self._open_reasoning_sources):
+                events.extend(self.complete_reasoning_record([], source=source))
         return events
 
     def ensure_text_block(self) -> list[str]:
@@ -186,9 +203,8 @@ class ChatStreamOutput(ABC):
 
     def _close_content_blocks(self) -> list[str]:
         events: list[str] = []
-        if self._reasoning_started:
-            events.extend(self._stop_reasoning_block())
-            self._reasoning_started = False
+        for source in sorted(self._open_reasoning_sources):
+            events.extend(self.complete_reasoning_record([], source=source))
         if self._text_started:
             events.extend(self._stop_text_block())
             self._text_started = False
@@ -332,19 +348,21 @@ class ChatStreamOutput(ABC):
     def _start_events(self) -> list[str]: ...
 
     @abstractmethod
-    def _start_reasoning_block(self) -> list[str]: ...
+    def _start_reasoning_block(self, source: int) -> list[str]: ...
 
     @abstractmethod
-    def _emit_reasoning_delta(self, content: str, *, summary: bool = False) -> str: ...
+    def _emit_reasoning_delta(
+        self, content: str, *, summary: bool = False, source: int = 0
+    ) -> str: ...
 
     @abstractmethod
     def _emit_opaque_reasoning(self, data: str) -> list[str]: ...
 
     @abstractmethod
-    def _attach_reasoning_replay(self, data: str) -> list[str]: ...
+    def _attach_reasoning_replay(self, data: str, source: int) -> list[str]: ...
 
     @abstractmethod
-    def _stop_reasoning_block(self) -> list[str]: ...
+    def _stop_reasoning_block(self, source: int) -> list[str]: ...
 
     @abstractmethod
     def _start_text_block(self) -> list[str]: ...
@@ -393,12 +411,14 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
             input_tokens,
             log_raw_events=log_raw_events,
         )
+        self._reasoning_indices: dict[int, int] = {}
 
     def close_unclosed_blocks(self) -> list[str]:
         events = self.flush_reasoning_replay(completed=False)
         events.extend(self._ledger.close_unclosed_blocks())
         self._text_started = False
-        self._reasoning_started = False
+        self._open_reasoning_sources.clear()
+        self._reasoning_indices.clear()
         for state in self.tool_states.values():
             state.open = False
         return events
@@ -406,11 +426,17 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
     def _start_events(self) -> list[str]:
         return [self._ledger.message_start()]
 
-    def _start_reasoning_block(self) -> list[str]:
-        return [self._ledger.start_thinking_block()]
+    def _start_reasoning_block(self, source: int) -> list[str]:
+        index = self._ledger.blocks.allocate_index()
+        self._reasoning_indices[source] = index
+        return [self._ledger.content_block_start(index, "thinking")]
 
-    def _emit_reasoning_delta(self, content: str, *, summary: bool = False) -> str:
-        return self._ledger.emit_thinking_delta(content)
+    def _emit_reasoning_delta(
+        self, content: str, *, summary: bool = False, source: int = 0
+    ) -> str:
+        return self._ledger.content_block_delta(
+            self._reasoning_indices[source], "thinking_delta", content
+        )
 
     def _emit_opaque_reasoning(self, data: str) -> list[str]:
         index = self._ledger.blocks.allocate_index()
@@ -419,15 +445,15 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
             self._ledger.content_block_stop(index),
         ]
 
-    def _attach_reasoning_replay(self, data: str) -> list[str]:
+    def _attach_reasoning_replay(self, data: str, source: int) -> list[str]:
         return [
             self._ledger.content_block_delta(
-                self._ledger.blocks.thinking_index, "signature_delta", data
+                self._reasoning_indices[source], "signature_delta", data
             )
         ]
 
-    def _stop_reasoning_block(self) -> list[str]:
-        return [self._ledger.stop_thinking_block()]
+    def _stop_reasoning_block(self, source: int) -> list[str]:
+        return [self._ledger.content_block_stop(self._reasoning_indices.pop(source))]
 
     def _start_text_block(self) -> list[str]:
         return [self._ledger.start_text_block()]
@@ -494,18 +520,11 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
             events=self._events,
         )
         self._text_state: TextBlockState | None = None
-        self._reasoning_state: ReasoningBlockState | None = None
+        self._reasoning_states: dict[int, ReasoningBlockState] = {}
         self._tool_output_states: dict[int, ToolBlockState] = {}
         self._usage: dict[str, object] | None = None
         self._conversion_failure: ExecutionFailure | None = None
         self._started = False
-
-    def begin_reasoning_record(self) -> list[str]:
-        if self._reasoning_started:
-            return []
-        self._reasoning_started = True
-        self._content_started = True
-        return self._start_reasoning_block()
 
     def _response_payload(
         self,
@@ -549,14 +568,14 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
             self._events.response_created(self._response_payload(status="in_progress"))
         ]
 
-    def _start_reasoning_block(self) -> list[str]:
+    def _start_reasoning_block(self, source: int) -> list[str]:
         output_index = self._ledger.reserve_output_slot()
         state = ReasoningBlockState(
             index=output_index,
             output_index=output_index,
             item_id=new_reasoning_item_id(),
         )
-        self._reasoning_state = state
+        self._reasoning_states[source] = state
         self._ledger.set_active_block(state)
         return [
             self._events.output_item_added(
@@ -565,9 +584,11 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
             )
         ]
 
-    def _emit_reasoning_delta(self, content: str, *, summary: bool = False) -> str:
-        state = self._reasoning_state
-        if state is None or not content:
+    def _emit_reasoning_delta(
+        self, content: str, *, summary: bool = False, source: int = 0
+    ) -> str:
+        state = self._reasoning_states.get(source)
+        if state is None:
             return ""
         if summary:
             added = (
@@ -582,6 +603,8 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
                 state.item_id, state.output_index, content, done=False
             )
         state.text_parts.append(content)
+        if not content:
+            return ""
         return self._events.reasoning_text_delta(
             state.item_id, state.output_index, content
         )
@@ -605,14 +628,13 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         events.extend(self._completer.complete_block(state))
         return events
 
-    def _attach_reasoning_replay(self, data: str) -> list[str]:
-        if self._reasoning_state is not None:
-            self._reasoning_state.encrypted_content = data
+    def _attach_reasoning_replay(self, data: str, source: int) -> list[str]:
+        if state := self._reasoning_states.get(source):
+            state.encrypted_content = data
         return []
 
-    def _stop_reasoning_block(self) -> list[str]:
-        state = self._reasoning_state
-        self._reasoning_state = None
+    def _stop_reasoning_block(self, source: int) -> list[str]:
+        state = self._reasoning_states.pop(source, None)
         if state is None:
             return []
         self._ledger.pop_active_block(state.index)

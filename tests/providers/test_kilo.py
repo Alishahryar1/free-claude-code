@@ -278,9 +278,10 @@ async def test_stream_uses_reasoning_field_without_duplicating_plain_details(
     assert thinking_content(events) == "plan "
     assert text_content(events) == "done"
     records = [
-        event.data["delta"]["signature"]
+        event.data["content_block"]["data"]
         for event in events
-        if event.data.get("delta", {}).get("type") == "signature_delta"
+        if event.event == "content_block_start"
+        and event.data["content_block"]["type"] == "redacted_thinking"
     ]
     assert records == [encrypted["data"]]
     assert stream.closed

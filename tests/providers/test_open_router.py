@@ -428,9 +428,10 @@ async def test_stream_maps_reasoning_content_and_details(open_router_provider):
     parsed = parse_sse_text(event_text)
     assert thinking_content(parsed) == "plan "
     carriers = [
-        event.data["delta"]["signature"]
+        event.data["content_block"]["data"]
         for event in parsed
-        if event.data.get("delta", {}).get("type") == "signature_delta"
+        if event.event == "content_block_start"
+        and event.data["content_block"]["type"] == "redacted_thinking"
     ]
     assert carriers == [redacted["data"]]
     assert text_content(parsed) == "done"

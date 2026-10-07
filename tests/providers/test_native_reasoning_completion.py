@@ -172,7 +172,10 @@ async def test_native_reasoning_is_forwarded_without_replacement(protocol):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_google_message_signature_round_trips_in_its_native_field(wire):
+@pytest.mark.parametrize("signature_first", [False, True])
+async def test_google_message_signature_round_trips_in_its_native_field(
+    wire, signature_first
+):
     upstream = _chunks(
         [
             ({"content": "Pong"}, None),
@@ -186,6 +189,11 @@ async def test_google_message_signature_round_trips_in_its_native_field(wire):
             ),
         ]
     )
+    if signature_first:
+        signature = upstream[1]["choices"][0]
+        signature["finish_reason"] = None
+        upstream[0]["choices"][0]["finish_reason"] = "stop"
+        upstream.reverse()
 
     def factory():
         return GeminiProvider(
@@ -216,6 +224,66 @@ async def test_google_message_signature_round_trips_in_its_native_field(wire):
     assert "reasoning_details" not in assistant[0]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("provider_kind", ["google", "structured"])
+async def test_interrupted_opaque_only_state_keeps_hidden_retry_eligible(
+    wire, provider_kind
+):
+    delta = (
+        {"extra_content": {"google": {"thought_signature": "abandoned-signature"}}}
+        if provider_kind == "google"
+        else {
+            "reasoning_details": [
+                {
+                    "type": "reasoning.encrypted",
+                    "data": "abandoned-signature",
+                    "index": 0,
+                }
+            ]
+        }
+    )
+    first = _chunks([(delta, None)])
+
+    class Cutoff(httpx2.AsyncByteStream):
+        async def __aiter__(self):
+            yield ("data: " + json.dumps(first[0]) + "\n\n").encode()
+            await asyncio.sleep(0.9)
+
+    def factory():
+        return GeminiProvider(
+            make_provider_config(
+                api_key="test-key", base_url="https://provider.invalid/v1"
+            ),
+            admission=immediate_admission(max_attempts=2),
+        )
+
+    second = _chunks([({"content": "Recovered answer."}, "stop")])
+    async with _harness(
+        "chat",
+        lambda bodies: (200, Cutoff() if len(bodies) == 1 else second),
+        chat_provider_factory=factory if provider_kind == "google" else None,
+        max_attempts=2,
+    ) as (_, bodies, provider):
+        if wire == "messages":
+            stream = provider.stream_messages(
+                MessagesRequest(
+                    model="requested", messages=[{"role": "user", "content": "hello"}]
+                ),
+                reasoning=ReasoningPolicy.off(),
+            )
+        else:
+            stream = provider.stream_responses(
+                OpenAIResponsesRequest(model="requested", input="hello"),
+                reasoning=ReasoningPolicy.off(),
+            )
+        raw = await delivered(stream, wire)
+    assert len(bodies) == 2
+    assert "Recovered answer." in raw
+    assert "abandoned-signature" not in raw
+    assert "response.failed" not in raw
+
+
 def test_failure_does_not_publish_unfinished_opaque_state():
     output = AnthropicChatStreamOutput(
         message_id="msg_test", model="public", input_tokens=1
@@ -240,11 +308,13 @@ def test_failure_does_not_publish_unfinished_opaque_state():
     )
     frames += output.ensure_text_block()
     frames.append(output.emit_text_delta("Partial answer."))
+    output.defer_opaque_reasoning("pending-message-signature")
     frames += output.finish_failure(
         ExecutionFailure(FailureKind.UPSTREAM, 502, "Disconnected", True)
     )
     stream = "".join(frames)
     assert "partial-cipher" not in stream
+    assert "pending-message-signature" not in stream
     assert "message_stop" not in stream
 
 
@@ -420,11 +490,11 @@ def test_responses_summary_maps_to_structured_chat_summary():
     assert isinstance(messages, list)
     assistant = messages[0]
     assert assistant["content"] == "Answer."
-    assert assistant["reasoning_content"] == "Full thought."
     assert assistant["reasoning_details"] == [
+        {"type": "reasoning.text", "text": "Full thought.", "signature": "cipher"},
         {"type": "reasoning.summary", "summary": "Short summary."},
-        {"type": "reasoning.encrypted", "data": "cipher"},
     ]
+    assert json.dumps(body).count("Full thought.") == 1
 
 
 def test_existing_responses_tool_delta_does_not_close_final_text():

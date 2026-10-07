@@ -16,6 +16,7 @@ class _ReasoningGroup:
     slots: dict[tuple[object, object], int] = field(default_factory=dict)
     native_parts: list[str] = field(default_factory=list)
     visible_parts: dict[tuple[str, int], str] = field(default_factory=dict)
+    output_sources: dict[tuple[str, int], int] = field(default_factory=dict)
     output_reasoning: bool = True
     after_content: bool = False
 
@@ -50,10 +51,7 @@ class StructuredReasoningStream:
     ) -> Iterator[str]:
         details = _reasoning_details(delta)
         if self._text_source is None:
-            if native_reasoning:
-                self._text_source = "native"
-            elif any(_reasoning_detail_text(detail) for detail in details):
-                self._text_source = "details"
+            self._text_source = _text_source_for(native_reasoning, details)
         visible = (
             [(native_reasoning, False)]
             if self._text_source == "native" and native_reasoning
@@ -70,7 +68,7 @@ class StructuredReasoningStream:
         if visible:
             yield from self.before_reasoning(output)
             if self._text_source is None:
-                self._text_source = "native" if native_reasoning else "details"
+                self._text_source = _text_source_for(native_reasoning, details)
         if self._group is None and (
             (output_reasoning and native_reasoning)
             or any(
@@ -80,7 +78,6 @@ class StructuredReasoningStream:
             )
         ):
             self._group = _ReasoningGroup(output_reasoning=output_reasoning)
-            yield from output.begin_reasoning_record()
         group = self._group
         if group is None:
             return
@@ -132,8 +129,10 @@ class StructuredReasoningStream:
                         )
                     )
         for key, text, summary in visible_parts:
-            yield from output.ensure_reasoning_block()
-            yield output.emit_reasoning_delta(text, summary=summary)
+            source = _output_source(group, key)
+            group.output_sources[key] = source
+            yield from output.ensure_reasoning_block(source=source)
+            yield output.emit_reasoning_delta(text, summary=summary, source=source)
             group.visible_parts[key] = group.visible_parts.get(key, "") + text
 
     def _remaining_readable(
@@ -178,6 +177,11 @@ class StructuredReasoningStream:
                     yield from self._remaining_part(
                         output, group, key, text, summary=summary
                     )
+                elif key not in group.output_sources:
+                    for other, emitted in group.visible_parts.items():
+                        if emitted == text and other in group.output_sources:
+                            group.output_sources[key] = group.output_sources[other]
+                            break
                 group.visible_parts[key] = text
                 represented.add(text)
 
@@ -192,7 +196,10 @@ class StructuredReasoningStream:
     ) -> Iterator[str]:
         remaining = text.removeprefix(group.visible_parts.get(key, ""))
         if remaining:
-            yield output.emit_reasoning_delta(remaining, summary=summary)
+            source = _output_source(group, key)
+            group.output_sources[key] = source
+            yield from output.begin_reasoning_record(source=source)
+            yield output.emit_reasoning_delta(remaining, summary=summary, source=source)
 
     def finish(
         self, output: ChatStreamOutput, *, completed: bool = True
@@ -201,14 +208,54 @@ class StructuredReasoningStream:
         self._text_source = None
         if group is not None:
             yield from self._remaining_readable(output, group)
-            if completed:
-                yield from output.complete_reasoning_record(
-                    [
-                        value
-                        for detail in group.details
-                        for value in _reasoning_detail_opaque(detail)
-                    ]
-                )
+            for slot, detail in enumerate(group.details):
+                if detail.get("type") != "reasoning.text":
+                    continue
+                key = ("detail", slot)
+                source = group.output_sources.get(key, slot + 1)
+                opaque = _reasoning_detail_opaque(detail) if completed else []
+                if (
+                    group.output_reasoning
+                    and detail.get("text") == ""
+                    and opaque
+                    and key not in group.output_sources
+                ):
+                    yield from output.begin_reasoning_record(source=source)
+                    yield output.emit_reasoning_delta("", source=source)
+                yield from output.complete_reasoning_record(opaque, source=source)
+            yield from output.complete_reasoning_record(
+                [
+                    value
+                    for detail in group.details
+                    if detail.get("type") != "reasoning.text"
+                    for value in _reasoning_detail_opaque(detail)
+                ]
+                if completed
+                else []
+            )
+
+
+def _output_source(group: _ReasoningGroup, key: tuple[str, int]) -> int:
+    if key in group.output_sources:
+        return group.output_sources[key]
+    if key[0] == "detail" and group.details[key[1]].get("type") == "reasoning.text":
+        return key[1] + 1
+    return 0
+
+
+def _text_source_for(
+    native_reasoning: str | None, details: Sequence[Any]
+) -> Literal["native", "details"] | None:
+    if any(
+        _field(detail, "type") == "reasoning.text" and _reasoning_detail_text(detail)
+        for detail in details
+    ):
+        return "details"
+    if native_reasoning:
+        return "native"
+    if any(_reasoning_detail_text(detail) for detail in details):
+        return "details"
+    return None
 
 
 def _reasoning_details(delta: Any) -> Sequence[Any]:

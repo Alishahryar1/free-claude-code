@@ -6,6 +6,7 @@ from copy import deepcopy
 import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
 from tests.providers.test_native_reasoning_completion import _chunks
 
@@ -228,3 +229,149 @@ async def test_native_signed_empty_thinking_keeps_its_block_kind():
         "thinking": "",
         "signature": "empty-signed",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("fragmented", [False, True])
+@pytest.mark.parametrize("native_alias", [False, True])
+async def test_chat_signed_details_keep_their_own_text_on_replay(
+    wire, fragmented, native_alias
+):
+    deltas: list[tuple[JsonObject, str | None]]
+    if fragmented:
+        deltas = [
+            (
+                {
+                    "reasoning_details": [
+                        {"type": "reasoning.text", "text": "Al", "index": 0}
+                    ]
+                },
+                None,
+            ),
+            (
+                {
+                    "reasoning_details": [
+                        {"type": "reasoning.text", "text": "pha.", "index": 0},
+                        {"type": "reasoning.text", "text": "Beta.", "index": 1},
+                    ]
+                },
+                None,
+            ),
+            ({"content": "Answer."}, None),
+            (
+                {
+                    "reasoning_details": [
+                        {"type": "reasoning.text", "signature": "sig-", "index": 0}
+                    ]
+                },
+                None,
+            ),
+            (
+                {
+                    "reasoning_details": [
+                        {"type": "reasoning.text", "signature": "alpha", "index": 0},
+                        {"type": "reasoning.text", "signature": "sig-beta", "index": 1},
+                    ]
+                },
+                "stop",
+            ),
+        ]
+        aliases = ["Al", "pha.Beta."]
+    else:
+        deltas = [
+            (
+                {
+                    "reasoning_details": [
+                        {
+                            "type": "reasoning.text",
+                            "text": "Alpha.",
+                            "signature": "sig-alpha",
+                            "index": 0,
+                        },
+                        {
+                            "type": "reasoning.text",
+                            "text": "Beta.",
+                            "signature": "sig-beta",
+                            "index": 1,
+                        },
+                    ]
+                },
+                None,
+            ),
+            ({"content": "Answer."}, "stop"),
+        ]
+        aliases = ["Alpha.Beta."]
+    if native_alias:
+        for (delta, _), text in zip(deltas, aliases, strict=False):
+            delta["reasoning_content"] = text
+    async with _harness("chat", lambda _: (200, _chunks(deltas))) as (send, bodies, _):
+        saved = await _saved_reply(
+            send(wire, [{"role": "user", "content": "hello"}]), wire
+        )
+        await _saved_reply(
+            send(wire, [*saved, {"role": "user", "content": "next"}]), wire
+        )
+    if wire == "messages":
+        pairs = [
+            (block["thinking"], block.get("signature"))
+            for block in saved[0]["content"]
+            if block["type"] == "thinking"
+        ]
+    else:
+        pairs = [
+            (
+                "".join(part["text"] for part in item.get("content", [])),
+                item.get("encrypted_content"),
+            )
+            for item in saved
+            if item["type"] == "reasoning"
+        ]
+    assert pairs == [("Alpha.", "sig-alpha"), ("Beta.", "sig-beta")]
+    details = bodies[-1]["messages"][0]["reasoning_details"]
+    assert [(detail["text"], detail.get("signature")) for detail in details] == pairs
+    assert json.dumps(bodies[-1]).count("Alpha.") == 1
+    assert json.dumps(bodies[-1]).count("Beta.") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_chat_explicit_signed_empty_text_retains_its_kind(wire):
+    upstream = _chunks(
+        [
+            (
+                {
+                    "reasoning_details": [
+                        {
+                            "type": "reasoning.text",
+                            "text": "",
+                            "signature": "empty-signature",
+                            "index": 0,
+                        }
+                    ]
+                },
+                None,
+            ),
+            ({"content": "Answer."}, "stop"),
+        ]
+    )
+    async with _harness("chat", lambda _: (200, upstream)) as (send, bodies, _):
+        saved = await _saved_reply(
+            send(wire, [{"role": "user", "content": "hello"}]), wire
+        )
+        await _saved_reply(
+            send(wire, [*saved, {"role": "user", "content": "next"}]), wire
+        )
+    if wire == "messages":
+        assert {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "empty-signature",
+        } in saved[0]["content"]
+    else:
+        reasoning = next(item for item in saved if item["type"] == "reasoning")
+        assert reasoning["content"] == [{"type": "reasoning_text", "text": ""}]
+        assert reasoning["encrypted_content"] == "empty-signature"
+    assert bodies[-1]["messages"][0]["reasoning_details"] == [
+        {"type": "reasoning.text", "text": "", "signature": "empty-signature"}
+    ]

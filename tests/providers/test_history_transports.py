@@ -688,13 +688,11 @@ async def test_chat_buffered_content_preserves_reasoning_through_next_request(
         await _saved_reply(send(history), wire)
         assert len(bodies) == 2
         assert [
-            detail
+            detail.get("data", detail.get("signature"))
             for message in bodies[-1]["messages"]
             for detail in message.get("reasoning_details", [])
-        ] == [
-            {"type": "reasoning.encrypted", "data": detail["data"]}
-            for detail in expected
-        ]
+        ] == [detail["data"] for detail in expected]
+        assert json.dumps(bodies[-1]).count("Plan.") == 1
         assert history == original
 
 
@@ -817,7 +815,7 @@ async def test_chat_plaintext_beside_encrypted_details_survives_switching(
         assert sent[-1]["messages"][0]["reasoning_details"] == (
             details
             if incomplete_saved_record
-            else [{"type": "reasoning.encrypted", "data": "opaque-only"}]
+            else [{"type": "reasoning.text", "text": text, "signature": "opaque-only"}]
         )
         assert json.dumps(sent[-1]).count(text) == 1
         assert history == original

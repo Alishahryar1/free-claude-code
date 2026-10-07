@@ -8,6 +8,7 @@ from typing import cast
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.history_replay import (
     has_readable_replay,
+    is_replay,
     readable_reasoning,
     reasoning_context,
     reasoning_detail,
@@ -62,33 +63,18 @@ class ResponsesChatRequest:
 
 @dataclass(slots=True)
 class _PendingReasoning:
-    text: str | None = None
-    encrypted: list[str] = field(default_factory=list)
-    summaries: list[str] = field(default_factory=list)
+    items: list[Mapping[str, JsonValue]] = field(default_factory=list)
 
     def add(self, item: Mapping[str, JsonValue]) -> None:
-        if encrypted := encrypted_reasoning_from_item(item):
-            self.encrypted.append(encrypted)
-            if has_readable_replay(encrypted):
-                return
-        for text, summary in readable_reasoning(item):
-            if summary:
-                self.summaries.append(text)
-            else:
-                self.text = combine_reasoning(self.text, text)
+        self.items.append(item)
 
     @property
     def empty(self) -> bool:
-        return self.text is None and not self.encrypted and not self.summaries
+        return not self.items
 
-    def take(self) -> tuple[str | None, list[str], list[str]]:
-        text = self.text
-        encrypted = list(self.encrypted)
-        self.text = None
-        self.encrypted.clear()
-        summaries = list(self.summaries)
-        self.summaries.clear()
-        return text, encrypted, summaries
+    def take(self) -> list[Mapping[str, JsonValue]]:
+        items, self.items = self.items, []
+        return items
 
 
 class _ResponsesChatInputBuilder:
@@ -314,31 +300,61 @@ class _ResponsesChatInputBuilder:
         self._pending_rich_output_parts.clear()
 
     def _apply_pending_reasoning(self, message: dict[str, object]) -> None:
-        text, encrypted, summaries = self._pending_reasoning.take()
-        if summaries and not self._structured_reasoning_details:
-            message["content"] = "\n\n".join(
-                [
-                    *[
-                        reasoning_context(summary, summary=True)
-                        for summary in summaries
-                    ],
-                    str(message.get("content") or ""),
-                ]
-            ).rstrip()
-        if text is not None:
-            _apply_reasoning_text(message, text, self._reasoning_replay)
-        if encrypted or (summaries and self._structured_reasoning_details):
-            details = message.setdefault("reasoning_details", [])
-            if isinstance(details, list):
-                if self._structured_reasoning_details:
-                    details.extend(
-                        {"type": "reasoning.summary", "summary": summary}
-                        for summary in summaries
+        contexts: list[str] = []
+        details: list[JsonValue] = []
+        for item in self._pending_reasoning.take():
+            encrypted = encrypted_reasoning_from_item(item)
+            if encrypted and has_readable_replay(encrypted):
+                details.extend(reasoning_detail(encrypted))
+                continue
+            readable = readable_reasoning(item)
+            full_text = [text for text, summary in readable if not summary]
+            content = item.get("content")
+            signed = (
+                self._structured_reasoning_details
+                and encrypted
+                and not is_replay(encrypted)
+                and (
+                    full_text
+                    or (
+                        isinstance(content, list)
+                        and any(
+                            isinstance(part, dict)
+                            and part.get("type") == "reasoning_text"
+                            and part.get("text") == ""
+                            for part in content
+                        )
                     )
-                for value in encrypted:
-                    details.extend(reasoning_detail(value))
-            if not details:
-                message.pop("reasoning_details", None)
+                )
+            )
+            if signed:
+                details.append(
+                    {
+                        "type": "reasoning.text",
+                        "text": "".join(full_text),
+                        "signature": encrypted,
+                    }
+                )
+            else:
+                for text in full_text:
+                    _apply_reasoning_text(message, text, self._reasoning_replay)
+            for text, summary in readable:
+                if not summary:
+                    continue
+                if self._structured_reasoning_details:
+                    details.append({"type": "reasoning.summary", "summary": text})
+                else:
+                    contexts.append(reasoning_context(text, summary=True))
+            if encrypted and not signed:
+                details.extend(reasoning_detail(encrypted))
+        if contexts:
+            message["content"] = "\n\n".join(
+                [*contexts, str(message.get("content") or "")]
+            ).rstrip()
+        if details:
+            existing = message.setdefault("reasoning_details", [])
+            if isinstance(existing, list):
+                existing.extend(details)
 
 
 def build_responses_chat_request(

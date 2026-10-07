@@ -61,7 +61,8 @@ class GoogleChatBehavior(OpenAIChatBehavior):
             google.get("thought_signature") if isinstance(google, Mapping) else None
         )
         if isinstance(signature, str) and signature:
-            yield from output.emit_opaque_reasoning(signature)
+            output.defer_opaque_reasoning(signature)
+        return iter(())
 
 
 class GoogleOpenAIProvider(OpenAIChatProvider):
