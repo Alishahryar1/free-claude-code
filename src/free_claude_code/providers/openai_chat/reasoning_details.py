@@ -3,10 +3,9 @@
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from free_claude_code.core.history_replay import readable_reasoning
-from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .stream_output import ChatStreamOutput
 
@@ -16,17 +15,9 @@ class _ReasoningGroup:
     details: list[dict[str, Any]] = field(default_factory=list)
     slots: dict[tuple[object, object], int] = field(default_factory=dict)
     native_parts: list[str] = field(default_factory=list)
-    visible_parts: dict[bool, list[str]] = field(default_factory=dict)
+    visible_parts: dict[tuple[str, int], str] = field(default_factory=dict)
     output_reasoning: bool = True
     after_content: bool = False
-
-    def snapshot(self) -> JsonObject:
-        native: JsonObject = {
-            "reasoning_details": cast(list[JsonValue], deepcopy(self.details))
-        }
-        if self.native_parts:
-            native["reasoning_content"] = "".join(self.native_parts)
-        return native
 
 
 class StructuredReasoningStream:
@@ -78,6 +69,8 @@ class StructuredReasoningStream:
             visible = []
         if visible:
             yield from self.before_reasoning(output)
+            if self._text_source is None:
+                self._text_source = "native" if native_reasoning else "details"
         if self._group is None and (
             (output_reasoning and native_reasoning)
             or any(
@@ -93,13 +86,17 @@ class StructuredReasoningStream:
             return
         if native_reasoning is not None:
             group.native_parts.append(native_reasoning)
+        visible_parts: list[tuple[tuple[str, int], str, bool]] = []
+        if self._text_source == "native" and native_reasoning and output_reasoning:
+            visible_parts.append((("native", 0), native_reasoning, False))
         for detail in details:
             if isinstance(detail, Mapping):
                 value = deepcopy(dict(detail))
                 identity = value.get("index", value.get("id"))
                 key = (identity, value.get("type"))
                 if isinstance(identity, str | int) and key in group.slots:
-                    current = group.details[group.slots[key]]
+                    slot = group.slots[key]
+                    current = group.details[slot]
                     for name, part in value.items():
                         if (
                             name
@@ -118,34 +115,84 @@ class StructuredReasoningStream:
                         else:
                             current[name] = part
                 else:
+                    slot = len(group.details)
                     if isinstance(identity, str | int):
-                        group.slots[key] = len(group.details)
+                        group.slots[key] = slot
                     group.details.append(value)
-        for text, summary in visible:
+                if (
+                    self._text_source == "details"
+                    and output_reasoning
+                    and (text := _reasoning_detail_text(detail))
+                ):
+                    visible_parts.append(
+                        (
+                            ("detail", slot),
+                            text,
+                            _field(detail, "type") == "reasoning.summary",
+                        )
+                    )
+        for key, text, summary in visible_parts:
             yield from output.ensure_reasoning_block()
             yield output.emit_reasoning_delta(text, summary=summary)
-            group.visible_parts.setdefault(summary, []).append(text)
+            group.visible_parts[key] = group.visible_parts.get(key, "") + text
 
     def _remaining_readable(
         self, output: ChatStreamOutput, group: _ReasoningGroup
     ) -> Iterator[str]:
         if not group.output_reasoning:
             return
-        represented = {
-            text
-            for parts in group.visible_parts.values()
-            for text in [*parts, "".join(parts)]
-        }
-        readable = readable_reasoning(group.snapshot())
+        typed = [
+            (("detail", slot), text, detail.get("type") == "reasoning.summary")
+            for slot, detail in enumerate(group.details)
+            if (text := _reasoning_detail_text(detail))
+        ]
+        represented = set(group.visible_parts.values())
+        for summary in (None, False, True):
+            emitted = [
+                group.visible_parts.get(key, "")
+                for key, _, is_summary in typed
+                if summary is None or summary == is_summary
+            ]
+            represented.update(("".join(emitted), "\n\n".join(emitted)))
+        native = "".join(group.native_parts)
+        if native:
+            if native not in represented:
+                yield from self._remaining_part(
+                    output, group, ("native", 0), native, summary=False
+                )
+            group.visible_parts[("native", 0)] = native
+            represented.add(native)
+        combined = "".join(text for _, text, _ in typed)
+        combined_lines = "\n\n".join(text for _, text, _ in typed)
         for summary in (False, True):
-            texts = [text for text, is_summary in readable if is_summary == summary]
-            if "".join(texts) in represented:
-                continue
-            for text in texts:
-                if text not in represented:
-                    yield output.emit_reasoning_delta(text, summary=summary)
-                    group.visible_parts.setdefault(summary, []).append(text)
-                    represented.add(text)
+            parts = [
+                (key, text) for key, text, is_summary in typed if is_summary == summary
+            ]
+            covered = (
+                combined in represented
+                or combined_lines in represented
+                or "".join(text for _, text in parts) in represented
+            )
+            for key, text in parts:
+                if not covered and text not in represented:
+                    yield from self._remaining_part(
+                        output, group, key, text, summary=summary
+                    )
+                group.visible_parts[key] = text
+                represented.add(text)
+
+    def _remaining_part(
+        self,
+        output: ChatStreamOutput,
+        group: _ReasoningGroup,
+        key: tuple[str, int],
+        text: str,
+        *,
+        summary: bool,
+    ) -> Iterator[str]:
+        remaining = text.removeprefix(group.visible_parts.get(key, ""))
+        if remaining:
+            yield output.emit_reasoning_delta(remaining, summary=summary)
 
     def finish(
         self, output: ChatStreamOutput, *, completed: bool = True

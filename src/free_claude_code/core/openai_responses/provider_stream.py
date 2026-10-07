@@ -1,11 +1,10 @@
 """Translate upstream OpenAI Responses events into Anthropic Messages SSE."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from free_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from free_claude_code.core.anthropic.usage import anthropic_input_usage_fields
-from free_claude_code.core.history_replay import readable_reasoning
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 
@@ -39,6 +38,18 @@ class _ToolState:
     stopped: bool = False
 
 
+@dataclass(slots=True)
+class _ReasoningState:
+    block_index: int | None = None
+    parts: dict[tuple[str, int], str] = field(default_factory=dict)
+    stopped: bool = False
+
+    def text(self, field_name: str) -> str:
+        return "".join(
+            text for (name, _), text in sorted(self.parts.items()) if name == field_name
+        )
+
+
 class ResponsesProviderStream:
     """Stateful one-way adapter for one upstream response."""
 
@@ -63,8 +74,7 @@ class ResponsesProviderStream:
         self.generated_output = False
         self._tool_names = tool_names or OpenAIToolNameCodec.from_names(())
         self._tools: dict[str, _ToolState] = {}
-        self._thinking_item_id: str | None = None
-        self._readable_parts: dict[tuple[str, bool], str] = {}
+        self._reasoning: dict[str, _ReasoningState] = {}
 
     def start(self) -> list[str]:
         """Return the Anthropic message_start event."""
@@ -111,7 +121,7 @@ class ResponsesProviderStream:
         if item.get("type") == "message" and self.ledger.blocks.text_started:
             return [self.ledger.stop_text_block()]
         if item.get("type") == "reasoning":
-            return self._item_readable(item)
+            return self._item_readable(item, completed=False)
         return []
 
     def _reasoning_delta(
@@ -120,40 +130,70 @@ class ResponsesProviderStream:
         delta = data.get("delta")
         if not isinstance(delta, str) or not delta:
             return []
-        events = list(self.ledger.ensure_thinking_block())
-        self._thinking_item_id = _string(data.get("item_id"))
-        key = (self._thinking_item_id, summary)
-        self._readable_parts[key] = self._readable_parts.get(key, "") + delta
-        events.append(self.ledger.emit_thinking_delta(delta))
+        state = self._reasoning.setdefault(
+            _string(data.get("item_id")), _ReasoningState()
+        )
+        field_name = "summary" if summary else "content"
+        key = (field_name, _integer(data.get(field_name + "_index")) or 0)
+        events = self._ensure_reasoning_started(state, completed=False)
+        state.parts[key] = state.parts.get(key, "") + delta
+        assert state.block_index is not None
+        events.append(
+            self.ledger.content_block_delta(state.block_index, "thinking_delta", delta)
+        )
         self.generated_output = True
         return events
 
-    def _item_readable(self, item: dict[str, Any]) -> list[str]:
-        item_id = _string(item.get("id"))
-        events: list[str] = []
-        for text, summary in readable_reasoning(item):
-            if text in {
-                value
-                for (source_id, _), value in self._readable_parts.items()
-                if source_id == item_id
-            }:
-                continue
-            key = (item_id, summary)
-            previous = self._readable_parts.get(key, "")
-            remaining = text.removeprefix(previous)
-            if (
-                self.ledger.blocks.thinking_started
-                and item_id == self._thinking_item_id
-            ):
-                events.append(self.ledger.emit_thinking_delta(remaining))
-                self._readable_parts[key] = previous + remaining
-            else:
-                events.extend(
-                    self._reasoning_delta(
-                        {"item_id": item_id, "delta": remaining}, summary=summary
-                    )
-                )
+    def _ensure_reasoning_started(
+        self, state: _ReasoningState, *, completed: bool
+    ) -> list[str]:
+        events = [] if completed else self._close_text()
+        if state.block_index is None:
+            state.block_index = self.ledger.blocks.allocate_index()
+            events.append(
+                self.ledger.content_block_start(state.block_index, "thinking")
+            )
+            self.generated_output = True
         return events
+
+    def _item_readable(self, item: dict[str, Any], *, completed: bool) -> list[str]:
+        item_id = _string(item.get("id"))
+        state = self._reasoning.setdefault(item_id, _ReasoningState())
+        events: list[str] = []
+        for field_name in ("content", "summary"):
+            parts = item.get(field_name)
+            if not isinstance(parts, list):
+                continue
+            text_parts = [
+                (index, part["text"])
+                for index, part in enumerate(parts)
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            ]
+            full_text = "".join(text for _, text in text_parts)
+            alternate = state.text("summary" if field_name == "content" else "content")
+            for index, text in text_parts:
+                key = (field_name, index)
+                previous = state.parts.get(key, "")
+                state.parts[key] = text
+                if not text or full_text == alternate:
+                    continue
+                remaining = text.removeprefix(previous)
+                if remaining:
+                    events.extend(
+                        self._ensure_reasoning_started(state, completed=completed)
+                    )
+                    assert state.block_index is not None
+                    events.append(
+                        self.ledger.content_block_delta(
+                            state.block_index, "thinking_delta", remaining
+                        )
+                    )
+        return events
+
+    def _close_text(self) -> list[str]:
+        return (
+            [self.ledger.stop_text_block()] if self.ledger.blocks.text_started else []
+        )
 
     def _text_delta(self, data: dict[str, Any]) -> list[str]:
         delta = data.get("delta")
@@ -179,7 +219,7 @@ class ResponsesProviderStream:
                 name="",
             )
             self._tools[item_id] = state
-        events = [] if state.started else list(self.ledger.close_content_blocks())
+        events = [] if state.started else self._close_text()
         events.extend(self._ensure_tool_started(state))
         if delta:
             events.append(self.ledger.emit_tool_delta(state.tool_index, delta))
@@ -204,7 +244,7 @@ class ResponsesProviderStream:
                 self._tools[item_id] = state
             if not state.name:
                 state.name = self._tool_names.decode(_string(item.get("name")))
-            events = [] if state.started else list(self.ledger.close_content_blocks())
+            events = [] if state.started else self._close_text()
             events.extend(self._ensure_tool_started(state))
             arguments = item.get("arguments")
             if not state.received_delta and isinstance(arguments, str) and arguments:
@@ -217,21 +257,31 @@ class ResponsesProviderStream:
             return events
         if item_type == "reasoning":
             encrypted = item.get("encrypted_content")
-            events = self._item_readable(item)
+            events = self._item_readable(item, completed=True)
+            state = self._reasoning[item_id]
             if (
-                self.ledger.blocks.thinking_started
-                and item_id == self._thinking_item_id
+                state.block_index is None
+                and isinstance(encrypted, str)
+                and encrypted
+                and any(
+                    isinstance(part, dict)
+                    and part.get("type") == "reasoning_text"
+                    and part.get("text") == ""
+                    for part in item.get("content") or []
+                )
             ):
+                events.extend(self._ensure_reasoning_started(state, completed=True))
+            if state.block_index is not None:
                 if isinstance(encrypted, str) and encrypted:
                     events.append(
                         self.ledger.content_block_delta(
-                            self.ledger.blocks.thinking_index,
+                            state.block_index,
                             "signature_delta",
                             encrypted,
                         )
                     )
-                events.append(self.ledger.stop_thinking_block())
-                self._thinking_item_id = None
+                events.append(self.ledger.content_block_stop(state.block_index))
+                state.stopped = True
                 return events
             if isinstance(encrypted, str) and encrypted:
                 index = self.ledger.blocks.allocate_index()
@@ -242,7 +292,9 @@ class ResponsesProviderStream:
                 )
                 events.append(self.ledger.content_block_stop(index))
                 self.generated_output = True
+                state.stopped = True
                 return events
+            state.stopped = True
             return events
         return []
 
@@ -263,8 +315,10 @@ class ResponsesProviderStream:
         response = data.get("response")
         response = response if isinstance(response, dict) else {}
         events = []
-        if self.ledger.blocks.thinking_started:
-            events.append(self.ledger.stop_thinking_block())
+        for state in self._reasoning.values():
+            if state.block_index is not None and not state.stopped:
+                events.append(self.ledger.content_block_stop(state.block_index))
+                state.stopped = True
         for state in self._tools.values():
             if state.started and not state.stopped:
                 events.append(self.ledger.stop_tool_block(state.tool_index))
