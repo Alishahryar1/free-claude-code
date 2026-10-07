@@ -1,5 +1,10 @@
 """Native reasoning survives conversion without trailing FCC replay records."""
 
+import asyncio
+import json
+from copy import deepcopy
+
+import httpx2
 import pytest
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
@@ -24,6 +29,7 @@ from free_claude_code.providers.openai_chat.reasoning_details import (
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
 )
+from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_history_transports import (
     _events_for,
@@ -482,3 +488,185 @@ async def test_unrecognized_detail_data_is_not_a_reasoning_signature(wire):
     assert [block["type"] for block in blocks] == [
         "text" if wire == "messages" else "message"
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_fragmented_summary_and_distinct_full_thought_replay_once(wire):
+    upstream = _chunks(
+        [
+            (
+                {
+                    "reasoning_details": [
+                        {"type": "reasoning.summary", "summary": "Short ", "index": 0}
+                    ]
+                },
+                None,
+            ),
+            (
+                {
+                    "reasoning_details": [
+                        {"type": "reasoning.summary", "summary": "summary.", "index": 0}
+                    ]
+                },
+                None,
+            ),
+            ({"reasoning_content": "Full thought."}, None),
+            ({"content": "Answer."}, "stop"),
+        ]
+    )
+    async with _harness("chat", lambda _: (200, upstream)) as (send, bodies, _):
+        saved = await _saved_reply(
+            send(wire, [{"role": "user", "content": "hello"}]), wire
+        )
+        await _saved_reply(
+            send(wire, [*saved, {"role": "user", "content": "next"}]), wire
+        )
+    assert json.dumps(saved).count("Short summary.") == 1
+    assert json.dumps(saved).count("Full thought.") == 1
+    assert json.dumps(bodies[-1]).count("Short summary.") == 1
+    assert json.dumps(bodies[-1]).count("Full thought.") == 1
+
+
+@pytest.mark.asyncio
+async def test_hidden_readable_only_cutoff_retries_without_delivered_content():
+    first = _chunks(
+        [
+            (
+                {
+                    "reasoning_details": [
+                        {
+                            "type": "reasoning.text",
+                            "text": "Hidden thought.",
+                            "index": 0,
+                        }
+                    ]
+                },
+                None,
+            )
+        ]
+    )
+
+    class Cutoff(httpx2.AsyncByteStream):
+        async def __aiter__(self):
+            yield ("data: " + json.dumps(first[0]) + "\n\n").encode()
+            await asyncio.sleep(0.9)
+
+    second = _chunks([({"content": "Recovered answer."}, "stop")])
+    async with _harness(
+        "chat",
+        lambda bodies: (200, Cutoff() if len(bodies) == 1 else second),
+        max_attempts=2,
+    ) as (_, bodies, provider):
+        stream = provider.stream_responses(
+            OpenAIResponsesRequest(model="requested", input="hello"),
+            reasoning=ReasoningPolicy.off(),
+        )
+        raw = await delivered(stream, "responses")
+    assert len(bodies) == 2
+    assert "Recovered answer." in raw
+    assert "Hidden thought." not in raw
+    assert "response.failed" not in raw
+    assert '"type": "reasoning"' not in raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer_before_done", [False, True])
+async def test_completed_full_reasoning_survives_streamed_summary(answer_before_done):
+    upstream = deepcopy(_events_for("responses"))
+    upstream[3]["item"]["content"] = [
+        {"type": "reasoning_text", "text": "Distinct full thought."}
+    ]
+    if answer_before_done:
+        message = {
+            "id": "msg_answer",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Answer.", "annotations": []}],
+        }
+        upstream[3:3] = [
+            {
+                "type": "response.output_item.added",
+                "output_index": 1,
+                "item": {**message, "status": "in_progress", "content": []},
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_answer",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "Answer.",
+            },
+            {"type": "response.output_item.done", "output_index": 1, "item": message},
+        ]
+        upstream[-1]["response"]["output"].append(message)
+        for sequence, event in enumerate(upstream):
+            event["sequence_number"] = sequence
+    async with _harness("responses", lambda _: (200, upstream)) as (send, bodies, _):
+        frames = [
+            frame
+            async for frame in send("messages", [{"role": "user", "content": "hello"}])
+        ]
+
+        async def saved_frames():
+            for frame in frames:
+                yield frame
+
+        saved = await _saved_reply(saved_frames(), "messages")
+        await _saved_reply(
+            send("messages", [*saved, {"role": "user", "content": "next"}]), "messages"
+        )
+    assert json.dumps(saved).count("Find 17.") == 1
+    assert json.dumps(saved).count("Distinct full thought.") == 1
+    assert json.dumps(bodies[-1]).count("Find 17.") == 1
+    assert json.dumps(bodies[-1]).count("Distinct full thought.") == 1
+    if answer_before_done:
+        events = parse_sse_text("".join(frames))
+        text_index = next(
+            event.data["index"]
+            for event in events
+            if event.event == "content_block_start"
+            and event.data["content_block"]["type"] == "text"
+        )
+        assert [
+            event.data["index"]
+            for event in events
+            if event.event == "content_block_stop"
+        ][-1] == text_index
+
+
+@pytest.mark.parametrize("summary", [False, True])
+def test_responses_seeded_reasoning_and_fragments_are_completed_once(summary):
+    stream = ResponsesProviderStream(
+        message_id="msg_test", model="native", input_tokens=1
+    )
+    field = "summary" if summary else "content"
+    part = "summary_text" if summary else "reasoning_text"
+    item = {
+        "type": "reasoning",
+        "id": "rs_seeded",
+        field: [{"type": part, "text": "First, "}],
+    }
+    frames = stream.start()
+    frames += stream.feed("response.output_item.added", {"item": item})
+    frames += stream.feed(
+        "response.reasoning_summary_text.delta"
+        if summary
+        else "response.reasoning_text.delta",
+        {"item_id": "rs_seeded", "delta": "think."},
+    )
+    frames += stream.feed(
+        "response.output_item.done",
+        {"item": {**item, field: [{"type": part, "text": "First, think."}]}},
+    )
+    frames += stream.feed("response.completed", {"response": {}})
+    events = parse_sse_text("".join(frames))
+    assert (
+        "".join(
+            event.data["delta"]["thinking"]
+            for event in events
+            if event.data.get("delta", {}).get("type") == "thinking_delta"
+        )
+        == "First, think."
+    )

@@ -16,7 +16,7 @@ class _ReasoningGroup:
     details: list[dict[str, Any]] = field(default_factory=list)
     slots: dict[tuple[object, object], int] = field(default_factory=dict)
     native_parts: list[str] = field(default_factory=list)
-    visible_parts: list[str] = field(default_factory=list)
+    visible_parts: dict[bool, list[str]] = field(default_factory=dict)
     output_reasoning: bool = True
     after_content: bool = False
 
@@ -79,9 +79,10 @@ class StructuredReasoningStream:
         if visible:
             yield from self.before_reasoning(output)
         if self._group is None and (
-            native_reasoning
+            (output_reasoning and native_reasoning)
             or any(
-                _reasoning_detail_text(detail) or _reasoning_detail_opaque(detail)
+                (output_reasoning and _reasoning_detail_text(detail))
+                or _reasoning_detail_opaque(detail)
                 for detail in details
             )
         ):
@@ -123,22 +124,28 @@ class StructuredReasoningStream:
         for text, summary in visible:
             yield from output.ensure_reasoning_block()
             yield output.emit_reasoning_delta(text, summary=summary)
-            group.visible_parts.append(text)
+            group.visible_parts.setdefault(summary, []).append(text)
 
     def _remaining_readable(
         self, output: ChatStreamOutput, group: _ReasoningGroup
     ) -> Iterator[str]:
         if not group.output_reasoning:
             return
-        represented = {*group.visible_parts, "".join(group.visible_parts)}
+        represented = {
+            text
+            for parts in group.visible_parts.values()
+            for text in [*parts, "".join(parts)]
+        }
         readable = readable_reasoning(group.snapshot())
-        if "".join(text for text, _ in readable) in represented:
-            return
-        for text, summary in readable:
-            if text not in represented:
-                yield output.emit_reasoning_delta(text, summary=summary)
-                group.visible_parts.append(text)
-                represented.add(text)
+        for summary in (False, True):
+            texts = [text for text, is_summary in readable if is_summary == summary]
+            if "".join(texts) in represented:
+                continue
+            for text in texts:
+                if text not in represented:
+                    yield output.emit_reasoning_delta(text, summary=summary)
+                    group.visible_parts.setdefault(summary, []).append(text)
+                    represented.add(text)
 
     def finish(
         self, output: ChatStreamOutput, *, completed: bool = True
