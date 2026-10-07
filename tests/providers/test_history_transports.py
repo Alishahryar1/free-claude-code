@@ -720,9 +720,12 @@ async def test_chat_pending_reasoning_is_discarded_on_failure_or_retry(wire, com
     text = "Plan." * (30000 if committed else 1)
     first = {"type": "reasoning.encrypted", "data": "first", "index": 0}
     second = {"type": "reasoning.encrypted", "data": "second", "index": 1}
+    readable = (
+        [{"type": "reasoning.text", "text": text, "index": 2}] if committed else []
+    )
     events = _chat_reasoning_events(
         [
-            {"reasoning_content": text, "reasoning_details": [first]},
+            {"reasoning_content": text, "reasoning_details": [first, *readable]},
             {"content": "<"},
             {"reasoning_details": [second]},
         ]
@@ -796,11 +799,17 @@ async def test_chat_plaintext_beside_encrypted_details_survives_switching(
                 ReplayRecord(origin, {"reasoning_details": details})
             )
             if wire == "responses":
-                saved[0]["encrypted_content"] = carrier
+                next(item for item in saved if item["type"] == "reasoning")[
+                    "encrypted_content"
+                ] = carrier
             else:
                 # Model an older complete v1 transcript before removing its readable field.
                 saved[0]["content"] = resolve_messages_replay(saved[0]["content"])
-                saved[0]["content"][0]["signature"] = carrier
+                next(
+                    block
+                    for block in saved[0]["content"]
+                    if block["type"] == "thinking"
+                )["signature"] = carrier
         else:
             assert _carrier(saved, wire) == "opaque-only"
         history = json.loads(json.dumps([*saved, {"role": "user", "content": "next"}]))

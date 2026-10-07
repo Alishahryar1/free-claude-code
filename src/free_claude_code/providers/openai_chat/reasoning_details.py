@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 from free_claude_code.core.history_replay import readable_reasoning
 
@@ -19,13 +19,14 @@ class _ReasoningGroup:
     output_sources: dict[tuple[str, int], int] = field(default_factory=dict)
     output_reasoning: bool = True
     after_content: bool = False
+    # Retain native phase transitions without using that field for publication.
+    native_primary: bool | None = None
 
 
 class StructuredReasoningStream:
     """Collect replay groups independently of their visible wire blocks."""
 
     def __init__(self) -> None:
-        self._text_source: Literal["native", "details"] | None = None
         self._group: _ReasoningGroup | None = None
 
     @property
@@ -38,8 +39,8 @@ class StructuredReasoningStream:
 
     def before_content(self, output: ChatStreamOutput) -> Iterator[str]:
         if self._group is not None and not self._group.after_content:
-            yield from self._remaining_readable(output, self._group)
             self._group.after_content = True
+        return iter(())
 
     def events(
         self,
@@ -50,25 +51,14 @@ class StructuredReasoningStream:
         output_reasoning: bool = True,
     ) -> Iterator[str]:
         details = _reasoning_details(delta)
-        if self._text_source is None:
-            self._text_source = _text_source_for(native_reasoning, details)
-        visible = (
-            [(native_reasoning, False)]
-            if self._text_source == "native" and native_reasoning
-            else [
-                (text, _field(detail, "type") == "reasoning.summary")
-                for detail in details
-                if (text := _reasoning_detail_text(detail))
-            ]
-            if self._text_source == "details"
-            else []
-        )
-        if not output_reasoning:
-            visible = []
-        if visible:
+        if (
+            native_reasoning
+            and self._group is not None
+            and self._group.native_primary
+            and self._group.after_content
+        ):
             yield from self.before_reasoning(output)
-            if self._text_source is None:
-                self._text_source = _text_source_for(native_reasoning, details)
+            yield from output.close_content_blocks()
         if self._group is None and (
             (output_reasoning and native_reasoning)
             or any(
@@ -81,11 +71,21 @@ class StructuredReasoningStream:
         group = self._group
         if group is None:
             return
+        if group.native_primary is None:
+            if any(
+                _field(detail, "type") == "reasoning.text"
+                and _reasoning_detail_text(detail)
+                for detail in details
+            ):
+                group.native_primary = False
+            elif native_reasoning:
+                group.native_primary = True
+            elif any(_reasoning_detail_text(detail) for detail in details):
+                group.native_primary = False
         if native_reasoning is not None:
+            # This may be an aggregate alias of signed details arriving later.
             group.native_parts.append(native_reasoning)
         visible_parts: list[tuple[tuple[str, int], str, bool]] = []
-        if self._text_source == "native" and native_reasoning and output_reasoning:
-            visible_parts.append((("native", 0), native_reasoning, False))
         for detail in details:
             if isinstance(detail, Mapping):
                 value = deepcopy(dict(detail))
@@ -117,8 +117,8 @@ class StructuredReasoningStream:
                         group.slots[key] = slot
                     group.details.append(value)
                 if (
-                    self._text_source == "details"
-                    and output_reasoning
+                    output_reasoning
+                    and not group.after_content
                     and (text := _reasoning_detail_text(detail))
                 ):
                     visible_parts.append(
@@ -145,6 +145,9 @@ class StructuredReasoningStream:
             for slot, detail in enumerate(group.details)
             if (text := _reasoning_detail_text(detail))
         ]
+        for key, text, summary in typed:
+            yield from self._remaining_part(output, group, key, text, summary=summary)
+            group.visible_parts[key] = text
         represented = set(group.visible_parts.values())
         for summary in (None, False, True):
             emitted = [
@@ -160,30 +163,6 @@ class StructuredReasoningStream:
                     output, group, ("native", 0), native, summary=False
                 )
             group.visible_parts[("native", 0)] = native
-            represented.add(native)
-        combined = "".join(text for _, text, _ in typed)
-        combined_lines = "\n\n".join(text for _, text, _ in typed)
-        for summary in (False, True):
-            parts = [
-                (key, text) for key, text, is_summary in typed if is_summary == summary
-            ]
-            covered = (
-                combined in represented
-                or combined_lines in represented
-                or "".join(text for _, text in parts) in represented
-            )
-            for key, text in parts:
-                if not covered and text not in represented:
-                    yield from self._remaining_part(
-                        output, group, key, text, summary=summary
-                    )
-                elif key not in group.output_sources:
-                    for other, emitted in group.visible_parts.items():
-                        if emitted == text and other in group.output_sources:
-                            group.output_sources[key] = group.output_sources[other]
-                            break
-                group.visible_parts[key] = text
-                represented.add(text)
 
     def _remaining_part(
         self,
@@ -205,7 +184,6 @@ class StructuredReasoningStream:
         self, output: ChatStreamOutput, *, completed: bool = True
     ) -> Iterator[str]:
         group, self._group = self._group, None
-        self._text_source = None
         if group is not None:
             yield from self._remaining_readable(output, group)
             for slot, detail in enumerate(group.details):
@@ -241,21 +219,6 @@ def _output_source(group: _ReasoningGroup, key: tuple[str, int]) -> int:
     if key[0] == "detail" and group.details[key[1]].get("type") == "reasoning.text":
         return key[1] + 1
     return 0
-
-
-def _text_source_for(
-    native_reasoning: str | None, details: Sequence[Any]
-) -> Literal["native", "details"] | None:
-    if any(
-        _field(detail, "type") == "reasoning.text" and _reasoning_detail_text(detail)
-        for detail in details
-    ):
-        return "details"
-    if native_reasoning:
-        return "native"
-    if any(_reasoning_detail_text(detail) for detail in details):
-        return "details"
-    return None
 
 
 def _reasoning_details(delta: Any) -> Sequence[Any]:

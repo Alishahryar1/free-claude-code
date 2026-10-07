@@ -75,20 +75,24 @@ async def test_plain_reasoning_emits_no_artificial_replay_state(wire, thinking):
         starts = [
             event.data for event in events if event.event == "content_block_start"
         ]
-        assert [event["content_block"]["type"] for event in starts] == (
+        assert [event["content_block"]["type"] for event in starts] == ["text"] + (
             ["thinking"] if thinking else []
-        ) + ["text"]
+        )
         stops = [
             event.data["index"]
             for event in events
             if event.event == "content_block_stop"
         ]
-        assert stops[-1] == starts[-1]["index"]
+        assert stops[-1] == next(
+            event["index"]
+            for event in starts
+            if event["content_block"]["type"] == "text"
+        )
     else:
         output = events[-1].data["response"]["output"]
-        assert [item["type"] for item in output] == (
+        assert [item["type"] for item in output] == ["message"] + (
             ["reasoning"] if thinking else []
-        ) + ["message"]
+        )
         assert all(not item.get("encrypted_content") for item in output)
 
 

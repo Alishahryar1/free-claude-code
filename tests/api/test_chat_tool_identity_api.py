@@ -283,7 +283,9 @@ def ambiguous_events(stop, *, incomplete=False, fragment_index=0):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-@pytest.mark.parametrize("prefix", [None, "content", "reasoning_content"])
+@pytest.mark.parametrize(
+    "prefix", [None, "content", "reasoning_content", "reasoning_details"]
+)
 @pytest.mark.parametrize("stop", [None, "same", "before"])
 @pytest.mark.parametrize("max_attempts", [1, 2])
 @pytest.mark.parametrize("fragment_index", [0, None])
@@ -296,7 +298,22 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
     )
     first = ambiguous_events(stop, fragment_index=fragment_index)
     if prefix:
-        first.insert(0, chat_chunk({prefix: "already visible"}))
+        first.insert(
+            0,
+            chat_chunk(
+                {
+                    "reasoning_details": [
+                        {
+                            "type": "reasoning.text",
+                            "text": "already visible",
+                            "index": 0,
+                        }
+                    ]
+                }
+                if prefix == "reasoning_details"
+                else {prefix: "already visible"}
+            ),
+        )
     async with _harness(
         "chat",
         lambda bodies: (
@@ -309,19 +326,20 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
             send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)), wire
         )
 
-    retry = stop is None and max_attempts > 1
+    # Structured records retain the existing conservative recovery policy.
+    retry = stop is None and max_attempts > 1 and prefix != "reasoning_details"
     assert len(bodies) == (2 if retry else 1)
     assert "call_abandoned" not in result
     events = parse_sse_text(result)
-    if prefix:
-        assert "already visible" in result
+    visible_prefix = prefix in {"content", "reasoning_details"}
+    assert ("already visible" in result) == visible_prefix
     if retry:
         assert completed_arguments(events, wire) == '{"path":"winning"}'
         assert events[-1].event == (
             "message_stop" if wire == "messages" else "response.completed"
         )
         assert bodies[1]["tools"] == bodies[0]["tools"]
-        if prefix:
+        if visible_prefix:
             assert "already visible" in str(bodies[1])
         else:
             assert bodies[0] == bodies[1]
