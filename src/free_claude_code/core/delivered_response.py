@@ -6,8 +6,6 @@ from typing import Any, Literal
 import simplejson
 
 from .history_replay import (
-    ReplayRecord,
-    encode_replay,
     readable_reasoning,
     unencrypted_responses_replay,
 )
@@ -495,18 +493,6 @@ class DeliveredResponse:
                                 }
                             )
                 closed_item = {**deepcopy(item), "status": "completed"}
-                if (
-                    record := unencrypted_responses_replay(
-                        item.get("encrypted_content")
-                    )
-                ) is not None:
-                    native = {**record.native, "status": "completed"}
-                    for field in ("content", "summary"):
-                        if field in closed_item:
-                            native[field] = deepcopy(closed_item[field])
-                    closed_item["encrypted_content"] = encode_replay(
-                        ReplayRecord(record.origin, native)
-                    )
                 events.append(
                     {
                         "type": "response.output_item.done",

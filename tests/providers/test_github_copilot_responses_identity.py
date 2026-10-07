@@ -19,7 +19,6 @@ from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
 )
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.github_copilot.types import CopilotEgress
@@ -382,12 +381,6 @@ async def test_copilot_interleaved_tools_use_output_positions_and_preserve_final
     try:
         received = await _run(harness, _input(True, harness.runtime.name))
         output = _assert_native_identity(received)
-        output = [
-            decode_replay(str(item["encrypted_content"])).native
-            if item.get("type") == "reasoning"
-            else item
-            for item in output
-        ]
         assert output == [
             {**final_output[0], "id": first["id"]},
             {**final_output[1], "id": second["id"]},

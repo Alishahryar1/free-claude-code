@@ -4,7 +4,7 @@ import asyncio
 import sys
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 from typing import Any, cast
@@ -220,7 +220,6 @@ class _OpenAIChatStreamAssembler:
         self._finish_reason: Any = None
         self._raw_stop_seen = False
         self._usage_info: Any = None
-        self._native_reasoning_seen = False
         self._tool_argument_aliases: dict[str, dict[str, str]] = {}
         self._tool_argument_alias_buffers: dict[int, str] = {}
         self._tool_name_buffers: dict[int, str] = {}
@@ -301,14 +300,6 @@ class _OpenAIChatStreamAssembler:
         if not chunk.choices:
             return
 
-        if (
-            self._output.replay_origin is not None
-            and isinstance(getattr(chunk, "model", None), str)
-            and chunk.model
-        ):
-            self._output.replay_origin = replace(
-                self._output.replay_origin, model=chunk.model
-            )
         choice = chunk.choices[0]
         delta = choice.delta
         if choice.finish_reason is not None:
@@ -325,22 +316,16 @@ class _OpenAIChatStreamAssembler:
             )
 
         reasoning = self._profile.reasoning_delta(delta)
-        if self._output_reasoning:
-            if self._structured_reasoning is not None:
-                yield from self._structured_reasoning.events(
-                    delta,
-                    self._output,
-                    native_reasoning=reasoning,
-                )
-            elif reasoning is not None and (
-                reasoning or not self._native_reasoning_seen
-            ):
-                # Preserve initial empty reasoning for replay; later empty fields
-                # are placeholders and must not interrupt text or tool output.
-                self._native_reasoning_seen = True
-                yield from self._output.ensure_reasoning_block()
-                if reasoning:
-                    yield self._output.emit_reasoning_delta(reasoning)
+        if self._structured_reasoning is not None:
+            yield from self._structured_reasoning.events(
+                delta,
+                self._output,
+                native_reasoning=reasoning if self._output_reasoning else None,
+                output_reasoning=self._output_reasoning,
+            )
+        elif self._output_reasoning and reasoning:
+            yield from self._output.ensure_reasoning_block()
+            yield self._output.emit_reasoning_delta(reasoning)
 
         yield from self._extra_reasoning_events(delta, self._output)
 
@@ -1050,15 +1035,6 @@ class _OpenAIChatStreamRunner:
                     request_id=self._request_id,
                 )
                 stream = scope.retain(stream)
-                assembler.output.replay_origin = replay_origin(
-                    tag,
-                    "chat",
-                    str(body["model"]),
-                    client=self._transport._client,
-                    endpoint=self._endpoint.snapshot
-                    if self._endpoint is not None
-                    else None,
-                )
                 assembler.bind_tool_argument_aliases(self._tool_argument_aliases)
                 async with recovery.read_stream(stream) as chunks:
                     async for chunk in chunks:
@@ -1604,7 +1580,7 @@ class _OpenAIChatStreamRunner:
         thinking_suffix = continuation_suffix(partial_thinking, recovered.thinking)
         if not (thinking_suffix or text_suffix or recovered.tool_calls):
             return None
-        events = output.flush_reasoning_replay()
+        events = output.flush_reasoning_replay(completed=False)
         if thinking_suffix:
             events.extend(output.ensure_reasoning_block())
             events.append(output.emit_reasoning_delta(thinking_suffix))

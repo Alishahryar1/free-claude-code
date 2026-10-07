@@ -18,7 +18,6 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
-from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import (
     ReasoningCapability,
@@ -343,12 +342,11 @@ async def test_stream_preserves_signed_details_without_duplicating_reasoning(
     assert thinking_content(events) == "plan "
     assert text_content(events) == "done"
     records = [
-        decode_replay(event.data["delta"]["signature"]).native
+        event.data["delta"]["signature"]
         for event in events
         if event.data.get("delta", {}).get("type") == "signature_delta"
     ]
-    assert len(records) == 1
-    assert records[0]["reasoning_details"] == [detail]
+    assert records == [detail["signature"]]
     assert stream.closed
 
 

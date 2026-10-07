@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.failure_policy import RetryableProviderProtocolError
 from free_claude_code.providers.request_recovery import RequestCorrections
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
@@ -19,6 +20,7 @@ from tests.api.support import create_test_app, provider_manager_for_app
 from tests.api.test_hidden_stream_retries import delivered, partial_tool
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
+from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness
@@ -719,11 +721,11 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_unsigned_thinking_can_continue_into_text(wire):
+@pytest.mark.parametrize("structured", [False, True])
+async def test_readable_thinking_retries_or_continues_into_text(wire, structured):
     first = text_events("chat", "", complete=False)
-    first[0]["choices"][0]["delta"] = {
-        "reasoning_content": "Look at the request first."
-    }
+    thought = "Look at the request first."
+    first[0]["choices"][0]["delta"] = {"reasoning_content": thought}
     async with _harness(
         "chat",
         lambda bodies: (
@@ -731,6 +733,12 @@ async def test_unsigned_thinking_can_continue_into_text(wire):
             first if len(bodies) == 1 else text_events("chat", "Answer."),
         ),
         max_attempts=2,
+        chat_provider_factory=None
+        if structured
+        else lambda: DeepSeekProvider(
+            make_provider_config(api_key="a", base_url="https://provider.invalid/v1"),
+            admission=immediate_admission(max_attempts=2),
+        ),
     ) as (send, bodies, _):
         result = await delivered(
             send(wire, [{"role": "user", "content": "answer"}]), wire
@@ -738,7 +746,11 @@ async def test_unsigned_thinking_can_continue_into_text(wire):
     events = parse_sse_text(result)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Answer."
-    assert "Look at the request first." in str(bodies[-1])
+    assert len(bodies) == 2
+    assert (thought in result) == (not structured)
+    assert (thought in str(bodies[-1])) == (not structured)
+    if structured:
+        assert bodies[0] == bodies[1]
 
 
 @pytest.mark.asyncio

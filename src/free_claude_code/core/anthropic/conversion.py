@@ -474,6 +474,7 @@ class AnthropicToOpenAIConverter:
         messages: list[Any],
         *,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+        structured_reasoning_details: bool = False,
     ) -> list[dict[str, Any]]:
         ledger = _OpenAIChatHistoryLedger()
 
@@ -493,6 +494,7 @@ class AnthropicToOpenAIConverter:
                 content,
                 reasoning_content=reasoning_content,
                 reasoning_replay=reasoning_replay,
+                structured_reasoning_details=structured_reasoning_details,
             )
             for segment in segments:
                 if isinstance(segment, _PlainSegment):
@@ -511,6 +513,7 @@ class AnthropicToOpenAIConverter:
         *,
         reasoning_content: str | None,
         reasoning_replay: ReasoningReplayMode,
+        structured_reasoning_details: bool = False,
     ) -> list[_TranscriptSegment]:
         if role == "system":
             system_text = _openai_system_text(
@@ -546,6 +549,7 @@ class AnthropicToOpenAIConverter:
                         first_tool_index=first_i,
                         reasoning_content=reasoning_content,
                         reasoning_replay=reasoning_replay,
+                        structured_reasoning_details=structured_reasoning_details,
                     )
                 ]
             for block in content:
@@ -556,6 +560,7 @@ class AnthropicToOpenAIConverter:
                         content,
                         reasoning_content=reasoning_content,
                         reasoning_replay=reasoning_replay,
+                        structured_reasoning_details=structured_reasoning_details,
                     )
                 )
             ]
@@ -595,6 +600,7 @@ class AnthropicToOpenAIConverter:
         first_tool_index: int,
         reasoning_content: str | None,
         reasoning_replay: ReasoningReplayMode,
+        structured_reasoning_details: bool = False,
     ) -> _ToolTurnSegment:
         pre = [
             block
@@ -609,6 +615,7 @@ class AnthropicToOpenAIConverter:
                     content,
                     reasoning_content=reasoning_content,
                     reasoning_replay=reasoning_replay,
+                    structured_reasoning_details=structured_reasoning_details,
                 )[0],
                 required_tool_ids=[],
             )
@@ -634,6 +641,7 @@ class AnthropicToOpenAIConverter:
                 pre,
                 reasoning_content=reasoning_content,
                 reasoning_replay=reasoning_replay,
+                structured_reasoning_details=structured_reasoning_details,
             )[0]
         pre_msg["tool_calls"] = tool_calls
         if reasoning_replay is ReasoningReplayMode.REASONING_CONTENT:
@@ -653,6 +661,7 @@ class AnthropicToOpenAIConverter:
         *,
         reasoning_content: str | None = None,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+        structured_reasoning_details: bool = False,
     ) -> list[dict[str, Any]]:
         content_parts: list[str] = []
         thinking_parts: list[str] = []
@@ -665,11 +674,22 @@ class AnthropicToOpenAIConverter:
                 content_parts.append(get_block_attr(block, "text", ""))
             elif block_type == "thinking":
                 signature = get_block_attr(block, "signature", None)
+                thinking = get_block_attr(block, "thinking", "")
                 if is_replay(signature):
                     details.extend(reasoning_detail(signature))
                     if has_readable_replay(signature):
                         continue
-                thinking = get_block_attr(block, "thinking", "")
+                elif isinstance(signature, str) and signature:
+                    if structured_reasoning_details:
+                        details.append(
+                            {
+                                "type": "reasoning.text",
+                                "text": thinking,
+                                "signature": signature,
+                            }
+                        )
+                        continue
+                    details.append({"type": "reasoning.encrypted", "data": signature})
                 if reasoning_replay == ReasoningReplayMode.DISABLED:
                     if thinking:
                         content_parts.append(reasoning_context(thinking))
@@ -836,12 +856,14 @@ def build_base_request_body(
     *,
     default_max_tokens: int | None = None,
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+    structured_reasoning_details: bool = False,
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body."""
     _openai_reject_native_only_top_level_fields(request_data)
     messages = AnthropicToOpenAIConverter.convert_messages(
         request_data.messages,
         reasoning_replay=reasoning_replay,
+        structured_reasoning_details=structured_reasoning_details,
     )
 
     system = request_data.system

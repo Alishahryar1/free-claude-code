@@ -1,6 +1,6 @@
 """Shared Google behavior for OpenAI-compatible Gemini endpoints."""
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from copy import deepcopy
 from typing import Any
 
@@ -8,6 +8,7 @@ from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_chat import (
+    ChatStreamOutput,
     OpenAIAsyncCredentialProvider,
     OpenAIChatBehavior,
     OpenAIChatProfile,
@@ -50,6 +51,18 @@ class GoogleChatBehavior(OpenAIChatBehavior):
             tool_call_extra_content_by_id=self._tool_call_extra_content_by_id,
         )
         return body
+
+    def extra_reasoning_events(
+        self, delta: Any, output: ChatStreamOutput, *, output_reasoning: bool
+    ) -> Iterator[str]:
+        extra = getattr(delta, "extra_content", None)
+        google = extra.get("google") if isinstance(extra, Mapping) else None
+        signature = (
+            google.get("thought_signature") if isinstance(google, Mapping) else None
+        )
+        if isinstance(signature, str) and signature:
+            output.defer_opaque_reasoning(signature)
+        return iter(())
 
 
 class GoogleOpenAIProvider(OpenAIChatProvider):

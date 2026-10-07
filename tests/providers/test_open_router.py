@@ -18,7 +18,6 @@ from free_claude_code.core.anthropic.stream_contracts import (
     thinking_content,
 )
 from free_claude_code.core.failures import FailureKind
-from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.providers.failure_policy import classify_provider_failure
 from free_claude_code.providers.open_router import OpenRouterProvider
@@ -429,15 +428,12 @@ async def test_stream_maps_reasoning_content_and_details(open_router_provider):
     parsed = parse_sse_text(event_text)
     assert thinking_content(parsed) == "plan "
     carriers = [
-        event.data["delta"]["signature"]
+        event.data["content_block"]["data"]
         for event in parsed
-        if event.data.get("delta", {}).get("type") == "signature_delta"
+        if event.event == "content_block_start"
+        and event.data["content_block"]["type"] == "redacted_thinking"
     ]
-    assert len(carriers) == 1
-    assert decode_replay(carriers[0]).native["reasoning_details"] == [
-        {"type": "reasoning.text", "text": "plan "},
-        redacted,
-    ]
+    assert carriers == [redacted["data"]]
     assert text_content(parsed) == "done"
     assert stream.closed
 

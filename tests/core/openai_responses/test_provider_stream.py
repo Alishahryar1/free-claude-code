@@ -133,7 +133,11 @@ def test_responses_provider_stream_preserves_reasoning_tools_usage_and_ids() -> 
         for event in events
         if event.event == "content_block_start"
     ]
-    assert {"type": "redacted_thinking", "data": "opaque"} in starts
+    assert [
+        event.data["delta"]["signature"]
+        for event in events
+        if event.data.get("delta", {}).get("type") == "signature_delta"
+    ] == ["opaque"]
     assert {
         "type": "tool_use",
         "id": "call_1",

@@ -16,7 +16,6 @@ from free_claude_code.core.history_replay import (
     encode_replay,
     prepare_history,
     resolve_messages_replay,
-    responses_replay_item,
 )
 
 
@@ -38,7 +37,10 @@ def _native():
 
 def test_response_history_roundtrip_across_providers_and_restart():
     native = _native()
-    item = responses_replay_item(native, _origin())
+    item = {
+        **native,
+        "encrypted_content": encode_replay(ReplayRecord(_origin(), native)),
+    }
     saved = {
         "input": [
             item,
@@ -140,7 +142,10 @@ def test_messages_native_blocks_are_exact_after_carrier_replay(block):
 
 
 def test_native_replay_connection_is_scoped_but_model_name_is_not_a_rule():
-    item = responses_replay_item(_native(), _origin())
+    item = {
+        **_native(),
+        "encrypted_content": encode_replay(ReplayRecord(_origin(), _native())),
+    }
     assert (
         prepare_history({"input": [item]}, _origin(connection="other"))["input"] == []
     )

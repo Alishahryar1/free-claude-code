@@ -1,7 +1,7 @@
 """Convert Anthropic Messages into an upstream OpenAI Responses request."""
 
 import json
-from typing import Any, cast
+from typing import Any
 
 from free_claude_code.core.anthropic.content import get_block_attr, get_block_type
 from free_claude_code.core.anthropic.conversion import resolve_anthropic_tool_choice
@@ -20,9 +20,6 @@ from free_claude_code.core.anthropic.tool_results import (
 )
 from free_claude_code.core.history_replay import (
     HistoryReplayError,
-    ReplayOrigin,
-    ReplayRecord,
-    encode_replay,
     has_readable_replay,
     is_replay,
     tool_history_context,
@@ -34,6 +31,7 @@ from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.tool_schema_patterns import translate_tool_schema_patterns
 
 from .errors import ResponsesConversionError
+from .ids import new_reasoning_item_id
 from .reasoning import responses_reasoning_config
 
 
@@ -214,6 +212,7 @@ def _assistant_items(
     ):
         items.append(
             {
+                "id": new_reasoning_item_id(),
                 "type": "reasoning",
                 "content": [{"type": "reasoning_text", "text": reasoning_content}],
                 "summary": [],
@@ -229,27 +228,15 @@ def _assistant_items(
         flush_text()
         if kind == "thinking":
             signature = get_block_attr(block, "signature", None)
-            item: dict[str, Any] = {"type": "reasoning", "summary": []}
+            item: dict[str, Any] = {
+                "id": new_reasoning_item_id(),
+                "type": "reasoning",
+                "summary": [],
+            }
             if isinstance(signature, str) and signature:
-                native = (
-                    block
-                    if isinstance(block, dict)
-                    else block.model_dump(mode="json", exclude_none=True)
-                )
-                item["encrypted_content"] = (
-                    signature
-                    if is_replay(signature)
-                    else encode_replay(
-                        ReplayRecord(
-                            ReplayOrigin(
-                                "unattributed/messages", "messages", "", "", "unknown"
-                            ),
-                            cast(JsonObject, native),
-                        )
-                    )
-                )
+                item["encrypted_content"] = signature
             if not signature or (
-                is_replay(signature) and not has_readable_replay(signature)
+                not is_replay(signature) or not has_readable_replay(signature)
             ):
                 item["content"] = [
                     {
@@ -261,6 +248,7 @@ def _assistant_items(
         elif kind == "redacted_thinking":
             items.append(
                 {
+                    "id": new_reasoning_item_id(),
                     "type": "reasoning",
                     "summary": [],
                     "encrypted_content": str(get_block_attr(block, "data", "")),

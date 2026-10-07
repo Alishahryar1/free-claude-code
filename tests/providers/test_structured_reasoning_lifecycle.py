@@ -10,9 +10,13 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.history_replay import (
     AssociatedReplayRecord,
     ReplayOrigin,
-    decode_replay,
+    encode_replay,
 )
-from free_claude_code.providers.history_replay import normalize_messages_history
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.providers.history_replay import (
+    normalize_messages_history,
+    replay_origin,
+)
 from free_claude_code.providers.openai_chat.reasoning_details import (
     StructuredReasoningStream,
 )
@@ -67,7 +71,8 @@ async def test_encrypted_only_reasoning_stays_with_its_answer():
         saved = await _saved_reply(
             send("responses", [{"role": "user", "content": "hello"}]), "responses"
         )
-        assert [item["type"] for item in saved] == ["reasoning", "message"]
+        assert [item["type"] for item in saved] == ["message", "reasoning"]
+        assert saved[1]["encrypted_content"] == "opaque"
         await _saved_reply(
             send("responses", [*saved, {"role": "user", "content": "next"}]),
             "responses",
@@ -75,11 +80,13 @@ async def test_encrypted_only_reasoning_stays_with_its_answer():
     assistants = [msg for msg in bodies[-1]["messages"] if msg["role"] == "assistant"]
     assert len(assistants) == 1
     assert assistants[0]["content"] == "17"
-    assert assistants[0]["reasoning_details"] == details
+    assert assistants[0]["reasoning_details"] == [
+        {"type": "reasoning.encrypted", "data": "opaque"}
+    ]
 
 
 @pytest.mark.asyncio
-async def test_late_metadata_does_not_overlap_messages_content_blocks():
+async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
     events = _chat_reasoning_events(
         [
             {
@@ -101,17 +108,19 @@ async def test_late_metadata_does_not_overlap_messages_content_blocks():
             chunk
             async for chunk in send("messages", [{"role": "user", "content": "hello"}])
         ]
-        active = None
-        for event in parse_sse_text("".join(stream)):
-            if event.event == "content_block_start":
-                assert active is None
-                active = event.data["index"]
-            elif event.event == "content_block_delta":
-                assert event.data["index"] == active
-            elif event.event == "content_block_stop":
-                assert event.data["index"] == active
-                active = None
-        assert active is None
+        parsed = parse_sse_text("".join(stream))
+        _assert_indexed(parsed)
+        text_index = max(
+            event.data["index"]
+            for event in parsed
+            if event.event == "content_block_start"
+            and event.data["content_block"]["type"] == "text"
+        )
+        assert [
+            event.data["index"]
+            for event in parsed
+            if event.event == "content_block_stop"
+        ][-1] == text_index
         saved = await _saved_reply(
             send("messages", [{"role": "user", "content": "hello"}]), "messages"
         )
@@ -119,36 +128,49 @@ async def test_late_metadata_does_not_overlap_messages_content_blocks():
             send("messages", [*saved, {"role": "user", "content": "next"}]), "messages"
         )
     assert bodies[-1]["messages"][0]["reasoning_details"] == [
-        {"type": "reasoning.encrypted", "data": "firstsecond", "index": 0}
+        {"type": "reasoning.text", "text": "Plan.", "signature": "firstsecond"}
     ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("destination", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("readable", [False, True])
-async def test_associated_messages_replay_into_every_transport(destination, readable):
-    first = {
+async def test_legacy_associated_messages_replay_into_every_transport(
+    destination, readable
+):
+    first: JsonObject = {
         "reasoning_details": [
             {"type": "reasoning.encrypted", "data": "first", "index": 0}
         ]
     }
     if readable:
         first["reasoning_content"] = "Plan."
-    events = _chat_reasoning_events(
-        [
-            first,
-            {"content": "Answer."},
-            {
-                "reasoning_details": [
-                    {"type": "reasoning.encrypted", "data": "second", "index": 0}
-                ]
-            },
-        ]
-    )
-    async with _harness("chat", lambda _: (200, events)) as (send, _, _):
-        saved = await _saved_reply(
-            send("messages", [{"role": "user", "content": "hello"}]), "messages"
+    async with _harness("chat") as (_, _, provider):
+        origin = replay_origin(
+            "OPENROUTER", "chat", "actual-returned", client=provider._client
         )
+    final: JsonObject = {
+        **first,
+        "reasoning_details": [
+            {"type": "reasoning.encrypted", "data": "firstsecond", "index": 0}
+        ],
+    }
+    anchor = encode_replay(AssociatedReplayRecord(origin, first, "group", "anchor"))
+    completed = encode_replay(AssociatedReplayRecord(origin, final, "group", "final"))
+    saved = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Plan." if readable else "",
+                    "signature": anchor,
+                },
+                {"type": "text", "text": "Answer."},
+                {"type": "redacted_thinking", "data": completed},
+            ],
+        }
+    ]
     history = [*saved, {"role": "user", "content": "next"}]
     before = json.dumps(history)
     async with _harness(destination) as (send, bodies, _):
@@ -169,7 +191,6 @@ def _messages_writer():
     output = AnthropicChatStreamOutput(
         message_id="msg_test", model="public", input_tokens=1
     )
-    output.replay_origin = ReplayOrigin("test", "chat", "endpoint", "account", "model")
     reasoning = StructuredReasoningStream()
     output.reasoning_replay = reasoning
     return output, reasoning
@@ -189,17 +210,19 @@ def _readable(reasoning, output, text="Plan.", data="first"):
     )
 
 
-def _assert_serial(events):
-    active = None
+def _assert_indexed(events):
+    active = set()
+    seen = set()
     for event in events:
         if event.event == "content_block_start":
-            assert active is None
-            active = event.data["index"]
+            assert event.data["index"] not in seen
+            seen.add(event.data["index"])
+            active.add(event.data["index"])
         elif event.event in {"content_block_delta", "content_block_stop"}:
-            assert event.data["index"] == active
+            assert event.data["index"] in active
             if event.event == "content_block_stop":
-                active = None
-    assert active is None
+                active.remove(event.data["index"])
+    assert not active
 
 
 @pytest.mark.parametrize(
@@ -251,44 +274,26 @@ def test_immediate_text_and_late_replay_survive_every_exit(terminal):
             == []
         )
     events = parse_sse_text("".join(frames))
-    _assert_serial(events)
-    finals = [
-        decode_replay(e.data["content_block"]["data"])
-        for e in events
-        if e.event == "content_block_start"
-        and e.data["content_block"]["type"] == "redacted_thinking"
-    ]
-    assert len(finals) == 1
-    assert isinstance(finals[0], AssociatedReplayRecord)
-    assert finals[0].part == "final"
-    assert finals[0].native == {
-        "reasoning_content": "Plan.",
-        "reasoning_details": [
-            {"type": "reasoning.encrypted", "data": "firstsecond", "index": 0}
-        ],
-    }
-
-
-def test_request_copy_preserves_routing_and_does_not_join_across_messages():
-    output, reasoning = _messages_writer()
-    frames = output.start_events() + _readable(reasoning, output)
-    frames += output.ensure_text_block()
-    frames.append(output.emit_text_delta("answer"))
-    frames += output.finish_success(
-        stop_reason="end_turn", usage=ChatStreamUsage(input_tokens=1, output_tokens=1)
-    )
-    events = parse_sse_text("".join(frames))
-    anchor = next(
+    _assert_indexed(events)
+    signatures = [
         e.data["delta"]["signature"]
         for e in events
         if e.data.get("delta", {}).get("type") == "signature_delta"
-    )
-    final = next(
-        e.data["content_block"]["data"]
-        for e in events
-        if e.event == "content_block_start"
-        and e.data["content_block"]["type"] == "redacted_thinking"
-    )
+    ]
+    assert signatures == ([] if terminal == "failure" else ["firstsecond"])
+    assert "fcc:history" not in "".join(frames)
+
+
+def test_request_copy_preserves_routing_and_does_not_join_across_messages():
+    origin = ReplayOrigin("test", "chat", "endpoint", "account", "model")
+    native: JsonObject = {
+        "reasoning_content": "Plan.",
+        "reasoning_details": [
+            {"type": "reasoning.encrypted", "data": "first", "index": 0}
+        ],
+    }
+    anchor = encode_replay(AssociatedReplayRecord(origin, native, "group", "anchor"))
+    final = encode_replay(AssociatedReplayRecord(origin, native, "group", "final"))
     request = MessagesRequest(
         model="route",
         original_model="original",
@@ -353,17 +358,12 @@ async def test_structured_replay_respects_retry_and_continuation_boundary(
             send(wire, [{"role": "user", "content": "hello"}]), wire
         )
     assert len(bodies) == 2
-    record = decode_replay(_carrier(saved, wire))
-    assert record.native["reasoning_content"] == (
-        "Original thought." if committed else "Recovery thought."
-    )
-    assert record.native["reasoning_details"] == [
-        {
-            "type": "reasoning.encrypted",
-            "data": "original" if committed else "replacement",
-            "index": 0,
-        }
-    ]
+    if committed:
+        assert "Original thought." in json.dumps(saved)
+        assert 'original"' not in json.dumps(saved)
+    else:
+        assert "Recovery thought." in json.dumps(saved)
+        assert _carrier(saved, wire) == "replacement"
     assert "continued" in json.dumps(saved)
     if not committed:
         assert "Original thought." not in json.dumps(saved)
@@ -388,7 +388,7 @@ async def test_first_metadata_after_text_does_not_invent_earlier_reasoning(wire)
                 part
                 async for part in send(wire, [{"role": "user", "content": "hello"}])
             ]
-            _assert_serial(parse_sse_text("".join(frames)))
+            _assert_indexed(parse_sse_text("".join(frames)))
         saved = await _saved_reply(
             send(wire, [{"role": "user", "content": "hello"}]), wire
         )

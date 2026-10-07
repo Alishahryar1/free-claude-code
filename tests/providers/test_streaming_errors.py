@@ -619,7 +619,7 @@ class TestStreamingExceptionHandling:
         assert "The answer" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_with_empty_reasoning_content_starts_thinking_block_only(self):
+    async def test_stream_with_empty_reasoning_content_creates_no_thinking_block(self):
         """Empty reasoning_content is stateful but must not emit visible thinking text."""
         provider = _make_provider()
         request = _make_request()
@@ -651,7 +651,7 @@ class TestStreamingExceptionHandling:
             if event.event == "content_block_delta"
             and event.data["delta"]["type"] == "thinking_delta"
         ]
-        assert len(thinking_starts) == 1
+        assert thinking_starts == []
         assert thinking_deltas == []
         assert parsed[-1].event == "message_stop"
 
@@ -667,8 +667,8 @@ class TestStreamingExceptionHandling:
             ),
             pytest.param(
                 [("", "The quick"), ("", " brown fox"), ("", "")],
-                [("reasoning", ""), ("text", "The quick brown fox")],
-                id="first-empty-reasoning-is-preserved",
+                [("text", "The quick brown fox")],
+                id="first-empty-reasoning-is-ignored",
             ),
             pytest.param(
                 [(None, "The quick"), (None, " brown fox")],
@@ -678,7 +678,6 @@ class TestStreamingExceptionHandling:
             pytest.param(
                 [("", None), ("", "first"), ("more", None), ("", "second")],
                 [
-                    ("reasoning", ""),
                     ("text", "first"),
                     ("reasoning", "more"),
                     ("text", "second"),
@@ -705,7 +704,7 @@ class TestStreamingExceptionHandling:
                 new_callable=AsyncMock,
                 side_effect=lambda **kwargs: AsyncStreamMock(chunks),
             ):
-                # Each request must preserve its own first explicit reasoning value.
+                # Empty placeholders do not create output items on either request.
                 for _ in range(2):
                     if wire == "messages":
                         stream = provider.stream_messages(_make_request())

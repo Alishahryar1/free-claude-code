@@ -205,7 +205,7 @@ class AnthropicMessagesTransport:
             endpoint_context=endpoint_context,
             request_id=request_id,
             presenter_factory=lambda origin: NativeMessagesRelay(
-                public_model=response_model or request.model, replay_origin=origin
+                public_model=response_model or request.model
             ),
             continuation=continuation,
         )
@@ -233,7 +233,6 @@ class AnthropicMessagesTransport:
                 request,
                 public_model=response_model or request.model,
                 tool_identities=prepared.tool_identities,
-                replay_origin=origin,
             ),
             continuation=continuation,
         )

@@ -17,7 +17,6 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
-from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.model_listing import ModelListResponseError
@@ -330,12 +329,11 @@ async def test_stream_uses_upstream_sse_and_preserves_reasoning_details(
     assert thinking_content(events) == "plan "
     assert text_content(events) == "done"
     records = [
-        decode_replay(event.data["delta"]["signature"]).native
+        event.data["delta"]["signature"]
         for event in events
         if event.data.get("delta", {}).get("type") == "signature_delta"
     ]
-    assert len(records) == 1
-    assert records[0]["reasoning_details"] == [detail]
+    assert records == [detail["signature"]]
     assert stream.closed
 
 

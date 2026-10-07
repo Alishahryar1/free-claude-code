@@ -6,7 +6,6 @@ import pytest
 
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
@@ -81,10 +80,7 @@ async def test_nullable_reasoning_content_preserves_healthy_response(wire):
     if wire == "responses":
         item = parse_sse_text(raw)[-1].data["response"]["output"][0]
         assert item["content"] is None
-        assert (
-            decode_replay(item["encrypted_content"]).native
-            == events[-1]["response"]["output"][0]
-        )
+        assert item == events[-1]["response"]["output"][0]
 
 
 @pytest.mark.asyncio
@@ -218,12 +214,13 @@ async def test_synthetic_reasoning_closure_preserves_followup_history(field, see
         history = [*deepcopy(output), {"role": "user", "content": "Next question."}]
         await delivered(send("responses", history), "responses")
     assert len(bodies) == 3
-    native = bodies[2]["input"][0]
+    native = output[0]
     assert native["type"] == "reasoning"
     assert native["id"] == first[1]["item"]["id"]
     assert native["status"] == "completed"
     assert native[field][0]["text"] == seeded + "Find 17."
     assert native["extension"] == first[1]["item"]["extension"]
+    assert str(bodies[2]).count(seeded + "Find 17.") == 1
     assert "previous provider stream" not in str(bodies[2])
     assert history[:-1] == output
 
@@ -260,10 +257,7 @@ async def test_readable_reasoning_survives_repeated_continuation_and_followup(wi
             send(wire, [*output, {"role": "user", "content": "Next question."}]), wire
         )
     assert len(bodies) == 4
-    native = next(
-        item for item in bodies[3]["input"] if item.get("type") == "reasoning"
-    )
-    assert native == second[3]["item"]
+    assert str(bodies[3]).count("Find 17.") == 1
     assert "previous provider stream" not in str(bodies[3])
 
 

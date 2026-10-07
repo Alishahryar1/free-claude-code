@@ -63,10 +63,9 @@ def test_grouped_tool_calls_keep_both_reasoning_records():
         ]
     )
     assistant = messages[1]
-    assert assistant["reasoning_content"] == "first\nsecond"
-    assert [detail["data"] for detail in assistant["reasoning_details"]] == [
-        "opaque1",
-        "opaque2",
+    assert assistant["reasoning_details"] == [
+        {"type": "reasoning.text", "text": "first", "signature": "opaque1"},
+        {"type": "reasoning.text", "text": "second", "signature": "opaque2"},
     ]
 
 
@@ -86,9 +85,12 @@ def test_malformed_tool_call_keeps_its_reasoning_and_error_result():
         ]
     )
     assistant = next(message for message in messages if message.get("tool_calls"))
-    assert assistant["reasoning_content"] == "broken call only"
-    assert [detail["data"] for detail in assistant["reasoning_details"]] == [
-        "opaque-broken"
+    assert assistant["reasoning_details"] == [
+        {
+            "type": "reasoning.text",
+            "text": "broken call only",
+            "signature": "opaque-broken",
+        }
     ]
     assert [
         (call["id"], call["function"]["arguments"]) for call in assistant["tool_calls"]
@@ -271,7 +273,7 @@ def test_deepseek_off_to_on_preserves_effort_and_all_available_history(wire):
     assert request.model_dump() == original
 
 
-def test_summary_is_context_even_when_destination_replays_full_reasoning():
+def test_summary_keeps_its_classification_when_destination_supports_details():
     messages = _chat(
         [
             {"role": "user", "content": "first"},
@@ -286,7 +288,9 @@ def test_summary_is_context_even_when_destination_replays_full_reasoning():
         ]
     )
     assert "reasoning_content" not in messages[1]
-    assert "[Earlier reasoning summary]" in messages[1]["content"]
+    assert messages[1]["reasoning_details"] == [
+        {"type": "reasoning.summary", "summary": "A summary, not the hidden chain."}
+    ]
 
 
 def test_image_tool_result_does_not_start_a_new_user_turn():

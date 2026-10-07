@@ -43,6 +43,7 @@ class OpenAIChatBehavior:
             reasoning=reasoning,
             policy=self.profile.request_policy,
             postprocessors=self.profile.request_postprocessors,
+            structured_reasoning_details=self.profile.structured_reasoning_details,
         )
         return self.finalize_chat_body(body, reasoning=reasoning)
 
