@@ -4,7 +4,6 @@ import json
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import replace
 from typing import cast
 
 from free_claude_code.core.anthropic.native import NativeMessagesError
@@ -13,11 +12,6 @@ from free_claude_code.core.anthropic.native_stream import (
     NativeMessagesStreamState,
 )
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.history_replay import (
-    ReplayOrigin,
-    ReplayRecord,
-    encode_replay,
-)
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .errors import openai_error_from_failure
@@ -116,12 +110,10 @@ class AnthropicToResponsesStream:
         *,
         public_model: str,
         tool_identities: Mapping[str, ResponsesToolIdentity],
-        replay_origin: ReplayOrigin,
     ) -> None:
         self._request = request
         self._public_model = public_model
         self._identities = tool_identities
-        self._replay_origin = replay_origin
         self._response_id = new_response_id()
         self._created_at = int(time.time())
         self._native = NativeMessagesStreamState()
@@ -190,10 +182,6 @@ class AnthropicToResponsesStream:
             if not isinstance(message, Mapping):
                 raise AssertionError("Validated message_start must contain a message.")
             self._usage.update(message.get("usage"))
-            if isinstance(message.get("model"), str) and message["model"]:
-                self._replay_origin = replace(
-                    self._replay_origin, model=message["model"]
-                )
             self._started = True
             return [self._events.response_created(self._payload("in_progress"))]
         if event_type == "message_delta":
@@ -352,9 +340,12 @@ class AnthropicToResponsesStream:
                 "Native block has no corresponding Responses item."
             )
         if isinstance(state, ReasoningBlockState):
-            state.encrypted_content = encode_replay(
-                ReplayRecord(self._replay_origin, completed.body)
-            )
+            field = "signature" if completed.body.get("type") == "thinking" else "data"
+            value = completed.body.get(field)
+            if isinstance(value, str) and value:
+                state.encrypted_content = value
+            if completed.body.get("type") == "thinking" and not state.text_parts:
+                state.text_parts.append("")
         elif isinstance(state, ToolBlockState):
             arguments = completed.tool_arguments
             if arguments is None:

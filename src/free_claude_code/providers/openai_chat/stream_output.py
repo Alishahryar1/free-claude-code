@@ -13,12 +13,6 @@ from free_claude_code.core.anthropic.streaming import (
     parse_complete_tool_input,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.history_replay import (
-    AssociatedReplayRecord,
-    ReplayOrigin,
-    ReplayRecord,
-    encode_replay,
-)
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     ReasoningBlockState,
@@ -48,7 +42,9 @@ class ReasoningReplayLifecycle(Protocol):
 
     def before_content(self, output: ChatStreamOutput) -> Iterator[str]: ...
 
-    def finish(self, output: ChatStreamOutput) -> Iterator[str]: ...
+    def finish(
+        self, output: ChatStreamOutput, *, completed: bool = True
+    ) -> Iterator[str]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +83,6 @@ class ChatStreamOutput(ABC):
 
     def __init__(self, *, input_tokens: int) -> None:
         self.input_tokens = input_tokens
-        self.replay_origin: ReplayOrigin | None = None
         self.reasoning_replay: ReasoningReplayLifecycle | None = None
         self.tool_states: dict[int, ChatToolState] = {}
         self._text_parts: list[str] = []
@@ -125,31 +120,34 @@ class ChatStreamOutput(ABC):
             self._content_started = True
         return events
 
-    def emit_reasoning_delta(self, content: str) -> str:
+    def emit_reasoning_delta(self, content: str, *, summary: bool = False) -> str:
         self._reasoning_parts.append(content)
-        return self._emit_reasoning_delta(content)
+        return self._emit_reasoning_delta(content, summary=summary)
 
     def begin_reasoning_record(self) -> list[str]:
         return []
 
-    def pause_reasoning_record(self, group_id: str, record: ReplayRecord) -> list[str]:
-        return []
-
-    def complete_reasoning_record(
-        self, group_id: str, record: ReplayRecord
-    ) -> list[str]:
-        data = encode_replay(record)
+    def complete_reasoning_record(self, opaque: list[str]) -> list[str]:
+        events: list[str] = []
         if self._reasoning_started:
-            events = self._attach_reasoning_replay(data)
+            if opaque:
+                events.extend(self._attach_reasoning_replay(opaque.pop(0)))
             events.extend(self._stop_reasoning_block())
             self._reasoning_started = False
-            return events
+        for data in opaque:
+            events.extend(self.emit_opaque_reasoning(data))
+        return events
+
+    def emit_opaque_reasoning(self, data: str) -> list[str]:
+        if not data:
+            return []
+        self._content_started = True
         return self._emit_opaque_reasoning(data)
 
-    def flush_reasoning_replay(self) -> list[str]:
+    def flush_reasoning_replay(self, *, completed: bool = True) -> list[str]:
         if self.reasoning_replay is None:
             return []
-        return list(self.reasoning_replay.finish(self))
+        return list(self.reasoning_replay.finish(self, completed=completed))
 
     def _pause_reasoning(self) -> list[str]:
         events: list[str] = []
@@ -185,9 +183,6 @@ class ChatStreamOutput(ABC):
         events = self.flush_reasoning_replay()
         events.extend(self._close_content_blocks())
         return events
-
-    def finish_replay_carriers(self) -> list[str]:
-        return []
 
     def _close_content_blocks(self) -> list[str]:
         events: list[str] = []
@@ -247,18 +242,21 @@ class ChatStreamOutput(ABC):
         return self._stop_tool_block(tool_index, state)
 
     def close_all_blocks(self) -> list[str]:
-        events = self.finish_reasoning_group()
+        events = self.flush_reasoning_replay()
+        events.extend(self._pause_reasoning())
         for tool_index, state in self.tool_states.items():
             if state.open:
                 events.extend(self.stop_tool_block(tool_index))
-        events.extend(self.finish_replay_carriers())
+        if self._text_started:
+            events.extend(self._stop_text_block())
+            self._text_started = False
         return events
 
     def close_unclosed_blocks(self) -> list[str]:
-        events = self.finish_reasoning_group()
+        events = self.flush_reasoning_replay(completed=False)
+        events.extend(self._close_content_blocks())
         for state in self.tool_states.values():
             state.open = False
-        events.extend(self.finish_replay_carriers())
         return events
 
     def has_emitted_tool_block(self) -> bool:
@@ -337,7 +335,7 @@ class ChatStreamOutput(ABC):
     def _start_reasoning_block(self) -> list[str]: ...
 
     @abstractmethod
-    def _emit_reasoning_delta(self, content: str) -> str: ...
+    def _emit_reasoning_delta(self, content: str, *, summary: bool = False) -> str: ...
 
     @abstractmethod
     def _emit_opaque_reasoning(self, data: str) -> list[str]: ...
@@ -389,8 +387,6 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
         log_raw_events: bool = False,
     ) -> None:
         super().__init__(input_tokens=input_tokens)
-        self._anchored_groups: set[str] = set()
-        self._pending_replay: list[str] = []
         self._ledger = AnthropicStreamLedger(
             message_id,
             model,
@@ -398,56 +394,9 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
             log_raw_events=log_raw_events,
         )
 
-    def pause_reasoning_record(self, group_id: str, record: ReplayRecord) -> list[str]:
-        if group_id in self._anchored_groups:
-            return []
-        if not self._reasoning_started and any(
-            state.open for state in self.tool_states.values()
-        ):
-            return []
-        self._anchored_groups.add(group_id)
-        data = encode_replay(
-            AssociatedReplayRecord(record.origin, record.native, group_id, "anchor")
-        )
-        self._content_started = True
-        if self._reasoning_started:
-            events = self._attach_reasoning_replay(data)
-            events.extend(self._stop_reasoning_block())
-            self._reasoning_started = False
-            return events
-        events = self._close_content_blocks()
-        events.extend(self._emit_opaque_reasoning(data))
-        return events
-
-    def complete_reasoning_record(
-        self, group_id: str, record: ReplayRecord
-    ) -> list[str]:
-        if group_id in self._anchored_groups:
-            self._anchored_groups.remove(group_id)
-            self._pending_replay.append(
-                encode_replay(
-                    AssociatedReplayRecord(
-                        record.origin, record.native, group_id, "final"
-                    )
-                )
-            )
-            return []
-        if self._reasoning_started:
-            return super().complete_reasoning_record(group_id, record)
-        self._pending_replay.append(encode_replay(record))
-        self._content_started = True
-        return []
-
-    def finish_replay_carriers(self) -> list[str]:
-        pending, self._pending_replay = self._pending_replay, []
-        return [
-            event for data in pending for event in self._emit_opaque_reasoning(data)
-        ]
-
     def close_unclosed_blocks(self) -> list[str]:
-        events = self.flush_reasoning_replay()
+        events = self.flush_reasoning_replay(completed=False)
         events.extend(self._ledger.close_unclosed_blocks())
-        events.extend(self.finish_replay_carriers())
         self._text_started = False
         self._reasoning_started = False
         for state in self.tool_states.values():
@@ -460,7 +409,7 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
     def _start_reasoning_block(self) -> list[str]:
         return [self._ledger.start_thinking_block()]
 
-    def _emit_reasoning_delta(self, content: str) -> str:
+    def _emit_reasoning_delta(self, content: str, *, summary: bool = False) -> str:
         return self._ledger.emit_thinking_delta(content)
 
     def _emit_opaque_reasoning(self, data: str) -> list[str]:
@@ -616,10 +565,22 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
             )
         ]
 
-    def _emit_reasoning_delta(self, content: str) -> str:
+    def _emit_reasoning_delta(self, content: str, *, summary: bool = False) -> str:
         state = self._reasoning_state
         if state is None or not content:
             return ""
+        if summary:
+            added = (
+                ""
+                if state.summary_parts
+                else self._events.reasoning_summary_part(
+                    state.item_id, state.output_index, "", done=False
+                )
+            )
+            state.summary_parts.append(content)
+            return added + self._events.reasoning_summary_text(
+                state.item_id, state.output_index, content, done=False
+            )
         state.text_parts.append(content)
         return self._events.reasoning_text_delta(
             state.item_id, state.output_index, content

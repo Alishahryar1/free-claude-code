@@ -265,6 +265,7 @@ def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
     if item.get("type") == "thinking":
         text = str(item.get("thinking") or "")
         return [(text, False)] if text else []
+    fields: list[tuple[str, bool]] = []
     for key in ("content", "summary"):
         parts = item.get(key)
         if isinstance(parts, list):
@@ -273,8 +274,10 @@ def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
                 for part in parts
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
             )
-            if text:
-                return [(text, key == "summary")]
+            if text and text not in {value for value, _ in fields}:
+                fields.append((text, key == "summary"))
+    if fields:
+        return fields
     details = item.get("reasoning_details")
     parts: list[tuple[str, bool]] = []
     if isinstance(details, list):
@@ -362,33 +365,6 @@ def validate_hosted_tool_history(blocks: list[JsonObject]) -> None:
         )
 
 
-def responses_replay_item(item: JsonObject, origin: ReplayOrigin) -> JsonObject:
-    result = deepcopy(item)
-    result["encrypted_content"] = encode_replay(ReplayRecord(origin, item))
-    return result
-
-
-def preserve_responses_reasoning(
-    payload: JsonObject, origin: ReplayOrigin
-) -> JsonObject:
-    """Wrap complete native reasoning before a presenter rewrites public metadata."""
-    result = deepcopy(payload)
-    item = result.get("item")
-    if isinstance(item, dict) and item.get("type") == "reasoning":
-        result["item"] = responses_replay_item(item, origin)
-    response = result.get("response")
-    if isinstance(response, dict):
-        output = response.get("output")
-        if isinstance(output, list):
-            response["output"] = [
-                responses_replay_item(item, origin)
-                if isinstance(item, dict) and item.get("type") == "reasoning"
-                else item
-                for item in output
-            ]
-    return result
-
-
 def reasoning_detail(value: str) -> list[JsonValue]:
     """Decode older Chat detail strings while retaining unknown opaque state."""
     try:
@@ -420,6 +396,16 @@ def responses_reasoning_blocks(item: Mapping[str, JsonValue]) -> list[JsonValue]
     carrier = item.get("encrypted_content")
     if isinstance(carrier, str) and carrier:
         record = _record(item, "encrypted_content")
+        if record is None:
+            readable = readable_reasoning(item)
+            if readable or item.get("content"):
+                return [
+                    {
+                        "type": "thinking",
+                        "thinking": "\n\n".join(text for text, _ in readable),
+                        "signature": carrier,
+                    }
+                ]
         if (
             record is not None
             and record.origin.protocol == "messages"

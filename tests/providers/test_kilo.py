@@ -15,7 +15,6 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
-from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.kilo import KiloProvider
@@ -279,15 +278,11 @@ async def test_stream_uses_reasoning_field_without_duplicating_plain_details(
     assert thinking_content(events) == "plan "
     assert text_content(events) == "done"
     records = [
-        decode_replay(event.data["delta"]["signature"]).native
+        event.data["delta"]["signature"]
         for event in events
         if event.data.get("delta", {}).get("type") == "signature_delta"
     ]
-    assert len(records) == 1
-    assert records[0]["reasoning_details"] == [
-        {"type": "reasoning.text", "text": "plan "},
-        encrypted,
-    ]
+    assert records == [encrypted["data"]]
     assert stream.closed
 
 
@@ -327,7 +322,7 @@ async def test_stream_restarts_reasoning_reconciliation_after_early_retry(
 
 
 @pytest.mark.asyncio
-async def test_stream_omits_all_reasoning_representations_when_disabled(
+async def test_stream_hides_readable_reasoning_and_preserves_opaque_when_disabled(
     kilo_provider,
 ):
     stream = AsyncStream(
@@ -367,11 +362,12 @@ async def test_stream_omits_all_reasoning_representations_when_disabled(
     events = parse_sse_text(event_text)
     assert thinking_content(events) == ""
     assert text_content(events) == "done"
-    assert all(
-        event.data.get("content_block", {}).get("type") != "redacted_thinking"
+    assert [
+        event.data["content_block"]["data"]
         for event in events
         if event.event == "content_block_start"
-    )
+        and event.data["content_block"]["type"] == "redacted_thinking"
+    ] == ["opaque"]
     assert stream.closed
 
 

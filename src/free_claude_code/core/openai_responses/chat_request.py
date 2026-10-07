@@ -8,7 +8,6 @@ from typing import cast
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.history_replay import (
     has_readable_replay,
-    is_replay,
     readable_reasoning,
     reasoning_context,
     reasoning_detail,
@@ -65,7 +64,7 @@ class ResponsesChatRequest:
 class _PendingReasoning:
     text: str | None = None
     encrypted: list[str] = field(default_factory=list)
-    contexts: list[str] = field(default_factory=list)
+    summaries: list[str] = field(default_factory=list)
 
     def add(self, item: Mapping[str, JsonValue]) -> None:
         if encrypted := encrypted_reasoning_from_item(item):
@@ -74,22 +73,22 @@ class _PendingReasoning:
                 return
         for text, summary in readable_reasoning(item):
             if summary:
-                self.contexts.append(reasoning_context(text, summary=True))
+                self.summaries.append(text)
             else:
                 self.text = combine_reasoning(self.text, text)
 
     @property
     def empty(self) -> bool:
-        return self.text is None and not self.encrypted and not self.contexts
+        return self.text is None and not self.encrypted and not self.summaries
 
     def take(self) -> tuple[str | None, list[str], list[str]]:
         text = self.text
         encrypted = list(self.encrypted)
         self.text = None
         self.encrypted.clear()
-        contexts = list(self.contexts)
-        self.contexts.clear()
-        return text, encrypted, contexts
+        summaries = list(self.summaries)
+        self.summaries.clear()
+        return text, encrypted, summaries
 
 
 class _ResponsesChatInputBuilder:
@@ -290,6 +289,9 @@ class _ResponsesChatInputBuilder:
     def _flush_reasoning(self) -> None:
         if self._pending_reasoning.empty:
             return
+        if self.messages and self.messages[-1].get("role") == "assistant":
+            self._apply_pending_reasoning(self.messages[-1])
+            return
         message: dict[str, object] = {"role": "assistant", "content": ""}
         self._apply_pending_reasoning(message)
         if len(message) > 2 or message.get("content"):
@@ -312,19 +314,29 @@ class _ResponsesChatInputBuilder:
         self._pending_rich_output_parts.clear()
 
     def _apply_pending_reasoning(self, message: dict[str, object]) -> None:
-        text, encrypted, contexts = self._pending_reasoning.take()
-        if contexts:
+        text, encrypted, summaries = self._pending_reasoning.take()
+        if summaries and not self._structured_reasoning_details:
             message["content"] = "\n\n".join(
-                [*contexts, str(message.get("content") or "")]
+                [
+                    *[
+                        reasoning_context(summary, summary=True)
+                        for summary in summaries
+                    ],
+                    str(message.get("content") or ""),
+                ]
             ).rstrip()
         if text is not None:
             _apply_reasoning_text(message, text, self._reasoning_replay)
-        if encrypted:
+        if encrypted or (summaries and self._structured_reasoning_details):
             details = message.setdefault("reasoning_details", [])
             if isinstance(details, list):
+                if self._structured_reasoning_details:
+                    details.extend(
+                        {"type": "reasoning.summary", "summary": summary}
+                        for summary in summaries
+                    )
                 for value in encrypted:
-                    if self._structured_reasoning_details or is_replay(value):
-                        details.extend(reasoning_detail(value))
+                    details.extend(reasoning_detail(value))
             if not details:
                 message.pop("reasoning_details", None)
 

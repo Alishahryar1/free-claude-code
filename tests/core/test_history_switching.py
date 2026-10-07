@@ -271,7 +271,7 @@ def test_deepseek_off_to_on_preserves_effort_and_all_available_history(wire):
     assert request.model_dump() == original
 
 
-def test_summary_is_context_even_when_destination_replays_full_reasoning():
+def test_summary_keeps_its_classification_when_destination_supports_details():
     messages = _chat(
         [
             {"role": "user", "content": "first"},
@@ -286,7 +286,9 @@ def test_summary_is_context_even_when_destination_replays_full_reasoning():
         ]
     )
     assert "reasoning_content" not in messages[1]
-    assert "[Earlier reasoning summary]" in messages[1]["content"]
+    assert messages[1]["reasoning_details"] == [
+        {"type": "reasoning.summary", "summary": "A summary, not the hidden chain."}
+    ]
 
 
 def test_image_tool_result_does_not_start_a_new_user_turn():

@@ -4,7 +4,6 @@ import asyncio
 import sys
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import replace
 from functools import partial
 from typing import cast
 
@@ -20,7 +19,6 @@ from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import (
     prepare_history,
-    preserve_responses_reasoning,
 )
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
@@ -457,14 +455,6 @@ class OpenAIResponsesTransport:
                             raise context_window_exceeded_provider_failure()
                         if adapt_event is not None:
                             payload = adapt_event(upstream_event.type, payload)
-                        response = payload.get("response")
-                        if (
-                            isinstance(response, dict)
-                            and isinstance(response.get("model"), str)
-                            and response["model"]
-                        ):
-                            origin = replace(origin, model=response["model"])
-                        payload = preserve_responses_reasoning(payload, origin)
                         for event in presenter.feed(upstream_event.type, payload):
                             for held in recovery.push(event):
                                 yield held

@@ -3,7 +3,6 @@
 import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.test_tool_call_buffer import _response
 from tests.providers.support import immediate_admission, make_provider_config
@@ -234,9 +233,4 @@ async def test_native_signed_thinking_interleaves_with_parallel_tool_calls(wire)
         calls = [item["call_id"] for item in output if item["type"] == "function_call"]
         signature = output[0]["encrypted_content"]
     assert calls == ["call_1", "call_2"]
-    assert decode_replay(signature).native == {
-        "type": "thinking",
-        "thinking": "before tools during tools",
-        "signature": "signed-native",
-        "extension": {"keep": 17},
-    }
+    assert signature == "signed-native"

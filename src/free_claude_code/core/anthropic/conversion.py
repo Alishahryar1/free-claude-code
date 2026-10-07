@@ -669,6 +669,8 @@ class AnthropicToOpenAIConverter:
                     details.extend(reasoning_detail(signature))
                     if has_readable_replay(signature):
                         continue
+                elif isinstance(signature, str) and signature:
+                    details.append({"type": "reasoning.encrypted", "data": signature})
                 thinking = get_block_attr(block, "thinking", "")
                 if reasoning_replay == ReasoningReplayMode.DISABLED:
                     if thinking:

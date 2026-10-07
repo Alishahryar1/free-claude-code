@@ -63,6 +63,19 @@ class ResponseBlockCompleter:
                     state.item_id, state.output_index, text
                 )
             )
+        if state.summary_parts:
+            summary = "".join(state.summary_parts)
+            self._ledger.add_reasoning_text(summary)
+            chunks.extend(
+                [
+                    self._events.reasoning_summary_text(
+                        state.item_id, state.output_index, summary, done=True
+                    ),
+                    self._events.reasoning_summary_part(
+                        state.item_id, state.output_index, summary, done=True
+                    ),
+                ]
+            )
         chunks.append(self._events.output_item_done(state.output_index, item))
         return chunks
 
@@ -152,8 +165,13 @@ def reasoning_output_item(
             item["content"] = [
                 {"type": "reasoning_text", "text": "".join(state.text_parts)}
             ]
-        return item
-    return reasoning_item(state.item_id, "".join(state.text_parts), status)
+    else:
+        item = reasoning_item(state.item_id, "".join(state.text_parts), status)
+    if state.summary_parts:
+        item["summary"] = [
+            {"type": "summary_text", "text": "".join(state.summary_parts)}
+        ]
+    return item
 
 
 def _reasoning_output_item(

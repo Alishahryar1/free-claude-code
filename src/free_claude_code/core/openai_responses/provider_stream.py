@@ -5,7 +5,7 @@ from typing import Any
 
 from free_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from free_claude_code.core.anthropic.usage import anthropic_input_usage_fields
-from free_claude_code.core.history_replay import is_replay
+from free_claude_code.core.history_replay import readable_reasoning
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 
@@ -63,7 +63,8 @@ class ResponsesProviderStream:
         self.generated_output = False
         self._tool_names = tool_names or OpenAIToolNameCodec.from_names(())
         self._tools: dict[str, _ToolState] = {}
-        self._encrypted_reasoning: dict[str, str] = {}
+        self._thinking_item_id: str | None = None
+        self._readable_items: set[str] = set()
 
     def start(self) -> list[str]:
         """Return the Anthropic message_start event."""
@@ -105,10 +106,8 @@ class ResponsesProviderStream:
                 call_id=_string(item.get("call_id")) or item_id,
                 name=self._tool_names.decode(_string(item.get("name"))),
             )
-        if item.get("type") == "reasoning" and item_id:
-            encrypted = item.get("encrypted_content")
-            if isinstance(encrypted, str) and encrypted:
-                self._encrypted_reasoning[item_id] = encrypted
+        if item.get("type") == "message" and self.ledger.blocks.text_started:
+            return [self.ledger.stop_text_block()]
         return []
 
     def _reasoning_delta(self, data: dict[str, Any]) -> list[str]:
@@ -116,6 +115,8 @@ class ResponsesProviderStream:
         if not isinstance(delta, str) or not delta:
             return []
         events = list(self.ledger.ensure_thinking_block())
+        self._thinking_item_id = _string(data.get("item_id"))
+        self._readable_items.add(self._thinking_item_id)
         events.append(self.ledger.emit_thinking_delta(delta))
         self.generated_output = True
         return events
@@ -124,7 +125,9 @@ class ResponsesProviderStream:
         delta = data.get("delta")
         if not isinstance(delta, str) or not delta:
             return []
-        events = list(self.ledger.ensure_text_block())
+        events = (
+            [] if self.ledger.blocks.text_started else [self.ledger.start_text_block()]
+        )
         events.append(self.ledger.emit_text_delta(delta))
         self.generated_output = True
         return events
@@ -142,7 +145,7 @@ class ResponsesProviderStream:
                 name="",
             )
             self._tools[item_id] = state
-        events = list(self.ledger.close_content_blocks())
+        events = [] if state.started else list(self.ledger.close_content_blocks())
         events.extend(self._ensure_tool_started(state))
         if delta:
             events.append(self.ledger.emit_tool_delta(state.tool_index, delta))
@@ -167,7 +170,7 @@ class ResponsesProviderStream:
                 self._tools[item_id] = state
             if not state.name:
                 state.name = self._tool_names.decode(_string(item.get("name")))
-            events = list(self.ledger.close_content_blocks())
+            events = [] if state.started else list(self.ledger.close_content_blocks())
             events.extend(self._ensure_tool_started(state))
             arguments = item.get("arguments")
             if not state.received_delta and isinstance(arguments, str) and arguments:
@@ -180,19 +183,28 @@ class ResponsesProviderStream:
             return events
         if item_type == "reasoning":
             encrypted = item.get("encrypted_content")
-            if not isinstance(encrypted, str) or not encrypted:
-                encrypted = self._encrypted_reasoning.get(item_id)
-            if isinstance(encrypted, str) and encrypted:
-                if is_replay(encrypted) and self.ledger.blocks.thinking_started:
-                    return [
+            events = []
+            if item_id not in self._readable_items:
+                for text, _ in readable_reasoning(item):
+                    events.extend(
+                        self._reasoning_delta({"item_id": item_id, "delta": text})
+                    )
+            if (
+                self.ledger.blocks.thinking_started
+                and item_id == self._thinking_item_id
+            ):
+                if isinstance(encrypted, str) and encrypted:
+                    events.append(
                         self.ledger.content_block_delta(
                             self.ledger.blocks.thinking_index,
                             "signature_delta",
                             encrypted,
-                        ),
-                        self.ledger.stop_thinking_block(),
-                    ]
-                events = list(self.ledger.close_content_blocks())
+                        )
+                    )
+                events.append(self.ledger.stop_thinking_block())
+                self._thinking_item_id = None
+                return events
+            if isinstance(encrypted, str) and encrypted:
                 index = self.ledger.blocks.allocate_index()
                 events.append(
                     self.ledger.content_block_start(
@@ -202,6 +214,7 @@ class ResponsesProviderStream:
                 events.append(self.ledger.content_block_stop(index))
                 self.generated_output = True
                 return events
+            return events
         return []
 
     def _ensure_tool_started(self, state: _ToolState) -> list[str]:
@@ -220,7 +233,15 @@ class ResponsesProviderStream:
     def _finish(self, data: dict[str, Any], *, incomplete: bool) -> list[str]:
         response = data.get("response")
         response = response if isinstance(response, dict) else {}
-        events = list(self.ledger.close_all_blocks())
+        events = []
+        if self.ledger.blocks.thinking_started:
+            events.append(self.ledger.stop_thinking_block())
+        for state in self._tools.values():
+            if state.started and not state.stopped:
+                events.append(self.ledger.stop_tool_block(state.tool_index))
+                state.stopped = True
+        if self.ledger.blocks.text_started:
+            events.append(self.ledger.stop_text_block())
         if self._pad_empty and not self.ledger.has_content_block():
             events.extend(self.ledger.ensure_text_block())
             events.append(self.ledger.emit_text_delta(" "))

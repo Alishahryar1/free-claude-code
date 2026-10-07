@@ -309,10 +309,7 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
             send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)), wire
         )
 
-    # OpenRouter's Messages thinking includes a Chat replay signature, which
-    # the existing public continuation policy treats as opaque.
-    opaque = wire == "messages" and prefix == "reasoning_content"
-    retry = stop is None and max_attempts > 1 and not opaque
+    retry = stop is None and max_attempts > 1
     assert len(bodies) == (2 if retry else 1)
     assert "call_abandoned" not in result
     events = parse_sse_text(result)

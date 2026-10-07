@@ -141,6 +141,44 @@ class ResponseEventBuilder:
             },
         )
 
+    def reasoning_summary_text(
+        self, item_id: str, output_index: int, text: str, *, done: bool
+    ) -> str:
+        kind = (
+            "response.reasoning_summary_text.done"
+            if done
+            else "response.reasoning_summary_text.delta"
+        )
+        return self._format(
+            kind,
+            {
+                "type": kind,
+                "item_id": item_id,
+                "output_index": output_index,
+                "summary_index": 0,
+                "text" if done else "delta": text,
+            },
+        )
+
+    def reasoning_summary_part(
+        self, item_id: str, output_index: int, text: str, *, done: bool
+    ) -> str:
+        kind = (
+            "response.reasoning_summary_part.done"
+            if done
+            else "response.reasoning_summary_part.added"
+        )
+        return self._format(
+            kind,
+            {
+                "type": kind,
+                "item_id": item_id,
+                "output_index": output_index,
+                "summary_index": 0,
+                "part": {"type": "summary_text", "text": text},
+            },
+        )
+
     def function_call_arguments_delta(
         self, item_id: str, output_index: int, arguments: str
     ) -> str:

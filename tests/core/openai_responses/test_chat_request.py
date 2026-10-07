@@ -138,10 +138,11 @@ def test_build_responses_chat_request_preserves_rich_supported_semantics() -> No
             },
             {
                 "role": "assistant",
-                "content": "[Earlier reasoning summary]\nUse the tool.",
+                "content": "",
                 "reasoning_content": "",
                 "reasoning_details": [
-                    {"type": "reasoning.encrypted", "data": "opaque-replay"}
+                    {"type": "reasoning.summary", "summary": "Use the tool."},
+                    {"type": "reasoning.encrypted", "data": "opaque-replay"},
                 ],
                 "tool_calls": [
                     {

@@ -83,12 +83,17 @@ def test_build_responses_provider_request_preserves_multiturn_protocol() -> None
     assert body["include"] == ["reasoning.encrypted_content"]
     assert body["reasoning"] == {"effort": "xhigh", "summary": "auto"}
     assert body["tool_choice"] == {"type": "function", "name": "lookup"}
+    assert body["input"][0]["id"].startswith("rs_")
+    assert body["input"][1]["id"].startswith("rs_")
+    assert body["input"][0]["id"] != body["input"][1]["id"]
     assert body["input"][0] == {
+        "id": body["input"][0]["id"],
         "type": "reasoning",
         "summary": [],
         "content": [{"type": "reasoning_text", "text": "summary"}],
     }
     assert body["input"][1] == {
+        "id": body["input"][1]["id"],
         "type": "reasoning",
         "summary": [],
         "encrypted_content": "opaque",

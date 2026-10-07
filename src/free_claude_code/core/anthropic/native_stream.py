@@ -2,13 +2,8 @@
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
-from free_claude_code.core.history_replay import (
-    ReplayOrigin,
-    ReplayRecord,
-    encode_replay,
-)
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .native import NativeMessagesError
@@ -239,11 +234,8 @@ class NativeMessagesStreamState:
 class NativeMessagesRelay:
     """Preserve upstream IDs, indexes, fields and event order for Messages clients."""
 
-    def __init__(
-        self, *, public_model: str, replay_origin: ReplayOrigin | None = None
-    ) -> None:
+    def __init__(self, *, public_model: str) -> None:
         self._public_model = public_model
-        self._replay_origin = replay_origin
         self._state = NativeMessagesStreamState()
 
     @property
@@ -255,56 +247,14 @@ class NativeMessagesRelay:
         return self._state.stop_reason
 
     def feed(self, event_type: str, payload: Mapping[str, JsonValue]) -> str:
-        completed = self._state.accept(event_type, payload)
+        self._state.accept(event_type, payload)
         body = dict(payload)
         if event_type == "message_start":
             message = body.get("message")
             if not isinstance(message, dict):
                 raise AssertionError("Validated message_start must contain a message.")
             body["message"] = {**message, "model": self._public_model}
-            if (
-                self._replay_origin is not None
-                and isinstance(message.get("model"), str)
-                and message["model"]
-            ):
-                self._replay_origin = replace(
-                    self._replay_origin, model=message["model"]
-                )
-        prefix = ""
-        if self._replay_origin is not None:
-            block = body.get("content_block")
-            if event_type == "content_block_start" and isinstance(block, dict):
-                if block.get("type") == "thinking":
-                    body["content_block"] = {**block, "signature": ""}
-                elif block.get("type") == "redacted_thinking":
-                    body["content_block"] = {
-                        **block,
-                        "data": encode_replay(ReplayRecord(self._replay_origin, block)),
-                    }
-            delta = body.get("delta")
-            if (
-                event_type == "content_block_delta"
-                and isinstance(delta, dict)
-                and delta.get("type") == "signature_delta"
-            ):
-                return ""
-            if (
-                completed is not None
-                and completed.body.get("type") == "thinking"
-                and completed.body.get("signature")
-            ):
-                signature = encode_replay(
-                    ReplayRecord(self._replay_origin, completed.body)
-                )
-                prefix = _event(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": body["index"],
-                        "delta": {"type": "signature_delta", "signature": signature},
-                    },
-                )
-        return prefix + _event(event_type, body)
+        return _event(event_type, body)
 
 
 def _event(kind: str, payload: JsonObject) -> str:
