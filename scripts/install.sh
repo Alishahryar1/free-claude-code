@@ -66,7 +66,7 @@ installer_is_interactive() {
 
 prompt_yes_no() {
     question=$1
-    default_answer=${2:-yes}
+    default_answer=${2:-no}
     case "$default_answer" in
         yes) prompt='[Y/n]' ;;
         no) prompt='[y/N]' ;;
@@ -129,7 +129,7 @@ select_coding_agent() {
         printf '%s already installed; will verify.\n' "$2" >&4
         return 0
     fi
-    prompt_yes_no "Install $2 for $3?" "${4:-yes}"
+    prompt_yes_no "Install $2 for $3?"
 }
 
 choose_coding_agents() {
@@ -160,67 +160,37 @@ choose_coding_agents() {
             install_opencode=0
         fi
 
-        if [ "$install_cline" -eq 1 ]; then
-            cline_default=yes
-        else
-            cline_default=no
-        fi
-        if select_coding_agent cline "Cline CLI" fcc-cline "$cline_default"; then
+        if select_coding_agent cline "Cline CLI" fcc-cline; then
             install_cline=1
         else
             install_cline=0
         fi
 
-        if [ "$install_hermes" -eq 1 ]; then
-            hermes_default=yes
-        else
-            hermes_default=no
-        fi
-        if select_coding_agent hermes "Hermes Agent" fcc-hermes "$hermes_default"; then
+        if select_coding_agent hermes "Hermes Agent" fcc-hermes; then
             install_hermes=1
         else
             install_hermes=0
         fi
 
-        if [ "$install_dsh" -eq 1 ]; then
-            dsh_default=yes
-        else
-            dsh_default=no
-        fi
-        if select_coding_agent dsh "DeepSeek Harness" fcc-dsh "$dsh_default"; then
+        if select_coding_agent dsh "DeepSeek Harness" fcc-dsh; then
             install_dsh=1
         else
             install_dsh=0
         fi
 
-        if [ "$install_grok" -eq 1 ]; then
-            grok_default=yes
-        else
-            grok_default=no
-        fi
-        if select_coding_agent grok "Grok Build" fcc-grok "$grok_default"; then
+        if select_coding_agent grok "Grok Build" fcc-grok; then
             install_grok=1
         else
             install_grok=0
         fi
 
-        if [ "$install_muse" -eq 1 ]; then
-            muse_default=yes
-        else
-            muse_default=no
-        fi
-        if select_coding_agent muse "Muse Code" fcc-muse "$muse_default"; then
+        if select_coding_agent muse "Muse Code" fcc-muse; then
             install_muse=1
         else
             install_muse=0
         fi
 
-        if [ "$install_aider" -eq 1 ]; then
-            aider_default=yes
-        else
-            aider_default=no
-        fi
-        if select_coding_agent aider Aider fcc-aider "$aider_default"; then
+        if select_coding_agent aider Aider fcc-aider; then
             install_aider=1
         else
             install_aider=0

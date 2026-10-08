@@ -91,7 +91,7 @@ function Test-InteractiveInstaller {
 function Read-YesNo {
     param(
         [string] $Prompt,
-        [bool] $DefaultYes = $true
+        [bool] $DefaultYes = $false
     )
 
     while ($true) {
@@ -168,15 +168,14 @@ function Read-CodingAgentSelection {
     param(
         [string] $CommandName,
         [string] $DisplayName,
-        [string] $FccCommand,
-        [bool] $DefaultYes = $true
+        [string] $FccCommand
     )
 
     if (Find-InstalledCodingAgent $CommandName) {
         Write-Host "$DisplayName already installed; will verify."
         return $true
     }
-    return Read-YesNo -Prompt "Install $DisplayName for ${FccCommand}?" -DefaultYes $DefaultYes
+    return Read-YesNo -Prompt "Install $DisplayName for ${FccCommand}?"
 }
 
 function Select-CodingAgents {
@@ -185,18 +184,12 @@ function Select-CodingAgents {
         $script:InstallCodex = Read-CodingAgentSelection codex Codex fcc-codex
         $script:InstallPi = Read-CodingAgentSelection pi Pi fcc-pi
         $script:InstallOpenCode = Read-CodingAgentSelection opencode OpenCode fcc-opencode
-        $script:InstallCline = Read-CodingAgentSelection cline "Cline CLI" fcc-cline `
-            -DefaultYes $script:InstallCline
-        $script:InstallHermes = Read-CodingAgentSelection hermes "Hermes Agent" fcc-hermes `
-            -DefaultYes $script:InstallHermes
-        $script:InstallDsh = Read-CodingAgentSelection dsh "DeepSeek Harness" fcc-dsh `
-            -DefaultYes $script:InstallDsh
-        $script:InstallGrok = Read-CodingAgentSelection grok "Grok Build" fcc-grok `
-            -DefaultYes $script:InstallGrok
-        $script:InstallMuse = Read-CodingAgentSelection muse "Muse Code" fcc-muse `
-            -DefaultYes $script:InstallMuse
-        $script:InstallAider = Read-CodingAgentSelection aider Aider fcc-aider `
-            -DefaultYes $script:InstallAider
+        $script:InstallCline = Read-CodingAgentSelection cline "Cline CLI" fcc-cline
+        $script:InstallHermes = Read-CodingAgentSelection hermes "Hermes Agent" fcc-hermes
+        $script:InstallDsh = Read-CodingAgentSelection dsh "DeepSeek Harness" fcc-dsh
+        $script:InstallGrok = Read-CodingAgentSelection grok "Grok Build" fcc-grok
+        $script:InstallMuse = Read-CodingAgentSelection muse "Muse Code" fcc-muse
+        $script:InstallAider = Read-CodingAgentSelection aider Aider fcc-aider
 
         if ($script:InstallClaudeCode -or $script:InstallCodex -or $script:InstallPi -or $script:InstallOpenCode -or $script:InstallCline -or $script:InstallHermes -or $script:InstallDsh -or $script:InstallGrok -or $script:InstallMuse -or $script:InstallAider) {
             break
