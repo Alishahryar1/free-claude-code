@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# fccd — control the free-claude-code server (launchd-managed)
+set -euo pipefail
+
+LABEL="com.fcc.server"
+PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+LOG="/Users/ehanlonmiller/git/free-claude-code/server.log"
+
+usage() {
+    cat <<EOF
+Usage: fccd <command>
+
+Commands:
+  start      Load and start the server
+  stop       Stop and unload the server
+  restart    Stop then start
+  status     Show launchd status (PID, last exit code)
+  logs       Tail server.log
+  enable     Auto-start on login (RunAtLoad=true via bootstrap)
+  disable    Remove auto-start (bootout)
+EOF
+}
+
+case "${1:-}" in
+    start)
+        launchctl load -w "$PLIST" 2>/dev/null || true
+        launchctl kickstart -k "gui/$(id -u)/$LABEL"
+        echo "started $LABEL"
+        ;;
+    stop)
+        launchctl unload "$PLIST" 2>/dev/null || true
+        echo "stopped $LABEL"
+        ;;
+    restart)
+        launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null || {
+            launchctl load -w "$PLIST"
+            launchctl kickstart -k "gui/$(id -u)/$LABEL"
+        }
+        echo "restarted $LABEL"
+        ;;
+    status)
+        launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep -E "state|pid|last exit code" || echo "not loaded"
+        ;;
+    logs)
+        tail -f "$LOG"
+        ;;
+    enable)
+        launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+        launchctl enable "gui/$(id -u)/$LABEL"
+        echo "enabled $LABEL (auto-start on login)"
+        ;;
+    disable)
+        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+        echo "disabled $LABEL"
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac
