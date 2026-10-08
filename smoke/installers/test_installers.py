@@ -681,7 +681,7 @@ def test_install_sh_asks_only_about_missing_harnesses(
         posix_harness.add_rtk()
 
     result = posix_harness.run_interactive(
-        ("y\n" if install_codex else "n\n") + "n\n" * (7 if rtk else 8)
+        ("y\n" if install_codex else "\n") + "\n" * (7 if rtk else 8)
     )
 
     assert result.returncode == 0, result.stdout
@@ -1303,11 +1303,11 @@ def test_install_sh_stops_when_rtk_setup_fails(
     _assert_uv_ready_without_fcc_install(posix_harness.calls())
 
 
-def test_install_sh_reprompts_then_installs_only_selected_agent(
+def test_install_sh_installs_then_updates_only_selected_agent(
     posix_harness: PosixHarness,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
-    result = posix_harness.run_interactive("n\n" * 11 + "y\n" + "n\n" * 9)
+    result = posix_harness.run_interactive("\n" * 11 + "y\n" + "\n" * 9)
 
     assert result.returncode == 0, result.stdout
     assert "Select at least one coding agent." in result.stdout
@@ -1318,9 +1318,22 @@ def test_install_sh_reprompts_then_installs_only_selected_agent(
     assert "Run Cline with: fcc-cline" not in result.stdout
     calls = posix_harness.calls()
     assert "codex-install:1" in calls
-    assert not any("claude.ai" in call for call in calls)
-    assert not any("pi.dev" in call for call in calls)
+    assert not any(
+        f"{command}:--version" in calls
+        for command in CODING_AGENTS
+        if command != "codex"
+    )
     assert not any("rtk-ai/rtk" in call for call in calls)
+    assert "[Y/n]" not in result.stdout
+
+    update = posix_harness.run_interactive("\n" * 10)
+
+    assert update.returncode == 0, update.stdout
+    assert "for fcc-codex?" not in update.stdout
+    update_calls = posix_harness.calls()[len(calls) :]
+    assert "codex:--version" in update_calls
+    assert not any(call.startswith("download:") for call in update_calls)
+    assert any("--refresh-package free-claude-code" in call for call in update_calls)
 
 
 def test_install_sh_rejects_uninstalled_only_selection(
@@ -2699,7 +2712,7 @@ def test_install_ps1_asks_only_about_missing_harnesses(
         powershell_harness.add_rtk()
 
     result = powershell_harness.run_interactive(
-        ["y" if install_codex else "n"] + ["n"] * (7 if rtk else 8)
+        ["y" if install_codex else ""] + [""] * (7 if rtk else 8)
     )
 
     assert result.returncode == 0, result.stderr
@@ -4295,14 +4308,44 @@ Invoke-DownloadedPowerShellInstaller `
     assert "invalid installer reached execution" not in result.stderr
 
 
+def test_install_ps1_installs_then_updates_only_selected_agent(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    (powershell_harness.bin_dir / "opencode.cmd").unlink()
+
+    result = powershell_harness.run_interactive([""] * 11 + ["y"] + [""] * 9)
+
+    assert result.returncode == 0, result.stderr
+    assert "Select at least one coding agent." in result.stdout
+    assert "Run Codex with: fcc-codex" in result.stdout
+    calls = powershell_harness.calls()
+    assert "codex-install:1" in calls
+    assert not any(
+        f"{command}:--version" in calls
+        for command in CODING_AGENTS
+        if command != "codex"
+    )
+    assert not any("rtk-ai/rtk" in call for call in calls)
+    assert "[Y/n]" not in result.stdout
+
+    update = powershell_harness.run_interactive([""] * 10)
+
+    assert update.returncode == 0, update.stderr
+    assert "for fcc-codex?" not in update.stdout
+    update_calls = powershell_harness.calls()[len(calls) :]
+    assert "codex:--version" in update_calls
+    assert not any(call.startswith("download:") for call in update_calls)
+    assert any("--refresh-package free-claude-code" in call for call in update_calls)
+
+
 @pytest.mark.parametrize("powershell", _powershells())
 @pytest.mark.parametrize(
     ("answers", "expected", "expected_messages"),
     [
         (
-            ("", "", "", "", "", "", "", "", "", "", ""),
-            "True,True,True,True,False,True,True,True,True,True,False",
-            (),
+            ("",) * 11 + ("y",) + ("",) * 9,
+            "False,True,False,False,False,False,False,False,False,False,False",
+            ("Select at least one coding agent.",),
         ),
         (
             (
