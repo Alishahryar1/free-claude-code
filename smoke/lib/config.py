@@ -105,6 +105,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "wandb": "wandb/openai/gpt-oss-20b",
 }
 MISTRAL_REASONING_SMOKE_DEFAULT_MODEL = "mistral/mistral-medium-3-5"
+MISTRAL_CACHE_SMOKE_DEFAULT_MODEL = "mistral/mistral-large-latest"
 
 NVIDIA_NIM_CLI_DEFAULT_MODELS: tuple[str, ...] = (
     "nvidia/nemotron-3.5-lightning-30b-a3b",
@@ -285,6 +286,21 @@ class SmokeConfig:
         else:
             full_model = MISTRAL_REASONING_SMOKE_DEFAULT_MODEL
             source = "mistral_reasoning_default"
+        return ProviderModel(provider="mistral", full_model=full_model, source=source)
+
+    def mistral_cache_smoke_model(self) -> ProviderModel | None:
+        """Return a Mistral model expected to report prompt-cache reads."""
+        if self.provider_matrix and "mistral" not in self.provider_matrix:
+            return None
+        if not self.has_provider_configuration("mistral"):
+            return None
+        override_env = "FCC_SMOKE_MODEL_MISTRAL_CACHE"
+        if override := os.getenv(override_env):
+            full_model = _normalize_provider_model("mistral", override)
+            source = override_env
+        else:
+            full_model = MISTRAL_CACHE_SMOKE_DEFAULT_MODEL
+            source = "mistral_cache_default"
         return ProviderModel(provider="mistral", full_model=full_model, source=source)
 
     def _include_provider_in_smoke(
