@@ -11,6 +11,9 @@ from ruamel.yaml import YAML
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.harnesses import dsh_desktop_integration as desktop
+from free_claude_code.providers.runtime.discovery import (
+    self_sufficient_local_provider_ids,
+)
 from tests.runtime.test_integration_startup import runtime as runtime
 
 
@@ -68,10 +71,12 @@ async def test_late_catalog_updates_and_disconnect_remains_removed(connected):
     )
     await asyncio.gather(*runtime.provider_manager._publications)
     await settle(runtime)
-    assert {model["id"] for model in route()["models"]} == {
-        "nvidia_nim/one",
-        "nvidia_nim/two",
+    local_ids = {
+        f"{provider_id}/one" for provider_id in self_sufficient_local_provider_ids()
     }
+    assert {model["id"] for model in route()["models"]} == (
+        {"nvidia_nim/one", "nvidia_nim/two"} | local_ids
+    )
     await runtime.disconnect_dsh_desktop()
     runtime._integrations.catalog_changed()
     await settle(runtime)
