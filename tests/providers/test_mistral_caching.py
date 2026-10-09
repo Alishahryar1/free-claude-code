@@ -103,6 +103,15 @@ def test_extract_returns_none_without_a_usable_session_header(headers):
     assert extract_mistral_affinity_key(headers) is None
 
 
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_extract_falls_through_blank_preferred_header(blank):
+    headers = {
+        "x-opencode-session": blank,
+        "anthropic-session-id": "anthropic",
+    }
+    assert extract_mistral_affinity_key(headers) == "anthropic"
+
+
 @pytest.mark.parametrize("headers", [None, {}])
 def test_affinity_headers_are_empty_without_a_session_header(headers):
     assert mistral_affinity_headers(headers) == {}
