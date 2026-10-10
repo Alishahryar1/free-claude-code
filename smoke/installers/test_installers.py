@@ -5226,14 +5226,17 @@ def test_install_ps1_log_failure_preserves_installation_failure(
 
 
 @pytest.mark.parametrize("code", [4551, 1260, 5])
+@pytest.mark.parametrize(
+    "invoker", ["Invoke-NativeCommand", "Invoke-Utf8NativeCapture"]
+)
 def test_install_ps1_identifies_native_policy_launch_errors(
-    powershell_harness: PowerShellHarness, code: int
+    powershell_harness: PowerShellHarness, code: int, invoker: str
 ) -> None:
     result = powershell_harness.run_functions(
         f"""function blocked.exe {{
     throw [ComponentModel.Win32Exception]::new({code})
 }}
-Invoke-NativeCommand -FilePath 'blocked.exe'
+{invoker} -FilePath 'blocked.exe'
 """
     )
     assert result.returncode != 0

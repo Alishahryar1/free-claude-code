@@ -399,6 +399,11 @@ function Invoke-Utf8NativeCapture {
         $captured = @(& $FilePath @Arguments 2>&1)
         $exitCode = $LASTEXITCODE
     }
+    catch {
+        Write-InstallLog $_.Exception.Message
+        Write-WindowsLaunchGuidance -FilePath $FilePath -Exception $_.Exception
+        throw
+    }
     finally {
         [Console]::OutputEncoding = $originalOutputEncoding
         $ErrorActionPreference = $originalErrorPreference
