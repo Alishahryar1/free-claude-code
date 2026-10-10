@@ -48,6 +48,10 @@ $script:InstallSteps = [ordered] @{}
 $script:CurrentInstallStep = ""
 $script:InstallStepOutcome = "Completed"
 $script:InstallerPath = $PSCommandPath
+$script:InstallStageNumber = 0
+$script:InstallStageCount = 0
+$script:FccVerified = $false
+$script:DesktopReady = $false
 $FccCommands = @(
     # Include retired entry points so updates reject older FCC processes before replacement.
     "fcc-desktop",
@@ -130,14 +134,19 @@ function Complete-InstallStep {
 }
 
 function Start-InstallStep {
-    param([string] $Name)
+    param([string] $Name, [string] $Message = $Name)
 
-    if ($DryRun -or $script:InstallSteps.Count -eq 0) { return }
+    if ($DryRun) { Write-Step $Message; return }
+    if ($script:InstallSteps.Count -eq 0) { return }
     Complete-InstallStep
     $script:CurrentInstallStep = $Name
     $script:InstallStepOutcome = "Completed"
     $script:InstallSteps[$Name] = "Running"
     Write-InstallLog "Starting: $Name"
+    if ($script:InstallStageCount -gt 0) {
+        $script:InstallStageNumber++
+        Write-Host "`n[$($script:InstallStageNumber)/$($script:InstallStageCount)] $Message"
+    }
 }
 
 function Get-InstallerRetryCommand {
@@ -152,19 +161,21 @@ function Get-InstallerRetryCommand {
 }
 
 function Show-InstallReport {
-    param([bool] $Succeeded)
+    param([bool] $Succeeded, [bool] $Cancelled = $false)
 
     if ($DryRun) { return }
-    Write-Host "`nInstallation summary:"
-    foreach ($entry in $script:InstallSteps.GetEnumerator()) {
-        Write-Host "  $($entry.Value): $($entry.Key)"
+    if (-not $Succeeded) {
+        if ($Cancelled) { Write-Host "`nInstallation cancelled." }
+        else { Write-Host "`nInstallation did not finish." }
+        foreach ($outcome in @("Completed", "Reused", "Skipped", "Failed", "Cancelled", "Not attempted")) {
+            $labels = @($script:InstallSteps.GetEnumerator() | Where-Object { $_.Value -eq $outcome } | ForEach-Object { $_.Key })
+            if ($labels.Count -gt 0) { Write-Host "${outcome}: $($labels -join ', ')" }
+        }
+        Write-Host "Completed changes have been kept. Rerun the installer to try again."
+        Write-Host "Retry: $(Get-InstallerRetryCommand)"
+        if (-not $Cancelled) { Write-Host "For help, include the terminal error and the installer log." }
     }
     if ($script:InstallLog) { Write-Host "Installer log: $script:InstallLog" }
-    if (-not $Succeeded) {
-        Write-Host "When reporting this failure, include the terminal error and the installer log. Interactive installer output is only shown in the terminal."
-        Write-Host "Completed changes have been kept. Resolve the error, then rerun the installer."
-        Write-Host "Retry: $(Get-InstallerRetryCommand)"
-    }
 }
 
 function Write-WindowsLaunchGuidance {
@@ -343,8 +354,7 @@ function Format-Command {
 function Invoke-NativeCommand {
     param(
         [string] $FilePath,
-        [string[]] $Arguments = @(),
-        [switch] $LogOutput
+        [string[]] $Arguments = @()
     )
 
     $commandText = Format-Command -FilePath $FilePath -Arguments $Arguments
@@ -353,277 +363,57 @@ function Invoke-NativeCommand {
         return
     }
 
-    $timer = [Diagnostics.Stopwatch]::StartNew()
-    $nativeErrors = [Text.StringBuilder]::new()
     Write-InstallLog "+ $commandText"
     try {
-        $global:LASTEXITCODE = $null
-        if ($LogOutput) {
-            $originalErrorPreference = $ErrorActionPreference
-            try {
-                # Windows PowerShell represents native stderr as ErrorRecord.
-                $ErrorActionPreference = "Continue"
-                & $FilePath @Arguments 2>&1 | ForEach-Object {
-                    Write-Host $_.ToString()
-                    Write-InstallLog $_.ToString()
-                    if ($_ -is [Management.Automation.ErrorRecord]) {
-                        [void] $nativeErrors.AppendLine($_.ToString())
-                    }
-                }
-            }
-            finally { $ErrorActionPreference = $originalErrorPreference }
-        }
-        else {
-            & $FilePath @Arguments
-        }
+        $global:LASTEXITCODE = 0
+        & $FilePath @Arguments
         $exitCode = $LASTEXITCODE
-        if ($null -eq $exitCode) { throw "Command could not start: $commandText" }
-        Write-InstallLog "Exit code $exitCode after $($timer.Elapsed.TotalSeconds.ToString('F1'))s: $commandText"
+        Write-InstallLog "Exit code ${exitCode}: $commandText"
         if ($exitCode -ne 0) {
             throw "Command failed with exit code ${exitCode}: $commandText"
         }
     }
     catch {
-        Write-InstallLog "Command failed: $commandText`n$($_.Exception.Message)"
-        Write-WindowsLaunchGuidance -FilePath $FilePath -Exception $_.Exception -Stderr $nativeErrors.ToString()
+        Write-InstallLog $_.Exception.Message
+        Write-WindowsLaunchGuidance -FilePath $FilePath -Exception $_.Exception
         throw
     }
-}
-
-function Format-NativeArgument {
-    param([string] $Value)
-
-    if ($Value -match '^[^\s"&|<>^()]+$') { return $Value }
-    # Windows argv rules: escape quotes and double backslashes before quotes/end.
-    return '"' + (($Value -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
-}
-
-function Read-SharedUtf8File {
-    param([string] $Path)
-
-    $sharing = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
-    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $sharing)
-    $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8)
-    try { return $reader.ReadToEnd() }
-    finally { $reader.Dispose() }
-}
-
-function New-InstallProbeJob {
-    if (-not ('FccInstaller.ProbeJob' -as [type])) {
-        Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using Microsoft.Win32.SafeHandles;
-namespace FccInstaller {
-    public sealed class ProbeJob : SafeHandleZeroOrMinusOneIsInvalid {
-        [StructLayout(LayoutKind.Sequential)]
-        private struct BasicLimits {
-            public long ProcessTime, JobTime;
-            public uint Flags;
-            public UIntPtr MinimumWorkingSet, MaximumWorkingSet;
-            public uint ActiveProcesses;
-            public UIntPtr Affinity;
-            public uint Priority, Scheduling;
-        }
-        [StructLayout(LayoutKind.Sequential)]
-        private struct ExtendedLimits {
-            public BasicLimits Basic;
-            public ulong ReadOperations, WriteOperations, OtherOperations;
-            public ulong ReadBytes, WriteBytes, OtherBytes;
-            public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
-        }
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool SetInformationJobObject(ProbeJob job, int kind,
-            ref ExtendedLimits limits, uint length);
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool AssignProcessToJobObject(ProbeJob job, IntPtr process);
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool CloseHandle(IntPtr value);
-        public ProbeJob() : base(true) {
-            SetHandle(CreateJobObject(IntPtr.Zero, null));
-            if (IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
-            var limits = new ExtendedLimits();
-            limits.Basic.Flags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            if (!SetInformationJobObject(this, 9, ref limits,
-                (uint)Marshal.SizeOf(typeof(ExtendedLimits)))) {
-                int error = Marshal.GetLastWin32Error();
-                Dispose();
-                throw new Win32Exception(error);
-            }
-        }
-        public void Assign(IntPtr process) {
-            if (!AssignProcessToJobObject(this, process))
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-        }
-        protected override bool ReleaseHandle() { return CloseHandle(handle); }
-    }
-}
-'@
-    }
-    return [FccInstaller.ProbeJob]::new()
 }
 
 function Invoke-Utf8NativeCapture {
     param(
         [string] $FilePath,
-        [string[]] $Arguments = @(),
-        [int] $TimeoutSeconds = 10
+        [string[]] $Arguments = @()
     )
 
     $commandText = Format-Command -FilePath $FilePath -Arguments $Arguments
     Write-Host "+ $commandText"
     if ($DryRun) { return "" }
     Write-InstallLog "+ $commandText"
-    $timer = [Diagnostics.Stopwatch]::StartNew()
-    $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ("fcc-probe-" + [guid]::NewGuid().ToString("N"))
-    $stdoutPath = Join-Path $temporaryRoot "stdout.txt"
-    $stderrPath = Join-Path $temporaryRoot "stderr.txt"
-    $stdinPath = Join-Path $temporaryRoot "stdin.txt"
-    $supervisorErrorPath = Join-Path $temporaryRoot "supervisor-stderr.txt"
-    $requestPath = Join-Path $temporaryRoot "request.xml"
-    $supervisorPath = Join-Path $temporaryRoot "supervisor.ps1"
-    $statusPath = Join-Path $temporaryRoot "status.txt"
-    $startPath = Join-Path $temporaryRoot "start"
-    $process = $null
-    $probeJob = $null
-    $exitCode = $null
-    $stderr = ""
     $originalOutputEncoding = [Console]::OutputEncoding
+    $originalErrorPreference = $ErrorActionPreference
     try {
-        [void] [IO.Directory]::CreateDirectory($temporaryRoot)
-        [IO.File]::WriteAllText($stdinPath, "")
-        [IO.File]::WriteAllText($stdoutPath, "")
-        [IO.File]::WriteAllText($stderrPath, "")
         [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-        $request = @{
-            FilePath = $FilePath
-            ArgumentList = ($Arguments | ForEach-Object { Format-NativeArgument $_ }) -join ' '
-            StdOut = $stdoutPath; StdErr = $stderrPath; StdIn = $stdinPath
-            StatusPath = $statusPath; StartPath = $startPath
-        }
-        [IO.File]::WriteAllText($requestPath, [Management.Automation.PSSerializer]::Serialize($request))
-        # Keep an owned parent alive until all native output handles are closed,
-        # including handles inherited by a child whose launcher exited.
-        [IO.File]::WriteAllText($supervisorPath, @'
-param([string] $RequestPath)
-$ErrorActionPreference = "Stop"
-[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-$request = [Management.Automation.PSSerializer]::Deserialize([IO.File]::ReadAllText($RequestPath))
-$native = $null
-try {
-    # The parent assigns this supervisor to its job before releasing the gate.
-    while (-not [IO.File]::Exists($request.StartPath)) { [Threading.Thread]::Sleep(25) }
-    $options = @{
-        FilePath = $request.FilePath; WindowStyle = "Hidden"; PassThru = $true
-        RedirectStandardOutput = $request.StdOut; RedirectStandardError = $request.StdErr
-        RedirectStandardInput = $request.StdIn
-    }
-    if ($request.ArgumentList) { $options.ArgumentList = $request.ArgumentList }
-    $native = Start-Process @options
-    [void] $native.Handle
-    $native.WaitForExit()
-    # Read-only sharing rejects a handle still open for writing. The outer
-    # process owns the deadline and can terminate this entire tree while waiting.
-    while ($true) {
-        try {
-            foreach ($path in @($request.StdOut, $request.StdErr)) {
-                $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-                $stream.Dispose()
-            }
-            break
-        }
-        catch {
-            $cause = $_.Exception.GetBaseException()
-            if ($cause -is [IO.IOException] -and ($cause.HResult -band 0xffff) -in @(32, 33)) {
-                [Threading.Thread]::Sleep(25)
-            }
-            else { throw }
-        }
-    }
-    $exitCode = $native.ExitCode
-}
-catch {
-    [Console]::Error.WriteLine($_.Exception.Message)
-    $exitCode = 125
-}
-finally { if ($null -ne $native) { $native.Dispose() } }
-[Console]::Out.Flush()
-[Console]::Error.Flush()
-[IO.File]::WriteAllText($request.StatusPath + '.tmp', [string] $exitCode)
-[IO.File]::Move($request.StatusPath + '.tmp', $request.StatusPath)
-while ($true) { [Threading.Thread]::Sleep(1000) }
-'@)
-        $startOptions = @{
-            FilePath = Get-PowerShellExecutable
-            WindowStyle = "Hidden"
-            PassThru = $true
-            RedirectStandardOutput = Join-Path $temporaryRoot "supervisor-stdout.txt"
-            RedirectStandardError = $supervisorErrorPath
-            RedirectStandardInput = $stdinPath
-            ArgumentList = (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $supervisorPath, $requestPath) |
-                ForEach-Object { Format-NativeArgument $_ }) -join ' '
-        }
-        $probeJob = New-InstallProbeJob
-        $timer.Restart()
-        $process = Start-Process @startOptions
-        # Windows PowerShell needs the handle retained to report the exit code.
-        [void] $process.Handle
-        $probeJob.Assign($process.Handle)
-        [IO.File]::WriteAllText($startPath, "")
-        while (-not [IO.File]::Exists($statusPath)) {
-            if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
-                throw "Command timed out after ${TimeoutSeconds}s: $commandText"
-            }
-            if ($process.WaitForExit(25)) {
-                $stderr = Read-SharedUtf8File $supervisorErrorPath
-                throw "Probe supervisor exited before reporting command status: $commandText`n$stderr"
-            }
-        }
-        $exitCode = [int] (Read-SharedUtf8File $statusPath)
-        $output = (Read-SharedUtf8File $stdoutPath).Trim()
-        $stderr = ((Read-SharedUtf8File $stderrPath) + (Read-SharedUtf8File $supervisorErrorPath)).Trim()
-        if ($exitCode -ne 0) {
-            throw "Command failed with exit code ${exitCode}: $commandText`n$output`n$stderr"
-        }
-        return $output
-    }
-    catch {
-        Write-InstallLog "Probe failed: $commandText`n$($_.Exception.Message)"
-        Write-WindowsLaunchGuidance -FilePath $FilePath -Exception $_.Exception -Stderr $stderr
-        throw
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = $null
+        $captured = @(& $FilePath @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
     }
     finally {
-        try {
-            if ($null -ne $probeJob) { $probeJob.Dispose() }
-            if ($null -ne $process) {
-                if (-not $process.HasExited) {
-                    # Assignment failure leaves only the gated supervisor alive.
-                    $process.Kill()
-                    [void] $process.WaitForExit(5000)
-                }
-                if ($null -ne $exitCode) {
-                    Write-InstallLog "Exit code $exitCode after $($timer.Elapsed.TotalSeconds.ToString('F1'))s: $commandText"
-                }
-            }
-        }
-        catch { Write-InstallLog "Probe cleanup failed: $($_.Exception.Message)" }
-        finally {
-            if ($null -ne $process) { $process.Dispose() }
-            [Console]::OutputEncoding = $originalOutputEncoding
-        }
-        foreach ($stream in @($stdoutPath, $stderrPath, $supervisorErrorPath)) {
-            if ([IO.File]::Exists($stream)) {
-                try {
-                    Write-InstallLog "$([IO.Path]::GetFileName($stream)): $(Read-SharedUtf8File $stream)"
-                }
-                catch { Write-InstallLog "Could not read probe output: $($_.Exception.Message)" }
-            }
-        }
-        Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
+        [Console]::OutputEncoding = $originalOutputEncoding
+        $ErrorActionPreference = $originalErrorPreference
     }
+    $output = ($captured | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] } | Out-String).Trim()
+    $errors = @($captured | Where-Object { $_ -is [Management.Automation.ErrorRecord] })
+    $stderr = ($errors | ForEach-Object { $_.ToString() } | Out-String).Trim()
+    Write-InstallLog "Exit code ${exitCode}: $commandText`n$output`n$stderr"
+    if ($null -eq $exitCode -or $exitCode -ne 0) {
+        $cause = if ($errors.Count) { $errors[0].Exception } else { $null }
+        Write-WindowsLaunchGuidance -FilePath $FilePath -Exception $cause -Stderr $stderr
+        throw "Command failed with exit code ${exitCode}: $commandText`n$output`n$stderr"
+    }
+
+    return $output
 }
 
 function Get-ApplicationCommand {
@@ -723,12 +513,11 @@ function Add-NpmBinDirectories {
         return
     }
 
-    $prefix = ""
-    try { $prefix = Invoke-Utf8NativeCapture $npm.Source @("prefix", "-g") } catch { }
-    if ([string]::IsNullOrWhiteSpace($prefix)) {
-        try { $prefix = Invoke-Utf8NativeCapture $npm.Source @("config", "get", "prefix") } catch { }
+    $prefix = (& $npm.Source prefix -g 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($prefix)) {
+        $prefix = (& $npm.Source config get prefix 2>$null | Out-String).Trim()
     }
-    if (-not [string]::IsNullOrWhiteSpace($prefix)) {
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($prefix)) {
         Add-PathEntry $prefix
     }
 }
@@ -744,59 +533,6 @@ function Assert-NoFccProcessesRunning {
 
     if ($running.Count -gt 0) {
         throw "Free Claude Code is still running ($($running -join ', ')). Stop those processes, then rerun the installer."
-    }
-}
-
-function Invoke-InstallerDownload {
-    param([string] $Uri, [string] $OutFile = "", [int] $TimeoutSeconds = 30)
-
-    $options = @{ Uri = $Uri; TimeoutSec = $TimeoutSeconds; ErrorAction = "Stop" }
-    if ($OutFile) { $options.OutFile = $OutFile }
-    for ($attempt = 0; $attempt -lt 3; $attempt++) {
-        $timer = [Diagnostics.Stopwatch]::StartNew()
-        Write-InstallLog "Download attempt $($attempt + 1): $Uri (deadline ${TimeoutSeconds}s)"
-        try {
-            if ($OutFile -and (Test-Path -LiteralPath $OutFile)) {
-                Remove-Item -LiteralPath $OutFile -Force
-            }
-            $result = Invoke-RestMethod @options
-            Write-InstallLog "Download completed after $($timer.Elapsed.TotalSeconds.ToString('F1'))s: $Uri"
-            return $result
-        }
-        catch {
-            Write-InstallLog "Download failed after $($timer.Elapsed.TotalSeconds.ToString('F1'))s: $Uri`n$($_.Exception.Message)"
-            $transient = $false
-            $response = $null
-            for ($cause = $_.Exception; $null -ne $cause; $cause = $cause.InnerException) {
-                if ($cause.PSObject.Properties["Response"] -and $cause.Response) { $response = $cause.Response }
-                if ($cause -is [Net.WebException] -and $cause.Status -in @(
-                    "Timeout", "ConnectFailure", "ConnectionClosed", "ReceiveFailure", "SendFailure", "KeepAliveFailure", "NameResolutionFailure"
-                )) { $transient = $true }
-                if ($cause -is [Threading.Tasks.TaskCanceledException]) { $transient = $true }
-                if ($cause -is [Net.Sockets.SocketException] -and $cause.SocketErrorCode -in @(
-                    "TimedOut", "ConnectionReset", "ConnectionRefused", "NetworkDown", "NetworkUnreachable", "HostUnreachable", "TryAgain"
-                )) { $transient = $true }
-            }
-            $delay = $attempt + 1
-            if ($response) {
-                $transient = [int] $response.StatusCode -in @(408, 429, 500, 502, 503, 504)
-                $retryAfter = if ($response.Headers -is [Net.WebHeaderCollection]) {
-                    $response.Headers["Retry-After"]
-                }
-                else { [string] $response.Headers.RetryAfter }
-                $seconds = 0
-                $date = [DateTimeOffset]::MinValue
-                if ([int]::TryParse($retryAfter, [ref] $seconds)) {
-                    $delay = [Math]::Max($delay, [Math]::Min(30, $seconds))
-                }
-                elseif ([DateTimeOffset]::TryParse($retryAfter, [ref] $date)) {
-                    $delay = [Math]::Max($delay, [Math]::Min(30, [Math]::Ceiling(($date - [DateTimeOffset]::UtcNow).TotalSeconds)))
-                }
-            }
-            if (-not $transient -or $attempt -eq 2) { throw }
-            Write-Host "Temporary download failure. Retrying in $delay second(s): $Uri"
-            Start-Sleep -Seconds $delay
-        }
     }
 }
 
@@ -824,7 +560,7 @@ function Invoke-DownloadedPowerShellInstaller {
     $temporaryScript = Join-Path ([IO.Path]::GetTempPath()) ("fcc-install-" + [guid]::NewGuid().ToString("N") + ".ps1")
     try {
         Write-Host "+ irm $Url -OutFile $(Format-Argument $temporaryScript)"
-        Invoke-InstallerDownload -Uri $Url -OutFile $temporaryScript
+        Invoke-RestMethod -Uri $Url -OutFile $temporaryScript -ErrorAction Stop
         if ((-not (Test-Path -LiteralPath $temporaryScript)) -or ((Get-Item -LiteralPath $temporaryScript).Length -eq 0)) {
             throw "The downloaded $Name installer was empty."
         }
@@ -893,12 +629,13 @@ function Test-PiApplication {
     param($Command)
 
     try {
-        $helpOutput = Invoke-Utf8NativeCapture -FilePath $Command.Source -Arguments @("--help")
+        $helpOutput = (& $Command.Source --help 2>$null | Out-String)
     }
     catch {
         return $false
     }
     return (
+        $LASTEXITCODE -eq 0 -and
         $helpOutput.Contains("--extension") -and
         $helpOutput.Contains("--models")
     )
@@ -937,7 +674,7 @@ function Install-Rtk {
         New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
 
         Write-Host "+ irm $archiveUrl -OutFile $(Format-Argument $archivePath)"
-        Invoke-InstallerDownload -Uri $archiveUrl -OutFile $archivePath -TimeoutSeconds 600
+        Invoke-RestMethod -Uri $archiveUrl -OutFile $archivePath -ErrorAction Stop
         if ((-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) -or ((Get-Item -LiteralPath $archivePath).Length -eq 0)) {
             throw "The RTK release archive was empty."
         }
@@ -1172,7 +909,29 @@ function Test-SupportedStableVersion {
 function Read-OpenCodeVersionOutput {
     param([string] $OpenCodePath)
 
-    return Invoke-Utf8NativeCapture -FilePath $OpenCodePath -Arguments @("--version")
+    $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ("fcc-opencode-version-" + [guid]::NewGuid().ToString("N"))
+    $stdoutPath = Join-Path $temporaryRoot "stdout.txt"
+    $stderrPath = Join-Path $temporaryRoot "stderr.txt"
+    $process = $null
+    try {
+        New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
+        $process = Start-Process -FilePath $OpenCodePath -ArgumentList @("--version") -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        # Windows PowerShell needs the handle retained to report the exit code.
+        [void] $process.Handle
+        if (-not $process.WaitForExit(10000)) {
+            & "$env:SYSTEMROOT\System32\taskkill.exe" /PID $process.Id /T /F *> $null
+            [void] $process.WaitForExit(5000)
+            throw "OpenCode version probe timed out at '$OpenCodePath'."
+        }
+        if ($process.ExitCode -ne 0) {
+            throw "OpenCode version probe failed at '$OpenCodePath' (exit code $($process.ExitCode))."
+        }
+        return [IO.File]::ReadAllText($stdoutPath)
+    }
+    finally {
+        if ($null -ne $process) { $process.Dispose() }
+        Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-OpenCodeVersion {
@@ -1249,7 +1008,7 @@ function Install-OpenCode {
         return
     }
 
-    $release = Invoke-InstallerDownload -Uri "https://opencode.ai/update/api/latest/cli/npm"
+    $release = Invoke-RestMethod -Uri "https://opencode.ai/update/api/latest/cli/npm" -ErrorAction Stop
     if ($release.version -isnot [string] -or $release.version -notmatch '^2\.\d+\.\d+$') {
         throw "The OpenCode release channel did not return a stable OpenCode 2 version."
     }
@@ -1262,7 +1021,7 @@ function Install-OpenCode {
     try {
         New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
         Write-Host "+ irm $archiveUrl -OutFile $(Format-Argument $archivePath)"
-        Invoke-InstallerDownload -Uri $archiveUrl -OutFile $archivePath -TimeoutSeconds 600
+        Invoke-RestMethod -Uri $archiveUrl -OutFile $archivePath -ErrorAction Stop
         if ((-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) -or ((Get-Item -LiteralPath $archivePath).Length -eq 0)) {
             throw "The OpenCode release archive was empty."
         }
@@ -1448,7 +1207,7 @@ function Install-Aider {
         $uvPath = $uvCommand.Source
     }
 
-    Invoke-NativeCommand -FilePath $uvPath -LogOutput -Arguments @(
+    Invoke-NativeCommand -FilePath $uvPath -Arguments @(
         "tool",
         "install",
         "--force",
@@ -1690,62 +1449,52 @@ function Confirm-SelectedPrerequisites {
 
 function Ensure-SelectedCodingAgents {
     if ($script:InstallClaudeCode) {
-        Start-InstallStep "Claude Code"
-        Write-Step "Ensuring Claude Code is installed"
+        Start-InstallStep "Claude Code" "Ensuring Claude Code is installed"
         Ensure-ClaudeCode
     }
 
     if ($script:InstallCodex) {
-        Start-InstallStep "Codex"
-        Write-Step "Ensuring Codex is installed"
+        Start-InstallStep "Codex" "Ensuring Codex is installed"
         Ensure-Codex
     }
 
     if ($script:InstallPi) {
-        Start-InstallStep "Pi"
-        Write-Step "Checking or installing Pi"
+        Start-InstallStep "Pi" "Checking or installing Pi"
         Ensure-Pi
     }
 
     if ($script:InstallOpenCode) {
-        Start-InstallStep "OpenCode"
-        Write-Step "Ensuring OpenCode is installed"
+        Start-InstallStep "OpenCode" "Ensuring OpenCode is installed"
         Ensure-OpenCode
     }
 
     if ($script:InstallCline) {
-        Start-InstallStep "Cline"
-        Write-Step "Ensuring Cline CLI is installed"
+        Start-InstallStep "Cline" "Ensuring Cline CLI is installed"
         Ensure-Cline
     }
 
     if ($script:InstallHermes) {
-        Start-InstallStep "Hermes"
-        Write-Step "Ensuring Hermes Agent is installed"
+        Start-InstallStep "Hermes" "Ensuring Hermes Agent is installed"
         Ensure-Hermes
     }
 
     if ($script:InstallDsh) {
-        Start-InstallStep "DeepSeek Harness"
-        Write-Step "Ensuring DeepSeek Harness is installed"
+        Start-InstallStep "DeepSeek Harness" "Ensuring DeepSeek Harness is installed"
         Ensure-Dsh
     }
 
     if ($script:InstallGrok) {
-        Start-InstallStep "Grok"
-        Write-Step "Ensuring Grok Build is installed"
+        Start-InstallStep "Grok" "Ensuring Grok Build is installed"
         Ensure-Grok
     }
 
     if ($script:InstallMuse) {
-        Start-InstallStep "Muse"
-        Write-Step "Ensuring Muse Code is installed"
+        Start-InstallStep "Muse" "Ensuring Muse Code is installed"
         Ensure-Muse
     }
 
     if ($script:InstallAider) {
-        Start-InstallStep "Aider"
-        Write-Step "Ensuring Aider is installed"
+        Start-InstallStep "Aider" "Ensuring Aider is installed"
         Ensure-Aider
     }
 
@@ -1888,7 +1637,7 @@ function Install-FreeClaudeCode {
         }
         $uvPath = $uvCommand.Source
     }
-    Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments -LogOutput
+    Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments
 }
 
 function Export-FccDesktopIcon {
@@ -1897,9 +1646,29 @@ function Export-FccDesktopIcon {
         [string] $IconPath
     )
 
-    # The probe waits for GUI applications too, with a longer icon-export deadline.
-    $null = Invoke-Utf8NativeCapture -FilePath $DesktopCommand -Arguments @("--export-icon", $IconPath) -TimeoutSeconds 30
-    if ($DryRun) { return }
+    $arguments = @("--export-icon", $IconPath)
+    $commandText = Format-Command -FilePath $DesktopCommand -Arguments $arguments
+    Write-Host "+ $commandText"
+    if ($DryRun) {
+        return
+    }
+
+    # PowerShell does not wait when directly invoking a Windows GUI executable.
+    $process = Start-Process `
+        -FilePath $DesktopCommand `
+        -ArgumentList @("--export-icon", ('"' + $IconPath + '"')) `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
+    try {
+        $exitCode = $process.ExitCode
+    }
+    finally {
+        $process.Dispose()
+    }
+    if ($exitCode -ne 0) {
+        throw "Command failed with exit code ${exitCode}: $commandText"
+    }
     if (-not (Test-Path -LiteralPath $IconPath -PathType Leaf)) {
         throw "Free Claude Code did not export its Windows app icon to '$IconPath'."
     }
@@ -1950,6 +1719,7 @@ function Configure-AndConfirmFreeClaudeCode {
     }
 
     Write-Host (Invoke-Utf8NativeCapture -FilePath $installedCommands["fcc-server"] -Arguments @("--version"))
+    $script:FccVerified = $true
     Start-InstallStep "Desktop integration"
     Export-FccDesktopIcon `
         -DesktopCommand $installedCommands["fcc-desktop"] `
@@ -2020,7 +1790,47 @@ function Install-FccDesktopShortcuts {
         $shortcut.IconLocation = "$IconPath,0"
         $shortcut.Description = "Run Free Claude Code in the background"
         $shortcut.Save()
+        if ($shortcutPath -eq $shortcutPaths[0]) { $script:DesktopReady = $true }
     }
+}
+
+function Show-InstallerNextSteps {
+    Write-Host "`nFree Claude Code is installed and verified."
+    if ($script:DesktopReady) {
+        Write-Host "Open the Free Claude Code desktop shortcut to run it in the background."
+    }
+    Write-Host "For terminal use, start the proxy with: fcc-server"
+    if ($script:InstallClaudeCode) {
+        Write-Host "Run Claude Code with: fcc-claude"
+    }
+    if ($script:InstallCodex) {
+        Write-Host "Run Codex with: fcc-codex"
+    }
+    if ($script:PiAvailable) {
+        Write-Host "Run Pi with: fcc-pi"
+    }
+    if ($script:InstallOpenCode) {
+        Write-Host "Run OpenCode with: fcc-opencode"
+    }
+    if ($script:InstallCline) {
+        Write-Host "Run Cline with: fcc-cline"
+    }
+    if ($script:InstallHermes) {
+        Write-Host "Run Hermes Agent with: fcc-hermes"
+    }
+    if ($script:InstallDsh) {
+        Write-Host "Run DeepSeek Harness with: fcc-dsh"
+    }
+    if ($script:InstallGrok) {
+        Write-Host "Run Grok Build with: fcc-grok"
+    }
+    if ($script:MuseAvailable) {
+        Write-Host "Run Muse Code with: fcc-muse"
+    }
+    if ($script:InstallAider) {
+        Write-Host "Run Aider with: fcc-aider"
+    }
+
 }
 
 if ($Help) {
@@ -2040,6 +1850,7 @@ if ((-not [string]::IsNullOrWhiteSpace($TorchBackend)) -and (-not $VoiceLocal)) 
 Initialize-InstallLog
 $script:InstallSteps["Preflight"] = "Not attempted"
 $installSucceeded = $false
+$installError = $null
 try {
     Start-InstallStep "Preflight"
     # Preserve the user's winning command before adding installer search paths.
@@ -2065,6 +1876,7 @@ try {
     }
 
     $script:InstallSteps["uv"] = "Not attempted"
+    $selectedAgents = @()
     foreach ($choice in @(
         @("Claude Code", $script:InstallClaudeCode), @("Codex", $script:InstallCodex),
         @("Pi", $script:InstallPi), @("OpenCode", $script:InstallOpenCode),
@@ -2072,26 +1884,35 @@ try {
         @("DeepSeek Harness", $script:InstallDsh), @("Grok", $script:InstallGrok),
         @("Muse", $script:InstallMuse), @("Aider", $script:InstallAider)
     )) {
-        $script:InstallSteps[$choice[0]] = if ($choice[1]) { "Not attempted" } else { "Skipped" }
+        if ($choice[1]) {
+            $script:InstallSteps[$choice[0]] = "Not attempted"
+            $selectedAgents += $choice[0]
+        }
     }
     foreach ($name in @("FCC package", "PATH configuration", "FCC verification", "Desktop integration")) {
         $script:InstallSteps[$name] = "Not attempted"
     }
-    $script:InstallSteps["RTK configuration"] = if ($script:EnableRtk) { "Not attempted" } else { "Skipped" }
+    if ($script:EnableRtk) { $script:InstallSteps["RTK configuration"] = "Not attempted" }
+
+    Write-Host "`nInstallation plan:"
+    Write-Host "  Install or update Free Claude Code."
+    Write-Host "  Verify or install: $($selectedAgents -join ', ')."
+    if ($VoiceLocal) { Write-Host "  Include local voice support." }
+    if ($TorchBackend) { Write-Host "  PyTorch backend: $TorchBackend" }
+    if ($script:EnableRtk) { Write-Host "  Configure RTK for the selected agents." }
+    Write-Host "Press Ctrl+C to cancel. You can rerun the installer afterward."
+    $script:InstallStageCount = $script:InstallSteps.Count - 1
 
     Confirm-SelectedPrerequisites
 
-    Start-InstallStep "uv"
-    Write-Step "Ensuring uv $MinUvVersion or newer is installed"
+    Start-InstallStep "uv" "Ensuring uv $MinUvVersion or newer is installed"
     Ensure-Uv
 
     Ensure-SelectedCodingAgents
 
-    Start-InstallStep "FCC package"
-    Write-Step "Installing or updating Free Claude Code"
+    Start-InstallStep "FCC package" "Installing or updating Free Claude Code"
     Install-FreeClaudeCode
 
-    Write-Step "Configuring PATH and verifying Free Claude Code"
     Configure-AndConfirmFreeClaudeCode
 
     if ($script:EnableRtk) {
@@ -2102,67 +1923,16 @@ try {
     $installSucceeded = $true
 }
 catch {
+    $installError = $_
     Write-InstallLog $_.Exception.Message
     throw
 }
 finally {
-    if (-not $installSucceeded) { Complete-InstallStep "Failed" }
-    Show-InstallReport -Succeeded $installSucceeded
+    $cancelled = (-not $installSucceeded) -and ($null -eq $installError)
+    if ($cancelled) { Complete-InstallStep "Cancelled" }
+    elseif (-not $installSucceeded) { Complete-InstallStep "Failed" }
+    Show-InstallReport -Succeeded $installSucceeded -Cancelled $cancelled
+    if ($script:FccVerified) { Show-InstallerNextSteps }
 }
 
-Write-Host ""
-if ($DryRun) {
-    Write-Host "Dry run complete. No changes were made."
-}
-else {
-    Write-Host "Free Claude Code is installed and verified. Open the Free Claude Code desktop shortcut to run it in the background."
-    Write-Host "For terminal use, start the proxy with: fcc-server"
-    if ($script:InstallClaudeCode) {
-        Write-Host "Run Claude Code with: fcc-claude"
-    }
-    if ($script:InstallCodex) {
-        Write-Host "Run Codex with: fcc-codex"
-    }
-    if ($script:PiAvailable) {
-        Write-Host "Run Pi with: fcc-pi"
-    }
-    if ($script:InstallOpenCode) {
-        Write-Host "Run OpenCode with: fcc-opencode"
-    }
-    if ($script:InstallCline) {
-        Write-Host "Run Cline with: fcc-cline"
-    }
-    else {
-        Write-Host "The fcc-cline wrapper is ready after you install Cline CLI."
-    }
-    if ($script:InstallHermes) {
-        Write-Host "Run Hermes Agent with: fcc-hermes"
-    }
-    else {
-        Write-Host "The fcc-hermes wrapper is ready after you install Hermes Agent."
-    }
-    if ($script:InstallDsh) {
-        Write-Host "Run DeepSeek Harness with: fcc-dsh"
-    }
-    else {
-        Write-Host "The fcc-dsh wrapper is ready after you install DeepSeek Harness >=$DshMinimumVersion."
-    }
-    if ($script:InstallGrok) {
-        Write-Host "Run Grok Build with: fcc-grok"
-    }
-    else {
-        Write-Host "The fcc-grok wrapper is ready after you install Grok Build."
-    }
-    if ($script:MuseAvailable) {
-        Write-Host "Run Muse Code with: fcc-muse"
-    }
-    else {
-        Write-Host "The fcc-muse wrapper is ready after you install Muse Code."
-    }
-    if ($script:InstallAider) {
-        Write-Host "Run Aider with: fcc-aider"
-    }
-    else {
-        Write-Host "The fcc-aider wrapper is ready after you install Aider."
-    }
-}
+if ($DryRun) { Write-Host "Dry run complete. No changes were made." }

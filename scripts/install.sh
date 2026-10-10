@@ -41,12 +41,16 @@ pi_available=0
 rtk_path=""
 install_log=""
 install_log_warning=0
-install_state_directory=""
 install_report_started=0
 install_report=""
 pending_steps=""
 current_install_step=""
 install_step_outcome=Completed
+install_stage_number=0
+install_stage_count=0
+install_cancelled=0
+fcc_verified=0
+desktop_ready=0
 installer_path=$0
 # With a piped installer, $0 names the shell, which may be an existing binary.
 case "${installer_path##*/}" in
@@ -76,26 +80,18 @@ fail() {
 
 write_install_log() {
     [ -n "$install_log" ] || return 0
-    if [ -n "$install_state_directory" ] && [ -d "$install_state_directory/log-disabled" ]; then
-        return 0
-    fi
     if { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >>"$install_log"; } 2>/dev/null; then
         return 0
     fi
     install_log=""
     if [ "$install_log_warning" -eq 0 ]; then
         install_log_warning=1
-        # Probes run in subshells. Share the warning state so a failed log does
-        # not print the same warning for every remaining probe.
-        if [ -z "$install_state_directory" ] || mkdir "$install_state_directory/log-disabled" 2>/dev/null; then
-            printf 'warning: Could not write the installer log. Installation will continue.\n' >&2
-        fi
+        printf 'warning: Could not write the installer log. Installation will continue.\n' >&2
     fi
 }
 
 initialize_install_log() {
     [ "$dry_run" -eq 0 ] || return 0
-    install_state_directory=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fcc-installer.XXXXXX" 2>/dev/null) || install_state_directory=""
     log_timestamp=$(date '+%Y%m%d-%H%M%S' 2>/dev/null) || log_timestamp=unknown
     install_log="${HOME:-}/.fcc/logs/install-$log_timestamp-$$.log"
     if [ -n "${HOME:-}" ] && (umask 077; mkdir -p "$HOME/.fcc/logs" && set -C && : >"$install_log") 2>/dev/null; then
@@ -117,6 +113,7 @@ complete_install_step() {
 }
 
 start_install_step() {
+    if [ "$dry_run" -eq 1 ]; then step "${2:-$1}"; return 0; fi
     [ "$install_report_started" -eq 1 ] || return 0
     complete_install_step
     current_install_step=$1
@@ -129,6 +126,10 @@ start_install_step() {
 '} ;;
     esac
     write_install_log "Starting: $1"
+    if [ "$install_stage_count" -gt 0 ]; then
+        install_stage_number=$((install_stage_number + 1))
+        printf '\n[%s/%s] %s\n' "$install_stage_number" "$install_stage_count" "${2:-$1}"
+    fi
 }
 
 print_installer_retry() {
@@ -153,23 +154,33 @@ finish_install() {
     trap - EXIT
     set +e
     if [ "$install_report_started" -eq 1 ]; then
-        if [ "$install_exit_code" -ne 0 ]; then
+        if [ "$install_cancelled" -eq 1 ]; then
+            complete_install_step Cancelled
+        elif [ "$install_exit_code" -ne 0 ]; then
             complete_install_step Failed
         else
             complete_install_step
         fi
-        printf '\nInstallation summary:\n%s' "$install_report"
-        if [ -n "$pending_steps" ]; then
-            printf '%s\n' "$pending_steps" | while IFS= read -r pending; do
-                printf 'Not attempted: %s\n' "$pending"
-            done
+        if [ "$install_exit_code" -ne 0 ]; then
+            if [ "$install_cancelled" -eq 1 ]; then
+                printf '\nInstallation cancelled.\n'
+            else
+                printf '\nInstallation did not finish.\n'
+            fi
+            printf '%s' "$install_report"
+            if [ -n "$pending_steps" ]; then
+                printf '%s\n' "$pending_steps" | while IFS= read -r pending; do
+                    printf 'Not attempted: %s\n' "$pending"
+                done
+            fi
+            printf 'Completed changes have been kept. Rerun the installer to try again.\n'
+            print_installer_retry
+            if [ "$install_cancelled" -eq 0 ]; then
+                printf 'For help, include the terminal error and the installer log.\n'
+            fi
         fi
         [ -z "$install_log" ] || printf 'Installer log: %s\n' "$install_log"
-        if [ "$install_exit_code" -ne 0 ]; then
-            printf 'When reporting this failure, include the terminal error and the installer log. Interactive installer output is only shown in the terminal.\n'
-            printf 'Completed changes have been kept. Resolve the error, then rerun the installer.\n'
-            print_installer_retry
-        fi
+        if [ "$fcc_verified" -eq 1 ]; then show_installer_next_steps; fi
     fi
     cleanup
     exit "$install_exit_code"
@@ -373,156 +384,7 @@ run() {
     fail "Command failed with exit code $status: $1"
 }
 
-run_logged() {
-    if [ "$dry_run" -eq 1 ] || [ -z "$install_state_directory" ]; then
-        run "$@"
-        return
-    fi
-    print_command "$@"
-    write_install_log "$(print_command "$@")"
-    run_started=$(date +%s)
-    # Save the command's status separately: a POSIX pipeline reports the last
-    # stage's status. Log failures must not replace the package command's result.
-    (
-        if "$@"; then status=0; else status=$?; fi
-        printf '%s\n' "$status" >"$install_state_directory/package-status"
-    ) 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
-        printf '%s\n' "$line"
-        write_install_log "$line"
-    done
-    read -r status <"$install_state_directory/package-status"
-    rm -f "$install_state_directory/package-status"
-    write_install_log "Exit code $status after $(($(date +%s) - run_started))s: $1"
-    [ "$status" -eq 0 ] || fail "Command failed with exit code $status: $1"
-}
-
-# Keep terminal-attached installers in run(). Only noninteractive probes use this
-# supervisor, whose private process group lets cancellation clean up descendants.
-probe_capture() (
-    probe_seconds=$1
-    shift
-    [ "$dry_run" -eq 0 ] || { print_command "$@" >&2; return 0; }
-    probe_directory=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fcc-probe.XXXXXX") || return 125
-    probe_supervisor=""
-    probe_cleanup() {
-        if [ -n "$probe_supervisor" ]; then
-            kill -s TERM "$probe_supervisor" 2>/dev/null || :
-            wait "$probe_supervisor" 2>/dev/null || :
-        fi
-        rm -rf "$probe_directory"
-    }
-    trap probe_cleanup EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' HUP TERM
-    write_install_log "$(print_command "$@") (deadline ${probe_seconds}s)"
-    probe_started=$(date +%s)
-    BASH_ENV= ENV= bash --noprofile --norc -s -- "$probe_seconds" "$probe_directory" "$@" <<'PROBE' &
-set +e
-set -u
-seconds=$1
-scratch=$2
-shift 2
-probe_pid=
-probe_group=
-stop_probe() {
-    if [ -n "$probe_group" ]; then
-        if [ "$1" -eq 1 ]; then
-            kill -s TERM -- "-$probe_group" 2>/dev/null || :
-            sleep 1
-        fi
-        kill -s KILL -- "-$probe_group" 2>/dev/null || :
-    elif [ -n "$probe_pid" ]; then
-        kill -s KILL "$probe_pid" 2>/dev/null || :
-    fi
-    [ -z "$probe_pid" ] || wait "$probe_pid" 2>/dev/null || :
-    probe_pid=
-    probe_group=
-}
-cancel() {
-    trap '' HUP INT TERM
-    stop_probe 1
-    exit "$1"
-}
-trap 'cancel 130' INT
-trap 'cancel 143' HUP TERM
-trap 'stop_probe 0' EXIT
-mkfifo "$scratch/status.fifo" "$scratch/stdout.fifo" "$scratch/stderr.fifo" || exit 125
-set -m
-(
-    set +m
-    # The parent verifies our group before opening this FIFO. Keep its leader
-    # alive after the command exits so cleanup cannot target a reused group ID.
-    exec 3>"$scratch/status.fifo"
-    trap ':' HUP INT TERM
-    # Readers finish only after all inherited writers close their handles.
-    # They stay in this group, so the deadline also bounds output draining.
-    cat <"$scratch/stdout.fifo" >"$scratch/stdout" 3>&- &
-    stdout_reader=$!
-    cat <"$scratch/stderr.fifo" >"$scratch/stderr" 3>&- &
-    stderr_reader=$!
-    "$@" </dev/null >"$scratch/stdout.fifo" 2>"$scratch/stderr.fifo" 3>&-
-    status=$?
-    wait "$stdout_reader" || status=125
-    wait "$stderr_reader" || status=125
-    printf '%s\n' "$status" >&3
-    while :; do sleep 60; done
-) 2>/dev/null &
-probe_pid=$!
-set +m
-group=$(ps -o pgid= -p "$probe_pid" 2>/dev/null) || exit 125
-case "$group" in *[!0-9[:space:]]*|'') exit 125 ;; esac
-[ "$group" -eq "$probe_pid" ] || exit 125
-probe_group=$probe_pid
-exec 3<"$scratch/status.fifo"
-if IFS= read -r -t "$seconds" status <&3; then
-    case "$status" in ''|*[!0-9]*) exit 125 ;; esac
-    stop_probe 0
-else
-    : >"$scratch/timed-out"
-    stop_probe 1
-    status=124
-fi
-exit "$status"
-PROBE
-    probe_supervisor=$!
-    if wait "$probe_supervisor"; then probe_status=0; else probe_status=$?; fi
-    probe_supervisor=""
-    for stream in stdout stderr; do
-        if [ -f "$probe_directory/$stream" ]; then
-            write_install_log "$stream: $(cat "$probe_directory/$stream")"
-        fi
-    done
-    write_install_log "Exit code $probe_status after $(($(date +%s) - probe_started))s: $1"
-    [ ! -f "$probe_directory/stdout" ] || cat "$probe_directory/stdout"
-    [ ! -f "$probe_directory/stderr" ] || cat "$probe_directory/stderr" >&2
-    if [ -f "$probe_directory/timed-out" ]; then
-        printf 'Command timed out after %ss: %s\n' "$probe_seconds" "$1" >&2
-        write_install_log "Command timed out: $1"
-    fi
-    exit "$probe_status"
-)
-
-run_probe() {
-    probe_limit=$1
-    shift
-    print_command "$@"
-    if probe_capture "$probe_limit" "$@"; then return 0; else probe_result=$?; fi
-    fail "Command failed with exit code $probe_result: $1"
-}
-
-download_file() {
-    download_limit=$3
-    # curl resets a partial output file before a retry. Bound both each transfer
-    # and the supervisor so even a long Retry-After cannot stall the installer.
-    probe_capture "$((download_limit * 3 + 30))" curl -fsSL --connect-timeout 10 \
-        --max-time "$download_limit" --retry 2 --retry-connrefused \
-        --retry-max-time "$((download_limit * 2 + 30))" "$1" -o "$2"
-}
-
 cleanup() {
-    if [ -n "$install_state_directory" ]; then
-        rm -rf "$install_state_directory"
-    fi
     if [ -n "$temporary_file" ] && [ -e "$temporary_file" ]; then
         rm -f "$temporary_file"
     fi
@@ -532,8 +394,8 @@ cleanup() {
 }
 
 trap 'finish_install "$?"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' HUP TERM
+trap 'install_cancelled=1; exit 130' INT
+trap 'install_cancelled=1; exit 143' HUP TERM
 
 add_path_entry() {
     [ -n "$1" ] || return 0
@@ -574,7 +436,7 @@ add_known_bin_directories() {
 
 add_uv_tool_bin_directory() {
     print_command uv tool dir --bin
-    if tool_bin=$(probe_capture 10 uv tool dir --bin); then
+    if tool_bin=$(uv tool dir --bin); then
         :
     else
         status=$?
@@ -591,7 +453,7 @@ add_npm_bin_directories() {
     [ "$dry_run" -eq 0 ] || return 0
     add_known_bin_directories
     if command -v npm >/dev/null 2>&1; then
-        pi_npm_prefix=$(probe_capture 10 npm prefix -g 2>/dev/null || probe_capture 10 npm config get prefix 2>/dev/null || true)
+        pi_npm_prefix=$(npm prefix -g 2>/dev/null || npm config get prefix 2>/dev/null || true)
         if [ -n "$pi_npm_prefix" ]; then
             add_path_entry "$pi_npm_prefix/bin"
             export PATH
@@ -683,7 +545,7 @@ download_and_run() {
 
     temporary_file=$(mktemp "${TMPDIR:-/tmp}/fcc-install.XXXXXX") || fail "Unable to create a temporary file for $label."
     print_command curl -fsSL "$url" -o "$temporary_file"
-    if download_file "$url" "$temporary_file" 30; then
+    if curl -fsSL "$url" -o "$temporary_file"; then
         :
     else
         status=$?
@@ -737,12 +599,12 @@ verify_command() {
     fi
 
     command_path=$(command -v "$command_name" 2>/dev/null) || fail "$display_name was installed, but '$command_name' is not available on PATH."
-    run_probe 10 "$command_path" --version
+    run "$command_path" --version
 }
 
 pi_command_is_compatible() {
     pi_command_path=$(command -v pi 2>/dev/null) || return 1
-    pi_help=$(probe_capture 10 "$pi_command_path" --help 2>/dev/null) || return 1
+    pi_help=$("$pi_command_path" --help 2>/dev/null) || return 1
     case "$pi_help" in
         *--extension*) ;;
         *) return 1 ;;
@@ -762,7 +624,7 @@ verify_pi_command() {
 
     pi_command_path=$(command -v pi 2>/dev/null) || fail "Pi was installed, but 'pi' is not available on PATH."
     pi_command_is_compatible || fail "The 'pi' command at $pi_command_path is not a compatible Pi Coding Agent."
-    run_probe 10 "$pi_command_path" --version
+    run "$pi_command_path" --version
 }
 
 verify_rtk_command() {
@@ -774,12 +636,12 @@ verify_rtk_command() {
 
     rtk_path=$(command -v rtk 2>/dev/null) || fail "RTK was installed, but 'rtk' is not available on PATH."
     print_command env RTK_TELEMETRY_DISABLED=1 "$rtk_path" --version
-    if ! RTK_TELEMETRY_DISABLED=1 probe_capture 10 "$rtk_path" --version; then
+    if ! RTK_TELEMETRY_DISABLED=1 "$rtk_path" --version; then
         fail "The 'rtk' command at $rtk_path is not a compatible Rust Token Killer installation. Remove the conflicting command from PATH, then rerun the installer."
     fi
 
     print_command env RTK_TELEMETRY_DISABLED=1 "$rtk_path" gain
-    if ! RTK_TELEMETRY_DISABLED=1 probe_capture 10 "$rtk_path" gain; then
+    if ! RTK_TELEMETRY_DISABLED=1 "$rtk_path" gain; then
         fail "The 'rtk' command at $rtk_path is not a compatible Rust Token Killer installation. Remove the conflicting command from PATH, then rerun the installer."
     fi
 }
@@ -823,7 +685,7 @@ install_rtk() {
     [ -n "${HOME:-}" ] || fail "HOME is required to install RTK."
     temporary_file=$(mktemp "${TMPDIR:-/tmp}/fcc-rtk.XXXXXX") || fail "Unable to create a temporary RTK archive."
     print_command curl -fsSL "$rtk_archive_url" -o "$temporary_file"
-    if download_file "$rtk_archive_url" "$temporary_file" 600; then
+    if curl -fsSL "$rtk_archive_url" -o "$temporary_file"; then
         :
     else
         status=$?
@@ -987,7 +849,7 @@ ensure_pi() {
 }
 
 opencode_version() {
-    opencode_output=$(probe_capture 10 "$1" --version) || return 1
+    opencode_output=$("$1" --version) || return 1
     printf '%s\n' "$opencode_output" | sed -nE 's/^[[:space:]]*(opencode([[:space:]]+version)?[[:space:]]+)?v?([0-9]+\.[0-9]+\.[0-9]+)(\+[0-9A-Za-z.-]+)?[[:space:]]*$/\3\4/p'
 }
 
@@ -1159,7 +1021,7 @@ ensure_hermes() {
 }
 
 current_dsh_version() {
-    if output=$(probe_capture 10 dsh --version 2>/dev/null); then
+    if output=$(dsh --version 2>/dev/null); then
         :
     else
         return 1
@@ -1211,7 +1073,7 @@ dsh_version_is_supported() {
 }
 
 current_node_version() {
-    if output=$(probe_capture 10 node --version 2>/dev/null); then
+    if output=$(node --version 2>/dev/null); then
         :
     else
         return 1
@@ -1343,7 +1205,7 @@ ensure_muse() {
 }
 
 install_aider_cli() {
-    run_logged uv tool install --force --python python3.12 --with pip aider-chat@latest
+    run uv tool install --force --python python3.12 --with pip aider-chat@latest
 }
 
 ensure_aider() {
@@ -1363,62 +1225,52 @@ ensure_aider() {
 
 ensure_selected_coding_agents() {
     if [ "$install_claude" -eq 1 ]; then
-        start_install_step "Claude Code"
-        step "Ensuring Claude Code is installed"
+        start_install_step "Claude Code" "Ensuring Claude Code is installed"
         ensure_claude
     fi
 
     if [ "$install_codex" -eq 1 ]; then
-        start_install_step "Codex"
-        step "Ensuring Codex is installed"
+        start_install_step "Codex" "Ensuring Codex is installed"
         ensure_codex
     fi
 
     if [ "$install_pi" -eq 1 ]; then
-        start_install_step "Pi"
-        step "Checking or installing Pi"
+        start_install_step "Pi" "Checking or installing Pi"
         ensure_pi
     fi
 
     if [ "$install_opencode" -eq 1 ]; then
-        start_install_step "OpenCode"
-        step "Ensuring OpenCode is installed"
+        start_install_step "OpenCode" "Ensuring OpenCode is installed"
         ensure_opencode
     fi
 
     if [ "$install_cline" -eq 1 ]; then
-        start_install_step "Cline"
-        step "Ensuring Cline CLI is installed"
+        start_install_step "Cline" "Ensuring Cline CLI is installed"
         ensure_cline
     fi
 
     if [ "$install_hermes" -eq 1 ]; then
-        start_install_step "Hermes"
-        step "Ensuring Hermes Agent is installed"
+        start_install_step "Hermes" "Ensuring Hermes Agent is installed"
         ensure_hermes
     fi
 
     if [ "$install_dsh" -eq 1 ]; then
-        start_install_step "DeepSeek Harness"
-        step "Ensuring DeepSeek Harness is installed"
+        start_install_step "DeepSeek Harness" "Ensuring DeepSeek Harness is installed"
         ensure_dsh
     fi
 
     if [ "$install_grok" -eq 1 ]; then
-        start_install_step "Grok"
-        step "Ensuring Grok Build is installed"
+        start_install_step "Grok" "Ensuring Grok Build is installed"
         ensure_grok
     fi
 
     if [ "$install_muse" -eq 1 ]; then
-        start_install_step "Muse"
-        step "Ensuring Muse Code is installed"
+        start_install_step "Muse" "Ensuring Muse Code is installed"
         ensure_muse
     fi
 
     if [ "$install_aider" -eq 1 ]; then
-        start_install_step "Aider"
-        step "Ensuring Aider is installed"
+        start_install_step "Aider" "Ensuring Aider is installed"
         ensure_aider
     fi
 
@@ -1428,7 +1280,7 @@ ensure_selected_coding_agents() {
 }
 
 current_uv_version() {
-    if output=$(probe_capture 10 uv --version); then
+    if output=$(uv --version); then
         :
     else
         return 1
@@ -1619,9 +1471,9 @@ install_free_claude_code() {
     spec=$(package_spec)
 
     if [ -n "$torch_backend" ]; then
-        run_logged uv tool install --force --refresh-package free-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$spec"
+        run uv tool install --force --refresh-package free-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$spec"
     else
-        run_logged uv tool install --force --refresh-package free-claude-code --python "$PYTHON_VERSION" "$spec"
+        run uv tool install --force --refresh-package free-claude-code --python "$PYTHON_VERSION" "$spec"
     fi
 }
 
@@ -1643,7 +1495,8 @@ configure_and_verify_free_claude_code() {
         [ -x "$tool_bin/$command_name" ] || fail "Free Claude Code installation did not create $tool_bin/$command_name."
     done
 
-    run_probe 10 "$tool_bin/fcc-server" --version
+    run "$tool_bin/fcc-server" --version
+    fcc_verified=1
 }
 
 shell_quote() {
@@ -1687,7 +1540,7 @@ install_macos_desktop_app() {
     fi
 
     mkdir -p "$executable_dir" "$resources_dir" "$desktop_dir"
-    run_probe 30 "$tool_bin/fcc-desktop" --export-icon "$icon_path"
+    run "$tool_bin/fcc-desktop" --export-icon "$icon_path"
     [ -f "$icon_path" ] || fail "Free Claude Code did not export its macOS app icon to $icon_path."
     printf '%s\n' "$FCC_MACOS_BUNDLE_ID" > "$owner_file"
     cat > "$contents_dir/Info.plist" <<'PLIST'
@@ -1735,6 +1588,45 @@ PLIST
     ln -s "$app_dir" "$desktop_link"
 }
 
+show_installer_next_steps() {
+    if [ "$desktop_ready" -eq 1 ]; then
+        printf '\nFree Claude Code is installed and verified. Open Free Claude Code from Applications or the desktop to run it in the background.\n'
+        printf 'For terminal use, start the proxy with: fcc-server\n'
+    else
+        printf '\nFree Claude Code is installed and verified. Start the proxy with: fcc-server\n'
+    fi
+    if [ "$install_claude" -eq 1 ]; then
+        printf 'Run Claude Code with: fcc-claude\n'
+    fi
+    if [ "$install_codex" -eq 1 ]; then
+        printf 'Run Codex with: fcc-codex\n'
+    fi
+    if [ "$pi_available" -eq 1 ]; then
+        printf 'Run Pi with: fcc-pi\n'
+    fi
+    if [ "$install_opencode" -eq 1 ]; then
+        printf 'Run OpenCode with: fcc-opencode\n'
+    fi
+    if [ "$install_cline" -eq 1 ]; then
+        printf 'Run Cline with: fcc-cline\n'
+    fi
+    if [ "$install_hermes" -eq 1 ]; then
+        printf 'Run Hermes Agent with: fcc-hermes\n'
+    fi
+    if [ "$install_dsh" -eq 1 ]; then
+        printf 'Run DeepSeek Harness with: fcc-dsh\n'
+    fi
+    if [ "$install_grok" -eq 1 ]; then
+        printf 'Run Grok Build with: fcc-grok\n'
+    fi
+    if [ "$install_muse" -eq 1 ]; then
+        printf 'Run Muse Code with: fcc-muse\n'
+    fi
+    if [ "$install_aider" -eq 1 ]; then
+        printf 'Run Aider with: fcc-aider\n'
+    fi
+}
+
 parse_args "$@"
 validate_args
 initialize_install_log
@@ -1751,7 +1643,6 @@ if ! command -v hermes >/dev/null 2>&1 && ! hermes_platform_is_supported; then
 fi
 step "Checking for running Free Claude Code processes"
 assert_no_fcc_processes_running
-require_command bash
 
 if ! installer_is_interactive && ! command -v dsh >/dev/null 2>&1; then
     if [ "$dry_run" -eq 1 ] && command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
@@ -1766,7 +1657,7 @@ if installer_is_interactive; then
     choose_coding_agents /dev/tty /dev/tty
 fi
 
-pending_steps=$(printf 'uv\n'
+pending_steps=$(
     [ "$install_claude" -eq 0 ] || printf 'Claude Code\n'
     [ "$install_codex" -eq 0 ] || printf 'Codex\n'
     [ "$install_pi" -eq 0 ] || printf 'Pi\n'
@@ -1777,13 +1668,28 @@ pending_steps=$(printf 'uv\n'
     [ "$install_grok" -eq 0 ] || printf 'Grok\n'
     [ "$install_muse" -eq 0 ] || printf 'Muse\n'
     [ "$install_aider" -eq 0 ] || printf 'Aider\n'
-    printf 'FCC package\nPATH configuration\nFCC verification\n'
+)
+printf '\nInstallation plan:\n  Install or update Free Claude Code.\n  Verify or install: '
+printf '%s\n' "$pending_steps" | while IFS= read -r agent; do
+    printf '%s%s' "${separator:-}" "$agent"
+    separator=', '
+done
+printf '\n'
+[ "$voice_local" -eq 0 ] || printf '  Include local voice support.\n'
+[ -z "$torch_backend" ] || printf '  PyTorch backend: %s\n' "$torch_backend"
+[ "$enable_rtk" -eq 0 ] || printf '  Configure RTK for the selected agents.\n'
+printf 'Press Ctrl+C to cancel. You can rerun the installer afterward.\n'
+pending_steps=$(printf 'uv\n%s\nFCC package\nPATH configuration\nFCC verification\n' "$pending_steps"
     [ "$(uname -s)" != Darwin ] || printf 'Desktop integration\n'
     [ "$enable_rtk" -eq 0 ] || printf 'RTK configuration\n'
 )
+install_stage_count=$(printf '%s\n' "$pending_steps" | wc -l)
 
 step "Checking installation prerequisites"
 require_command curl
+if [ "$install_claude" -eq 1 ] || [ "$install_opencode" -eq 1 ] || [ "$install_hermes" -eq 1 ] || [ "$install_grok" -eq 1 ] || [ "$install_muse" -eq 1 ]; then
+    require_command bash
+fi
 require_command sh
 require_command mktemp
 if [ "$enable_rtk" -eq 1 ] && ! command -v rtk >/dev/null 2>&1; then
@@ -1808,23 +1714,20 @@ if [ "$dry_run" -eq 0 ]; then
     if [ "$enable_rtk" -eq 1 ] && ! command -v rtk >/dev/null 2>&1; then select_rtk_release; fi
 fi
 
-start_install_step uv
-step "Ensuring uv $MIN_UV_VERSION or newer is installed"
+start_install_step uv "Ensuring uv $MIN_UV_VERSION or newer is installed"
 ensure_uv
 
 ensure_selected_coding_agents
 
-start_install_step "FCC package"
-step "Installing or updating Free Claude Code"
+start_install_step "FCC package" "Installing or updating Free Claude Code"
 install_free_claude_code
 
-step "Configuring PATH and verifying Free Claude Code"
 configure_and_verify_free_claude_code
 
 if [ "$(uname -s)" = "Darwin" ]; then
-    start_install_step "Desktop integration"
-    step "Installing the Free Claude Code desktop launcher"
+    start_install_step "Desktop integration" "Installing the Free Claude Code desktop launcher"
     install_macos_desktop_app
+    desktop_ready=1
 fi
 if [ "$enable_rtk" -eq 1 ]; then
     start_install_step "RTK configuration"
@@ -1834,53 +1737,4 @@ complete_install_step
 
 if [ "$dry_run" -eq 1 ]; then
     printf '\nDry run complete. No changes were made.\n'
-else
-    if [ "$(uname -s)" = "Darwin" ]; then
-        printf '\nFree Claude Code is installed and verified. Open Free Claude Code from Applications or the desktop to run it in the background.\n'
-        printf 'For terminal use, start the proxy with: fcc-server\n'
-    else
-        printf '\nFree Claude Code is installed and verified. Start the proxy with: fcc-server\n'
-    fi
-    if [ "$install_claude" -eq 1 ]; then
-        printf 'Run Claude Code with: fcc-claude\n'
-    fi
-    if [ "$install_codex" -eq 1 ]; then
-        printf 'Run Codex with: fcc-codex\n'
-    fi
-    if [ "$pi_available" -eq 1 ]; then
-        printf 'Run Pi with: fcc-pi\n'
-    fi
-    if [ "$install_opencode" -eq 1 ]; then
-        printf 'Run OpenCode with: fcc-opencode\n'
-    fi
-    if [ "$install_cline" -eq 1 ]; then
-        printf 'Run Cline with: fcc-cline\n'
-    else
-        printf 'The fcc-cline wrapper is ready after you install Cline CLI.\n'
-    fi
-    if [ "$install_hermes" -eq 1 ]; then
-        printf 'Run Hermes Agent with: fcc-hermes\n'
-    else
-        printf 'The fcc-hermes wrapper is ready after you install Hermes Agent.\n'
-    fi
-    if [ "$install_dsh" -eq 1 ]; then
-        printf 'Run DeepSeek Harness with: fcc-dsh\n'
-    else
-        printf 'The fcc-dsh wrapper is ready after you install DeepSeek Harness >=%s.\n' "$MIN_DSH_VERSION"
-    fi
-    if [ "$install_grok" -eq 1 ]; then
-        printf 'Run Grok Build with: fcc-grok\n'
-    else
-        printf 'The fcc-grok wrapper is ready after you install Grok Build.\n'
-    fi
-    if [ "$install_muse" -eq 1 ]; then
-        printf 'Run Muse Code with: fcc-muse\n'
-    else
-        printf 'The fcc-muse wrapper is ready after you install Muse Code.\n'
-    fi
-    if [ "$install_aider" -eq 1 ]; then
-        printf 'Run Aider with: fcc-aider\n'
-    else
-        printf 'The fcc-aider wrapper is ready after you install Aider.\n'
-    fi
 fi
