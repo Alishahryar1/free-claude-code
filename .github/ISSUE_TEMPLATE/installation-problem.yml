@@ -7,6 +7,6 @@ body:
     id: description
     attributes:
       label: Installation issue
-      description: Describe what happened and include the error you received. You can attach screenshots here if helpful.
+      description: Describe what happened. Include the terminal error and attach the installer log shown at the end, if available. You can also attach screenshots here.
     validations:
       required: true
