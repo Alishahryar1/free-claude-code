@@ -1,3 +1,4 @@
+import time
 from typing import Any
 
 import httpx
@@ -20,6 +21,7 @@ from smoke.lib.e2e import (
     tool_use_blocks,
 )
 from smoke.lib.http import collect_message_stream, conversation_headers
+from smoke.lib.server import RunningServer
 from smoke.lib.skips import (
     skip_if_upstream_unavailable_events,
     skip_if_upstream_unavailable_exception,
@@ -143,6 +145,60 @@ def test_mistral_native_reasoning_model_e2e(smoke_config: SmokeConfig) -> None:
     assert_native_thinking_stream(
         events,
         context=f"{provider_model.source}={provider_model.full_model}",
+    )
+
+
+def test_mistral_prompt_cache_affinity_e2e(smoke_config: SmokeConfig) -> None:
+    """Mistral prompt caching via the x-affinity session header (merge gate).
+
+    The x-affinity mechanism is reverse-engineered from the official Mistral
+    CLI (mistral-vibe), not a public API contract. Two requests sharing one
+    session id and a long common prefix must report cache reads on the second
+    response. Cache support is model-dependent and best-effort, so the gate
+    pins a model that consistently reports cache reads and retries the
+    follow-up with escalating pauses (the cache is eventually consistent).
+    """
+    provider_model = smoke_config.mistral_cache_smoke_model()
+    if provider_model is None:
+        pytest.skip("missing_env: mistral is not configured")
+
+    headers = conversation_headers(session_id="fcc-smoke-mistral-cache-affinity")
+    first_payload = {
+        # fcc-smoke-default routes to the MODEL override (the Mistral model);
+        # tier names like claude-opus-4-7 would route to MODEL_OPUS instead.
+        "model": "fcc-smoke-default",
+        "max_tokens": 256,
+        "system": _long_cacheable_system_prompt(),
+        "messages": [{"role": "user", "content": "Say hello in one word."}],
+    }
+    second_payload = {
+        **first_payload,
+        "messages": [
+            first_payload["messages"][0],
+            {"role": "user", "content": "Now say goodbye in one word."},
+        ],
+    }
+
+    try:
+        with SmokeServerDriver(
+            smoke_config,
+            name="product-provider-mistral-prompt-cache-affinity",
+            env_overrides={
+                "MODEL": provider_model.full_model,
+                "MODEL_FALLBACKS": "",
+                "MESSAGING_PLATFORM": "none",
+            },
+        ).run() as server:
+            cached_reads = _mistral_cached_reads_with_retry(
+                server, smoke_config, headers, first_payload, second_payload
+            )
+    except Exception as exc:
+        skip_if_upstream_unavailable_exception(exc)
+        raise
+
+    assert cached_reads > 0, (
+        f"{provider_model.source}={provider_model.full_model}: "
+        "no prompt cache reads reported on the second request"
     )
 
 
@@ -648,3 +704,58 @@ def _openai_auth_headers(smoke_config: SmokeConfig) -> dict[str, str]:
     if token:
         headers["authorization"] = f"Bearer {token}"
     return conversation_headers(headers)
+
+
+def _long_cacheable_system_prompt() -> str:
+    """Build a deterministic system prompt far above the minimum cacheable prefix."""
+    paragraph = (
+        "You are a concise assistant in a long-running support conversation. "
+        "Answer every question with a single short sentence and nothing else. "
+    )
+    return paragraph * 40
+
+
+def _mistral_cached_reads_with_retry(
+    server: RunningServer,
+    smoke_config: SmokeConfig,
+    headers: dict[str, str],
+    first_payload: dict[str, Any],
+    second_payload: dict[str, Any],
+    *,
+    read_pauses_s: tuple[float, ...] = (3, 3, 5, 8, 13, 21),
+) -> int:
+    """Warm the cache, then return follow-up cache reads, retrying misses.
+
+    Mistral prompt caching is best-effort and eventually consistent: the
+    warm request's cache write becomes visible to later requests only after
+    a variable delay (observed from ~3s to ~25s). The first probe matches the
+    observed minimum propagation (~3s); later pauses escalate, so the probes
+    land at ~3, 6, 11, 19, 32, and 53s after the warm request and the final
+    probe covers the observed upper bound with margin.
+    """
+    warm_events = collect_message_stream(
+        server, first_payload, smoke_config, headers=headers
+    )
+    skip_if_upstream_unavailable_events(warm_events)
+    for pause_s in read_pauses_s:
+        time.sleep(pause_s)
+        followup_events = collect_message_stream(
+            server, second_payload, smoke_config, headers=headers
+        )
+        skip_if_upstream_unavailable_events(followup_events)
+        cached_reads = _cache_read_input_tokens(followup_events)
+        if cached_reads > 0:
+            return cached_reads
+    return 0
+
+
+def _cache_read_input_tokens(events: list[SSEEvent]) -> int:
+    for event in events:
+        if event.event != "message_delta":
+            continue
+        usage = event.data.get("usage")
+        if isinstance(usage, dict):
+            cached = usage.get("cache_read_input_tokens")
+            if isinstance(cached, int) and not isinstance(cached, bool):
+                return cached
+    return 0
