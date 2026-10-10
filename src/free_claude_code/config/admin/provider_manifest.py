@@ -350,6 +350,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Keys start with ci_live_; create one at cheaperinference.com/signup."
         ),
     },
+    "POE_API_KEY": {
+        "label": "Poe API Key",
+        "description": (
+            "Poe API key for OpenAI-compatible access to hundreds of bots with "
+            "your subscription points. Create one at poe.com/api/keys."
+        ),
+    },
 }
 
 

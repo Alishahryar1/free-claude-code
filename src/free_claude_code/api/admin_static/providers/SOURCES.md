@@ -46,6 +46,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `atlascloud.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/atlascloud.svg |
 | `xkiro.png` | https://xkiro.com/images/logo/logo-xt-green.png |
 | `opper.svg` | https://opper.ai/ (provided by Opper, single-colour `currentColor` mark) |
+| `poe.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/poe.svg |
 | `poolside-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/poolside-color.svg |
 | `qwen-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/qwen-color.svg |
 | `sambanova-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/sambanova-color.svg |
