@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.model_capabilities import ModelInputModality
 from tests.api.support import create_test_app, provider_manager_for_app
@@ -144,6 +145,42 @@ def test_models_list_includes_configured_refs_cached_provider_models_and_aliases
     assert all(
         "provider_model_ref" not in item and "apiBackend" not in item
         for item in data["data"]
+    )
+
+
+def test_claude_models_use_custom_provider_display_name_without_changing_ids():
+    provider_id = "custom_f526dba2aa0a472f9c506ba236056d57"
+    model_ref = f"{provider_id}/deepseek-v4.1-flash"
+    definition = CustomProviderDefinition(
+        provider_id=provider_id,
+        display_name="Phoenix",
+        base_url="https://gateway.example/v1",
+    )
+    settings = _settings(model=model_ref, model_opus=None, model_haiku=None).model_copy(
+        update={"custom_providers": (definition,)}
+    )
+    app = create_test_app(settings)
+    provider_manager_for_app(app).cache_model_infos(
+        provider_id,
+        {
+            ProviderModelInfo("deepseek-v4.1-flash", supports_thinking=True),
+            ProviderModelInfo("deepseek-plain", supports_thinking=False),
+        },
+    )
+
+    response = TestClient(app).get("/v1/models")
+
+    assert response.status_code == 200
+    rows = {row["id"]: row for row in response.json()["data"]}
+    assert rows[f"anthropic/{model_ref}"]["display_name"] == (
+        "Phoenix/deepseek-v4.1-flash"
+    )
+    assert rows[f"claude-3-freecc-no-thinking/{model_ref}"]["display_name"] == (
+        "Phoenix/deepseek-v4.1-flash (no thinking)"
+    )
+    plain_ref = f"{provider_id}/deepseek-plain"
+    assert rows[f"claude-3-freecc-no-thinking/{plain_ref}"]["display_name"] == (
+        "Phoenix/deepseek-plain (no thinking)"
     )
 
 
