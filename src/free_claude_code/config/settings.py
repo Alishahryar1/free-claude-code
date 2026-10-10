@@ -244,6 +244,11 @@ class Settings(BaseModel):
         default=None, validation_alias="ORCAROUTER_API_KEY"
     )
 
+    # ==================== Atlas Cloud (OpenAI-compatible gateway) ====================
+    atlascloud_api_key: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ATLASCLOUD_API_KEY"
+    )
+
     # ==================== xKiro (OpenAI-compatible gateway) ====================
     xkiro_api_key: OptionalNonEmptyString = Field(
         default=None, validation_alias="XKIRO_API_KEY"
@@ -582,6 +587,9 @@ class Settings(BaseModel):
     )
     orcarouter_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="ORCAROUTER_PROXY"
+    )
+    atlascloud_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ATLASCLOUD_PROXY"
     )
     xkiro_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="XKIRO_PROXY"

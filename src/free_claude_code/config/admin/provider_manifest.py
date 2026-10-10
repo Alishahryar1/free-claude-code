@@ -300,6 +300,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "www.orcarouter.ai/console."
         ),
     },
+    "ATLASCLOUD_API_KEY": {
+        "label": "Atlas Cloud API Key",
+        "description": (
+            "Atlas Cloud OpenAI-compatible multi-provider gateway API key for "
+            "api.atlascloud.ai/v1; create one at console.atlascloud.ai/api-keys."
+        ),
+    },
     "XKIRO_API_KEY": {
         "label": "xKiro API Key",
         "description": (
