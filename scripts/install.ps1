@@ -161,6 +161,7 @@ function Show-InstallReport {
     }
     if ($script:InstallLog) { Write-Host "Installer log: $script:InstallLog" }
     if (-not $Succeeded) {
+        Write-Host "When reporting this failure, include the terminal error and the installer log. Interactive installer output is only shown in the terminal."
         Write-Host "Completed changes have been kept. Resolve the error, then rerun the installer."
         Write-Host "Retry: $(Get-InstallerRetryCommand)"
     }
@@ -183,7 +184,7 @@ function Write-WindowsLaunchGuidance {
     }
     if ($policyFailure) {
         $guidance = @"
-Windows application policy blocked '$FilePath' or a child it tried to start.
+Windows application policy prevented this command from running: '$FilePath'.
 Inspect recent policy events to identify the blocked file, then ask your administrator to allow the required application:
 Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-CodeIntegrity/Operational'; Id=3077,3089; StartTime=(Get-Date).AddMinutes(-15)} | Format-List TimeCreated,Id,Message
 "@
@@ -342,7 +343,8 @@ function Format-Command {
 function Invoke-NativeCommand {
     param(
         [string] $FilePath,
-        [string[]] $Arguments = @()
+        [string[]] $Arguments = @(),
+        [switch] $LogOutput
     )
 
     $commandText = Format-Command -FilePath $FilePath -Arguments $Arguments
@@ -352,11 +354,30 @@ function Invoke-NativeCommand {
     }
 
     $timer = [Diagnostics.Stopwatch]::StartNew()
+    $nativeErrors = [Text.StringBuilder]::new()
     Write-InstallLog "+ $commandText"
     try {
-        $global:LASTEXITCODE = 0
-        & $FilePath @Arguments
+        $global:LASTEXITCODE = $null
+        if ($LogOutput) {
+            $originalErrorPreference = $ErrorActionPreference
+            try {
+                # Windows PowerShell represents native stderr as ErrorRecord.
+                $ErrorActionPreference = "Continue"
+                & $FilePath @Arguments 2>&1 | ForEach-Object {
+                    Write-Host $_.ToString()
+                    Write-InstallLog $_.ToString()
+                    if ($_ -is [Management.Automation.ErrorRecord]) {
+                        [void] $nativeErrors.AppendLine($_.ToString())
+                    }
+                }
+            }
+            finally { $ErrorActionPreference = $originalErrorPreference }
+        }
+        else {
+            & $FilePath @Arguments
+        }
         $exitCode = $LASTEXITCODE
+        if ($null -eq $exitCode) { throw "Command could not start: $commandText" }
         Write-InstallLog "Exit code $exitCode after $($timer.Elapsed.TotalSeconds.ToString('F1'))s: $commandText"
         if ($exitCode -ne 0) {
             throw "Command failed with exit code ${exitCode}: $commandText"
@@ -364,7 +385,7 @@ function Invoke-NativeCommand {
     }
     catch {
         Write-InstallLog "Command failed: $commandText`n$($_.Exception.Message)"
-        Write-WindowsLaunchGuidance -FilePath $FilePath -Exception $_.Exception
+        Write-WindowsLaunchGuidance -FilePath $FilePath -Exception $_.Exception -Stderr $nativeErrors.ToString()
         throw
     }
 }
@@ -375,6 +396,74 @@ function Format-NativeArgument {
     if ($Value -match '^[^\s"&|<>^()]+$') { return $Value }
     # Windows argv rules: escape quotes and double backslashes before quotes/end.
     return '"' + (($Value -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
+}
+
+function Read-SharedUtf8File {
+    param([string] $Path)
+
+    $sharing = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $sharing)
+    $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8)
+    try { return $reader.ReadToEnd() }
+    finally { $reader.Dispose() }
+}
+
+function New-InstallProbeJob {
+    if (-not ('FccInstaller.ProbeJob' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+namespace FccInstaller {
+    public sealed class ProbeJob : SafeHandleZeroOrMinusOneIsInvalid {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BasicLimits {
+            public long ProcessTime, JobTime;
+            public uint Flags;
+            public UIntPtr MinimumWorkingSet, MaximumWorkingSet;
+            public uint ActiveProcesses;
+            public UIntPtr Affinity;
+            public uint Priority, Scheduling;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ExtendedLimits {
+            public BasicLimits Basic;
+            public ulong ReadOperations, WriteOperations, OtherOperations;
+            public ulong ReadBytes, WriteBytes, OtherBytes;
+            public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetInformationJobObject(ProbeJob job, int kind,
+            ref ExtendedLimits limits, uint length);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AssignProcessToJobObject(ProbeJob job, IntPtr process);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr value);
+        public ProbeJob() : base(true) {
+            SetHandle(CreateJobObject(IntPtr.Zero, null));
+            if (IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+            var limits = new ExtendedLimits();
+            limits.Basic.Flags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if (!SetInformationJobObject(this, 9, ref limits,
+                (uint)Marshal.SizeOf(typeof(ExtendedLimits)))) {
+                int error = Marshal.GetLastWin32Error();
+                Dispose();
+                throw new Win32Exception(error);
+            }
+        }
+        public void Assign(IntPtr process) {
+            if (!AssignProcessToJobObject(this, process))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        protected override bool ReleaseHandle() { return CloseHandle(handle); }
+    }
+}
+'@
+    }
+    return [FccInstaller.ProbeJob]::new()
 }
 
 function Invoke-Utf8NativeCapture {
@@ -393,34 +482,111 @@ function Invoke-Utf8NativeCapture {
     $stdoutPath = Join-Path $temporaryRoot "stdout.txt"
     $stderrPath = Join-Path $temporaryRoot "stderr.txt"
     $stdinPath = Join-Path $temporaryRoot "stdin.txt"
+    $supervisorErrorPath = Join-Path $temporaryRoot "supervisor-stderr.txt"
+    $requestPath = Join-Path $temporaryRoot "request.xml"
+    $supervisorPath = Join-Path $temporaryRoot "supervisor.ps1"
+    $statusPath = Join-Path $temporaryRoot "status.txt"
+    $startPath = Join-Path $temporaryRoot "start"
     $process = $null
+    $probeJob = $null
+    $exitCode = $null
     $stderr = ""
     $originalOutputEncoding = [Console]::OutputEncoding
     try {
         [void] [IO.Directory]::CreateDirectory($temporaryRoot)
         [IO.File]::WriteAllText($stdinPath, "")
+        [IO.File]::WriteAllText($stdoutPath, "")
+        [IO.File]::WriteAllText($stderrPath, "")
         [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-        $startOptions = @{
+        $request = @{
             FilePath = $FilePath
+            ArgumentList = ($Arguments | ForEach-Object { Format-NativeArgument $_ }) -join ' '
+            StdOut = $stdoutPath; StdErr = $stderrPath; StdIn = $stdinPath
+            StatusPath = $statusPath; StartPath = $startPath
+        }
+        [IO.File]::WriteAllText($requestPath, [Management.Automation.PSSerializer]::Serialize($request))
+        # Keep an owned parent alive until all native output handles are closed,
+        # including handles inherited by a child whose launcher exited.
+        [IO.File]::WriteAllText($supervisorPath, @'
+param([string] $RequestPath)
+$ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$request = [Management.Automation.PSSerializer]::Deserialize([IO.File]::ReadAllText($RequestPath))
+$native = $null
+try {
+    # The parent assigns this supervisor to its job before releasing the gate.
+    while (-not [IO.File]::Exists($request.StartPath)) { [Threading.Thread]::Sleep(25) }
+    $options = @{
+        FilePath = $request.FilePath; WindowStyle = "Hidden"; PassThru = $true
+        RedirectStandardOutput = $request.StdOut; RedirectStandardError = $request.StdErr
+        RedirectStandardInput = $request.StdIn
+    }
+    if ($request.ArgumentList) { $options.ArgumentList = $request.ArgumentList }
+    $native = Start-Process @options
+    [void] $native.Handle
+    $native.WaitForExit()
+    # Read-only sharing rejects a handle still open for writing. The outer
+    # process owns the deadline and can terminate this entire tree while waiting.
+    while ($true) {
+        try {
+            foreach ($path in @($request.StdOut, $request.StdErr)) {
+                $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+                $stream.Dispose()
+            }
+            break
+        }
+        catch {
+            $cause = $_.Exception.GetBaseException()
+            if ($cause -is [IO.IOException] -and ($cause.HResult -band 0xffff) -in @(32, 33)) {
+                [Threading.Thread]::Sleep(25)
+            }
+            else { throw }
+        }
+    }
+    $exitCode = $native.ExitCode
+}
+catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    $exitCode = 125
+}
+finally { if ($null -ne $native) { $native.Dispose() } }
+[Console]::Out.Flush()
+[Console]::Error.Flush()
+[IO.File]::WriteAllText($request.StatusPath + '.tmp', [string] $exitCode)
+[IO.File]::Move($request.StatusPath + '.tmp', $request.StatusPath)
+while ($true) { [Threading.Thread]::Sleep(1000) }
+'@)
+        $startOptions = @{
+            FilePath = Get-PowerShellExecutable
             WindowStyle = "Hidden"
             PassThru = $true
-            RedirectStandardOutput = $stdoutPath
-            RedirectStandardError = $stderrPath
+            RedirectStandardOutput = Join-Path $temporaryRoot "supervisor-stdout.txt"
+            RedirectStandardError = $supervisorErrorPath
             RedirectStandardInput = $stdinPath
+            ArgumentList = (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $supervisorPath, $requestPath) |
+                ForEach-Object { Format-NativeArgument $_ }) -join ' '
         }
-        if ($Arguments.Count -gt 0) {
-            $startOptions.ArgumentList = ($Arguments | ForEach-Object { Format-NativeArgument $_ }) -join ' '
-        }
+        $probeJob = New-InstallProbeJob
+        $timer.Restart()
         $process = Start-Process @startOptions
         # Windows PowerShell needs the handle retained to report the exit code.
         [void] $process.Handle
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            throw "Command timed out after ${TimeoutSeconds}s: $commandText"
+        $probeJob.Assign($process.Handle)
+        [IO.File]::WriteAllText($startPath, "")
+        while (-not [IO.File]::Exists($statusPath)) {
+            if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+                throw "Command timed out after ${TimeoutSeconds}s: $commandText"
+            }
+            if ($process.WaitForExit(25)) {
+                $stderr = Read-SharedUtf8File $supervisorErrorPath
+                throw "Probe supervisor exited before reporting command status: $commandText`n$stderr"
+            }
         }
-        $output = [IO.File]::ReadAllText($stdoutPath, [Text.Encoding]::UTF8).Trim()
-        $stderr = [IO.File]::ReadAllText($stderrPath, [Text.Encoding]::UTF8).Trim()
-        if ($process.ExitCode -ne 0) {
-            throw "Command failed with exit code $($process.ExitCode): $commandText`n$output`n$stderr"
+        $exitCode = [int] (Read-SharedUtf8File $statusPath)
+        $output = (Read-SharedUtf8File $stdoutPath).Trim()
+        $stderr = ((Read-SharedUtf8File $stderrPath) + (Read-SharedUtf8File $supervisorErrorPath)).Trim()
+        if ($exitCode -ne 0) {
+            throw "Command failed with exit code ${exitCode}: $commandText`n$output`n$stderr"
         }
         return $output
     }
@@ -431,13 +597,15 @@ function Invoke-Utf8NativeCapture {
     }
     finally {
         try {
+            if ($null -ne $probeJob) { $probeJob.Dispose() }
             if ($null -ne $process) {
                 if (-not $process.HasExited) {
-                    & "$env:SYSTEMROOT\System32\taskkill.exe" /PID $process.Id /T /F *> $null
+                    # Assignment failure leaves only the gated supervisor alive.
+                    $process.Kill()
                     [void] $process.WaitForExit(5000)
                 }
-                if ($process.HasExited) {
-                    Write-InstallLog "Exit code $($process.ExitCode) after $($timer.Elapsed.TotalSeconds.ToString('F1'))s: $commandText"
+                if ($null -ne $exitCode) {
+                    Write-InstallLog "Exit code $exitCode after $($timer.Elapsed.TotalSeconds.ToString('F1'))s: $commandText"
                 }
             }
         }
@@ -446,15 +614,14 @@ function Invoke-Utf8NativeCapture {
             if ($null -ne $process) { $process.Dispose() }
             [Console]::OutputEncoding = $originalOutputEncoding
         }
-        foreach ($stream in @($stdoutPath, $stderrPath)) {
+        foreach ($stream in @($stdoutPath, $stderrPath, $supervisorErrorPath)) {
             if ([IO.File]::Exists($stream)) {
                 try {
-                    Write-InstallLog "$([IO.Path]::GetFileName($stream)): $([IO.File]::ReadAllText($stream, [Text.Encoding]::UTF8))"
+                    Write-InstallLog "$([IO.Path]::GetFileName($stream)): $(Read-SharedUtf8File $stream)"
                 }
                 catch { Write-InstallLog "Could not read probe output: $($_.Exception.Message)" }
             }
         }
-        # Regular files let us finish even if a descendant inherited stdout/stderr.
         Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
@@ -1281,7 +1448,7 @@ function Install-Aider {
         $uvPath = $uvCommand.Source
     }
 
-    Invoke-NativeCommand -FilePath $uvPath -Arguments @(
+    Invoke-NativeCommand -FilePath $uvPath -LogOutput -Arguments @(
         "tool",
         "install",
         "--force",
@@ -1506,9 +1673,13 @@ function Ensure-Dsh {
 
 function Confirm-SelectedPrerequisites {
     if ($DryRun) { return }
-    if ($script:InstallDsh) { [void] (Confirm-DshToolchain) }
-    if ($script:InstallCline -and -not (Get-ApplicationCommand "cline") -and -not (Get-ApplicationCommand "npm")) {
-        throw "Cline installation requires npm. Install Node.js from https://nodejs.org/en/download, then rerun the installer."
+    # Pi can bootstrap Node/npm before the dependent agents are installed.
+    $installingPi = $script:InstallPi -and -not (Find-InstalledCodingAgent "pi")
+    if (-not $installingPi) {
+        if ($script:InstallDsh) { [void] (Confirm-DshToolchain) }
+        if ($script:InstallCline -and -not (Get-ApplicationCommand "cline") -and -not (Get-ApplicationCommand "npm")) {
+            throw "Cline installation requires npm. Install Node.js from https://nodejs.org/en/download, then rerun the installer."
+        }
     }
     if ($script:InstallHermes -and -not (Get-ApplicationCommand "hermes")) { Confirm-HermesArchitecture }
     if ($script:InstallOpenCode) {
@@ -1717,7 +1888,7 @@ function Install-FreeClaudeCode {
         }
         $uvPath = $uvCommand.Source
     }
-    Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments
+    Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments -LogOutput
 }
 
 function Export-FccDesktopIcon {

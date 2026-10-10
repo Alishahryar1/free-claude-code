@@ -48,6 +48,10 @@ pending_steps=""
 current_install_step=""
 install_step_outcome=Completed
 installer_path=$0
+# With a piped installer, $0 names the shell, which may be an existing binary.
+case "${installer_path##*/}" in
+    sh|-sh|bash|-bash|dash|ksh|zsh) installer_path="" ;;
+esac
 
 show_usage() {
     cat <<'USAGE'
@@ -162,6 +166,7 @@ finish_install() {
         fi
         [ -z "$install_log" ] || printf 'Installer log: %s\n' "$install_log"
         if [ "$install_exit_code" -ne 0 ]; then
+            printf 'When reporting this failure, include the terminal error and the installer log. Interactive installer output is only shown in the terminal.\n'
             printf 'Completed changes have been kept. Resolve the error, then rerun the installer.\n'
             print_installer_retry
         fi
@@ -368,6 +373,29 @@ run() {
     fail "Command failed with exit code $status: $1"
 }
 
+run_logged() {
+    if [ "$dry_run" -eq 1 ] || [ -z "$install_state_directory" ]; then
+        run "$@"
+        return
+    fi
+    print_command "$@"
+    write_install_log "$(print_command "$@")"
+    run_started=$(date +%s)
+    # Save the command's status separately: a POSIX pipeline reports the last
+    # stage's status. Log failures must not replace the package command's result.
+    (
+        if "$@"; then status=0; else status=$?; fi
+        printf '%s\n' "$status" >"$install_state_directory/package-status"
+    ) 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s\n' "$line"
+        write_install_log "$line"
+    done
+    read -r status <"$install_state_directory/package-status"
+    rm -f "$install_state_directory/package-status"
+    write_install_log "Exit code $status after $(($(date +%s) - run_started))s: $1"
+    [ "$status" -eq 0 ] || fail "Command failed with exit code $status: $1"
+}
+
 # Keep terminal-attached installers in run(). Only noninteractive probes use this
 # supervisor, whose private process group lets cancellation clean up descendants.
 probe_capture() (
@@ -418,7 +446,7 @@ cancel() {
 trap 'cancel 130' INT
 trap 'cancel 143' HUP TERM
 trap 'stop_probe 0' EXIT
-mkfifo "$scratch/status.fifo" || exit 125
+mkfifo "$scratch/status.fifo" "$scratch/stdout.fifo" "$scratch/stderr.fifo" || exit 125
 set -m
 (
     set +m
@@ -426,8 +454,16 @@ set -m
     # alive after the command exits so cleanup cannot target a reused group ID.
     exec 3>"$scratch/status.fifo"
     trap ':' HUP INT TERM
-    "$@" </dev/null >"$scratch/stdout" 2>"$scratch/stderr" 3>&-
+    # Readers finish only after all inherited writers close their handles.
+    # They stay in this group, so the deadline also bounds output draining.
+    cat <"$scratch/stdout.fifo" >"$scratch/stdout" 3>&- &
+    stdout_reader=$!
+    cat <"$scratch/stderr.fifo" >"$scratch/stderr" 3>&- &
+    stderr_reader=$!
+    "$@" </dev/null >"$scratch/stdout.fifo" 2>"$scratch/stderr.fifo" 3>&-
     status=$?
+    wait "$stdout_reader" || status=125
+    wait "$stderr_reader" || status=125
     printf '%s\n' "$status" >&3
     while :; do sleep 60; done
 ) 2>/dev/null &
@@ -1307,7 +1343,7 @@ ensure_muse() {
 }
 
 install_aider_cli() {
-    run uv tool install --force --python python3.12 --with pip aider-chat@latest
+    run_logged uv tool install --force --python python3.12 --with pip aider-chat@latest
 }
 
 ensure_aider() {
@@ -1583,9 +1619,9 @@ install_free_claude_code() {
     spec=$(package_spec)
 
     if [ -n "$torch_backend" ]; then
-        run uv tool install --force --refresh-package free-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$spec"
+        run_logged uv tool install --force --refresh-package free-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$spec"
     else
-        run uv tool install --force --refresh-package free-claude-code --python "$PYTHON_VERSION" "$spec"
+        run_logged uv tool install --force --refresh-package free-claude-code --python "$PYTHON_VERSION" "$spec"
     fi
 }
 
@@ -1760,9 +1796,12 @@ if [ "$enable_rtk" -eq 1 ] && ! command -v rtk >/dev/null 2>&1; then
 fi
 
 if [ "$dry_run" -eq 0 ]; then
-    if [ "$install_dsh" -eq 1 ]; then require_dsh_toolchain; fi
-    if [ "$install_cline" -eq 1 ] && ! command -v cline >/dev/null 2>&1; then
-        command -v npm >/dev/null 2>&1 || fail "Cline installation requires npm. Install Node.js from https://nodejs.org/en/download, then rerun the installer."
+    # Pi can bootstrap Node/npm before the dependent agents are installed.
+    if [ "$install_pi" -eq 0 ] || find_installed_coding_agent pi >/dev/null; then
+        if [ "$install_dsh" -eq 1 ]; then require_dsh_toolchain; fi
+        if [ "$install_cline" -eq 1 ] && ! command -v cline >/dev/null 2>&1; then
+            command -v npm >/dev/null 2>&1 || fail "Cline installation requires npm. Install Node.js from https://nodejs.org/en/download, then rerun the installer."
+        fi
     fi
     if [ "$install_hermes" -eq 1 ] && ! command -v hermes >/dev/null 2>&1; then confirm_hermes_platform; fi
     if [ "$install_opencode" -eq 1 ]; then check_opencode_install; fi

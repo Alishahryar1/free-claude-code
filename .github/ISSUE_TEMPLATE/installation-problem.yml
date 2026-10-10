@@ -7,6 +7,6 @@ body:
     id: description
     attributes:
       label: Installation issue
-      description: Describe what happened and include the error you received. Attach the installer log shown in the final summary, if available. You can also attach screenshots here.
+      description: Describe what happened and include the terminal error you received. Attach the installer log shown in the final summary, if available. Output from interactive child installers appears only in the terminal. You can also attach screenshots here.
     validations:
       required: true

@@ -1138,6 +1138,7 @@ def test_install_sh_rejects_exact_dsh_on_unsupported_node(
     posix_harness: PosixHarness,
 ) -> None:
     posix_harness.add_client("dsh")
+    posix_harness.add_client("pi")
     _write_executable(
         posix_harness.bin_dir / "node",
         _posix_command("node").replace("node 22.19.0", "node 23.9.0"),
@@ -5341,7 +5342,7 @@ def test_install_ps1_probe_keeps_timeout_output_and_closes_stdin(
     powershell_harness.env.update(TEST_PYTHON=sys.executable, TEST_PROBE=str(probe))
     result = powershell_harness.run_functions(
         "Initialize-InstallLog\nInvoke-Utf8NativeCapture -FilePath $env:TEST_PYTHON "
-        "-Arguments @($env:TEST_PROBE) -TimeoutSeconds 1"
+        "-Arguments @($env:TEST_PROBE) -TimeoutSeconds 3"
     )
     if read_stdin:
         assert result.returncode == 0, result.stderr
@@ -5496,8 +5497,8 @@ def test_install_sh_probe_cleans_owned_descendants(
         try:
             started = time.monotonic()
             result = posix_harness.run_functions('probe_capture 1 "$TEST_PROBE"')
-            assert result.returncode == (0 if parent_exits else 124), result.stderr
-            assert ("timed out" in result.stderr) == (not parent_exits)
+            assert result.returncode == 124, result.stderr
+            assert "timed out" in result.stderr
             assert time.monotonic() - started < 6
             assert sentinel.poll() is None
             time.sleep(3)
@@ -5695,3 +5696,268 @@ def test_install_sh_preview_creates_no_log_or_probe(
     assert result.returncode == 0, result.stderr
     assert posix_harness.calls() == []
     assert not (Path(posix_harness.env["HOME"]) / ".fcc/logs").exists()
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_install_ps1_probe_waits_for_output_after_launcher_exits(
+    powershell_harness: PowerShellHarness, timeout: bool
+) -> None:
+    marker = powershell_harness.root / "child-finished"
+    ready = powershell_harness.root / "child-started"
+    probe = powershell_harness.root / "spawn-and-exit.py"
+    child = (
+        "import time; from pathlib import Path; "
+        + f"Path({str(ready)!r}).touch(); "
+        + f"time.sleep({6 if timeout else 0.2}); "
+        + "print('child output', flush=True); "
+        + f"Path({str(marker)!r}).touch()"
+    )
+    probe.write_text(
+        "import subprocess, sys\n"
+        + f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
+        + "print('version 1.0.0', flush=True)\n",
+        encoding="utf-8",
+    )
+    powershell_harness.env.update(TEST_PYTHON=sys.executable, TEST_PROBE=str(probe))
+    started = time.monotonic()
+    result = powershell_harness.run_functions(
+        "Invoke-Utf8NativeCapture $env:TEST_PYTHON @($env:TEST_PROBE) "
+        + f"-TimeoutSeconds {3 if timeout else 5}"
+    )
+    assert time.monotonic() - started < 8
+    if timeout:
+        assert result.returncode != 0
+        assert "timed out" in result.stdout + result.stderr
+        assert ready.exists(), "Probe timed out before its child started"
+        time.sleep(6)
+        assert not marker.exists(), "Probe child survived its timeout"
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "version 1.0.0" in result.stdout
+        assert "child output" in result.stdout
+        assert marker.exists()
+
+
+def test_install_ps1_cancellation_stops_probe_after_launcher_exits(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    ready = powershell_harness.root / "child-started"
+    later = powershell_harness.root / "child-survived"
+    probe = powershell_harness.root / "cancelled-probe.py"
+    child = (
+        "import time; from pathlib import Path; "
+        + f"Path({str(ready)!r}).touch(); time.sleep(3); "
+        + f"Path({str(later)!r}).touch()"
+    )
+    probe.write_text(
+        "import subprocess, sys\n"
+        + f"subprocess.Popen([sys.executable, '-c', {child!r}])\n",
+        encoding="utf-8",
+    )
+    powershell_harness.env.update(
+        TEST_PROBE=str(probe), TEST_PYTHON=sys.executable, TEST_READY=str(ready)
+    )
+    result = powershell_harness.run_functions(
+        r"""$source = [IO.File]::ReadAllText($env:FCC_INSTALLER)
+$definitions = $source.Substring(0, $source.IndexOf('if ($Help)'))
+$worker = [PowerShell]::Create()
+$null = $worker.AddScript($definitions + "`nInvoke-Utf8NativeCapture $" + 'env:TEST_PYTHON @($env:TEST_PROBE)')
+try {
+    $operation = $worker.BeginInvoke()
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while (-not [IO.File]::Exists($env:TEST_READY) -and $timer.Elapsed.TotalSeconds -lt 5) {
+        [Threading.Thread]::Sleep(20)
+    }
+    if (-not [IO.File]::Exists($env:TEST_READY)) { throw 'Probe did not start' }
+    $worker.Stop()
+}
+finally { $worker.Dispose() }
+"""
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    time.sleep(3)
+    assert not later.exists(), "Probe child survived PowerShell cancellation"
+
+
+def _assert_pi_supplies_selected_agent_toolchain(
+    harness: PosixHarness | PowerShellHarness, dependent: str
+) -> None:
+    windows = isinstance(harness, PowerShellHarness)
+    suffix = ".cmd" if windows else ""
+    harness.add_uv("0.12.13")
+    (harness.bin_dir / f"opencode{suffix}").unlink()
+    for command in ("node", "npm"):
+        source = harness.bin_dir / f"{command}{suffix}"
+        (harness.fixtures / f"{command}-command{suffix}").write_bytes(
+            source.read_bytes()
+        )
+        source.unlink()
+    installer = harness.fixtures / (
+        "pi-installer.ps1" if windows else "pi-installer.sh"
+    )
+    bootstrap = (
+        r"""$nodeBin = Join-Path $env:LOCALAPPDATA 'pi-node\current'
+New-Item -ItemType Directory -Force -Path $nodeBin | Out-Null
+foreach ($command in @('node', 'npm')) {
+    Copy-Item (Join-Path $env:FAKE_FIXTURES "$command-command.cmd") (Join-Path $nodeBin "$command.cmd")
+}
+"""
+        if windows
+        else """node_bin="$HOME/.local/share/pi-node/current/bin"
+mkdir -p "$node_bin"
+for command in node npm; do
+    cp "$FAKE_FIXTURES/$command-command" "$node_bin/$command"
+    chmod +x "$node_bin/$command"
+done
+"""
+    )
+    installer.write_text(
+        bootstrap + installer.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    answers = [
+        "y" if command in ("pi", dependent) else "n" for command in CODING_AGENTS
+    ]
+    answers.append("n")
+    result = (
+        harness.run_interactive(answers)
+        if windows
+        else harness.run_interactive("\n".join(answers) + "\n")
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = harness.calls()
+    assert "pi-install" in calls
+    assert any(call.startswith("npm:install -g ") for call in calls)
+    assert f"{dependent}:--version" in calls
+
+
+@pytest.mark.parametrize("dependent", ["cline", "dsh"])
+def test_install_ps1_pi_supplies_selected_agent_toolchain(
+    powershell_harness: PowerShellHarness, dependent: str
+) -> None:
+    _assert_pi_supplies_selected_agent_toolchain(powershell_harness, dependent)
+
+
+@pytest.mark.parametrize("dependent", ["cline", "dsh"])
+def test_install_sh_pi_supplies_selected_agent_toolchain(
+    posix_harness: PosixHarness, dependent: str
+) -> None:
+    _assert_pi_supplies_selected_agent_toolchain(posix_harness, dependent)
+
+
+def test_install_ps1_package_failure_log_contains_original_error(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    powershell_harness.add_installed_clients()
+    powershell_harness.add_uv("0.12.13")
+    uv = powershell_harness.bin_dir / "uv.cmd"
+    uv.write_text(
+        uv.read_text(encoding="utf-8").replace(
+            'if "%FAIL_STEP%"=="fcc-install" exit /b 53',
+            'if "%FAIL_STEP%"=="fcc-install" (echo package resolution failed 1>&2 & exit /b 53)',
+        ),
+        encoding="utf-8",
+    )
+    result = powershell_harness.run(fail_step="fcc-install")
+    assert result.returncode != 0
+    assert "53" in result.stdout + result.stderr
+    assert "package resolution failed" in result.stdout + result.stderr
+    logs = list(
+        (Path(powershell_harness.env["USERPROFILE"]) / ".fcc/logs").glob(
+            "install-*.log"
+        )
+    )
+    assert len(logs) == 1
+    assert "package resolution failed" in logs[0].read_text(encoding="utf-8")
+
+
+def test_install_sh_package_failure_log_contains_original_error(
+    posix_harness: PosixHarness,
+) -> None:
+    for command in CODING_AGENTS:
+        posix_harness.add_client(command)
+    posix_harness.add_uv("0.12.13")
+    uv = posix_harness.bin_dir / "uv"
+    uv.write_text(
+        uv.read_text(encoding="utf-8").replace(
+            'if [ "$FAIL_STEP" = "fcc-install" ]; then',
+            'if [ "$FAIL_STEP" = "fcc-install" ]; then\n        echo "package resolution failed" >&2',
+        ),
+        encoding="utf-8",
+    )
+    result = posix_harness.run(fail_step="fcc-install")
+    assert result.returncode != 0
+    assert "33" in result.stdout + result.stderr
+    assert "package resolution failed" in result.stdout + result.stderr
+    logs = list((Path(posix_harness.env["HOME"]) / ".fcc/logs").glob("install-*.log"))
+    assert len(logs) == 1
+    assert "package resolution failed" in logs[0].read_text(encoding="utf-8")
+
+
+def test_install_sh_piped_failure_retries_downloaded_installer(
+    posix_harness: PosixHarness,
+) -> None:
+    for command in CODING_AGENTS:
+        posix_harness.add_client(command)
+    posix_harness.add_uv("0.12.13")
+    result = posix_harness.run_interactive("n\n", fail_step="fcc-install")
+    assert result.returncode != 0
+    retry = next(
+        line for line in result.stdout.splitlines() if line.startswith("Retry:")
+    )
+    assert (
+        "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh"
+        in retry
+    )
+    assert "| sh -s --" in retry
+
+
+def test_install_ps1_logged_command_explains_child_policy_failure(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    command = powershell_harness.root / "blocked-child.cmd"
+    command.write_text(
+        "@echo off\necho failed to spawn python (os error 4551) 1>&2\nexit /b 31\n",
+        encoding="utf-8",
+    )
+    powershell_harness.env["TEST_COMMAND"] = str(command)
+    result = powershell_harness.run_functions(
+        "Initialize-InstallLog\nInvoke-NativeCommand $env:TEST_COMMAND -LogOutput"
+    )
+    assert result.returncode != 0
+    assert "exit code 31" in result.stdout + result.stderr
+    assert "Get-WinEvent" in result.stdout
+    assert "CodeIntegrity" in result.stdout
+
+
+def test_install_ps1_capture_read_shares_delete_access(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    powershell_harness.env["TEST_STATUS"] = str(powershell_harness.root / "status.txt")
+    result = powershell_harness.run_functions(
+        r"""$sharing = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+# Atomic rename holds delete access briefly after publishing the target name.
+$writer = [IO.FileStream]::new($env:TEST_STATUS, [IO.FileMode]::Create,
+    [IO.FileAccess]::ReadWrite, $sharing, 4096, [IO.FileOptions]::DeleteOnClose)
+try {
+    $writer.WriteByte(48)
+    $writer.Flush()
+    $status = Read-SharedUtf8File $env:TEST_STATUS
+    if ($status -ne '0') { throw "Wrong status: $status" }
+}
+finally { $writer.Dispose() }
+"""
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_install_sh_probe_captures_output_after_launcher_exits(
+    posix_harness: PosixHarness,
+) -> None:
+    result = posix_harness.run_functions(
+        "probe_capture 2 /bin/sh -c "
+        "\"(sleep 0.1; printf 'late output\\n'; printf 'late diagnostic\\n' >&2) & "
+        "printf 'early output\\n'; exit 0\""
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["early output", "late output"]
+    assert "late diagnostic" in result.stderr
