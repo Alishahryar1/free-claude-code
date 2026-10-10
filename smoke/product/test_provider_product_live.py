@@ -180,9 +180,15 @@ def test_mistral_prompt_cache_affinity_e2e(smoke_config: SmokeConfig) -> None:
     }
 
     try:
-        with _server_for_provider(
-            smoke_config, provider_model, "prompt-cache-affinity"
-        ) as server:
+        with SmokeServerDriver(
+            smoke_config,
+            name="product-provider-mistral-prompt-cache-affinity",
+            env_overrides={
+                "MODEL": provider_model.full_model,
+                "MODEL_FALLBACKS": "",
+                "MESSAGING_PLATFORM": "none",
+            },
+        ).run() as server:
             cached_reads = _mistral_cached_reads_with_retry(
                 server, smoke_config, headers, first_payload, second_payload
             )
