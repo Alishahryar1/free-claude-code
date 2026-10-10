@@ -754,6 +754,37 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             optional_sequence_items=(("supported_endpoint_types", "openai"),),
         ),
     ),
+    # Measured against api.atlascloud.ai/v1 across DeepSeek, GLM, Kimi, Qwen, MiniMax,
+    # OpenAI, Anthropic, Google and xAI models: only ``high`` and ``xhigh`` are
+    # accepted by every model (``none`` is a 400 for glm-5.3, minimax-m2.7 and
+    # gpt-5.5, ``low``/``medium`` for qwen3.5-plus, ``max`` for several), so the
+    # efforts map onto those two and "off" sends no field.
+    "atlascloud": OpenAIChatProfile(
+        _policy(
+            "ATLASCLOUD",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(
+            (
+                (ReasoningEffort.MINIMAL, "high"),
+                (ReasoningEffort.LOW, "high"),
+                (ReasoningEffort.MEDIUM, "high"),
+                (ReasoningEffort.HIGH, "high"),
+                (ReasoningEffort.XHIGH, "xhigh"),
+                (ReasoningEffort.MAX, "xhigh"),
+            ),
+            enabled_value="high",
+        ),
+        model_listing=OpenAIModelListing(
+            path="/models",
+            # ``supported_features`` under-reports reasoning (deepseek-v4-flash lists
+            # only tools yet returns reasoning tokens), so thinking is left unknown.
+            input_modalities_path=("input_modalities",),
+            context_window_tokens_path=("context_length",),
+            max_output_tokens_path=("max_output_length",),
+        ),
+    ),
     "xkiro": OpenAIChatProfile(
         _policy(
             "XKIRO",

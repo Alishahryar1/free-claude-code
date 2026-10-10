@@ -91,6 +91,8 @@ EXPERIENTIAL_DEFAULT_BASE = "https://api.experientiallabs.ai/v1"
 CHEAPERINFERENCE_DEFAULT_BASE = "https://api.cheaperinference.com/v1"
 # OrcaRouter OpenAI-compatible multi-provider gateway.
 ORCAROUTER_DEFAULT_BASE = "https://api.orcarouter.ai/v1"
+# Atlas Cloud OpenAI-compatible multi-provider gateway.
+ATLASCLOUD_DEFAULT_BASE = "https://api.atlascloud.ai/v1"
 # xKiro OpenAI-compatible multi-provider gateway.
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Opper OpenAI-compatible Chat Completions gateway.
@@ -742,6 +744,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="orcarouter_api_key",
         default_base_url=ORCAROUTER_DEFAULT_BASE,
         proxy_attr="orcarouter_proxy",
+    ),
+    "atlascloud": ProviderDescriptor(
+        provider_id="atlascloud",
+        display_name="Atlas Cloud",
+        website_url="https://www.atlascloud.ai/",
+        logo_filename="atlascloud.svg",
+        credential_env="ATLASCLOUD_API_KEY",
+        credential_url="https://console.atlascloud.ai/api-keys",
+        credential_attr="atlascloud_api_key",
+        default_base_url=ATLASCLOUD_DEFAULT_BASE,
+        proxy_attr="atlascloud_proxy",
     ),
     "xkiro": ProviderDescriptor(
         provider_id="xkiro",
