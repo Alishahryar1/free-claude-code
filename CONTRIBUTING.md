@@ -4,7 +4,8 @@ Thanks for helping improve Free Claude Code. Keep changes focused, test the beha
 
 ## Before Opening A Pull Request
 
-- Open an issue before proposing README changes.
+- Standalone documentation PRs are reserved for the repository owner.
+- Include relevant README and other documentation updates with production code changes. These accompanying updates do not require a separate issue.
 - Do not open Docker integration pull requests.
 - For bugs, include every model mapping, the active model when the failure occurred, the complete error, and reproducible steps.
 - Add focused tests for behavior changes and relevant edge cases.

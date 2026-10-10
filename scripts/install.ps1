@@ -42,6 +42,16 @@ $script:InstallAider = $true
 $script:PiAvailable = $false
 $script:MuseAvailable = $false
 $script:EnableRtk = $Rtk.IsPresent
+$script:InstallLog = ""
+$script:InstallLogWarning = $false
+$script:InstallSteps = [ordered] @{}
+$script:CurrentInstallStep = ""
+$script:InstallStepOutcome = "Completed"
+$script:InstallerPath = $PSCommandPath
+$script:InstallStageNumber = 0
+$script:InstallStageCount = 0
+$script:FccVerified = $false
+$script:DesktopReady = $false
 $FccCommands = @(
     # Include retired entry points so updates reject older FCC processes before replacement.
     "fcc-desktop",
@@ -82,6 +92,116 @@ function Write-Step {
 
     Write-Host ""
     Write-Host "==> $Message"
+}
+
+function Write-InstallLog {
+    param([string] $Message)
+
+    if (-not $script:InstallLog) { return }
+    try {
+        [IO.File]::AppendAllText($script:InstallLog, "$(Get-Date -Format o) $Message`n", [Text.UTF8Encoding]::new($false))
+    }
+    catch {
+        $script:InstallLog = ""
+        if (-not $script:InstallLogWarning) {
+            $script:InstallLogWarning = $true
+            Write-Warning "Could not write the installer log. Installation will continue. $($_.Exception.Message)"
+        }
+    }
+}
+
+function Initialize-InstallLog {
+    if ($DryRun) { return }
+    try {
+        $directory = Join-Path $env:USERPROFILE ".fcc\logs"
+        [void] [IO.Directory]::CreateDirectory($directory)
+        $script:InstallLog = Join-Path $directory ("install-$(Get-Date -Format yyyyMMdd-HHmmss)-$([guid]::NewGuid().ToString('N')).log")
+        Write-InstallLog "Starting Free Claude Code installer"
+    }
+    catch {
+        $script:InstallLogWarning = $true
+        Write-Warning "Could not create the installer log. Installation will continue. $($_.Exception.Message)"
+    }
+}
+
+function Complete-InstallStep {
+    param([string] $Outcome = $script:InstallStepOutcome)
+
+    if (-not $script:CurrentInstallStep) { return }
+    $script:InstallSteps[$script:CurrentInstallStep] = $Outcome
+    Write-InstallLog "$Outcome`: $script:CurrentInstallStep"
+    $script:CurrentInstallStep = ""
+}
+
+function Start-InstallStep {
+    param([string] $Name, [string] $Message = $Name)
+
+    if ($DryRun) { Write-Step $Message; return }
+    if ($script:InstallSteps.Count -eq 0) { return }
+    Complete-InstallStep
+    $script:CurrentInstallStep = $Name
+    $script:InstallStepOutcome = "Completed"
+    $script:InstallSteps[$Name] = "Running"
+    Write-InstallLog "Starting: $Name"
+    if ($script:InstallStageCount -gt 0) {
+        $script:InstallStageNumber++
+        Write-Host "`n[$($script:InstallStageNumber)/$($script:InstallStageCount)] $Message"
+    }
+}
+
+function Get-InstallerRetryCommand {
+    $options = @()
+    if ($VoiceLocal) { $options += "-VoiceLocal" }
+    if ($TorchBackend) { $options += @("-TorchBackend", $TorchBackend) }
+    if ($script:EnableRtk) { $options += "-Rtk" }
+    if ($script:InstallerPath -and (Test-Path -LiteralPath $script:InstallerPath -PathType Leaf)) {
+        return "& " + (Format-Command $script:InstallerPath $options)
+    }
+    return "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1'))) " + (($options | ForEach-Object { Format-Argument $_ }) -join " ")
+}
+
+function Show-InstallReport {
+    param([bool] $Succeeded, [bool] $Cancelled = $false)
+
+    if ($DryRun) { return }
+    if (-not $Succeeded) {
+        if ($Cancelled) { Write-Host "`nInstallation cancelled." }
+        else { Write-Host "`nInstallation did not finish." }
+        foreach ($outcome in @("Completed", "Reused", "Skipped", "Failed", "Cancelled", "Not attempted")) {
+            $labels = @($script:InstallSteps.GetEnumerator() | Where-Object { $_.Value -eq $outcome } | ForEach-Object { $_.Key })
+            if ($labels.Count -gt 0) { Write-Host "${outcome}: $($labels -join ', ')" }
+        }
+        Write-Host "Completed changes have been kept. Rerun the installer to try again."
+        Write-Host "Retry: $(Get-InstallerRetryCommand)"
+        if (-not $Cancelled) { Write-Host "For help, include the terminal error and the installer log." }
+    }
+    if ($script:InstallLog) { Write-Host "Installer log: $script:InstallLog" }
+}
+
+function Write-WindowsLaunchGuidance {
+    param([string] $FilePath, [Exception] $Exception, [string] $Stderr = "")
+
+    $policyFailure = $Stderr -match '\(os error (4551|1260)\)'
+    for ($cause = $Exception; $null -ne $cause; $cause = $cause.InnerException) {
+        if ($cause -is [ComponentModel.Win32Exception] -and $cause.NativeErrorCode -in @(4551, 1260)) {
+            $policyFailure = $true
+        }
+        # Start-Process on Windows PowerShell drops the native error code.
+        foreach ($code in @(4551, 1260)) {
+            if ($cause.Message.Contains([ComponentModel.Win32Exception]::new($code).Message)) {
+                $policyFailure = $true
+            }
+        }
+    }
+    if ($policyFailure) {
+        $guidance = @"
+Windows application policy prevented this command from running: '$FilePath'.
+Inspect recent policy events to identify the blocked file, then ask your administrator to allow the required application:
+Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-CodeIntegrity/Operational'; Id=3077,3089; StartTime=(Get-Date).AddMinutes(-15)} | Format-List TimeCreated,Id,Message
+"@
+        Write-Host $guidance
+        Write-InstallLog $guidance
+    }
 }
 
 function Test-InteractiveInstaller {
@@ -243,11 +363,20 @@ function Invoke-NativeCommand {
         return
     }
 
-    $global:LASTEXITCODE = 0
-    & $FilePath @Arguments
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        throw "Command failed with exit code ${exitCode}: $commandText"
+    Write-InstallLog "+ $commandText"
+    try {
+        $global:LASTEXITCODE = 0
+        & $FilePath @Arguments
+        $exitCode = $LASTEXITCODE
+        Write-InstallLog "Exit code ${exitCode}: $commandText"
+        if ($exitCode -ne 0) {
+            throw "Command failed with exit code ${exitCode}: $commandText"
+        }
+    }
+    catch {
+        Write-InstallLog $_.Exception.Message
+        Write-WindowsLaunchGuidance -FilePath $FilePath -Exception $_.Exception
+        throw
     }
 }
 
@@ -259,21 +388,37 @@ function Invoke-Utf8NativeCapture {
 
     $commandText = Format-Command -FilePath $FilePath -Arguments $Arguments
     Write-Host "+ $commandText"
+    if ($DryRun) { return "" }
+    Write-InstallLog "+ $commandText"
     $originalOutputEncoding = [Console]::OutputEncoding
+    $originalErrorPreference = $ErrorActionPreference
     try {
         [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-        $global:LASTEXITCODE = 0
-        $output = & $FilePath @Arguments
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = $null
+        $captured = @(& $FilePath @Arguments 2>&1)
         $exitCode = $LASTEXITCODE
+    }
+    catch {
+        Write-InstallLog $_.Exception.Message
+        Write-WindowsLaunchGuidance -FilePath $FilePath -Exception $_.Exception
+        throw
     }
     finally {
         [Console]::OutputEncoding = $originalOutputEncoding
+        $ErrorActionPreference = $originalErrorPreference
     }
-    if ($exitCode -ne 0) {
-        throw "Command failed with exit code ${exitCode}: $commandText"
+    $output = ($captured | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] } | Out-String).Trim()
+    $errors = @($captured | Where-Object { $_ -is [Management.Automation.ErrorRecord] })
+    $stderr = ($errors | ForEach-Object { $_.ToString() } | Out-String).Trim()
+    Write-InstallLog "Exit code ${exitCode}: $commandText`n$output`n$stderr"
+    if ($null -eq $exitCode -or $exitCode -ne 0) {
+        $cause = if ($errors.Count) { $errors[0].Exception } else { $null }
+        Write-WindowsLaunchGuidance -FilePath $FilePath -Exception $cause -Stderr $stderr
+        throw "Command failed with exit code ${exitCode}: $commandText`n$output`n$stderr"
     }
 
-    return ($output | Out-String).Trim()
+    return $output
 }
 
 function Get-ApplicationCommand {
@@ -482,7 +627,7 @@ function Confirm-Application {
     if (-not $command) {
         throw "$DisplayName was installed, but '$CommandName' is not available on PATH."
     }
-    Invoke-NativeCommand -FilePath $command.Source -Arguments @("--version")
+    Write-Host (Invoke-Utf8NativeCapture -FilePath $command.Source -Arguments @("--version"))
 }
 
 function Test-PiApplication {
@@ -515,7 +660,7 @@ function Confirm-PiApplication {
     if (-not (Test-PiApplication $command)) {
         throw "The 'pi' command at '$($command.Source)' is not a compatible Pi Coding Agent."
     }
-    Invoke-NativeCommand -FilePath $command.Source -Arguments @("--version")
+    Write-Host (Invoke-Utf8NativeCapture -FilePath $command.Source -Arguments @("--version"))
 }
 
 function Install-Rtk {
@@ -586,7 +731,12 @@ function Invoke-RtkCommand {
     $previousTelemetryDisabled = $env:RTK_TELEMETRY_DISABLED
     try {
         $env:RTK_TELEMETRY_DISABLED = "1"
-        Invoke-NativeCommand -FilePath $command.Source -Arguments $Arguments
+        if ($Arguments[0] -in @("--version", "gain")) {
+            Write-Host (Invoke-Utf8NativeCapture -FilePath $command.Source -Arguments $Arguments)
+        }
+        else {
+            Invoke-NativeCommand -FilePath $command.Source -Arguments $Arguments
+        }
     }
     finally {
         if ($hadTelemetryDisabled) {
@@ -670,6 +820,7 @@ function Configure-RtkForSelectedAgents {
 
 function Ensure-ClaudeCode {
     if (Get-ApplicationCommand "claude") {
+        $script:InstallStepOutcome = "Reused"
         Write-Host "Claude Code already found on PATH; verifying it."
     }
     else {
@@ -682,6 +833,7 @@ function Ensure-ClaudeCode {
 
 function Ensure-Codex {
     if (Get-ApplicationCommand "codex") {
+        $script:InstallStepOutcome = "Reused"
         Write-Host "Codex already found on PATH; verifying it."
     }
     else {
@@ -697,6 +849,7 @@ function Ensure-Pi {
     Add-NpmBinDirectories
     $existingPi = Get-ApplicationCommand "pi"
     if ($existingPi -and ($DryRun -or (Test-PiApplication $existingPi))) {
+        $script:InstallStepOutcome = "Reused"
         Write-Host "Pi already found on PATH; verifying it."
     }
     else {
@@ -715,6 +868,7 @@ function Ensure-Pi {
                 -not (Test-PiApplication $currentPi)
             )
             if ((-not $currentPi) -or $unchangedIncompatiblePi) {
+                $script:InstallStepOutcome = "Skipped"
                 Write-Host "Pi was not installed; continuing without it."
                 return
             }
@@ -901,17 +1055,9 @@ function Install-OpenCode {
     }
 }
 
-function Ensure-OpenCode {
+function Get-OpenCodeInstallState {
     $command = if ($script:OriginalOpenCode) { $script:OriginalOpenCode } else { Get-ApplicationCommand "opencode" }
     $nativePath = Join-Path $env:USERPROFILE ".opencode\bin\opencode.exe"
-    if ($DryRun) {
-        Write-Host "+ opencode --version"
-        Write-Host "Install stable OpenCode 2 if absent, or migrate v1 at '$nativePath'; external v1 requires manual upgrade."
-        Write-Host "Check and back up the recognized old OpenCode RTK plugin if present."
-        if (-not $command) { Install-OpenCode }
-        return
-    }
-
     $install = $true
     if ($command) {
         $version = Get-OpenCodeVersion $command.Source
@@ -938,11 +1084,32 @@ function Ensure-OpenCode {
                 throw "OpenCode installation path is linked: '$target'. Migrate it manually."
             }
         }
+    }
+    return [pscustomobject] @{ Install = $install; PluginPath = $pluginPath }
+}
+
+function Ensure-OpenCode {
+    $command = if ($script:OriginalOpenCode) { $script:OriginalOpenCode } else { Get-ApplicationCommand "opencode" }
+    $nativePath = Join-Path $env:USERPROFILE ".opencode\bin\opencode.exe"
+    if ($DryRun) {
+        Write-Host "+ opencode --version"
+        Write-Host "Install stable OpenCode 2 if absent, or migrate v1 at '$nativePath'; external v1 requires manual upgrade."
+        Write-Host "Check and back up the recognized old OpenCode RTK plugin if present."
+        if (-not $command) { Install-OpenCode }
+        return
+    }
+
+    $state = Get-OpenCodeInstallState
+    $pluginPath = $state.PluginPath
+    if ($state.Install) {
         Install-OpenCode
         Add-KnownBinDirectories
         if ((Get-OpenCodeVersion $nativePath) -notmatch '^2\.') {
             throw "The OpenCode installer did not install stable OpenCode 2 at '$nativePath'."
         }
+    }
+    else {
+        if (-not $pluginPath) { $script:InstallStepOutcome = "Reused" }
     }
     # Check the command selected after the installer's PATH additions.
     $command = Get-ApplicationCommand "opencode"
@@ -967,6 +1134,7 @@ function Ensure-Cline {
 
     $command = Get-ApplicationCommand "cline"
     if ($command) {
+        $script:InstallStepOutcome = "Reused"
         Write-Host "Cline already found on PATH; verifying it."
     }
     else {
@@ -1006,6 +1174,7 @@ function Install-Hermes {
 function Ensure-Hermes {
     $command = Get-ApplicationCommand "hermes"
     if ($command) {
+        $script:InstallStepOutcome = "Reused"
         Write-Host "Hermes Agent already found on PATH; verifying it."
     }
     else {
@@ -1023,6 +1192,7 @@ function Install-Grok {
 function Ensure-Grok {
     $command = Get-ApplicationCommand "grok"
     if ($command) {
+        $script:InstallStepOutcome = "Reused"
         Write-Host "Grok Build already found on PATH; verifying it."
     }
     else {
@@ -1078,6 +1248,7 @@ function Ensure-Aider {
     }
 
     if ($command) {
+        $script:InstallStepOutcome = "Reused"
         Write-Host "Aider already found on PATH; verifying it."
     }
     else {
@@ -1253,6 +1424,7 @@ function Ensure-Dsh {
     if ($command) {
         $version = Get-DshVersion $command.Source
         if (Test-DshVersion $version) {
+            $script:InstallStepOutcome = "Reused"
             Write-Host "DeepSeek Harness $version already satisfies >=$DshMinimumVersion; leaving it unchanged."
             return
         }
@@ -1263,54 +1435,71 @@ function Ensure-Dsh {
     Confirm-DshApplication
 }
 
+function Confirm-SelectedPrerequisites {
+    if ($DryRun) { return }
+    # Pi can bootstrap Node/npm before the dependent agents are installed.
+    $installingPi = $script:InstallPi -and -not (Find-InstalledCodingAgent "pi")
+    if (-not $installingPi) {
+        if ($script:InstallDsh) { [void] (Confirm-DshToolchain) }
+        if ($script:InstallCline -and -not (Get-ApplicationCommand "cline") -and -not (Get-ApplicationCommand "npm")) {
+            throw "Cline installation requires npm. Install Node.js from https://nodejs.org/en/download, then rerun the installer."
+        }
+    }
+    if ($script:InstallHermes -and -not (Get-ApplicationCommand "hermes")) { Confirm-HermesArchitecture }
+    if ($script:InstallOpenCode) {
+        $state = Get-OpenCodeInstallState
+        if ($state.Install) { [void] (Get-OpenCodeWindowsAssetName) }
+    }
+}
+
 function Ensure-SelectedCodingAgents {
     if ($script:InstallClaudeCode) {
-        Write-Step "Ensuring Claude Code is installed"
+        Start-InstallStep "Claude Code" "Ensuring Claude Code is installed"
         Ensure-ClaudeCode
     }
 
     if ($script:InstallCodex) {
-        Write-Step "Ensuring Codex is installed"
+        Start-InstallStep "Codex" "Ensuring Codex is installed"
         Ensure-Codex
     }
 
     if ($script:InstallPi) {
-        Write-Step "Checking or installing Pi"
+        Start-InstallStep "Pi" "Checking or installing Pi"
         Ensure-Pi
     }
 
     if ($script:InstallOpenCode) {
-        Write-Step "Ensuring OpenCode is installed"
+        Start-InstallStep "OpenCode" "Ensuring OpenCode is installed"
         Ensure-OpenCode
     }
 
     if ($script:InstallCline) {
-        Write-Step "Ensuring Cline CLI is installed"
+        Start-InstallStep "Cline" "Ensuring Cline CLI is installed"
         Ensure-Cline
     }
 
     if ($script:InstallHermes) {
-        Write-Step "Ensuring Hermes Agent is installed"
+        Start-InstallStep "Hermes" "Ensuring Hermes Agent is installed"
         Ensure-Hermes
     }
 
     if ($script:InstallDsh) {
-        Write-Step "Ensuring DeepSeek Harness is installed"
+        Start-InstallStep "DeepSeek Harness" "Ensuring DeepSeek Harness is installed"
         Ensure-Dsh
     }
 
     if ($script:InstallGrok) {
-        Write-Step "Ensuring Grok Build is installed"
+        Start-InstallStep "Grok" "Ensuring Grok Build is installed"
         Ensure-Grok
     }
 
     if ($script:InstallMuse) {
-        Write-Step "Ensuring Muse Code is installed"
+        Start-InstallStep "Muse" "Ensuring Muse Code is installed"
         Ensure-Muse
     }
 
     if ($script:InstallAider) {
-        Write-Step "Ensuring Aider is installed"
+        Start-InstallStep "Aider" "Ensuring Aider is installed"
         Ensure-Aider
     }
 
@@ -1406,6 +1595,7 @@ function Ensure-Uv {
     if ($uvCommand) {
         $version = Get-UvVersion $uvCommand.Source
         if (Test-SupportedStableVersion -Version $version -Minimum $MinUvVersion) {
+            $script:InstallStepOutcome = "Reused"
             Write-Host "uv $version already satisfies >=$MinUvVersion; leaving it unchanged."
             return
         }
@@ -1490,6 +1680,7 @@ function Export-FccDesktopIcon {
 }
 
 function Configure-AndConfirmFreeClaudeCode {
+    Start-InstallStep "PATH configuration"
     $iconPath = Join-Path $env:USERPROFILE ".fcc\app-icon.ico"
     if ($DryRun) {
         Write-Host "+ uv tool update-shell"
@@ -1511,6 +1702,7 @@ function Configure-AndConfirmFreeClaudeCode {
     }
     Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
     $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
+    Start-InstallStep "FCC verification"
     $toolBinPath = ([IO.Path]::GetFullPath($toolBin)).TrimEnd(
         [IO.Path]::DirectorySeparatorChar,
         [IO.Path]::AltDirectorySeparatorChar
@@ -1531,7 +1723,9 @@ function Configure-AndConfirmFreeClaudeCode {
         $installedCommands[$commandName] = $command.Source
     }
 
-    Invoke-NativeCommand -FilePath $installedCommands["fcc-server"] -Arguments @("--version")
+    Write-Host (Invoke-Utf8NativeCapture -FilePath $installedCommands["fcc-server"] -Arguments @("--version"))
+    $script:FccVerified = $true
+    Start-InstallStep "Desktop integration"
     Export-FccDesktopIcon `
         -DesktopCommand $installedCommands["fcc-desktop"] `
         -IconPath $iconPath
@@ -1601,63 +1795,15 @@ function Install-FccDesktopShortcuts {
         $shortcut.IconLocation = "$IconPath,0"
         $shortcut.Description = "Run Free Claude Code in the background"
         $shortcut.Save()
+        if ($shortcutPath -eq $shortcutPaths[0]) { $script:DesktopReady = $true }
     }
 }
 
-if ($Help) {
-    Show-Usage
-    return
-}
-
-if ($RemainingArgs.Count -gt 0) {
-    Show-Usage
-    throw "Unknown option: $($RemainingArgs -join ' ')"
-}
-
-if ((-not [string]::IsNullOrWhiteSpace($TorchBackend)) -and (-not $VoiceLocal)) {
-    throw "-TorchBackend requires -VoiceLocal."
-}
-
-# Preserve the user's winning command before adding installer search paths.
-$script:OriginalOpenCode = Get-ApplicationCommand "opencode"
-Add-KnownBinDirectories
-$script:InstallCline = [bool] ((Get-ApplicationCommand "cline") -or (Get-ApplicationCommand "npm"))
-Write-Step "Checking for running Free Claude Code processes"
-Assert-NoFccProcessesRunning
-
-if (-not (Test-InteractiveInstaller)) {
-    $hasDsh = [bool] (Get-ApplicationCommand "dsh")
-    $hasDryRunToolchain = [bool] (
-        $DryRun -and
-        (Get-ApplicationCommand "node") -and
-        (Get-ApplicationCommand "npm")
-    )
-    $script:InstallDsh = $hasDsh -or $hasDryRunToolchain -or (Test-DshToolchain)
-}
-
-if (Test-InteractiveInstaller) {
-    Write-Step "Choosing coding agents"
-    Select-CodingAgents
-}
-
-Write-Step "Ensuring uv $MinUvVersion or newer is installed"
-Ensure-Uv
-
-Ensure-SelectedCodingAgents
-Configure-RtkForSelectedAgents
-
-Write-Step "Installing or updating Free Claude Code"
-Install-FreeClaudeCode
-
-Write-Step "Configuring PATH and verifying Free Claude Code"
-Configure-AndConfirmFreeClaudeCode
-
-Write-Host ""
-if ($DryRun) {
-    Write-Host "Dry run complete. No changes were made."
-}
-else {
-    Write-Host "Free Claude Code is installed and verified. Open the Free Claude Code desktop shortcut to run it in the background."
+function Show-InstallerNextSteps {
+    Write-Host "`nFree Claude Code is installed and verified."
+    if ($script:DesktopReady) {
+        Write-Host "Open the Free Claude Code desktop shortcut to run it in the background."
+    }
     Write-Host "For terminal use, start the proxy with: fcc-server"
     if ($script:InstallClaudeCode) {
         Write-Host "Run Claude Code with: fcc-claude"
@@ -1674,37 +1820,124 @@ else {
     if ($script:InstallCline) {
         Write-Host "Run Cline with: fcc-cline"
     }
-    else {
-        Write-Host "The fcc-cline wrapper is ready after you install Cline CLI."
-    }
     if ($script:InstallHermes) {
         Write-Host "Run Hermes Agent with: fcc-hermes"
-    }
-    else {
-        Write-Host "The fcc-hermes wrapper is ready after you install Hermes Agent."
     }
     if ($script:InstallDsh) {
         Write-Host "Run DeepSeek Harness with: fcc-dsh"
     }
-    else {
-        Write-Host "The fcc-dsh wrapper is ready after you install DeepSeek Harness >=$DshMinimumVersion."
-    }
     if ($script:InstallGrok) {
         Write-Host "Run Grok Build with: fcc-grok"
-    }
-    else {
-        Write-Host "The fcc-grok wrapper is ready after you install Grok Build."
     }
     if ($script:MuseAvailable) {
         Write-Host "Run Muse Code with: fcc-muse"
     }
-    else {
-        Write-Host "The fcc-muse wrapper is ready after you install Muse Code."
-    }
     if ($script:InstallAider) {
         Write-Host "Run Aider with: fcc-aider"
     }
-    else {
-        Write-Host "The fcc-aider wrapper is ready after you install Aider."
-    }
+
 }
+
+if ($Help) {
+    Show-Usage
+    return
+}
+
+if ($RemainingArgs.Count -gt 0) {
+    Show-Usage
+    throw "Unknown option: $($RemainingArgs -join ' ')"
+}
+
+if ((-not [string]::IsNullOrWhiteSpace($TorchBackend)) -and (-not $VoiceLocal)) {
+    throw "-TorchBackend requires -VoiceLocal."
+}
+
+Initialize-InstallLog
+$script:InstallSteps["Preflight"] = "Not attempted"
+$installSucceeded = $false
+$installError = $null
+try {
+    Start-InstallStep "Preflight"
+    # Preserve the user's winning command before adding installer search paths.
+    $script:OriginalOpenCode = Get-ApplicationCommand "opencode"
+    Add-KnownBinDirectories
+    $script:InstallCline = [bool] ((Get-ApplicationCommand "cline") -or (Get-ApplicationCommand "npm"))
+    Write-Step "Checking for running Free Claude Code processes"
+    Assert-NoFccProcessesRunning
+
+    if (-not (Test-InteractiveInstaller)) {
+        $hasDsh = [bool] (Get-ApplicationCommand "dsh")
+        $hasDryRunToolchain = [bool] (
+            $DryRun -and
+            (Get-ApplicationCommand "node") -and
+            (Get-ApplicationCommand "npm")
+        )
+        $script:InstallDsh = $hasDsh -or $hasDryRunToolchain -or (Test-DshToolchain)
+    }
+
+    if (Test-InteractiveInstaller) {
+        Write-Step "Choosing coding agents"
+        Select-CodingAgents
+    }
+
+    $script:InstallSteps["uv"] = "Not attempted"
+    $selectedAgents = @()
+    foreach ($choice in @(
+        @("Claude Code", $script:InstallClaudeCode), @("Codex", $script:InstallCodex),
+        @("Pi", $script:InstallPi), @("OpenCode", $script:InstallOpenCode),
+        @("Cline", $script:InstallCline), @("Hermes", $script:InstallHermes),
+        @("DeepSeek Harness", $script:InstallDsh), @("Grok", $script:InstallGrok),
+        @("Muse", $script:InstallMuse), @("Aider", $script:InstallAider)
+    )) {
+        if ($choice[1]) {
+            $script:InstallSteps[$choice[0]] = "Not attempted"
+            $selectedAgents += $choice[0]
+        }
+    }
+    foreach ($name in @("FCC package", "PATH configuration", "FCC verification", "Desktop integration")) {
+        $script:InstallSteps[$name] = "Not attempted"
+    }
+    if ($script:EnableRtk) { $script:InstallSteps["RTK configuration"] = "Not attempted" }
+
+    Write-Host "`nInstallation plan:"
+    Write-Host "  Install or update Free Claude Code."
+    Write-Host "  Verify or install: $($selectedAgents -join ', ')."
+    if ($VoiceLocal) { Write-Host "  Include local voice support." }
+    if ($TorchBackend) { Write-Host "  PyTorch backend: $TorchBackend" }
+    if ($script:EnableRtk) { Write-Host "  Configure RTK for the selected agents." }
+    Write-Host "Press Ctrl+C to cancel. You can rerun the installer afterward."
+    $script:InstallStageCount = $script:InstallSteps.Count - 1
+
+    Confirm-SelectedPrerequisites
+
+    Start-InstallStep "uv" "Ensuring uv $MinUvVersion or newer is installed"
+    Ensure-Uv
+
+    Ensure-SelectedCodingAgents
+
+    Start-InstallStep "FCC package" "Installing or updating Free Claude Code"
+    Install-FreeClaudeCode
+
+    Configure-AndConfirmFreeClaudeCode
+
+    if ($script:EnableRtk) {
+        Start-InstallStep "RTK configuration"
+        Configure-RtkForSelectedAgents
+    }
+    Complete-InstallStep
+    $installSucceeded = $true
+}
+catch {
+    $installError = $_
+    Write-InstallLog $_.Exception.Message
+    throw
+}
+finally {
+    $cancelled = (-not $installSucceeded) -and ($null -eq $installError)
+    if ($cancelled) { Complete-InstallStep "Cancelled" }
+    elseif (-not $installSucceeded) { Complete-InstallStep "Failed" }
+    Show-InstallReport -Succeeded $installSucceeded -Cancelled $cancelled
+    if ($script:FccVerified) { Show-InstallerNextSteps }
+}
+
+if ($DryRun) { Write-Host "Dry run complete. No changes were made." }

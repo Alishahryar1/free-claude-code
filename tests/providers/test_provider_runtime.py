@@ -13,6 +13,7 @@ from free_claude_code.application.errors import (
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
     AGNES_DEFAULT_BASE,
+    ATLASCLOUD_DEFAULT_BASE,
     BEDROCK_DEFAULT_BASE,
     CHEAPERINFERENCE_DEFAULT_BASE,
     CHUTES_DEFAULT_BASE,
@@ -131,6 +132,7 @@ def _make_settings(**overrides):
     mock.experiential_api_key = "test_experiential_key"
     mock.cheaperinference_api_key = "test_cheaperinference_key"
     mock.orcarouter_api_key = "test_orcarouter_key"
+    mock.atlascloud_api_key = "test_atlascloud_key"
     mock.xkiro_api_key = "test_xkiro_key"
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
@@ -182,6 +184,7 @@ def _make_settings(**overrides):
     mock.experiential_proxy = None
     mock.cheaperinference_proxy = None
     mock.orcarouter_proxy = None
+    mock.atlascloud_proxy = None
     mock.xkiro_proxy = None
     mock.kilo_api_key = "test_kilo_key"
     mock.kilo_proxy = None
@@ -412,6 +415,36 @@ async def test_orcarouter_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.proxy_attr == "orcarouter_proxy"
     assert config.api_key == "orcarouter-token"
     assert config.base_url == ORCAROUTER_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
+async def test_atlascloud_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["atlascloud"]
+    settings = _make_settings(
+        atlascloud_api_key="atlascloud-token",
+        atlascloud_base_url="https://unused.example/v1",
+        atlascloud_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "atlascloud",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "Atlas Cloud"
+    assert descriptor.credential_env == "ATLASCLOUD_API_KEY"
+    assert descriptor.credential_attr == "atlascloud_api_key"
+    assert descriptor.credential_url == "https://console.atlascloud.ai/api-keys"
+    assert descriptor.default_base_url == ATLASCLOUD_DEFAULT_BASE
+    assert descriptor.base_url_attr is None
+    assert descriptor.proxy_attr == "atlascloud_proxy"
+    assert config.api_key == "atlascloud-token"
+    assert config.base_url == ATLASCLOUD_DEFAULT_BASE
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
@@ -1172,6 +1205,7 @@ async def test_create_provider_instantiates_each_builtin():
         "experiential": OpenAIChatProvider,
         "cheaperinference": OpenAIChatProvider,
         "orcarouter": OpenAIChatProvider,
+        "atlascloud": OpenAIChatProvider,
         "xkiro": OpenAIChatProvider,
         "opencode_go": OpenCodeProvider,
         "vercel": OpenAIChatProvider,
