@@ -343,6 +343,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Keys start with ci_live_; create one at cheaperinference.com/signup."
         ),
     },
+    "ONOMEO_API_KEY": {
+        "label": "onomeo API Key",
+        "description": (
+            "onomeo OpenAI-compatible gateway API key for onomeo.com/v1. "
+            "Create one at onomeo.com/dashboard."
+        ),
+    },
 }
 
 

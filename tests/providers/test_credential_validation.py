@@ -65,6 +65,7 @@ CASES = [
     ("nararoute", "https://router.bynara.id/v1/models", {"data": []}, 401),
     ("experiential", "https://api.experientiallabs.ai/v1/models", {"data": []}, 401),
     ("orcarouter", "https://api.orcarouter.ai/v1/models", {"data": []}, 401),
+    ("onomeo", "https://onomeo.com/v1/models", {"data": []}, 401),
     (
         "xkiro",
         "https://api.xkiro.com/v1/usage",

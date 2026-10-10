@@ -62,6 +62,7 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "orcarouter",
     "xkiro",
     "opper",
+    "onomeo",
     "ollama_cloud",
     "lmstudio",
     "llamacpp",

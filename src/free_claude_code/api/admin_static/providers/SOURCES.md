@@ -39,6 +39,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `novita-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/novita-color.svg |
 | `nvidia-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/nvidia-color.svg |
 | `ollama.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/ollama.svg |
+| `onomeo.svg` | https://onomeo.com/icon.svg |
 | `openai.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/openai.svg |
 | `opencode.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/opencode.svg |
 | `openrouter.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/openrouter.svg |

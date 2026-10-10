@@ -27,6 +27,7 @@ from free_claude_code.config.provider_catalog import (
     MINIMAX_DEFAULT_BASE,
     NEBIUS_DEFAULT_BASE,
     OLLAMA_CLOUD_DEFAULT_BASE,
+    ONOMEO_DEFAULT_BASE,
     OPPER_DEFAULT_BASE,
     ORCAROUTER_DEFAULT_BASE,
     POOLSIDE_DEFAULT_BASE,
@@ -132,6 +133,7 @@ def _make_settings(**overrides):
     mock.cheaperinference_api_key = "test_cheaperinference_key"
     mock.orcarouter_api_key = "test_orcarouter_key"
     mock.xkiro_api_key = "test_xkiro_key"
+    mock.onomeo_api_key = "test_onomeo_key"
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -183,6 +185,7 @@ def _make_settings(**overrides):
     mock.cheaperinference_proxy = None
     mock.orcarouter_proxy = None
     mock.xkiro_proxy = None
+    mock.onomeo_proxy = None
     mock.kilo_api_key = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
@@ -1173,6 +1176,7 @@ async def test_create_provider_instantiates_each_builtin():
         "cheaperinference": OpenAIChatProvider,
         "orcarouter": OpenAIChatProvider,
         "xkiro": OpenAIChatProvider,
+        "onomeo": OpenAIChatProvider,
         "opencode_go": OpenCodeProvider,
         "vercel": OpenAIChatProvider,
         "bedrock": OpenAIChatProvider,
@@ -1702,3 +1706,32 @@ def test_xkiro_requires_key_despite_public_catalog():
         build_provider_config(
             PROVIDER_CATALOG["xkiro"], _make_settings(xkiro_api_key=None)
         )
+
+
+@pytest.mark.asyncio
+async def test_onomeo_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["onomeo"]
+    settings = _make_settings(
+        onomeo_api_key="onomeo-token",
+        onomeo_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "onomeo",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "onomeo"
+    assert descriptor.credential_env == "ONOMEO_API_KEY"
+    assert descriptor.credential_attr == "onomeo_api_key"
+    assert descriptor.credential_url == "https://onomeo.com/dashboard"
+    assert descriptor.default_base_url == ONOMEO_DEFAULT_BASE
+    assert descriptor.base_url_attr is None
+    assert descriptor.proxy_attr == "onomeo_proxy"
+    assert config.api_key == "onomeo-token"
+    assert config.base_url == "https://onomeo.com/v1"
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)

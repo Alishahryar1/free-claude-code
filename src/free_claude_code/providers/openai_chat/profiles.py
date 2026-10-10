@@ -786,6 +786,18 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         model_listing=OpenAIModelListing(path="/models"),
     ),
+    # onomeo documents no caller reasoning controls, streams reasoning text as
+    # reasoning_content or reasoning, and lists model ids without token limits.
+    "onomeo": OpenAIChatProfile(
+        _policy(
+            "ONOMEO",
+            ReasoningReplayMode.DISABLED,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NO_REASONING,
+        model_listing=OpenAIModelListing(path="/models"),
+        reasoning_delta_fallback_field="reasoning",
+    ),
     "ollama_cloud": OpenAIChatProfile(
         _policy(
             "OLLAMA_CLOUD",

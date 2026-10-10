@@ -74,6 +74,7 @@ def _settings(**overrides):
         "cheaperinference_api_key": "",
         "orcarouter_api_key": "",
         "xkiro_api_key": "",
+        "onomeo_api_key": "",
         "fireworks_api_key": "",
         "novita_api_key": "",
         "cloudflare_api_token": "",
@@ -1421,4 +1422,49 @@ def test_xkiro_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
     )
 
     assert not config.has_provider_configuration("xkiro")
+    assert config.provider_smoke_models() == []
+
+
+def test_onomeo_provider_configuration_uses_default_model(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_ONOMEO", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            onomeo_api_key="onomeo-key",
+        )
+    )
+
+    assert config.has_provider_configuration("onomeo")
+    models = config.provider_smoke_models()
+    assert [model.provider for model in models] == ["onomeo"]
+    assert models[0].full_model == "onomeo/deepseek-v4-flash"
+    assert models[0].source == "provider_default"
+
+
+def test_onomeo_smoke_override_accepts_model_with_or_without_prefix(
+    monkeypatch,
+) -> None:
+    settings = _settings(
+        model="ollama/llama3.1",
+        ollama_base_url="",
+        onomeo_api_key="onomeo-key",
+    )
+    for override in ("glm-5.2", "onomeo/glm-5.2"):
+        monkeypatch.setenv("FCC_SMOKE_MODEL_ONOMEO", override)
+        models = _smoke_config(settings=settings).provider_smoke_models()
+
+        assert [model.provider for model in models] == ["onomeo"]
+        assert models[0].full_model == "onomeo/glm-5.2"
+        assert models[0].source == "FCC_SMOKE_MODEL_ONOMEO"
+
+
+def test_onomeo_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_ONOMEO", raising=False)
+    config = _smoke_config(
+        provider_matrix=frozenset({"onomeo"}),
+        settings=_settings(ollama_base_url="", onomeo_api_key=""),
+    )
+
+    assert not config.has_provider_configuration("onomeo")
     assert config.provider_smoke_models() == []

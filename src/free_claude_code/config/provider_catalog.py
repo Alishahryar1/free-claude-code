@@ -95,6 +95,8 @@ ORCAROUTER_DEFAULT_BASE = "https://api.orcarouter.ai/v1"
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Opper OpenAI-compatible Chat Completions gateway.
 OPPER_DEFAULT_BASE = "https://api.opper.ai/v3/compat"
+# onomeo OpenAI-compatible Chat Completions gateway.
+ONOMEO_DEFAULT_BASE = "https://onomeo.com/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -764,6 +766,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="opper_api_key",
         default_base_url=OPPER_DEFAULT_BASE,
         proxy_attr="opper_proxy",
+    ),
+    "onomeo": ProviderDescriptor(
+        provider_id="onomeo",
+        display_name="onomeo",
+        website_url="https://onomeo.com/",
+        logo_filename="onomeo.svg",
+        credential_env="ONOMEO_API_KEY",
+        credential_url="https://onomeo.com/dashboard",
+        credential_attr="onomeo_api_key",
+        default_base_url=ONOMEO_DEFAULT_BASE,
+        proxy_attr="onomeo_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",

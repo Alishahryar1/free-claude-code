@@ -76,6 +76,7 @@ _MODELS = _list_field("data")
 # https://platform.kimi.ai/docs/api/errors
 # https://router.bynara.id/id/docs
 # https://platform.experientiallabs.ai/docs/authentication
+# https://onomeo.com/docs
 _PROBES = (
     # https://platform.claude.com/docs/en/api/models/list
     _Probe("anthropic", "/models?limit=1", _MODELS, _AUTH_401),
@@ -150,6 +151,7 @@ _PROBES = (
     _Probe("nararoute", "/models", _MODELS, _AUTH_401),
     _Probe("experiential", "/models", _MODELS, _AUTH_401),
     _Probe("orcarouter", "/models", _MODELS, _AUTH_401),
+    _Probe("onomeo", "/models", _MODELS, _AUTH_401),
     # xKiro's /models is public; /usage requires the inference API key.
     # https://docs.xkiro.com/api/usage/
     _Probe(
