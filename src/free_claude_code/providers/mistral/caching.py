@@ -22,6 +22,12 @@ MISTRAL_SESSION_HEADER_NAMES: tuple[str, ...] = (
     "x-claude-code-session-id",
     "session-id",
     "x-session-id",
+    "session_id",
+    "x-grok-session-id",
+    "x-meta-ai-gateway-session-id",
+    "x-tbh-session-id",
+    # Launch identity is less specific than a conversation session.
+    "x-fcc-launch-id",
 )
 
 

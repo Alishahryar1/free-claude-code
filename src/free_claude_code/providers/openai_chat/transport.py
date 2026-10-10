@@ -1413,6 +1413,7 @@ class _OpenAIChatStreamRunner:
                     corrections=corrections,
                     endpoint=self._endpoint,
                     request_client=self._request_client,
+                    extra_headers=self._extra_headers,
                 )
                 scope = ProviderAttemptScope(
                     attempt,

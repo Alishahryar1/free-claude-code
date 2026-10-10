@@ -82,6 +82,28 @@ def test_extract_accepts_every_known_session_header(name):
     assert extract_mistral_affinity_key({name: "sess-1"}) == "sess-1"
 
 
+@pytest.mark.parametrize(
+    "name", [name for name in MISTRAL_SESSION_HEADER_NAMES if name != "x-fcc-launch-id"]
+)
+def test_conversation_identity_takes_precedence_over_launch_identity(name):
+    assert (
+        extract_mistral_affinity_key(
+            {"x-fcc-launch-id": "launch-1", name: "conversation-1"}
+        )
+        == "conversation-1"
+    )
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_conversation_identity_falls_back_to_launch_identity(blank):
+    assert (
+        extract_mistral_affinity_key(
+            {"x-opencode-session": blank, "x-fcc-launch-id": "launch-1"}
+        )
+        == "launch-1"
+    )
+
+
 def test_extract_matches_header_names_case_insensitively():
     assert extract_mistral_affinity_key({"X-OpenCode-Session": "sess-2"}) == "sess-2"
 
@@ -143,6 +165,7 @@ async def test_stream_messages_sends_affinity_header(mistral_provider):
         ]
 
     assert any("Hello back!" in event for event in events)
+    assert mock_create.await_args is not None
     assert mock_create.await_args.kwargs["extra_headers"] == {
         MISTRAL_AFFINITY_HEADER: "sess-123"
     }
@@ -175,6 +198,7 @@ async def test_stream_messages_without_session_header_sends_no_extra_headers(
         ]
 
     assert any("Hello back!" in event for event in events)
+    assert mock_create.await_args is not None
     assert "extra_headers" not in mock_create.await_args.kwargs
 
 
@@ -222,6 +246,7 @@ async def test_stream_responses_sends_affinity_header(mistral_provider):
         ]
 
     assert chunks
+    assert mock_create.await_args is not None
     assert mock_create.await_args.kwargs["extra_headers"] == {
         MISTRAL_AFFINITY_HEADER: "sess-123"
     }
@@ -241,6 +266,7 @@ async def test_stream_responses_without_session_header_sends_no_extra_headers(
         chunks = [chunk async for chunk in mistral_provider.stream_responses(request)]
 
     assert chunks
+    assert mock_create.await_args is not None
     assert "extra_headers" not in mock_create.await_args.kwargs
 
 
@@ -266,6 +292,7 @@ async def test_other_openai_chat_providers_do_not_send_affinity_headers():
         ]
 
     assert any("Hello back!" in event for event in events)
+    assert mock_create.await_args is not None
     assert "extra_headers" not in mock_create.await_args.kwargs
 
 
