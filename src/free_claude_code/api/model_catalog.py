@@ -202,7 +202,7 @@ def _build_claude_models_response(
             models.append(
                 _discovered_model_response(
                     desktop_model_id(ref) if desktop else gateway_model_id(ref),
-                    display_name=ref,
+                    display_name=ref if native else model.display_name,
                 )
             )
         if native:
@@ -212,7 +212,9 @@ def _build_claude_models_response(
                 desktop_model_id(ref, no_thinking=True)
                 if desktop
                 else no_thinking_gateway_model_id(ref),
-                display_name=f"{ref} (no thinking)",
+                display_name=(
+                    f"{model.display_name.removesuffix(' (no thinking)')} (no thinking)"
+                ),
             )
         )
     return ModelsListResponse(
