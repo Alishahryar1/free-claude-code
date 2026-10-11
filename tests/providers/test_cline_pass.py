@@ -273,10 +273,7 @@ def test_build_request_body_replays_only_opaque_reasoning_details(
         message for message in body["messages"] if message["role"] == "assistant"
     )
 
-    assert (
-        assistant["content"]
-        == "[Earlier reasoning]\nNeed a tool.\n\nI will inspect it."
-    )
+    assert assistant["content"] == "Need a tool.\n\nI will inspect it."
     assert assistant["reasoning_details"] == [detail]
     assert "reasoning" not in assistant
     assert "reasoning_content" not in assistant

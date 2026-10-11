@@ -337,11 +337,6 @@ def _replay_readable(
     return native or readable_reasoning(item)
 
 
-def reasoning_context(text: str, *, summary: bool = False) -> str:
-    label = "Earlier reasoning summary" if summary else "Earlier reasoning"
-    return f"[{label}]\n{text}" if text else ""
-
-
 def tool_history_context(item: Mapping[str, JsonValue]) -> str:
     """Keep available tool data as quoted history, never as new instructions."""
     return "[Earlier tool record]\n" + json.dumps(
@@ -422,8 +417,7 @@ def responses_reasoning_blocks(item: Mapping[str, JsonValue]) -> list[JsonValue]
         if record is not None and readable_reasoning(record.native):
             return blocks
     blocks.extend(
-        {"type": "text", "text": reasoning_context(text, summary=summary)}
-        for text, summary in readable_reasoning(item)
+        {"type": "text", "text": text} for text, _ in readable_reasoning(item)
     )
     return blocks
 
@@ -454,8 +448,7 @@ def prepare_history(
                 projected.append(record.native)
                 if not readable_reasoning(record.native):
                     projected.extend(
-                        _context_item(reasoning_context(text, summary=summary))
-                        for text, summary in readable_reasoning(item)
+                        _context_item(text) for text, _ in readable_reasoning(item)
                     )
                 continue
             if record is None and item.get("encrypted_content"):
@@ -463,10 +456,8 @@ def prepare_history(
                     item
                 )  # Older history: try native before precise recovery.
                 continue
-            for text, summary in _replay_readable(item, record):
-                projected.append(
-                    _context_item(reasoning_context(text, summary=summary))
-                )
+            for text, _ in _replay_readable(item, record):
+                projected.append(_context_item(text))
         result["input"] = projected
         return result
     messages = result.get("messages")
@@ -546,16 +537,14 @@ def _prepare_messages_content(message: JsonObject, destination: ReplayOrigin) ->
             blocks.append(record.native)
             if not readable_reasoning(record.native):
                 blocks.extend(
-                    {"type": "text", "text": reasoning_context(text, summary=summary)}
-                    for text, summary in readable_reasoning(block)
+                    {"type": "text", "text": text}
+                    for text, _ in readable_reasoning(block)
                 )
         elif record is None and (block.get("signature") or block.get("data")):
             blocks.append(block)
         else:
-            for text, summary in _replay_readable(block, record):
-                blocks.append(
-                    {"type": "text", "text": reasoning_context(text, summary=summary)}
-                )
+            for text, _ in _replay_readable(block, record):
+                blocks.append({"type": "text", "text": text})
     message["content"] = blocks
 
 
@@ -622,9 +611,7 @@ def _prepare_chat_content(
                             else text
                         )
                     else:
-                        _append_context(
-                            message, reasoning_context(text, summary=summary)
-                        )
+                        _append_context(message, text)
     if restored:
         message["reasoning_details"] = restored
     else:
@@ -633,7 +620,7 @@ def _prepare_chat_content(
         for key in ("reasoning_content", "reasoning"):
             text = message.pop(key, None)
             if isinstance(text, str) and text:
-                _append_context(message, reasoning_context(text))
+                _append_context(message, text)
     if (
         had_reasoning_content
         and reasoning_field == "reasoning_content"

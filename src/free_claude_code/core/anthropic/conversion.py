@@ -10,7 +10,6 @@ from free_claude_code.core.history_replay import (
     HistoryReplayError,
     has_readable_replay,
     is_replay,
-    reasoning_context,
     reasoning_detail,
     tool_history_context,
     validate_hosted_tool_history,
@@ -583,7 +582,7 @@ class AnthropicToOpenAIConverter:
                     content_parts = [
                         _think_tag_content(reasoning_content)
                         if reasoning_replay == ReasoningReplayMode.THINK_TAGS
-                        else reasoning_context(reasoning_content)
+                        else reasoning_content
                     ]
                     if content:
                         content_parts.append(content)
@@ -692,7 +691,7 @@ class AnthropicToOpenAIConverter:
                     details.append({"type": "reasoning.encrypted", "data": signature})
                 if reasoning_replay == ReasoningReplayMode.DISABLED:
                     if thinking:
-                        content_parts.append(reasoning_context(thinking))
+                        content_parts.append(thinking)
                     continue
                 if reasoning_replay == ReasoningReplayMode.THINK_TAGS:
                     content_parts.append(_think_tag_content(thinking))

@@ -17,6 +17,7 @@ from tests.api.test_delivered_stream_recovery import (
     text_events,
 )
 from tests.api.test_hidden_stream_retries import partial_tool
+from tests.api.test_recovery_reasoning import followed_by_text, reasoning_events
 from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
@@ -112,6 +113,35 @@ async def test_exhausted_model_continues_on_next_candidate(source, target, wire)
             )
             == "Hello there. Done."
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["chat", "messages", "responses"])
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_fallback_preserves_readable_reasoning_without_a_heading(target, wire):
+    interrupted = followed_by_text(reasoning_events(closed=False), "Hello ")
+    async with (
+        _harness("responses", lambda _: (200, interrupted), max_attempts=1) as (
+            first,
+            _,
+            _,
+        ),
+        _harness(target, lambda _: (200, text_events(target, "world."))) as (
+            second,
+            bodies,
+            _,
+        ),
+    ):
+        raw = await delivered_candidates([first, second], wire)
+
+    assert len(bodies) == 1
+    history = bodies[0].get("messages", bodies[0].get("input"))
+    content = history[-1]["content"]
+    instruction = content if isinstance(content, str) else content[0]["text"]
+    assert instruction.split("\n\n", 1)[0] == "Find 17."
+    events = parse_sse_text(raw)
+    assert_completed(events, wire)
+    assert public_text(events, wire) == "Hello world."
 
 
 @pytest.mark.asyncio

@@ -1376,9 +1376,7 @@ async def test_stream_messages_retries_without_reasoning_content(nim_provider):
     second_call = mock_create.await_args_list[1].kwargs
     assert first_call["messages"][0]["reasoning_content"] == "Need the tool."
     assert "reasoning_content" not in second_call["messages"][0]
-    assert (
-        "[Earlier reasoning]\nNeed the tool." in second_call["messages"][0]["content"]
-    )
+    assert "Need the tool." in second_call["messages"][0]["content"]
     assert second_call["messages"][0]["tool_calls"][0]["id"] == "toolu_reasoning"
     assert any("Recovered" in event for event in events)
     assert any("message_stop" in event for event in events)

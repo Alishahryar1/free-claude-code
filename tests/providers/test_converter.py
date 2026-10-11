@@ -814,10 +814,7 @@ def test_convert_assistant_message_thinking_becomes_context_when_disabled():
     assert len(result) == 1
     assert "reasoning_content" not in result[0]
     assert "<think>" not in result[0]["content"]
-    assert (
-        result[0]["content"]
-        == "[Earlier reasoning]\nI need to calculate this.\n\nThe answer is 4."
-    )
+    assert result[0]["content"] == "I need to calculate this.\n\nThe answer is 4."
 
 
 def test_convert_assistant_top_level_reasoning_becomes_context_when_disabled():
@@ -835,7 +832,7 @@ def test_convert_assistant_top_level_reasoning_becomes_context_when_disabled():
     assert result == [
         {
             "role": "assistant",
-            "content": "[Earlier reasoning]\nI need to calculate this.\n\nThe answer is 4.",
+            "content": "I need to calculate this.\n\nThe answer is 4.",
         }
     ]
 

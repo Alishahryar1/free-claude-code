@@ -4,8 +4,6 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
-from free_claude_code.core.history_replay import reasoning_context
-
 
 def clone_body_without_chat_template(body: dict[str, Any]) -> dict[str, Any] | None:
     """Clone a request body and strip NIM chat-template control fields."""
@@ -60,10 +58,11 @@ def _strip_message_reasoning_content(body: dict[str, Any]) -> bool:
             and reasoning
             and message.get("role") == "assistant"
         ):
-            context = reasoning_context(reasoning)
             content = message.get("content")
             if isinstance(content, list):
-                content.append({"type": "text", "text": context})
+                content.append({"type": "text", "text": reasoning})
             else:
-                message["content"] = f"{content}\n\n{context}" if content else context
+                message["content"] = (
+                    f"{content}\n\n{reasoning}" if content else reasoning
+                )
     return removed

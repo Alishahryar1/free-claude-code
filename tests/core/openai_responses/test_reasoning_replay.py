@@ -105,7 +105,7 @@ def test_completed_reasoning_keeps_both_display_and_opaque_replay() -> None:
             cast(JsonObject, body), ReplayOrigin("other", egress, "", "", "m")
         )
         serialized = json.dumps(projected)
-        assert "[Earlier reasoning]" in serialized
+        assert "[Earlier reasoning]" not in serialized
         assert "visible" in serialized
         assert "opaque" not in serialized
         assert carrier not in serialized

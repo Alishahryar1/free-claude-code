@@ -675,7 +675,7 @@ async def test_native_reasoning_carrier_replays_only_to_messages_egress(
             await collect(harness.provider.stream_responses(request))
             body = json.loads(harness.seen[0].content)
             wire = json.dumps(body)
-            assert "[Earlier reasoning]" in wire
+            assert "[Earlier reasoning]" not in wire
             assert "private reasoning" in wire
             assert "exact-signature" not in wire
             assert carrier not in wire

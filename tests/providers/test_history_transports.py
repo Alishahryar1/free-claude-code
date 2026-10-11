@@ -356,7 +356,7 @@ async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changi
         assert bodies[1]["input"][0]["encrypted_content"] == "opaque-original"
         assert bodies[2]["input"][0] == {
             "role": "assistant",
-            "content": "[Earlier reasoning summary]\nFind 17.",
+            "content": "Find 17.",
         }
         assert all(body["reasoning"] == bodies[0]["reasoning"] for body in bodies)
         assert history == original

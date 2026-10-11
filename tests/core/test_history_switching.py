@@ -476,5 +476,5 @@ def test_destination_without_native_reasoning_keeps_readable_context(wire):
             )
         }
     rendered = json.dumps(body)
-    assert "[Earlier reasoning]" in rendered
+    assert "[Earlier reasoning]" not in rendered
     assert "Preserve this thought." in rendered

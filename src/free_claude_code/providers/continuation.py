@@ -9,7 +9,6 @@ from free_claude_code.core.delivered_response import (
     is_structured_text_format,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.history_replay import reasoning_context
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_recovery import (
     ContinuationSeed,
@@ -237,7 +236,7 @@ def continuation_tail(seed: ContinuationSeed, *, tools: bool) -> list[dict[str, 
     if tools:
         instruction += " No tool calls from this interrupted assistant turn were delivered or executed. Any unfinished calls were discarded. Emit the required tool calls using the provided tools."
     if seed.thinking:
-        instruction = f"{reasoning_context(seed.thinking)}\n\n{instruction}"
+        instruction = f"{seed.thinking}\n\n{instruction}"
     tail = [{"role": "assistant", "content": seed.text}] if seed.text else []
     return [*tail, {"role": "user", "content": instruction}]
 

@@ -59,7 +59,7 @@ def test_legacy_invalid_id_then_ciphertext_rejection_keeps_original():
     assert cleaned is not None
     assert cleaned["input"][1] == {
         "role": "assistant",
-        "content": "[Earlier reasoning summary]\nlook up 17",
+        "content": "look up 17",
     }
     assert cleaned["input"][2:] == original["input"][2:]
     assert body == original
@@ -140,7 +140,7 @@ def test_messages_signature_path_retains_readable_text_and_other_blocks():
     )
     assert result is not None
     assert result["messages"][0]["content"] == [
-        {"type": "text", "text": "[Earlier reasoning]\nread the file"},
+        {"type": "text", "text": "read the file"},
         body["messages"][0]["content"][1],
     ]
 

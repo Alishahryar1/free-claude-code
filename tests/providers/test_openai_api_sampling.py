@@ -379,7 +379,7 @@ async def test_history_and_sampling_corrections_preserve_each_other(history_firs
         if error is history_error:
             expected["input"][0] = {
                 "role": "assistant",
-                "content": "[Earlier reasoning summary]\nSaved reasoning",
+                "content": "Saved reasoning",
             }
         else:
             expected.pop("temperature")

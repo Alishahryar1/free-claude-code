@@ -106,7 +106,7 @@ def test_foreign_readable_reasoning_keeps_context_without_ciphertext(protocol):
     result = prepare_history(saved, _origin("b", protocol))
     rendered = json.dumps(result)
     assert "Search for the value." in rendered
-    assert "summary" in rendered.lower()
+    assert "[Earlier reasoning summary]" not in rendered
     assert "opaque-native" not in rendered
     assert "fcc:" not in rendered
     assert all(
@@ -191,11 +191,36 @@ def test_chat_replay_keeps_full_text_and_summary_meaning(native_text):
         dict[str, Any],
         prepare_history(body, _origin("b", "chat"), scope=HistoryScope.ALL),
     )["messages"][0]
-    assert result["content"] == "answer\n\n[Earlier reasoning summary]\nShort summary."
+    assert result["content"] == "answer\n\nShort summary."
     if native_text == "Short summary.":
         assert "reasoning_content" not in result
     else:
         assert result["reasoning_content"] == "Full reasoning."
+    assert body == original
+
+
+@pytest.mark.parametrize(
+    "thinking",
+    ["  Read first.\nThen edit.  ", "[Earlier reasoning]\nOriginal text.", ""],
+)
+def test_plain_reasoning_context_preserves_original_text_and_history(thinking):
+    body = {
+        "messages": [
+            {"role": "assistant", "content": "Answer.", "reasoning_content": thinking},
+            {"role": "user", "content": "Continue."},
+        ]
+    }
+    original = deepcopy(body)
+
+    result = prepare_history(body, _origin(protocol="chat"))
+
+    assert result["messages"] == [
+        {
+            "role": "assistant",
+            "content": "Answer." + (f"\n\n{thinking}" if thinking else ""),
+        },
+        {"role": "user", "content": "Continue."},
+    ]
     assert body == original
 
 

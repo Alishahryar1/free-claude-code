@@ -10,7 +10,6 @@ from free_claude_code.core.history_replay import (
     has_readable_replay,
     is_replay,
     readable_reasoning,
-    reasoning_context,
     reasoning_detail,
     tool_history_context,
 )
@@ -344,7 +343,7 @@ class _ResponsesChatInputBuilder:
                 if self._structured_reasoning_details:
                     details.append({"type": "reasoning.summary", "summary": text})
                 else:
-                    contexts.append(reasoning_context(text, summary=True))
+                    contexts.append(text)
             if encrypted and not signed:
                 details.extend(reasoning_detail(encrypted))
         if contexts:
@@ -580,9 +579,7 @@ def _apply_reasoning_text(
         )
         return
     replay = (
-        f"<think>\n{text}\n</think>"
-        if mode is ReasoningReplayMode.THINK_TAGS
-        else reasoning_context(text)
+        f"<think>\n{text}\n</think>" if mode is ReasoningReplayMode.THINK_TAGS else text
     )
     if not replay:
         return

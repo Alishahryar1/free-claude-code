@@ -18,7 +18,6 @@ from free_claude_code.core.history_replay import (
     decode_replay,
     is_replay,
     readable_reasoning,
-    reasoning_context,
     resolve_messages_replay,
 )
 from free_claude_code.core.json_types import JsonValue
@@ -181,8 +180,8 @@ def history_retry_body(
                     item["id"] = corrected
         else:
             context = "\n\n".join(
-                reasoning_context(text, summary=summary)
-                for text, summary in readable_reasoning(
+                text
+                for text, _ in readable_reasoning(
                     original
                     if protocol != "chat"
                     else {"reasoning_details": [original]}

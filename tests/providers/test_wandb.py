@@ -117,7 +117,7 @@ def test_build_request_body_drops_undocumented_reasoning_replay_but_keeps_tools(
 
     assert body["messages"][1] == {
         "role": "assistant",
-        "content": "[Earlier reasoning]\nRead it first.\n\nI will inspect it.",
+        "content": "Read it first.\n\nI will inspect it.",
         "tool_calls": [
             {
                 "id": "toolu_1",

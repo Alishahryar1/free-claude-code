@@ -224,7 +224,7 @@ def test_build_responses_chat_request_preserves_rich_supported_semantics() -> No
         (ReasoningReplayMode.THINK_TAGS, {"content": "<think>\nThink\n</think>"}),
         (
             ReasoningReplayMode.DISABLED,
-            {"content": "[Earlier reasoning]\nThink\n\nAnswer"},
+            {"content": "Think\n\nAnswer"},
         ),
     ],
 )
@@ -257,7 +257,7 @@ def test_build_responses_chat_request_uses_provider_reasoning_replay(
         if mode is ReasoningReplayMode.DISABLED:
             assert assistant == {
                 "role": "assistant",
-                "content": "[Earlier reasoning]\nThink\n\nAnswer",
+                "content": "Think\n\nAnswer",
             }
 
 
