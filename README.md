@@ -131,17 +131,6 @@ OpenCode 2:
 fcc-opencode
 ```
 
-To upgrade from OpenCode 1, close OpenCode and rerun the FCC installer with
-OpenCode selected. For npm or other package-manager installations, follow
-[OpenCode's migration instructions](https://opencode.ai/v2/docs/migrate-v1/)
-first. For npm v1, run `npm uninstall -g opencode-ai`, then rerun the FCC installer.
-
-RTK integration is temporarily unavailable for OpenCode 2. RTK continues to work
-with the other supported agents.
-
-Use `fcc-opencode` for coding and sessions. Use plain `opencode` for commands
-such as upgrades, service management, ACP, and MCP setup.
-
 Cline:
 
 ```bash
@@ -159,16 +148,6 @@ DeepSeek Harness Web:
 ```bash
 fcc-dsh
 ```
-
-For DeepSeek Harness Desktop, install and open the app once, then select **Connect** under **Integrations → DeepSeek Harness Desktop** in FCC. Keep FCC running while using its models. FCC becomes the default for new sessions. Select **Disconnect** to remove the connection. Native DeepSeek account features still need a DeepSeek login.
-
-Use DeepSeek Harness 0.2.0-rc.2 or newer. Update the CLI with:
-
-```bash
-npm install -g @deepseek-ai/dsh@latest
-```
-
-For headless tasks, run `fcc-dsh headless "your task"`. Extra `--patch` files apply after FCC's settings. After disconnecting Desktop, select another model to continue an existing FCC session. If another DSH setting uses FCC's Desktop credential, Disconnect keeps that credential and reports why.
 
 Grok Build:
 
@@ -388,6 +367,7 @@ For editor and app integrations, install the client, start FCC, then open
 - **VS Code Chat**: Install the latest [VS Code](https://code.visualstudio.com/), connect, and select an FCC model in its built-in Chat model picker.
 - **Claude Desktop**: Install [Claude Desktop](https://claude.ai/download). Fully quit it before connecting or disconnecting, then reopen it. Disconnect returns to normal Claude sign-in.
 - **Codex in VS Code and App**: Install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt) or Codex App.
+- **DeepSeek Harness Desktop**: Install and open the app once before connecting. Start a new session to use FCC models.
 - **Claude Code in JetBrains ACP**: Install Claude Agent in JetBrains AI Assistant and start it once, then click **Connect** in FCC. Reopen the IDE, select **Claude Code (FCC)**, and start a new chat. After JetBrains updates the agent, restart FCC before starting a new chat. Requires a local IDE in its standard installation locations.
 
 Reload VS Code or restart the app/IDE after connecting. In Codex and Claude Desktop, select an FCC
