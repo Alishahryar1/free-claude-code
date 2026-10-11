@@ -38,10 +38,12 @@ def test_failed_acquisition_closes_handle_and_allows_retry(
             handle.close()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows byte-range locking")
 def test_empty_file_locked_by_another_handle_is_normal_contention(
     tmp_path, monkeypatch
 ):
+    if os.name != "nt":
+        pytest.skip("Windows byte-range locking")
+
     import msvcrt
 
     path = tmp_path / "lock"
