@@ -1581,7 +1581,7 @@ const claudeIntegrationDialog = byId("claudeIntegrationDialog");
 const claudeIntegration = { connected: null, busy: false, paths: null, update: null };
 const claudeIntegrationPath = "/admin/api/integrations/claude-vscode";
 const claudeOnboardingDialog = byId("claudeOnboardingDialog");
-const claudeOnboarding = { completed: null, busy: false, paths: null };
+const claudeOnboarding = { completed: null, busy: false, paths: null, refreshAfterSave: false };
 const claudeOnboardingPath = "/admin/api/integrations/claude-onboarding";
 
 function renderClaudeOnboarding() {
@@ -1605,6 +1605,10 @@ function renderClaudeOnboarding() {
 }
 
 async function refreshClaudeOnboarding({ replaceCheck = false } = {}) {
+  if (claudeOnboarding.busy && !claudeOnboarding.checkRequest) {
+    claudeOnboarding.refreshAfterSave = true;
+    return;
+  }
   if (replaceCheck && claudeOnboarding.checkRequest) {
     claudeOnboarding.checkRequest = null;
     claudeOnboarding.busy = false;
@@ -1652,6 +1656,10 @@ byId("confirmClaudeOnboarding").addEventListener("click", async () => {
   } finally {
     claudeOnboarding.busy = false;
     renderClaudeOnboarding();
+    if (claudeOnboarding.refreshAfterSave) {
+      claudeOnboarding.refreshAfterSave = false;
+      void refreshClaudeOnboarding();
+    }
   }
 });
 byId("closeClaudeOnboarding").addEventListener("click", () => claudeOnboardingDialog.close());

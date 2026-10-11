@@ -635,3 +635,46 @@ def test_late_onboarding_status_cannot_undo_connect_result(
     )
     expect(button).to_have_text("Completed")
     expect(button).to_be_disabled()
+
+
+@pytest.mark.parametrize("save_failed", [False, True])
+def test_connect_reconciles_after_pending_onboarding_save(
+    page, admin_base_url, tmp_path, save_failed
+):
+    pending = []
+
+    def hold(route):
+        pending.append(route)
+
+    endpoint = "**/admin/api/integrations/claude-onboarding/complete"
+    page.route(endpoint, hold)
+    page.goto(f"{admin_base_url}/admin/integrations")
+    button = page.locator("#openClaudeOnboarding")
+    expect(button).to_have_text("Complete onboarding")
+    button.click()
+    page.locator("#confirmClaudeOnboarding").click()
+    expect(button).to_have_text("Saving…")
+    page.keyboard.press("Escape")
+    expect(page.locator("#claudeOnboardingDialog")).not_to_be_visible()
+    page.locator("#openClaudeIntegration").click()
+    page.locator("#confirmClaudeIntegration").click()
+    expect(page.locator("#openClaudeIntegration")).to_have_text("Disconnect")
+    assert (
+        json.loads((tmp_path / ".claude.json").read_text())["hasCompletedOnboarding"]
+        is True
+    )
+    assert len(pending) == 1
+    with page.expect_response(
+        lambda response: response.url.endswith("/claude-onboarding")
+    ):
+        pending.pop().fulfill(
+            status=503 if save_failed else 200,
+            json=(
+                {"detail": "Temporary completion error"}
+                if save_failed
+                else {"completed": True, "changed": False}
+            ),
+        )
+    expect(button).to_have_text("Completed")
+    expect(button).to_be_disabled()
+    expect(page.locator("#claudeOnboardingMessage")).to_be_hidden()
