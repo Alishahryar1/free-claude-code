@@ -76,6 +76,31 @@ def test_native_json_preserves_exception_chain_and_stack(tmp_path, stdlib):
     assert "test_native_json_preserves_exception_chain_and_stack" in row["text"]
 
 
+@pytest.mark.parametrize("stdlib", [False, True])
+def test_exception_logs_omit_local_values_but_keep_explicit_context(tmp_path, stdlib):
+    log_file = tmp_path / "exception.log"
+    configure_logging(log_file, force=True)
+    secret = "DUMMY_EXCEPTION_CREDENTIAL"
+    headers = {"Authorization": f"Bearer {secret}"}
+    try:
+        _ = len(headers) / 0
+    except ZeroDivisionError:
+        with logger.contextualize(attempt=2):
+            if stdlib:
+                logging.getLogger("test.exception").exception("request failed")
+            else:
+                logger.exception("request failed")
+    logger.complete()
+
+    text = log_file.read_text(encoding="utf-8")
+    assert secret not in text
+    row = json.loads(text)
+    assert row["record"]["extra"]["attempt"] == 2
+    assert row["record"]["message"] == "request failed"
+    assert row["record"]["exception"]["traceback"] is True
+    assert "ZeroDivisionError: division by zero" in row["text"]
+
+
 def test_logging_preserves_records_across_process_restarts(tmp_path):
     log_file = tmp_path / "server.log"
     script = """

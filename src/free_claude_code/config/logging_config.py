@@ -71,6 +71,7 @@ def _add_file_sink(log_file: str | Path, level: str) -> int:
         log_path,
         level=level,
         serialize=True,
+        diagnose=False,
         encoding="utf-8",
         mode="a",
         rotation="50 MB",
