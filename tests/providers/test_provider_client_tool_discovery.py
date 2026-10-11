@@ -14,7 +14,6 @@ from free_claude_code.providers.admission_registry import ProviderAdmissionRegis
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from free_claude_code.providers.runtime.runtime import create_provider
 from tests.core.openai_responses.test_client_tool_discovery import AGENTS, SEARCH
-from tests.providers.support import immediate_admission
 from tests.providers.test_opencode import (
     _catalog_payload,
     _provider_with_wire_transports,
@@ -238,15 +237,9 @@ async def test_provider_discovery_call_and_result_round_trip(
             http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(upstream)),
             max_retries=0,
         )
-        with (
-            patch(
-                "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
-                return_value=client,
-            ),
-            patch(
-                "free_claude_code.providers.runtime.factory.ProviderAdmissionController",
-                return_value=immediate_admission(provider_name=provider_id),
-            ),
+        with patch(
+            "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
+            return_value=client,
         ):
             provider = cast(
                 OpenAIChatProvider,
@@ -260,13 +253,10 @@ async def test_provider_discovery_call_and_result_round_trip(
                             mistral_api_key="test",
                         ),
                         ProviderAdmissionRegistry(
-                            ProviderAdmissionLimits.from_settings(
-                                Settings(
-                                    open_router_api_key="test",
-                                    nvidia_nim_api_key="test",
-                                    groq_api_key="test",
-                                    mistral_api_key="test",
-                                )
+                            ProviderAdmissionLimits(
+                                rate_limit=1_000_000,
+                                rate_window=1.0,
+                                max_concurrency=1_000,
                             )
                         ),
                     )
