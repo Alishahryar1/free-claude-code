@@ -19,6 +19,7 @@ from free_claude_code.harnesses import (
 )
 from free_claude_code.harnesses import (
     claude_integration,
+    claude_onboarding,
     codex_integration,
 )
 from free_claude_code.harnesses import (
@@ -148,11 +149,27 @@ async def test_startup_refreshes_old_connections_and_status_is_read_only(runtime
         await runtime.claude_vscode_status()
         await runtime.codex_integration_status()
         assert [p.stat().st_mtime_ns for p in (claude, codex)] == before
+        assert not claude_onboarding.state_path().exists()
         await runtime.disconnect_claude_vscode()
         assert (await runtime.claude_vscode_status())["update"]["changed"] is False
         await runtime.refresh_claude_vscode()
         await runtime._integrations._claude_update.task
         assert (await runtime.claude_vscode_status())["connected"] is False
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ['{"hasCompletedOnboarding":false}', "{invalid"])
+async def test_startup_preserves_global_onboarding(runtime, source):
+    old_connections()
+    state = claude_onboarding.state_path()
+    state.write_text(source)
+    try:
+        await runtime.start()
+        await finish(runtime)
+        assert (await runtime.claude_vscode_status())["connected"] is True
+        assert state.read_text() == source
     finally:
         await runtime.close()
 
@@ -208,7 +225,7 @@ async def test_unrecognized_codex_never_waits_for_catalog(runtime, monkeypatch):
         wait.assert_not_awaited()
         assert (await runtime.codex_integration_status())["connected"] is False
         assert not codex_integration.config_path().exists()
-        assert not claude_integration.claude_state_path().exists()
+        assert not claude_onboarding.state_path().exists()
     finally:
         await runtime.close()
 

@@ -13,6 +13,7 @@ from free_claude_code.config.loader import clear_settings_cache
 from free_claude_code.harnesses import (
     claude_desktop_integration,
     claude_integration,
+    claude_onboarding,
     codex_integration,
     jetbrains_acp_integration,
     vscode_chat_integration,
@@ -71,7 +72,7 @@ def _isolate_managed_config(monkeypatch, tmp_path):
         claude_integration, "settings_path", lambda: tmp_path / "vscode/settings.json"
     )
     monkeypatch.setattr(
-        claude_integration, "claude_state_path", lambda: tmp_path / ".claude.json"
+        claude_onboarding, "state_path", lambda: tmp_path / ".claude.json"
     )
     monkeypatch.setattr(
         codex_integration, "config_path", lambda: tmp_path / ".codex/config.toml"

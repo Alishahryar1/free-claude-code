@@ -27,6 +27,7 @@ from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses import (
     claude_desktop_integration,
     claude_integration,
+    claude_onboarding,
     codex_integration,
     dsh_desktop_integration,
     jetbrains_acp_integration,
@@ -408,6 +409,38 @@ class IntegrationService:
     async def disconnect_claude_vscode(self) -> JsonObject:
         return await self._claude_vscode("disconnect")
 
+    async def claude_onboarding_status(self) -> JsonObject:
+        return await self._claude_onboarding(complete=False)
+
+    async def complete_claude_onboarding(self) -> JsonObject:
+        return await self._claude_onboarding(complete=True)
+
+    async def _claude_onboarding(self, *, complete: bool) -> JsonObject:
+        def operate() -> JsonObject:
+            operation = (
+                claude_onboarding.complete if complete else claude_onboarding.status
+            )
+            return operation(claude_onboarding.state_path())
+
+        try:
+            if complete:
+                async with self._config_lock, self._claude_update.access.write():
+                    self._check_integration_available()
+                    return await run_sync_owned(operate)
+            async with self._claude_update.access.read():
+                self._check_integration_available()
+                result = await run_sync_owned(operate)
+                self._check_integration_available()
+                return result
+        except ValueError, UnicodeError:
+            raise InvalidRequestError(
+                "Could not read Claude onboarding state. Check the JSON in .claude.json."
+            ) from None
+        except OSError:
+            raise ApplicationUnavailableError(
+                "Could not access .claude.json. Check file permissions and try again."
+            ) from None
+
     def _check_integration_available(self) -> None:
         if self._is_draining() or self._has_pending_restart():
             raise ApplicationUnavailableError(
@@ -608,40 +641,55 @@ class IntegrationService:
     async def _claude_vscode(self, action: IntegrationAction) -> JsonObject:
         def operate(url: str, token: str, ready: bool) -> JsonObject:
             path = claude_integration.settings_path()
-            state_path = claude_integration.claude_state_path()
             if action == "status" and not ready:
                 return {
                     "connected": None,
                     "paths": {
                         "vscode_settings": str(path.resolve()),
-                        "claude_state": str(state_path.resolve()),
+                        "claude_state": str(claude_onboarding.state_path().absolute()),
                     },
                 }
             if action == "refresh":
                 return {
-                    "changed": claude_integration.refresh_connected(
-                        path, state_path, url, token
-                    )
+                    "changed": claude_integration.refresh_connected(path, url, token)
                 }
-            return claude_integration.configure(
+            if action == "connect":
+                claude_integration.configure(path, url, token)
+                claude_onboarding.complete(claude_onboarding.state_path())
+            result = claude_integration.configure(
                 path,
-                state_path,
                 url,
                 token,
                 None if action == "status" else action == "connect",
             )
+            if action == "status":
+                result["paths"] = {
+                    "vscode_settings": str(path.resolve()),
+                    "claude_state": str(claude_onboarding.state_path().absolute()),
+                }
+            return result
 
         try:
             return await self._run_integration(
                 self._claude_update, action, operate, mask_when_unready=True
             )
         except ValueError, UnicodeError:
+            files = (
+                "VS Code settings.json and .claude.json"
+                if action == "connect"
+                else "VS Code settings.json"
+            )
             raise InvalidRequestError(
-                "Could not read Claude integration settings. Check the JSON in VS Code settings.json and .claude.json."
+                f"Could not read Claude integration settings. Check the JSON in {files}."
             ) from None
         except OSError:
+            files = (
+                "VS Code settings.json or .claude.json"
+                if action == "connect"
+                else "VS Code settings.json"
+            )
             raise ApplicationUnavailableError(
-                "Could not access VS Code settings.json or .claude.json. Check file permissions and try again."
+                f"Could not access {files}. Check file permissions and try again."
             ) from None
 
     async def codex_integration_status(self) -> JsonObject:

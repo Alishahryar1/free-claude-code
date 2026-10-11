@@ -259,6 +259,24 @@ async def models(
     return _model_options(services)
 
 
+@router.get("/admin/api/integrations/claude-onboarding")
+async def claude_onboarding_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.claude_onboarding_status)
+
+
+@router.post("/admin/api/integrations/claude-onboarding/complete")
+async def complete_claude_onboarding(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.complete_claude_onboarding)
+
+
 @router.get("/admin/api/integrations/claude-vscode")
 async def claude_vscode_status(
     request: Request,

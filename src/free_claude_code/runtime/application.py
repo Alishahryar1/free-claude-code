@@ -380,6 +380,12 @@ class ApplicationRuntime:
     async def claude_vscode_status(self) -> JsonObject:
         return await self._integrations.claude_vscode_status()
 
+    async def claude_onboarding_status(self) -> JsonObject:
+        return await self._integrations.claude_onboarding_status()
+
+    async def complete_claude_onboarding(self) -> JsonObject:
+        return await self._integrations.complete_claude_onboarding()
+
     async def connect_claude_vscode(self) -> JsonObject:
         return await self._integrations.connect_claude_vscode()
 

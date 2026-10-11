@@ -82,7 +82,6 @@ def test_complete_report_reads_real_files_without_mutation(
     claude = diagnostics.claude_integration
     claude.configure(
         claude.settings_path(),
-        claude.claude_state_path(),
         local_proxy_root_url(settings),
         settings.proxy_auth_token,
         connected=True,

@@ -374,6 +374,10 @@ Reload VS Code or restart the app/IDE after connecting. In Codex and Claude Desk
 model from the model picker. Reload or restart the client when FCC reports updated settings. Use
 **Disconnect** on the same card to remove the integration.
 
+To complete Claude Code onboarding separately, open **Admin UI → Integrations →
+Claude Code onboarding** and click **Complete onboarding**. Connecting Claude Code
+in VS Code also completes onboarding.
+
 Run FCC on the same computer and in the same user environment as the client you
 are configuring.
 

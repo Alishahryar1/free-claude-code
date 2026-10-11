@@ -213,7 +213,6 @@ def integration_report(settings: Settings) -> dict[str, Any]:
         ),
         "claude-vscode": lambda: claude_integration.configure(
             claude_integration.settings_path(),
-            claude_integration.claude_state_path(),
             url,
             token,
         ),

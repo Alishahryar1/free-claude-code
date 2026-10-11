@@ -28,14 +28,27 @@ base_url = "https://example.com/v1"
 """
 
 
+@pytest.mark.parametrize(
+    "source", [None, '{"hasCompletedOnboarding":false}', "{invalid"]
+)
+def test_refresh_ignores_global_onboarding(tmp_path, source):
+    settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
+    settings.write_text(json.dumps(OLD_CLAUDE))
+    if source is not None:
+        state.write_text(source)
+    assert claude_integration.refresh_connected(settings, URL, TOKEN) is True
+    if source is None:
+        assert not state.exists()
+    else:
+        assert state.read_text() == source
+
+
 def test_refresh_upgrades_original_claude_directly_and_only_once(tmp_path):
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
     settings.write_text(json.dumps(OLD_CLAUDE))
     state.write_text('{"theme":"dark"}')
-    assert (
-        claude_integration.configure(settings, state, URL, TOKEN)["connected"] is False
-    )
-    assert claude_integration.refresh_connected(settings, state, URL, TOKEN) is True
+    assert claude_integration.configure(settings, URL, TOKEN)["connected"] is True
+    assert claude_integration.refresh_connected(settings, URL, TOKEN) is True
     saved = json.loads(settings.read_text())
     env = {
         entry["name"]: entry["value"]
@@ -45,15 +58,10 @@ def test_refresh_upgrades_original_claude_directly_and_only_once(tmp_path):
     assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
     assert env["KEEP_ME"] == "user-value"
     assert saved["editor.fontSize"] == 15
-    assert json.loads(state.read_text()) == {
-        "theme": "dark",
-        "hasCompletedOnboarding": True,
-    }
-    assert (
-        claude_integration.configure(settings, state, URL, TOKEN)["connected"] is True
-    )
+    assert state.read_text() == '{"theme":"dark"}'
+    assert claude_integration.configure(settings, URL, TOKEN)["connected"] is True
     before = [path.stat().st_mtime_ns for path in (settings, state)]
-    assert claude_integration.refresh_connected(settings, state, URL, TOKEN) is False
+    assert claude_integration.refresh_connected(settings, URL, TOKEN) is False
     assert [path.stat().st_mtime_ns for path in (settings, state)] == before
 
 
@@ -72,7 +80,7 @@ def test_refresh_does_not_claim_unrecognized_claude(tmp_path, change):
     before = settings.read_bytes() if settings.exists() else None
     # Unrelated Claude state is not even parsed when the integration is not ours.
     state.write_text("{invalid")
-    assert claude_integration.refresh_connected(settings, state, URL, TOKEN) is False
+    assert claude_integration.refresh_connected(settings, URL, TOKEN) is False
     assert (settings.read_bytes() if settings.exists() else None) == before
     assert state.read_text() == "{invalid"
 
@@ -91,13 +99,11 @@ def test_refresh_claude_retry_finishes_partial_write(tmp_path, monkeypatch):
     with monkeypatch.context() as patch:
         patch.setattr(claude_integration, "atomic_write_text", fail_settings)
         with pytest.raises(PermissionError):
-            claude_integration.refresh_connected(settings, state, URL, TOKEN)
+            claude_integration.refresh_connected(settings, URL, TOKEN)
     assert settings.read_bytes() == before
-    assert json.loads(state.read_text())["hasCompletedOnboarding"] is True
-    assert claude_integration.refresh_connected(settings, state, URL, TOKEN) is True
-    assert (
-        claude_integration.configure(settings, state, URL, TOKEN)["connected"] is True
-    )
+    assert not state.exists()
+    assert claude_integration.refresh_connected(settings, URL, TOKEN) is True
+    assert claude_integration.configure(settings, URL, TOKEN)["connected"] is True
 
 
 def test_refresh_codex_merges_latest_settings_without_changing_model(tmp_path):
@@ -148,9 +154,7 @@ def test_refresh_rejects_malformed_input_without_writing(tmp_path, integration):
     path.write_text("{invalid")
     with pytest.raises(ValueError):
         if integration == "claude":
-            claude_integration.refresh_connected(
-                path, tmp_path / ".claude.json", URL, TOKEN
-            )
+            claude_integration.refresh_connected(path, URL, TOKEN)
         else:
             codex_integration.refresh_connected(path, tmp_path / "catalog.json", URL)
     assert path.read_text() == "{invalid"

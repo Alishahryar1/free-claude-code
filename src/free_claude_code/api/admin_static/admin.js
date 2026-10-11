@@ -293,6 +293,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   else window.CodeSessions.deactivate();
   if (activeView.id === "integrations") {
     refreshClaudeIntegration();
+    refreshClaudeOnboarding();
     refreshVSCodeChatIntegration();
     refreshJetBrainsIntegration();
     refreshCodexIntegration();
@@ -1579,6 +1580,88 @@ try {
 const claudeIntegrationDialog = byId("claudeIntegrationDialog");
 const claudeIntegration = { connected: null, busy: false, paths: null, update: null };
 const claudeIntegrationPath = "/admin/api/integrations/claude-vscode";
+const claudeOnboardingDialog = byId("claudeOnboardingDialog");
+const claudeOnboarding = { completed: null, busy: false, paths: null };
+const claudeOnboardingPath = "/admin/api/integrations/claude-onboarding";
+
+function renderClaudeOnboarding() {
+  const { completed, busy, paths, checkRequest } = claudeOnboarding;
+  const button = byId("openClaudeOnboarding");
+  button.textContent = busy ? checkRequest ? "Loading…" : "Saving…" : completed === null ? "Retry" : completed ? "Completed" : "Complete onboarding";
+  button.disabled = busy || completed === true;
+  button.setAttribute("aria-busy", String(busy));
+  const action = byId("confirmClaudeOnboarding");
+  action.textContent = busy ? "Saving…" : "Complete onboarding";
+  action.disabled = busy || completed !== false;
+  const files = byId("claudeOnboardingFiles");
+  files.replaceChildren();
+  if (paths) {
+    const item = document.createElement("li");
+    const code = document.createElement("code");
+    code.textContent = paths.claude_state;
+    item.appendChild(code);
+    files.appendChild(item);
+  }
+}
+
+async function refreshClaudeOnboarding({ replaceCheck = false } = {}) {
+  if (replaceCheck && claudeOnboarding.checkRequest) {
+    claudeOnboarding.checkRequest = null;
+    claudeOnboarding.busy = false;
+  }
+  const request = beginIntegrationCheck(claudeOnboarding);
+  if (!request) return;
+  renderClaudeOnboarding();
+  try {
+    const result = await api(claudeOnboardingPath);
+    if (!currentIntegrationCheck(claudeOnboarding, request)) return;
+    claudeOnboarding.completed = result.completed;
+    claudeOnboarding.paths = result.paths;
+    integrationMessage("claudeOnboardingMessage", "");
+  } catch (error) {
+    if (!currentIntegrationCheck(claudeOnboarding, request)) return;
+    claudeOnboarding.completed = null;
+    integrationMessage("claudeOnboardingMessage", error.message, true);
+  } finally {
+    finishIntegrationCheck(claudeOnboarding, request, renderClaudeOnboarding);
+  }
+}
+
+byId("openClaudeOnboarding").addEventListener("click", () => {
+  if (claudeOnboarding.completed === null) {
+    void refreshClaudeOnboarding();
+    return;
+  }
+  integrationMessage("claudeOnboardingDialogMessage", "");
+  claudeOnboardingDialog.showModal();
+});
+byId("confirmClaudeOnboarding").addEventListener("click", async () => {
+  if (byId("confirmClaudeOnboarding").disabled) return;
+  claudeOnboarding.busy = true;
+  renderClaudeOnboarding();
+  integrationMessage("claudeOnboardingDialogMessage", "");
+  integrationMessage("claudeOnboardingMessage", "");
+  try {
+    const result = await api(`${claudeOnboardingPath}/complete`, { method: "POST" });
+    claudeOnboarding.completed = result.completed;
+    claudeOnboardingDialog.close();
+    integrationMessage("claudeOnboardingMessage", "Claude onboarding completed.");
+  } catch (error) {
+    integrationMessage("claudeOnboardingDialogMessage", error.message, true);
+    integrationMessage("claudeOnboardingMessage", error.message, true);
+  } finally {
+    claudeOnboarding.busy = false;
+    renderClaudeOnboarding();
+  }
+});
+byId("closeClaudeOnboarding").addEventListener("click", () => claudeOnboardingDialog.close());
+claudeOnboardingDialog.addEventListener("click", (event) => {
+  if (event.target !== claudeOnboardingDialog) return;
+  const bounds = claudeOnboardingDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    claudeOnboardingDialog.close();
+  }
+});
 
 function integrationMessage(id, message, error = false) {
   const element = byId(id);
@@ -1650,7 +1733,7 @@ function renderClaudeIntegration() {
   byId("openClaudeIntegration").className = connected && !busy ? "danger-button" : "primary-button";
   byId("confirmClaudeIntegration").className = connected ? "danger-button" : "primary-button";
   byId("claudeIntegrationDescription").textContent = connected
-    ? "Remove FCC's VS Code settings. Claude onboarding stays completed."
+    ? "Remove FCC's VS Code settings."
     : "Will set FCC's URL and token, enable model discovery, skip VS Code login, and complete Claude onboarding.";
   const files = byId("claudeIntegrationFiles");
   files.replaceChildren();
@@ -1719,6 +1802,7 @@ byId("confirmClaudeIntegration").addEventListener("click", async () => {
   } finally {
     claudeIntegration.busy = false;
     renderClaudeIntegration();
+    if (!disconnect) void refreshClaudeOnboarding({ replaceCheck: true });
   }
 });
 byId("closeClaudeIntegration").addEventListener("click", () => claudeIntegrationDialog.close());

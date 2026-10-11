@@ -32,6 +32,7 @@ from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningP
 from free_claude_code.harnesses import (
     claude_desktop_integration,
     claude_integration,
+    claude_onboarding,
     codex_integration,
     jetbrains_acp_integration,
     vscode_chat_integration,
@@ -194,7 +195,7 @@ def admin_base_url(
         lambda: tmp_path / "vscode/chatLanguageModels.json",
     )
     monkeypatch.setattr(
-        claude_integration, "claude_state_path", lambda: tmp_path / ".claude.json"
+        claude_onboarding, "state_path", lambda: tmp_path / ".claude.json"
     )
     monkeypatch.setattr(
         claude_integration,

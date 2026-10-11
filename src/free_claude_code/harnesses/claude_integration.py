@@ -13,7 +13,6 @@ from free_claude_code.harnesses.config_file import atomic_write_text, decode_jso
 
 _ENV = "claudeCode.environmentVariables"
 _LOGIN = "claudeCode.disableLoginPrompt"
-_ONBOARDING = "hasCompletedOnboarding"
 
 
 def settings_path() -> Path:
@@ -28,10 +27,6 @@ def settings_path() -> Path:
         if not root.is_absolute():
             root = home / ".config"
     return root / "Code/User/settings.json"
-
-
-def claude_state_path() -> Path:
-    return Path.home() / ".claude.json"
 
 
 def _read_object(path: Path) -> JsonObject:
@@ -81,12 +76,10 @@ def _connected(
 
 def _connect(
     path: Path,
-    state_path: Path,
     document: JsonObject,
     entries: list[JsonObject],
     values: dict[str, str],
 ) -> bool:
-    onboarding = _read_object(state_path)
     before = json.dumps(document, allow_nan=False)
     document[_LOGIN] = True
     remaining = dict(values)
@@ -97,32 +90,23 @@ def _connect(
     entries.extend({"name": name, "value": value} for name, value in remaining.items())
     document[_ENV] = entries
     settings_changed = json.dumps(document, allow_nan=False) != before
-    onboarding_changed = onboarding.get(_ONBOARDING) is not True
-    if onboarding_changed:
-        onboarding[_ONBOARDING] = True
-        atomic_write_text(
-            state_path, json.dumps(onboarding, indent=2, allow_nan=False) + "\n"
-        )
     if settings_changed:
         atomic_write_text(path, json.dumps(document, indent=2, allow_nan=False) + "\n")
-    return settings_changed or onboarding_changed
+    return settings_changed
 
 
-def refresh_connected(
-    path: Path, state_path: Path, proxy_root_url: str, auth_token: str
-) -> bool:
+def refresh_connected(path: Path, proxy_root_url: str, auth_token: str) -> bool:
     """Apply current settings only to an existing connection, even from release one."""
     path = path.resolve()
     values = claude_proxy_values(proxy_root_url, auth_token)
     document, entries = _read(path, set(values))
     if not _connected(document, entries, values):
         return False
-    return _connect(path, state_path.resolve(), document, entries, values)
+    return _connect(path, document, entries, values)
 
 
 def configure(
     path: Path,
-    state_path: Path,
     proxy_root_url: str,
     auth_token: str,
     connected: bool | None = None,
@@ -131,10 +115,8 @@ def configure(
     path = path.resolve()
     values = claude_proxy_values(proxy_root_url, auth_token)
     document, entries = _read(path, set(values))
-    if connected is not False:
-        state_path = state_path.resolve()
     if connected is True:
-        _connect(path, state_path, document, entries, values)
+        _connect(path, document, entries, values)
     elif connected is False:
         before = json.dumps(document, allow_nan=False)
         document.pop(_LOGIN, None)
@@ -150,14 +132,9 @@ def configure(
             )
     if connected is not None:
         document, entries = _read(path, set(values))
-    onboarding = _read_object(state_path) if connected is not False else {}
-    result: JsonObject = {
-        "connected": _connected(document, entries, values)
-        and onboarding.get(_ONBOARDING) is True,
-    }
+    result: JsonObject = {"connected": _connected(document, entries, values)}
     if connected is None:
         result["paths"] = {
             "vscode_settings": str(path),
-            "claude_state": str(state_path),
         }
     return result

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import threading
 from unittest.mock import AsyncMock
 
@@ -6,6 +7,7 @@ import pytest
 
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.harnesses import claude_integration as claude
+from free_claude_code.harnesses import claude_onboarding
 from free_claude_code.harnesses import vscode_chat_integration as vscode
 from tests.runtime.test_integration_startup import runtime as runtime
 
@@ -98,20 +100,20 @@ async def test_cancelled_reader_drains_before_writer_enters(runtime, monkeypatch
 async def test_status_cannot_observe_partial_multifile_write(runtime, monkeypatch):
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
-    atomic = claude.atomic_write_text
+    atomic = claude_onboarding.atomic_write_text
 
     def held(path, content):
         atomic(path, content)
-        if path == claude.claude_state_path():
+        if path == claude_onboarding.state_path():
             loop.call_soon_threadsafe(entered.set)
             assert release.wait(5)
 
-    monkeypatch.setattr(claude, "atomic_write_text", held)
+    monkeypatch.setattr(claude_onboarding, "atomic_write_text", held)
     writer = asyncio.create_task(runtime.connect_claude_vscode())
     reader = None
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        assert claude.claude_state_path().exists()
+        assert claude_onboarding.state_path().exists()
         assert not claude.settings_path().exists()
         reader = asyncio.create_task(runtime.claude_vscode_status())
         assert (await asyncio.wait_for(runtime.jetbrains_acp_status(), 1))[
@@ -130,11 +132,107 @@ async def test_status_cannot_observe_partial_multifile_write(runtime, monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("first", ["connect", "complete"])
+async def test_connect_and_onboarding_share_write_ownership(
+    runtime, monkeypatch, first
+):
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    complete = claude_onboarding.complete
+    calls = 0
+    path = claude_onboarding.state_path()
+    path.write_text('{"theme":"dark"}')
+
+    def held(path):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5)
+        return complete(path)
+
+    monkeypatch.setattr(claude_onboarding, "complete", held)
+    operations = [runtime.connect_claude_vscode, runtime.complete_claude_onboarding]
+    if first == "complete":
+        operations.reverse()
+    writer = asyncio.create_task(operations[0]())
+    second = reader = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        second = asyncio.create_task(operations[1]())
+        reader = asyncio.create_task(runtime.claude_onboarding_status())
+        assert (await asyncio.wait_for(runtime.jetbrains_acp_status(), 1))[
+            "connected"
+        ] is False
+        assert not second.done() and not reader.done()
+        assert calls == 1
+        release.set()
+        await asyncio.wait_for(asyncio.gather(writer, second), 5)
+        assert (await asyncio.wait_for(reader, 5))["completed"] is True
+        assert calls == 2
+        assert json.loads(path.read_text()) == {
+            "theme": "dark",
+            "hasCompletedOnboarding": True,
+        }
+        assert (await runtime.claude_vscode_status())["connected"] is True
+    finally:
+        release.set()
+        await asyncio.gather(
+            writer,
+            *([second] if second else []),
+            *([reader] if reader else []),
+            return_exceptions=True,
+        )
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_onboarding_write_is_drained_before_shutdown(
+    runtime, monkeypatch
+):
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    complete = claude_onboarding.complete
+
+    def held(path):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        return complete(path)
+
+    monkeypatch.setattr(claude_onboarding, "complete", held)
+    writer = asyncio.create_task(runtime.complete_claude_onboarding())
+    close = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        writer.cancel()
+        close = asyncio.create_task(runtime.close())
+        await asyncio.sleep(0)
+        assert not writer.done() and not close.done()
+        assert runtime._config_lock.locked()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(writer, 5)
+        assert await asyncio.wait_for(close, 5)
+        assert (
+            json.loads(claude_onboarding.state_path().read_text())[
+                "hasCompletedOnboarding"
+            ]
+            is True
+        )
+    finally:
+        release.set()
+        await asyncio.gather(
+            writer, *([close] if close else []), return_exceptions=True
+        )
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_continuously_changed_generation_has_bounded_retry(runtime, monkeypatch):
     entered, release = asyncio.Queue(), threading.Semaphore(0)
     loop = asyncio.get_running_loop()
 
-    def held(path, state_path, url, token, connected=None):
+    def held(path, url, token, connected=None):
         loop.call_soon_threadsafe(entered.put_nowait, token)
         assert release.acquire(timeout=5)
         return {"connected": False, "paths": {}}
@@ -257,7 +355,7 @@ async def test_generation_change_discards_old_status_outcome(
     tokens = []
     initial_token = runtime.settings.proxy_auth_token
 
-    def held(path, state_path, url, token, connected=None):
+    def held(path, url, token, connected=None):
         tokens.append(token)
         if len(tokens) == 1:
             loop.call_soon_threadsafe(entered.set)
