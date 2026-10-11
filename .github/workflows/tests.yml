@@ -140,8 +140,6 @@ jobs:
         run: uv run --locked playwright install --only-shell ${{ matrix.os == 'Linux' && '--with-deps chromium' || 'chromium' }}
 
       - name: Run Playwright
-        env:
-          PYTEST_ADDOPTS: ${{ matrix.os == 'Windows' && '-p e2e.startup_diagnostics' || '' }}
         run: >-
           uv run --locked pytest e2e -v --tb=short
           -o thread_dump_timeout=10 --durations=20
@@ -154,14 +152,5 @@ jobs:
         with:
           name: playwright-results-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Upload Windows startup diagnostics
-        if: always() && matrix.os == 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: windows-startup-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results/startup-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
