@@ -1,7 +1,7 @@
 param(
     [switch] $VoiceLocal,
     [string] $TorchBackend = "",
-    [switch] $Rtk,
+    [switch] $RtkHeadroom,
     [switch] $DryRun,
     [switch] $Help,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -25,6 +25,7 @@ $DshPackage = "@deepseek-ai/dsh@latest"
 $GrokInstallUrl = "https://x.ai/cli/install.ps1"
 $MuseInstallUrl = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1"
 $RtkVersion = "0.44.2"
+$HeadroomPackage = "headroom-ai[mcp]==0.40.0"
 $RtkReleaseBaseUrl = "https://github.com/rtk-ai/rtk/releases/download/v$RtkVersion"
 $RtkWindowsAssetName = "rtk-x86_64-pc-windows-msvc.zip"
 $RtkWindowsAssetSha256 = "3a1e114edce9080f8a10663e9c87488363a82f14a5ca8aab2ad416817f89d47c"
@@ -41,7 +42,7 @@ $script:InstallMuse = $true
 $script:InstallAider = $true
 $script:PiAvailable = $false
 $script:MuseAvailable = $false
-$script:EnableRtk = $Rtk.IsPresent
+$script:EnableRtkHeadroom = $RtkHeadroom.IsPresent
 $script:InstallLog = ""
 $script:InstallLogWarning = $false
 $script:InstallSteps = [ordered] @{}
@@ -52,6 +53,8 @@ $script:InstallStageNumber = 0
 $script:InstallStageCount = 0
 $script:FccVerified = $false
 $script:DesktopReady = $false
+$script:HeadroomPath = ""
+$script:FccToolBin = ""
 $FccCommands = @(
     # Include retired entry points so updates reject older FCC processes before replacement.
     "fcc-desktop",
@@ -68,6 +71,7 @@ $FccCommands = @(
     "fcc-aider",
     "fcc-doctor",
     "fcc-update",
+    "_fcc-configure-headroom",
     "fcc-init",
     "free-claude-code"
 )
@@ -81,7 +85,7 @@ Installs or updates Free Claude Code and lets you choose which coding agents to 
 Options:
   -VoiceLocal            Install local Whisper voice transcription support.
   -TorchBackend VALUE    Use a uv PyTorch backend, such as cu130. Requires local voice.
-  -Rtk                   Install and configure RTK for the selected coding agents.
+  -RtkHeadroom           Install and configure RTK + Headroom token optimization.
   -DryRun                Print commands without running them.
   -Help                  Show this help text.
 "@
@@ -153,7 +157,7 @@ function Get-InstallerRetryCommand {
     $options = @()
     if ($VoiceLocal) { $options += "-VoiceLocal" }
     if ($TorchBackend) { $options += @("-TorchBackend", $TorchBackend) }
-    if ($script:EnableRtk) { $options += "-Rtk" }
+    if ($script:EnableRtkHeadroom) { $options += "-RtkHeadroom" }
     if ($script:InstallerPath -and (Test-Path -LiteralPath $script:InstallerPath -PathType Leaf)) {
         return "& " + (Format-Command $script:InstallerPath $options)
     }
@@ -318,16 +322,10 @@ function Select-CodingAgents {
         Write-Host ""
     }
 
-    if (-not $script:EnableRtk) {
-        if (Get-ApplicationCommand "rtk") {
-            Write-Host "RTK already installed; will verify."
-            $script:EnableRtk = $true
-        }
-        else {
-            $script:EnableRtk = Read-YesNo `
-                -Prompt "Enable RTK token optimization globally for the selected coding agents?" `
-                -DefaultYes $false
-        }
+    if (-not $script:EnableRtkHeadroom) {
+        $script:EnableRtkHeadroom = Read-YesNo `
+            -Prompt "Enable RTK + Headroom token optimization?" `
+            -DefaultYes $false
     }
 }
 
@@ -796,7 +794,7 @@ function Ensure-Rtk {
 }
 
 function Configure-RtkForSelectedAgents {
-    if (-not $script:EnableRtk) {
+    if (-not $script:EnableRtkHeadroom) {
         return
     }
 
@@ -816,6 +814,51 @@ function Configure-RtkForSelectedAgents {
     if ($script:InstallCline) {
         Write-Host "Optional for each project: cd <project>; `$env:RTK_TELEMETRY_DISABLED='1'; rtk init --agent cline"
     }
+}
+
+function Ensure-Headroom {
+    $command = Get-ApplicationCommand "headroom"
+    if ($command) {
+        $script:HeadroomPath = $command.Source
+        Write-Host "Headroom already found on PATH; will verify without updating it."
+        return
+    }
+    Invoke-NativeCommand -FilePath "uv" -Arguments @("tool", "install", "--python", $PythonRequest, $HeadroomPackage)
+    if ($DryRun) {
+        $script:HeadroomPath = "<uv-tool-bin>\headroom.exe"
+        return
+    }
+    $uvCommand = Get-ApplicationCommand "uv"
+    $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
+    $command = Get-ApplicationCommand "headroom"
+    if (-not $command -or (Split-Path -Parent $command.Source) -ne $toolBin) {
+        throw "Headroom installation did not create its command in the uv tool bin directory."
+    }
+    $script:HeadroomPath = $command.Source
+}
+
+function Configure-HeadroomForSelectedAgents {
+    param([switch] $Check)
+    $arguments = @("--headroom", $script:HeadroomPath, "--include-connected-desktops")
+    if ($Check) { $arguments += "--check" }
+    foreach ($choice in @(
+        @("claude", $script:InstallClaudeCode), @("codex", $script:InstallCodex),
+        @("pi", ($script:InstallPi -and $script:PiAvailable)), @("opencode", $script:InstallOpenCode),
+        @("cline", $script:InstallCline), @("hermes", $script:InstallHermes),
+        @("dsh", $script:InstallDsh), @("grok", $script:InstallGrok),
+        @("muse", ($script:InstallMuse -and $script:MuseAvailable)), @("aider", $script:InstallAider)
+    )) {
+        if ($choice[1]) { $arguments += @("--agent", $choice[0]) }
+    }
+    $helper = "<uv-tool-bin>\_fcc-configure-headroom.exe"
+    if (-not $DryRun) {
+        $command = Get-ApplicationCommand "_fcc-configure-headroom"
+        if (-not $command -or (Split-Path -Parent $command.Source) -ne $script:FccToolBin) {
+            throw "The verified FCC Headroom setup helper is unavailable. Rerun the installer."
+        }
+        $helper = $command.Source
+    }
+    Invoke-NativeCommand -FilePath $helper -Arguments $arguments
 }
 
 function Ensure-ClaudeCode {
@@ -1703,12 +1746,13 @@ function Configure-AndConfirmFreeClaudeCode {
     Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
     $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
     Start-InstallStep "FCC verification"
+    $script:FccToolBin = $toolBin
     $toolBinPath = ([IO.Path]::GetFullPath($toolBin)).TrimEnd(
         [IO.Path]::DirectorySeparatorChar,
         [IO.Path]::AltDirectorySeparatorChar
     )
     $installedCommands = @{}
-    foreach ($commandName in @("fcc-desktop", "fcc-server", "fcc-claude", "fcc-codex", "fcc-pi", "fcc-opencode", "fcc-cline", "fcc-hermes", "fcc-dsh", "fcc-grok", "fcc-muse", "fcc-aider", "fcc-doctor", "fcc-update.cmd")) {
+    foreach ($commandName in @("fcc-desktop", "fcc-server", "fcc-claude", "fcc-codex", "fcc-pi", "fcc-opencode", "fcc-cline", "fcc-hermes", "fcc-dsh", "fcc-grok", "fcc-muse", "fcc-aider", "fcc-doctor", "fcc-update.cmd", "_fcc-configure-headroom")) {
         $command = Get-ApplicationCommand $commandName
         if (-not $command) {
             throw "Free Claude Code installation did not create '$commandName'."
@@ -1897,14 +1941,18 @@ try {
     foreach ($name in @("FCC package", "PATH configuration", "FCC verification", "Desktop integration")) {
         $script:InstallSteps[$name] = "Not attempted"
     }
-    if ($script:EnableRtk) { $script:InstallSteps["RTK configuration"] = "Not attempted" }
+    if ($script:EnableRtkHeadroom) {
+        $script:InstallSteps["Headroom verification"] = "Not attempted"
+        $script:InstallSteps["RTK configuration"] = "Not attempted"
+        $script:InstallSteps["Headroom configuration"] = "Not attempted"
+    }
 
     Write-Host "`nInstallation plan:"
     Write-Host "  Install or update Free Claude Code."
     Write-Host "  Verify or install: $($selectedAgents -join ', ')."
     if ($VoiceLocal) { Write-Host "  Include local voice support." }
     if ($TorchBackend) { Write-Host "  PyTorch backend: $TorchBackend" }
-    if ($script:EnableRtk) { Write-Host "  Configure RTK for the selected agents." }
+    if ($script:EnableRtkHeadroom) { Write-Host "  Configure RTK + Headroom for the selected agents and connected desktops." }
     Write-Host "Press Ctrl+C to cancel. You can rerun the installer afterward."
     $script:InstallStageCount = $script:InstallSteps.Count - 1
 
@@ -1920,9 +1968,14 @@ try {
 
     Configure-AndConfirmFreeClaudeCode
 
-    if ($script:EnableRtk) {
+    if ($script:EnableRtkHeadroom) {
+        Start-InstallStep "Headroom verification"
+        Ensure-Headroom
+        Configure-HeadroomForSelectedAgents -Check
         Start-InstallStep "RTK configuration"
         Configure-RtkForSelectedAgents
+        Start-InstallStep "Headroom configuration"
+        Configure-HeadroomForSelectedAgents
     }
     Complete-InstallStep
     $installSucceeded = $true

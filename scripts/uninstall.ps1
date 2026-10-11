@@ -26,6 +26,7 @@ $FccCommands = @(
     "fcc-aider",
     "fcc-doctor",
     "fcc-update",
+    "_fcc-configure-headroom",
     "fcc-init",
     "free-claude-code"
 )

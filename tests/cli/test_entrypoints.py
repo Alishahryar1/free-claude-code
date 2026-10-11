@@ -39,6 +39,7 @@ def test_cli_scripts_are_registered() -> None:
 
     assert pyproject["project"]["scripts"] == {
         "_fcc-update-check": "free_claude_code.updater.check:main",
+        "_fcc-configure-headroom": "free_claude_code.cli.configure_headroom:main",
         "fcc-server": "free_claude_code.cli.entrypoints:serve",
         "fcc-doctor": "free_claude_code.cli.entrypoints:doctor",
         "fcc-claude": "free_claude_code.cli.launchers.claude:launch",
