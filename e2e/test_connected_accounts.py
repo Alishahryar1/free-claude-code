@@ -413,8 +413,9 @@ def test_late_account_response_cannot_replace_discovered_model_count(
     page.route("**/admin/api/status", status)
     page.goto(f"{admin_base_url}/admin")
     page.wait_for_function("state.startup?.startup?.providers?.openai === 'ready'")
+    pending = accounts.take_pending_status(page)
     accounts.hold_status.clear()
-    accounts.pending_status.pop().fulfill(json=account)
+    pending.fulfill(json=account)
     card = page.locator('[data-provider="openai"]')
     expect(card.get_by_role("button", name="Disconnect", exact=True)).to_be_enabled()
     expect(card.locator(".provider-meta")).to_have_text("2 models available")
@@ -429,8 +430,9 @@ def test_auth_status_refresh_preserves_proxy_edit_and_selection(
     proxy = dialog.locator("#field-OPENAI_PROXY")
     proxy.fill("http://pending-proxy:8080")
     proxy.evaluate("input => input.setSelectionRange(7, 14)")
+    pending = accounts.take_pending_status(page)
     accounts.hold_status.clear()
-    accounts.pending_status.pop().fulfill(json=_status("openai", connected=True))
+    pending.fulfill(json=_status("openai", connected=True))
     expect(
         page.locator('[data-provider="openai"]').get_by_role(
             "button", name="Disconnect", exact=True
@@ -466,13 +468,14 @@ def test_slow_initial_account_check_does_not_erase_a_later_save_warning(
     )
     page.goto(f"{admin_base_url}/admin")
     dialog = open_provider(page, "nvidia_nim")
-    assert len(accounts.pending_status) == 1
+    pending = accounts.take_pending_status(page)
+    assert not accounts.pending_status
     accounts.hold_status.clear()
     dialog.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
     dialog.get_by_role("button", name="Save", exact=True).click()
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
     with page.expect_response("**/admin/api/providers/github_copilot/auth") as response:
-        accounts.pending_status.pop().fulfill(json=_status("github_copilot"))
+        pending.fulfill(json=_status("github_copilot"))
     response.value.finished()
     page.evaluate("() => new Promise(requestAnimationFrame)")
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")

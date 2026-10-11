@@ -12,6 +12,7 @@ import pytest
 import uvicorn
 from playwright.sync_api import Page
 
+from e2e.artifacts import failure_artifacts_recorder as failure_artifacts_recorder
 from e2e.code_support import CodeControl
 from e2e.server_shutdown import join_server
 from free_claude_code.api.app import create_app

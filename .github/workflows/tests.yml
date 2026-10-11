@@ -137,7 +137,7 @@ jobs:
           runner-label: ${{ matrix.runner }}
 
       - name: Install Chromium
-        run: uv run --locked playwright install ${{ matrix.os == 'Linux' && '--with-deps chromium' || 'chromium' }}
+        run: uv run --locked playwright install --only-shell ${{ matrix.os == 'Linux' && '--with-deps chromium' || 'chromium' }}
 
       - name: Run Playwright
         run: >-

@@ -73,33 +73,23 @@ class TestMessagingRateLimiter:
 
     @pytest.mark.asyncio
     async def test_compaction(self):
-        """
-        Verify multiple rapid requests with same dedup_key are compacted.
-        Logic ported from verify_limiter.py
-        """
+        """Queued edits with the same key deliver only the latest content."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
-        call_counts = {}
+        edits = []
 
         async def mock_edit(msg_id, content):
-            call_counts[msg_id] = call_counts.get(msg_id, 0) + 1
+            edits.append((msg_id, content))
             return f"done_{content}"
 
-        # Spam 5 edits
+        # Submit the whole burst before yielding to the worker.
         for i in range(5):
             limiter.fire_and_forget(
                 lambda i=i: mock_edit("msg1", f"update_{i}"), dedup_key="edit:msg1"
             )
 
-        # Wait for processing
-        # 1st might go through immediately, subsequent ones queue and compact
-        await asyncio.sleep(2.5)
-
-        # Expected: ~2 calls (first and last)
-        assert call_counts["msg1"] <= 2, (
-            f"Expected compaction to reduce calls, but got {call_counts.get('msg1', 0)}"
-        )
-        assert call_counts["msg1"] >= 1, "Expected at least one call"
+        await asyncio.wait_for(asyncio.gather(*limiter._background_tasks), timeout=2.0)
+        assert edits == [("msg1", "update_4")]
 
     @pytest.mark.asyncio
     async def test_compaction_and_futures_resolution(self):
@@ -114,7 +104,6 @@ class TestMessagingRateLimiter:
 
         async def mock_edit(mid, content):
             call_counts[mid] = call_counts.get(mid, 0) + 1
-            await asyncio.sleep(0.05)
             return f"result_{content}"
 
         async def task(i):
@@ -122,19 +111,14 @@ class TestMessagingRateLimiter:
                 lambda i=i: mock_edit(msg_id, f"v{i}"), dedup_key=f"edit:{msg_id}"
             )
 
-        start_time = time.time()
-
         # Enqueue 3 tasks concurrently
-        results = await asyncio.gather(task(1), task(2), task(3))
-
-        duration = time.time() - start_time
+        results = await asyncio.wait_for(
+            asyncio.gather(task(1), task(2), task(3)), timeout=2.0
+        )
 
         # All results should be the LAST one executed
         for res in results:
             assert res == "result_v3", f"Expected result_v3, got {res}"
-
-        # Should be reasonably fast
-        assert duration < 2.0, "Execution took too long"
 
         # Calls should be compacted
         assert call_counts[msg_id] <= 2, f"Too many actual calls: {call_counts[msg_id]}"
@@ -279,9 +263,10 @@ class TestMessagingRateLimiter:
             raise ValueError("fire_and_forget failed")
 
         limiter.fire_and_forget(fail_task, dedup_key="fire_fail")
-        await asyncio.sleep(1.5)
+        await asyncio.wait_for(asyncio.gather(*limiter._background_tasks), timeout=2.0)
 
         joined = " ".join(str(r.message) for r in caplog.records)
+        assert "Final error in fire_and_forget for key fire_fail" in joined
         assert "ValueError" in joined
         assert "fire_and_forget failed" not in joined
 

@@ -1,6 +1,7 @@
 """Release intent is validated against committed paths, not edited numbers."""
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -40,9 +41,10 @@ def commit(repo: Path, title: str = "test change") -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
-@pytest.fixture
-def history(tmp_path):
-    git(tmp_path, "init", "-b", "main")
+@pytest.fixture(scope="session")
+def history_template(tmp_path_factory):
+    tmp_path = tmp_path_factory.mktemp("version-policy-template")
+    git(tmp_path, "init", "--template=", "-b", "main")
     git(tmp_path, "config", "core.autocrlf", "false")
     write(
         tmp_path,
@@ -56,6 +58,15 @@ def history(tmp_path):
     )
     write(tmp_path, "src/file.py", "original\n")
     return tmp_path, commit(tmp_path)
+
+
+@pytest.fixture
+def history(tmp_path, history_template):
+    source, base = history_template
+    # Copy the immutable seed, including Git objects and refs. Every test can
+    # change its worktree, index, and history without affecting another test.
+    shutil.copytree(source, tmp_path, dirs_exist_ok=True)
+    return tmp_path, base
 
 
 def check(repo: Path, base: str, title: str) -> subprocess.CompletedProcess[str]:

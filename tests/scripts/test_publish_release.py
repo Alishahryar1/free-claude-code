@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import shutil
 from itertools import pairwise
 from pathlib import Path
 from typing import TypedDict
@@ -20,14 +21,21 @@ def test_one_increment(kind, expected):
     assert next_version("6.2.66", kind) == expected
 
 
-@pytest.fixture
-def releases(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    git(tmp_path, "init", "-b", "main")
+@pytest.fixture(scope="session")
+def releases_template(tmp_path_factory):
+    tmp_path = tmp_path_factory.mktemp("publish-release-template")
+    git(tmp_path, "init", "--template=", "-b", "main")
     write(tmp_path, "src/file.py", "base")
     base = commit(tmp_path)
     git(tmp_path, "tag", "v1.2.3")
     git(tmp_path, "update-ref", "refs/remotes/origin/main", base)
+    return tmp_path
+
+
+@pytest.fixture
+def releases(tmp_path, monkeypatch, releases_template):
+    shutil.copytree(releases_template, tmp_path, dirs_exist_ok=True)
+    monkeypatch.chdir(tmp_path)
     state = FakeRemote(tmp_path)
     monkeypatch.setattr(publishing, "command", state.command)
     return tmp_path, state

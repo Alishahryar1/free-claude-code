@@ -11,18 +11,38 @@ def test_provider_titles_link_to_websites_and_every_logo_loads(
 ) -> None:
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
-    for card in page.locator(".provider-card").all():
-        link = card.locator(".provider-title a")
-        expect(link).to_have_count(1)
-        href = link.get_attribute("href")
-        assert href is not None and href.startswith("https://")
-        expect(link).to_have_attribute("target", "_blank")
-        expect(link).to_have_attribute("rel", "noopener noreferrer")
-        logo = link.locator("img")
-        expect(logo).to_have_count(1)
-        expect(logo).to_have_attribute("alt", "")
-        expect(logo).to_have_js_property("complete", True)
-        assert logo.evaluate("image => image.naturalWidth > 0")
+    cards = page.locator(".provider-card")
+    expect(cards.first).to_be_visible()
+    page.wait_for_function("""() => Array.from(document.querySelectorAll(
+        '.provider-card .provider-title a img'
+    )).every(image => image.complete)""")
+    # Read the rendered DOM together instead of tracing a browser round trip
+    # for each attribute of every provider. Keep card identity in failures.
+    snapshots = cards.evaluate_all("""cards => cards.map(card => ({
+        provider: card.dataset.provider,
+        links: Array.from(card.querySelectorAll('.provider-title a'), link => ({
+            href: link.getAttribute('href'),
+            target: link.getAttribute('target'),
+            rel: link.getAttribute('rel'),
+            logos: Array.from(link.querySelectorAll('img'), image => ({
+                alt: image.getAttribute('alt'),
+                complete: image.complete,
+                naturalWidth: image.naturalWidth,
+            })),
+        })),
+    }))""")
+    assert snapshots
+    for card in snapshots:
+        assert len(card["links"]) == 1, card
+        link = card["links"][0]
+        assert link["href"] and link["href"].startswith("https://"), card
+        assert link["target"] == "_blank", card
+        assert link["rel"] == "noopener noreferrer", card
+        assert len(link["logos"]) == 1, card
+        logo = link["logos"][0]
+        assert logo["alt"] == "", card
+        assert logo["complete"] is True, card
+        assert logo["naturalWidth"] > 0, card
     expect(page.locator('[data-provider="llamacpp"] .provider-title')).to_have_text(
         "LLaMA.cpp"
     )
