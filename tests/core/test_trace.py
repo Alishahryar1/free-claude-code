@@ -99,6 +99,29 @@ def test_sanitize_masks_nested_api_key_strings() -> None:
     assert out["outer"]["text"] == "visible"
 
 
+@pytest.mark.parametrize(
+    "header", ["x-goog-api-key", "X-Goog-Api-Key", "api-key", "Api-Key"]
+)
+def test_trace_redacts_provider_api_keys_in_json(tmp_path: Path, header: str) -> None:
+    log_file = str(tmp_path / "credentials.log")
+    configure_logging(log_file, force=True, level="DEBUG")
+    headers = {header: "dummy-provider-secret", "content-type": "application/json"}
+
+    trace_event(
+        stage="ingress",
+        event="request.received",
+        source="unit",
+        requests=[{"headers": headers}],
+    )
+
+    payload = _trace_payloads(log_file)[0]
+    assert payload["requests"] == [
+        {"headers": {header: "<redacted>", "content-type": "application/json"}}
+    ]
+    assert "dummy-provider-secret" not in Path(log_file).read_text(encoding="utf-8")
+    assert headers[header] == "dummy-provider-secret"
+
+
 @pytest.mark.asyncio
 async def test_traced_async_stream_logs_completion(tmp_path) -> None:
     log_file = str(tmp_path / "complete.log")

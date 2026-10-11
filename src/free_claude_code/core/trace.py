@@ -22,6 +22,8 @@ _SECRET_VALUE_KEYS = frozenset(
     for k in (
         "authorization",
         "x-api-key",
+        "x-goog-api-key",
+        "api-key",
         "anthropic-auth-token",
         "api_key",
         "password",
