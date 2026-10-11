@@ -13,6 +13,7 @@ DSH_PACKAGE="@deepseek-ai/dsh@latest"
 GROK_INSTALL_URL="https://x.ai/cli/install.sh"
 MUSE_INSTALL_URL="https://dev.meta.ai/install.sh"
 RTK_VERSION="0.44.2"
+HEADROOM_PACKAGE="headroom-ai[mcp]==0.40.0"
 RTK_RELEASE_BASE_URL="https://github.com/rtk-ai/rtk/releases/download/v$RTK_VERSION"
 UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 FCC_MACOS_BUNDLE_ID="io.github.alishahryar1.free-claude-code"
@@ -32,13 +33,14 @@ install_dsh=1
 install_grok=1
 install_muse=1
 install_aider=1
-enable_rtk=0
+enable_rtk_headroom=0
 torch_backend=""
 temporary_file=""
 temporary_binary=""
 tool_bin=""
 pi_available=0
 rtk_path=""
+headroom_path=""
 install_log=""
 install_log_warning=0
 install_report_started=0
@@ -66,7 +68,7 @@ Installs or updates Free Claude Code and lets you choose which coding agents to 
 Options:
   --voice-local            Install local Whisper voice transcription support.
   --torch-backend VALUE    Use a uv PyTorch backend, such as cu130. Requires local voice.
-  --rtk                    Install and configure RTK for the selected coding agents.
+  --rtk-headroom           Install and configure RTK + Headroom token optimization.
   --dry-run                Print commands without running them.
   --help                   Show this help text.
 USAGE
@@ -145,7 +147,7 @@ print_installer_retry() {
         printf ' --torch-backend '
         shell_quote "$torch_backend"
     fi
-    [ "$enable_rtk" -eq 0 ] || printf ' --rtk'
+    [ "$enable_rtk_headroom" -eq 0 ] || printf ' --rtk-headroom'
     printf '\n'
 }
 
@@ -328,12 +330,9 @@ choose_coding_agents() {
         printf 'Select at least one coding agent.\n\n' >&4
     done
 
-    if [ "$enable_rtk" -eq 0 ]; then
-        if command -v rtk >/dev/null 2>&1; then
-            printf 'RTK already installed; will verify.\n' >&4
-            enable_rtk=1
-        elif prompt_yes_no "Enable RTK token optimization globally for the selected coding agents?" no; then
-            enable_rtk=1
+    if [ "$enable_rtk_headroom" -eq 0 ]; then
+        if prompt_yes_no "Enable RTK + Headroom token optimization?" no; then
+            enable_rtk_headroom=1
         fi
     fi
 
@@ -769,7 +768,7 @@ ensure_rtk_claude_config_directory() {
 }
 
 configure_rtk_for_selected_agents() {
-    [ "$enable_rtk" -eq 1 ] || return 0
+    [ "$enable_rtk_headroom" -eq 1 ] || return 0
 
     step "Installing and configuring RTK token optimization"
     ensure_rtk
@@ -787,6 +786,41 @@ configure_rtk_for_selected_agents() {
     if [ "$install_cline" -eq 1 ]; then
         printf 'Optional for each project: cd <project> && RTK_TELEMETRY_DISABLED=1 rtk init --agent cline\n'
     fi
+}
+
+ensure_headroom() {
+    if command -v headroom >/dev/null 2>&1; then
+        headroom_path=$(command -v headroom)
+        printf 'Headroom already found on PATH; verifying it without updating it.\n'
+    else
+        run uv tool install --python "$PYTHON_VERSION" "$HEADROOM_PACKAGE"
+        if [ "$dry_run" -eq 1 ]; then
+            headroom_path="<uv-tool-bin>/headroom"
+        else
+            add_uv_tool_bin_directory
+            headroom_path="$tool_bin/headroom"
+            [ -x "$headroom_path" ] || fail "Headroom installation did not create $headroom_path."
+        fi
+    fi
+    run "$headroom_path" --version
+    run "$headroom_path" mcp install --help
+}
+
+configure_headroom_for_selected_agents() {
+    # Headroom 0.40.0's OpenCode registrar uses the pre-v2 schema.
+    printf 'Headroom setup supports Claude Code, Codex, and Grok. Other selected agents are skipped.\n'
+    set --
+    [ "$install_claude" -eq 0 ] || set -- "$@" claude
+    [ "$install_codex" -eq 0 ] || set -- "$@" codex
+    [ "$install_grok" -eq 0 ] || set -- "$@" grok
+    if [ "$#" -eq 0 ]; then
+        printf 'Headroom registration skipped: no supported agents selected.\n'
+        return 0
+    fi
+    for headroom_agent in "$@"; do
+        # Upstream resolves the server executable from PATH.
+        run env "PATH=$(dirname "$headroom_path"):$PATH" "$headroom_path" mcp install --agent "$headroom_agent"
+    done
 }
 
 ensure_claude() {
@@ -1433,8 +1467,8 @@ parse_args() {
                 torch_backend=${1#*=}
                 [ -n "$torch_backend" ] || fail "--torch-backend requires a non-empty value."
                 ;;
-            --rtk)
-                enable_rtk=1
+            --rtk-headroom)
+                enable_rtk_headroom=1
                 ;;
             --dry-run)
                 dry_run=1
@@ -1677,11 +1711,11 @@ done
 printf '\n'
 [ "$voice_local" -eq 0 ] || printf '  Include local voice support.\n'
 [ -z "$torch_backend" ] || printf '  PyTorch backend: %s\n' "$torch_backend"
-[ "$enable_rtk" -eq 0 ] || printf '  Configure RTK for the selected agents.\n'
+[ "$enable_rtk_headroom" -eq 0 ] || printf '  Run RTK + Headroom setup for supported selected agents.\n'
 printf 'Press Ctrl+C to cancel. You can rerun the installer afterward.\n'
 pending_steps=$(printf 'uv\n%s\nFCC package\nPATH configuration\nFCC verification\n' "$pending_steps"
     [ "$(uname -s)" != Darwin ] || printf 'Desktop integration\n'
-    [ "$enable_rtk" -eq 0 ] || printf 'RTK configuration\n'
+    [ "$enable_rtk_headroom" -eq 0 ] || printf 'Headroom verification\nRTK configuration\nHeadroom configuration\n'
 )
 install_stage_count=$(printf '%s\n' "$pending_steps" | wc -l)
 
@@ -1692,7 +1726,7 @@ if [ "$install_claude" -eq 1 ] || [ "$install_opencode" -eq 1 ] || [ "$install_h
 fi
 require_command sh
 require_command mktemp
-if [ "$enable_rtk" -eq 1 ] && ! command -v rtk >/dev/null 2>&1; then
+if [ "$enable_rtk_headroom" -eq 1 ] && ! command -v rtk >/dev/null 2>&1; then
     require_command tar
     if [ "$dry_run" -eq 0 ] &&
         ! command -v sha256sum >/dev/null 2>&1 &&
@@ -1711,7 +1745,7 @@ if [ "$dry_run" -eq 0 ]; then
     fi
     if [ "$install_hermes" -eq 1 ] && ! command -v hermes >/dev/null 2>&1; then confirm_hermes_platform; fi
     if [ "$install_opencode" -eq 1 ]; then check_opencode_install; fi
-    if [ "$enable_rtk" -eq 1 ] && ! command -v rtk >/dev/null 2>&1; then select_rtk_release; fi
+    if [ "$enable_rtk_headroom" -eq 1 ] && ! command -v rtk >/dev/null 2>&1; then select_rtk_release; fi
 fi
 
 start_install_step uv "Ensuring uv $MIN_UV_VERSION or newer is installed"
@@ -1729,9 +1763,13 @@ if [ "$(uname -s)" = "Darwin" ]; then
     install_macos_desktop_app
     desktop_ready=1
 fi
-if [ "$enable_rtk" -eq 1 ]; then
+if [ "$enable_rtk_headroom" -eq 1 ]; then
+    start_install_step "Headroom verification"
+    ensure_headroom
     start_install_step "RTK configuration"
     configure_rtk_for_selected_agents
+    start_install_step "Headroom configuration"
+    configure_headroom_for_selected_agents
 fi
 complete_install_step
 

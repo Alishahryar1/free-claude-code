@@ -46,6 +46,146 @@ CODING_AGENTS = (
 )
 
 
+def test_install_ps1_bundle_dry_run_includes_headroom(powershell_harness):
+    result = powershell_harness.run("-RtkHeadroom", "-DryRun")
+    assert result.returncode == 0, result.stderr
+    assert "headroom-ai[mcp]==0.40.0" in result.stdout
+    assert "mcp install --agent claude" in result.stdout
+    assert "_fcc-configure-headroom" not in result.stdout
+    assert not any("headroom-ai" in call for call in powershell_harness.calls())
+
+
+def test_install_sh_bundle_dry_run_includes_headroom(posix_harness):
+    result = posix_harness.run("--rtk-headroom", "--dry-run")
+    assert result.returncode == 0, result.stderr
+    assert "headroom-ai[mcp]==0.40.0" in result.stdout
+    assert "mcp install --agent claude" in result.stdout
+    assert "_fcc-configure-headroom" not in result.stdout
+    assert not any("headroom-ai" in call for call in posix_harness.calls())
+
+
+def _assert_headroom_bundle_workflow(harness, failure, reuse):
+    windows = isinstance(harness, PowerShellHarness)
+    for agent in CODING_AGENTS:
+        harness.add_client(agent)
+    harness.add_uv("0.12.13")
+    harness.add_rtk()
+    if reuse:
+        harness.add_client("headroom")
+    flag = "-RtkHeadroom" if windows else "--rtk-headroom"
+    result = harness.run(flag, fail_step=failure)
+    calls = harness.calls()
+    package = [call for call in calls if "headroom-ai[mcp]" in call]
+    setup = [call for call in calls if call.startswith("headroom:mcp install --agent")]
+    rtk = [call for call in calls if call.startswith("rtk:init")]
+    assert bool(package) is (not reuse)
+    if failure:
+        assert result.returncode != 0, result.stdout + result.stderr
+        stage = (
+            "Headroom configuration"
+            if failure == "headroom-configure"
+            else "Headroom verification"
+        )
+        assert f"Failed: {stage}" in result.stdout
+        assert flag in result.stdout.split("Retry:", 1)[1]
+        if failure in {"headroom-install", "headroom-check"}:
+            assert not rtk and not setup
+        else:
+            assert rtk and setup == [
+                "headroom:mcp install --agent claude",
+                "headroom:mcp install --agent codex",
+            ]
+        offset = len(calls)
+        result = harness.run(flag)
+        assert result.returncode == 0, result.stdout + result.stderr
+        calls = harness.calls()[offset:]
+        setup = [
+            call for call in calls if call.startswith("headroom:mcp install --agent")
+        ]
+        rtk = [call for call in calls if call.startswith("rtk:init")]
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert setup == [
+        f"headroom:mcp install --agent {agent}" for agent in ("claude", "codex", "grok")
+    ]
+    assert (
+        calls.index("headroom:--version") < calls.index(rtk[0]) < calls.index(setup[0])
+    )
+    assert not any("_fcc-configure-headroom" in call for call in calls)
+
+
+@pytest.mark.parametrize(
+    ("failure", "reuse"),
+    [
+        ("", False),
+        ("", True),
+        ("headroom-install", False),
+        ("headroom-check", False),
+        ("headroom-configure", False),
+    ],
+)
+def test_install_ps1_headroom_bundle_workflow(powershell_harness, failure, reuse):
+    _assert_headroom_bundle_workflow(powershell_harness, failure, reuse)
+
+
+@pytest.mark.parametrize(
+    ("failure", "reuse"),
+    [
+        ("", False),
+        ("", True),
+        ("headroom-install", False),
+        ("headroom-check", False),
+        ("headroom-configure", False),
+    ],
+)
+def test_install_sh_headroom_bundle_workflow(posix_harness, failure, reuse):
+    _assert_headroom_bundle_workflow(posix_harness, failure, reuse)
+
+
+@pytest.mark.parametrize("selected", ["claude", "codex", "grok", "unsupported"])
+def test_install_sh_headroom_native_selection(posix_harness, selected):
+    posix_harness.add_client("headroom")
+    flags = "\n".join(f"install_{name}=0" for name in ("claude", "codex", "grok"))
+    if selected != "unsupported":
+        flags += f"\ninstall_{selected}=1"
+    result = posix_harness.run_functions(
+        flags
+        + "\nheadroom_path=$(command -v headroom)\nconfigure_headroom_for_selected_agents"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert posix_harness.calls() == (
+        []
+        if selected == "unsupported"
+        else [f"headroom:mcp install --agent {selected}"]
+    )
+    if selected == "unsupported":
+        assert "skip" in result.stdout.lower()
+
+
+@pytest.mark.parametrize("selected", ["claude", "codex", "grok", "unsupported"])
+def test_install_ps1_headroom_native_selection(powershell_harness, selected):
+    powershell_harness.add_client("headroom")
+    variables = {
+        "claude": "InstallClaudeCode",
+        "codex": "InstallCodex",
+        "grok": "InstallGrok",
+    }
+    flags = "\n".join(f"$script:{name} = $false" for name in variables.values())
+    if selected != "unsupported":
+        flags += f"\n$script:{variables[selected]} = $true"
+    result = powershell_harness.run_functions(
+        flags
+        + '\n$script:HeadroomPath = (Get-ApplicationCommand "headroom").Source\nConfigure-HeadroomForSelectedAgents'
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert powershell_harness.calls() == (
+        []
+        if selected == "unsupported"
+        else [f"headroom:mcp install --agent {selected}"]
+    )
+    if selected == "unsupported":
+        assert "skip" in result.stdout.lower()
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -112,6 +252,10 @@ if [ "{name}" = "opencode" ] && [ "${{FCC_RUNNING_PHASE:-}}" = "opencode-plugin"
         : > "$FCC_PROCESS_MARKER.probed"
     fi
 fi
+if [ "{name}" = "headroom" ]; then
+    [ "$FAIL_STEP" != "headroom-check" ] || exit 79
+    if [ "$FAIL_STEP" = "headroom-configure" ] && [ "${{4:-}}" = "codex" ]; then exit 80; fi
+fi
 if [ "$FAIL_STEP" = "{name}-verify" ]; then
     exit 31
 fi
@@ -167,6 +311,13 @@ if [ "${{1:-}}" = "--version" ]; then
 fi
 if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
     case " $* " in
+        *" headroom-ai[mcp]==0.40.0 "*)
+            [ "$FAIL_STEP" = "headroom-install" ] && exit 78
+            mkdir -p "$tool_bin"
+            cp "$FAKE_FIXTURES/headroom-command.sh" "$tool_bin/headroom"
+            chmod +x "$tool_bin/headroom"
+            exit 0
+            ;;
         *" aider-chat@latest "*)
             if [ "$FAIL_STEP" = "aider-install" ]; then
                 exit 29
@@ -588,6 +739,7 @@ chmod +x "$uv_bin/uv"
         metadata.size = len(rtk_command)
         archive.addfile(metadata, io.BytesIO(rtk_command))
     _write_executable(fixtures / "uv-command.sh", _posix_uv_command("0.12.13"))
+    _write_executable(fixtures / "headroom-command.sh", _posix_command("headroom"))
     _write_executable(
         fixtures / "fcc-command.sh",
         """#!/bin/sh
@@ -675,18 +827,20 @@ def test_install_sh_auto_selects_installed_harnesses(
         posix_harness.add_client(command)
 
     result = posix_harness.run_interactive(
-        "\n" if rtk is None else "", *(("--rtk",) if rtk else ())
+        "" if rtk else "\n", *(("--rtk-headroom",) if rtk else ())
     )
 
     assert result.returncode == 0, result.stdout
     assert "Install or verify" not in result.stdout
     assert "for fcc-" not in result.stdout
-    assert ("Enable RTK token optimization" in result.stdout) is (rtk is None)
+    assert ("Enable RTK + Headroom token optimization" in result.stdout) is (
+        rtk is not True
+    )
     for command in CODING_AGENTS:
         assert f"{command}:--version" in posix_harness.calls()
-    assert ("rtk:--version:telemetry=1" in posix_harness.calls()) is (rtk is not None)
+    assert ("rtk:--version:telemetry=1" in posix_harness.calls()) is (rtk is True)
     assert ("rtk:init --global --codex:telemetry=1" in posix_harness.calls()) is (
-        rtk is not None
+        rtk is True
     )
 
 
@@ -700,7 +854,7 @@ def test_install_sh_asks_only_about_missing_harnesses(
         posix_harness.add_rtk()
 
     result = posix_harness.run_interactive(
-        ("y\n" if install_codex else "\n") + "\n" * (7 if rtk else 8)
+        ("y\n" if install_codex else "\n") + "\n" * 8
     )
 
     assert result.returncode == 0, result.stdout
@@ -719,12 +873,8 @@ def test_install_sh_asks_only_about_missing_harnesses(
     assert "opencode:--version" in calls
     assert ("codex-install:1" in calls) is install_codex
     assert not any(f"{command}:--version" in calls for command in CODING_AGENTS[4:])
-    assert ("Enable RTK token optimization" in result.stdout) is not rtk
-    assert ("rtk:init --global --codex:telemetry=1" in calls) is (rtk and install_codex)
-    if rtk and install_codex:
-        assert calls.index("codex:--version") < calls.index(
-            "rtk:init --global --codex:telemetry=1"
-        )
+    assert "Enable RTK + Headroom token optimization" in result.stdout
+    assert not any(call.startswith("rtk:init") for call in calls)
 
 
 def test_install_sh_discovers_installed_npm_harnesses_before_questions(
@@ -1201,7 +1351,7 @@ def test_install_sh_stops_when_selected_dsh_install_fails(
 def test_install_sh_installs_and_configures_rtk_for_selected_agents(
     posix_harness: PosixHarness,
 ) -> None:
-    result = posix_harness.run("--rtk")
+    result = posix_harness.run("--rtk-headroom")
 
     assert result.returncode == 0, result.stderr
     calls = posix_harness.calls()
@@ -1234,7 +1384,7 @@ def test_install_sh_prepares_custom_claude_config_directory_for_rtk(
     custom_config = posix_harness.root / "custom-claude"
     posix_harness.env["CLAUDE_CONFIG_DIR"] = str(custom_config)
 
-    result = posix_harness.run("--rtk")
+    result = posix_harness.run("--rtk-headroom")
 
     assert result.returncode == 0, result.stderr
     assert custom_config.is_dir()
@@ -1259,7 +1409,7 @@ def test_install_sh_selects_pinned_rtk_release_for_platform(
     posix_harness.env["FAKE_UNAME"] = system
     posix_harness.env["FAKE_UNAME_MACHINE"] = machine
 
-    result = posix_harness.run("--rtk", "--dry-run")
+    result = posix_harness.run("--rtk-headroom", "--dry-run")
 
     assert result.returncode == 0, result.stderr
     assert f"rtk-ai/rtk/releases/download/v0.44.2/{asset}" in result.stdout
@@ -1273,7 +1423,7 @@ def test_install_sh_rejects_unsupported_rtk_platform(
     posix_harness.env["FAKE_UNAME"] = "FreeBSD"
     posix_harness.env["FAKE_UNAME_MACHINE"] = "riscv64"
 
-    result = posix_harness.run("--rtk", "--dry-run")
+    result = posix_harness.run("--rtk-headroom", "--dry-run")
 
     assert result.returncode != 0
     assert "does not provide a release for FreeBSD riscv64" in result.stderr
@@ -1300,7 +1450,7 @@ def test_install_sh_rejects_conflicting_rtk_command(
 ) -> None:
     posix_harness.add_unrelated_rtk()
 
-    result = posix_harness.run("--rtk")
+    result = posix_harness.run("--rtk-headroom")
 
     assert result.returncode != 0
     assert "not a compatible Rust Token Killer installation" in result.stderr
@@ -1323,7 +1473,7 @@ def test_install_sh_stops_when_rtk_setup_fails(
     posix_harness: PosixHarness,
     failure: str,
 ) -> None:
-    result = posix_harness.run("--rtk", fail_step=failure)
+    result = posix_harness.run("--rtk-headroom", fail_step=failure)
 
     assert result.returncode != 0
     assert "Free Claude Code is installed and verified." in result.stdout
@@ -2051,6 +2201,8 @@ if "{name}"=="opencode" if "%FCC_RUNNING_PHASE%"=="opencode-plugin" (
         type nul > "%FCC_PROCESS_MARKER%.probed"
     )
 )
+if "{name}"=="headroom" if "%FAIL_STEP%"=="headroom-check" exit /b 79
+if "{name}"=="headroom" if "%FAIL_STEP%"=="headroom-configure" if "%4"=="codex" exit /b 80
 if "%FAIL_STEP%"=="{name}-verify" exit /b 51
 {version_command}
 if "%1"=="--help" (
@@ -2098,6 +2250,8 @@ echo uv {version}
 exit /b 0
 :install
 if "%5"=="python3.12" goto install_aider
+if "%5"=="headroom-ai[mcp]==0.40.0" goto install_headroom
+if "%5"=="headroom-ai[mcp]" goto install_headroom
 if "%FAIL_STEP%"=="fcc-install" exit /b 53
 if not exist "%UV_BIN_DIR%" mkdir "%UV_BIN_DIR%"
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-server.cmd" >nul
@@ -2119,6 +2273,11 @@ exit /b 0
 if "%FAIL_STEP%"=="aider-install" exit /b 57
 if not exist "%UV_BIN_DIR%" mkdir "%UV_BIN_DIR%"
 copy /y "%FAKE_FIXTURES%\aider-command.cmd" "%UV_BIN_DIR%\aider.cmd" >nul
+exit /b 0
+:install_headroom
+if "%FAIL_STEP%"=="headroom-install" exit /b 78
+if not exist "%UV_BIN_DIR%" mkdir "%UV_BIN_DIR%"
+copy /y "%FAKE_FIXTURES%\headroom-command.cmd" "%UV_BIN_DIR%\headroom.cmd" >nul
 exit /b 0
 :update_shell
 if "%FAIL_STEP%"=="path-update" exit /b 54
@@ -2282,6 +2441,9 @@ def powershell_harness(
     )
     (fixtures / "rtk-command.cmd").write_text(_batch_rtk(), encoding="utf-8")
     (fixtures / "uv-command.cmd").write_text(_batch_uv("0.12.13"), encoding="utf-8")
+    (fixtures / "headroom-command.cmd").write_text(
+        _batch_client("headroom"), encoding="utf-8"
+    )
     (fixtures / "fcc-command.cmd").write_text(
         """@echo off
 for %%I in ("%~f0") do set "FCC_NAME=%%~nI"
@@ -2673,21 +2835,21 @@ def test_install_ps1_auto_selects_installed_harnesses(
         powershell_harness.add_client(command)
 
     result = powershell_harness.run_interactive(
-        [""] if rtk is None else [], *(("-Rtk",) if rtk else ())
+        [] if rtk else [""], *(("-RtkHeadroom",) if rtk else ())
     )
 
     assert result.returncode == 0, result.stderr
     assert "Install or verify" not in result.stdout
     assert "for fcc-" not in result.stdout
-    assert ("Enable RTK token optimization" in result.stdout) is (rtk is None)
+    assert ("Enable RTK + Headroom token optimization" in result.stdout) is (
+        rtk is not True
+    )
     for command in CODING_AGENTS:
         assert f"{command}:--version" in powershell_harness.calls()
     assert "muse-install:external" in powershell_harness.calls()
-    assert ("rtk:--version:telemetry=1" in powershell_harness.calls()) is (
-        rtk is not None
-    )
+    assert ("rtk:--version:telemetry=1" in powershell_harness.calls()) is (rtk is True)
     assert ("rtk:init --global --codex:telemetry=1" in powershell_harness.calls()) is (
-        rtk is not None
+        rtk is True
     )
 
 
@@ -2701,7 +2863,7 @@ def test_install_ps1_asks_only_about_missing_harnesses(
         powershell_harness.add_rtk()
 
     result = powershell_harness.run_interactive(
-        ["y" if install_codex else ""] + [""] * (7 if rtk else 8)
+        ["y" if install_codex else ""] + [""] * 8
     )
 
     assert result.returncode == 0, result.stderr
@@ -2720,12 +2882,8 @@ def test_install_ps1_asks_only_about_missing_harnesses(
     assert "opencode:--version" in calls
     assert ("codex-install:1" in calls) is install_codex
     assert not any(f"{command}:--version" in calls for command in CODING_AGENTS[4:])
-    assert ("Enable RTK token optimization" in result.stdout) is not rtk
-    assert ("rtk:init --global --codex:telemetry=1" in calls) is (rtk and install_codex)
-    if rtk and install_codex:
-        assert calls.index("codex:--version") < calls.index(
-            "rtk:init --global --codex:telemetry=1"
-        )
+    assert "Enable RTK + Headroom token optimization" in result.stdout
+    assert not any(call.startswith("rtk:init") for call in calls)
 
 
 def test_install_ps1_discovers_installed_npm_harnesses_before_questions(
@@ -3609,7 +3767,7 @@ def test_install_ps1_preserves_existing_rtk_and_configures_selected_agents(
 ) -> None:
     powershell_harness.add_rtk()
 
-    result = powershell_harness.run("-Rtk")
+    result = powershell_harness.run("-RtkHeadroom")
 
     assert result.returncode == 0, result.stderr
     assert "verifying it without updating it" in result.stdout
@@ -3634,7 +3792,8 @@ def test_install_ps1_prepares_custom_claude_config_directory_for_rtk(
     powershell_harness.env["CLAUDE_CONFIG_DIR"] = str(custom_config)
 
     result = powershell_harness.run_functions(
-        "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-RtkClaudeConfigDirectory", "-Rtk"
+        "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-RtkClaudeConfigDirectory",
+        "-RtkHeadroom",
     )
 
     assert result.returncode == 0, result.stderr
@@ -3649,7 +3808,7 @@ def test_install_ps1_rejects_conflicting_rtk_command(
     powershell_harness.add_unrelated_rtk()
 
     result = powershell_harness.run_functions(
-        "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Rtk", "-Rtk"
+        "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Rtk", "-RtkHeadroom"
     )
 
     assert result.returncode != 0
@@ -3661,7 +3820,7 @@ def test_install_ps1_rejects_conflicting_rtk_command(
 def test_install_ps1_rtk_dry_run_prints_install_and_agent_setup(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    result = powershell_harness.run("-Rtk", "-DryRun")
+    result = powershell_harness.run("-RtkHeadroom", "-DryRun")
 
     assert result.returncode == 0, result.stderr
     assert powershell_harness.calls() == []
@@ -4375,7 +4534,7 @@ $script:InstallDsh = $true
 $script:InstallGrok = $true
 $script:InstallMuse = $true
 $script:InstallAider = $true
-$script:EnableRtk = $false
+$script:EnableRtkHeadroom = $false
 function Read-Host {{
     param([string] $Prompt)
     $answer = $script:Answers[$script:AnswerIndex]
@@ -4386,7 +4545,7 @@ function Read-YesNo {{{read_yes_no}}}
 function Read-CodingAgentSelection {{{read_selection}}}
 function Select-CodingAgents {{{select_agents}}}
 Select-CodingAgents
-Write-Output "selection:$($script:InstallClaudeCode),$($script:InstallCodex),$($script:InstallPi),$($script:InstallOpenCode),$($script:InstallCline),$($script:InstallHermes),$($script:InstallDsh),$($script:InstallGrok),$($script:InstallMuse),$($script:InstallAider),$($script:EnableRtk)"
+Write-Output "selection:$($script:InstallClaudeCode),$($script:InstallCodex),$($script:InstallPi),$($script:InstallOpenCode),$($script:InstallCline),$($script:InstallHermes),$($script:InstallDsh),$($script:InstallGrok),$($script:InstallMuse),$($script:InstallAider),$($script:EnableRtkHeadroom)"
 """
 
     result = subprocess.run(
@@ -4448,7 +4607,7 @@ def test_install_ps1_configures_rtk_only_for_available_selected_agents(
     body = _braced_body(text, "function Configure-RtkForSelectedAgents")
     script = f"""Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$script:EnableRtk = $true
+$script:EnableRtkHeadroom = $true
 $script:InstallClaudeCode = $false
 $script:InstallCodex = $true
 $script:InstallPi = $true
@@ -5119,9 +5278,9 @@ def _assert_installer_recovers_after_verification_failure(
     harness.add_rtk()
     home = Path(harness.env["USERPROFILE" if windows else "HOME"])
     options = (
-        ("-Rtk", "-VoiceLocal", "-TorchBackend", "cu130")
+        ("-RtkHeadroom", "-VoiceLocal", "-TorchBackend", "cu130")
         if windows
-        else ("--rtk", "--voice-local", "--torch-backend", "cu130")
+        else ("--rtk-headroom", "--voice-local", "--torch-backend", "cu130")
     )
 
     failed = harness.run(*options, fail_step="fcc-verify")
@@ -5280,9 +5439,9 @@ def test_install_ps1_retry_command_preserves_literal_options_and_path(
     script = powershell_harness.root / "install ' & café.ps1"
     output = powershell_harness.root / "retry-options.json"
     script.write_text(
-        "param([switch] $VoiceLocal, [string] $TorchBackend, [switch] $Rtk)\n"
+        "param([switch] $VoiceLocal, [string] $TorchBackend, [switch] $RtkHeadroom)\n"
         "[IO.File]::WriteAllText($env:TEST_RETRY_OUTPUT, "
-        "(ConvertTo-Json @($VoiceLocal.IsPresent, $TorchBackend, $Rtk.IsPresent)), [Text.Encoding]::UTF8)\n",
+        "(ConvertTo-Json @($VoiceLocal.IsPresent, $TorchBackend, $RtkHeadroom.IsPresent)), [Text.Encoding]::UTF8)\n",
         encoding="utf-8-sig",
     )
     backend = "cu'130 $literal; &(literal)"
@@ -5295,7 +5454,7 @@ def test_install_ps1_retry_command_preserves_literal_options_and_path(
         "-VoiceLocal",
         "-TorchBackend",
         backend,
-        "-Rtk",
+        "-RtkHeadroom",
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(output.read_text(encoding="utf-8-sig")) == [True, backend, True]
@@ -5314,7 +5473,7 @@ def test_install_sh_retry_command_preserves_literal_options_and_path(
         TEST_BACKEND=backend,
     )
     result = posix_harness.run_functions(
-        "installer_path=$TEST_RETRY_PATH\nvoice_local=1\nenable_rtk=1\ntorch_backend=$TEST_BACKEND\n"
+        "installer_path=$TEST_RETRY_PATH\nvoice_local=1\nenable_rtk_headroom=1\ntorch_backend=$TEST_BACKEND\n"
         'retry=$(print_installer_retry)\neval "${retry#Retry: }"'
     )
     assert result.returncode == 0, result.stderr
@@ -5322,7 +5481,7 @@ def test_install_sh_retry_command_preserves_literal_options_and_path(
         "--voice-local",
         "--torch-backend",
         backend,
-        "--rtk",
+        "--rtk-headroom",
     ]
 
 
@@ -5479,7 +5638,9 @@ def _assert_installer_keeps_launch_instructions_after_rtk_failure(
         harness.add_client(command)
     harness.add_uv("0.12.13")
     harness.add_rtk()
-    result = harness.run("-Rtk" if windows else "--rtk", fail_step="rtk-init-claude")
+    result = harness.run(
+        "-RtkHeadroom" if windows else "--rtk-headroom", fail_step="rtk-init-claude"
+    )
     assert result.returncode != 0
     assert "Free Claude Code is installed and verified." in result.stdout
     assert "Run Claude Code with: fcc-claude" in result.stdout
