@@ -54,7 +54,6 @@ $script:InstallStageCount = 0
 $script:FccVerified = $false
 $script:DesktopReady = $false
 $script:HeadroomPath = ""
-$script:FccToolBin = ""
 $FccCommands = @(
     # Include retired entry points so updates reject older FCC processes before replacement.
     "fcc-desktop",
@@ -71,7 +70,6 @@ $FccCommands = @(
     "fcc-aider",
     "fcc-doctor",
     "fcc-update",
-    "_fcc-configure-headroom",
     "fcc-init",
     "free-claude-code"
 )
@@ -820,45 +818,49 @@ function Ensure-Headroom {
     $command = Get-ApplicationCommand "headroom"
     if ($command) {
         $script:HeadroomPath = $command.Source
-        Write-Host "Headroom already found on PATH; will verify without updating it."
-        return
+        Write-Host "Headroom already found on PATH; verifying it without updating it."
     }
-    Invoke-NativeCommand -FilePath "uv" -Arguments @("tool", "install", "--python", $PythonRequest, $HeadroomPackage)
-    if ($DryRun) {
-        $script:HeadroomPath = "<uv-tool-bin>\headroom.exe"
-        return
+    else {
+        Invoke-NativeCommand -FilePath "uv" -Arguments @("tool", "install", "--python", $PythonRequest, $HeadroomPackage)
+        if ($DryRun) {
+            $script:HeadroomPath = "<uv-tool-bin>\headroom.exe"
+        }
+        else {
+            $uvCommand = Get-ApplicationCommand "uv"
+            $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
+            $command = Get-ApplicationCommand "headroom"
+            if (-not $command -or (Split-Path -Parent $command.Source) -ne $toolBin) {
+                throw "Headroom installation did not create its command in the uv tool bin directory."
+            }
+            $script:HeadroomPath = $command.Source
+        }
     }
-    $uvCommand = Get-ApplicationCommand "uv"
-    $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
-    $command = Get-ApplicationCommand "headroom"
-    if (-not $command -or (Split-Path -Parent $command.Source) -ne $toolBin) {
-        throw "Headroom installation did not create its command in the uv tool bin directory."
-    }
-    $script:HeadroomPath = $command.Source
+    Invoke-NativeCommand -FilePath $script:HeadroomPath -Arguments @("--version")
+    Invoke-NativeCommand -FilePath $script:HeadroomPath -Arguments @("mcp", "install", "--help")
 }
 
 function Configure-HeadroomForSelectedAgents {
-    param([switch] $Check)
-    $arguments = @("--headroom", $script:HeadroomPath, "--include-connected-desktops")
-    if ($Check) { $arguments += "--check" }
-    foreach ($choice in @(
-        @("claude", $script:InstallClaudeCode), @("codex", $script:InstallCodex),
-        @("pi", ($script:InstallPi -and $script:PiAvailable)), @("opencode", $script:InstallOpenCode),
-        @("cline", $script:InstallCline), @("hermes", $script:InstallHermes),
-        @("dsh", $script:InstallDsh), @("grok", $script:InstallGrok),
-        @("muse", ($script:InstallMuse -and $script:MuseAvailable)), @("aider", $script:InstallAider)
-    )) {
-        if ($choice[1]) { $arguments += @("--agent", $choice[0]) }
+    # Headroom 0.40.0's OpenCode registrar uses the pre-v2 schema.
+    Write-Host "Headroom setup supports Claude Code, Codex, and Grok. Other selected agents are skipped."
+    $agents = @()
+    if ($script:InstallClaudeCode) { $agents += "claude" }
+    if ($script:InstallCodex) { $agents += "codex" }
+    if ($script:InstallGrok) { $agents += "grok" }
+    if ($agents.Count -eq 0) {
+        Write-Host "Headroom registration skipped: no supported agents selected."
+        return
     }
-    $helper = "<uv-tool-bin>\_fcc-configure-headroom.exe"
-    if (-not $DryRun) {
-        $command = Get-ApplicationCommand "_fcc-configure-headroom"
-        if (-not $command -or (Split-Path -Parent $command.Source) -ne $script:FccToolBin) {
-            throw "The verified FCC Headroom setup helper is unavailable. Rerun the installer."
+    $previousPath = $env:PATH
+    try {
+        # Upstream resolves the server executable from PATH.
+        $env:PATH = (Split-Path -Parent $script:HeadroomPath) + [IO.Path]::PathSeparator + $env:PATH
+        foreach ($agent in $agents) {
+            Invoke-NativeCommand -FilePath $script:HeadroomPath -Arguments @("mcp", "install", "--agent", $agent)
         }
-        $helper = $command.Source
     }
-    Invoke-NativeCommand -FilePath $helper -Arguments $arguments
+    finally {
+        $env:PATH = $previousPath
+    }
 }
 
 function Ensure-ClaudeCode {
@@ -1746,13 +1748,12 @@ function Configure-AndConfirmFreeClaudeCode {
     Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
     $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
     Start-InstallStep "FCC verification"
-    $script:FccToolBin = $toolBin
     $toolBinPath = ([IO.Path]::GetFullPath($toolBin)).TrimEnd(
         [IO.Path]::DirectorySeparatorChar,
         [IO.Path]::AltDirectorySeparatorChar
     )
     $installedCommands = @{}
-    foreach ($commandName in @("fcc-desktop", "fcc-server", "fcc-claude", "fcc-codex", "fcc-pi", "fcc-opencode", "fcc-cline", "fcc-hermes", "fcc-dsh", "fcc-grok", "fcc-muse", "fcc-aider", "fcc-doctor", "fcc-update.cmd", "_fcc-configure-headroom")) {
+    foreach ($commandName in @("fcc-desktop", "fcc-server", "fcc-claude", "fcc-codex", "fcc-pi", "fcc-opencode", "fcc-cline", "fcc-hermes", "fcc-dsh", "fcc-grok", "fcc-muse", "fcc-aider", "fcc-doctor", "fcc-update.cmd")) {
         $command = Get-ApplicationCommand $commandName
         if (-not $command) {
             throw "Free Claude Code installation did not create '$commandName'."
@@ -1952,7 +1953,7 @@ try {
     Write-Host "  Verify or install: $($selectedAgents -join ', ')."
     if ($VoiceLocal) { Write-Host "  Include local voice support." }
     if ($TorchBackend) { Write-Host "  PyTorch backend: $TorchBackend" }
-    if ($script:EnableRtkHeadroom) { Write-Host "  Configure RTK + Headroom for the selected agents and connected desktops." }
+    if ($script:EnableRtkHeadroom) { Write-Host "  Run RTK + Headroom setup for supported selected agents." }
     Write-Host "Press Ctrl+C to cancel. You can rerun the installer afterward."
     $script:InstallStageCount = $script:InstallSteps.Count - 1
 
@@ -1971,7 +1972,6 @@ try {
     if ($script:EnableRtkHeadroom) {
         Start-InstallStep "Headroom verification"
         Ensure-Headroom
-        Configure-HeadroomForSelectedAgents -Check
         Start-InstallStep "RTK configuration"
         Configure-RtkForSelectedAgents
         Start-InstallStep "Headroom configuration"

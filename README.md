@@ -64,7 +64,7 @@ Windows PowerShell:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1")))
 ```
 
-When prompted, choose at least one coding agent and optionally enable RTK + [Headroom](https://github.com/headroomlabs-ai/headroom) token optimization. You can review the installers before running them: [install.sh](scripts/install.sh) and [install.ps1](scripts/install.ps1).
+When prompted, choose at least one coding agent and optionally enable RTK + [Headroom](https://github.com/headroomlabs-ai/headroom) token optimization for supported agents. You can review the installers before running them: [install.sh](scripts/install.sh) and [install.ps1](scripts/install.ps1).
 
 ### 2. Start FCC
 

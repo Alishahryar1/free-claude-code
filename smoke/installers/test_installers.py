@@ -28,7 +28,6 @@ FCC_COMMANDS = (
     "fcc-aider",
     "fcc-doctor",
     "fcc-update",
-    "_fcc-configure-headroom",
     "fcc-init",
     "free-claude-code",
 )
@@ -51,8 +50,8 @@ def test_install_ps1_bundle_dry_run_includes_headroom(powershell_harness):
     result = powershell_harness.run("-RtkHeadroom", "-DryRun")
     assert result.returncode == 0, result.stderr
     assert "headroom-ai[mcp]==0.40.0" in result.stdout
-    assert "_fcc-configure-headroom" in result.stdout
-    assert "--check" in result.stdout
+    assert "mcp install --agent claude" in result.stdout
+    assert "_fcc-configure-headroom" not in result.stdout
     assert not any("headroom-ai" in call for call in powershell_harness.calls())
 
 
@@ -60,8 +59,8 @@ def test_install_sh_bundle_dry_run_includes_headroom(posix_harness):
     result = posix_harness.run("--rtk-headroom", "--dry-run")
     assert result.returncode == 0, result.stderr
     assert "headroom-ai[mcp]==0.40.0" in result.stdout
-    assert "_fcc-configure-headroom" in result.stdout
-    assert "--check" in result.stdout
+    assert "mcp install --agent claude" in result.stdout
+    assert "_fcc-configure-headroom" not in result.stdout
     assert not any("headroom-ai" in call for call in posix_harness.calls())
 
 
@@ -77,11 +76,7 @@ def _assert_headroom_bundle_workflow(harness, failure, reuse):
     result = harness.run(flag, fail_step=failure)
     calls = harness.calls()
     package = [call for call in calls if "headroom-ai[mcp]" in call]
-    checks = [
-        call
-        for call in calls
-        if call.startswith("_fcc-configure-headroom:") and "--headroom" in call
-    ]
+    setup = [call for call in calls if call.startswith("headroom:mcp install --agent")]
     rtk = [call for call in calls if call.startswith("rtk:init")]
     assert bool(package) is (not reuse)
     if failure:
@@ -94,25 +89,28 @@ def _assert_headroom_bundle_workflow(harness, failure, reuse):
         assert f"Failed: {stage}" in result.stdout
         assert flag in result.stdout.split("Retry:", 1)[1]
         if failure in {"headroom-install", "headroom-check"}:
-            assert not rtk
-            assert not any("--check" not in call for call in checks)
+            assert not rtk and not setup
         else:
-            assert rtk and len(checks) == 2
+            assert rtk and setup == [
+                "headroom:mcp install --agent claude",
+                "headroom:mcp install --agent codex",
+            ]
         offset = len(calls)
         result = harness.run(flag)
         assert result.returncode == 0, result.stdout + result.stderr
         calls = harness.calls()[offset:]
-        checks = [
-            call
-            for call in calls
-            if call.startswith("_fcc-configure-headroom:") and "--headroom" in call
+        setup = [
+            call for call in calls if call.startswith("headroom:mcp install --agent")
         ]
         rtk = [call for call in calls if call.startswith("rtk:init")]
     assert result.returncode == 0, result.stdout + result.stderr
-    assert len(checks) == 2 and "--check" in checks[0] and "--check" not in checks[1]
-    assert calls.index(checks[0]) < calls.index(rtk[0]) < calls.index(checks[1])
-    assert "--include-connected-desktops" in checks[1]
-    assert "--agent claude" in checks[1] and "--agent codex" in checks[1]
+    assert setup == [
+        f"headroom:mcp install --agent {agent}" for agent in ("claude", "codex", "grok")
+    ]
+    assert (
+        calls.index("headroom:--version") < calls.index(rtk[0]) < calls.index(setup[0])
+    )
+    assert not any("_fcc-configure-headroom" in call for call in calls)
 
 
 @pytest.mark.parametrize(
@@ -141,6 +139,51 @@ def test_install_ps1_headroom_bundle_workflow(powershell_harness, failure, reuse
 )
 def test_install_sh_headroom_bundle_workflow(posix_harness, failure, reuse):
     _assert_headroom_bundle_workflow(posix_harness, failure, reuse)
+
+
+@pytest.mark.parametrize("selected", ["claude", "codex", "grok", "unsupported"])
+def test_install_sh_headroom_native_selection(posix_harness, selected):
+    posix_harness.add_client("headroom")
+    flags = "\n".join(f"install_{name}=0" for name in ("claude", "codex", "grok"))
+    if selected != "unsupported":
+        flags += f"\ninstall_{selected}=1"
+    result = posix_harness.run_functions(
+        flags
+        + "\nheadroom_path=$(command -v headroom)\nconfigure_headroom_for_selected_agents"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert posix_harness.calls() == (
+        []
+        if selected == "unsupported"
+        else [f"headroom:mcp install --agent {selected}"]
+    )
+    if selected == "unsupported":
+        assert "skip" in result.stdout.lower()
+
+
+@pytest.mark.parametrize("selected", ["claude", "codex", "grok", "unsupported"])
+def test_install_ps1_headroom_native_selection(powershell_harness, selected):
+    powershell_harness.add_client("headroom")
+    variables = {
+        "claude": "InstallClaudeCode",
+        "codex": "InstallCodex",
+        "grok": "InstallGrok",
+    }
+    flags = "\n".join(f"$script:{name} = $false" for name in variables.values())
+    if selected != "unsupported":
+        flags += f"\n$script:{variables[selected]} = $true"
+    result = powershell_harness.run_functions(
+        flags
+        + '\n$script:HeadroomPath = (Get-ApplicationCommand "headroom").Source\nConfigure-HeadroomForSelectedAgents'
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert powershell_harness.calls() == (
+        []
+        if selected == "unsupported"
+        else [f"headroom:mcp install --agent {selected}"]
+    )
+    if selected == "unsupported":
+        assert "skip" in result.stdout.lower()
 
 
 def _repo_root() -> Path:
@@ -208,6 +251,10 @@ if [ "{name}" = "opencode" ] && [ "${{FCC_RUNNING_PHASE:-}}" = "opencode-plugin"
     else
         : > "$FCC_PROCESS_MARKER.probed"
     fi
+fi
+if [ "{name}" = "headroom" ]; then
+    [ "$FAIL_STEP" != "headroom-check" ] || exit 79
+    if [ "$FAIL_STEP" = "headroom-configure" ] && [ "${{4:-}}" = "codex" ]; then exit 80; fi
 fi
 if [ "$FAIL_STEP" = "{name}-verify" ]; then
     exit 31
@@ -298,8 +345,6 @@ if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-aider"
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-doctor"
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-update"
-    cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/_fcc-configure-headroom"
-    chmod +x "$tool_bin/_fcc-configure-headroom"
     if [ "$FAIL_STEP" != "fcc-missing" ]; then
         cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-codex"
     fi
@@ -700,12 +745,6 @@ chmod +x "$uv_bin/uv"
         """#!/bin/sh
 name=${0##*/}
 echo "$name:$*" >> "$CALL_LOG"
-if [ "$name" = "_fcc-configure-headroom" ] && [ "${1:-}" != "--version" ]; then
-    case " $* " in
-        *" --check "*) [ "$FAIL_STEP" != "headroom-check" ] || exit 79 ;;
-        *) [ "$FAIL_STEP" != "headroom-configure" ] || exit 80 ;;
-    esac
-fi
 if [ "$FAIL_STEP" = "fcc-verify" ]; then
     exit 36
 fi
@@ -2162,6 +2201,8 @@ if "{name}"=="opencode" if "%FCC_RUNNING_PHASE%"=="opencode-plugin" (
         type nul > "%FCC_PROCESS_MARKER%.probed"
     )
 )
+if "{name}"=="headroom" if "%FAIL_STEP%"=="headroom-check" exit /b 79
+if "{name}"=="headroom" if "%FAIL_STEP%"=="headroom-configure" if "%4"=="codex" exit /b 80
 if "%FAIL_STEP%"=="{name}-verify" exit /b 51
 {version_command}
 if "%1"=="--help" (
@@ -2226,7 +2267,6 @@ copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-muse.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-aider.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-doctor.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-update.cmd" >nul
-copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\_fcc-configure-headroom.cmd" >nul
 if not "%FAIL_STEP%"=="fcc-missing" copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-codex.cmd" >nul
 exit /b 0
 :install_aider
@@ -2408,8 +2448,6 @@ def powershell_harness(
         """@echo off
 for %%I in ("%~f0") do set "FCC_NAME=%%~nI"
 echo %FCC_NAME%:%*>>"%CALL_LOG%"
-if "%FCC_NAME%"=="_fcc-configure-headroom" if "%1"=="--headroom" if "%FAIL_STEP%"=="headroom-check" exit /b 79
-if "%FCC_NAME%"=="_fcc-configure-headroom" if "%1"=="--headroom" if "%FAIL_STEP%"=="headroom-configure" if not "%4"=="--check" exit /b 80
 if "%FAIL_STEP%"=="fcc-verify" exit /b 55
 if "%FCC_NAME%"=="fcc-desktop" if "%1"=="--export-icon" if "%FAIL_STEP%"=="desktop-icon-export" exit /b 56
 if "%FCC_NAME%"=="fcc-desktop" if "%1"=="--export-icon" (
@@ -5401,9 +5439,9 @@ def test_install_ps1_retry_command_preserves_literal_options_and_path(
     script = powershell_harness.root / "install ' & café.ps1"
     output = powershell_harness.root / "retry-options.json"
     script.write_text(
-        "param([switch] $VoiceLocal, [string] $TorchBackend, [switch] $Rtk)\n"
+        "param([switch] $VoiceLocal, [string] $TorchBackend, [switch] $RtkHeadroom)\n"
         "[IO.File]::WriteAllText($env:TEST_RETRY_OUTPUT, "
-        "(ConvertTo-Json @($VoiceLocal.IsPresent, $TorchBackend, $Rtk.IsPresent)), [Text.Encoding]::UTF8)\n",
+        "(ConvertTo-Json @($VoiceLocal.IsPresent, $TorchBackend, $RtkHeadroom.IsPresent)), [Text.Encoding]::UTF8)\n",
         encoding="utf-8-sig",
     )
     backend = "cu'130 $literal; &(literal)"

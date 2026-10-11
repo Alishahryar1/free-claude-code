@@ -19,7 +19,7 @@ UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 FCC_MACOS_BUNDLE_ID="io.github.alishahryar1.free-claude-code"
 FCC_MACOS_OWNER_FILE=".free-claude-code-owner"
 # Include retired entry points so updates reject older FCC processes before replacement.
-FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-doctor fcc-update _fcc-configure-headroom fcc-init free-claude-code"
+FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-doctor fcc-update fcc-init free-claude-code"
 
 dry_run=0
 voice_local=0
@@ -791,36 +791,36 @@ configure_rtk_for_selected_agents() {
 ensure_headroom() {
     if command -v headroom >/dev/null 2>&1; then
         headroom_path=$(command -v headroom)
-        printf 'Headroom already found on PATH; will verify without updating it.\n'
+        printf 'Headroom already found on PATH; verifying it without updating it.\n'
     else
         run uv tool install --python "$PYTHON_VERSION" "$HEADROOM_PACKAGE"
         if [ "$dry_run" -eq 1 ]; then
             headroom_path="<uv-tool-bin>/headroom"
-            return 0
+        else
+            add_uv_tool_bin_directory
+            headroom_path="$tool_bin/headroom"
+            [ -x "$headroom_path" ] || fail "Headroom installation did not create $headroom_path."
         fi
-        add_uv_tool_bin_directory
-        headroom_path="$tool_bin/headroom"
-        [ -x "$headroom_path" ] || fail "Headroom installation did not create $headroom_path."
     fi
+    run "$headroom_path" --version
+    run "$headroom_path" mcp install --help
 }
 
 configure_headroom_for_selected_agents() {
-    set -- "$@" --headroom "$headroom_path" --include-connected-desktops
-    [ "$install_claude" -eq 0 ] || set -- "$@" --agent claude
-    [ "$install_codex" -eq 0 ] || set -- "$@" --agent codex
-    if [ "$install_pi" -eq 1 ] && [ "$pi_available" -eq 1 ]; then set -- "$@" --agent pi; fi
-    [ "$install_opencode" -eq 0 ] || set -- "$@" --agent opencode
-    [ "$install_cline" -eq 0 ] || set -- "$@" --agent cline
-    [ "$install_hermes" -eq 0 ] || set -- "$@" --agent hermes
-    [ "$install_dsh" -eq 0 ] || set -- "$@" --agent dsh
-    [ "$install_grok" -eq 0 ] || set -- "$@" --agent grok
-    [ "$install_muse" -eq 0 ] || set -- "$@" --agent muse
-    [ "$install_aider" -eq 0 ] || set -- "$@" --agent aider
-    if [ "$dry_run" -eq 1 ]; then
-        print_command "<uv-tool-bin>/_fcc-configure-headroom" "$@"
-    else
-        run "$tool_bin/_fcc-configure-headroom" "$@"
+    # Headroom 0.40.0's OpenCode registrar uses the pre-v2 schema.
+    printf 'Headroom setup supports Claude Code, Codex, and Grok. Other selected agents are skipped.\n'
+    set --
+    [ "$install_claude" -eq 0 ] || set -- "$@" claude
+    [ "$install_codex" -eq 0 ] || set -- "$@" codex
+    [ "$install_grok" -eq 0 ] || set -- "$@" grok
+    if [ "$#" -eq 0 ]; then
+        printf 'Headroom registration skipped: no supported agents selected.\n'
+        return 0
     fi
+    for headroom_agent in "$@"; do
+        # Upstream resolves the server executable from PATH.
+        run env "PATH=$(dirname "$headroom_path"):$PATH" "$headroom_path" mcp install --agent "$headroom_agent"
+    done
 }
 
 ensure_claude() {
@@ -1525,7 +1525,7 @@ configure_and_verify_free_claude_code() {
     add_uv_tool_bin_directory
     start_install_step "FCC verification"
 
-    for command_name in fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-doctor fcc-update _fcc-configure-headroom; do
+    for command_name in fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-doctor fcc-update; do
         [ -x "$tool_bin/$command_name" ] || fail "Free Claude Code installation did not create $tool_bin/$command_name."
     done
 
@@ -1711,7 +1711,7 @@ done
 printf '\n'
 [ "$voice_local" -eq 0 ] || printf '  Include local voice support.\n'
 [ -z "$torch_backend" ] || printf '  PyTorch backend: %s\n' "$torch_backend"
-[ "$enable_rtk_headroom" -eq 0 ] || printf '  Configure RTK + Headroom for the selected agents and connected desktops.\n'
+[ "$enable_rtk_headroom" -eq 0 ] || printf '  Run RTK + Headroom setup for supported selected agents.\n'
 printf 'Press Ctrl+C to cancel. You can rerun the installer afterward.\n'
 pending_steps=$(printf 'uv\n%s\nFCC package\nPATH configuration\nFCC verification\n' "$pending_steps"
     [ "$(uname -s)" != Darwin ] || printf 'Desktop integration\n'
@@ -1766,7 +1766,6 @@ fi
 if [ "$enable_rtk_headroom" -eq 1 ]; then
     start_install_step "Headroom verification"
     ensure_headroom
-    configure_headroom_for_selected_agents --check
     start_install_step "RTK configuration"
     configure_rtk_for_selected_agents
     start_install_step "Headroom configuration"
