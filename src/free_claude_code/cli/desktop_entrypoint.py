@@ -15,7 +15,8 @@ def launch(argv: Sequence[str] | None = None) -> None:
     if len(args) == 2 and args[0] == "--export-icon":
         export_app_icon(Path(args[1]))
         return
-    if args:
+    auto_started = args == ("--auto-started",)
+    if args and not auto_started:
         print("Usage: fcc-desktop [--export-icon PATH]", file=sys.stderr)
         raise SystemExit(2)
     if sys.platform not in {"darwin", "win32"}:
@@ -26,4 +27,4 @@ def launch(argv: Sequence[str] | None = None) -> None:
 
     from free_claude_code.cli.desktop_tray import launch as launch_tray
 
-    launch_tray()
+    launch_tray(auto_started=auto_started)
