@@ -374,3 +374,6 @@ def close_browser_connections_before_server_teardown(
     yield
     if not page.is_closed():
         page.goto("about:blank")
+        # Context disposal can otherwise leak an unfinished route.fetch() error
+        # into the next test's Playwright call.
+        page.unroute_all(behavior="ignoreErrors")
