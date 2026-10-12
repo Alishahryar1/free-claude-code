@@ -1,6 +1,7 @@
 """Cheapest-provider resolution from OpenRouter per-model endpoint pricing."""
 
 import asyncio
+import math
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
@@ -44,9 +45,15 @@ def blended_price(pricing: object) -> float | None:
     try:
         prompt = float(pricing["prompt"])
         completion = float(pricing["completion"])
-    except KeyError, TypeError, ValueError:
+    except KeyError, TypeError, ValueError, OverflowError:
         return None
-    return (prompt + completion) / 2
+    if not (math.isfinite(prompt) and math.isfinite(completion)):
+        # NaN and infinities would poison the comparisons in
+        # cheapest_provider_name: every ordering test against them is
+        # false, so a non-finite first candidate would never be replaced.
+        return None
+    blended = (prompt + completion) / 2
+    return blended if math.isfinite(blended) else None
 
 
 def cheapest_provider_name(

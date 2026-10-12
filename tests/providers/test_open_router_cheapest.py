@@ -57,6 +57,38 @@ def test_blended_price_averages_prompt_and_completion():
     assert blended_price(None) is None
 
 
+@pytest.mark.parametrize(
+    "rate",
+    ["NaN", "Infinity", "-Infinity", "1e400", 10**400, float("nan")],
+)
+def test_blended_price_rejects_non_finite_rates(rate):
+    assert blended_price({"prompt": rate, "completion": rate}) is None
+
+
+def test_blended_price_rejects_a_blend_that_overflows():
+    assert blended_price({"prompt": 1e308, "completion": 1e308}) is None
+
+
+@pytest.mark.parametrize("rate", ["NaN", "Infinity", "-Infinity", 10**400])
+def test_unusable_endpoint_pricing_is_ignored(rate):
+    endpoints = [
+        {
+            "provider_name": "invalid",
+            "status": 0,
+            "pricing": {"prompt": rate, "completion": rate},
+        }
+    ]
+    assert cheapest_provider_name(endpoints) is None
+
+
+def test_non_finite_candidate_does_not_block_a_later_finite_one():
+    endpoints = [
+        endpoint("NaN-priced", "NaN", "NaN"),
+        endpoint("Finite", "0.0000001", "0.0000002"),
+    ]
+    assert cheapest_provider_name(endpoints) == "Finite"
+
+
 def test_cheapest_provider_skips_disrupted_endpoints():
     assert cheapest_provider_name(MIXED_ENDPOINTS) == "Cheap"
 
