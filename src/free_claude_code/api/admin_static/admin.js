@@ -1065,8 +1065,9 @@ class ModelListEditor {
     this.addEffort = this.effortSelect("inherit", "Fallback reasoning effort");
     this.addEffort.id = `field-${field.key}-effort`;
 
-    this.addButton = this.actionButton("+", "Add fallback", () => this.add());
-    this.addButton.className = "secondary-button model-list-action model-list-plus";
+    this.addButton = this.actionButton("", "Add fallback", () => this.add());
+    this.addButton.className = "secondary-button model-list-action";
+    this.addButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 6v12M6 12h12" stroke-linecap="round"/></svg>';
     addRow.append(addCombobox.element, this.addEffort, this.addButton);
 
     this.rows = document.createElement("div");
@@ -1154,8 +1155,13 @@ class ModelListEditor {
       row.addEventListener("dragover", (event) => {
         if (!this.draggedEntry || this.field.locked) return;
         event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
         this.clearDropIndicators();
+        const destination = this.dropDestination(event, row, entry);
+        if (destination === this.values.indexOf(this.draggedEntry)) {
+          event.dataTransfer.dropEffect = "none";
+          return;
+        }
+        event.dataTransfer.dropEffect = "move";
         row.dataset.dropPosition = this.dropAfter(event, row) ? "after" : "before";
       });
       row.addEventListener("dragleave", (event) => {
@@ -1165,10 +1171,9 @@ class ModelListEditor {
         if (!this.draggedEntry || this.field.locked) return;
         event.preventDefault();
         const moved = this.draggedEntry;
-        const source = this.values.indexOf(moved);
-        const insertion = this.values.indexOf(entry) + (this.dropAfter(event, row) ? 1 : 0);
+        const destination = this.dropDestination(event, row, entry);
         this.clearDrag();
-        this.move(moved, insertion - (source < insertion ? 1 : 0));
+        this.move(moved, destination);
       });
 
       const remove = this.actionButton("", `Remove ${entry.model}`, () => this.remove(index));
@@ -1204,6 +1209,12 @@ class ModelListEditor {
   dropAfter(event, row) {
     const bounds = row.getBoundingClientRect();
     return event.clientY >= bounds.top + bounds.height / 2;
+  }
+
+  dropDestination(event, row, entry) {
+    const source = this.values.indexOf(this.draggedEntry);
+    const insertion = this.values.indexOf(entry) + (this.dropAfter(event, row) ? 1 : 0);
+    return insertion - (source < insertion ? 1 : 0);
   }
 
   clearDropIndicators() {

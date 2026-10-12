@@ -149,9 +149,6 @@ def test_fallback_editor_adds_filters_reorders_and_removes_models(
     add_effort = editor.get_by_label("Fallback reasoning effort", exact=True)
     stored_value = editor.locator("#field-MODEL_FALLBACKS")
     expect(editor.locator(".model-list-row")).to_have_count(0)
-    expect(editor.get_by_role("button", name="Add fallback", exact=True)).to_have_text(
-        "+"
-    )
 
     add_input.fill("model-b")
     expect(
@@ -335,6 +332,7 @@ def test_fallback_drag_and_keyboard_reordering_save_model_effort_pairs(
         {"model": "groq/model-a", "reasoning": "low"},
         {"model": "groq/model-b", "reasoning": "client"},
         {"model": "groq/model-c", "reasoning": "max"},
+        {"model": "groq/model-d", "reasoning": "high"},
     ]
     for entry in entries:
         editor.locator("#field-MODEL_FALLBACKS-add").fill(entry["model"])
@@ -343,30 +341,103 @@ def test_fallback_drag_and_keyboard_reordering_save_model_effort_pairs(
         )
         editor.get_by_role("button", name="Add fallback", exact=True).click()
     rows = editor.locator(".model-list-row")
-    target_box = rows.nth(2).bounding_box()
+    target_box = rows.nth(3).bounding_box()
     assert target_box is not None
     editor.get_by_role("button", name="Move groq/model-a", exact=True).drag_to(
-        rows.nth(2), target_position={"x": 10, "y": target_box["height"] - 5}
+        rows.nth(3), target_position={"x": 10, "y": target_box["height"] - 5}
     )
-    assert _fallbacks(editor) == [entries[1], entries[2], entries[0]]
+    assert _fallbacks(editor) == [entries[1], entries[2], entries[3], entries[0]]
     handle = editor.get_by_role("button", name="Move groq/model-a", exact=True)
     handle.focus()
     handle.press("ArrowUp")
     expect(handle).to_be_focused()
-    assert _fallbacks(editor) == [entries[1], entries[0], entries[2]]
+    assert _fallbacks(editor) == [entries[1], entries[2], entries[0], entries[3]]
     handle.press("ArrowDown")
     handle.press("ArrowDown")  # The last row stays in place.
-    assert _fallbacks(editor) == [entries[1], entries[2], entries[0]]
+    assert _fallbacks(editor) == [entries[1], entries[2], entries[3], entries[0]]
     expect(page.locator("#field-MODEL_SONNET")).to_have_value("None")
     with page.expect_response("**/admin/api/config/apply") as saved:
         page.locator("#applyButton").click()
     assert saved.value.json()["applied"] is True
     page.reload()
     expect(page.locator("#messageArea")).to_have_text("")
-    assert _fallbacks(editor) == [entries[1], entries[2], entries[0]]
+    assert _fallbacks(editor) == [entries[1], entries[2], entries[3], entries[0]]
     expect(
         editor.get_by_role("combobox", name="Fallback model 1", exact=True)
     ).to_have_value("groq/model-b")
+
+
+def test_fallback_plus_and_trash_have_matching_shape_and_centered_icons(
+    page: Page, admin_base_url: str
+) -> None:
+    _open_models(page, admin_base_url)
+    editor = page.locator('.field[data-key="MODEL_FALLBACKS"]')
+    editor.locator("#field-MODEL_FALLBACKS-add").fill("groq/model-a")
+    plus = editor.get_by_role("button", name="Add fallback", exact=True)
+    plus.click()
+    trash = editor.get_by_role("button", name="Remove groq/model-a", exact=True)
+    shape = "el => { const s = getComputedStyle(el); return [s.width, s.height, s.borderRadius]; }"
+    assert plus.evaluate(shape) == trash.evaluate(shape)
+    for button in (plus, trash):
+        icon = button.locator("svg")
+        expect(icon).to_be_visible()
+        button_box, icon_box = button.bounding_box(), icon.bounding_box()
+        assert button_box is not None and icon_box is not None
+        for axis, size in (("x", "width"), ("y", "height")):
+            button_center = button_box[axis] + button_box[size] / 2
+            icon_center = icon_box[axis] + icon_box[size] / 2
+            assert abs(button_center - icon_center) <= 0.5
+
+
+def test_fallback_drag_indicators_only_offer_positions_that_change_order(
+    page: Page, admin_base_url: str
+) -> None:
+    page.set_viewport_size({"width": 1280, "height": 1100})
+    _open_models(page, admin_base_url)
+    editor = page.locator('.field[data-key="MODEL_FALLBACKS"]')
+    for suffix in ("a", "b", "c", "d"):
+        editor.locator("#field-MODEL_FALLBACKS-add").fill(f"groq/model-{suffix}")
+        editor.get_by_role("button", name="Add fallback", exact=True).click()
+    editor.scroll_into_view_if_needed()
+    original = _fallbacks(editor)
+    rows = editor.locator(".model-list-row")
+    handle = editor.get_by_role("button", name="Move groq/model-b", exact=True)
+    handle_box = handle.bounding_box()
+    assert handle_box is not None
+    x = handle_box["x"] + handle_box["width"] / 2
+    y = handle_box["y"] + handle_box["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 8, y + 8, steps=5)
+    expect(editor.locator(".model-list-row.dragging")).to_have_count(1)
+    indicators = editor.locator(".model-list-row[data-drop-position]")
+    try:
+        # Both halves of the source and the two neighboring insertion points
+        # retain the current order, so they should show no placement line.
+        for index, after in ((1, False), (1, True), (0, True), (2, False)):
+            bounds = rows.nth(index).bounding_box()
+            assert bounds is not None
+            page.mouse.move(
+                bounds["x"] + 10,
+                bounds["y"] + (bounds["height"] - 2 if after else 2),
+                steps=5,
+            )
+            expect(indicators).to_have_count(0)
+            assert _fallbacks(editor) == original
+        for index, position in ((3, "after"), (0, "before")):
+            bounds = rows.nth(index).bounding_box()
+            assert bounds is not None
+            page.mouse.move(
+                bounds["x"] + 10,
+                bounds["y"] + (bounds["height"] - 2 if position == "after" else 2),
+                steps=5,
+            )
+            expect(indicators).to_have_count(1)
+            expect(rows.nth(index)).to_have_attribute("data-drop-position", position)
+    finally:
+        page.mouse.up()
+    assert _fallbacks(editor) == [original[1], original[0], original[2], original[3]]
+    expect(indicators).to_have_count(0)
 
 
 @pytest.mark.parametrize("invalid_model", ["", "groq/model-b"])

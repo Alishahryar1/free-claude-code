@@ -709,12 +709,12 @@ button.startup-busy::before,
   width: 40px;
   height: 40px;
   padding: 0;
+  border-radius: var(--radius-sm);
   display: grid;
   place-items: center;
 }
 
 .model-list-action svg { width: 18px; height: 18px; }
-.model-list-plus { font-size: 24px; font-weight: 400; }
 
 .model-list-editor .model-list-drag {
   width: 20px;
