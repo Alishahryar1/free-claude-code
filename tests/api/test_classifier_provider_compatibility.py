@@ -12,6 +12,7 @@ from openai import APIError, AsyncOpenAI, BadRequestError
 from free_claude_code.api.handlers import MessagesHandler
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+from free_claude_code.config.reasoning import FALLBACK_REASONING_PREFERENCES
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
@@ -21,6 +22,10 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.reasoning import ReasoningCapability
 from free_claude_code.providers.open_router import OpenRouterProvider
+from tests.api.model_fallback_support import (
+    ControlledFallbackProvider,
+    execution_failure,
+)
 from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
@@ -173,18 +178,32 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("fallback_effort", [None, *FALLBACK_REASONING_PREFERENCES])
 @pytest.mark.parametrize(
     "reject_off",
     [False, True, "stream"],
     ids=["off-ignored", "off-rejected", "off-stream-rejected"],
 )
-async def test_classifier_mandatory_reasoning_still_returns_verdict(reject_off, stream):
+async def test_classifier_mandatory_reasoning_still_returns_verdict(
+    reject_off, stream, fallback_effort
+):
     provider = OpenRouterProvider(
         make_provider_config(api_key="test", base_url="https://openrouter.test/v1"),
         admission=immediate_admission(),
     )
     bodies = []
     streams = []
+    primary = ControlledFallbackProvider(failure=execution_failure("primary failed"))
+    settings = Settings()
+    request = classifier_request().model_copy(update={"stream": stream})
+    if fallback_effort is not None:
+        settings = Settings(
+            MODEL="nvidia_nim/primary",
+            MODEL_FALLBACKS=[
+                {"model": "open_router/dynamic-route", "reasoning": fallback_effort}
+            ],
+        )
+        request = request.model_copy(update={"model": "nvidia_nim/primary"})
 
     async def upstream(**body):
         bodies.append(body)
@@ -227,8 +246,12 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(reject_off, 
 
     try:
         handler = MessagesHandler(
-            Settings(),
-            provider_resolver=AsyncMock(side_effect=lambda _: provider),
+            settings,
+            provider_resolver=AsyncMock(
+                side_effect=lambda provider_id: (
+                    primary if provider_id == "nvidia_nim" else provider
+                )
+            ),
             web_tools=StubWebToolsClient(),
         )
         with patch.object(
@@ -236,9 +259,7 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(reject_off, 
             "create",
             new=AsyncMock(side_effect=upstream),
         ):
-            response = await handler.create(
-                classifier_request().model_copy(update={"stream": stream})
-            )
+            response = await handler.create(request)
             assert isinstance(response, (JSONResponse, StreamingResponse))
             assert response.status_code == 200
             if stream:

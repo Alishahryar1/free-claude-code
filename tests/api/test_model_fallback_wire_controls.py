@@ -3,11 +3,15 @@
 import json
 from unittest.mock import AsyncMock
 
+import httpx
 import httpx2
 import pytest
+from fastapi.responses import JSONResponse
 
+from free_claude_code.api.handlers import MessagesHandler
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.application.routing import ModelRouter
+from free_claude_code.config.reasoning import FALLBACK_REASONING_PREFERENCES
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -19,6 +23,7 @@ from tests.api.model_fallback_support import (
     ControlledFallbackProvider,
     execution_failure,
 )
+from tests.api.test_classifier_provider_compatibility import classifier_request
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -27,6 +32,58 @@ from tests.api.test_delivered_stream_recovery import (
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.support import immediate_admission
 from tests.providers.test_custom_provider import completion, definition, provider
+from tests.web_tools_support import StubWebToolsClient
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("effort", FALLBACK_REASONING_PREFERENCES)
+async def test_classifier_fallback_keeps_manual_thinking_compatible(effort):
+    captured = []
+
+    def reply(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=completion("anthropic_messages").replace(
+                "Hello", "<severity>0</severity>"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    configuration = definition(
+        api_format="anthropic_messages", reasoning_format="messages_manual"
+    )
+    fallback = provider(configuration, messages_handler=reply)
+    primary = ControlledFallbackProvider(failure=execution_failure("primary failed"))
+    settings = Settings(
+        MODEL="nvidia_nim/primary",
+        custom_providers=(configuration,),
+        MODEL_FALLBACKS=[
+            {"model": f"{configuration.provider_id}/backup", "reasoning": effort}
+        ],
+    )
+    handler = MessagesHandler(
+        settings,
+        provider_resolver=AsyncMock(
+            side_effect=lambda provider_id: (
+                primary if provider_id == "nvidia_nim" else fallback
+            )
+        ),
+        web_tools=StubWebToolsClient(),
+    )
+    try:
+        response = await handler.create(
+            classifier_request().model_copy(update={"model": "nvidia_nim/primary"})
+        )
+        assert isinstance(response, JSONResponse) and response.status_code == 200
+        assert json.loads(bytes(response.body))["content"] == [
+            {"type": "text", "text": "<severity>0</severity>"}
+        ]
+        assert len(captured) == 1
+        assert captured[0]["thinking"] == {"type": "disabled"}
+        assert captured[0]["max_tokens"] > 64
+    finally:
+        await fallback.cleanup()
 
 
 @pytest.mark.asyncio

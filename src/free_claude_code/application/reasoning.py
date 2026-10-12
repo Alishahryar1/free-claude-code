@@ -47,6 +47,9 @@ def resolve_fallback_reasoning(
 ) -> ReasoningPolicy:
     """Resolve a candidate from original intent, never a previous fallback."""
 
+    # Classifier requests keep the handler's tolerant policy on every candidate.
+    if original.control is ReasoningControl.PREFER_OFF:
+        return original
     if preference is ReasoningPreference.INHERIT:
         return original
     if preference is ReasoningPreference.CLIENT:
