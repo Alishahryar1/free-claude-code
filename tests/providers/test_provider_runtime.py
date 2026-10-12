@@ -30,6 +30,7 @@ from free_claude_code.config.provider_catalog import (
     OLLAMA_CLOUD_DEFAULT_BASE,
     OPPER_DEFAULT_BASE,
     ORCAROUTER_DEFAULT_BASE,
+    POE_DEFAULT_BASE,
     POOLSIDE_DEFAULT_BASE,
     PROVIDER_CATALOG,
     QWENCLOUD_CODING_DEFAULT_BASE,
@@ -134,6 +135,7 @@ def _make_settings(**overrides):
     mock.orcarouter_api_key = "test_orcarouter_key"
     mock.atlascloud_api_key = "test_atlascloud_key"
     mock.xkiro_api_key = "test_xkiro_key"
+    mock.poe_api_key = "test_poe_key"
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -186,6 +188,7 @@ def _make_settings(**overrides):
     mock.orcarouter_proxy = None
     mock.atlascloud_proxy = None
     mock.xkiro_proxy = None
+    mock.poe_proxy = None
     mock.kilo_api_key = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
@@ -445,6 +448,35 @@ async def test_atlascloud_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.proxy_attr == "atlascloud_proxy"
     assert config.api_key == "atlascloud-token"
     assert config.base_url == ATLASCLOUD_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
+async def test_poe_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["poe"]
+    settings = _make_settings(
+        poe_api_key="poe-token",
+        poe_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "poe",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "Poe"
+    assert descriptor.credential_env == "POE_API_KEY"
+    assert descriptor.credential_attr == "poe_api_key"
+    assert descriptor.credential_url == "https://poe.com/api/keys"
+    assert descriptor.default_base_url == POE_DEFAULT_BASE
+    assert descriptor.base_url_attr is None
+    assert descriptor.proxy_attr == "poe_proxy"
+    assert config.api_key == "poe-token"
+    assert config.base_url == POE_DEFAULT_BASE
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
@@ -1207,6 +1239,7 @@ async def test_create_provider_instantiates_each_builtin():
         "orcarouter": OpenAIChatProvider,
         "atlascloud": OpenAIChatProvider,
         "xkiro": OpenAIChatProvider,
+        "poe": OpenAIChatProvider,
         "opencode_go": OpenCodeProvider,
         "vercel": OpenAIChatProvider,
         "bedrock": OpenAIChatProvider,

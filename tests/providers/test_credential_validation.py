@@ -43,6 +43,12 @@ CASES = [
     ("scaleway", "https://api.scaleway.ai/v1/models", {"data": []}, 401),
     ("opper", "https://api.opper.ai/v3/compat/models", {"data": []}, 401),
     (
+        "poe",
+        "https://api.poe.com/usage/current_balance",
+        {"current_point_balance": 300},
+        401,
+    ),
+    (
         "vercel",
         "https://ai-gateway.vercel.sh/v1/credits",
         {"balance": "0", "total_used": "1"},
