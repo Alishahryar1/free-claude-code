@@ -43,7 +43,8 @@ def notice(page, admin_base_url, request):
     page.goto(f"{admin_base_url}/admin/integrations")
     button = page.locator(f"#{button_id}")
     message = page.locator(f"#{message_id}")
-    expect(button).to_have_text("Disconnect")
+    # Initial page readiness can exceed five seconds on shared Windows runners.
+    expect(button).to_have_text("Disconnect", timeout=10_000)
 
     def observe(phase, changed=False, instance="first"):
         progress.update(

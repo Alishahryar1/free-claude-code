@@ -1925,7 +1925,7 @@ def test_first_http_sync_failure_recovers_without_reloading(
     page.goto(f"{admin_base_url}/admin/code")
     expect(
         page.get_by_role("button", name="New code session", exact=True)
-    ).to_be_enabled()
+    ).to_be_enabled(timeout=10_000)
     assert page.evaluate("window.failedCodeLoad")
     expect(page.locator("#codeNotice")).to_be_hidden()
 
