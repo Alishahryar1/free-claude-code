@@ -587,3 +587,38 @@ def test_anthropic_standard_modal_groups_key_workspace_and_proxy(
         {"value": "test-api-key"}
     ]
     assert submissions[0]["values"]["ANTHROPIC_WORKSPACE_ID"] == "wrkspc_test"
+
+
+def test_openrouter_cheapest_provider_controls_render_and_persist(
+    page: Page,
+    admin_base_url: str,
+) -> None:
+    _open_admin(page, admin_base_url, {"width": 1280, "height": 900})
+    dialog = open_provider(page, "open_router")
+
+    quantizations = dialog.locator("#field-OPENROUTER_QUANTIZATIONS")
+    expect(quantizations).to_have_attribute("multiple", "")
+    expect(quantizations.locator("option")).to_have_count(8)
+    for value in ("fp4", "fp6", "fp8", "fp16", "bf16", "int4", "int8", "unknown"):
+        expect(quantizations.locator(f"option[value={value}]")).to_have_count(1)
+    expect(quantizations.locator("option:checked")).to_have_count(0)
+
+    cheapest = dialog.locator("#field-OPENROUTER_USE_CHEAPEST_PROVIDER")
+    expect(cheapest).not_to_be_checked()
+
+    quantizations.select_option(["fp8", "bf16"])
+    cheapest.check()
+    with page.expect_response("**/admin/api/config/apply") as saved:
+        dialog.get_by_role("button", name="Save", exact=True).click()
+    assert saved.value.json()["applied"] is True
+    values = saved.value.request.post_data_json["values"]
+    assert values["OPENROUTER_QUANTIZATIONS"] == "fp8,bf16"
+    assert values["OPENROUTER_USE_CHEAPEST_PROVIDER"] == "true"
+
+    page.reload()
+    expect(page.locator("#messageArea")).to_have_text("")
+    dialog = open_provider(page, "open_router")
+    expect(dialog.locator("#field-OPENROUTER_QUANTIZATIONS")).to_have_values(
+        ["fp8", "bf16"]
+    )
+    expect(dialog.locator("#field-OPENROUTER_USE_CHEAPEST_PROVIDER")).to_be_checked()

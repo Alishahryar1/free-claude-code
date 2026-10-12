@@ -11,6 +11,10 @@ import pytest
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+from free_claude_code.config.open_router_preferences import (
+    OpenRouterProviderPreferences,
+)
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
@@ -19,9 +23,12 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.failures import FailureKind
 from free_claude_code.core.model_capabilities import ModelInputModality
+from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.failure_policy import classify_provider_failure
 from free_claude_code.providers.open_router import OpenRouterProvider
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
+from free_claude_code.providers.runtime import ProviderRuntime
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
@@ -158,6 +165,155 @@ def open_router_provider():
         ),
         admission=immediate_admission(),
     )
+
+
+def _routed_provider(**preferences):
+    return OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        provider_preferences=OpenRouterProviderPreferences.model_validate(preferences),
+        admission=immediate_admission(),
+    )
+
+
+def test_configured_preferences_become_the_provider_request_field():
+    provider = _routed_provider(
+        only=["DeepInfra"], quantizations=["fp8"], allow_fallbacks=False
+    )
+
+    body = provider._chat._build_request_body(make_request())
+
+    assert body["provider"] == {
+        "only": ["DeepInfra"],
+        "quantizations": ["fp8"],
+        "allow_fallbacks": False,
+    }
+
+
+def test_absent_preferences_omit_the_provider_request_field(open_router_provider):
+    body = open_router_provider._chat._build_request_body(make_request())
+
+    assert "provider" not in body
+
+
+def test_preferences_serialize_documented_object_shapes():
+    provider = _routed_provider(
+        sort={"by": "price", "partition": "none"},
+        max_price={"prompt": 0.25, "completion": 1.25},
+        preferred_max_latency={"p90": 5.0},
+        zdr=True,
+    )
+
+    body = provider._chat._build_request_body(make_request())
+
+    assert body["provider"] == {
+        "sort": {"by": "price", "partition": "none"},
+        "max_price": {"prompt": 0.25, "completion": 1.25},
+        "preferred_max_latency": {"p90": 5.0},
+        "zdr": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_settings_preferences_reach_the_built_provider_request():
+    settings = Settings.model_validate(
+        {
+            "OPENROUTER_API_KEY": "synthetic-key",
+            "OPENROUTER_PROVIDER_PREFERENCES": json.dumps(
+                {"only": ["DeepInfra"], "allow_fallbacks": False}
+            ),
+        }
+    )
+    runtime = ProviderRuntime(
+        settings,
+        ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+    )
+    try:
+        provider = await runtime.resolve_provider("open_router", 1)
+        assert isinstance(provider, OpenRouterProvider)
+
+        body = provider._chat._build_request_body(make_request())
+
+        assert body["provider"] == {"only": ["DeepInfra"], "allow_fallbacks": False}
+    finally:
+        await runtime.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_settings_cheapest_mode_pins_the_streamed_request():
+    endpoints_payload = {
+        "data": {
+            "endpoints": [
+                {
+                    "provider_name": "Expensive",
+                    "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+                    "quantization": "fp16",
+                    "status": 0,
+                },
+                {
+                    "provider_name": "Cheap",
+                    "pricing": {"prompt": "0.0000001", "completion": "0.0000002"},
+                    "quantization": "fp8",
+                    "status": 0,
+                },
+                {
+                    "provider_name": "Down",
+                    "pricing": {"prompt": "0.00000005", "completion": "0.0000001"},
+                    "quantization": "fp8",
+                    "status": -2,
+                },
+            ]
+        }
+    }
+    settings = Settings.model_validate(
+        {
+            "OPENROUTER_API_KEY": "synthetic-key",
+            "OPENROUTER_USE_CHEAPEST_PROVIDER": "true",
+            "OPENROUTER_QUANTIZATIONS": "fp8",
+        }
+    )
+    runtime = ProviderRuntime(
+        settings,
+        ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+    )
+    try:
+        provider = await runtime.resolve_provider("open_router", 1)
+        assert isinstance(provider, OpenRouterProvider)
+        stream = AsyncStream([_chunk(content="done", finish_reason="stop")])
+        with (
+            patch.object(
+                provider._client,
+                "get",
+                new_callable=AsyncMock,
+                return_value=endpoints_payload,
+            ) as get_mock,
+            patch.object(
+                provider._client.chat.completions,
+                "create",
+                new_callable=AsyncMock,
+                return_value=stream,
+            ) as create_mock,
+        ):
+            events = [
+                event
+                async for event in provider.stream_messages(
+                    make_messages_request("moonshotai/kimi-k2.6")
+                )
+            ]
+
+        assert text_content(parse_sse_text("".join(events))) == "done"
+        get_mock.assert_awaited_once_with(
+            "/models/moonshotai/kimi-k2.6/endpoints", cast_to=object
+        )
+        assert create_mock.call_args.kwargs["provider"] == {
+            "only": ["Cheap"],
+            "allow_fallbacks": False,
+            "quantizations": ["fp8"],
+        }
+    finally:
+        await runtime.cleanup()
 
 
 def _chunk(

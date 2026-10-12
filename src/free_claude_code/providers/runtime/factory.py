@@ -65,7 +65,13 @@ def _load_open_router() -> ProviderFactory:
         settings: Settings,
         admission: ProviderAdmissionController,
     ) -> BaseProvider:
-        return OpenRouterProvider(config, admission=admission)
+        return OpenRouterProvider(
+            config,
+            provider_preferences=settings.open_router_provider_preferences,
+            quantizations=settings.open_router_quantizations,
+            use_cheapest_provider=settings.open_router_use_cheapest_provider,
+            admission=admission,
+        )
 
     return construct
 
