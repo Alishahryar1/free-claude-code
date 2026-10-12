@@ -224,8 +224,35 @@ NIM at all, or at `ollama/<model>` for a zero-quota local path (Ollama is reacha
 this machine at `http://localhost:11434`).
 
 Note `/models` is not by itself proof of a working credential — it can return 200 with
-no key at all (observed on NVIDIA NIM and QwenCloud). Confirm a chosen fallback with a
-real `/chat/completions` before relying on it.
+no key at all (observed on NVIDIA NIM and QwenCloud). The general form of that trap is
+the three-gate model below.
+
+## Provider validation model
+
+A provider is validated by three independent gates. Passing an earlier gate says nothing
+about a later one, and each failure mode can look identical from the Admin UI.
+
+| Gate | Question | Evidence | Failure implies |
+| --- | --- | --- | --- |
+| 1. Configured | Is a credential present? | local configuration validation only | missing or empty credential |
+| 2. Discoverable | Does the provider respond to model discovery? | a successful `/models` request | connectivity, endpoint, provider, or credential issue (discoverable does **not** guarantee inference access) |
+| 3. Completion-capable | Can the *target* model generate completions? | a successful `/chat/completions` request for the intended model | model entitlement, availability, billing, routing, quota, or inference-layer issue |
+
+**Diagnostic rule:** Configured ≠ Discoverable ≠ Completion-capable. Treat a provider as
+verified only after **Gate 3** succeeds for the specific model intended for production use.
+
+The model generalises beyond Groq:
+
+- A provider can pass Gate 1 and fail Gate 2.
+- A provider can pass Gate 2 and fail Gate 3.
+- One model can fail Gate 3 while another model on the same account passes.
+- A runtime can look healthy while serving stale configuration until an apply or restart —
+  configuration state, discovery state, and runtime state are separate concerns and should
+  be validated independently.
+
+For FCC specifically, Gates 1–2 surface as the Admin Providers tab ("Configured" plus an
+"N models available" count), while Gate 3 has no indicator at all and needs a real request.
+That is why a green provider list is a starting point, not proof.
 
 ## Provider retry budget
 
