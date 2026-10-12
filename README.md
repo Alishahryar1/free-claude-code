@@ -401,6 +401,9 @@ are configuring.
 
 Configure integrations from **Admin UI → Messaging**, then click **Apply**.
 
+Discord and Telegram preserve line spacing inside Markdown code fences, including
+`~~~` fences and longer backtick fences used to show triple backticks as code.
+
 <details>
 <summary><strong>Discord bot</strong></summary>
 

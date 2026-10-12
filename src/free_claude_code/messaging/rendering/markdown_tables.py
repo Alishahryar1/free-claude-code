@@ -3,7 +3,7 @@
 import re
 
 _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
-_FENCE_RE = re.compile(r"^\s*```")
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _is_gfm_table_header_line(line: str) -> bool:
@@ -23,17 +23,33 @@ def normalize_gfm_tables(text: str) -> str:
         return text
 
     out_lines: list[str] = []
-    in_fence = False
+    fence_marker = ""
+    fence_length = 0
 
     for idx, line in enumerate(lines):
-        if _FENCE_RE.match(line):
-            in_fence = not in_fence
+        fence_match = _FENCE_RE.match(line)
+        if fence_marker:
+            if fence_match:
+                marker, suffix = fence_match.groups()
+                if (
+                    marker[0] == fence_marker
+                    and len(marker) >= fence_length
+                    and not suffix.strip(" \t")
+                ):
+                    fence_marker = ""
             out_lines.append(line)
             continue
+        if fence_match:
+            marker, suffix = fence_match.groups()
+            # Backtick fence info strings cannot themselves contain backticks.
+            if marker[0] == "~" or "`" not in suffix:
+                fence_marker = marker[0]
+                fence_length = len(marker)
+                out_lines.append(line)
+                continue
 
         if (
-            not in_fence
-            and idx + 1 < len(lines)
+            idx + 1 < len(lines)
             and _is_gfm_table_header_line(line)
             and _TABLE_SEP_RE.match(lines[idx + 1])
             and out_lines
