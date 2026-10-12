@@ -38,10 +38,10 @@ from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
 
 
-def test_builtin_effort_is_medium_with_inherited_tier_efforts():
+def test_builtin_effort_is_from_client_with_inherited_tier_efforts():
     snapshot = compose_settings_snapshot({}, {})
     settings = snapshot.settings
-    assert settings.reasoning_policy is ReasoningPreference.MEDIUM
+    assert settings.reasoning_policy is ReasoningPreference.CLIENT
     assert snapshot.sources["reasoning_policy"] is ConfigSource.DEFAULT
     router = ModelRouter(settings)
     for tier in ("fable", "opus", "sonnet", "haiku"):
@@ -49,11 +49,11 @@ def test_builtin_effort_is_medium_with_inherited_tier_efforts():
         assert getattr(settings, f"reasoning_{tier}") is ReasoningPreference.INHERIT
         route = router.resolve(f"claude-{tier}-test")
         assert route.primary.provider_model_ref == settings.model
-        assert route.reasoning_preference is ReasoningPreference.MEDIUM
+        assert route.reasoning_preference is ReasoningPreference.CLIENT
 
 
 @pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
-@pytest.mark.parametrize("effort", ["client", "off", "high"])
+@pytest.mark.parametrize("effort", ["client", "off", "medium", "high"])
 def test_explicit_default_effort_is_retained(source, effort):
     values = {"REASONING_POLICY": effort}
     snapshot = compose_settings_snapshot(

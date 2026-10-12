@@ -47,7 +47,7 @@ def test_model_routing_pairs_five_models_with_effort_and_defaults(
         model = group.locator(f"#field-{model_key}")
         effort = group.locator(f"#field-{effort_key}")
         expect(model).to_be_visible()
-        expect(effort).to_have_value("medium" if route == "Default" else "inherit")
+        expect(effort).to_have_value("client" if route == "Default" else "inherit")
         if route != "Default":
             expect(model).to_have_value("None")
             expect(effort).to_be_enabled()
@@ -70,7 +70,7 @@ def test_model_routing_saves_independent_model_and_effort_choices(
     page: Page, admin_base_url: str
 ) -> None:
     _open_models(page, admin_base_url)
-    page.locator("#field-REASONING_POLICY").select_option("client")
+    page.locator("#field-REASONING_POLICY").select_option("medium")
     opus = page.get_by_role("group", name="Opus model and effort", exact=True)
     expect(opus.locator("#field-MODEL_OPUS")).to_have_value("None")
     opus.locator("#field-REASONING_OPUS").select_option("high")
@@ -87,7 +87,7 @@ def test_model_routing_saves_independent_model_and_effort_choices(
     payload = saved.value.request.post_data_json
     assert isinstance(payload, dict)
     values = payload["values"]
-    assert values["REASONING_POLICY"] == "client"
+    assert values["REASONING_POLICY"] == "medium"
     assert values["REASONING_OPUS"] == "high"
     assert "MODEL_OPUS" not in values
     assert values["MODEL_SONNET"] == "open_router/vendor/model-b"
@@ -98,7 +98,7 @@ def test_model_routing_saves_independent_model_and_effort_choices(
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     page.reload()
     expect(page.locator("#messageArea")).to_have_text("")
-    expect(page.locator("#field-REASONING_POLICY")).to_have_value("client")
+    expect(page.locator("#field-REASONING_POLICY")).to_have_value("medium")
     expect(opus.locator("#field-MODEL_OPUS")).to_have_value("None")
     expect(opus.locator("#field-REASONING_OPUS")).to_have_value("high")
     expect(sonnet.locator("#field-MODEL_SONNET")).to_have_value(

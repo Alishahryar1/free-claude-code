@@ -561,7 +561,7 @@ def test_create_response_preserves_muse_code_request_shape() -> None:
         ],
     }
     provider = FakeProvider(_responses_text_stream("done"))
-    app = create_test_app(Settings(REASONING_POLICY="client"))
+    app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
         TestClient(app) as client,
@@ -722,7 +722,7 @@ def test_create_response_preserves_and_resolves_reasoning_effort(
     expected_policy: ReasoningPolicy,
 ) -> None:
     provider = FakeProvider(_responses_text_stream("done"))
-    app = create_test_app(Settings(REASONING_POLICY="client"))
+    app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
         TestClient(app) as client,

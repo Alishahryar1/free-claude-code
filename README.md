@@ -349,7 +349,7 @@ Choose a model and effort in the bottom row, then click **+**. Edit either dropd
 <details>
 <summary><strong>Reasoning control</strong></summary>
 
-Open **Admin UI → Model Config → Model Routing** and choose an effort beside each model. **Default Effort** starts at **Medium**. Fable, Opus, Sonnet, and Haiku start at **Inherit**.
+Open **Admin UI → Model Config → Model Routing** and choose an effort beside each model. **Default Effort** starts at **From client**. Fable, Opus, Sonnet, and Haiku start at **Inherit**.
 
 | Selection | Behavior |
 | --- | --- |

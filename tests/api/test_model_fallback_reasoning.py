@@ -20,7 +20,10 @@ from tests.api.model_fallback_support import (
 
 
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
-def test_medium_default_reaches_primary_and_inherited_fallback(wire_api):
+@pytest.mark.parametrize("client_effort", [None, "high"])
+def test_from_client_default_reaches_primary_and_inherited_fallback(
+    wire_api, client_effort
+):
     primary = ControlledFallbackProvider(failure=execution_failure("primary failed"))
     fallback = ControlledFallbackProvider(text="fallback worked")
     settings = Settings(
@@ -28,14 +31,18 @@ def test_medium_default_reaches_primary_and_inherited_fallback(wire_api):
         MODEL_FALLBACKS=[{"model": "groq/fallback-model"}],
     )
     payload = (
-        messages_payload(stream=True) | {"output_config": {"effort": "high"}}
-        if wire_api == "messages"
-        else responses_payload() | {"reasoning": {"effort": "high"}}
+        messages_payload(stream=True) if wire_api == "messages" else responses_payload()
     )
+    if client_effort is not None:
+        payload["output_config" if wire_api == "messages" else "reasoning"] = {
+            "effort": client_effort
+        }
     with fallback_client(primary, fallback, settings=settings) as client:
         response = client.post(f"/v1/{wire_api}", json=payload)
     assert response.status_code == 200 and "fallback worked" in response.text
-    expected = ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM)
+    expected = ReasoningPolicy(
+        effort=ReasoningEffort(client_effort) if client_effort is not None else None
+    )
     assert primary.reasoning_policies == [expected]
     assert fallback.reasoning_policies == [expected]
 
@@ -105,7 +112,6 @@ def test_fallback_has_its_own_policy_and_replaces_client_controls(wire_api, effo
     fallback = ControlledFallbackProvider(text="fallback worked")
     settings = Settings(
         MODEL="nvidia_nim/primary-model",
-        REASONING_POLICY="client",
         MODEL_FALLBACKS=[{"model": "groq/fallback-model", "reasoning": effort}],
     )
     if wire_api == "messages":

@@ -803,7 +803,7 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
     )
     assert reasoning_policy["section"] == "models"
     assert reasoning_policy["type"] == "select"
-    assert reasoning_policy["value"] == "medium"
+    assert reasoning_policy["value"] == "client"
     assert reasoning_policy["options"] == [
         {"value": "off", "label": "Off"},
         {"value": "client", "label": "From client"},

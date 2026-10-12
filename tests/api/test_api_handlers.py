@@ -22,7 +22,7 @@ from free_claude_code.core.anthropic.models import (
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
-from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.web_tools_support import StubWebToolsClient
 
@@ -151,9 +151,7 @@ async def test_messages_handler_passes_routed_request_and_stream_metadata() -> N
     assert provider.stream_kwargs[0]["input_tokens"] > 0
     assert provider.stream_kwargs[0]["request_id"].startswith("req_")
     assert provider.stream_kwargs[0]["response_model"] == "nvidia_nim/test-model"
-    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.on(
-        effort=ReasoningEffort.MEDIUM
-    )
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
     assert len(provider.requests) == 1
 
 
@@ -531,12 +529,8 @@ async def test_messages_handler_preserves_thinking_for_non_classifier() -> None:
         assert isinstance(response, StreamingResponse)
         await _streaming_body_text(response)
 
-    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.on(
-        effort=ReasoningEffort.MEDIUM
-    )
-    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.on(
-        effort=ReasoningEffort.MEDIUM
-    )
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
     assert provider.requests[0].stop_sequences == ["</severity>"]
     assert (
         _trace_events(
@@ -727,12 +721,8 @@ async def test_responses_handler_does_not_apply_safety_classifier_policy() -> No
         assert isinstance(response, StreamingResponse)
         await _streaming_body_text(response)
 
-    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.on(
-        effort=ReasoningEffort.MEDIUM
-    )
-    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.on(
-        effort=ReasoningEffort.MEDIUM
-    )
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
     assert (
         _trace_events(
             trace_mock,
