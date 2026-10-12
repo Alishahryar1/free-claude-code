@@ -5,12 +5,12 @@ import math
 import random
 import time
 import uuid
-from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
+from functools import partial
 from typing import TypeVar
 
 from loguru import logger
@@ -20,6 +20,7 @@ from free_claude_code.core.stream_delivery import (
     current_stream_delivery,
 )
 from free_claude_code.core.trace import trace_event
+from free_claude_code.providers.admission_capacity import ProviderCapacityLimiter
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.failure_policy import (
     ProviderFailureOverride,
@@ -412,7 +413,7 @@ class ProviderAttempt:
 
 
 class ProviderAdmissionController:
-    """Coordinate one provider's rate, concurrency, and recovery state.
+    """Coordinate one credential's recovery within a provider capacity budget.
 
     Normal attempts pass through a strict sliding window and concurrency bulkhead.
     The first shared transient failure opens one recovery episode. Exactly one
@@ -431,6 +432,7 @@ class ProviderAdmissionController:
         base_delay: float = DEFAULT_UPSTREAM_BASE_DELAY,
         max_delay: float = DEFAULT_UPSTREAM_MAX_DELAY,
         jitter: float = DEFAULT_UPSTREAM_JITTER,
+        capacity: ProviderCapacityLimiter | None = None,
     ) -> None:
         limits = ProviderAdmissionLimits(rate_limit, rate_window, max_concurrency)
         if max_attempts <= 0:
@@ -447,11 +449,7 @@ class ProviderAdmissionController:
         self._base_delay = base_delay
         self._max_delay = max_delay
         self._jitter = jitter
-        self._limits = limits
-        self._admission_times: deque[float] = deque()
-        self._last_discarded_at: float | None = None
-        self._active_attempts = 0
-        self._capacity_changed = asyncio.Event()
+        self._capacity = capacity or ProviderCapacityLimiter(limits)
         self._condition = asyncio.Condition()
         self._episode: _RecoveryEpisode | None = None
         self._next_generation = 1
@@ -497,7 +495,9 @@ class ProviderAdmissionController:
             slot_acquired = False
             claim: _AttemptClaim | None = None
             try:
-                admitted = await self._acquire_capacity(execution, permit)
+                admitted = await self._capacity.acquire(
+                    partial(self._permit_is_current, execution, permit)
+                )
                 if not admitted:
                     await self._abandon_probe_permit(execution, permit)
                     continue
@@ -896,60 +896,14 @@ class ProviderAdmissionController:
 
     def reconfigure(self, limits: ProviderAdmissionLimits) -> None:
         """Update capacity without resetting occupancy, history, or recovery."""
-        if limits != self._limits:
-            self._limits = limits
-            self._wake_capacity()
-
-    def _wake_capacity(self) -> None:
-        changed = self._capacity_changed
-        self._capacity_changed = asyncio.Event()
-        changed.set()
+        self._capacity.reconfigure(limits)
 
     def _notify_recovery_waiters(self) -> None:
         self._condition.notify_all()
-        self._wake_capacity()
-
-    async def _acquire_capacity(
-        self, execution: ProviderExecution, permit: _GatePermit
-    ) -> bool:
-        while self._permit_is_current(execution, permit):
-            changed = self._capacity_changed
-            now = time.monotonic()
-            limits = self._limits
-            cutoff = now - limits.rate_window
-            while self._admission_times and self._admission_times[0] <= cutoff:
-                self._last_discarded_at = self._admission_times.popleft()
-
-            ready_at = now
-            if self._last_discarded_at is not None:
-                ready_at = max(ready_at, self._last_discarded_at + limits.rate_window)
-            if len(self._admission_times) >= limits.rate_limit:
-                ready_at = max(
-                    ready_at,
-                    self._admission_times[-limits.rate_limit] + limits.rate_window,
-                )
-            if self._active_attempts < limits.max_concurrency and ready_at <= now:
-                self._admission_times.append(now)
-                self._active_attempts += 1
-                return True
-
-            # Occupancy changes explicitly wake us. Avoid an expired rate timer
-            # spinning while all concurrency slots remain occupied.
-            delay = (
-                max(0.0, ready_at - now)
-                if self._active_attempts < limits.max_concurrency
-                else None
-            )
-            try:
-                async with asyncio.timeout(delay):
-                    await changed.wait()
-            except TimeoutError:
-                pass
-        return False
+        self._capacity.wake_waiters()
 
     def _release_concurrency(self) -> None:
-        self._active_attempts -= 1
-        self._wake_capacity()
+        self._capacity.release()
 
     def _retry_delay(self, error: Exception, attempt: int) -> float:
         exponent = max(0, attempt - 1)

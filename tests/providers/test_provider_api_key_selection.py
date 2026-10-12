@@ -74,7 +74,8 @@ async def test_concurrent_resolutions_coalesce_by_provider_and_key():
         assert first is not second and second is not third
         assert [provider._config.api_key for provider in (first, second, third)] == KEYS
         assert runtime.is_cached("groq") and runtime.is_cached("groq", 2)
-        assert first._admission is second._admission is third._admission
+        assert first._admission is not second._admission
+        assert second._admission is not third._admission
     finally:
         await runtime.cleanup()
     assert not runtime.is_cached("groq")

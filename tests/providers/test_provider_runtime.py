@@ -2,7 +2,7 @@ import asyncio
 import gc
 import subprocess
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -1281,6 +1281,7 @@ async def test_create_provider_instantiates_each_builtin():
                 rate_limit=7,
                 rate_window=11,
                 max_concurrency=3,
+                capacity=ANY,
             )
             admission_factory.reset_mock()
 

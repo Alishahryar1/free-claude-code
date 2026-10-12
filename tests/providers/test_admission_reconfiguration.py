@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from free_claude_code.config.settings import Settings
-from free_claude_code.providers import admission as admission_module
+from free_claude_code.providers import admission_capacity as capacity_module
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -51,7 +51,7 @@ async def test_limit_changes_preserve_occupied_slots_and_wake_waiters():
 async def test_waiting_for_concurrency_does_not_spend_rate_capacity(monkeypatch):
     clock = SimpleNamespace(now=0.0)
     monkeypatch.setattr(
-        admission_module, "time", SimpleNamespace(monotonic=lambda: clock.now)
+        capacity_module, "time", SimpleNamespace(monotonic=lambda: clock.now)
     )
     controller = ProviderAdmissionController(
         provider_name="test", rate_limit=1, rate_window=10, max_concurrency=1
@@ -88,7 +88,7 @@ async def test_rate_count_increase_wakes_waiter_without_clearing_history():
 async def test_longer_window_waits_only_until_discarded_history_expires(monkeypatch):
     clock = SimpleNamespace(now=0.0)
     monkeypatch.setattr(
-        admission_module, "time", SimpleNamespace(monotonic=lambda: clock.now)
+        capacity_module, "time", SimpleNamespace(monotonic=lambda: clock.now)
     )
     controller = ProviderAdmissionController(
         provider_name="test", rate_limit=1, rate_window=2
@@ -115,7 +115,7 @@ async def test_shorter_window_wakes_waiter_and_longer_window_uses_retained_histo
 ):
     clock = SimpleNamespace(now=0.0)
     monkeypatch.setattr(
-        admission_module, "time", SimpleNamespace(monotonic=lambda: clock.now)
+        capacity_module, "time", SimpleNamespace(monotonic=lambda: clock.now)
     )
     controller = ProviderAdmissionController(
         provider_name="test", rate_limit=1, rate_window=60

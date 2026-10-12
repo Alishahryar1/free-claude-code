@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.config.settings import Settings
+from free_claude_code.providers.admission import ProviderAdmissionController
 from tests.api.support import create_test_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.test_anthropic_messages_transport import _sse
@@ -16,9 +17,11 @@ KEYS = ["synthetic-first", "synthetic-second", "synthetic-third"]
 CUSTOM_ID = "custom_" + "d" * 32
 
 
-@pytest.fixture
-def upstream(monkeypatch):
+@pytest.fixture(params=[403, 429], ids=["permission-rejection", "rate-limit"])
+def upstream(monkeypatch, request):
     calls = []
+    failure_status = request.param
+    monkeypatch.setattr(ProviderAdmissionController, "_retry_delay", lambda *_args: 0.1)
 
     def payload(request):
         if request.method == "GET":
@@ -29,7 +32,14 @@ def upstream(monkeypatch):
         body = json.loads(request.content)
         calls.append((token, body))
         if token != "synthetic-third":
-            return 403, {"error": {"type": "permission_error", "message": "No quota"}}
+            return failure_status, {
+                "error": {
+                    "type": "rate_limit_error"
+                    if failure_status == 429
+                    else "permission_error",
+                    "message": "No quota",
+                }
+            }
         protocol = (
             "messages"
             if request.url.path.endswith("/messages")
@@ -70,7 +80,7 @@ def upstream(monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", local_http)
     monkeypatch.setattr(httpx2.AsyncClient, "__init__", local_http2)
-    return calls
+    return calls, failure_status
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
@@ -88,6 +98,7 @@ def upstream(monkeypatch):
 def test_fallback_sequence_uses_each_rows_selected_key(
     upstream, provider, api_format, wire
 ):
+    calls, failure_status = upstream
     model = f"{provider}/same-model"
     custom = (
         [
@@ -127,11 +138,13 @@ def test_fallback_sequence_uses_each_rows_selected_key(
         )
     assert result.status_code == 200, result.text
     assert "selected key worked" in result.text
-    tokens = [token for token, _ in upstream]
+    tokens = [token for token, _ in calls]
     assert [
         token
         for index, token in enumerate(tokens)
         if not index or token != tokens[index - 1]
     ] == KEYS
-    assert all(body["model"] == "same-model" for _, body in upstream)
+    if failure_status == 429:
+        assert tokens == [KEYS[0]] * 5 + [KEYS[1]] * 5 + [KEYS[2]]
+    assert all(body["model"] == "same-model" for _, body in calls)
     assert all(key not in result.text for key in KEYS)

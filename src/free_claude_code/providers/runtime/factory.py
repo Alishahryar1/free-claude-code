@@ -301,7 +301,7 @@ def prepare_provider(
             config = build_custom_provider_config(
                 custom_definition, settings, api_key_number=api_key_number
             )
-            admission = admission_registry.get(provider_id)
+            admission = admission_registry.get(provider_id, api_key=config.api_key)
             return CustomProvider(
                 config, definition=custom_definition, admission=admission
             )
@@ -325,7 +325,7 @@ def prepare_provider(
         config = build_provider_config(
             descriptor, settings, api_key_number=api_key_number
         )
-        admission = admission_registry.get(provider_id)
+        admission = admission_registry.get(provider_id, api_key=config.api_key)
         if factory is not None:
             provider = factory(config, settings, admission)
             if (
