@@ -44,6 +44,7 @@ window.FccApiKeyEditor = class {
     this.empty.textContent = "No keys configured.";
     this.add = this.button("Add key", "Add key", () => {
       if (!this.editable()) return;
+      this.picked = null;
       this.entries.push({ value: "" });
       this.changed();
       this.render();

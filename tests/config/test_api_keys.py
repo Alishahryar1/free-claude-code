@@ -131,3 +131,168 @@ def test_schema_one_upgrade_preserves_custom_order_and_unknown_values():
     before = store.path.read_bytes(), store.path.stat().st_mtime_ns
     store.initialize({})
     assert (store.path.read_bytes(), store.path.stat().st_mtime_ns) == before
+
+
+def _old_store(values, schema="1"):
+    store = ManagedConfigStore()
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"FCC_CONFIG_SCHEMA={schema}"] if schema else []
+    lines.extend(f"{key}={quote_env_value(value)}" for key, value in values.items())
+    store.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return store
+
+
+@pytest.mark.parametrize("schema", ["1", None])
+@pytest.mark.parametrize(
+    "stored", ['["saved", ""]', '["saved", "saved"]', '["saved", 3]', '["saved"']
+)
+@pytest.mark.parametrize(
+    "override,expected",
+    [
+        ("", ()),
+        ("[]", ()),
+        (
+            '["process-first","process-second"]',
+            (SecretStr("process-first"), SecretStr("process-second")),
+        ),
+    ],
+)
+def test_upgrade_preserves_shadowed_invalid_credential_list(
+    schema, stored, override, expected
+):
+    store = _old_store(
+        {
+            "OPENAI_API_KEY": stored,
+            "GROQ_API_KEY": "managed-good",
+            "UNKNOWN_PRIVATE": "preserved",
+        },
+        schema,
+    )
+    process = {"OPENAI_API_KEY": override}
+    store.initialize(process)
+    snapshot = store.read(process)
+    assert snapshot.sources["openai_api_keys"] is ConfigSource.PROCESS
+    assert snapshot.settings.openai_api_keys == expected
+    assert snapshot.managed["OPENAI_API_KEY"] == stored
+    assert json.loads(snapshot.managed["GROQ_API_KEY"]) == ["managed-good"]
+    assert snapshot.managed["UNKNOWN_PRIVATE"] == "preserved"
+    assert snapshot.managed["FCC_CONFIG_SCHEMA"] == "2"
+    before = store.path.read_bytes(), store.path.stat().st_mtime_ns
+    store.initialize(process)
+    assert (store.path.read_bytes(), store.path.stat().st_mtime_ns) == before
+    with pytest.raises(ValidationError):
+        store.read({})
+
+
+@pytest.mark.parametrize(
+    "saved,converted",
+    [
+        ([{}], [{}]),
+        (
+            [{"api_key": "managed-secret", "unknown": "preserved"}],
+            [{"api_keys": ["managed-secret"], "unknown": "preserved"}],
+        ),
+    ],
+)
+def test_upgrade_converts_custom_credentials_before_effective_definition_validation(
+    saved, converted
+):
+    store = _old_store({"FCC_CUSTOM_PROVIDERS": json.dumps(saved)})
+    process = {"FCC_CUSTOM_PROVIDERS": "[]"}
+    store.initialize(process)
+    snapshot = store.read(process)
+    assert snapshot.settings.custom_providers == ()
+    assert snapshot.sources["custom_providers"] is ConfigSource.PROCESS
+    assert json.loads(snapshot.managed["FCC_CUSTOM_PROVIDERS"]) == converted
+    assert snapshot.managed["FCC_CONFIG_SCHEMA"] == "2"
+    with pytest.raises(ValidationError):
+        store.read({})
+
+
+def test_upgrade_preserves_custom_noncredential_members():
+    store = _old_store(
+        {
+            "FCC_CUSTOM_PROVIDERS": json.dumps(
+                [
+                    {
+                        "provider_id": "custom_" + "1" * 32,
+                        "display_name": "  Name  ",
+                        "base_url": "https://custom.example/v1/",
+                        "model_ids": [" raw ", " raw "],
+                        "api_key": " first ",
+                    }
+                ]
+            )
+        }
+    )
+    store.initialize({})
+    snapshot = store.read({})
+    assert json.loads(snapshot.managed["FCC_CUSTOM_PROVIDERS"]) == [
+        {
+            "provider_id": "custom_" + "1" * 32,
+            "display_name": "  Name  ",
+            "base_url": "https://custom.example/v1/",
+            "model_ids": [" raw ", " raw "],
+            "api_keys": ["first"],
+        }
+    ]
+    assert snapshot.settings.custom_providers[0].display_name == "Name"
+    assert snapshot.settings.custom_providers[0].model_ids == ("raw",)
+
+
+def test_upgrade_preserves_conflicting_custom_credential_forms_for_validation():
+    saved = [{"api_key": "old-secret", "api_keys": ["new-secret"]}]
+    store = _old_store({"FCC_CUSTOM_PROVIDERS": json.dumps(saved)})
+    process = {"FCC_CUSTOM_PROVIDERS": "[]"}
+    store.initialize(process)
+    snapshot = store.read(process)
+    assert json.loads(snapshot.managed["FCC_CUSTOM_PROVIDERS"]) == saved
+    assert snapshot.settings.custom_providers == ()
+    with pytest.raises(ValidationError):
+        store.read({})
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "{",
+        '{"invalid":"root"}',
+        '[{"api_key":3}]',
+        '[{"api_keys":["duplicate","duplicate"]}]',
+    ],
+)
+def test_upgrade_preserves_unconvertible_custom_owner_when_shadowed(stored):
+    store = _old_store({"FCC_CUSTOM_PROVIDERS": stored})
+    process = {"FCC_CUSTOM_PROVIDERS": "[]"}
+    store.initialize(process)
+    snapshot = store.read(process)
+    assert snapshot.managed["FCC_CUSTOM_PROVIDERS"] == stored
+    assert snapshot.settings.custom_providers == ()
+    with pytest.raises(ValidationError):
+        store.read({})
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("OPENAI_API_KEY", '["", "saved"]'),
+        ("FCC_CUSTOM_PROVIDERS", "{"),
+        ("FCC_CUSTOM_PROVIDERS", '[{"api_keys":[3]}]'),
+    ],
+)
+def test_unshadowed_credential_conversion_failure_preserves_original_file(key, value):
+    store = _old_store({key: value, "GROQ_API_KEY": "managed-good"})
+    before = store.path.read_bytes()
+    with pytest.raises(ValueError):
+        store.initialize({})
+    assert store.path.read_bytes() == before
+    assert list(store.path.parent.glob("*.tmp")) == []
+
+
+def test_upgrade_converts_valid_stored_credential_even_when_shadowed():
+    store = _old_store({"OPENAI_API_KEY": " managed-first "})
+    process = {"OPENAI_API_KEY": "[]"}
+    store.initialize(process)
+    snapshot = store.read(process)
+    assert json.loads(snapshot.managed["OPENAI_API_KEY"]) == ["managed-first"]
+    assert snapshot.settings.openai_api_keys == ()

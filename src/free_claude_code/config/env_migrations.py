@@ -1,5 +1,6 @@
 """One-time consolidation of legacy FCC dotenv state."""
 
+import json
 import os
 import re
 import uuid
@@ -9,12 +10,10 @@ from pathlib import Path
 
 from loguru import logger
 
-from .api_keys import encode_api_keys, normalize_api_keys
+from .api_keys import api_key_values, encode_api_keys, normalize_api_keys
 from .custom_providers import (
     CUSTOM_PROVIDERS_ENV,
-    CustomProviderDefinition,
     decode_custom_providers,
-    encode_custom_providers,
 )
 from .env_files import (
     ANTHROPIC_AUTH_TOKEN_ENV,
@@ -218,7 +217,7 @@ def consolidate_managed_config(
             repaired = normalize_retired_model_settings(
                 base_values, preserve_empty_overrides=False
             )
-            normalized = _normalize_credential_lists(repaired)
+            normalized = _normalize_credential_lists(repaired, process)
             normalized[FCC_CONFIG_SCHEMA_ENV] = CONFIG_SCHEMA_VERSION
             atomic_write_managed_config(normalized, path=managed)
             _log_model_repairs(base_values, repaired)
@@ -257,14 +256,17 @@ def consolidate_managed_config(
             values.pop(key)
     values[FCC_CONFIG_SCHEMA_ENV] = CONFIG_SCHEMA_VERSION
     normalized = _normalize_credential_lists(
-        normalize_retired_model_settings(values, preserve_empty_overrides=False)
+        normalize_retired_model_settings(values, preserve_empty_overrides=False),
+        process,
     )
     atomic_write_managed_config(normalized, path=managed)
     _log_model_repairs(values, normalized)
     return ConfigMigrationResult(changed=True, imported_from=tuple(imported))
 
 
-def _normalize_credential_lists(values: Mapping[str, str]) -> dict[str, str]:
+def _normalize_credential_lists(
+    values: Mapping[str, str], process: Mapping[str, str]
+) -> dict[str, str]:
     normalized = dict(values)
     owners = {
         descriptor.credential_env
@@ -275,19 +277,33 @@ def _normalize_credential_lists(values: Mapping[str, str]) -> dict[str, str]:
         try:
             encoded = encode_api_keys(normalize_api_keys(normalized[key]))
         except ValueError as exc:
+            if key in process:
+                continue
             raise ValueError(f"{key}: {exc}") from None
         if encoded is None:
             normalized.pop(key)
         else:
             normalized[key] = encoded
     if CUSTOM_PROVIDERS_ENV in normalized:
-        decoded = decode_custom_providers(normalized[CUSTOM_PROVIDERS_ENV])
-        if not isinstance(decoded, list | tuple):
-            raise ValueError("Custom providers must be a JSON array")
-        definitions = tuple(
-            CustomProviderDefinition.model_validate(item) for item in decoded
-        )
-        normalized[CUSTOM_PROVIDERS_ENV] = encode_custom_providers(definitions)
+        try:
+            decoded = decode_custom_providers(normalized[CUSTOM_PROVIDERS_ENV])
+            if not isinstance(decoded, list):
+                raise ValueError("Custom providers must be a JSON array")
+            for definition in decoded:
+                if not isinstance(definition, dict):
+                    continue
+                if "api_key" in definition and "api_keys" in definition:
+                    continue  # Effective Settings validation rejects this conflict.
+                member = "api_key" if "api_key" in definition else "api_keys"
+                if member in definition:
+                    keys = api_key_values(normalize_api_keys(definition.pop(member)))
+                    definition["api_keys"] = keys
+            normalized[CUSTOM_PROVIDERS_ENV] = json.dumps(
+                decoded, ensure_ascii=False, separators=(",", ":")
+            )
+        except ValueError:
+            if CUSTOM_PROVIDERS_ENV not in process:
+                raise
     return normalized
 
 

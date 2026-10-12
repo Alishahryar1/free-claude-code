@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from free_claude_code.config.api_keys import api_key_values, normalize_api_keys
 from free_claude_code.config.loader import clear_settings_cache, get_settings
 from free_claude_code.config.model_refs import parse_model_name, parse_provider_type
 from free_claude_code.config.provider_catalog import (
@@ -450,10 +451,27 @@ def redacted(value: str, env: Mapping[str, str] | None = None) -> str:
         return value
 
     source = env if env is not None else os.environ
-    result = value
+    credential_keys = {
+        descriptor.credential_env
+        for descriptor in PROVIDER_CATALOG.values()
+        if descriptor.credential_env
+    }
+    replacements: dict[str, str] = {}
     for key, secret in source.items():
         if not secret or len(secret) < 4:
             continue
         if any(part in key.upper() for part in SECRET_KEY_PARTS):
-            result = result.replace(secret, f"<redacted:{key}>")
+            marker = f"<redacted:{key}>"
+            replacements.setdefault(secret, marker)
+            if key in credential_keys:
+                try:
+                    entries = api_key_values(normalize_api_keys(secret))
+                except ValueError:
+                    continue  # Error reporting still masks the complete raw value.
+                for entry in entries:
+                    if len(entry) >= 4:
+                        replacements.setdefault(entry, marker)
+    result = value
+    for secret in sorted(replacements, key=len, reverse=True):
+        result = result.replace(secret, replacements[secret])
     return result

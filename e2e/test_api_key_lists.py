@@ -58,6 +58,40 @@ def test_keyboard_reorder_replace_remove_and_reopen_preserve_saved_keys(
     assert "NVIDIA_NIM_API_KEY" not in dotenv_values_from_file(tmp_path / ".fcc/.env")
 
 
+def test_adding_row_finishes_move_before_next_keyboard_cancel(
+    page: Page, admin_base_url: str, tmp_path
+):
+    page.goto(admin_base_url + "/admin")
+    dialog = open_provider(page, "nvidia_nim")
+    add_key(dialog, "draft-first")
+    add_key(dialog, "draft-second")
+    handle = dialog.get_by_role("button", name="Move Key 1", exact=True)
+    handle.press("Space")
+    handle.press("ArrowDown")
+    add_key(dialog, "draft-third")
+
+    handle = dialog.get_by_role("button", name="Move Key 2", exact=True)
+    handle.press("Space")
+    handle.press("ArrowUp")
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_visible()
+    inputs = dialog.locator(".api-key-row input")
+    expect(inputs).to_have_count(3)
+    for input, value in zip(
+        inputs.all(), ("draft-second", "draft-first", "draft-third"), strict=True
+    ):
+        expect(input).to_have_value(value)
+    dialog.get_by_role("button", name="Save", exact=True).click()
+    expect(dialog).not_to_be_visible()
+    assert json.loads(
+        dotenv_values_from_file(tmp_path / ".fcc/.env")["NVIDIA_NIM_API_KEY"]
+    ) == ["draft-second", "draft-first", "draft-third"]
+    dialog = open_provider(page, "nvidia_nim")
+    expect(dialog.locator(".api-key-row")).to_have_count(3)
+    for input in dialog.locator(".api-key-row input").all():
+        expect(input).to_have_value("")
+
+
 def test_actual_drag_reorders_without_exposing_saved_values(
     page: Page, admin_base_url: str, tmp_path
 ):
