@@ -1,3 +1,4 @@
+import json
 import mimetypes
 from dataclasses import replace
 from pathlib import Path
@@ -17,13 +18,22 @@ from free_claude_code.application.model_metadata import (
     ProviderModelRefreshResult,
 )
 from free_claude_code.config.admin.values import MASKED_SECRET
-from free_claude_code.config.env_files import dotenv_values_from_file
+from free_claude_code.config.api_keys import normalize_api_keys
+from free_claude_code.config.env_files import (
+    dotenv_values_from_file,
+    dotenv_values_from_text,
+)
 from free_claude_code.config.model_refs import ModelFallback, decode_model_fallbacks
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.server_urls import local_admin_url
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.version import package_version
-from tests.api.support import create_test_app, provider_manager_for_app, runtime_for_app
+from tests.api.support import (
+    create_test_app,
+    post_config,
+    provider_manager_for_app,
+    runtime_for_app,
+)
 
 
 def _local_client(app):
@@ -74,7 +84,8 @@ def test_admin_retirement_preview_apply_and_runtime_agree(monkeypatch, tmp_path)
     monkeypatch.setenv("MODEL_OPUS", "github_models/retired-process")
     app = create_test_app()
     client = _local_client(app)
-    body = client.post(
+    body = post_config(
+        client,
         "/admin/api/config/apply",
         json={
             "values": {
@@ -845,7 +856,7 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
     settings = Settings()
     settings.model = "nvidia_nim/configured-model"
     settings.model_opus = "open_router/anthropic/configured-opus"
-    settings.open_router_api_key = "open-router-key"
+    settings.open_router_api_keys = normalize_api_keys("open-router-key")
     app = create_test_app(settings)
     provider_manager_for_app(app).cache_model_infos(
         "open_router",
@@ -873,7 +884,7 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
 def test_admin_model_refresh_returns_the_updated_canonical_catalog():
     settings = Settings()
     settings.model = "deepseek/deepseek-chat"
-    settings.deepseek_api_key = "deepseek-key"
+    settings.deepseek_api_keys = normalize_api_keys("deepseek-key")
     app = create_test_app(settings)
     runtime = app.state.services.admin
 
@@ -943,7 +954,8 @@ def test_admin_apply_persists_open_browser_for_next_launch(monkeypatch, tmp_path
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"FCC_OPEN_BROWSER": False}},
     )
@@ -967,7 +979,8 @@ def test_admin_apply_hot_publishes_provider_progress_timeout(monkeypatch, tmp_pa
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"PROVIDER_PROGRESS_TIMEOUT": 900}},
     )
@@ -991,7 +1004,8 @@ def test_admin_apply_hot_publishes_ordered_model_fallbacks(monkeypatch, tmp_path
     app = create_test_app()
     value = "open_router/vendor/model-a,groq/vendor/model-b"
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MODEL_FALLBACKS": value}},
     )
@@ -1030,7 +1044,8 @@ def test_admin_apply_null_removes_model_fallbacks(monkeypatch, tmp_path):
     )
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MODEL_FALLBACKS": None}},
     )
@@ -1049,7 +1064,8 @@ def test_admin_rejects_invalid_provider_progress_timeout_without_writing(
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"PROVIDER_PROGRESS_TIMEOUT": 0}},
     )
@@ -1069,7 +1085,8 @@ def test_admin_apply_masks_telegram_proxy_credentials(monkeypatch, tmp_path):
     app = create_test_app()
     proxy_url = "https://user:password@proxy.example:8443"
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"TELEGRAM_PROXY_URL": proxy_url}},
     )
@@ -1095,7 +1112,8 @@ def test_admin_apply_null_removes_optional_secret(monkeypatch, tmp_path):
     )
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"TELEGRAM_PROXY_URL": None}},
     )
@@ -1121,14 +1139,19 @@ def test_admin_apply_masked_or_blank_secret_is_unchanged(
     )
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"OPENROUTER_API_KEY": submitted}},
     )
 
     assert response.status_code == 200
     assert response.json()["applied"] is True
-    assert "OPENROUTER_API_KEY=original-secret" in env_file.read_text(encoding="utf-8")
+    assert json.loads(
+        dotenv_values_from_text(env_file.read_text(encoding="utf-8"))[
+            "OPENROUTER_API_KEY"
+        ]
+    ) == ["original-secret"]
 
 
 def test_admin_apply_rejects_bad_model_shape(monkeypatch, tmp_path):
@@ -1136,7 +1159,8 @@ def test_admin_apply_rejects_bad_model_shape(monkeypatch, tmp_path):
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MODEL": "missing-provider-prefix"}},
     )
@@ -1154,7 +1178,8 @@ def test_admin_apply_rejects_duplicate_model_fallbacks(monkeypatch, tmp_path):
     app = create_test_app()
     duplicate = "groq/vendor/model,groq/vendor/model"
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MODEL_FALLBACKS": duplicate}},
     )
@@ -1176,7 +1201,8 @@ def test_admin_apply_rejects_invalid_catalog_provider_proxy(
     _clear_process_config(monkeypatch)
     invalid_proxy = "not-a-proxy://user:leaked-secret@proxy.example:8080"
 
-    response = _local_client(create_test_app()).post(
+    response = post_config(
+        _local_client(create_test_app()),
         "/admin/api/config/apply",
         json={"values": {proxy_key: invalid_proxy}},
     )
@@ -1209,7 +1235,8 @@ def test_admin_apply_accepts_httpx_provider_proxy(monkeypatch, tmp_path, proxy):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
 
-    response = _local_client(create_test_app()).post(
+    response = post_config(
+        _local_client(create_test_app()),
         "/admin/api/config/apply",
         json={"values": {"OPENAI_PROXY": proxy}},
     )
@@ -1233,7 +1260,8 @@ def test_admin_apply_rejects_unusable_provider_proxy(monkeypatch, tmp_path, prox
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
 
-    response = _local_client(create_test_app()).post(
+    response = post_config(
+        _local_client(create_test_app()),
         "/admin/api/config/apply",
         json={"values": {"OPENAI_PROXY": proxy}},
     )
@@ -1266,7 +1294,8 @@ def test_admin_apply_rejects_invalid_provider_proxy_without_side_effects(
     baseline = env_file.read_bytes()
     invalid_proxy = "invalid://user:leaked-secret@proxy.example:8080"
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"OPENAI_PROXY": invalid_proxy}},
     )
@@ -1297,7 +1326,8 @@ def test_admin_apply_validates_retained_proxy_and_allows_removal(
     _local_client(app).get("/admin/api/config")
     baseline = env_file.read_bytes()
 
-    rejected = _local_client(app).post(
+    rejected = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MODEL": "open_router/test-model"}},
     )
@@ -1306,7 +1336,8 @@ def test_admin_apply_validates_retained_proxy_and_allows_removal(
     assert rejected.json()["applied"] is False
     assert env_file.read_bytes() == baseline
 
-    removed = _local_client(app).post(
+    removed = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"GROQ_PROXY": None}},
     )
@@ -1331,7 +1362,8 @@ def test_admin_apply_preserves_valid_stored_proxy_secret(
         encoding="utf-8",
     )
 
-    response = _local_client(create_test_app()).post(
+    response = post_config(
+        _local_client(create_test_app()),
         "/admin/api/config/apply",
         json={"values": {"OPENAI_PROXY": submitted}},
     )
@@ -1351,7 +1383,8 @@ def test_admin_apply_writes_complete_managed_env_and_masks_preview(
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1368,7 +1401,9 @@ def test_admin_apply_writes_complete_managed_env_and_masks_preview(
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text("utf-8")
     assert "MODEL=open_router/test-model" in text
-    assert "OPENROUTER_API_KEY=router-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["OPENROUTER_API_KEY"]) == [
+        "router-secret"
+    ]
     assert "ANTHROPIC_AUTH_TOKEN=" not in text
     assert "PROXY_AUTH_ENABLED=" not in text
     assert "HOST=" not in text
@@ -1386,7 +1421,8 @@ def test_admin_apply_writes_fireworks_key_and_masks_preview(monkeypatch, tmp_pat
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1403,7 +1439,9 @@ def test_admin_apply_writes_fireworks_key_and_masks_preview(monkeypatch, tmp_pat
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=fireworks/test-model" in text
-    assert "FIREWORKS_API_KEY=fw-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["FIREWORKS_API_KEY"]) == [
+        "fw-secret"
+    ]
 
 
 def test_admin_apply_writes_gemini_key_and_masks_preview(monkeypatch, tmp_path):
@@ -1411,7 +1449,8 @@ def test_admin_apply_writes_gemini_key_and_masks_preview(monkeypatch, tmp_path):
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1428,7 +1467,7 @@ def test_admin_apply_writes_gemini_key_and_masks_preview(monkeypatch, tmp_path):
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=gemini/models/gemini-3.1-flash-lite" in text
-    assert "GEMINI_API_KEY=gm-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["GEMINI_API_KEY"]) == ["gm-secret"]
 
 
 def test_admin_apply_writes_groq_key_and_masks_preview(monkeypatch, tmp_path):
@@ -1436,7 +1475,8 @@ def test_admin_apply_writes_groq_key_and_masks_preview(monkeypatch, tmp_path):
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1453,7 +1493,7 @@ def test_admin_apply_writes_groq_key_and_masks_preview(monkeypatch, tmp_path):
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=groq/llama-3.3-70b-versatile" in text
-    assert "GROQ_API_KEY=gq-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["GROQ_API_KEY"]) == ["gq-secret"]
 
 
 def test_admin_apply_writes_sambanova_key_and_masks_preview(monkeypatch, tmp_path):
@@ -1461,7 +1501,8 @@ def test_admin_apply_writes_sambanova_key_and_masks_preview(monkeypatch, tmp_pat
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1478,7 +1519,9 @@ def test_admin_apply_writes_sambanova_key_and_masks_preview(monkeypatch, tmp_pat
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=sambanova/Meta-Llama-3.3-70B-Instruct" in text
-    assert "SAMBANOVA_API_KEY=sn-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["SAMBANOVA_API_KEY"]) == [
+        "sn-secret"
+    ]
 
 
 def test_admin_apply_writes_cerebras_key_and_masks_preview(monkeypatch, tmp_path):
@@ -1486,7 +1529,8 @@ def test_admin_apply_writes_cerebras_key_and_masks_preview(monkeypatch, tmp_path
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1503,7 +1547,9 @@ def test_admin_apply_writes_cerebras_key_and_masks_preview(monkeypatch, tmp_path
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=cerebras/llama3.1-8b" in text
-    assert "CEREBRAS_API_KEY=cb-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["CEREBRAS_API_KEY"]) == [
+        "cb-secret"
+    ]
 
 
 def test_admin_apply_writes_bedrock_region_config_and_masks_key(monkeypatch, tmp_path):
@@ -1511,7 +1557,8 @@ def test_admin_apply_writes_bedrock_region_config_and_masks_key(monkeypatch, tmp
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1529,7 +1576,9 @@ def test_admin_apply_writes_bedrock_region_config_and_masks_key(monkeypatch, tmp
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=bedrock/openai.gpt-oss-120b" in text
-    assert "AWS_BEARER_TOKEN_BEDROCK=bedrock-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["AWS_BEARER_TOKEN_BEDROCK"]) == [
+        "bedrock-secret"
+    ]
     assert "BEDROCK_BASE_URL=https://bedrock-mantle.us-west-2.api.aws/v1" in text
 
 
@@ -1538,7 +1587,8 @@ def test_admin_apply_writes_cloudflare_fields_and_masks_preview(monkeypatch, tmp
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1557,7 +1607,9 @@ def test_admin_apply_writes_cloudflare_fields_and_masks_preview(monkeypatch, tmp
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=cloudflare/@cf/moonshotai/kimi-k2.6" in text
-    assert "CLOUDFLARE_API_TOKEN=cf-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["CLOUDFLARE_API_TOKEN"]) == [
+        "cf-secret"
+    ]
     assert "CLOUDFLARE_ACCOUNT_ID=cf-account" in text
 
 
@@ -1566,7 +1618,8 @@ def test_admin_apply_writes_huggingface_key_and_masks_preview(monkeypatch, tmp_p
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1584,7 +1637,9 @@ def test_admin_apply_writes_huggingface_key_and_masks_preview(monkeypatch, tmp_p
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=huggingface/openai/gpt-oss-120b:fastest" in text
-    assert "HUGGINGFACE_API_KEY=hf-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["HUGGINGFACE_API_KEY"]) == [
+        "hf-secret"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1617,7 +1672,8 @@ def test_admin_key_change_requires_restart_for_active_voice_backend(
     )
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {credential_key: "new-key"}},
     )
@@ -1661,7 +1717,8 @@ def test_admin_constructor_captured_setting_requires_restart(
     env_file.write_text(f"{key}={initial}\n", encoding="utf-8")
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {key: updated}},
     )
@@ -1683,7 +1740,8 @@ def test_admin_apply_writes_cohere_key_and_masks_preview(monkeypatch, tmp_path):
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1700,7 +1758,9 @@ def test_admin_apply_writes_cohere_key_and_masks_preview(monkeypatch, tmp_path):
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=cohere/command-a-plus-05-2026" in text
-    assert "COHERE_API_KEY=cohere-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["COHERE_API_KEY"]) == [
+        "cohere-secret"
+    ]
 
 
 def test_admin_apply_replaces_retired_model_and_ignores_retired_credential(
@@ -1710,7 +1770,8 @@ def test_admin_apply_replaces_retired_model_and_ignores_retired_credential(
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {
@@ -1750,7 +1811,8 @@ def test_admin_apply_preserves_hidden_diagnostics_and_smoke_values(
     )
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MODEL": "open_router/test-model"}},
     )
@@ -1782,7 +1844,8 @@ def test_admin_apply_preserves_unrecognized_managed_zai_base_url(monkeypatch, tm
     )
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MODEL": "zai/glm-5.2"}},
     )
@@ -1791,7 +1854,7 @@ def test_admin_apply_preserves_unrecognized_managed_zai_base_url(monkeypatch, tm
     body = response.json()
     assert body["applied"] is True
     text = env_file.read_text("utf-8")
-    assert "ZAI_API_KEY=zai-secret" in text
+    assert json.loads(dotenv_values_from_text(text)["ZAI_API_KEY"]) == ["zai-secret"]
     assert "ZAI_BASE_URL=https://custom.zai.invalid/v1" in text
 
 
@@ -1813,7 +1876,8 @@ def test_admin_apply_preserves_unrecognized_managed_assignments(monkeypatch, tmp
     )
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MODEL": "open_router/test-model"}},
     )
@@ -1838,7 +1902,8 @@ def test_admin_apply_restart_required_reports_automatic_restart(monkeypatch, tmp
     app = create_test_app(restart_callback=restart_callback)
     instance_id = _local_client(app).get("/admin/api/status").json()["instance_id"]
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"PORT": "9090"}},
     )
@@ -1886,7 +1951,8 @@ def test_admin_apply_restart_required_reports_manual_fallback(monkeypatch, tmp_p
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"PORT": "9091"}},
     )
@@ -1915,7 +1981,9 @@ def test_restart_signal_failure_reports_saved_config_and_manual_restart(
     app = create_test_app(restart_callback=restart_callback)
     client = _local_client(app)
     original_port = client.get("/admin/api/status").json()["port"]
-    response = client.post("/admin/api/config/apply", json={"values": {"PORT": "9090"}})
+    response = post_config(
+        client, "/admin/api/config/apply", json={"values": {"PORT": "9090"}}
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -1958,10 +2026,12 @@ def test_pending_restart_survives_later_apply(
     )
     app = create_test_app(settings, restart_callback=callback)
     client = _local_client(app)
-    assert client.post(
-        "/admin/api/config/apply", json={"values": {"PORT": "9090"}}
+    assert post_config(
+        client, "/admin/api/config/apply", json={"values": {"PORT": "9090"}}
     ).json()["restart"]["required"]
-    result = client.post("/admin/api/config/apply", json={"values": followup}).json()
+    result = post_config(
+        client, "/admin/api/config/apply", json={"values": followup}
+    ).json()
     fields = ["PORT", "LOG_LEVEL"] if "LOG_LEVEL" in followup else ["PORT"]
     assert result["applied"] is True
     assert result["restart"]["required"] is True
@@ -1987,9 +2057,10 @@ def test_reverting_pending_restart_restores_hot_apply(monkeypatch, tmp_path):
     callback = MagicMock(side_effect=RuntimeError("restart failed"))
     app = create_test_app(settings, restart_callback=callback)
     client = _local_client(app)
-    client.post("/admin/api/config/apply", json={"values": {"PORT": "9090"}})
+    post_config(client, "/admin/api/config/apply", json={"values": {"PORT": "9090"}})
     with patch.object(provider_manager_for_app(app), "_start_pass", MagicMock()):
-        result = client.post(
+        result = post_config(
+            client,
             "/admin/api/config/apply",
             json={"values": {"PORT": str(settings.port), "MODEL": "nvidia_nim/new"}},
         ).json()
@@ -2013,7 +2084,8 @@ def test_admin_process_env_values_are_locked_and_not_written(monkeypatch, tmp_pa
     assert model_field["locked"] is True
     assert model_field["source"] == "process"
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MODEL": "deepseek/managed-model"}},
     )
@@ -2036,7 +2108,8 @@ def test_admin_process_model_fallbacks_are_locked_and_not_written(
     assert field["locked"] is True
     assert field["source"] == "process"
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MODEL_FALLBACKS": "groq/managed-model"}},
     )
@@ -2061,7 +2134,8 @@ def test_admin_never_reads_arbitrary_current_directory_env(monkeypatch, tmp_path
     assert model_field["value"] == "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
     assert model_field["source"] == "default"
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {}},
     )
@@ -2083,7 +2157,8 @@ def test_admin_migration_removes_blank_required_managed_values(monkeypatch, tmp_
     )
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"NVIDIA_NIM_API_KEY": "nim-secret"}},
     )
@@ -2091,7 +2166,9 @@ def test_admin_migration_removes_blank_required_managed_values(monkeypatch, tmp_
     assert response.status_code == 200
     assert response.json()["applied"] is True
     managed_text = (tmp_path / ".fcc" / ".env").read_text("utf-8")
-    assert "NVIDIA_NIM_API_KEY=nim-secret" in managed_text
+    assert json.loads(dotenv_values_from_text(managed_text)["NVIDIA_NIM_API_KEY"]) == [
+        "nim-secret"
+    ]
     assert "MESSAGING_PLATFORM=" not in managed_text
     assert "WHISPER_DEVICE=" not in managed_text
 
@@ -2109,7 +2186,8 @@ def test_admin_migrates_empty_auth_token_to_explicit_disabled_state(
     )
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"PROVIDER_RATE_LIMIT": "2"}},
     )
@@ -2146,7 +2224,8 @@ def test_admin_apply_rejects_missing_required_value_without_writing(
     _local_client(app).get("/admin/api/config")
     baseline = env_file.read_bytes()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={"values": {"MESSAGING_PLATFORM": submitted}},
     )
@@ -2164,7 +2243,8 @@ def test_admin_apply_preserves_false_and_numeric_zero(monkeypatch, tmp_path):
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
-    response = _local_client(app).post(
+    response = post_config(
+        _local_client(app),
         "/admin/api/config/apply",
         json={
             "values": {

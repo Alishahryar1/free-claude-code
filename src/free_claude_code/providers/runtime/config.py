@@ -1,6 +1,7 @@
 """Provider configuration construction from neutral catalog metadata."""
 
 from free_claude_code.application.errors import ApplicationUnavailableError
+from free_claude_code.config.api_keys import first_api_key
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.provider_catalog import ProviderDescriptor
 from free_claude_code.config.settings import Settings
@@ -22,7 +23,7 @@ def provider_credential(
     if descriptor.static_credential is not None:
         return descriptor.static_credential
     if descriptor.credential_attr:
-        return string_setting(settings, descriptor.credential_attr)
+        return first_api_key(getattr(settings, descriptor.credential_attr))
     return None
 
 
@@ -32,7 +33,12 @@ def has_provider_configuration(
     """Return whether all provider-defining settings are present."""
     attrs = descriptor.configuration_attrs()
     if attrs:
-        return all(string_setting(settings, attr) for attr in attrs)
+        return all(
+            provider_credential(descriptor, settings)
+            if attr == descriptor.credential_attr
+            else string_setting(settings, attr)
+            for attr in attrs
+        )
     return descriptor.static_credential is not None
 
 
@@ -69,7 +75,11 @@ def build_provider_config(
             f"{env_name} is not set. Add it in the Admin UI."
         )
     for attr in descriptor.required_settings_attrs:
-        if string_setting(settings, attr) is not None:
+        if (
+            provider_credential(descriptor, settings)
+            if attr == descriptor.credential_attr
+            else string_setting(settings, attr)
+        ) is not None:
             continue
         field = Settings.model_fields[attr]
         env_name = field.validation_alias or attr
@@ -93,7 +103,7 @@ def build_custom_provider_config(
     definition: CustomProviderDefinition, settings: Settings
 ) -> ProviderConfig:
     return ProviderConfig(
-        api_key=definition.api_key.get_secret_value() if definition.api_key else None,
+        api_key=first_api_key(definition.api_keys),
         base_url=definition.base_url,
         proxy=None,
         http_read_timeout=settings.http_read_timeout,

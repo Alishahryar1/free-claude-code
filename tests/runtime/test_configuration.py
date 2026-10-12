@@ -45,7 +45,9 @@ def test_preparation_uses_captured_disk_and_process_state(monkeypatch):
     snapshot = store.read({"PORT": "8123"})
     monkeypatch.setenv("PORT", "9999")
     store.path.unlink()
-    prepared = prepare_admin_update({"PORT": "8124"}, snapshot, snapshot.settings)
+    prepared = prepare_admin_update(
+        {"PORT": "8124"}, snapshot, snapshot.settings, revision_key=b"test-revision-key"
+    )
     assert prepared.settings is not None
     assert prepared.settings.port == 8123
     assert "PORT" not in prepared.target_values

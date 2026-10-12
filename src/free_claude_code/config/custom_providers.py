@@ -8,11 +8,12 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    SecretStr,
     TypeAdapter,
     field_validator,
     model_validator,
 )
+
+from .api_keys import ApiKeyList, api_key_values, first_api_key
 
 CUSTOM_PROVIDERS_ENV = "FCC_CUSTOM_PROVIDERS"
 REASONING_FORMATS = {
@@ -35,7 +36,7 @@ class CustomProviderDefinition(BaseModel):
     provider_id: str = Field(pattern=r"^custom_[0-9a-f]{32}$")
     display_name: str = Field(min_length=1)
     base_url: str
-    api_key: SecretStr | None = Field(default=None, repr=False)
+    api_keys: ApiKeyList = Field(default=(), repr=False)
     api_format: Literal["openai_chat", "openai_responses", "anthropic_messages"] = (
         "openai_chat"
     )
@@ -68,10 +69,16 @@ class CustomProviderDefinition(BaseModel):
             )
         return str(url).rstrip("/")
 
-    @field_validator("api_key", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def empty_key(cls, value: object) -> object:
-        return value.strip() or None if isinstance(value, str) else value
+    def normalize_legacy_key(cls, value: object) -> object:
+        if not isinstance(value, dict) or "api_key" not in value:
+            return value
+        if "api_keys" in value:
+            raise ValueError("Supply api_keys only, not both credential forms")
+        values = dict(value)
+        values["api_keys"] = values.pop("api_key")
+        return values
 
     @field_validator("model_ids")
     @classmethod
@@ -93,13 +100,15 @@ class CustomProviderDefinition(BaseModel):
 
     def private_values(self) -> dict:
         return self.model_dump(mode="json") | {
-            "api_key": self.api_key.get_secret_value() if self.api_key else None,
+            "api_keys": api_key_values(self.api_keys),
         }
 
     def same_inventory(self, other: CustomProviderDefinition) -> bool:
-        return self.model_dump(exclude={"display_name"}) == other.model_dump(
-            exclude={"display_name"}
-        )
+        return self.model_dump(
+            exclude={"display_name", "api_keys"}
+        ) == other.model_dump(exclude={"display_name", "api_keys"}) and first_api_key(
+            self.api_keys
+        ) == first_api_key(other.api_keys)
 
 
 def decode_custom_providers(value: object) -> object:

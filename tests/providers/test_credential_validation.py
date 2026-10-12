@@ -5,6 +5,7 @@ import asyncio
 import httpx
 import pytest
 
+from free_claude_code.config.admin.credentials import CredentialSubmission
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers import credential_validation as validation
@@ -112,10 +113,24 @@ CASES = [
 
 def _settings(provider_id):
     descriptor = PROVIDER_CATALOG[provider_id]
-    assert descriptor.credential_attr is not None
-    return Settings.model_construct(
-        _fields_set=set(), **{descriptor.credential_attr: "secret-not-a-known-format"}
+    assert descriptor.credential_env is not None
+    return Settings.model_validate(
+        {descriptor.credential_env: "secret-not-a-known-format"}
     )
+
+
+async def _check_credentials(settings, keys):
+    owners = {
+        d.credential_env: d.credential_attr
+        for d in PROVIDER_CATALOG.values()
+        if d.credential_env and d.credential_attr
+    }
+    submissions = tuple(
+        CredentialSubmission(key, getattr(settings, owners[key]))
+        for key in dict.fromkeys(keys)
+        if key in owners
+    )
+    return await validation.check_credentials(settings, submissions)
 
 
 def _mock_http(monkeypatch, handler):
@@ -158,7 +173,7 @@ async def test_documented_probe_acceptance_and_rejection(
     clients = _mock_http(monkeypatch, respond)
     key = PROVIDER_CATALOG[provider_id].credential_env
     assert key is not None
-    result = await validation.check_credentials(_settings(provider_id), (key, key))
+    result = await _check_credentials(_settings(provider_id), (key, key))
     assert result[0].status == validation.CredentialStatus.VERIFIED
     assert len(requests) == 1
     assert all(client.is_closed for client in clients)
@@ -169,7 +184,7 @@ async def test_documented_probe_acceptance_and_rejection(
         body = {"error": {"details": [{"reason": "API_KEY_INVALID"}]}}
     if provider_id == "siliconflow":
         body = "Invalid token"  # The documented StringData error body.
-    result = await validation.check_credentials(_settings(provider_id), (key,))
+    result = await _check_credentials(_settings(provider_id), (key,))
     assert result[0].status == (
         validation.CredentialStatus.REJECTED
         if rejection
@@ -195,7 +210,7 @@ async def test_ambiguous_errors_warn_without_retry(
     _mock_http(monkeypatch, respond)
     key = PROVIDER_CATALOG[provider_id].credential_env
     assert key is not None
-    result = await validation.check_credentials(_settings(provider_id), (key,))
+    result = await _check_credentials(_settings(provider_id), (key,))
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
     assert len(requests) == 1
     assert "secret-not-a-known-format" not in caplog.text
@@ -217,7 +232,7 @@ async def test_non_api_responses_do_not_verify_or_reject(
     )
     key = PROVIDER_CATALOG[provider_id].credential_env
     assert key is not None
-    result = await validation.check_credentials(_settings(provider_id), (key,))
+    result = await _check_credentials(_settings(provider_id), (key,))
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
 
 
@@ -231,8 +246,8 @@ async def test_unsupported_shared_credentials_never_send_http(monkeypatch):
     all_keys = {d.credential_env for d in PROVIDER_CATALOG.values() if d.credential_env}
     keys = tuple(all_keys - supported)
     assert "OPENAI_API_KEY" in keys
-    result = await validation.check_credentials(
-        Settings.model_construct(), (*keys, "OPENCODE_API_KEY", "MODEL")
+    result = await _check_credentials(
+        Settings.model_validate(dict.fromkeys(keys, "unverified-key")), keys
     )
     assert len(result) == len(keys)
     assert all(
@@ -241,7 +256,7 @@ async def test_unsupported_shared_credentials_never_send_http(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_timeout_preserves_finished_rejection_and_closes_clients(
+async def test_probe_timeout_preserves_finished_rejection_and_closes_clients(
     monkeypatch,
 ):
     async def respond(request):
@@ -252,11 +267,9 @@ async def test_batch_timeout_preserves_finished_rejection_and_closes_clients(
 
     clients = _mock_http(monkeypatch, respond)
     monkeypatch.setattr(validation, "MAX_CONCURRENCY", 1)
-    monkeypatch.setattr(validation, "BATCH_TIMEOUT", 0.1)
-    settings = Settings.model_construct(groq_api_key="key", open_router_api_key="key")
-    results = await validation.check_credentials(
-        settings, ("GROQ_API_KEY", "OPENROUTER_API_KEY")
-    )
+    monkeypatch.setattr(validation, "REQUEST_TIMEOUT", 0.1)
+    settings = Settings(GROQ_API_KEY="key", OPENROUTER_API_KEY="key")
+    results = await _check_credentials(settings, ("GROQ_API_KEY", "OPENROUTER_API_KEY"))
     assert [r.status for r in results] == [
         validation.CredentialStatus.REJECTED,
         validation.CredentialStatus.UNVERIFIED,
@@ -275,9 +288,7 @@ async def test_external_cancellation_propagates_and_closes_clients(monkeypatch):
         raise AssertionError("unreachable")
 
     clients = _mock_http(monkeypatch, respond)
-    task = asyncio.create_task(
-        validation.check_credentials(_settings("groq"), ("GROQ_API_KEY",))
-    )
+    task = asyncio.create_task(_check_credentials(_settings("groq"), ("GROQ_API_KEY",)))
     await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -295,7 +306,7 @@ async def test_connection_failure_is_safe_and_does_not_retry(monkeypatch):
         raise httpx.ConnectError("secret-not-a-known-format", request=request)
 
     clients = _mock_http(monkeypatch, respond)
-    results = await validation.check_credentials(_settings("groq"), ("GROQ_API_KEY",))
+    results = await _check_credentials(_settings("groq"), ("GROQ_API_KEY",))
     assert results[0].status == validation.CredentialStatus.UNVERIFIED
     assert "secret-not-a-known-format" not in repr(results)
     assert calls == 1
@@ -316,7 +327,7 @@ async def test_recognized_restricted_key_warns_instead_of_rejecting(
     _mock_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
     key = PROVIDER_CATALOG[provider_id].credential_env
     assert key is not None
-    result = await validation.check_credentials(_settings(provider_id), (key,))
+    result = await _check_credentials(_settings(provider_id), (key,))
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
     assert "recognized" in result[0].message
 
@@ -329,7 +340,7 @@ async def test_checks_are_concurrent_but_bounded(monkeypatch):
     peak = 0
     started = []
 
-    async def check(settings, key, probe):
+    async def check(settings, key, probe, credential):
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
@@ -345,12 +356,14 @@ async def test_checks_are_concurrent_but_bounded(monkeypatch):
     monkeypatch.setattr(validation, "_check_one", check)
     monkeypatch.setattr(validation, "MAX_CONCURRENCY", 2)
     task = asyncio.create_task(
-        validation.check_credentials(
-            Settings.model_construct(),
+        _check_credentials(
+            Settings(
+                GROQ_API_KEY="one", MISTRAL_API_KEY="two", OPENROUTER_API_KEY="three"
+            ),
             ("GROQ_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY"),
         )
     )
-    await first_wave.wait()
+    await asyncio.wait_for(first_wave.wait(), 5)
     assert len(started) == 2
     release.set()
     results = await task
@@ -365,7 +378,7 @@ async def test_programming_errors_do_not_become_permission_to_save(monkeypatch):
 
     clients = _mock_http(monkeypatch, broken)
     with pytest.raises(ExceptionGroup) as error:
-        await validation.check_credentials(_settings("groq"), ("GROQ_API_KEY",))
+        await _check_credentials(_settings("groq"), ("GROQ_API_KEY",))
     assert isinstance(error.value.exceptions[0], RuntimeError)
     assert all(client.is_closed for client in clients)
 
@@ -381,7 +394,7 @@ async def test_programming_errors_do_not_become_permission_to_save(monkeypatch):
 )
 async def test_xkiro_unexpected_usage_remains_unverified(monkeypatch, payload):
     _mock_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
-    result = await validation.check_credentials(_settings("xkiro"), ("XKIRO_API_KEY",))
+    result = await _check_credentials(_settings("xkiro"), ("XKIRO_API_KEY",))
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
 
 
@@ -401,7 +414,7 @@ async def test_anthropic_probe_uses_workspace_and_version_without_inference(
         ANTHROPIC_AUTH_TOKEN="local-token",
         ANTHROPIC_WORKSPACE_ID="wrkspc_test",
     )
-    checks = await validation.check_credentials(settings, ("ANTHROPIC_API_KEY",))
+    checks = await _check_credentials(settings, ("ANTHROPIC_API_KEY",))
     assert checks[0].status is validation.CredentialStatus.VERIFIED
     assert len(requests) == 1
     request = requests[0]

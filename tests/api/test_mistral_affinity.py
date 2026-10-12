@@ -48,7 +48,7 @@ async def mistral_wire(handler=None):
     app = create_test_app(
         Settings(
             model="mistral/mistral-large-latest",
-            mistral_api_key="test-mistral-key",
+            mistral_api_keys="test-mistral-key",
             proxy_auth_enabled=False,
         ),
         providers={"mistral": provider},

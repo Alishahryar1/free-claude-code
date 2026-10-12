@@ -15,6 +15,8 @@ from free_claude_code.application.errors import (
     InvalidRequestError,
 )
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.api_keys import normalize_api_keys
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.core.version import package_version
@@ -33,6 +35,13 @@ from tests.api.support import create_test_app
 
 
 def _settings(**updates: object) -> Settings:
+    credential_attrs = {
+        d.credential_attr for d in PROVIDER_CATALOG.values() if d.credential_attr
+    }
+    updates = {
+        key: normalize_api_keys(value) if key in credential_attrs else value
+        for key, value in updates.items()
+    }
     return Settings().model_copy(update=updates)
 
 
@@ -444,7 +453,7 @@ async def test_bootstrap_constructs_isolated_runtime_resource_graphs(
 ) -> None:
     settings = _settings(
         model="nvidia_nim/test-model",
-        nvidia_nim_api_key="test-key",
+        nvidia_nim_api_keys="test-key",
         voice_note_enabled=True,
         whisper_device="cpu",
     )
@@ -491,10 +500,26 @@ async def test_bootstrap_selects_nvidia_transcriber_without_loading_riva() -> No
         voice_note_enabled=True,
         whisper_device="nvidia_nim",
         whisper_model="openai/whisper-large-v3",
-        nvidia_nim_api_key="nvapi-test",
+        nvidia_nim_api_keys=["nvapi-first", "nvapi-tail"],
     )
 
-    assert isinstance((await _create_transcriber(settings)), NvidiaNimTranscriber)
+    transcriber = await _create_transcriber(settings)
+    assert isinstance(transcriber, NvidiaNimTranscriber)
+    assert transcriber._key == "nvapi-first"
+    await transcriber.close()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_supplies_only_first_key_to_local_model_downloads():
+    settings = _settings(
+        voice_note_enabled=True,
+        whisper_device="cpu",
+        huggingface_api_keys=["hf-first", "hf-tail"],
+    )
+    transcriber = await _create_transcriber(settings)
+    assert isinstance(transcriber, TranscriptionService)
+    assert transcriber._huggingface_api_key == "hf-first"
+    await transcriber.close()
 
 
 @pytest.mark.asyncio

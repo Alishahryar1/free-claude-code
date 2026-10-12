@@ -21,7 +21,7 @@ from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 async def runtime(request):
     settings = Settings(
         model="nvidia_nim/one",
-        nvidia_nim_api_key="test",
+        nvidia_nim_api_keys="test",
         proxy_auth_token="managed",
         messaging_platform="none",
     )

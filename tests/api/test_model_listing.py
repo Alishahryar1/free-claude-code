@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
@@ -29,9 +30,9 @@ def _settings(
         model_fallbacks=model_fallbacks,
         proxy_auth_enabled=False,
         proxy_auth_token="freecc",
-        deepseek_api_key="deepseek-key",
-        open_router_api_key="open-router-key",
-        wafer_api_key="wafer-key",
+        deepseek_api_keys=normalize_api_keys("deepseek-key"),
+        open_router_api_keys=normalize_api_keys("open-router-key"),
+        wafer_api_keys=normalize_api_keys("wafer-key"),
     )
 
 

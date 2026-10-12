@@ -365,6 +365,19 @@ button.startup-busy::before,
 .provider-dialog .message-area:empty { display: none; }
 .provider-dialog-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
 
+.api-key-editor { display: flex; flex-direction: column; gap: 12px; }
+.api-key-rows { display: flex; flex-direction: column; gap: 12px; }
+.api-key-row { display: grid; grid-template-columns: 32px 20px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.api-key-row .api-key-handle { cursor: grab; padding: 6px; }
+.api-key-handle svg { display: block; flex-shrink: 0; width: 16px; height: 20px; }
+.api-key-number { color: var(--muted); text-align: center; font-size: 13px; }
+.api-key-row .api-key-remove { padding: 9px 12px; }
+.api-key-row.dragging { opacity: .5; }
+.api-key-add { align-self: flex-start; }
+.api-key-result { grid-column: 3 / -1; font-size: 13px; line-height: 1.5; }
+.field-warning { color: var(--warn); }
+.api-key-editor .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
 .provider-title {
   display: flex;
   align-items: center;

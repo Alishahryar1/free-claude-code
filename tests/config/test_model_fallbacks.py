@@ -27,7 +27,7 @@ def _snapshot(managed=None, process=None):
 
 
 def _fallback_field(state):
-    fields = load_config_response(state)["fields"]
+    fields = load_config_response(state, revision_key=b"test-revision-key")["fields"]
     assert isinstance(fields, list)
     for field in fields:
         assert isinstance(field, dict)
@@ -121,6 +121,7 @@ def test_admin_fallback_records_round_trip_without_restart_or_false_changes(as_j
         {"MODEL_FALLBACKS": json.dumps(entries) if as_json else entries},
         original,
         original.settings,
+        revision_key=b"test-revision-key",
     )
     assert saved.valid, saved.errors
     assert saved.pending_fields == ()
@@ -147,7 +148,10 @@ def test_admin_fallback_records_round_trip_without_restart_or_false_changes(as_j
         "max",
     ]
     unchanged = prepare_admin_update(
-        {"MODEL_FALLBACKS": field["value"]}, loaded, loaded.settings
+        {"MODEL_FALLBACKS": field["value"]},
+        loaded,
+        loaded.settings,
+        revision_key=b"test-revision-key",
     )
     assert unchanged.valid and unchanged.changed_keys == ()
 
@@ -166,6 +170,7 @@ def test_empty_process_fallbacks_override_managed_records_and_remain_locked(empt
         {"MODEL_FALLBACKS": [{"model": "groq/two", "reasoning": "off"}]},
         state,
         state.settings,
+        revision_key=b"test-revision-key",
     )
     assert result.valid and result.settings is not None
     assert result.settings.model_fallbacks is None

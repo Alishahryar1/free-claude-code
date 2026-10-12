@@ -73,7 +73,7 @@ def test_configuration_defaults_and_region_override():
     config = build_provider_config(descriptor, settings)
     assert config.api_key == "key"
     assert config.base_url == BASE_URL
-    assert descriptor.configuration_attrs() == ("alibaba_cloud_api_key",)
+    assert descriptor.configuration_attrs() == ("alibaba_cloud_api_keys",)
 
     settings = Settings(
         ALIBABA_CLOUD_API_KEY="regional-key",

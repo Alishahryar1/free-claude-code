@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config import loader
@@ -207,7 +207,7 @@ def test_direct_settings_construction_performs_no_environment_io(
         ("HTTP_READ_TIMEOUT", "http_read_timeout", "600", 600.0),
         ("FCC_OPEN_BROWSER", "open_admin_browser", "false", False),
         ("REASONING_POLICY", "reasoning_policy", "off", ReasoningPreference.OFF),
-        ("GROQ_API_KEY", "groq_api_key", " secret ", "secret"),
+        ("GROQ_API_KEY", "groq_api_keys", " secret ", (SecretStr("secret"),)),
         ("OPENROUTER_PROXY", "open_router_proxy", " http://proxy ", "http://proxy"),
     ],
 )
@@ -266,7 +266,9 @@ def test_optional_blank_process_values_normalize_to_none(key: str) -> None:
         if field.validation_alias == key
     )
 
-    assert getattr(snapshot.settings, attribute) is None
+    assert getattr(snapshot.settings, attribute) == (
+        () if key == "GROQ_API_KEY" else None
+    )
 
 
 def test_blank_required_process_value_is_rejected() -> None:
@@ -333,7 +335,7 @@ def test_repair_invalid_managed_provider_proxies_removes_all_eligible_values() -
     managed = _write_managed_config(
         "\n".join(
             (
-                "FCC_CONFIG_SCHEMA=1",
+                "FCC_CONFIG_SCHEMA=2",
                 "MODEL=nvidia_nim/test-model",
                 "OPENROUTER_PROXY=http://proxy.example:notaport",
                 "GROQ_PROXY=https://proxy.example:8443",
@@ -359,7 +361,7 @@ def test_repair_invalid_managed_provider_proxies_removes_all_eligible_values() -
 def test_repair_valid_managed_provider_proxy_leaves_file_unchanged() -> None:
     managed = _write_managed_config(
         "# Keep this exact text on a no-op.\n"
-        "FCC_CONFIG_SCHEMA=1\n"
+        "FCC_CONFIG_SCHEMA=2\n"
         "OPENAI_PROXY=https://proxy.example:8443\n"
     )
     baseline = managed.read_bytes()
@@ -381,7 +383,7 @@ def test_repair_preserves_process_owned_managed_proxy(
 ) -> None:
     invalid_openai = "invalid://managed-proxy"
     managed = _write_managed_config(
-        "FCC_CONFIG_SCHEMA=1\n"
+        "FCC_CONFIG_SCHEMA=2\n"
         f"OPENAI_PROXY={invalid_openai}\n"
         "OPENROUTER_PROXY=invalid://unshadowed\n"
     )
@@ -400,7 +402,7 @@ def test_repair_preserves_process_owned_managed_proxy(
 
 def test_repair_propagates_atomic_write_failure_without_changing_source() -> None:
     managed = _write_managed_config(
-        "FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY=invalid://managed-proxy\n"
+        "FCC_CONFIG_SCHEMA=2\nOPENAI_PROXY=invalid://managed-proxy\n"
     )
     baseline = managed.read_bytes()
 
@@ -419,7 +421,7 @@ def test_repair_propagates_atomic_write_failure_without_changing_source() -> Non
 
 def test_repair_is_idempotent_and_writes_only_once() -> None:
     managed = _write_managed_config(
-        "FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY=invalid://managed-proxy\n"
+        "FCC_CONFIG_SCHEMA=2\nOPENAI_PROXY=invalid://managed-proxy\n"
     )
 
     with patch.object(
@@ -438,7 +440,7 @@ def test_repair_is_idempotent_and_writes_only_once() -> None:
 
 
 def test_repair_propagates_malformed_managed_config() -> None:
-    managed = _write_managed_config('FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY="unterminated\n')
+    managed = _write_managed_config('FCC_CONFIG_SCHEMA=2\nOPENAI_PROXY="unterminated\n')
     baseline = managed.read_bytes()
 
     with pytest.raises(ValueError, match="Could not parse configuration file"):
@@ -451,7 +453,7 @@ def test_repair_propagates_config_lock_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     managed = _write_managed_config(
-        "FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY=invalid://managed-proxy\n"
+        "FCC_CONFIG_SCHEMA=2\nOPENAI_PROXY=invalid://managed-proxy\n"
     )
     baseline = managed.read_bytes()
 
@@ -482,7 +484,7 @@ def test_optional_strings_share_one_normalization_rule() -> None:
         }
     )
 
-    assert settings.groq_api_key == "key"
+    assert settings.groq_api_keys == (SecretStr("key"),)
     assert settings.open_router_proxy is None
     assert settings.model_opus is None
     assert settings.allowed_dir is None

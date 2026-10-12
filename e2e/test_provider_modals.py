@@ -3,7 +3,7 @@
 import pytest
 from playwright.sync_api import Page, Route, expect
 
-from e2e.provider_support import close_provider, open_provider
+from e2e.provider_support import api_key_input, close_provider, open_provider
 
 
 def test_provider_titles_link_to_websites_and_every_logo_loads(
@@ -137,10 +137,10 @@ def test_modal_groups_all_provider_fields_and_discards_cancelled_edits(
 ) -> None:
     page.goto(f"{admin_base_url}/admin")
     dialog = open_provider(page, "azure_openai")
-    for key in ("AZURE_OPENAI_API_KEY", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_PROXY"):
+    for key in ("AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_PROXY"):
         expect(dialog.locator(f"#field-{key}")).to_be_visible()
     expect(dialog.locator("#field-NVIDIA_NIM_API_KEY")).to_have_count(0)
-    dialog.locator("#field-AZURE_OPENAI_API_KEY").fill("cancelled-key")
+    api_key_input(page, "AZURE_OPENAI_API_KEY").fill("cancelled-key")
     expect(page.locator("#saveProvider")).to_be_enabled()
     if dismiss == "close":
         close_provider(page)
@@ -154,17 +154,19 @@ def test_modal_groups_all_provider_fields_and_discards_cancelled_edits(
     ).to_be_focused()
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     dialog = open_provider(page, "azure_openai")
-    expect(dialog.locator("#field-AZURE_OPENAI_API_KEY")).to_have_value("")
+    expect(dialog.locator(".api-key-row")).to_have_count(0)
 
 
 @pytest.mark.parametrize("restart", [False, True])
 def test_modal_save_applies_only_its_changes_and_preserves_other_page_edits(
     page: Page, admin_base_url: str, restart: bool
 ) -> None:
-    submissions: list[object] = []
+    submissions: list[dict] = []
 
     def save(route: Route) -> None:
-        submissions.append(route.request.post_data_json)
+        payload = route.request.post_data_json
+        assert isinstance(payload, dict)
+        submissions.append(payload)
         route.fulfill(
             json={
                 "applied": True,
@@ -191,11 +193,15 @@ def test_modal_save_applies_only_its_changes_and_preserves_other_page_edits(
     model.fill("open_router/pending-model")
     page.get_by_role("button", name="Providers", exact=True).click()
     dialog = open_provider(page, "nvidia_nim")
-    dialog.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
+    api_key_input(page, "NVIDIA_NIM_API_KEY").fill("new-key")
     dialog.get_by_role("button", name="Save", exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.locator("#messageArea")).to_have_text("Applied")
-    assert submissions == [{"values": {"NVIDIA_NIM_API_KEY": "new-key"}}]
+    assert len(submissions) == 1
+    assert set(submissions[0]["values"]) == {"NVIDIA_NIM_API_KEY"}
+    assert submissions[0]["values"]["NVIDIA_NIM_API_KEY"]["entries"] == [
+        {"value": "new-key"}
+    ]
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(model).to_have_value("open_router/pending-model")

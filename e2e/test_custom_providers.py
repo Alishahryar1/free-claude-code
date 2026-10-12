@@ -3,6 +3,8 @@
 import pytest
 from playwright.sync_api import Page, expect
 
+from e2e.provider_support import api_key_input
+
 
 @pytest.fixture(autouse=True)
 def no_page_errors(page: Page):
@@ -17,7 +19,7 @@ def add_provider(page: Page, name: str) -> str:
     dialog = page.locator("#providerDialog")
     dialog.get_by_label("Name", exact=True).fill(name)
     dialog.get_by_label("Base URL", exact=True).fill("https://gateway.example/team/v1")
-    dialog.get_by_label("API key", exact=True).fill("example-custom-key")
+    api_key_input(page, "api_keys").fill("example-custom-key")
     dialog.get_by_label("Model IDs", exact=True).fill("org/model-one\nmodel-two")
     page.locator("#saveProvider").click()
     expect(dialog).not_to_be_visible()
@@ -43,7 +45,7 @@ def test_custom_provider_save_rename_and_remove_preserve_unrelated_draft(
     expect(card.locator(".provider-check-result")).to_have_text("2 models available")
     card.get_by_role("button", name="Edit", exact=True).click()
     dialog = page.locator("#providerDialog")
-    expect(dialog.get_by_label("API key", exact=True)).to_have_value("")
+    expect(api_key_input(page, "api_keys")).to_have_value("")
     dialog.get_by_label("Name", exact=True).fill("Renamed gateway")
     page.locator("#saveProvider").click()
     expect(dialog).not_to_be_visible()

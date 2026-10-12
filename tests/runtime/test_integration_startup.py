@@ -11,6 +11,7 @@ from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.readiness import InitializationWait
+from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.paths import claude_desktop_disconnect_path
 from free_claude_code.config.settings import Settings
@@ -43,7 +44,7 @@ def runtime():
             "proxy_auth_token": TOKEN,
             "messaging_platform": "none",
             "model": "nvidia_nim/one",
-            "nvidia_nim_api_key": "test",
+            "nvidia_nim_api_keys": normalize_api_keys("test"),
         }
     )
     provider = MagicMock(spec=BaseProvider)

@@ -12,6 +12,7 @@ from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.readiness import InitializationWait
+from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.async_tasks import run_sync_owned
@@ -28,8 +29,8 @@ def _settings():
     return Settings().model_copy(
         update={
             "model": "nvidia_nim/one",
-            "nvidia_nim_api_key": "test",
-            "groq_api_key": "test",
+            "nvidia_nim_api_keys": normalize_api_keys("test"),
+            "groq_api_keys": normalize_api_keys("test"),
             "messaging_platform": "none",
         }
     )

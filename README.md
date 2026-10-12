@@ -94,9 +94,9 @@ terminal open.
 
 1. Create an API key at [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys).
 2. Open the Admin UI URL from the server log.
-3. Paste the key into `NVIDIA_NIM_API_KEY`.
+3. Open NVIDIA NIM in **Providers**, click **Add key**, paste the key, and click **Save**.
 4. Leave `MODEL` on the default `nvidia_nim/nvidia/nemotron-3-super-120b-a12b`, or search the model dropdown and select another model.
-5. Click **Apply**.
+5. Click **Apply** to save your model selection.
 
 To protect the local proxy with a bearer token, enable **Proxy Authentication**
 in Admin.
@@ -187,7 +187,15 @@ Optional: add an ordered **Fallback Models** list under **Model Config**. It
 applies to every connected client. A failed request may reach and consume usage
 from more than one provider before succeeding.
 
-For another API endpoint, open **Providers → Custom providers → Add provider**. Enter its API base URL, optional key, and API format. Leave **Model IDs** empty to discover models automatically, or enter one upstream model ID per line. Save, then select a model in **Model Config**.
+Provider modals support numbered API keys. Use **Add key**, remove rows, or drag their handles to reorder them. FCC uses key 1. Saving checks every key, blocks confirmed invalid keys, and shows warnings for keys it cannot verify.
+
+The same API key environment variable also accepts a JSON array:
+
+```dotenv
+NVIDIA_NIM_API_KEY='["your-first-key","your-second-key"]'
+```
+
+For another API endpoint, open **Providers → Custom providers → Add provider**. Enter its API base URL, optional keys, and API format. Leave **Model IDs** empty to discover models automatically, or enter one upstream model ID per line. Save, then select a model in **Model Config**.
 
 <details>
 <summary><strong>Provider catalog</strong></summary>

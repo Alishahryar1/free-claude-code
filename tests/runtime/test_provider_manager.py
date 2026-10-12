@@ -7,6 +7,7 @@ import pytest
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.ports import ModelCatalogPort
+from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
@@ -73,7 +74,7 @@ class RecordingModelCatalogPublisher:
 
 def _settings(model: str) -> Settings:
     return Settings().model_copy(
-        update={"model": model, "nvidia_nim_api_key": "test-key"}
+        update={"model": model, "nvidia_nim_api_keys": normalize_api_keys("test-key")}
     )
 
 
@@ -98,6 +99,54 @@ async def test_startup_generation_lease_and_shutdown_close_exactly_once() -> Non
     assert factory.runtimes[0].cleanup_calls == 1
     with pytest.raises(ApplicationUnavailableError, match="shutting down"):
         await manager.acquire()
+
+
+@pytest.mark.asyncio
+async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_it():
+    provider_id = "custom_" + "c" * 32
+    definition = {
+        "provider_id": provider_id,
+        "display_name": "Gateway",
+        "base_url": "https://gateway.example/v1",
+        "api_keys": ["catalog-first", "catalog-tail"],
+    }
+
+    def settings(keys):
+        return Settings.model_validate(
+            {
+                "FCC_CUSTOM_PROVIDERS": [{**definition, "api_keys": keys}],
+                "MODEL": f"{provider_id}/one",
+            }
+        )
+
+    async def held_models():
+        await asyncio.Event().wait()
+
+    def factory(config, registry):
+        runtime = FakeRuntime(config)
+        runtime.provider.list_model_infos = AsyncMock(side_effect=held_models)
+        return runtime
+
+    manager = ProviderRuntimeManager(
+        settings(["catalog-first", "catalog-tail"]), runtime_factory=factory
+    )
+    manager.cache_model_infos(
+        provider_id, {ProviderModelInfo("one", context_window_tokens=1234)}
+    )
+    try:
+        await manager.replace(
+            settings(["catalog-first", "new-tail"]), commit=AsyncMock()
+        )
+        cached = manager.cached_prefixed_model_infos()
+        assert [(info.model_id, info.context_window_tokens) for info in cached] == [
+            (f"{provider_id}/one", 1234)
+        ]
+        await manager.replace(
+            settings(["new-tail", "catalog-first"]), commit=AsyncMock()
+        )
+        assert not manager.cached_prefixed_model_infos()
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio
@@ -791,7 +840,7 @@ async def test_application_catalog_survives_generation_replacement() -> None:
 async def test_generation_lease_keeps_its_model_metadata_after_replacement() -> None:
     factory = RuntimeFactory()
     first_settings = _settings("open_router/one").model_copy(
-        update={"open_router_api_key": "open-router-key"}
+        update={"open_router_api_keys": normalize_api_keys("open-router-key")}
     )
     manager = ProviderRuntimeManager(first_settings, runtime_factory=factory)
     manager.cache_model_infos(
@@ -841,7 +890,7 @@ async def test_generation_lease_keeps_its_model_metadata_after_replacement() -> 
 async def test_replacement_prunes_and_rejects_removed_remote_provider_cache() -> None:
     factory = RuntimeFactory()
     first_settings = _settings("open_router/one").model_copy(
-        update={"open_router_api_key": "open-router-key"}
+        update={"open_router_api_keys": normalize_api_keys("open-router-key")}
     )
     manager = ProviderRuntimeManager(first_settings, runtime_factory=factory)
     manager.cache_model_infos("open_router", {ProviderModelInfo("old-model")})

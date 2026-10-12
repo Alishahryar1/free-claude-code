@@ -136,7 +136,7 @@ def test_legacy_file_imports_only_recognized_values_and_is_untouched(
 
     assert result.imported_from == (legacy.resolve(),)
     assert values["MODEL"] == "deepseek/legacy"
-    assert values["HUGGINGFACE_API_KEY"] == "hf"
+    assert values["HUGGINGFACE_API_KEY"] == '["hf"]'
     assert values["PROXY_AUTH_ENABLED"] == "false"
     assert "UNRELATED_SECRET" not in values
     assert legacy.read_text(encoding="utf-8") == original
@@ -192,7 +192,7 @@ def test_canonical_setting_wins_and_retired_key_is_removed(
     consolidate_managed_config({})
     values = dotenv_values_from_file(managed)
 
-    assert values["HUGGINGFACE_API_KEY"] == "current-token"
+    assert values["HUGGINGFACE_API_KEY"] == '["current-token"]'
     assert "HF_TOKEN" not in values
 
 
@@ -224,7 +224,7 @@ def test_post_schema_invalid_explicit_path_is_never_dereferenced(
 ) -> None:
     managed, _legacy = _paths(monkeypatch, tmp_path)
     managed.parent.mkdir(parents=True)
-    managed.write_text("FCC_CONFIG_SCHEMA=1\n", encoding="utf-8")
+    managed.write_text("FCC_CONFIG_SCHEMA=2\n", encoding="utf-8")
 
     result = consolidate_managed_config({"FCC_ENV_FILE": str(tmp_path / "missing.env")})
 
@@ -336,7 +336,7 @@ def test_only_managed_schema_marker_is_trusted(
     consolidate_managed_config({"FCC_CONFIG_SCHEMA": "99"})
 
     values = dotenv_values_from_file(managed)
-    assert values["FCC_CONFIG_SCHEMA"] == "1"
+    assert values["FCC_CONFIG_SCHEMA"] == "2"
     assert values["MODEL"] == "deepseek/imported"
 
 
@@ -403,7 +403,7 @@ def test_concurrent_loaders_produce_one_valid_managed_file(
     assert {snapshot.settings.model for snapshot in snapshots} == {
         "deepseek/concurrent"
     }
-    assert dotenv_values_from_file(managed)["FCC_CONFIG_SCHEMA"] == "1"
+    assert dotenv_values_from_file(managed)["FCC_CONFIG_SCHEMA"] == "2"
     assert list(managed.parent.glob("*.tmp")) == []
 
 
@@ -442,7 +442,7 @@ def test_newer_managed_schema_fails_closed(
 ) -> None:
     managed, _legacy = _paths(monkeypatch, tmp_path)
     managed.parent.mkdir(parents=True)
-    managed.write_text("FCC_CONFIG_SCHEMA=2\n", encoding="utf-8")
+    managed.write_text("FCC_CONFIG_SCHEMA=3\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="unsupported schema"):
         consolidate_managed_config({})

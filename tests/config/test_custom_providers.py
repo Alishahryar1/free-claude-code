@@ -37,7 +37,7 @@ def test_private_storage_round_trip_and_routing():
     assert original.base_url == "https://gateway.example/api/v2"
     assert "private-key" not in repr(original)
     assert "private-key" not in original.model_dump_json()
-    assert json.loads(encoded)[0]["api_key"] == "private-key"
+    assert json.loads(encoded)[0]["api_keys"] == ["private-key"]
     assert ModelRouter(settings).resolve(settings.model).primary.provider_id == ID
 
 

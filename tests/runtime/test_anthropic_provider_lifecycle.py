@@ -3,6 +3,7 @@
 import httpx
 import pytest
 
+from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.anthropic import AnthropicProvider
@@ -44,7 +45,7 @@ async def test_workspace_replacement_retires_http_and_capabilities_with_lease():
 
     settings = Settings(
         MODEL="anthropic/same-model",
-        NVIDIA_NIM_API_KEY=None,
+        NVIDIA_NIM_API_KEY=(),
         ANTHROPIC_API_KEY="old-key",
         ANTHROPIC_WORKSPACE_ID="old",
     )
@@ -57,7 +58,10 @@ async def test_workspace_replacement_retires_http_and_capabilities_with_lease():
         record = await old.model_record("same-model")
         await manager.replace(
             settings.model_copy(
-                update={"anthropic_api_key": "new-key", "anthropic_workspace_id": "new"}
+                update={
+                    "anthropic_api_keys": normalize_api_keys("new-key"),
+                    "anthropic_workspace_id": "new",
+                }
             ),
             commit=commit,
         )

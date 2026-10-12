@@ -7,18 +7,18 @@ Failure defaults to unverified; rejection requires provider-specific evidence.
 
 import asyncio
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 import httpx
 
+from free_claude_code.config.admin.credentials import CredentialSubmission
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonValue
 from free_claude_code.providers.runtime.config import string_setting
 
 REQUEST_TIMEOUT = 5.0
-BATCH_TIMEOUT = 10.0
 MAX_CONCURRENCY = 8
 
 
@@ -33,6 +33,8 @@ class CredentialCheck:
     key: str
     status: CredentialStatus
     message: str
+    index: int = 0
+    provider_id: str | None = None
 
 
 def _field(payload: JsonValue, name: str) -> JsonValue:
@@ -263,11 +265,10 @@ def _interpret(key: str, probe: _Probe, response: httpx.Response) -> CredentialC
     )
 
 
-async def _check_one(settings: Settings, key: str, probe: _Probe) -> CredentialCheck:
+async def _check_one(
+    settings: Settings, key: str, probe: _Probe, credential: str
+) -> CredentialCheck:
     descriptor = PROVIDER_CATALOG[probe.provider_id]
-    credential = string_setting(settings, descriptor.credential_attr)
-    if not credential:
-        return _unverified(key, "No API key to verify.")
     base = (
         string_setting(settings, descriptor.base_url_attr)
         or descriptor.default_base_url
@@ -307,36 +308,42 @@ async def _check_one(settings: Settings, key: str, probe: _Probe) -> CredentialC
 
 
 async def check_credentials(
-    settings: Settings, changed_keys: tuple[str, ...]
+    settings: Settings, submissions: tuple[CredentialSubmission, ...]
 ) -> tuple[CredentialCheck, ...]:
-    """Check distinct edited credentials without touching runtime or model state."""
-    credential_keys = {
-        descriptor.credential_env
-        for descriptor in PROVIDER_CATALOG.values()
-        if not descriptor.local and descriptor.credential_env is not None
-    }
-    keys = tuple(sorted(set(changed_keys) & credential_keys))
-    results = {
-        key: _unverified(
-            key,
-            "The key check timed out."
-            if key in _PROBE_BY_KEY
-            else "Automatic key verification is unavailable for this provider.",
+    """Check every submitted entry with bounded workers and per-attempt timeouts."""
+    entries = [
+        (submission, index, credential)
+        for submission in submissions
+        for index, credential in enumerate(submission.credentials)
+    ]
+    results = [
+        CredentialCheck(
+            submission.key,
+            CredentialStatus.UNVERIFIED,
+            "Automatic key verification is unavailable for this provider.",
+            index,
+            submission.provider_id,
         )
-        for key in keys
-    }
-    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+        for submission, index, _ in entries
+    ]
+    pending = iter(enumerate(entries))
 
-    async def run(key: str, probe: _Probe) -> None:
-        async with semaphore:
-            results[key] = await _check_one(settings, key, probe)
+    async def run() -> None:
+        for result_index, (submission, index, credential) in pending:
+            probe = (
+                _PROBE_BY_KEY.get(submission.key)
+                if submission.provider_id is None
+                else None
+            )
+            if probe is not None:
+                check = await _check_one(
+                    settings, submission.key, probe, credential.get_secret_value()
+                )
+                results[result_index] = replace(
+                    check, index=index, provider_id=submission.provider_id
+                )
 
-    try:
-        async with asyncio.timeout(BATCH_TIMEOUT):
-            async with asyncio.TaskGroup() as group:
-                for key in keys:
-                    if probe := _PROBE_BY_KEY.get(key):
-                        group.create_task(run(key, probe))
-    except TimeoutError:
-        pass  # Finished results survive; unfinished checks retain their warning.
-    return tuple(results[key] for key in keys)
+    async with asyncio.TaskGroup() as group:
+        for _ in range(min(MAX_CONCURRENCY, len(entries))):
+            group.create_task(run())
+    return tuple(results)

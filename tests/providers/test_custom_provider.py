@@ -22,6 +22,51 @@ pytestmark = pytest.mark.asyncio
 
 
 @pytest.mark.parametrize(
+    "api_format", ["openai_chat", "openai_responses", "anthropic_messages"]
+)
+async def test_custom_requests_use_first_key_in_each_protocol(api_format):
+    requests = []
+
+    def reply(request):
+        requests.append(request)
+        response = (
+            httpx.Response if api_format == "anthropic_messages" else httpx2.Response
+        )
+        return response(
+            200,
+            text=completion(api_format),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    instance = provider(
+        definition(
+            api_format=api_format,
+            api_keys=["custom-runtime-first", "custom-runtime-tail"],
+        ),
+        openai_handler=reply,
+        messages_handler=reply,
+    )
+    try:
+        stream = instance.stream_messages(
+            MessagesRequest(
+                model="m",
+                max_tokens=64,
+                messages=[{"role": "user", "content": "Hello"}],
+            )
+        )
+        assert [event async for event in stream]
+    finally:
+        await instance.cleanup()
+    assert len(requests) == 1
+    header = "x-api-key" if api_format == "anthropic_messages" else "authorization"
+    assert requests[0].headers[header] == (
+        "custom-runtime-first"
+        if api_format == "anthropic_messages"
+        else "Bearer custom-runtime-first"
+    )
+
+
+@pytest.mark.parametrize(
     "thinking",
     [
         None,

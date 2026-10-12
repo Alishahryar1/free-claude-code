@@ -38,6 +38,10 @@ from free_claude_code.harnesses import (
     vscode_chat_integration,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
+from free_claude_code.providers.credential_validation import (
+    CredentialCheck,
+    CredentialStatus,
+)
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.asgi import RuntimeASGIApp
@@ -221,6 +225,23 @@ def admin_base_url(
     monkeypatch.setattr(env_migrations, "legacy_env_paths", lambda: ())
     monkeypatch.setattr(env_migrations, "verified_checkout_env_path", lambda: None)
     clear_settings_cache()
+
+    async def verified_credentials(settings, submissions):
+        return tuple(
+            CredentialCheck(
+                submission.key,
+                CredentialStatus.VERIFIED,
+                "API key accepted.",
+                index,
+                submission.provider_id,
+            )
+            for submission in submissions
+            for index, _ in enumerate(submission.credentials)
+        )
+
+    monkeypatch.setattr(
+        "free_claude_code.runtime.application.check_credentials", verified_credentials
+    )
 
     store = ManagedConfigStore()
     store.initialize({})

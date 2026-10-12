@@ -6,7 +6,7 @@ import pytest
 from playwright.sync_api import expect
 
 from e2e.form_support import assert_autofill_opt_out
-from e2e.provider_support import open_provider
+from e2e.provider_support import api_key_input, open_provider
 from free_claude_code.application.code_sessions.models import (
     HarnessEvent,
     PromptRequest,
@@ -1521,7 +1521,7 @@ def test_hidden_code_removal_preserves_providers_and_deleted_history(
     providers_url = f"{admin_base_url}/admin"
     expect(page).to_have_url(providers_url)
     open_provider(page, "mistral")
-    field = page.locator("#field-MISTRAL_API_KEY")
+    field = api_key_input(page, "MISTRAL_API_KEY")
     field.fill("Keep this provider edit")
     field.evaluate("input => input.setSelectionRange(2, 7)")
     history_length = page.evaluate("history.length")

@@ -86,7 +86,7 @@ async def wire_client(provider_id="opencode_zen", handler=None):
     app = create_test_app(
         Settings(
             model=f"{provider_id}/responses-selector",
-            opencode_api_key="test_opencode_key",
+            opencode_api_keys="test_opencode_key",
             proxy_auth_enabled=True,
             proxy_auth_token="fcc-private-token",
         ),

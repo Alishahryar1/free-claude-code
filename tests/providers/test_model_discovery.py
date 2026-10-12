@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
@@ -42,12 +43,12 @@ def _settings(
     model_sonnet: str | None = None,
     model_haiku: str | None = None,
     model_fallbacks: tuple[ModelFallback, ...] | None = None,
-    nvidia_nim_api_key: str = "",
-    open_router_api_key: str = "",
-    deepseek_api_key: str = "",
-    wafer_api_key: str = "",
-    opencode_api_key: str = "",
-    zai_api_key: str = "",
+    nvidia_nim_api_keys: str = "",
+    open_router_api_keys: str = "",
+    deepseek_api_keys: str = "",
+    wafer_api_keys: str = "",
+    opencode_api_keys: str = "",
+    zai_api_keys: str = "",
     vertex_project_id: str = "",
 ) -> Settings:
     return Settings.model_construct(
@@ -57,12 +58,12 @@ def _settings(
         model_sonnet=model_sonnet,
         model_haiku=model_haiku,
         model_fallbacks=model_fallbacks,
-        nvidia_nim_api_key=nvidia_nim_api_key,
-        open_router_api_key=open_router_api_key,
-        deepseek_api_key=deepseek_api_key,
-        wafer_api_key=wafer_api_key,
-        opencode_api_key=opencode_api_key,
-        zai_api_key=zai_api_key,
+        nvidia_nim_api_keys=normalize_api_keys(nvidia_nim_api_keys),
+        open_router_api_keys=normalize_api_keys(open_router_api_keys),
+        deepseek_api_keys=normalize_api_keys(deepseek_api_keys),
+        wafer_api_keys=normalize_api_keys(wafer_api_keys),
+        opencode_api_keys=normalize_api_keys(opencode_api_keys),
+        zai_api_keys=normalize_api_keys(zai_api_keys),
         vertex_project_id=vertex_project_id,
         log_api_error_tracebacks=False,
     )
@@ -409,8 +410,8 @@ class FakeProvider(BaseProvider):
 async def test_runtime_warm_caches_all_referenced_provider_models() -> None:
     settings = _settings(
         model_fallbacks=(ModelFallback(model="open_router/anthropic/claude-opus"),),
-        nvidia_nim_api_key="nim-key",
-        open_router_api_key="open-router-key",
+        nvidia_nim_api_keys="nim-key",
+        open_router_api_keys="open-router-key",
     )
     nim = FakeProvider(_infos("nim-model"))
     router = FakeProvider(_infos("anthropic/claude-opus"))
@@ -438,7 +439,7 @@ async def test_runtime_warm_caches_all_referenced_provider_models() -> None:
 async def test_runtime_warm_treats_model_lists_as_discovery_metadata() -> None:
     settings = _settings(
         model_sonnet="nvidia_nim/nim-model",
-        nvidia_nim_api_key="nim-key",
+        nvidia_nim_api_keys="nim-key",
     )
     runtime = _manager(
         settings,
@@ -456,8 +457,8 @@ async def test_runtime_warm_treats_model_lists_as_discovery_metadata() -> None:
 async def test_runtime_warm_reports_query_failures_without_blocking() -> None:
     settings = _settings(
         model_opus="open_router/anthropic/claude-opus",
-        nvidia_nim_api_key="nim-key",
-        open_router_api_key="open-router-key",
+        nvidia_nim_api_keys="nim-key",
+        open_router_api_keys="open-router-key",
     )
     runtime = _manager(
         settings,
@@ -507,8 +508,8 @@ async def test_runtime_warm_queries_referenced_providers_concurrently() -> None:
 @pytest.mark.asyncio
 async def test_startup_discovery_queries_each_successful_provider_once() -> None:
     settings = _settings(
-        nvidia_nim_api_key="nim-key",
-        open_router_api_key="open-router-key",
+        nvidia_nim_api_keys="nim-key",
+        open_router_api_keys="open-router-key",
     )
     nim = FakeProvider(_infos("nim-model"))
     router = FakeProvider(_infos("anthropic/claude-sonnet"))
@@ -533,7 +534,7 @@ async def test_startup_discovery_queries_each_successful_provider_once() -> None
 
 @pytest.mark.asyncio
 async def test_failed_startup_discovery_remains_eligible_for_explicit_refresh() -> None:
-    settings = _settings(nvidia_nim_api_key="nim-key")
+    settings = _settings(nvidia_nim_api_keys="nim-key")
     nim = FakeProvider(error=RuntimeError("upstream unavailable"))
     runtime = _manager(settings, {"nvidia_nim": nim})
 
@@ -551,7 +552,7 @@ async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_
 ):
     settings = _settings(
         model="lmstudio/local-qwen",
-        open_router_api_key="open-router-key",
+        open_router_api_keys="open-router-key",
     )
     runtime = _manager(
         settings,
@@ -598,7 +599,7 @@ async def test_runtime_refresh_model_list_cache_treats_vertex_project_as_configu
 async def test_runtime_refresh_model_list_cache_keeps_prior_cache_on_failure() -> None:
     settings = _settings(
         model="nvidia_nim/cached-model",
-        nvidia_nim_api_key="nim-key",
+        nvidia_nim_api_keys="nim-key",
     )
     runtime = _manager(
         settings,

@@ -6,7 +6,7 @@ import pytest
 from playwright.sync_api import Error, Page, Request, expect
 
 from e2e.form_support import assert_autofill_opt_out
-from e2e.provider_support import open_provider
+from e2e.provider_support import api_key_input, open_provider
 from free_claude_code.core.version import package_version
 
 
@@ -86,13 +86,13 @@ def test_settings_text_fields_opt_out_of_autofill(page, admin_base_url):
     page.get_by_role("button", name="Providers", exact=True).click()
     open_provider(page, "nvidia_nim")
     assert_autofill_opt_out(page)
-    key = page.locator("#field-NVIDIA_NIM_API_KEY")
+    key = api_key_input(page, "NVIDIA_NIM_API_KEY")
     expect(key).to_have_value("")
-    expect(key).to_have_attribute("type", "text")
+    expect(key).to_have_attribute("type", "password")
     expect(key).to_have_attribute("autocapitalize", "none")
     expect(key).to_have_attribute("spellcheck", "false")
     expect(key).to_have_attribute("autocorrect", "off")
-    expect(page.locator('.field input[type="password"]')).to_have_count(0)
+    expect(page.locator('.field input[type="password"]')).to_have_count(1)
     key.fill("manually-entered-api-key")
     expect(key).to_have_value("manually-entered-api-key")
     expect(page.locator("#saveProvider")).to_be_enabled()

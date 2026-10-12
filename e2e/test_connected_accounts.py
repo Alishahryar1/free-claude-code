@@ -5,7 +5,7 @@ import time
 import pytest
 from playwright.sync_api import Dialog, Page, Route, expect
 
-from e2e.provider_support import open_provider
+from e2e.provider_support import api_key_input, open_provider
 from free_claude_code.application.connected_accounts import (
     ConnectedAccountLoginMode,
     ConnectedAccountState,
@@ -298,7 +298,7 @@ def test_connected_counts_and_modes_survive_apply_and_disconnect_independently(
     )
     _open(page, admin_base_url)
     open_provider(page, "nvidia_nim")
-    page.locator("#field-NVIDIA_NIM_API_KEY").fill("unused-test-key")
+    api_key_input(page, "NVIDIA_NIM_API_KEY").fill("unused-test-key")
     page.get_by_role("button", name="Save", exact=True).click()
     expect(page.locator("#providerDialog")).not_to_be_visible()
     expect(page.locator("#messageArea")).to_have_text("Applied")
@@ -458,6 +458,7 @@ def test_slow_initial_account_check_does_not_erase_a_later_save_warning(
                 "applied": True,
                 "credential_checks": [
                     {
+                        "index": 0,
                         "key": "NVIDIA_NIM_API_KEY",
                         "status": "unverified",
                         "message": "Verification unavailable.",
@@ -471,7 +472,7 @@ def test_slow_initial_account_check_does_not_erase_a_later_save_warning(
     pending = accounts.take_pending_status(page)
     assert not accounts.pending_status
     accounts.hold_status.clear()
-    dialog.locator("#field-NVIDIA_NIM_API_KEY").fill("new-key")
+    api_key_input(page, "NVIDIA_NIM_API_KEY").fill("new-key")
     dialog.get_by_role("button", name="Save", exact=True).click()
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
     with page.expect_response("**/admin/api/providers/github_copilot/auth") as response:

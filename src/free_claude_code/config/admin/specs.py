@@ -9,6 +9,7 @@ from free_claude_code.config.settings import Settings
 type FieldType = Literal[
     "text",
     "secret",
+    "api_key_list",
     "number",
     "boolean",
     "model",
@@ -62,7 +63,7 @@ class ConfigFieldSpec:
         value = Settings.model_fields[self.settings_attr].get_default(
             call_default_factory=True
         )
-        if value is None:
+        if value is None or self.field_type == "api_key_list":
             return None
         if isinstance(value, bool):
             return "true" if value else "false"

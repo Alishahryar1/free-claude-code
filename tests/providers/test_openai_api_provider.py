@@ -8,13 +8,17 @@ import httpx2
 import pytest
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
     text_content,
 )
+from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.openai_api.provider import OpenAIAPIProvider
+from free_claude_code.providers.runtime.config import build_provider_config
 from tests.providers.support import immediate_admission, make_provider_config
 
 
@@ -61,6 +65,75 @@ def _provider(
 
 async def _collect(stream: AsyncIterator[str]) -> str:
     return "".join([chunk async for chunk in stream])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ingress", ["messages", "responses"])
+async def test_key_one_authenticates_discovery_and_failure_never_tries_later_keys(
+    ingress,
+):
+    requests = []
+
+    def reply(request):
+        requests.append(request)
+        if request.url.path == "/v1/models":
+            return httpx2.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "gpt-test",
+                            "object": "model",
+                            "created": 0,
+                            "owned_by": "test",
+                        }
+                    ],
+                },
+            )
+        return httpx2.Response(
+            401,
+            json={
+                "error": {
+                    "message": "Invalid API key",
+                    "type": "authentication_error",
+                    "code": "invalid_api_key",
+                }
+            },
+        )
+
+    settings = Settings(OPENAI_API_KEY=["runtime-first", "runtime-inactive"])
+    provider = OpenAIAPIProvider(
+        build_provider_config(PROVIDER_CATALOG["openai_api"], settings),
+        admission=immediate_admission(provider_name="openai_api", max_attempts=1),
+        transport=httpx2.MockTransport(reply),
+    )
+    try:
+        assert {model.model_id for model in await provider.list_model_infos()} == {
+            "gpt-test"
+        }
+        with pytest.raises(ExecutionFailure):
+            stream = (
+                provider.stream_messages(
+                    MessagesRequest(
+                        model="gpt-test",
+                        max_tokens=64,
+                        messages=[{"role": "user", "content": "Hello"}],
+                    )
+                )
+                if ingress == "messages"
+                else provider.stream_responses(
+                    OpenAIResponsesRequest(model="gpt-test", input="Hello")
+                )
+            )
+            await _collect(stream)
+    finally:
+        await provider.cleanup()
+    assert [request.url.path for request in requests] == ["/v1/models", "/v1/responses"]
+    assert [request.headers["authorization"] for request in requests] == [
+        "Bearer runtime-first",
+        "Bearer runtime-first",
+    ]
 
 
 @pytest.mark.asyncio

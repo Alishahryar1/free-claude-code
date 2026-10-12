@@ -151,7 +151,7 @@ def test_missing_provider_credential_is_protocol_specific_503_without_terminal_h
     app = create_test_app(
         _settings(
             model="open_router/test-model",
-            open_router_api_key="",
+            open_router_api_keys="",
         )
     )
 

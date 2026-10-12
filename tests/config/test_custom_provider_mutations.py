@@ -12,6 +12,7 @@ from free_claude_code.config.loader import (
     compose_settings_snapshot,
 )
 from free_claude_code.runtime.diagnostics import settings_report
+from tests.config.credential_support import credential_edit
 
 
 def snapshot(values=None, process=None):
@@ -23,6 +24,23 @@ def snapshot(values=None, process=None):
 
 
 def mutate(state, action, provider_id=None, values=None, routes=None):
+    values = dict(values or {})
+    if "api_key" in values:
+        public = load_config_response(state, revision_key=b"test-revision-key")
+        rows = public["custom_providers"]
+        assert isinstance(rows, list)
+        existing = next(
+            (
+                item
+                for item in rows
+                if isinstance(item, dict) and item["provider_id"] == provider_id
+            ),
+            None,
+        )
+        projection = (
+            existing["api_keys"] if existing else {"revision": None, "entries": []}
+        )
+        values["api_keys"] = credential_edit(projection, values.pop("api_key"))
     return prepare_admin_update(
         routes or {},
         state,
@@ -30,6 +48,7 @@ def mutate(state, action, provider_id=None, values=None, routes=None):
         CustomProviderMutation(
             action=action, provider_id=provider_id, values=values or {}
         ),
+        revision_key=b"test-revision-key",
     )
 
 
@@ -63,9 +82,9 @@ def test_mutations_preserve_other_providers_secrets_and_routing_identity():
     assert edited.valid and len(edited.settings.custom_providers) == 2
     original = edited.settings.custom_provider(first)
     assert original.display_name == "Renamed"
-    assert original.api_key.get_secret_value() == "private-api-key"
+    assert original.api_keys[0].get_secret_value() == "private-api-key"
     cleared = mutate(snapshot(edited.target_values), "update", first, {"api_key": None})
-    assert cleared.settings.custom_provider(first).api_key is None
+    assert cleared.settings.custom_provider(first).api_keys == ()
 
 
 def test_deletion_requires_reassignment_and_is_idempotent():
@@ -124,10 +143,12 @@ def test_invalid_duplicate_or_locked_mutation_does_not_expose_keys():
         state.managed, {CUSTOM_PROVIDERS_ENV: state.managed[CUSTOM_PROVIDERS_ENV]}
     )
     assert not mutate(locked, "delete", provider_id).valid
-    public = load_config_response(state)
+    public = load_config_response(state, revision_key=b"test-revision-key")
     rows = public["custom_providers"]
     assert isinstance(rows, list) and isinstance(rows[0], dict)
-    assert rows[0]["api_key"] == "********"
+    projection = rows[0]["api_keys"]
+    assert isinstance(projection, dict)
+    assert projection["entries"] == [{"reference": 0}]
     assert "private-api-key" not in json.dumps(public)
     doctor = json.dumps(settings_report(state.settings, {}))
     assert (

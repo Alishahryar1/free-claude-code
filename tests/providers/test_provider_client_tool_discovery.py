@@ -247,10 +247,10 @@ async def test_provider_discovery_call_and_result_round_trip(
                     await create_provider(
                         provider_id,
                         Settings(
-                            open_router_api_key="test",
-                            nvidia_nim_api_key="test",
-                            groq_api_key="test",
-                            mistral_api_key="test",
+                            open_router_api_keys="test",
+                            nvidia_nim_api_keys="test",
+                            groq_api_keys="test",
+                            mistral_api_keys="test",
                         ),
                         ProviderAdmissionRegistry(
                             ProviderAdmissionLimits(

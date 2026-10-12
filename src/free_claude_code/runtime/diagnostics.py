@@ -187,7 +187,7 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
             "configured": True,
             "referenced": definition.provider_id in referenced,
             "base_url": _url_summary(definition.base_url),
-            "api_key_configured": bool(definition.api_key),
+            "api_key_configured": bool(definition.api_keys),
             "api_format": definition.api_format,
             "reasoning_format": definition.reasoning_format,
             "reasoning_history_format": definition.reasoning_history_format,

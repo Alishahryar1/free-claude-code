@@ -12,6 +12,7 @@ const state = {
   providerChecks: new Map(),
   providerId: null,
   customProvider: null,
+  configRefreshRequired: false,
   modelLabels: new Map(),
   localStatusRequest: null,
   startup: null,
@@ -216,6 +217,7 @@ async function load({ providersOnly = false } = {}) {
   config.custom_providers ||= [];
   config.provider_status.push(...config.custom_providers.map((provider) => ({ ...provider, kind: "custom", status: "configured", settings_keys: [], missing_configuration_keys: [] })));
   state.config = config;
+  state.configRefreshRequired = false;
   window.CodeSessions.setProviderNames(config.custom_providers);
   state.startup = null;
   state.fields = new Map(config.fields.map((field) => [field.key, field]));
@@ -429,7 +431,14 @@ function updateProviderCard(provider) {
   renderProviderCheckResult(provider.provider_id);
 }
 
-function openProviderDialog(providerId) {
+async function refreshProviderConfig() {
+  if (!state.configRefreshRequired) return true;
+  try { await load({ providersOnly: true }); return true; }
+  catch (error) { showMessage(`Could not reload settings: ${error.message}`, "error"); return false; }
+}
+
+async function openProviderDialog(providerId) {
+  if (!await refreshProviderConfig()) return;
   if (connectedAccountDescriptor(providerId)?.kind === "custom") return openCustomProviderDialog(providerId);
   state.customProvider = null;
   state.providerId = providerId;
@@ -454,9 +463,12 @@ function openProviderDialog(providerId) {
   });
   renderProviderDialogActions(provider);
   updateDirtyState();
-  byId("providerDialog").showModal();
+  if (!byId("providerDialog").open) byId("providerDialog").showModal();
   const missing = provider.missing_configuration_keys?.[0];
-  const first = missing ? byId(`field-${missing}`) : fields.querySelector("input:not(:disabled), select:not(:disabled), textarea:not(:disabled)");
+  const target = missing ? byId(`field-${missing}`) : null;
+  const first = target?.dataset.fieldType === "api_key_list"
+    ? target.closest(".api-key-editor").querySelector("input:not([type=hidden]):not(:disabled), button:not(:disabled)")
+    : target || fields.querySelector("input:not([type=hidden]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button:not(:disabled)");
   first?.focus();
 }
 
@@ -466,9 +478,10 @@ const CUSTOM_LABELS = {
   native_responses: "Native reasoning", messages_manual: "Token-budget thinking", messages_adaptive: "Adaptive thinking",
 };
 
-function openCustomProviderDialog(providerId = null) {
+async function openCustomProviderDialog(providerId = null) {
+  if (!await refreshProviderConfig()) return;
   const provider = state.config.custom_providers.find((item) => item.provider_id === providerId) || {
-    display_name: "", base_url: "", api_key: null, api_format: "openai_chat", reasoning_format: "provider_default", reasoning_history_format: "disabled", model_ids: [],
+    display_name: "", base_url: "", api_keys: { revision: null, entries: [] }, api_format: "openai_chat", reasoning_format: "provider_default", reasoning_history_format: "disabled", model_ids: [],
   };
   state.providerId = providerId || "__custom_new__";
   state.customProvider = provider;
@@ -481,7 +494,7 @@ function openCustomProviderDialog(providerId = null) {
   const definitions = [
     ["display_name", "Name", "string", [], ""],
     ["base_url", "Base URL", "string", [], "Include the API path, for example https://gateway.example/v1."],
-    ["api_key", "API key", "secret", [], "Optional for endpoints that do not require a key."],
+    ["api_keys", "API keys", "api_key_list", [], "Key 1 is used. Leave the list empty for endpoints that do not require a key."],
     ["api_format", "API format", "select", [["openai_chat", "Chat Completions"], ["openai_responses", "Responses"], ["anthropic_messages", "Anthropic Messages"]], "Select the API exposed by your endpoint."],
     ["reasoning_format", "Reasoning format", "select", formats.map((value) => [value, CUSTOM_LABELS[value]]), "How FCC sends reasoning controls. Provider default leaves computation to the upstream."],
     ["reasoning_history_format", "Reasoning history format", "select", [["disabled", "Text context"], ["reasoning_content", "reasoning_content"], ["reasoning", "reasoning"], ["think_tags", "Think tags"]], "How previous reasoning is sent to a Chat Completions endpoint."],
@@ -489,8 +502,8 @@ function openCustomProviderDialog(providerId = null) {
   ];
   for (const [key, label, type, options, description] of definitions) {
     fields.appendChild(renderField({ key, label, type, options: options.map(([value, label]) => ({value, label})), description,
-      value: key === "model_ids" ? provider.model_ids.join("\n") : provider[key], nullable: key === "api_key", secret: key === "api_key",
-      configured: key === "api_key" && !!provider.api_key, locked: !!state.config.custom_providers_locked, source: "managed_env" }));
+      value: key === "model_ids" ? provider.model_ids.join("\n") : provider[key], nullable: key === "api_keys", secret: key === "api_keys",
+      configured: key === "api_keys" && !!provider.api_keys?.entries.length, locked: !!state.config.custom_providers_locked, source: state.config.custom_providers_locked ? "process" : "managed_env" }));
   }
   const format = byId("field-api_format");
   const reasoning = byId("field-reasoning_format");
@@ -518,7 +531,7 @@ function openCustomProviderDialog(providerId = null) {
   }
   byId("saveProvider").hidden = false;
   updateDirtyState();
-  byId("providerDialog").showModal();
+  if (!byId("providerDialog").open) byId("providerDialog").showModal();
   byId("field-display_name").focus();
 }
 
@@ -914,6 +927,20 @@ function renderField(field) {
     label.appendChild(sourceEl);
   }
 
+  if (field.type === "api_key_list") {
+    label.id = `field-${field.key}-label`;
+    label.removeAttribute("for");
+    const editor = new window.FccApiKeyEditor(field, updateDirtyState);
+    wrapper.append(label, editor.element);
+    if (field.description) {
+      const description = document.createElement("div");
+      description.className = "field-description";
+      description.textContent = field.description;
+      wrapper.appendChild(description);
+    }
+    return wrapper;
+  }
+
   const input = window.FccFormControls.configure(inputForField(field));
   input.id = `field-${field.key}`;
   input.dataset.key = field.key;
@@ -929,6 +956,7 @@ function renderField(field) {
   input.addEventListener("input", () => {
     input.dataset.remove = "false";
     clearCredentialError(input);
+    if (state.providerId) credentialEditors().forEach((editor) => editor.clearResults());
   });
   if (field.type === "optional_model") {
     input.addEventListener("blur", () => {
@@ -1261,6 +1289,7 @@ function option(value, label) {
 }
 
 function readFieldValue(input) {
+  if (input.dataset.fieldType === "api_key_list") return JSON.parse(input.value);
   if (input.type === "checkbox") return input.checked ? "true" : "false";
   if (input.dataset.remove === "true") return null;
   if (
@@ -1277,6 +1306,7 @@ function readFieldValue(input) {
 }
 
 function comparableValue(value) {
+  if (value !== null && typeof value === "object") return JSON.stringify(value);
   return value === null ? NULL_VALUE : String(value);
 }
 
@@ -1297,7 +1327,7 @@ function updateDirtyState() {
   byId("dirtyState").textContent =
     state.restart ? "Changes saved" : count === 0 ? "No changes" : `${count} unsaved change${count === 1 ? "" : "s"}`;
   byId("applyButton").disabled = state.applying || (!state.restart && count === 0);
-  byId("saveProvider").disabled = state.applying || !!state.restart || !Object.keys(changedValues(byId("providerFields"))).length;
+  byId("saveProvider").disabled = state.applying || !!state.restart || state.configRefreshRequired || !Object.keys(changedValues(byId("providerFields"))).length;
 }
 
 function clearCredentialError(input) {
@@ -1306,9 +1336,21 @@ function clearCredentialError(input) {
   input.removeAttribute("aria-describedby");
 }
 
-function showCredentialErrors(checks) {
+function credentialEditors() {
+  return [...byId("providerFields").querySelectorAll(".api-key-editor")].map((element) => element.apiKeyEditor);
+}
+
+function showCredentialErrors(checks, rowErrors = []) {
   let first = null;
-  checks.forEach((check) => {
+  [...rowErrors.map((error) => ({ ...error, status: "rejected" })), ...checks].forEach((check) => {
+    const editor = credentialEditors().find((editor) => editor.field.key === check.key);
+    if (editor) {
+      if (check.status === "rejected" || check.status === "unverified") {
+        const input = editor.showResult(check.index, check.message, check.status === "rejected");
+        if (check.status === "rejected") first ||= input;
+      }
+      return;
+    }
     const input = byId(`field-${check.key}`);
     if (!input) return;
     clearCredentialError(input);
@@ -1335,6 +1377,7 @@ function setApplying(applying) {
   byId("closeProviderDialog").disabled = applying;
   byId("cancelProviderDialog").disabled = applying;
   byId("saveProvider").textContent = applying ? "Saving…" : "Save";
+  byId("saveProvider").classList.toggle("startup-busy", applying);
   byId("saveProvider").setAttribute("aria-busy", String(applying));
   byId("applyButton").textContent = state.restart
     ? applying ? "Reconnecting…" : "Reconnect"
@@ -1378,7 +1421,7 @@ async function reconnectAfterRestart() {
   state.startupRequest?.controller.abort();
   state.startupRequest = null;
   state.startupAgain = false;
-  const { restart, warnings, providersOnly } = state.restart;
+  const { restart, warnings, providersOnly, providerId, checks } = state.restart;
   const target = new URL(restart.admin_url || "/admin", window.location.href);
   setApplying(true);
   showMessage(["Applied. Reconnecting to the server…", ...warnings].join("\n"), warnings.length ? "warn" : "ok");
@@ -1386,7 +1429,7 @@ async function reconnectAfterRestart() {
     await waitForRestart(restart, target);
     if (target.origin !== window.location.origin) {
       // Carry only the safe warning text across an address change, never edits.
-      target.hash = new URLSearchParams({ "fcc-applied": JSON.stringify(warnings) }).toString();
+      target.hash = new URLSearchParams({ "fcc-applied": JSON.stringify(warnings), ...(providerId ? { "fcc-provider": providerId, "fcc-checks": JSON.stringify(checks) } : {}) }).toString();
       window.location.replace(target.href);
       return;
     }
@@ -1394,7 +1437,9 @@ async function reconnectAfterRestart() {
     state.restart = null;
     void refreshStartup();
     showMessage(["Applied", ...warnings].join("\n"), warnings.length ? "warn" : "ok");
+    if (providerId) await restoreSavedProvider(providerId, checks);
   } catch (error) {
+    state.configRefreshRequired = true;
     showMessage([`Settings were saved. ${error.message} Use Reconnect to try again.`, ...warnings].join("\n"), "warn");
     appendAdminLink(target);
   } finally {
@@ -1402,22 +1447,38 @@ async function reconnectAfterRestart() {
   }
 }
 
-function showRestartNotice() {
+async function showRestartNotice() {
   const url = new URL(window.location.href);
   const fragment = new URLSearchParams(url.hash.slice(1));
   const notice = fragment.get("fcc-applied");
   if (notice === null) return;
   fragment.delete("fcc-applied");
+  const providerId = fragment.get("fcc-provider");
+  const checks = fragment.get("fcc-checks");
+  fragment.delete("fcc-provider");
+  fragment.delete("fcc-checks");
   url.hash = fragment.toString();
   window.history.replaceState(window.history.state, "", url);
   try {
     const warnings = JSON.parse(notice);
     if (Array.isArray(warnings) && warnings.every((warning) => typeof warning === "string")) {
       showMessage(["Applied", ...warnings].join("\n"), warnings.length ? "warn" : "ok");
+      if (providerId && checks) {
+        const parsed = JSON.parse(checks);
+        if (Array.isArray(parsed) && parsed.every((check) => check && typeof check.key === "string" && Number.isInteger(check.index) && typeof check.message === "string" && check.status === "unverified")) await restoreSavedProvider(providerId, parsed);
+      }
     }
   } catch {
     // A malformed navigation notice must not prevent normal Admin use.
   }
+}
+
+async function restoreSavedProvider(providerId, checks) {
+  if (!connectedAccountDescriptor(providerId)) return;
+  await openProviderDialog(providerId);
+  showCredentialErrors(checks);
+  byId("providerMessage").textContent = "Saved. Some keys could not be verified.";
+  byId("providerMessage").className = "message-area warn";
 }
 
 async function apply(providerId = null, customAction = null) {
@@ -1426,20 +1487,31 @@ async function apply(providerId = null, customAction = null) {
     await reconnectAfterRestart();
     return;
   }
+  if (providerId && state.configRefreshRequired) return;
   const values = changedValues(providerId ? byId("providerFields") : byId("adminViews"));
   const custom = providerId && state.customProvider;
+  const action = customAction || (custom?.provider_id ? "update" : "create");
+  if (!Object.keys(values).length && !(custom && action === "delete")) return;
+  if (providerId && action !== "delete") {
+    let invalid = null;
+    for (const editor of credentialEditors()) {
+      const input = editor.validate();
+      invalid ||= input;
+      values[editor.field.key] = editor.payload();
+    }
+    if (invalid) {
+      showMessage("Check the highlighted API key rows.", "error");
+      invalid.focus();
+      return;
+    }
+  }
   let mutation = null;
   if (custom) {
-    const action = customAction || (custom.provider_id ? "update" : "create");
     if ("model_ids" in values) values.model_ids = values.model_ids.split(/\r?\n/).map((id) => id.trim()).filter(Boolean);
     mutation = { action, values: action === "delete" ? {} : values };
     if (custom.provider_id) mutation.provider_id = custom.provider_id;
   }
-  if (!Object.keys(values).length && mutation?.action !== "delete") return;
-  const checkingKeys = Object.keys(values).some((key) => {
-    const field = state.fields.get(key);
-    return field?.secret && field.section === "providers" && values[key] !== null;
-  });
+  const checkingKeys = credentialEditors().some((editor) => values[editor.field.key]?.entries.length);
   let rejectedField = null;
   let applied = false;
   setApplying(true);
@@ -1451,29 +1523,39 @@ async function apply(providerId = null, customAction = null) {
     });
     const checks = result.credential_checks || [];
     if (!result.applied) {
-      rejectedField = showCredentialErrors(checks);
-      showMessage(rejectedField ? "Not applied. Check the highlighted API keys." : result.errors.join("; "), "error");
+      rejectedField = showCredentialErrors(checks, result.credential_row_errors || []);
+      showMessage(rejectedField ? "Not applied. Check the highlighted API keys." : (result.errors || []).join("; "), "error");
       return;
     }
     applied = true;
-    if (providerId) byId("providerDialog").close();
-    const warnings = checks.filter((check) => check.status === "unverified").map((check) =>
-      `${state.fields.get(check.key)?.label || check.key}: ${check.message}`
+    const warningChecks = checks.filter((check) => check.status === "unverified");
+    const warnings = warningChecks.map((check) =>
+      `${state.fields.get(check.key)?.label || "API keys"}, Key ${check.index + 1}: ${check.message}`
     );
+    const savedProviderId = warnings.length && providerId && mutation?.action !== "delete" ? result.custom_provider_id || providerId : null;
+    if (providerId && !savedProviderId) byId("providerDialog").close();
     const restart = result.restart || {};
     if (restart.required && restart.automatic) {
-      state.restart = { restart, warnings, providersOnly: !!providerId };
+      if (providerId) byId("providerDialog").close();
+      state.restart = { restart, warnings, providersOnly: !!providerId, providerId: savedProviderId, checks: warningChecks };
       await reconnectAfterRestart();
       return;
     }
     const pending = restart.required ? restart.fields || [] : result.pending_fields || [];
     await load({ providersOnly: !!providerId });
+    if (savedProviderId) await restoreSavedProvider(savedProviderId, warningChecks);
     const message = pending.length
       ? `Applied. Restart fcc-server to use: ${pending.join(", ")}`
       : "Applied";
     showMessage([message, ...warnings].join("\n"), warnings.length ? "warn" : "ok");
+    if (savedProviderId) {
+      byId("providerMessage").textContent = `Saved${pending.length ? ". Restart required" : ""}. Some keys could not be verified.`;
+      byId("providerMessage").className = "message-area warn";
+    }
   } catch (error) {
+    if (providerId && (applied || error.status === 409 || !error.status || error.status >= 500)) state.configRefreshRequired = true;
     showMessage(applied ? `Applied, but could not reload settings: ${error.message}` : `Could not apply settings: ${error.message}`, "error");
+    if (providerId && state.configRefreshRequired) byId("providerMessage").append(" Close and reopen this modal to load saved settings before saving again.");
   } finally {
     setApplying(false);
     if (rejectedField) {
@@ -1481,7 +1563,7 @@ async function apply(providerId = null, customAction = null) {
       rejectedField.closest(".settings-section")?.classList.add("show-advanced");
       rejectedField.scrollIntoView({ block: "center", behavior: "instant" });
       rejectedField.focus();
-    } else if (providerId && applied) {
+    } else if (providerId && applied && !byId("providerDialog").open) {
       const focus = mutation && mutation.action !== "update"
         ? byId("addCustomProvider")
         : document.querySelector(`[data-provider="${providerId}"] [data-provider-settings]`);

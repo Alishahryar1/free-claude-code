@@ -20,7 +20,7 @@ from tests.runtime.test_provider_manager import RuntimeFactory
 @pytest.mark.parametrize("protection", ["concurrency", "rate", "recovery"])
 async def test_replacement_cannot_bypass_existing_protection(protection: str) -> None:
     settings = Settings(
-        nvidia_nim_api_key="test-key",
+        nvidia_nim_api_keys="test-key",
         provider_rate_limit=1 if protection == "rate" else 1000,
         provider_rate_window=60,
         provider_max_concurrency=1,
@@ -163,7 +163,7 @@ async def test_blocked_publication_keeps_old_limits_until_generation_switch():
 @pytest.mark.asyncio
 async def test_old_lazy_construction_uses_current_limits_and_survives_retirement():
     settings = Settings(
-        nvidia_nim_api_key="test", provider_rate_limit=1000, provider_max_concurrency=1
+        nvidia_nim_api_keys="test", provider_rate_limit=1000, provider_max_concurrency=1
     )
     manager = ProviderRuntimeManager(settings)
     old_lease = await manager.acquire()

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.config.api_keys import first_api_key
 from free_claude_code.messaging.transcription import TranscriptionService
 from free_claude_code.messaging.voice import Transcriber
 from free_claude_code.providers.nvidia_nim.voice import NvidiaNimTranscriber
@@ -26,7 +27,7 @@ async def test_voice_transcription_backend_when_explicitly_enabled(
     _write_tone_wav(wav_path)
     transcriber: Transcriber
     if smoke_config.settings.whisper_device == "nvidia_nim":
-        api_key = smoke_config.settings.nvidia_nim_api_key
+        api_key = first_api_key(smoke_config.settings.nvidia_nim_api_keys)
         if api_key is None:
             pytest.skip("NVIDIA_NIM_API_KEY is required")
         transcriber = NvidiaNimTranscriber(
@@ -37,7 +38,9 @@ async def test_voice_transcription_backend_when_explicitly_enabled(
         transcriber = TranscriptionService(
             model=smoke_config.settings.whisper_model,
             device=smoke_config.settings.whisper_device,
-            huggingface_api_key=smoke_config.settings.huggingface_api_key,
+            huggingface_api_key=first_api_key(
+                smoke_config.settings.huggingface_api_keys
+            ),
         )
     try:
         text = await transcriber.transcribe(wav_path)

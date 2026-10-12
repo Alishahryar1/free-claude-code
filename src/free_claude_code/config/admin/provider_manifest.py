@@ -22,7 +22,7 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         "description": "Anthropic API access with separate usage billing. Messages requests use Anthropic tools and client thinking controls. Native fallback uses other Anthropic models. FCC local web and prompt optimizations apply to compatibility routes.",
     },
     "OPENAI_API_KEY": {
-        "label": "OpenAI API Key",
+        "label": "OpenAI API Keys",
         "description": "API key for the OpenAI Platform. Separate from ChatGPT sign-in.",
     },
     "OPENAI_PROXY": {
@@ -42,38 +42,38 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "NVIDIA_NIM_API_KEY": {
-        "label": "NVIDIA NIM API Key",
+        "label": "NVIDIA NIM API Keys",
         "description": "Used by NVIDIA NIM chat and optional NIM voice transcription.",
     },
     "MISTRAL_API_KEY": {
-        "label": "Mistral API Key",
+        "label": "Mistral API Keys",
         "description": (
             "Mistral La Plateforme (api.mistral.ai); Experiment plan is free tier with rate limits."
         ),
     },
     "CODESTRAL_API_KEY": {
-        "label": "Codestral API Key",
+        "label": "Codestral API Keys",
         "description": (
             "Mistral Codestral endpoint (codestral.mistral.ai); distinct from Mistral "
             "La Plateforme ``MISTRAL_API_KEY``. See Mistral docs for coding/FIM domains."
         ),
     },
     "OPENCODE_API_KEY": {
-        "label": "OpenCode API Key",
+        "label": "OpenCode API Keys",
         "description": (
             "OpenCode Zen curated gateway (opencode.ai/zen/v1) and OpenCode Go subscription "
             "gateway (opencode.ai/zen/go/v1); single key from opencode.ai/auth."
         ),
     },
     "AI_GATEWAY_API_KEY": {
-        "label": "Vercel AI Gateway API Key",
+        "label": "Vercel AI Gateway API Keys",
         "description": (
             "Vercel AI Gateway API key for the OpenAI-compatible endpoint at "
             "ai-gateway.vercel.sh/v1."
         ),
     },
     "AWS_BEARER_TOKEN_BEDROCK": {
-        "label": "Amazon Bedrock API Key",
+        "label": "Amazon Bedrock API Keys",
         "description": (
             "Amazon Bedrock bearer API key for the region-specific Mantle "
             "OpenAI-compatible endpoint."
@@ -86,18 +86,18 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "HUGGINGFACE_API_KEY": {
-        "label": "Hugging Face API Key",
+        "label": "Hugging Face API Keys",
         "description": (
             "Hugging Face token with Inference Providers permission; also used "
             "for local Whisper model downloads when voice notes need gated models."
         ),
     },
     "COHERE_API_KEY": {
-        "label": "Cohere API Key",
+        "label": "Cohere API Keys",
         "description": "Cohere API key for the OpenAI-compatible Compatibility API.",
     },
     "ZAI_API_KEY": {
-        "label": "Z.ai API Key",
+        "label": "Z.ai API Keys",
         "description": (
             "Shared Z.ai key for Coding Plan (zai/...) and the general API "
             "(zai_api/...). The selected model prefix chooses Coding Plan quota "
@@ -105,39 +105,39 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "FIREWORKS_API_KEY": {
-        "label": "Fireworks API Key",
+        "label": "Fireworks API Keys",
         "description": "Fireworks AI inference API key.",
     },
     "NOVITA_API_KEY": {
-        "label": "Novita AI API Key",
+        "label": "Novita AI API Keys",
         "description": (
             "Novita AI OpenAI-compatible API key (create at "
             "[novita.ai/settings/key-management](https://novita.ai/settings/key-management))."
         ),
     },
     "MINIMAX_API_KEY": {
-        "label": "MiniMax API Key",
+        "label": "MiniMax API Keys",
         "description": (
             "MiniMax API key for the OpenAI-compatible Chat Completions API at "
             "free_claude_code.api.minimax.io/v1."
         ),
     },
     "KIMI_CODE_API_KEY": {
-        "label": "Kimi Code API Key",
+        "label": "Kimi Code API Keys",
         "description": (
             "Personal Kimi Code subscription key from kimi.com/code/console; "
             "separate from KIMI_API_KEY credits on the Kimi API platform."
         ),
     },
     "CLOUDFLARE_API_TOKEN": {
-        "label": "Cloudflare API Token",
+        "label": "Cloudflare API Tokens",
         "description": (
             "Cloudflare API token for account-scoped AI REST requests. "
             "Use with CLOUDFLARE_ACCOUNT_ID."
         ),
     },
     "GEMINI_API_KEY": {
-        "label": "Gemini API Key",
+        "label": "Gemini API Keys",
         "description": (
             "Google AI Studio Gemini API key (Google AI Studio / Gemini API "
             "[OpenAI-compatible](https://ai.google.dev/gemini-api/docs/openai)); "
@@ -146,7 +146,7 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "GROQ_API_KEY": {
-        "label": "Groq API Key",
+        "label": "Groq API Keys",
         "description": (
             "GroqCloud OpenAI-compatible API key ([console.groq.com/keys]("
             "https://console.groq.com/keys)); see Groq "
@@ -154,7 +154,7 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "CLINE_API_KEY": {
-        "label": "Cline API Key",
+        "label": "Cline API Keys",
         "description": (
             "Subscribe to ClinePass, then create a programmatic API key under "
             "Settings > API Keys at app.cline.bot. This is not the Cline CLI's "
@@ -162,7 +162,7 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "XAI_API_KEY": {
-        "label": "xAI API Key",
+        "label": "xAI API Keys",
         "description": (
             "xAI OpenAI-compatible API key for Grok chat and image-understanding "
             "models."
@@ -182,7 +182,7 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "QWENCLOUD_API_KEY": {
-        "label": "QwenCloud Token Plan API Key",
+        "label": "QwenCloud Token Plan API Keys",
         "description": (
             "Dedicated QwenCloud Token Plan key (sk-sp-...). Token Plan, Coding "
             "Plan, and pay-as-you-go keys use separate endpoints and cannot be "
@@ -190,7 +190,7 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "QWENCLOUD_CODING_API_KEY": {
-        "label": "QwenCloud Coding Plan API Key",
+        "label": "QwenCloud Coding Plan API Keys",
         "description": (
             "Dedicated QwenCloud Coding Plan key (sk-sp-...) for personal, "
             "interactive coding-agent use. Token Plan, Coding Plan, and "
@@ -198,69 +198,69 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "TOGETHER_API_KEY": {
-        "label": "Together AI API Key",
+        "label": "Together AI API Keys",
         "description": (
             "Together AI OpenAI-compatible API key for serverless and dedicated "
             "chat models."
         ),
     },
     "DEEPINFRA_API_KEY": {
-        "label": "DeepInfra API Key",
+        "label": "DeepInfra API Keys",
         "description": (
             "DeepInfra API key for OpenAI-compatible chat and reasoning models."
         ),
     },
     "SILICONFLOW_API_KEY": {
-        "label": "SiliconFlow API Key",
+        "label": "SiliconFlow API Keys",
         "description": (
             "SiliconFlow API key for OpenAI-compatible chat, reasoning, and "
             "vision models."
         ),
     },
     "NEBIUS_API_KEY": {
-        "label": "Nebius Token Factory API Key",
+        "label": "Nebius Token Factory API Keys",
         "description": (
             "Nebius Token Factory API key for OpenAI-compatible chat, reasoning, "
             "and tool-capable models."
         ),
     },
     "OPPER_API_KEY": {
-        "label": "Opper API Key",
+        "label": "Opper API Keys",
         "description": (
             "Opper gateway key for OpenAI-compatible chat, reasoning and "
             "tool-capable models across its EU-hosted model pools."
         ),
     },
     "SCW_SECRET_KEY": {
-        "label": "Scaleway API Key",
+        "label": "Scaleway API Keys",
         "description": (
             "Scaleway Generative APIs secret key for OpenAI-compatible chat and "
             "tool-capable models."
         ),
     },
     "CHUTES_API_KEY": {
-        "label": "Chutes API Key",
+        "label": "Chutes API Keys",
         "description": (
             "Chutes API key for OpenAI-compatible chat, reasoning, and "
             "tool-capable models."
         ),
     },
     "FEATHERLESS_API_KEY": {
-        "label": "Featherless AI API Key",
+        "label": "Featherless AI API Keys",
         "description": (
             "Featherless AI API key for plan-available OpenAI-compatible chat, "
             "reasoning, and tool-capable models."
         ),
     },
     "SAMBANOVA_API_KEY": {
-        "label": "SambaNova API Key",
+        "label": "SambaNova API Keys",
         "description": (
             "SambaNova Cloud OpenAI-compatible API key (create at "
             "[cloud.sambanova.ai/apis](https://cloud.sambanova.ai/apis))."
         ),
     },
     "CEREBRAS_API_KEY": {
-        "label": "Cerebras API Key",
+        "label": "Cerebras API Keys",
         "description": (
             "Cerebras Inference API key (create in [Cloud Console](https://cloud.cerebras.ai)); "
             "see [Quickstart](https://inference-docs.cerebras.ai/quickstart) and "
@@ -273,27 +273,27 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "TOKENROUTER_API_KEY": {
-        "label": "TokenRouter API Key",
+        "label": "TokenRouter API Keys",
         "description": (
             "TokenRouter OpenAI-compatible gateway API key for api.tokenrouter.com/v1."
         ),
     },
     "NARAROUTE_API_KEY": {
-        "label": "NaraRoute API Key",
+        "label": "NaraRoute API Keys",
         "description": (
             "NaraRoute OpenAI-compatible gateway API key for router.bynara.id/v1. "
             "Keys begin with sk-nry-; create one at router.bynara.id/keys."
         ),
     },
     "LIGHTNING_API_KEY": {
-        "label": "Lightning AI API Key",
+        "label": "Lightning AI API Keys",
         "description": (
             "Lightning AI Model APIs key for the OpenAI-compatible endpoint at "
             "lightning.ai/api/v1. Create one on lightning.ai under Model APIs."
         ),
     },
     "ORCAROUTER_API_KEY": {
-        "label": "OrcaRouter API Key",
+        "label": "OrcaRouter API Keys",
         "description": (
             "OrcaRouter OpenAI-compatible multi-provider gateway API key for "
             "api.orcarouter.ai/v1. Keys begin with sk-orca-; create one at "
@@ -301,41 +301,41 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "ATLASCLOUD_API_KEY": {
-        "label": "Atlas Cloud API Key",
+        "label": "Atlas Cloud API Keys",
         "description": (
             "Atlas Cloud OpenAI-compatible multi-provider gateway API key for "
             "api.atlascloud.ai/v1; create one at console.atlascloud.ai/api-keys."
         ),
     },
     "XKIRO_API_KEY": {
-        "label": "xKiro API Key",
+        "label": "xKiro API Keys",
         "description": (
             "xKiro API key for api.xkiro.com/v1. "
             "Create one at xkiro.com/dashboard/api/keys."
         ),
     },
     "AGNES_API_KEY": {
-        "label": "Agnes AI API Key",
+        "label": "Agnes AI API Keys",
         "description": (
             "Agnes AI OpenAI-compatible API key for apihub.agnes-ai.com/v1."
         ),
     },
     "ZENMUX_API_KEY": {
-        "label": "ZenMux API Key",
+        "label": "ZenMux API Keys",
         "description": (
             "ZenMux OpenAI-compatible gateway API key for zenmux.ai/api/v1. "
             "Create one at zenmux.ai/platform/pay-as-you-go."
         ),
     },
     "WANDB_API_KEY": {
-        "label": "W&B Inference API Key",
+        "label": "W&B Inference API Keys",
         "description": (
             "W&B API key for Serverless Inference at api.inference.wandb.ai/v1. "
             "Create one in [W&B User Settings](https://wandb.ai/settings)."
         ),
     },
     "EXPLABS_API_KEY": {
-        "label": "Experiential Labs API Key",
+        "label": "Experiential Labs API Keys",
         "description": (
             "Experiential Labs OpenAI-compatible gateway API key for "
             "api.experientiallabs.ai/v1. Keys look like xpl_ followed by 40 "
@@ -343,7 +343,7 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
         ),
     },
     "CHEAPER_INFERENCE_API_KEY": {
-        "label": "Cheaper Inference API Key",
+        "label": "Cheaper Inference API Keys",
         "description": (
             "Cheaper Inference OpenAI-compatible gateway API key for "
             "api.cheaperinference.com/v1. "
@@ -386,9 +386,9 @@ def _credential_field_specs() -> tuple[ConfigFieldSpec, ...]:
             _with_override(
                 ConfigFieldSpec(
                     key=descriptor.credential_env,
-                    label=f"{descriptor.display_name} API Key",
+                    label=f"{descriptor.display_name} API Keys",
                     section_id="providers",
-                    field_type="secret",
+                    field_type="api_key_list",
                     settings_attr=descriptor.credential_attr,
                     provider_ids=tuple(
                         provider.provider_id

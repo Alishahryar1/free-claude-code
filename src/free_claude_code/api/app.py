@@ -95,6 +95,16 @@ def create_app(services: ApiServices) -> FastAPI:
             message_summary=message_summary,
             tool_names=tool_names,
         )
+        if request.url.path == "/admin/api/config/apply":
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": [
+                        {key: error[key] for key in ("loc", "msg", "type")}
+                        for error in exc.errors()
+                    ]
+                },
+            )
         return await request_validation_exception_handler(request, exc)
 
     @app.exception_handler(ApplicationError)

@@ -3,7 +3,7 @@
 import pytest
 from playwright.sync_api import ConsoleMessage, Page, Route, ViewportSize, expect
 
-from e2e.provider_support import close_provider, open_provider
+from e2e.provider_support import api_key_input, close_provider, open_provider
 
 
 @pytest.mark.parametrize(
@@ -20,7 +20,7 @@ def test_retired_provider_is_absent_and_default_setup_remains_available(
         "primary-button"
     )
     card.locator("[data-provider-settings]").click()
-    expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_focused()
+    expect(page.get_by_role("button", name="Add key", exact=True)).to_be_focused()
     close_provider(page)
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(page.locator("#field-MODEL")).to_have_value(
@@ -54,7 +54,7 @@ def test_missing_provider_configuration_opens_modal_and_focuses_exact_field(
 ) -> None:
     _open_admin(page, admin_base_url, viewport)
     card = page.locator('[data-provider="nvidia_nim"]')
-    key_input = page.locator("#field-NVIDIA_NIM_API_KEY")
+    key_input = page.get_by_role("button", name="Add key", exact=True)
 
     expect(card.get_by_role("button", name="Configure", exact=True)).to_have_class(
         "primary-button"
@@ -307,7 +307,7 @@ def test_admin_loading_finishes_before_local_availability_checks(
     page.route("**/admin/api/providers/*/local-status", hold)
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
     open_provider(page, "nvidia_nim")
-    key = page.locator("#field-NVIDIA_NIM_API_KEY")
+    key = api_key_input(page, "NVIDIA_NIM_API_KEY")
     key.fill("unsaved-key")
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     expect(page.locator("#saveProvider")).to_be_enabled()
@@ -351,7 +351,7 @@ def test_local_availability_failure_does_not_fail_admin_loading(
     with page.expect_request("**/admin/api/providers/lmstudio/local-status"):
         page.goto(f"{admin_base_url}/admin")
     open_provider(page, "nvidia_nim")
-    expect(page.locator("#field-NVIDIA_NIM_API_KEY")).to_be_editable()
+    expect(api_key_input(page, "NVIDIA_NIM_API_KEY")).to_be_editable()
     close_provider(page)
     if failure == "http":
         pending.pop().fulfill(status=503, json={"detail": "private-diagnostic-marker"})
@@ -443,10 +443,8 @@ def test_xkiro_uses_standard_provider_configuration(page: Page, admin_base_url: 
     expect(card.get_by_role("button", name="Configure", exact=True)).to_be_visible()
     expect(card.locator('a[href="https://xkiro.com/"]')).to_be_visible()
     dialog = open_provider(page, "xkiro")
-    expect(dialog.locator("#field-XKIRO_API_KEY")).to_be_focused()
-    expect(dialog.locator("#field-XKIRO_API_KEY")).to_have_attribute(
-        "data-secret", "true"
-    )
+    expect(dialog.get_by_role("button", name="Add key", exact=True)).to_be_focused()
+    expect(api_key_input(page, "XKIRO_API_KEY")).to_have_attribute("type", "password")
     expect(dialog.locator("#field-XKIRO_PROXY")).to_be_visible()
     expect(dialog).to_contain_text("xkiro.com/dashboard/api/keys")
     close_provider(page)
@@ -472,8 +470,8 @@ def test_anthropic_standard_modal_groups_key_workspace_and_proxy(
     card = page.locator('[data-provider="anthropic"]')
     expect(card.get_by_role("button", name="Configure", exact=True)).to_be_visible()
     dialog = open_provider(page, "anthropic")
-    key = dialog.locator("#field-ANTHROPIC_API_KEY")
-    expect(key).to_have_attribute("data-secret", "true")
+    key = api_key_input(page, "ANTHROPIC_API_KEY")
+    expect(key).to_have_attribute("type", "password")
     expect(key).to_be_focused()
     expect(dialog.locator("#field-ANTHROPIC_WORKSPACE_ID")).to_be_visible()
     expect(dialog.locator("#field-ANTHROPIC_PROXY")).to_be_visible()
@@ -481,11 +479,12 @@ def test_anthropic_standard_modal_groups_key_workspace_and_proxy(
     dialog.locator("#field-ANTHROPIC_WORKSPACE_ID").fill("wrkspc_test")
     dialog.get_by_role("button", name="Save", exact=True).click()
     expect(dialog).not_to_be_visible()
-    assert submissions == [
-        {
-            "values": {
-                "ANTHROPIC_API_KEY": "test-api-key",
-                "ANTHROPIC_WORKSPACE_ID": "wrkspc_test",
-            }
-        }
+    assert len(submissions) == 1
+    assert set(submissions[0]["values"]) == {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_WORKSPACE_ID",
+    }
+    assert submissions[0]["values"]["ANTHROPIC_API_KEY"]["entries"] == [
+        {"value": "test-api-key"}
     ]
+    assert submissions[0]["values"]["ANTHROPIC_WORKSPACE_ID"] == "wrkspc_test"

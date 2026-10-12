@@ -3,17 +3,25 @@
 import json
 from enum import Enum
 
+from free_claude_code.config.api_keys import encode_api_keys, normalize_api_keys
 from free_claude_code.config.custom_providers import REASONING_FORMATS
 from free_claude_code.config.loader import ConfigSource, ManagedConfigSnapshot
 from free_claude_code.config.model_refs import ModelFallback
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.core.json_types import JsonObject
 
+from .credentials import credential_projection
 from .manifest import FIELDS, SECTIONS
 from .specs import ConfigFieldSpec, ConfigOptionSpec
 from .state import ConfigValueState, ValueState
 from .status import provider_config_status
 
 MASKED_SECRET = "********"
+_CREDENTIAL_KEYS = frozenset(
+    provider.credential_env
+    for provider in PROVIDER_CATALOG.values()
+    if provider.credential_env
+)
 
 
 def normalize_for_env(value: object, *, key: str | None = None) -> str | None:
@@ -21,6 +29,8 @@ def normalize_for_env(value: object, *, key: str | None = None) -> str | None:
 
     if value is None:
         return None
+    if key in _CREDENTIAL_KEYS and isinstance(value, list | tuple):
+        return encode_api_keys(normalize_api_keys(value))
     if key == "MODEL_FALLBACKS" and isinstance(value, list | tuple):
         return (
             json.dumps(
@@ -83,7 +93,9 @@ def load_value_state(snapshot: ManagedConfigSnapshot) -> ValueState:
     return state
 
 
-def load_config_response(snapshot: ManagedConfigSnapshot) -> JsonObject:
+def load_config_response(
+    snapshot: ManagedConfigSnapshot, *, revision_key: bytes
+) -> JsonObject:
     """Return manifest and current config values for the Admin UI."""
 
     state = load_value_state(snapshot)
@@ -92,13 +104,22 @@ def load_config_response(snapshot: ManagedConfigSnapshot) -> JsonObject:
         entry = state[field.key]
         source = entry.source
         raw_value = entry.value
+        value = display_value(field, raw_value)
+        if field.field_type == "api_key_list":
+            assert field.settings_attr is not None
+            value = credential_projection(
+                field.key,
+                getattr(snapshot.settings, field.settings_attr),
+                source,
+                revision_key,
+            )
         fields.append(
             {
                 "key": field.key,
                 "label": field.label,
                 "section": field.section_id,
                 "type": field.field_type,
-                "value": display_value(field, raw_value),
+                "value": value,
                 "configured": raw_value is not None,
                 "source": source,
                 "locked": is_locked_source(source),
@@ -134,7 +155,14 @@ def load_config_response(snapshot: ManagedConfigSnapshot) -> JsonObject:
         "provider_status": provider_config_status(state),
         "custom_providers": [
             item.model_dump(mode="json")
-            | {"api_key": MASKED_SECRET if item.api_key else None}
+            | {
+                "api_keys": credential_projection(
+                    "custom:" + item.provider_id,
+                    item.api_keys,
+                    snapshot.sources["custom_providers"].value,
+                    revision_key,
+                )
+            }
             for item in snapshot.settings.custom_providers
         ],
         "custom_providers_locked": snapshot.sources["custom_providers"]

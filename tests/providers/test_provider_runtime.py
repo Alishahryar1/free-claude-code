@@ -10,6 +10,7 @@ from free_claude_code.application.errors import (
     ApplicationUnavailableError,
     UnknownProviderError,
 )
+from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
     AGNES_DEFAULT_BASE,
@@ -83,57 +84,57 @@ def _make_settings(**overrides):
     mock.model_opus = None
     mock.model_sonnet = None
     mock.model_haiku = None
-    mock.openai_api_key = "test_openai_api_key"
-    mock.azure_openai_api_key = "test_azure_openai_key"
+    mock.openai_api_keys = "test_openai_api_key"
+    mock.azure_openai_api_keys = "test_azure_openai_key"
     mock.azure_openai_base_url = "https://test-resource.openai.azure.com/openai/v1/"
-    mock.nvidia_nim_api_key = "test_key"
-    mock.open_router_api_key = "test_openrouter_key"
-    mock.xai_api_key = "test_xai_key"
-    mock.anthropic_api_key = "test_anthropic_key"
+    mock.nvidia_nim_api_keys = "test_key"
+    mock.open_router_api_keys = "test_openrouter_key"
+    mock.xai_api_keys = "test_xai_key"
+    mock.anthropic_api_keys = "test_anthropic_key"
     mock.anthropic_workspace_id = "workspace"
     mock.anthropic_proxy = None
-    mock.alibaba_cloud_api_key = "test_alibaba_key"
+    mock.alibaba_cloud_api_keys = "test_alibaba_key"
     mock.alibaba_cloud_base_url = None
     mock.alibaba_cloud_proxy = None
-    mock.qwencloud_api_key = "test_qwencloud_key"
-    mock.qwencloud_coding_api_key = "test_qwencloud_coding_key"
-    mock.together_api_key = "test_together_key"
-    mock.deepinfra_api_key = "test_deepinfra_key"
-    mock.siliconflow_api_key = "test_siliconflow_key"
-    mock.nebius_api_key = "test_nebius_key"
-    mock.scw_secret_key = "test_scw_key"
-    mock.opper_api_key = "test_opper_key"
-    mock.chutes_api_key = "test_chutes_key"
-    mock.featherless_api_key = "test_featherless_key"
-    mock.mistral_api_key = "test_mistral_key"
-    mock.codestral_api_key = "test_codestral_key"
-    mock.deepseek_api_key = "test_deepseek_key"
-    mock.wafer_api_key = "test_wafer_key"
-    mock.minimax_api_key = "test_minimax_key"
-    mock.opencode_api_key = "test_opencode_key"
-    mock.vercel_ai_gateway_api_key = "test_vercel_key"
-    mock.bedrock_api_key = "test_bedrock_key"
+    mock.qwencloud_api_keys = "test_qwencloud_key"
+    mock.qwencloud_coding_api_keys = "test_qwencloud_coding_key"
+    mock.together_api_keys = "test_together_key"
+    mock.deepinfra_api_keys = "test_deepinfra_key"
+    mock.siliconflow_api_keys = "test_siliconflow_key"
+    mock.nebius_api_keys = "test_nebius_key"
+    mock.scw_secret_keys = "test_scw_key"
+    mock.opper_api_keys = "test_opper_key"
+    mock.chutes_api_keys = "test_chutes_key"
+    mock.featherless_api_keys = "test_featherless_key"
+    mock.mistral_api_keys = "test_mistral_key"
+    mock.codestral_api_keys = "test_codestral_key"
+    mock.deepseek_api_keys = "test_deepseek_key"
+    mock.wafer_api_keys = "test_wafer_key"
+    mock.minimax_api_keys = "test_minimax_key"
+    mock.opencode_api_keys = "test_opencode_key"
+    mock.vercel_ai_gateway_api_keys = "test_vercel_key"
+    mock.bedrock_api_keys = "test_bedrock_key"
     mock.bedrock_base_url = BEDROCK_DEFAULT_BASE
-    mock.huggingface_api_key = "test_huggingface_key"
-    mock.cohere_api_key = "test_cohere_key"
-    mock.zai_api_key = "test_zai_key"
-    mock.tokenrouter_api_key = "test_tokenrouter_key"
-    mock.nararoute_api_key = "test_nararoute_key"
-    mock.agnes_api_key = "test_agnes_key"
-    mock.zenmux_api_key = "test_zenmux_key"
-    mock.wandb_api_key = "test_wandb_key"
+    mock.huggingface_api_keys = "test_huggingface_key"
+    mock.cohere_api_keys = "test_cohere_key"
+    mock.zai_api_keys = "test_zai_key"
+    mock.tokenrouter_api_keys = "test_tokenrouter_key"
+    mock.nararoute_api_keys = "test_nararoute_key"
+    mock.agnes_api_keys = "test_agnes_key"
+    mock.zenmux_api_keys = "test_zenmux_key"
+    mock.wandb_api_keys = "test_wandb_key"
     mock.lm_studio_base_url = "http://localhost:1234/v1"
     mock.llamacpp_base_url = "http://localhost:8080/v1"
     mock.ollama_base_url = "http://localhost:11434"
-    mock.ollama_api_key = "test_ollama_cloud_key"
-    mock.poolside_api_key = "test_poolside_key"
-    mock.llm7_api_key = "test_llm7_key"
-    mock.lightning_api_key = "test_lightning_key"
-    mock.experiential_api_key = "test_experiential_key"
-    mock.cheaperinference_api_key = "test_cheaperinference_key"
-    mock.orcarouter_api_key = "test_orcarouter_key"
-    mock.atlascloud_api_key = "test_atlascloud_key"
-    mock.xkiro_api_key = "test_xkiro_key"
+    mock.ollama_api_keys = "test_ollama_cloud_key"
+    mock.poolside_api_keys = "test_poolside_key"
+    mock.llm7_api_keys = "test_llm7_key"
+    mock.lightning_api_keys = "test_lightning_key"
+    mock.experiential_api_keys = "test_experiential_key"
+    mock.cheaperinference_api_keys = "test_cheaperinference_key"
+    mock.orcarouter_api_keys = "test_orcarouter_key"
+    mock.atlascloud_api_keys = "test_atlascloud_key"
+    mock.xkiro_api_keys = "test_xkiro_key"
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -141,9 +142,9 @@ def _make_settings(**overrides):
     mock.mistral_proxy = None
     mock.codestral_proxy = None
     mock.kimi_proxy = None
-    mock.kimi_api_key = "test_kimi_key"
+    mock.kimi_api_keys = "test_kimi_key"
     mock.kimi_code_proxy = None
-    mock.kimi_code_api_key = "test_kimi_code_key"
+    mock.kimi_code_api_keys = "test_kimi_code_key"
     mock.wafer_proxy = None
     mock.minimax_proxy = None
     mock.opencode_zen_proxy = None
@@ -160,22 +161,22 @@ def _make_settings(**overrides):
     mock.zenmux_proxy = None
     mock.wandb_proxy = None
     mock.fireworks_proxy = None
-    mock.fireworks_api_key = "test_fireworks_key"
+    mock.fireworks_api_keys = "test_fireworks_key"
     mock.novita_proxy = None
-    mock.novita_api_key = "test_novita_key"
-    mock.cloudflare_api_token = "test_cloudflare_token"
+    mock.novita_api_keys = "test_novita_key"
+    mock.cloudflare_api_tokens = "test_cloudflare_token"
     mock.cloudflare_account_id = "test_cloudflare_account"
     mock.cloudflare_proxy = None
-    mock.gemini_api_key = ""
+    mock.gemini_api_keys = ""
     mock.gemini_proxy = None
     mock.vertex_project_id = "test-vertex-project"
     mock.vertex_location = "global"
     mock.vertex_proxy = None
-    mock.groq_api_key = ""
+    mock.groq_api_keys = ""
     mock.groq_proxy = None
-    mock.cline_api_key = ""
+    mock.cline_api_keys = ""
     mock.cline_pass_proxy = None
-    mock.cerebras_api_key = ""
+    mock.cerebras_api_keys = ""
     mock.cerebras_proxy = None
     mock.ollama_cloud_proxy = None
     mock.poolside_proxy = None
@@ -186,7 +187,7 @@ def _make_settings(**overrides):
     mock.orcarouter_proxy = None
     mock.atlascloud_proxy = None
     mock.xkiro_proxy = None
-    mock.kilo_api_key = "test_kilo_key"
+    mock.kilo_api_keys = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
     mock.openai_api_proxy = None
@@ -213,6 +214,10 @@ def _make_settings(**overrides):
     mock.nim = NimSettings()
     for key, value in overrides.items():
         setattr(mock, key, value)
+    for attr in {
+        d.credential_attr for d in PROVIDER_CATALOG.values() if d.credential_attr
+    }:
+        setattr(mock, attr, normalize_api_keys(mock.__dict__.get(attr)))
     return mock
 
 
@@ -251,7 +256,7 @@ def test_ollama_cloud_descriptor_uses_direct_authenticated_endpoint():
 
     assert descriptor.default_base_url == OLLAMA_CLOUD_DEFAULT_BASE
     assert descriptor.credential_env == "OLLAMA_API_KEY"
-    assert descriptor.credential_attr == "ollama_api_key"
+    assert descriptor.credential_attr == "ollama_api_keys"
     assert descriptor.base_url_attr is None
     assert descriptor.local is False
 
@@ -259,7 +264,7 @@ def test_ollama_cloud_descriptor_uses_direct_authenticated_endpoint():
 def test_ollama_cloud_provider_config_uses_key_and_proxy():
     descriptor = PROVIDER_CATALOG["ollama_cloud"]
     settings = _make_settings(
-        ollama_api_key="ollama-cloud-token",
+        ollama_api_keys="ollama-cloud-token",
         ollama_cloud_proxy="http://proxy.test:8080",
     )
 
@@ -274,7 +279,7 @@ def test_ollama_cloud_provider_config_uses_key_and_proxy():
 async def test_poolside_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["poolside"]
     settings = _make_settings(
-        poolside_api_key="poolside-token",
+        poolside_api_keys="poolside-token",
         poolside_proxy="http://proxy.test:8080",
     )
 
@@ -288,7 +293,7 @@ async def test_poolside_provider_config_uses_key_base_and_proxy() -> None:
 
     assert descriptor.display_name == "Poolside AI"
     assert descriptor.credential_env == "POOLSIDE_API_KEY"
-    assert descriptor.credential_attr == "poolside_api_key"
+    assert descriptor.credential_attr == "poolside_api_keys"
     assert descriptor.credential_url == "https://platform.poolside.ai/"
     assert descriptor.default_base_url == POOLSIDE_DEFAULT_BASE
     assert descriptor.base_url_attr is None
@@ -303,7 +308,7 @@ async def test_poolside_provider_config_uses_key_base_and_proxy() -> None:
 async def test_llm7_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["llm7"]
     settings = _make_settings(
-        llm7_api_key="llm7-token",
+        llm7_api_keys="llm7-token",
         llm7_proxy="http://proxy.test:8080",
     )
 
@@ -317,7 +322,7 @@ async def test_llm7_provider_config_uses_key_base_and_proxy() -> None:
 
     assert descriptor.display_name == "LLM7.io"
     assert descriptor.credential_env == "LLM7_API_KEY"
-    assert descriptor.credential_attr == "llm7_api_key"
+    assert descriptor.credential_attr == "llm7_api_keys"
     assert descriptor.credential_url == "https://dash.llm7.io/"
     assert descriptor.default_base_url == LLM7_DEFAULT_BASE
     assert descriptor.base_url_attr is None
@@ -332,7 +337,7 @@ async def test_llm7_provider_config_uses_key_base_and_proxy() -> None:
 async def test_experiential_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["experiential"]
     settings = _make_settings(
-        experiential_api_key="experiential-token",
+        experiential_api_keys="experiential-token",
         experiential_proxy="http://proxy.test:8080",
     )
 
@@ -346,7 +351,7 @@ async def test_experiential_provider_config_uses_key_base_and_proxy() -> None:
 
     assert descriptor.display_name == "Experiential Labs"
     assert descriptor.credential_env == "EXPLABS_API_KEY"
-    assert descriptor.credential_attr == "experiential_api_key"
+    assert descriptor.credential_attr == "experiential_api_keys"
     assert (
         descriptor.credential_url
         == "https://platform.experientiallabs.ai/settings/api-keys"
@@ -364,7 +369,7 @@ async def test_experiential_provider_config_uses_key_base_and_proxy() -> None:
 async def test_cheaperinference_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["cheaperinference"]
     settings = _make_settings(
-        cheaperinference_api_key="ci_live_token",
+        cheaperinference_api_keys="ci_live_token",
         cheaperinference_proxy="http://proxy.test:8080",
     )
 
@@ -378,7 +383,7 @@ async def test_cheaperinference_provider_config_uses_key_base_and_proxy() -> Non
 
     assert descriptor.display_name == "Cheaper Inference"
     assert descriptor.credential_env == "CHEAPER_INFERENCE_API_KEY"
-    assert descriptor.credential_attr == "cheaperinference_api_key"
+    assert descriptor.credential_attr == "cheaperinference_api_keys"
     assert descriptor.credential_url == "https://cheaperinference.com/signup"
     assert descriptor.default_base_url == CHEAPERINFERENCE_DEFAULT_BASE
     assert descriptor.base_url_attr is None
@@ -393,7 +398,7 @@ async def test_cheaperinference_provider_config_uses_key_base_and_proxy() -> Non
 async def test_orcarouter_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["orcarouter"]
     settings = _make_settings(
-        orcarouter_api_key="orcarouter-token",
+        orcarouter_api_keys="orcarouter-token",
         orcarouter_base_url="https://unused.example/v1",
         orcarouter_proxy="http://proxy.test:8080",
     )
@@ -408,7 +413,7 @@ async def test_orcarouter_provider_config_uses_key_base_and_proxy() -> None:
 
     assert descriptor.display_name == "OrcaRouter"
     assert descriptor.credential_env == "ORCAROUTER_API_KEY"
-    assert descriptor.credential_attr == "orcarouter_api_key"
+    assert descriptor.credential_attr == "orcarouter_api_keys"
     assert descriptor.credential_url == "https://www.orcarouter.ai/console"
     assert descriptor.default_base_url == ORCAROUTER_DEFAULT_BASE
     assert descriptor.base_url_attr is None
@@ -423,7 +428,7 @@ async def test_orcarouter_provider_config_uses_key_base_and_proxy() -> None:
 async def test_atlascloud_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["atlascloud"]
     settings = _make_settings(
-        atlascloud_api_key="atlascloud-token",
+        atlascloud_api_keys="atlascloud-token",
         atlascloud_base_url="https://unused.example/v1",
         atlascloud_proxy="http://proxy.test:8080",
     )
@@ -438,7 +443,7 @@ async def test_atlascloud_provider_config_uses_key_base_and_proxy() -> None:
 
     assert descriptor.display_name == "Atlas Cloud"
     assert descriptor.credential_env == "ATLASCLOUD_API_KEY"
-    assert descriptor.credential_attr == "atlascloud_api_key"
+    assert descriptor.credential_attr == "atlascloud_api_keys"
     assert descriptor.credential_url == "https://console.atlascloud.ai/api-keys"
     assert descriptor.default_base_url == ATLASCLOUD_DEFAULT_BASE
     assert descriptor.base_url_attr is None
@@ -453,7 +458,7 @@ async def test_atlascloud_provider_config_uses_key_base_and_proxy() -> None:
 async def test_xai_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["xai"]
     settings = _make_settings(
-        xai_api_key="xai-token",
+        xai_api_keys="xai-token",
         xai_proxy="http://proxy.test:8080",
     )
 
@@ -477,7 +482,7 @@ async def test_xai_provider_config_uses_key_base_and_proxy() -> None:
 async def test_qwencloud_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["qwencloud"]
     settings = _make_settings(
-        qwencloud_api_key="qwencloud-token",
+        qwencloud_api_keys="qwencloud-token",
         qwencloud_proxy="http://proxy.test:8080",
     )
 
@@ -501,7 +506,7 @@ async def test_qwencloud_provider_config_uses_key_base_and_proxy() -> None:
 async def test_cline_pass_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["cline_pass"]
     settings = _make_settings(
-        cline_api_key="cline-programmatic-token",
+        cline_api_keys="cline-programmatic-token",
         cline_pass_proxy="http://proxy.test:8080",
     )
 
@@ -515,7 +520,7 @@ async def test_cline_pass_provider_config_uses_key_base_and_proxy() -> None:
 
     assert descriptor.display_name == "ClinePass"
     assert descriptor.credential_env == "CLINE_API_KEY"
-    assert descriptor.credential_attr == "cline_api_key"
+    assert descriptor.credential_attr == "cline_api_keys"
     assert descriptor.credential_url == "https://app.cline.bot"
     assert descriptor.base_url_attr is None
     assert config.api_key == "cline-programmatic-token"
@@ -529,7 +534,7 @@ async def test_cline_pass_provider_config_uses_key_base_and_proxy() -> None:
 async def test_qwencloud_coding_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["qwencloud_coding"]
     settings = _make_settings(
-        qwencloud_coding_api_key="qwencloud-coding-token",
+        qwencloud_coding_api_keys="qwencloud-coding-token",
         qwencloud_coding_proxy="http://proxy.test:8080",
     )
 
@@ -553,7 +558,7 @@ async def test_qwencloud_coding_provider_config_uses_key_base_and_proxy() -> Non
 async def test_together_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["together"]
     settings = _make_settings(
-        together_api_key="together-token",
+        together_api_keys="together-token",
         together_proxy="http://proxy.test:8080",
     )
 
@@ -577,7 +582,7 @@ async def test_together_provider_config_uses_key_base_and_proxy() -> None:
 async def test_deepinfra_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["deepinfra"]
     settings = _make_settings(
-        deepinfra_api_key="deepinfra-token",
+        deepinfra_api_keys="deepinfra-token",
         deepinfra_proxy="http://proxy.test:8080",
     )
 
@@ -601,7 +606,7 @@ async def test_deepinfra_provider_config_uses_key_base_and_proxy() -> None:
 async def test_siliconflow_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["siliconflow"]
     settings = _make_settings(
-        siliconflow_api_key="siliconflow-token",
+        siliconflow_api_keys="siliconflow-token",
         siliconflow_proxy="http://proxy.test:8080",
     )
 
@@ -626,7 +631,7 @@ async def test_siliconflow_provider_config_uses_key_base_and_proxy() -> None:
 async def test_nebius_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["nebius"]
     settings = _make_settings(
-        nebius_api_key="nebius-token",
+        nebius_api_keys="nebius-token",
         nebius_proxy="http://proxy.test:8080",
     )
 
@@ -654,7 +659,7 @@ async def test_nebius_provider_config_uses_key_base_and_proxy() -> None:
 async def test_scaleway_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["scaleway"]
     settings = _make_settings(
-        scw_secret_key="scw-token",
+        scw_secret_keys="scw-token",
         scw_proxy="http://proxy.test:8080",
     )
 
@@ -680,7 +685,7 @@ async def test_scaleway_provider_config_uses_key_base_and_proxy() -> None:
 async def test_opper_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["opper"]
     settings = _make_settings(
-        opper_api_key="opper-token",
+        opper_api_keys="opper-token",
         opper_proxy="http://proxy.test:8080",
     )
 
@@ -706,7 +711,7 @@ async def test_opper_provider_config_uses_key_base_and_proxy() -> None:
 async def test_chutes_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["chutes"]
     settings = _make_settings(
-        chutes_api_key="chutes-token",
+        chutes_api_keys="chutes-token",
         chutes_proxy="http://proxy.test:8080",
     )
 
@@ -734,7 +739,7 @@ async def test_chutes_provider_config_uses_key_base_and_proxy() -> None:
 async def test_featherless_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["featherless"]
     settings = _make_settings(
-        featherless_api_key="featherless-token",
+        featherless_api_keys="featherless-token",
         featherless_proxy="http://proxy.test:8080",
     )
 
@@ -760,7 +765,7 @@ async def test_featherless_provider_config_uses_key_base_and_proxy() -> None:
 async def test_agnes_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["agnes"]
     settings = _make_settings(
-        agnes_api_key="agnes-token",
+        agnes_api_keys="agnes-token",
         agnes_proxy="http://proxy.test:8080",
     )
 
@@ -785,7 +790,7 @@ async def test_agnes_provider_config_uses_key_base_and_proxy() -> None:
 async def test_zenmux_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["zenmux"]
     settings = _make_settings(
-        zenmux_api_key="zenmux-token",
+        zenmux_api_keys="zenmux-token",
         zenmux_proxy="http://proxy.test:8080",
     )
 
@@ -810,7 +815,7 @@ async def test_zenmux_provider_config_uses_key_base_and_proxy() -> None:
 async def test_wandb_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["wandb"]
     settings = _make_settings(
-        wandb_api_key="wandb-token",
+        wandb_api_keys="wandb-token",
         wandb_proxy="http://proxy.test:8080",
     )
 
@@ -835,7 +840,7 @@ async def test_wandb_provider_config_uses_key_base_and_proxy() -> None:
 def test_bedrock_provider_config_uses_regional_base_key_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["bedrock"]
     settings = _make_settings(
-        bedrock_api_key="bedrock-token",
+        bedrock_api_keys="bedrock-token",
         bedrock_base_url="https://bedrock-mantle.eu-west-1.api.aws/v1",
         bedrock_proxy="http://proxy.test:8080",
     )
@@ -852,7 +857,7 @@ def test_bedrock_provider_config_uses_regional_base_key_and_proxy() -> None:
 def test_azure_openai_provider_config_uses_resource_base_key_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["azure_openai"]
     settings = _make_settings(
-        azure_openai_api_key="azure-token",
+        azure_openai_api_keys="azure-token",
         azure_openai_base_url=("https://resource.openai.azure.com/openai/v1/"),
         azure_openai_proxy="http://proxy.test:8080",
     )
@@ -861,7 +866,7 @@ def test_azure_openai_provider_config_uses_resource_base_key_and_proxy() -> None
 
     assert descriptor.default_base_url is None
     assert descriptor.configuration_attrs() == (
-        "azure_openai_api_key",
+        "azure_openai_api_keys",
         "azure_openai_base_url",
     )
     assert config.api_key == "azure-token"
@@ -879,7 +884,7 @@ def test_azure_openai_provider_config_reports_missing_resource_url() -> None:
         build_provider_config(
             descriptor,
             _make_settings(
-                azure_openai_api_key="azure-token",
+                azure_openai_api_keys="azure-token",
                 azure_openai_base_url="",
             ),
         )
@@ -937,7 +942,7 @@ def test_zai_provider_config_ignores_stale_base_url_setting():
 async def test_zai_api_provider_config_uses_shared_key_general_base_and_own_proxy():
     descriptor = PROVIDER_CATALOG["zai_api"]
     settings = _make_settings(
-        zai_api_key="shared-zai-key",
+        zai_api_keys="shared-zai-key",
         zai_api_proxy="http://proxy.test:8080",
     )
 
@@ -951,7 +956,7 @@ async def test_zai_api_provider_config_uses_shared_key_general_base_and_own_prox
 
     assert descriptor.display_name == "Z.ai API"
     assert descriptor.credential_env == "ZAI_API_KEY"
-    assert descriptor.credential_attr == "zai_api_key"
+    assert descriptor.credential_attr == "zai_api_keys"
     assert descriptor.default_base_url == ZAI_API_DEFAULT_BASE
     assert descriptor.base_url_attr is None
     assert descriptor.proxy_attr == "zai_api_proxy"
@@ -972,7 +977,7 @@ def test_minimax_descriptor_uses_expected_endpoint_and_credential():
 def test_kimi_code_provider_config_uses_subscription_key_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["kimi_code"]
     settings = _make_settings(
-        kimi_code_api_key="subscription-token",
+        kimi_code_api_keys="subscription-token",
         kimi_code_proxy="http://proxy.test:8080",
     )
 
@@ -994,7 +999,7 @@ def test_cloudflare_descriptor_uses_api_root_not_account_url():
 @pytest.mark.asyncio
 async def test_create_cloudflare_provider_uses_account_scoped_base_url():
     settings = _make_settings(
-        cloudflare_api_token="test_cloudflare_token",
+        cloudflare_api_tokens="test_cloudflare_token",
         cloudflare_account_id="test-account",
     )
 
@@ -1051,12 +1056,12 @@ def test_opencode_go_catalog_uses_opencode_api_key() -> None:
     desc = PROVIDER_CATALOG["opencode_go"]
 
     assert desc.credential_env == "OPENCODE_API_KEY"
-    assert desc.credential_attr == "opencode_api_key"
+    assert desc.credential_attr == "opencode_api_keys"
 
 
 def test_build_provider_config_opencode_go_uses_opencode_api_key() -> None:
     descriptor = PROVIDER_CATALOG["opencode_go"]
-    settings = _make_settings(opencode_api_key="shared-opencode-token")
+    settings = _make_settings(opencode_api_keys="shared-opencode-token")
 
     config = build_provider_config(descriptor, settings)
 
@@ -1090,7 +1095,7 @@ def test_cohere_descriptor_uses_openai_chat_compatibility_api() -> None:
 def test_build_provider_config_vercel_uses_gateway_key_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["vercel"]
     settings = _make_settings(
-        vercel_ai_gateway_api_key="vercel-token",
+        vercel_ai_gateway_api_keys="vercel-token",
         vercel_ai_gateway_proxy="http://proxy.test:8080",
     )
 
@@ -1103,7 +1108,7 @@ def test_build_provider_config_vercel_uses_gateway_key_and_proxy() -> None:
 def test_build_provider_config_huggingface_uses_api_key_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["huggingface"]
     settings = _make_settings(
-        huggingface_api_key="hf-token",
+        huggingface_api_keys="hf-token",
         huggingface_proxy="http://proxy.test:8080",
     )
 
@@ -1116,7 +1121,7 @@ def test_build_provider_config_huggingface_uses_api_key_and_proxy() -> None:
 def test_build_provider_config_cohere_uses_api_key_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["cohere"]
     settings = _make_settings(
-        cohere_api_key="cohere-token",
+        cohere_api_keys="cohere-token",
         cohere_proxy="http://proxy.test:8080",
     )
 
@@ -1143,25 +1148,25 @@ async def test_create_provider_uses_openai_chat_openrouter_by_default():
 @pytest.mark.asyncio
 async def test_create_provider_instantiates_each_builtin():
     settings = _make_settings(
-        gemini_api_key="test_gemini_key",
+        gemini_api_keys="test_gemini_key",
         vertex_project_id="test-vertex-project",
-        groq_api_key="test_groq_key",
-        cline_api_key="test_cline_key",
-        cerebras_api_key="test_cerebras_key",
-        fireworks_api_key="test_fireworks_key",
-        novita_api_key="test_novita_key",
-        cloudflare_api_token="test_cloudflare_token",
+        groq_api_keys="test_groq_key",
+        cline_api_keys="test_cline_key",
+        cerebras_api_keys="test_cerebras_key",
+        fireworks_api_keys="test_fireworks_key",
+        novita_api_keys="test_novita_key",
+        cloudflare_api_tokens="test_cloudflare_token",
         cloudflare_account_id="test_cloudflare_account",
-        vercel_ai_gateway_api_key="test_vercel_key",
-        bedrock_api_key="test_bedrock_key",
-        huggingface_api_key="test_huggingface_key",
-        cohere_api_key="test_cohere_key",
-        kimi_api_key="test_kimi_key",
-        kimi_code_api_key="test_kimi_code_key",
+        vercel_ai_gateway_api_keys="test_vercel_key",
+        bedrock_api_keys="test_bedrock_key",
+        huggingface_api_keys="test_huggingface_key",
+        cohere_api_keys="test_cohere_key",
+        kimi_api_keys="test_kimi_key",
+        kimi_code_api_keys="test_kimi_code_key",
         provider_rate_limit=7,
         provider_rate_window=11,
         provider_max_concurrency=3,
-        sambanova_api_key="test_sambanova_key",
+        sambanova_api_keys="test_sambanova_key",
     )
     cases = {
         "nvidia_nim": NvidiaNimProvider,
@@ -1705,7 +1710,7 @@ async def test_provider_runtime_cleanup_exceptiongroup_on_multiple_failures() ->
 async def test_xkiro_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["xkiro"]
     settings = _make_settings(
-        xkiro_api_key="xkiro-token",
+        xkiro_api_keys="xkiro-token",
         xkiro_base_url="https://unused.example/v1",
         xkiro_proxy="http://proxy.test:8080",
     )
@@ -1720,7 +1725,7 @@ async def test_xkiro_provider_config_uses_key_base_and_proxy() -> None:
 
     assert descriptor.display_name == "xKiro"
     assert descriptor.credential_env == "XKIRO_API_KEY"
-    assert descriptor.credential_attr == "xkiro_api_key"
+    assert descriptor.credential_attr == "xkiro_api_keys"
     assert descriptor.credential_url == "https://xkiro.com/dashboard/api/keys"
     assert descriptor.default_base_url == XKIRO_DEFAULT_BASE
     assert descriptor.base_url_attr is None
@@ -1734,5 +1739,5 @@ async def test_xkiro_provider_config_uses_key_base_and_proxy() -> None:
 def test_xkiro_requires_key_despite_public_catalog():
     with pytest.raises(ApplicationUnavailableError, match="XKIRO_API_KEY is not set"):
         build_provider_config(
-            PROVIDER_CATALOG["xkiro"], _make_settings(xkiro_api_key=None)
+            PROVIDER_CATALOG["xkiro"], _make_settings(xkiro_api_keys=None)
         )

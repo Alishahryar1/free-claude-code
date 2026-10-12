@@ -11,13 +11,32 @@ from free_claude_code.application.code_sessions import CodeApplicationPort
 from free_claude_code.application.connected_accounts import ConnectedAccountPort
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime, RestartCallback
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.config.credential_support import credential_edit
 from tests.web_tools_support import StubWebToolsClient
+
+
+def post_config(client, path, *, json):
+    values = json.get("values", {})
+    credential_keys = {
+        d.credential_env for d in PROVIDER_CATALOG.values() if d.credential_env
+    }
+    if credential_keys.intersection(values):
+        config = client.get("/admin/api/config").json()
+        fields = {field["key"]: field for field in config["fields"]}
+        values = {
+            key: credential_edit(fields[key]["value"], value)
+            if key in credential_keys
+            else value
+            for key, value in values.items()
+        }
+    return client.post(path, json=json | {"values": values})
 
 
 class ApiTestRuntime(ProviderRuntimeManager):

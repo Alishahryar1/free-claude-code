@@ -99,6 +99,39 @@ def test_sanitize_masks_nested_api_key_strings() -> None:
     assert out["outer"]["text"] == "visible"
 
 
+def test_trace_redacts_credential_lists_and_all_catalog_aliases():
+    from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+    from free_claude_code.core.trace import sanitize_trace_value
+
+    owners = {
+        name
+        for descriptor in PROVIDER_CATALOG.values()
+        for name in (descriptor.credential_env, descriptor.credential_attr)
+        if name
+    }
+    values = {
+        name: ["trace-first-sentinel", "trace-inactive-sentinel"] for name in owners
+    }
+    payload = {
+        "values": values,
+        "custom_provider": {
+            "values": {
+                "api_keys": {"entries": [{"value": "custom-trace-sentinel"}]},
+                "display_name": "Visible",
+            }
+        },
+    }
+    public = sanitize_trace_value(payload)
+    encoded = json.dumps(public)
+    for secret in (
+        "trace-first-sentinel",
+        "trace-inactive-sentinel",
+        "custom-trace-sentinel",
+    ):
+        assert secret not in encoded
+    assert public["custom_provider"]["values"]["display_name"] == "Visible"
+
+
 @pytest.mark.parametrize(
     "header", ["x-goog-api-key", "X-Goog-Api-Key", "api-key", "Api-Key"]
 )

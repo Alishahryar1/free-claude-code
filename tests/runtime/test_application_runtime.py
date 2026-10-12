@@ -13,7 +13,10 @@ from free_claude_code.application.connected_accounts import (
 )
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.admin.credentials import CredentialSubmission
 from free_claude_code.config.admin.persistence import PreparedAdminUpdate
+from free_claude_code.config.api_keys import normalize_api_keys
+from free_claude_code.config.loader import ManagedConfigSnapshot
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -214,6 +217,7 @@ def _prepared(
         errors=(),
         pending_fields=pending_fields,
         path=tmp_path / ".env",
+        expected=ManagedConfigSnapshot(settings, {}, {}, {}, tmp_path / ".env"),
     )
 
 
@@ -232,7 +236,7 @@ def _runtime_with_admin_provider(
     provider: BaseProvider,
 ) -> tuple[ApplicationRuntime, ProviderRuntimeManager]:
     settings = _settings("nvidia_nim/fallback").model_copy(
-        update={"nvidia_nim_api_key": "test-key"}
+        update={"nvidia_nim_api_keys": normalize_api_keys("test-key")}
     )
     manager = ProviderRuntimeManager(
         settings,
@@ -523,6 +527,9 @@ async def test_credential_checks_gate_both_apply_paths(tmp_path, pending, status
     prepared = replace(
         _prepared(_settings("nvidia_nim/new"), tmp_path, pending_fields=pending),
         changed_keys=("GROQ_API_KEY",),
+        credential_submissions=(
+            CredentialSubmission("GROQ_API_KEY", normalize_api_keys("new")),
+        ),
     )
     checks = (
         CredentialCheck("GROQ_API_KEY", status, "Safe result"),
@@ -545,9 +552,14 @@ async def test_credential_checks_gate_both_apply_paths(tmp_path, pending, status
         ) as commit,
     ):
         result = await runtime.apply_admin_config({"GROQ_API_KEY": "new"})
-    check.assert_awaited_once_with(prepared.settings, prepared.changed_keys)
+    check.assert_awaited_once_with(prepared.settings, prepared.credential_submissions)
     assert result["credential_checks"] == [
-        {"key": check.key, "status": check.status.value, "message": check.message}
+        {
+            "key": check.key,
+            "index": check.index,
+            "status": check.status.value,
+            "message": check.message,
+        }
         for check in checks
     ]
     if status == CredentialStatus.REJECTED:

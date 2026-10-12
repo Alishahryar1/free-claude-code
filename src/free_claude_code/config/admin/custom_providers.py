@@ -77,10 +77,8 @@ def merge_custom_provider(
     if "provider_id" in mutation.values:
         raise ValueError("Provider IDs cannot be edited")
     changes = dict(mutation.values)
-    if changes.get("api_key") == "********" or (
-        isinstance(changes.get("api_key"), str) and not str(changes["api_key"]).strip()
-    ):
-        changes.pop("api_key")
+    if "api_key" in changes:
+        raise ValueError("Use the ordered api_keys editor for credentials")
     try:
         definition = CustomProviderDefinition.model_validate(
             values | changes | {"provider_id": provider_id}

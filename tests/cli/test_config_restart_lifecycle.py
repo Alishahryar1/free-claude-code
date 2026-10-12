@@ -77,10 +77,10 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
     entered, release = threading.Event(), threading.Event()
     commit = ManagedConfigStore.commit
 
-    def blocked_commit(self, values):
+    def blocked_commit(self, values, expected=None):
         entered.set()
         assert release.wait(10)
-        commit(self, values)
+        commit(self, values, expected)
 
     def wait_status(client, old_id=None):
         deadline = time.monotonic() + 10

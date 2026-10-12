@@ -49,11 +49,11 @@ def test_ollama_cloud_is_remote_and_distinct_from_local_ollama() -> None:
 
 def test_provider_configuration_attrs_cover_multi_field_and_adc_providers() -> None:
     assert PROVIDER_CATALOG["azure_openai"].configuration_attrs() == (
-        "azure_openai_api_key",
+        "azure_openai_api_keys",
         "azure_openai_base_url",
     )
     assert PROVIDER_CATALOG["cloudflare"].configuration_attrs() == (
-        "cloudflare_api_token",
+        "cloudflare_api_tokens",
         "cloudflare_account_id",
     )
     assert PROVIDER_CATALOG["vertex"].configuration_attrs() == ("vertex_project_id",)
@@ -83,7 +83,7 @@ def test_openai_api_is_a_separate_key_configured_provider() -> None:
 
     assert api.auth_kind is ProviderAuthKind.CONFIGURATION
     assert api.credential_env == "OPENAI_API_KEY"
-    assert api.configuration_attrs() == ("openai_api_key",)
+    assert api.configuration_attrs() == ("openai_api_keys",)
     assert api.proxy_attr == "openai_api_proxy"
     assert api.default_base_url == "https://api.openai.com/v1"
     assert subscription.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT

@@ -26,12 +26,14 @@ _SECRET_VALUE_KEYS = frozenset(
         "api-key",
         "anthropic-auth-token",
         "api_key",
+        "api_keys",
         "password",
         "secret",
         "token",
         "bearer_token",
         "openapi_token",
         "nvidia-api-key",
+        "aws_bearer_token_bedrock",
     )
 )
 
@@ -41,7 +43,17 @@ def sanitize_trace_value(obj: Any) -> Any:
     if isinstance(obj, Mapping):
         out: dict[str, Any] = {}
         for k, v in obj.items():
-            if str(k).lower() in _SECRET_VALUE_KEYS:
+            name = str(k).lower()
+            if name in _SECRET_VALUE_KEYS or name.replace("-", "_").endswith(
+                (
+                    "_api_key",
+                    "_api_keys",
+                    "_api_token",
+                    "_api_tokens",
+                    "_secret_key",
+                    "_secret_keys",
+                )
+            ):
                 out[str(k)] = "<redacted>"
             else:
                 out[str(k)] = sanitize_trace_value(v)

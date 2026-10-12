@@ -56,7 +56,7 @@ async def main():
             assert threading.get_ident() == thread
             return provider
         return construct
-    assert await create_provider("groq", Settings(groq_api_key="test"), ProviderAdmissionRegistry(ProviderAdmissionLimits(1, 2, 2)), provider_loaders={"groq": load}) is provider
+    assert await create_provider("groq", Settings(groq_api_keys="test"), ProviderAdmissionRegistry(ProviderAdmissionLimits(1, 2, 2)), provider_loaders={"groq": load}) is provider
     await provider.cleanup()
 
 asyncio.run(main())
