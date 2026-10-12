@@ -89,7 +89,10 @@ def create_test_app(
             runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
                 snapshot,
                 admission_registry,
-                dict(providers),
+                {
+                    (provider_id, 1): provider
+                    for provider_id, provider in providers.items()
+                },
             ),
             connected_provider_ids=connected_provider_ids,
         )

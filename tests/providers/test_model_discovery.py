@@ -77,7 +77,9 @@ def _manager(
     return ProviderRuntimeManager(
         settings,
         runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
-            snapshot, admission_registry, dict(providers)
+            snapshot,
+            admission_registry,
+            {(provider_id, 1): provider for provider_id, provider in providers.items()},
         ),
     )
 

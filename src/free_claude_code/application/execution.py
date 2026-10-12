@@ -131,6 +131,8 @@ class ProviderExecutor:
             "wire_api": wire_api,
             "from_provider_model_ref": failed.provider_model_ref,
             "to_provider_model_ref": selected.provider_model_ref,
+            "from_api_key_number": failed.api_key_number,
+            "to_api_key_number": selected.api_key_number,
             "candidate_index": candidate_index,
             "candidate_count": candidate_count,
             "failure_kind": failure.kind.value,
@@ -170,6 +172,7 @@ class ProviderExecutor:
             "request_id": request_id,
             "wire_api": wire_api,
             "selected_provider_model_ref": selected.provider_model_ref,
+            "api_key_number": selected.api_key_number,
             "candidate_index": candidate_index,
             "candidate_count": candidate_count,
         }
@@ -191,7 +194,9 @@ class ProviderExecutor:
             continuation: ContinuationSeed | None,
         ) -> AsyncIterator[str]:
             target = candidate.target
-            provider = await self._provider_resolver(target.provider_id)
+            provider = await self._provider_resolver(
+                target.provider_id, target.api_key_number
+            )
             return provider.stream_native_messages(
                 routed.request.with_model(target.provider_model),
                 request_id=request_id,
@@ -252,7 +257,9 @@ class ProviderExecutor:
             continuation: ContinuationSeed | None,
         ) -> AsyncIterator[str]:
             target = candidate.target
-            provider = await self._provider_resolver(target.provider_id)
+            provider = await self._provider_resolver(
+                target.provider_id, target.api_key_number
+            )
             request = (
                 primary_request
                 if index == 0
@@ -311,7 +318,9 @@ class ProviderExecutor:
             continuation: ContinuationSeed | None,
         ) -> AsyncIterator[str]:
             target = candidate.target
-            provider = await self._provider_resolver(target.provider_id)
+            provider = await self._provider_resolver(
+                target.provider_id, target.api_key_number
+            )
             request = (
                 primary_request
                 if index == 0

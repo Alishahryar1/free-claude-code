@@ -16,7 +16,7 @@ from free_claude_code.core.web_tools import WebFetchResult
 from tests.web_tools_support import StubWebToolsClient
 
 
-async def _no_provider(_provider_id):
+async def _no_provider(_provider_id, _api_key_number):
     pytest.fail("This request must not resolve a provider")
 
 

@@ -139,7 +139,7 @@ def _local_tool_body(
         }
     )
 
-    async def unexpected_provider(_provider_id: str):
+    async def unexpected_provider(_provider_id: str, _api_key_number: int):
         pytest.fail("Forced local tools must not resolve a provider")
 
     service = WebToolService(
@@ -384,7 +384,7 @@ def _automatic_search_service(
     effective_settings = settings or Settings()
     return MessagesHandler(
         effective_settings,
-        provider_resolver=AsyncMock(side_effect=lambda _: provider),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
         model_router=FixedProviderModelRouter(
             effective_settings,
             _PROVIDER_IDS[0],
@@ -608,7 +608,7 @@ async def test_service_rejects_forced_server_tool_when_local_handler_is_disabled
     assert settings.enable_web_server_tools is False
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(side_effect=lambda _: MagicMock()),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: MagicMock()),
         model_router=FixedProviderModelRouter(settings, provider_id),
         web_tools=StubWebToolsClient(),
     )
@@ -1916,7 +1916,7 @@ async def test_service_rejects_listed_server_tools_for_every_provider(
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": False})
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(side_effect=lambda _: MagicMock()),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: MagicMock()),
         model_router=FixedProviderModelRouter(settings, provider_id),
         web_tools=StubWebToolsClient(),
     )

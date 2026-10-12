@@ -38,7 +38,7 @@ async def test_workspace_replacement_retires_http_and_capabilities_with_lease():
             transport=httpx.MockTransport(handle),
         )
         owners.append(owner)
-        return ProviderRuntime(settings, registry, {"anthropic": owner})
+        return ProviderRuntime(settings, registry, {("anthropic", 1): owner})
 
     async def commit():
         return None

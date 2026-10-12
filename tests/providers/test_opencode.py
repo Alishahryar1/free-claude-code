@@ -1119,7 +1119,7 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
         reasoning_preference=ReasoningPreference.INHERIT,
     )
     executor = ProviderExecutor(
-        AsyncMock(side_effect=lambda _provider_id: provider),
+        AsyncMock(side_effect=lambda _provider_id, _api_key_number: provider),
         progress_timeout_seconds=60.0,
     )
 

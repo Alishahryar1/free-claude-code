@@ -136,7 +136,7 @@ def test_fallback_records_selected_provider_without_logging_failed_attempt(outco
     with (
         patch(
             "free_claude_code.api.routes.resolve_provider",
-            side_effect=lambda name, **kwargs: providers[name],
+            side_effect=lambda name, _api_key_number, **kwargs: providers[name],
         ),
         TestClient(create_test_app(settings)) as client,
     ):

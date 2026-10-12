@@ -48,6 +48,7 @@ class ProviderModelTarget:
     provider_id: str
     provider_model: str
     provider_model_ref: str
+    api_key_number: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,25 +149,34 @@ class ModelRouter:
             reasoning_preference=reasoning_preference,
         )
 
-    def _target_from_ref(self, provider_model_ref: str) -> ProviderModelTarget:
+    def _target_from_ref(
+        self, provider_model_ref: str, api_key_number: int = 1
+    ) -> ProviderModelTarget:
         return self._target(
             parse_provider_type(provider_model_ref),
             parse_model_name(provider_model_ref),
+            api_key_number,
         )
 
-    def _target(self, provider_id: str, provider_model: str) -> ProviderModelTarget:
+    def _target(
+        self, provider_id: str, provider_model: str, api_key_number: int = 1
+    ) -> ProviderModelTarget:
         self._validate_provider_id(provider_id)
         return ProviderModelTarget(
             provider_id=provider_id,
             provider_model=provider_model,
             provider_model_ref=f"{provider_id}/{provider_model}",
+            api_key_number=api_key_number,
         )
 
     def _fallback_targets(
         self, primary: ProviderModelTarget
     ) -> tuple[ProviderModelCandidate, ...]:
         configured = tuple(
-            ProviderModelCandidate(self._target_from_ref(entry.model), entry.reasoning)
+            ProviderModelCandidate(
+                self._target_from_ref(entry.model, entry.api_key_number),
+                entry.reasoning,
+            )
             for entry in self._settings.model_fallbacks or ()
         )
         return tuple(

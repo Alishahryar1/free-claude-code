@@ -709,14 +709,15 @@ button.startup-busy::before,
 .model-list-add,
 .model-list-row {
   display: grid;
-  grid-template-columns: 20px repeat(2, minmax(0, 1fr)) 40px;
+  grid-template-columns: 20px repeat(2, minmax(0, 1fr)) 172px 40px;
   gap: 8px;
   align-items: center;
 }
 
 .model-list-add > .model-combobox { grid-column: 2; }
-.model-list-add > select { grid-column: 3; }
-.model-list-add > button { grid-column: 4; }
+.model-list-add > select:first-of-type { grid-column: 3; }
+.model-list-add > select:last-of-type { grid-column: 4; }
+.model-list-add > button { grid-column: 5; }
 
 .model-list-editor .model-list-action {
   width: 40px;

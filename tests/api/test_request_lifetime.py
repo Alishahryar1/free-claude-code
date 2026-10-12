@@ -460,11 +460,13 @@ class _Lease:
     def model_info(self, provider_id: str, model_id: str) -> ProviderModelInfo | None:
         return None
 
-    def is_provider_cached(self, provider_id: str) -> bool:
+    def is_provider_cached(self, provider_id: str, api_key_number: int = 1) -> bool:
         del provider_id
         return True
 
-    async def resolve_provider(self, provider_id: str) -> ProviderPort:
+    async def resolve_provider(
+        self, provider_id: str, api_key_number: int = 1
+    ) -> ProviderPort:
         assert provider_id == "nvidia_nim"
         return self._provider
 

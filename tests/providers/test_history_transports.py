@@ -500,7 +500,11 @@ async def test_successful_fallback_preserves_raw_state_and_gets_unmodified_input
     routed = _routed_request(_target("open_router", "fallback-model"))
     original = routed.request.model_dump()
     executor = ProviderExecutor(
-        AsyncMock(side_effect=lambda name: primary if name == "provider" else provider),
+        AsyncMock(
+            side_effect=lambda name, _api_key_number: (
+                primary if name == "provider" else provider
+            )
+        ),
         progress_timeout_seconds=10,
     )
     try:

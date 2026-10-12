@@ -275,6 +275,8 @@ def test_fallback_model_efforts_are_json_serializable_in_doctor_report():
     ]
     settings = Settings(MODEL_FALLBACKS=entries)
     report = json.loads(json.dumps(diagnostics.settings_report(settings, {})))
-    assert report["model_routing"]["model_fallbacks"] == entries
+    assert report["model_routing"]["model_fallbacks"] == [
+        entry | {"api_key_number": 1} for entry in entries
+    ]
     assert report["providers"]["groq"]["referenced"] is True
     assert report["providers"]["open_router"]["referenced"] is True

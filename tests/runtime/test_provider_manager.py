@@ -25,10 +25,12 @@ class FakeRuntime(ProviderRuntime):
         self.provider = MagicMock()
         self.provider.list_model_infos = AsyncMock(return_value=frozenset())
 
-    def is_cached(self, provider_id: str) -> bool:
+    def is_cached(self, provider_id: str, api_key_number: int = 1) -> bool:
         return provider_id == "cached"
 
-    async def resolve_provider(self, provider_id: str) -> BaseProvider:
+    async def resolve_provider(
+        self, provider_id: str, api_key_number: int = 1
+    ) -> BaseProvider:
         return cast(BaseProvider, self.provider)
 
     async def cleanup(self) -> None:

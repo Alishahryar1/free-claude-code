@@ -157,7 +157,9 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
     try:
         response = await MessagesHandler(
             Settings(),
-            provider_resolver=AsyncMock(side_effect=lambda _: provider),
+            provider_resolver=AsyncMock(
+                side_effect=lambda _, _api_key_number: provider
+            ),
             web_tools=StubWebToolsClient(),
         ).create(classifier_request())
         assert isinstance(response, JSONResponse)
@@ -248,7 +250,7 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
         handler = MessagesHandler(
             settings,
             provider_resolver=AsyncMock(
-                side_effect=lambda provider_id: (
+                side_effect=lambda provider_id, _api_key_number: (
                     primary if provider_id == "nvidia_nim" else provider
                 )
             ),
@@ -309,7 +311,9 @@ async def test_handler_uses_cached_capabilities_for_the_selected_provider(
     try:
         handler = MessagesHandler(
             Settings(),
-            provider_resolver=AsyncMock(side_effect=lambda _: provider),
+            provider_resolver=AsyncMock(
+                side_effect=lambda _, _api_key_number: provider
+            ),
             model_info_lookup=lambda provider_id, model_id: next(
                 (
                     info

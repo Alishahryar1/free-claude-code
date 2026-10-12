@@ -9,6 +9,7 @@ from pydantic import (
     BaseModel,
     BeforeValidator,
     ConfigDict,
+    Field,
     StringConstraints,
     TypeAdapter,
     field_validator,
@@ -21,12 +22,13 @@ RETIRED_PROVIDER_IDS = frozenset({"github_models"})
 
 
 class ModelFallback(BaseModel):
-    """One ordered fallback's model and reasoning preference."""
+    """One ordered fallback's model, reasoning preference, and key number."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     model: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     reasoning: ReasoningPreference = ReasoningPreference.INHERIT
+    api_key_number: int = Field(default=1, strict=True, ge=1)
 
     @field_validator("model")
     @classmethod

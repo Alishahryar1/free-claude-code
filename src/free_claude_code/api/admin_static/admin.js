@@ -225,6 +225,7 @@ async function load({ providersOnly = false } = {}) {
   state.providerChecks.clear();
   renderProviders(config.provider_status);
   if (!providersOnly) renderSections(config.sections, config.fields);
+  document.querySelectorAll(".model-list-editor").forEach((element) => element.modelListEditor.refreshKeyOptions());
   byId("configPath").textContent = config.paths.managed;
   void refreshLocalStatus(config);
   void refreshStartup();
@@ -1081,10 +1082,12 @@ class ModelListEditor {
     this.values = input.value ? JSON.parse(input.value) : [];
     this.inputId = `field-${field.key}-add`;
     this.rowComboboxes = [];
+    this.rowKeys = [];
     this.draggedEntry = null;
 
     this.element = document.createElement("div");
     this.element.className = "model-list-editor";
+    this.element.modelListEditor = this;
 
     const addRow = document.createElement("div");
     addRow.className = "model-list-add";
@@ -1092,11 +1095,20 @@ class ModelListEditor {
     this.addInput = addCombobox.input;
     this.addEffort = this.effortSelect("inherit", "Fallback reasoning effort");
     this.addEffort.id = `field-${field.key}-effort`;
+    this.addKey = this.keySelect("", 1, "Fallback API key");
+    this.addProviderId = "";
+    const updateAddModel = () => {
+      const providerId = this.providerId(this.addInput.value);
+      this.updateKeySelect(this.addKey, this.addInput.value, providerId === this.addProviderId ? Number(this.addKey.value) : 1);
+      this.addProviderId = providerId;
+    };
+    this.addInput.addEventListener("input", updateAddModel);
+    this.addInput.addEventListener("change", updateAddModel);
 
     this.addButton = this.actionButton("", "Add fallback", () => this.add());
     this.addButton.className = "secondary-button model-list-action";
     this.addButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 6v12M6 12h12" stroke-linecap="round"/></svg>';
-    addRow.append(addCombobox.element, this.addEffort, this.addButton);
+    addRow.append(addCombobox.element, this.addEffort, this.addKey, this.addButton);
 
     this.rows = document.createElement("div");
     this.rows.className = "model-list-rows";
@@ -1135,13 +1147,16 @@ class ModelListEditor {
       showMessage("Enter a full provider/model fallback.", "error");
       return;
     }
-    if (this.values.some((entry) => entry.model === value)) {
-      showMessage("That fallback model is already in the list.", "error");
+    const apiKeyNumber = Number(this.addKey.value);
+    if (this.values.some((entry) => entry.model === value && (entry.api_key_number ?? 1) === apiKeyNumber)) {
+      showMessage("That model and API key are already in the fallback list.", "error");
       return;
     }
-    this.values.push({ model: value, reasoning: this.addEffort.value });
+    this.values.push({ model: value, reasoning: this.addEffort.value, api_key_number: apiKeyNumber });
     this.addInput.value = "";
     this.addEffort.value = "inherit";
+    this.addProviderId = "";
+    this.updateKeySelect(this.addKey, "", 1);
     showMessage("");
     this.sync();
     this.renderRows();
@@ -1174,6 +1189,7 @@ class ModelListEditor {
       state.modelComboboxes.delete(combobox);
     });
     this.rowComboboxes = [];
+    this.rowKeys = [];
     this.rows.replaceChildren();
 
     this.values.forEach((entry, index) => {
@@ -1185,6 +1201,12 @@ class ModelListEditor {
       const effort = this.effortSelect(entry.reasoning, `Reasoning effort for ${entry.model}`);
       effort.addEventListener("change", () => {
         entry.reasoning = effort.value;
+        this.sync();
+      });
+      const key = this.keySelect(entry.model, entry.api_key_number ?? 1, `API key for ${entry.model}`);
+      this.rowKeys.push({ entry, select: key });
+      key.addEventListener("change", () => {
+        entry.api_key_number = Number(key.value);
         this.sync();
       });
 
@@ -1210,7 +1232,11 @@ class ModelListEditor {
       remove.className = "danger-button model-list-action";
       remove.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
       const updateModel = () => {
+        const previousProvider = this.providerId(entry.model);
         entry.model = combobox.input.value.trim();
+        if (this.providerId(entry.model) !== previousProvider) entry.api_key_number = 1;
+        this.updateKeySelect(key, entry.model, entry.api_key_number ?? 1);
+        key.setAttribute("aria-label", `API key for ${entry.model}`);
         effort.setAttribute("aria-label", `Reasoning effort for ${entry.model}`);
         handle.setAttribute("aria-label", `Move ${entry.model}`);
         remove.setAttribute("aria-label", `Remove ${entry.model}`);
@@ -1219,7 +1245,7 @@ class ModelListEditor {
       combobox.input.addEventListener("input", updateModel);
       combobox.input.addEventListener("change", updateModel);
 
-      row.append(handle, combobox.element, effort, remove);
+      row.append(handle, combobox.element, effort, key, remove);
       this.rows.appendChild(row);
     });
   }
@@ -1266,6 +1292,48 @@ class ModelListEditor {
     select.disabled = this.field.locked;
     select.setAttribute("aria-label", label);
     return select;
+  }
+
+  providerId(model) {
+    return model.includes("/") ? model.trim().split("/", 1)[0] : "";
+  }
+
+  keyCount(model) {
+    const providerId = this.providerId(model);
+    const custom = state.config.custom_providers.find((provider) => provider.provider_id === providerId);
+    if (custom) return custom.api_keys.entries.length;
+    const provider = state.config.provider_status.find((item) => item.provider_id === providerId);
+    const credential = provider?.settings_keys.map((key) => state.fields.get(key)).find((field) => field?.type === "api_key_list");
+    return credential ? credential.value.entries.length : null;
+  }
+
+  keySelect(model, value, label) {
+    const select = window.FccFormControls.configure(document.createElement("select"));
+    select.setAttribute("aria-label", label);
+    this.updateKeySelect(select, model, value);
+    return select;
+  }
+
+  updateKeySelect(select, model, value) {
+    const count = this.keyCount(model);
+    select.replaceChildren();
+    if (count === null) {
+      select.appendChild(option(1, this.providerId(model) ? "Default authentication" : "Key 1"));
+    } else {
+      for (let number = 1; number <= Math.max(1, count); number++) select.appendChild(option(number, `Key ${number}`));
+    }
+    if (value > Math.max(1, count ?? 1)) {
+      const unavailable = option(value, `Key ${value} (unavailable)`);
+      unavailable.disabled = true;
+      select.appendChild(unavailable);
+    }
+    select.value = String(value);
+    select.disabled = this.field.locked || count === null || (count === 0 && value === 1);
+  }
+
+  refreshKeyOptions() {
+    this.updateKeySelect(this.addKey, this.addInput.value, Number(this.addKey.value));
+    this.rowKeys.forEach(({ entry, select }) => this.updateKeySelect(select, entry.model, entry.api_key_number ?? 1));
   }
 
   actionButton(text, label, action = null) {

@@ -19,6 +19,7 @@ from .model_refs import ModelFallback, ModelFallbacks
 from .nim import NimSettings
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
+    PROVIDER_CATALOG,
     SUPPORTED_PROVIDER_IDS,
 )
 from .reasoning import ReasoningPreference
@@ -98,10 +99,28 @@ class Settings(BaseModel):
             refs = value if isinstance(value, tuple) else (value,) if value else ()
             for ref in refs:
                 model_ref = ref.model if isinstance(ref, ModelFallback) else ref
-                if model_ref.partition("/")[0] not in self.provider_ids:
+                provider_id = model_ref.partition("/")[0]
+                if provider_id not in self.provider_ids:
                     raise ValueError(
                         f"{field.upper()}: Invalid provider in model reference"
                     )
+                if isinstance(ref, ModelFallback) and ref.api_key_number > 1:
+                    definition = self.custom_provider(provider_id)
+                    descriptor = PROVIDER_CATALOG.get(provider_id)
+                    if definition is not None:
+                        keys = definition.api_keys
+                    elif descriptor is not None and descriptor.credential_attr:
+                        keys = getattr(self, descriptor.credential_attr)
+                    else:
+                        raise ValueError(
+                            f"MODEL_FALLBACKS: {provider_id} has no API key list."
+                        )
+                    if ref.api_key_number > len(keys):
+                        raise ValueError(
+                            f"MODEL_FALLBACKS: {ref.model} selects Key "
+                            f"{ref.api_key_number}, but only {len(keys)} keys are "
+                            "configured. Update the fallback selection first."
+                        )
         return self
 
     # ==================== OpenAI Platform API ====================
@@ -846,9 +865,11 @@ class Settings(BaseModel):
     ) -> tuple[ModelFallback, ...] | None:
         if value is None:
             return None
-        refs = tuple(entry.model for entry in value)
+        refs = tuple((entry.model, entry.api_key_number) for entry in value)
         if len(refs) != len(set(refs)):
-            raise ValueError("MODEL_FALLBACKS must not contain duplicate model refs.")
+            raise ValueError(
+                "MODEL_FALLBACKS must not contain duplicate model/key pairs."
+            )
         return value
 
     @model_validator(mode="after")

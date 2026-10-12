@@ -116,6 +116,14 @@ def test_admin_fallback_records_round_trip_without_restart_or_false_changes(as_j
         {"model": "groq/one", "reasoning": "low"},
         {"model": "open_router/vendor/two", "reasoning": "inherit"},
     ]
+    canonical = [
+        {"model": "groq/one", "reasoning": "low", "api_key_number": 1},
+        {
+            "model": "open_router/vendor/two",
+            "reasoning": "inherit",
+            "api_key_number": 1,
+        },
+    ]
     original = _snapshot()
     saved = prepare_admin_update(
         {"MODEL_FALLBACKS": json.dumps(entries) if as_json else entries},
@@ -125,11 +133,11 @@ def test_admin_fallback_records_round_trip_without_restart_or_false_changes(as_j
     )
     assert saved.valid, saved.errors
     assert saved.pending_fields == ()
-    assert json.loads(saved.target_values["MODEL_FALLBACKS"]) == entries
+    assert json.loads(saved.target_values["MODEL_FALLBACKS"]) == canonical
     loaded = _snapshot(saved.target_values)
     field = _fallback_field(loaded)
     value = field["value"]
-    assert isinstance(value, str) and json.loads(value) == entries
+    assert isinstance(value, str) and json.loads(value) == canonical
     assert field["source"] == ConfigSource.MANAGED.value
     options = field["options"]
     assert isinstance(options, list)
@@ -174,9 +182,9 @@ def test_empty_process_fallbacks_override_managed_records_and_remain_locked(empt
     )
     assert result.valid and result.settings is not None
     assert result.settings.model_fallbacks is None
-    assert json.loads(result.target_values["MODEL_FALLBACKS"]) == json.loads(
-        managed["MODEL_FALLBACKS"]
-    )
+    assert json.loads(result.target_values["MODEL_FALLBACKS"]) == [
+        {"model": "groq/one", "reasoning": "max", "api_key_number": 1}
+    ]
 
 
 def test_retired_provider_normalization_preserves_surviving_efforts():

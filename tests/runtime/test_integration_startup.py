@@ -52,7 +52,7 @@ def runtime():
         return_value=frozenset({ProviderModelInfo("one")})
     )
 
-    async def construct(_id, _settings, _admission_registry):
+    async def construct(_id, _settings, _admission_registry, _api_key_number):
         return provider
 
     manager = ProviderRuntimeManager(

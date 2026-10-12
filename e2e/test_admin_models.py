@@ -1,6 +1,7 @@
 """Rendered model-fallback controls for the local Admin UI."""
 
 import json
+from typing import cast
 
 import pytest
 from playwright.sync_api import Locator, Page, expect
@@ -25,7 +26,7 @@ def _refresh_openrouter_models(page: Page) -> None:
     page.get_by_role("button", name="Model Config", exact=True).click()
 
 
-def _fallbacks(editor: Locator) -> list[dict[str, str]]:
+def _fallbacks(editor: Locator) -> list[dict[str, str | int]]:
     value = editor.locator("#field-MODEL_FALLBACKS").input_value()
     return json.loads(value) if value else []
 
@@ -93,7 +94,7 @@ def test_model_routing_saves_independent_model_and_effort_choices(
     assert values["MODEL_SONNET"] == "open_router/vendor/model-b"
     assert values["REASONING_SONNET"] == "low"
     assert json.loads(values["MODEL_FALLBACKS"]) == [
-        {"model": "open_router/vendor/model-a", "reasoning": "off"}
+        {"model": "open_router/vendor/model-a", "reasoning": "off", "api_key_number": 1}
     ]
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     page.reload()
@@ -106,7 +107,7 @@ def test_model_routing_saves_independent_model_and_effort_choices(
     )
     expect(sonnet.locator("#field-REASONING_SONNET")).to_have_value("low")
     assert _fallbacks(fallback) == [
-        {"model": "open_router/vendor/model-a", "reasoning": "off"}
+        {"model": "open_router/vendor/model-a", "reasoning": "off", "api_key_number": 1}
     ]
     expect(page.locator("#dirtyState")).to_have_text("No changes")
 
@@ -165,8 +166,12 @@ def test_fallback_editor_adds_filters_reorders_and_removes_models(
     add_input.fill("groq/custom-model")
     editor.get_by_role("button", name="Add fallback", exact=True).click()
     assert _fallbacks(editor) == [
-        {"model": "open_router/vendor/model-b", "reasoning": "low"},
-        {"model": "groq/custom-model", "reasoning": "inherit"},
+        {
+            "model": "open_router/vendor/model-b",
+            "reasoning": "low",
+            "api_key_number": 1,
+        },
+        {"model": "groq/custom-model", "reasoning": "inherit", "api_key_number": 1},
     ]
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
     expect(page.locator("#applyButton")).to_be_enabled()
@@ -183,12 +188,16 @@ def test_fallback_editor_adds_filters_reorders_and_removes_models(
         rows.nth(0), target_position={"x": 10, "y": 5}
     )
     assert _fallbacks(editor) == [
-        {"model": "groq/custom-model", "reasoning": "inherit"},
-        {"model": "open_router/vendor/model-b", "reasoning": "low"},
+        {"model": "groq/custom-model", "reasoning": "inherit", "api_key_number": 1},
+        {
+            "model": "open_router/vendor/model-b",
+            "reasoning": "low",
+            "api_key_number": 1,
+        },
     ]
     editor.get_by_role("button", name="Remove groq/custom-model", exact=True).click()
     assert _fallbacks(editor) == [
-        {"model": "open_router/vendor/model-b", "reasoning": "low"}
+        {"model": "open_router/vendor/model-b", "reasoning": "low", "api_key_number": 1}
     ]
     editor.get_by_role(
         "button", name="Remove open_router/vendor/model-b", exact=True
@@ -220,7 +229,7 @@ def test_fallback_editor_rejects_blank_and_duplicate_rows(
     add_input.fill("groq/custom-model")
     add_button.click()
     expect(page.locator("#messageArea")).to_have_text(
-        "That fallback model is already in the list."
+        "That model and API key are already in the fallback list."
     )
     expect(editor.locator(".model-list-row")).to_have_count(1)
 
@@ -317,7 +326,7 @@ def test_fallback_editor_pairs_match_existing_controls_and_save_effort(
         )
     ).to_have_value("max")
     assert _fallbacks(editor) == [
-        {"model": "open_router/vendor/model-b", "reasoning": "max"}
+        {"model": "open_router/vendor/model-b", "reasoning": "max", "api_key_number": 1}
     ]
     expect(page.locator("#dirtyState")).to_have_text("No changes")
 
@@ -329,15 +338,15 @@ def test_fallback_drag_and_keyboard_reordering_save_model_effort_pairs(
     _open_models(page, admin_base_url)
     editor = page.locator('.field[data-key="MODEL_FALLBACKS"]')
     entries = [
-        {"model": "groq/model-a", "reasoning": "low"},
-        {"model": "groq/model-b", "reasoning": "client"},
-        {"model": "groq/model-c", "reasoning": "max"},
-        {"model": "groq/model-d", "reasoning": "high"},
+        {"model": "groq/model-a", "reasoning": "low", "api_key_number": 1},
+        {"model": "groq/model-b", "reasoning": "client", "api_key_number": 1},
+        {"model": "groq/model-c", "reasoning": "max", "api_key_number": 1},
+        {"model": "groq/model-d", "reasoning": "high", "api_key_number": 1},
     ]
     for entry in entries:
-        editor.locator("#field-MODEL_FALLBACKS-add").fill(entry["model"])
+        editor.locator("#field-MODEL_FALLBACKS-add").fill(cast(str, entry["model"]))
         editor.get_by_label("Fallback reasoning effort", exact=True).select_option(
-            entry["reasoning"]
+            cast(str, entry["reasoning"])
         )
         editor.get_by_role("button", name="Add fallback", exact=True).click()
     rows = editor.locator(".model-list-row")
@@ -510,7 +519,7 @@ def test_editable_fallbacks_keep_focus_and_live_model_suggestions(
     model.fill("open_router/new-model")
     expect(model).to_be_focused()
     assert _fallbacks(editor) == [
-        {"model": "open_router/new-model", "reasoning": "inherit"}
+        {"model": "open_router/new-model", "reasoning": "inherit", "api_key_number": 1}
     ]
     for effort in ("low", "high", "client"):
         editor.get_by_label(
@@ -532,7 +541,7 @@ def test_editable_fallbacks_keep_focus_and_live_model_suggestions(
     expect(model).to_have_value("new-model")
     editor.get_by_role("option", name="open_router/new-model", exact=True).click()
     assert _fallbacks(editor) == [
-        {"model": "open_router/new-model", "reasoning": "client"}
+        {"model": "open_router/new-model", "reasoning": "client", "api_key_number": 1}
     ]
     registered = page.evaluate("state.modelComboboxes.size")
     for _ in range(3):

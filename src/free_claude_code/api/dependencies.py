@@ -24,13 +24,14 @@ def get_settings(services: ApiServices = Depends(get_services)) -> Settings:
 
 async def resolve_provider(
     provider_type: str,
+    api_key_number: int = 1,
     *,
     lease: RequestRuntimeLease,
 ) -> ProviderPort:
     """Resolve a provider through one retained generation."""
-    should_log_init = not lease.is_provider_cached(provider_type)
+    should_log_init = not lease.is_provider_cached(provider_type, api_key_number)
     try:
-        provider = await lease.resolve_provider(provider_type)
+        provider = await lease.resolve_provider(provider_type, api_key_number)
     except UnknownProviderError:
         logger.error(
             "Unknown provider_type: '{}'. Supported: {}",
@@ -39,7 +40,7 @@ async def resolve_provider(
         )
         raise
     if should_log_init:
-        logger.info("Provider initialized: {}", provider_type)
+        logger.info("Provider initialized: {} Key {}", provider_type, api_key_number)
     return provider
 
 

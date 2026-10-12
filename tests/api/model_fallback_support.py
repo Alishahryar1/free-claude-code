@@ -289,6 +289,7 @@ def fallback_client(
 
     def resolve(
         provider_id: str,
+        _api_key_number: int,
         *,
         lease: object,
     ) -> ControlledFallbackProvider:

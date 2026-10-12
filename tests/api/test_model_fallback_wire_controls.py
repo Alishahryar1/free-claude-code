@@ -65,7 +65,7 @@ async def test_classifier_fallback_keeps_manual_thinking_compatible(effort):
     handler = MessagesHandler(
         settings,
         provider_resolver=AsyncMock(
-            side_effect=lambda provider_id: (
+            side_effect=lambda provider_id, _api_key_number: (
                 primary if provider_id == "nvidia_nim" else fallback
             )
         ),
@@ -134,7 +134,7 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
     )
     executor = ProviderExecutor(
         AsyncMock(
-            side_effect=lambda provider_id: (
+            side_effect=lambda provider_id, _api_key_number: (
                 primary if provider_id == "nvidia_nim" else fallback
             )
         ),

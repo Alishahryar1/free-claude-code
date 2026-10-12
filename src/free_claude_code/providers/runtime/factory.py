@@ -282,6 +282,8 @@ def prepare_provider(
     provider_id: str,
     provider_loaders: Mapping[str, Callable[[], ProviderFactory]],
     custom_definition: CustomProviderDefinition | None = None,
+    *,
+    api_key_number: int = 1,
 ) -> Callable[[Settings, ProviderAdmissionRegistry], BaseProvider]:
     """Load implementation modules in a worker; return a loop-owned constructor."""
 
@@ -296,7 +298,9 @@ def prepare_provider(
         def construct_custom(
             settings: Settings, admission_registry: ProviderAdmissionRegistry
         ) -> BaseProvider:
-            config = build_custom_provider_config(custom_definition, settings)
+            config = build_custom_provider_config(
+                custom_definition, settings, api_key_number=api_key_number
+            )
             admission = admission_registry.get(provider_id)
             return CustomProvider(
                 config, definition=custom_definition, admission=admission
@@ -318,7 +322,9 @@ def prepare_provider(
     def construct(
         settings: Settings, admission_registry: ProviderAdmissionRegistry
     ) -> BaseProvider:
-        config = build_provider_config(descriptor, settings)
+        config = build_provider_config(
+            descriptor, settings, api_key_number=api_key_number
+        )
         admission = admission_registry.get(provider_id)
         if factory is not None:
             provider = factory(config, settings, admission)

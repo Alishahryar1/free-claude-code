@@ -435,7 +435,7 @@ async def test_primary_context_validation_counts_toward_progress_timeout(
         fallback = FakeProvider() if wire == "messages" else ResponsesFakeProvider()
         providers = {"provider": provider, "fallback": fallback}
         executor = ProviderExecutor(
-            AsyncMock(side_effect=lambda name: providers[name]),
+            AsyncMock(side_effect=lambda name, _api_key_number: providers[name]),
             progress_timeout_seconds=0.05,
         )
         route = _routed_request if wire == "messages" else _routed_responses_request
@@ -910,7 +910,7 @@ async def test_context_rejection_before_first_event_allows_fallback(wire):
         fallback = FakeProvider() if wire == "messages" else ResponsesFakeProvider()
         providers = {"provider": provider, "fallback": fallback}
         executor = ProviderExecutor(
-            AsyncMock(side_effect=lambda name: providers[name]),
+            AsyncMock(side_effect=lambda name, _api_key_number: providers[name]),
             progress_timeout_seconds=2,
         )
         route = _routed_request if wire == "messages" else _routed_responses_request

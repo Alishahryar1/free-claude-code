@@ -51,7 +51,9 @@ router = APIRouter()
 
 
 def _provider_resolver(lease: RequestRuntimeLease) -> ProviderResolver:
-    return lambda provider_type: resolve_provider(provider_type, lease=lease)
+    return lambda provider_type, api_key_number: resolve_provider(
+        provider_type, api_key_number, lease=lease
+    )
 
 
 async def _create_messages_response(

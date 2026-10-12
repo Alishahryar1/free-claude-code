@@ -243,7 +243,7 @@ def _runtime_with_admin_provider(
         runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
             snapshot,
             admission_registry,
-            {"nvidia_nim": provider},
+            {("nvidia_nim", 1): provider},
         ),
     )
     return ApplicationRuntime(

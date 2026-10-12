@@ -383,6 +383,33 @@ def test_fallback_effort_does_not_change_primary_identity(requested):
     ] == [("groq/backup", ReasoningPreference.LOW)]
 
 
+@pytest.mark.parametrize("requested", ["claude-opus-4", "groq/primary"])
+def test_same_model_fallbacks_keep_alternate_keys_and_their_efforts(requested):
+    settings = Settings(
+        MODEL="groq/primary",
+        MODEL_OPUS="groq/primary",
+        GROQ_API_KEY=["synthetic-first", "synthetic-second", "synthetic-third"],
+        MODEL_FALLBACKS=[
+            {"model": "groq/primary", "reasoning": "off", "api_key_number": 1},
+            {"model": "groq/primary", "reasoning": "low", "api_key_number": 2},
+            {"model": "groq/primary", "reasoning": "high", "api_key_number": 3},
+        ],
+    )
+    route = ModelRouter(settings).resolve(requested)
+    assert route.primary.api_key_number == 1
+    assert [
+        (
+            candidate.target.provider_model_ref,
+            candidate.target.api_key_number,
+            candidate.reasoning_preference,
+        )
+        for candidate in route.fallbacks
+    ] == [
+        ("groq/primary", 2, ReasoningPreference.LOW),
+        ("groq/primary", 3, ReasoningPreference.HIGH),
+    ]
+
+
 def test_direct_gateway_route_preserves_original_and_deduplicates_canonical_target(
     settings,
 ):

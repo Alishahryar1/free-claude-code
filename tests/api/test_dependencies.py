@@ -83,8 +83,8 @@ async def test_resolve_provider_uses_retained_lease_and_logs_first_initializatio
         result = await resolve_provider("nvidia_nim", lease=lease)
 
     assert result is provider
-    lease.resolve_provider.assert_called_once_with("nvidia_nim")
-    log_info.assert_called_once_with("Provider initialized: {}", "nvidia_nim")
+    lease.resolve_provider.assert_called_once_with("nvidia_nim", 1)
+    log_info.assert_called_once_with("Provider initialized: {} Key {}", "nvidia_nim", 1)
 
 
 @pytest.mark.asyncio

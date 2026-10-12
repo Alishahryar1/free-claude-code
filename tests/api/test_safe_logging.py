@@ -27,7 +27,9 @@ async def test_create_message_skips_full_payload_debug_log_by_default(caplog):
     mock_provider.stream_messages = fake_stream
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(side_effect=lambda _: mock_provider),
+        provider_resolver=AsyncMock(
+            side_effect=lambda _, _api_key_number: mock_provider
+        ),
         web_tools=StubWebToolsClient(),
     )
 
@@ -57,7 +59,9 @@ async def test_create_message_logs_full_payload_when_opt_in(caplog):
     mock_provider.stream_messages = fake_stream
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(side_effect=lambda _: mock_provider),
+        provider_resolver=AsyncMock(
+            side_effect=lambda _, _api_key_number: mock_provider
+        ),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -123,7 +127,9 @@ async def test_create_message_unexpected_error_default_logs_exclude_exception_te
     mock_provider.stream_messages = stream_boom
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(side_effect=lambda _: mock_provider),
+        provider_resolver=AsyncMock(
+            side_effect=lambda _, _api_key_number: mock_provider
+        ),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -160,7 +166,9 @@ async def test_create_message_unexpected_error_terminal_json_ignores_status_code
     mock_provider.stream_messages = stream_boom
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(side_effect=lambda _: mock_provider),
+        provider_resolver=AsyncMock(
+            side_effect=lambda _, _api_key_number: mock_provider
+        ),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(

@@ -1,4 +1,4 @@
-"""Ordered secret credentials and the single credential used at runtime."""
+"""Ordered secret credentials and explicit credential selection."""
 
 import json
 from typing import Annotated
@@ -43,8 +43,13 @@ type ApiKeyList = Annotated[tuple[SecretStr, ...], BeforeValidator(normalize_api
 
 
 def first_api_key(keys: ApiKeyList) -> str | None:
-    """Select the only credential supplied to provider and voice resources."""
+    """Select the first credential for default provider and voice resources."""
     return keys[0].get_secret_value() if keys else None
+
+
+def selected_api_key(keys: ApiKeyList, number: int) -> str | None:
+    """Select the one-based numbered credential, without substituting another."""
+    return keys[number - 1].get_secret_value() if 1 <= number <= len(keys) else None
 
 
 def api_key_values(keys: ApiKeyList) -> list[str]:

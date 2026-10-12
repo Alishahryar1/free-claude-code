@@ -348,9 +348,9 @@ Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` 
 
 In **Admin UI → Model Config**, add **Fallback Models** in the order FCC should try them if the selected model fails. Each fallback has its own reasoning effort: **Inherit**, **Off**, **From client**, **Low**, **Medium**, **High**, **X-High**, or **Max**.
 
-Choose a model and effort in the bottom row, then click **+**. Edit either dropdown in place, drag the handle to change the order, or click the red trash button to remove a fallback.
+Choose a model, effort, and API key number in the bottom row, then click **+**. **Key 1**, **Key 2**, and so on refer to the current numbered keys in that provider's settings. Existing fallbacks use **Key 1**. Edit the selections in place, drag the handle to change the order, or click the red trash button to remove a fallback.
 
-**Inherit** keeps the original request's resolved reasoning setting. **From client** uses the effort or token budget sent by your coding agent, bypassing the global or tier setting. A fallback matching the selected provider/model is skipped.
+**Inherit** keeps the original request's resolved reasoning setting. **From client** uses the effort or token budget sent by your coding agent, bypassing the global or tier setting. A fallback matching the selected provider, model, and key is skipped. You can select the same model with another key number.
 
 </details>
 

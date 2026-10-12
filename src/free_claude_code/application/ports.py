@@ -56,7 +56,7 @@ class ProviderPort(Protocol):
     ) -> AsyncIterator[str]: ...
 
 
-ProviderResolver = Callable[[str], Awaitable[ProviderPort]]
+ProviderResolver = Callable[[str, int], Awaitable[ProviderPort]]
 ModelInfoLookup = Callable[[str, str], ProviderModelInfo | None]
 
 
@@ -69,11 +69,13 @@ class RequestRuntimeLease(Protocol):
     @property
     def settings(self) -> Settings: ...
 
-    def is_provider_cached(self, provider_id: str) -> bool: ...
+    def is_provider_cached(self, provider_id: str, api_key_number: int = 1) -> bool: ...
 
     async def wait_for_token_estimation(self) -> None: ...
 
-    async def resolve_provider(self, provider_id: str) -> ProviderPort: ...
+    async def resolve_provider(
+        self, provider_id: str, api_key_number: int = 1
+    ) -> ProviderPort: ...
 
     def model_info(
         self, provider_id: str, model_id: str

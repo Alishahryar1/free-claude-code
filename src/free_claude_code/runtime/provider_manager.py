@@ -103,24 +103,28 @@ class ProviderGenerationLease:
     def settings(self) -> Settings:
         return self._generation.settings
 
-    def is_provider_cached(self, provider_id: str) -> bool:
-        return self._generation.runtime.is_cached(provider_id)
+    def is_provider_cached(self, provider_id: str, api_key_number: int = 1) -> bool:
+        return self._generation.runtime.is_cached(provider_id, api_key_number)
 
     async def wait_for_token_estimation(self) -> None:
         self._manager._ensure_open()
         await self._wait.wait(self._manager._ensure_encoder())
 
-    async def resolve_provider(self, provider_id: str) -> BaseProvider:
+    async def resolve_provider(
+        self, provider_id: str, api_key_number: int = 1
+    ) -> BaseProvider:
         self._manager._ensure_open()
         generation = self._generation
         if provider_id not in generation.initialized:
             task = self._manager._catalog_task(generation, provider_id)
             await self._wait.wait(task)
-        if generation.runtime.is_cached(provider_id):
-            provider = await generation.runtime.resolve_provider(provider_id)
+        if generation.runtime.is_cached(provider_id, api_key_number):
+            provider = await generation.runtime.resolve_provider(
+                provider_id, api_key_number
+            )
         else:
             waiting = asyncio.create_task(
-                generation.runtime.resolve_provider(provider_id)
+                generation.runtime.resolve_provider(provider_id, api_key_number)
             )
             try:
                 provider = await self._wait.wait(waiting)
