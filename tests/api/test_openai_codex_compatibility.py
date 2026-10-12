@@ -4,6 +4,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
@@ -97,7 +98,9 @@ async def test_messages_accepts_current_claude_controls_for_openai_provider(
         upstream_requests,
         response_text="hello",
     )
-    app = create_test_app(providers={"openai": provider})
+    app = create_test_app(
+        Settings(REASONING_POLICY="client"), providers={"openai": provider}
+    )
 
     try:
         with TestClient(app) as client:

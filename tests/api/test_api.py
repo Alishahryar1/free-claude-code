@@ -7,7 +7,7 @@ from free_claude_code.config.constants import DEFAULT_MODEL
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -363,7 +363,7 @@ def test_model_mapping(client: TestClient):
     args = _stream_messages_calls[0][0]
     kwargs = _stream_messages_calls[0][1]
     assert args[0].model != "claude-3-haiku-20240307"
-    assert kwargs["reasoning"] == ReasoningPolicy.provider_default()
+    assert kwargs["reasoning"] == ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM)
 
 
 @pytest.mark.parametrize(

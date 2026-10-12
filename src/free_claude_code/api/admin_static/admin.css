@@ -530,6 +530,15 @@ button.startup-busy::before,
   gap: 20px;
 }
 
+.model-route-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.model-route-row > .field { min-width: 0; }
+
 /* Field Grouping */
 .field {
   display: flex;
@@ -684,47 +693,43 @@ button.startup-busy::before,
   gap: 8px;
 }
 
-.model-list-add {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
-  gap: 8px;
-  align-items: start;
-}
-
+.model-list-add,
 .model-list-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.4fr) auto auto auto;
-  gap: 4px;
+  grid-template-columns: 20px repeat(2, minmax(0, 1fr)) 40px;
+  gap: 8px;
   align-items: center;
-  min-height: 44px;
-  padding: 6px 8px 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--panel-strong);
 }
 
-.model-list-value {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: var(--text-strong);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 13px;
+.model-list-add > .model-combobox { grid-column: 2; }
+.model-list-add > select { grid-column: 3; }
+.model-list-add > button { grid-column: 4; }
+
+.model-list-editor .model-list-action {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
 }
 
-.model-list-action {
-  min-height: 32px;
-  padding: 4px 8px;
+.model-list-action svg { width: 18px; height: 18px; }
+.model-list-plus { font-size: 24px; font-weight: 400; }
+
+.model-list-editor .model-list-drag {
+  width: 20px;
+  font-size: 22px;
+  cursor: grab;
 }
+
+.model-list-drag:active { cursor: grabbing; }
+.model-list-row.dragging { opacity: 0.5; }
+.model-list-row[data-drop-position="before"] { box-shadow: 0 -2px var(--accent); }
+.model-list-row[data-drop-position="after"] { box-shadow: 0 2px var(--accent); }
 
 .model-list-editor button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-
-.model-list-empty {
-  padding: 8px 2px;
-  color: var(--muted);
-  font-size: 13px;
 }
 
 .field input:focus,
@@ -945,14 +950,6 @@ button.startup-busy::before,
   
   .field-grid {
     grid-template-columns: 1fr;
-  }
-
-  .model-list-add {
-    grid-template-columns: 1fr;
-  }
-
-  .model-list-row {
-    grid-template-columns: 1fr repeat(3, auto);
   }
 
   .action-meta {

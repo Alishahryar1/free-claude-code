@@ -340,6 +340,8 @@ Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` 
 
 In **Admin UI → Model Config**, add **Fallback Models** in the order FCC should try them if the selected model fails. Each fallback has its own reasoning effort: **Inherit**, **Off**, **From client**, **Low**, **Medium**, **High**, **X-High**, or **Max**.
 
+Choose a model and effort in the bottom row, then click **+**. Edit either dropdown in place, drag the handle to change the order, or click the red trash button to remove a fallback.
+
 **Inherit** keeps the original request's resolved reasoning setting. **From client** uses the effort or token budget sent by your coding agent, bypassing the global or tier setting. A fallback matching the selected provider/model is skipped.
 
 </details>
@@ -347,14 +349,14 @@ In **Admin UI → Model Config**, add **Fallback Models** in the order FCC shoul
 <details>
 <summary><strong>Reasoning control</strong></summary>
 
-Open **Admin UI → Model Config → Reasoning** and select the behavior you want.
+Open **Admin UI → Model Config → Model Routing** and choose an effort beside each model. **Default Effort** starts at **Medium**. Fable, Opus, Sonnet, and Haiku start at **Inherit**.
 
 | Selection | Behavior |
 | --- | --- |
-| **From client** (default) | Use the effort sent by your coding agent. If none is sent, keep the provider default. |
+| **From client** | Use the effort sent by your coding agent. If none is sent, keep the provider default. |
 | **Off** | Request reasoning to be disabled. |
 | **Low**, **Medium**, **High**, **X-High**, or **Max** | Override the client with the selected reasoning level. |
-| **Inherit** (Fable, Opus, Sonnet, and Haiku only) | Use the root Reasoning selection. |
+| **Inherit** | Tier overrides use Default Effort. Fallbacks keep the original request's resolved effort. |
 
 Providers that do not support a selected control retain their own behavior.
 

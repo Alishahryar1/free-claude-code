@@ -38,6 +38,32 @@ from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
 
 
+def test_builtin_effort_is_medium_with_inherited_tier_efforts():
+    snapshot = compose_settings_snapshot({}, {})
+    settings = snapshot.settings
+    assert settings.reasoning_policy is ReasoningPreference.MEDIUM
+    assert snapshot.sources["reasoning_policy"] is ConfigSource.DEFAULT
+    router = ModelRouter(settings)
+    for tier in ("fable", "opus", "sonnet", "haiku"):
+        assert getattr(settings, f"model_{tier}") is None
+        assert getattr(settings, f"reasoning_{tier}") is ReasoningPreference.INHERIT
+        route = router.resolve(f"claude-{tier}-test")
+        assert route.primary.provider_model_ref == settings.model
+        assert route.reasoning_preference is ReasoningPreference.MEDIUM
+
+
+@pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
+@pytest.mark.parametrize("effort", ["client", "off", "high"])
+def test_explicit_default_effort_is_retained(source, effort):
+    values = {"REASONING_POLICY": effort}
+    snapshot = compose_settings_snapshot(
+        values if source is ConfigSource.MANAGED else {},
+        values if source is ConfigSource.PROCESS else {},
+    )
+    assert snapshot.settings.reasoning_policy is ReasoningPreference(effort)
+    assert snapshot.sources["reasoning_policy"] is source
+
+
 @pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
 @pytest.mark.parametrize("tier", ["FABLE", "OPUS", "SONNET", "HAIKU"])
 def test_retirement_normalizes_sources_without_resurrecting_overrides(source, tier):

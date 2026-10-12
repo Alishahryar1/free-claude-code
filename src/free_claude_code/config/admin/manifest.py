@@ -43,12 +43,7 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
     ConfigSectionSpec(
         "models",
         "Model Routing",
-        "Search discovered provider models or enter a provider/model slug.",
-    ),
-    ConfigSectionSpec(
-        "reasoning",
-        "Reasoning",
-        "Client reasoning policy and route-specific overrides.",
+        "Choose a model and effort together. Tier overrides can inherit the defaults.",
     ),
     ConfigSectionSpec(
         "runtime",
@@ -142,45 +137,45 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ),
     ConfigFieldSpec(
         "REASONING_POLICY",
-        "Reasoning Policy",
-        "reasoning",
+        "Default Effort",
+        "models",
         "select",
         settings_attr="reasoning_policy",
         options=_reasoning_options(ROOT_REASONING_PREFERENCES),
         description=(
-            "From client preserves CLI effort. Providers translate only the controls "
-            "their API supports. Native Anthropic Messages requests always use the "
-            "client thinking controls."
+            "Used by inherited routes and direct provider/model requests. From client "
+            "preserves CLI effort. Native Anthropic primary requests use client "
+            "thinking controls."
         ),
     ),
     ConfigFieldSpec(
         "REASONING_FABLE",
-        "Fable Reasoning",
-        "reasoning",
+        "Fable Effort",
+        "models",
         "select",
         settings_attr="reasoning_fable",
         options=_reasoning_options(ROUTE_REASONING_PREFERENCES),
     ),
     ConfigFieldSpec(
         "REASONING_OPUS",
-        "Opus Reasoning",
-        "reasoning",
+        "Opus Effort",
+        "models",
         "select",
         settings_attr="reasoning_opus",
         options=_reasoning_options(ROUTE_REASONING_PREFERENCES),
     ),
     ConfigFieldSpec(
         "REASONING_SONNET",
-        "Sonnet Reasoning",
-        "reasoning",
+        "Sonnet Effort",
+        "models",
         "select",
         settings_attr="reasoning_sonnet",
         options=_reasoning_options(ROUTE_REASONING_PREFERENCES),
     ),
     ConfigFieldSpec(
         "REASONING_HAIKU",
-        "Haiku Reasoning",
-        "reasoning",
+        "Haiku Effort",
+        "models",
         "select",
         settings_attr="reasoning_haiku",
         options=_reasoning_options(ROUTE_REASONING_PREFERENCES),

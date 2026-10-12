@@ -644,7 +644,7 @@ class Settings(BaseModel):
         validation_alias="PROVIDER_PROGRESS_TIMEOUT",
     )
     reasoning_policy: ReasoningPreference = Field(
-        default=ReasoningPreference.CLIENT,
+        default=ReasoningPreference.MEDIUM,
         validation_alias="REASONING_POLICY",
     )
     reasoning_fable: ReasoningPreference = Field(

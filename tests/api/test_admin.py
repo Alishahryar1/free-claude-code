@@ -643,7 +643,7 @@ def test_admin_static_places_reasoning_fields_in_model_config():
         encoding="utf-8"
     )
 
-    assert 'sections: ["models", "reasoning", "web_tools"]' in script
+    assert 'sections: ["models", "web_tools"]' in script
     assert 'sections: ["models", "thinking", "web_tools"]' not in script
 
 
@@ -801,9 +801,9 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
     reasoning_policy = next(
         field for field in body["fields"] if field["key"] == "REASONING_POLICY"
     )
-    assert reasoning_policy["section"] == "reasoning"
+    assert reasoning_policy["section"] == "models"
     assert reasoning_policy["type"] == "select"
-    assert reasoning_policy["value"] == "client"
+    assert reasoning_policy["value"] == "medium"
     assert reasoning_policy["options"] == [
         {"value": "off", "label": "Off"},
         {"value": "client", "label": "From client"},
@@ -820,6 +820,12 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
         {"value": "inherit", "label": "Inherit"},
         *reasoning_policy["options"],
     ]
+    assert all(
+        field["section"] == "models"
+        for field in body["fields"]
+        if field["key"].startswith("REASONING_")
+    )
+    assert "reasoning" not in {section["id"] for section in body["sections"]}
     restart_required = {
         field["key"] for field in body["fields"] if field["restart_required"] is True
     }

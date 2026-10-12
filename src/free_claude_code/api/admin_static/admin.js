@@ -37,7 +37,7 @@ const VIEW_GROUPS = [
     id: "model_config",
     label: "Model Config",
     title: "Model Config",
-    sections: ["models", "reasoning", "web_tools"],
+    sections: ["models", "web_tools"],
     containerId: "modelConfigSections",
   },
   {
@@ -849,9 +849,11 @@ function renderSections(sections, fields) {
 
       const grid = document.createElement("div");
       grid.className = "field-grid";
-      sectionFields.forEach((field) => {
-        grid.appendChild(renderField(field));
-      });
+      if (section.id === "models") {
+        renderModelRoutes(grid, sectionFields);
+      } else {
+        sectionFields.forEach((field) => grid.appendChild(renderField(field)));
+      }
       sectionEl.appendChild(grid);
 
       if (sectionFields.some((field) => field.advanced)) {
@@ -869,6 +871,28 @@ function renderSections(sections, fields) {
       container.appendChild(sectionEl);
     });
   });
+}
+
+function renderModelRoutes(grid, fields) {
+  const fieldsByKey = new Map(fields.map((field) => [field.key, field]));
+  const routes = [
+    ["Default", "MODEL", "REASONING_POLICY"],
+    ["Fable", "MODEL_FABLE", "REASONING_FABLE"],
+    ["Opus", "MODEL_OPUS", "REASONING_OPUS"],
+    ["Sonnet", "MODEL_SONNET", "REASONING_SONNET"],
+    ["Haiku", "MODEL_HAIKU", "REASONING_HAIKU"],
+  ];
+  for (const [name, modelKey, effortKey] of routes) {
+    const row = document.createElement("div");
+    row.className = "model-route-row";
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", `${name} model and effort`);
+    row.append(renderField(fieldsByKey.get(modelKey)), renderField(fieldsByKey.get(effortKey)));
+    grid.appendChild(row);
+    fieldsByKey.delete(modelKey);
+    fieldsByKey.delete(effortKey);
+  }
+  fieldsByKey.forEach((field) => grid.appendChild(renderField(field)));
 }
 
 function renderField(field) {
@@ -1028,38 +1052,26 @@ class ModelListEditor {
     this.field = field;
     this.values = input.value ? JSON.parse(input.value) : [];
     this.inputId = `field-${field.key}-add`;
+    this.rowComboboxes = [];
+    this.draggedEntry = null;
 
     this.element = document.createElement("div");
     this.element.className = "model-list-editor";
 
     const addRow = document.createElement("div");
     addRow.className = "model-list-add";
-    this.addInput = window.FccFormControls.configure(document.createElement("input"));
-    this.addInput.id = this.inputId;
-    this.addInput.type = "text";
-    this.addInput.autocomplete = "off";
-    this.addInput.placeholder = "provider/model";
-    this.addInput.disabled = field.locked;
-    const addCombobox = createModelCombobox(this.addInput, {
-      ...field,
-      key: `${field.key}-add`,
-      label: "fallback model",
-      type: "model",
-    });
+    const addCombobox = this.modelCombobox("", "add", "New fallback model");
+    this.addInput = addCombobox.input;
     this.addEffort = this.effortSelect("inherit", "Fallback reasoning effort");
     this.addEffort.id = `field-${field.key}-effort`;
 
-    this.addButton = document.createElement("button");
-    this.addButton.type = "button";
-    this.addButton.className = "secondary-button";
-    this.addButton.textContent = "Add";
-    this.addButton.disabled = field.locked;
-    this.addButton.addEventListener("click", () => this.add());
+    this.addButton = this.actionButton("+", "Add fallback", () => this.add());
+    this.addButton.className = "secondary-button model-list-action model-list-plus";
     addRow.append(addCombobox.element, this.addEffort, this.addButton);
 
     this.rows = document.createElement("div");
     this.rows.className = "model-list-rows";
-    this.element.append(input, addRow, this.rows);
+    this.element.append(input, this.rows, addRow);
     this.renderRows();
   }
 
@@ -1078,69 +1090,130 @@ class ModelListEditor {
     this.addEffort.value = "inherit";
     showMessage("");
     this.sync();
+    this.renderRows();
   }
 
-  move(index, offset) {
-    const destination = index + offset;
-    if (destination < 0 || destination >= this.values.length) return;
-    [this.values[index], this.values[destination]] = [
-      this.values[destination],
-      this.values[index],
-    ];
+  move(entry, destination) {
+    const index = this.values.indexOf(entry);
+    if (this.field.locked || destination < 0 || destination >= this.values.length || index === destination) return;
+    this.values.splice(index, 1);
+    this.values.splice(destination, 0, entry);
     this.sync();
+    this.renderRows();
   }
 
   remove(index) {
     this.values.splice(index, 1);
     this.sync();
+    this.renderRows();
   }
 
   sync() {
     this.input.value = this.values.length ? JSON.stringify(this.values) : "";
     this.input.dataset.remove = "false";
     this.input.dispatchEvent(new Event("input", { bubbles: true }));
-    this.renderRows();
   }
 
   renderRows() {
-    this.rows.innerHTML = "";
-    if (this.values.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "model-list-empty";
-      empty.textContent = "No fallback models configured.";
-      this.rows.appendChild(empty);
-      return;
-    }
+    this.rowComboboxes.forEach((combobox) => {
+      combobox.close();
+      state.modelComboboxes.delete(combobox);
+    });
+    this.rowComboboxes = [];
+    this.rows.replaceChildren();
 
     this.values.forEach((entry, index) => {
       const row = document.createElement("div");
       row.className = "model-list-row";
 
-      const model = document.createElement("span");
-      model.className = "model-list-value";
-      model.textContent = entry.model;
+      const combobox = this.modelCombobox(entry.model, `row-${index}`, `Fallback model ${index + 1}`);
+      this.rowComboboxes.push(combobox);
       const effort = this.effortSelect(entry.reasoning, `Reasoning effort for ${entry.model}`);
       effort.addEventListener("change", () => {
         entry.reasoning = effort.value;
         this.sync();
       });
 
-      const up = this.actionButton("Move up", `Move ${entry.model} up`, () =>
-        this.move(index, -1),
-      );
-      up.disabled = this.field.locked || index === 0;
-      const down = this.actionButton("Move down", `Move ${entry.model} down`, () =>
-        this.move(index, 1),
-      );
-      down.disabled = this.field.locked || index === this.values.length - 1;
-      const remove = this.actionButton("Remove", `Remove ${entry.model}`, () =>
-        this.remove(index),
-      );
-      remove.disabled = this.field.locked;
+      const handle = this.actionButton("⠿", `Move ${entry.model}`);
+      handle.classList.add("model-list-drag");
+      handle.draggable = !this.field.locked;
+      handle.title = "Drag to reorder, or use the up and down arrow keys.";
+      handle.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+        event.preventDefault();
+        this.move(entry, this.values.indexOf(entry) + (event.key === "ArrowUp" ? -1 : 1));
+        this.rows.children[this.values.indexOf(entry)].querySelector(".model-list-drag").focus();
+      });
+      handle.addEventListener("dragstart", (event) => {
+        this.draggedEntry = entry;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", entry.model);
+        row.classList.add("dragging");
+      });
+      handle.addEventListener("dragend", () => this.clearDrag());
+      row.addEventListener("dragover", (event) => {
+        if (!this.draggedEntry || this.field.locked) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        this.clearDropIndicators();
+        row.dataset.dropPosition = this.dropAfter(event, row) ? "after" : "before";
+      });
+      row.addEventListener("dragleave", (event) => {
+        if (!row.contains(event.relatedTarget)) delete row.dataset.dropPosition;
+      });
+      row.addEventListener("drop", (event) => {
+        if (!this.draggedEntry || this.field.locked) return;
+        event.preventDefault();
+        const moved = this.draggedEntry;
+        const source = this.values.indexOf(moved);
+        const insertion = this.values.indexOf(entry) + (this.dropAfter(event, row) ? 1 : 0);
+        this.clearDrag();
+        this.move(moved, insertion - (source < insertion ? 1 : 0));
+      });
 
-      row.append(model, effort, up, down, remove);
+      const remove = this.actionButton("", `Remove ${entry.model}`, () => this.remove(index));
+      remove.className = "danger-button model-list-action";
+      remove.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      const updateModel = () => {
+        entry.model = combobox.input.value.trim();
+        effort.setAttribute("aria-label", `Reasoning effort for ${entry.model}`);
+        handle.setAttribute("aria-label", `Move ${entry.model}`);
+        remove.setAttribute("aria-label", `Remove ${entry.model}`);
+        this.sync();
+      };
+      combobox.input.addEventListener("input", updateModel);
+      combobox.input.addEventListener("change", updateModel);
+
+      row.append(handle, combobox.element, effort, remove);
       this.rows.appendChild(row);
     });
+  }
+
+  modelCombobox(value, suffix, label) {
+    const input = window.FccFormControls.configure(document.createElement("input"));
+    input.id = `field-${this.field.key}-${suffix}`;
+    input.type = "text";
+    input.autocomplete = "off";
+    input.placeholder = "provider/model";
+    input.disabled = this.field.locked;
+    input.value = value;
+    input.setAttribute("aria-label", label);
+    return createModelCombobox(input, { ...this.field, key: `${this.field.key}-${suffix}`, label, type: "model" });
+  }
+
+  dropAfter(event, row) {
+    const bounds = row.getBoundingClientRect();
+    return event.clientY >= bounds.top + bounds.height / 2;
+  }
+
+  clearDropIndicators() {
+    this.rows.querySelectorAll("[data-drop-position]").forEach((row) => delete row.dataset.dropPosition);
+  }
+
+  clearDrag() {
+    this.draggedEntry = null;
+    this.clearDropIndicators();
+    this.rows.querySelectorAll(".dragging").forEach((row) => row.classList.remove("dragging"));
   }
 
   effortSelect(value, label) {
@@ -1152,13 +1225,15 @@ class ModelListEditor {
     return select;
   }
 
-  actionButton(text, label, action) {
+  actionButton(text, label, action = null) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "ghost-button model-list-action";
     button.textContent = text;
     button.setAttribute("aria-label", label);
-    button.addEventListener("click", action);
+    button.title = label;
+    button.disabled = this.field.locked;
+    if (action) button.addEventListener("click", action);
     return button;
   }
 }
