@@ -180,33 +180,39 @@ would provoke more throttling, not less — but lengthening the retry budget its
 not, because coordinated recovery keeps retries serial. See "Provider retry budget"
 below.
 
-FCC already implements the mitigation end to end — `MODEL_FALLBACKS` in
-`~/.fcc/.env`, consumed by `config/model_refs.py` and applied as
-`candidates = (primary, *resolved.fallbacks)` in `application/execution.py`. Nothing
-needs building. It is unset, so `candidates` has length 1 and a throttled request has
-nowhere to go.
+The other, code-free mitigation is a `MODEL_FALLBACKS` chain in `~/.fcc/.env`, already
+implemented end to end: `config/model_refs.py` parses it and `application/execution.py`
+applies `candidates = (primary, *resolved.fallbacks)`, so a throttled primary falls
+through to the next provider instead of ending the turn. The default `MODEL` is a NIM
+model (`nvidia_nim/nvidia/nemotron-3-super-120b-a12b`), which is why NIM throttling is
+the only visible symptom.
 
-It is deliberately still unset. The only other providers configured on this machine
-all reject their credentials, so a fallback chain would add a second failing call to
-every throttled request:
+Earlier this chain was deliberately left unset because the only configured alternates
+all rejected their credentials, so every fallback added a second failing call:
 
-| Provider | Key | Result |
+| Provider | Key | Result (at the time) |
 | --- | --- | --- |
 | `xai` | original 84-char key | valid, but `403 permission-denied` — no credits |
 | `xai` | replacement 129-char key | `401 bad-credentials` |
 | `qwencloud` | `QWENCLOUD_API_KEY` | `401 Invalid API-key provided` |
 | `qwencloud_coding` | `QWENCLOUD_CODING_API_KEY` | `401 invalid access token or token expired` |
 
-Pointing `MODEL_FALLBACKS` at any of those makes every throttled turn slower and still
-fails. Unblocking is a credentials task, not a code task: fund the original xAI key, or
-supply a real `sk-…` QwenCloud key. Then:
+That is no longer true: `GROQ_API_KEY` and `MISTRAL_API_KEY` are now configured in
+`~/.fcc/.env`, and the Admin Providers tab reports 11 Groq and 46 Mistral models, so a
+fallback chain is viable. Use `provider/model` entries (the provider id is the first
+path segment), for example:
 
 ```
-MODEL_FALLBACKS=provider/model,provider/model
+MODEL_FALLBACKS=groq/llama-3.3-70b-versatile,mistral/mistral-large-latest
 ```
 
-Note `/models` is unauthenticated on both NVIDIA and QwenCloud and returns 200 with no
-key at all, so it proves nothing. Only `/chat/completions` verifies a credential.
+Point `MODEL` at a Groq or Mistral model instead if you would rather not route through
+NIM at all, or at `ollama/<model>` for a zero-quota local path (Ollama is reachable on
+this machine at `http://localhost:11434`).
+
+Note `/models` is not by itself proof of a working credential — it can return 200 with
+no key at all (observed on NVIDIA NIM and QwenCloud). Confirm a chosen fallback with a
+real `/chat/completions` before relying on it.
 
 ## Provider retry budget
 
