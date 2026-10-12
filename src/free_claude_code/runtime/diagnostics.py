@@ -142,7 +142,14 @@ def classified_settings() -> set[str]:
         set(RUNTIME_FIELDS + ROUTING_FIELDS + REASONING_FIELDS + WEB_FIELDS)
         | EXCLUDED_FIELDS
         | URL_FIELDS
-        | {"nim", "vertex_location", "custom_providers"}
+        | {
+            "nim",
+            "vertex_location",
+            "custom_providers",
+            "open_router_provider_preferences",
+            "open_router_use_cheapest_provider",
+            "open_router_quantizations",
+        }
     )
 
 
@@ -185,6 +192,13 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
                 row[key] = _url_summary(getattr(settings, attr))
         if name == "vertex":
             row["location"] = settings.vertex_location
+        if name == "open_router":
+            row["use_cheapest_provider"] = settings.open_router_use_cheapest_provider
+            if settings.open_router_quantizations:
+                row["quantizations"] = list(settings.open_router_quantizations)
+            preferences = settings.open_router_provider_preferences
+            if preferences is not None:
+                row["provider_preferences"] = preferences.to_request_field()
         providers[name] = row
     for definition in settings.custom_providers:
         providers[definition.provider_id] = {
