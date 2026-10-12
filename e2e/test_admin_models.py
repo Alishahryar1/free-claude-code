@@ -389,7 +389,7 @@ def test_fallback_plus_and_trash_have_matching_shape_and_centered_icons(
             assert abs(button_center - icon_center) <= 0.5
 
 
-def test_fallback_drag_indicators_only_offer_positions_that_change_order(
+def test_fallback_drag_indicators_only_offer_unique_positions_that_change_order(
     page: Page, admin_base_url: str
 ) -> None:
     page.set_viewport_size({"width": 1280, "height": 1100})
@@ -434,9 +434,40 @@ def test_fallback_drag_indicators_only_offer_positions_that_change_order(
             )
             expect(indicators).to_have_count(1)
             expect(rows.nth(index)).to_have_attribute("data-drop-position", position)
+        line_y = None
+        for index, after in ((2, True), (3, False)):
+            bounds = rows.nth(index).bounding_box()
+            assert bounds is not None
+            page.mouse.move(
+                bounds["x"] + 10,
+                bounds["y"] + (bounds["height"] - 2 if after else 2),
+                steps=5,
+            )
+            expect(indicators).to_have_count(1)
+            current_y = indicators.evaluate(
+                "el => { const r = el.getBoundingClientRect(); return el.dataset.dropPosition === 'before' ? r.top : r.bottom; }"
+            )
+            if line_y is None:
+                line_y = current_y
+            else:
+                assert current_y == line_y
+        upper, lower = rows.nth(2).bounding_box(), rows.nth(3).bounding_box()
+        assert upper is not None and lower is not None
+        page.mouse.move(
+            upper["x"] + 10,
+            (upper["y"] + upper["height"] + lower["y"]) / 2,
+            steps=5,
+        )
+        expect(indicators).to_have_count(1)
+        assert (
+            indicators.evaluate(
+                "el => { const r = el.getBoundingClientRect(); return el.dataset.dropPosition === 'before' ? r.top : r.bottom; }"
+            )
+            == line_y
+        )
     finally:
         page.mouse.up()
-    assert _fallbacks(editor) == [original[1], original[0], original[2], original[3]]
+    assert _fallbacks(editor) == [original[0], original[2], original[1], original[3]]
     expect(indicators).to_have_count(0)
 
 

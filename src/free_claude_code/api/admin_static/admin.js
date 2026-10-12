@@ -1072,6 +1072,31 @@ class ModelListEditor {
 
     this.rows = document.createElement("div");
     this.rows.className = "model-list-rows";
+    this.rows.addEventListener("dragover", (event) => {
+      if (!this.draggedEntry || this.field.locked) return;
+      event.preventDefault();
+      this.clearDropIndicators();
+      const insertion = this.dropInsertion(event);
+      if (this.dropDestination(insertion) === this.values.indexOf(this.draggedEntry)) {
+        event.dataTransfer.dropEffect = "none";
+        return;
+      }
+      event.dataTransfer.dropEffect = "move";
+      const next = this.rows.children[insertion];
+      const marker = next || this.rows.lastElementChild;
+      marker.dataset.dropPosition = next ? "before" : "after";
+    });
+    this.rows.addEventListener("dragleave", (event) => {
+      if (!this.rows.contains(event.relatedTarget)) this.clearDropIndicators();
+    });
+    this.rows.addEventListener("drop", (event) => {
+      if (!this.draggedEntry || this.field.locked) return;
+      event.preventDefault();
+      const moved = this.draggedEntry;
+      const destination = this.dropDestination(this.dropInsertion(event));
+      this.clearDrag();
+      this.move(moved, destination);
+    });
     this.element.append(input, this.rows, addRow);
     this.renderRows();
   }
@@ -1152,29 +1177,6 @@ class ModelListEditor {
         row.classList.add("dragging");
       });
       handle.addEventListener("dragend", () => this.clearDrag());
-      row.addEventListener("dragover", (event) => {
-        if (!this.draggedEntry || this.field.locked) return;
-        event.preventDefault();
-        this.clearDropIndicators();
-        const destination = this.dropDestination(event, row, entry);
-        if (destination === this.values.indexOf(this.draggedEntry)) {
-          event.dataTransfer.dropEffect = "none";
-          return;
-        }
-        event.dataTransfer.dropEffect = "move";
-        row.dataset.dropPosition = this.dropAfter(event, row) ? "after" : "before";
-      });
-      row.addEventListener("dragleave", (event) => {
-        if (!row.contains(event.relatedTarget)) delete row.dataset.dropPosition;
-      });
-      row.addEventListener("drop", (event) => {
-        if (!this.draggedEntry || this.field.locked) return;
-        event.preventDefault();
-        const moved = this.draggedEntry;
-        const destination = this.dropDestination(event, row, entry);
-        this.clearDrag();
-        this.move(moved, destination);
-      });
 
       const remove = this.actionButton("", `Remove ${entry.model}`, () => this.remove(index));
       remove.className = "danger-button model-list-action";
@@ -1206,14 +1208,16 @@ class ModelListEditor {
     return createModelCombobox(input, { ...this.field, key: `${this.field.key}-${suffix}`, label, type: "model" });
   }
 
-  dropAfter(event, row) {
-    const bounds = row.getBoundingClientRect();
-    return event.clientY >= bounds.top + bounds.height / 2;
+  dropInsertion(event) {
+    const index = Array.from(this.rows.children).findIndex((row) => {
+      const bounds = row.getBoundingClientRect();
+      return event.clientY < bounds.top + bounds.height / 2;
+    });
+    return index === -1 ? this.values.length : index;
   }
 
-  dropDestination(event, row, entry) {
+  dropDestination(insertion) {
     const source = this.values.indexOf(this.draggedEntry);
-    const insertion = this.values.indexOf(entry) + (this.dropAfter(event, row) ? 1 : 0);
     return insertion - (source < insertion ? 1 : 0);
   }
 
