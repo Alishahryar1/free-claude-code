@@ -3,6 +3,7 @@ from typing import Any, cast
 
 from free_claude_code.cli.launchers.catalog_http import catalog_models_from_response
 from free_claude_code.harnesses.codex_model_catalog import (
+    CODEX_TRUNCATION_POLICY,
     build_codex_model_catalog,
 )
 
@@ -207,3 +208,13 @@ def test_codex_catalog_projects_known_capabilities_and_preserves_unknown_default
     assert unknown["default_reasoning_summary"] == "none"
     assert unknown["context_window"] == 200000
     assert unknown["max_context_window"] == 200000
+
+
+def test_codex_catalog_disables_tool_output_truncation() -> None:
+    catalog = build_codex_model_catalog(
+        catalog_models_from_response(_models_payload("nvidia_nim/provider-model"))
+    )
+
+    policy = _catalog_models(catalog)[0]["truncation_policy"]
+    assert policy == CODEX_TRUNCATION_POLICY
+    assert policy["limit"] > 10000

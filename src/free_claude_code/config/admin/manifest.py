@@ -225,6 +225,44 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="provider_max_concurrency",
     ),
     ConfigFieldSpec(
+        "PROVIDER_MAX_ATTEMPTS",
+        "Provider Max Attempts",
+        "runtime",
+        "number",
+        settings_attr="provider_max_attempts",
+        description=(
+            "Bounded attempts one request may make while a provider is "
+            "throttled before the failure is surfaced."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROVIDER_RETRY_BASE_DELAY",
+        "Provider Retry Base Delay",
+        "runtime",
+        "number",
+        settings_attr="provider_retry_base_delay",
+        description="Seconds before the first provider retry; doubles each attempt.",
+        advanced=True,
+    ),
+    ConfigFieldSpec(
+        "PROVIDER_RETRY_MAX_DELAY",
+        "Provider Retry Max Delay",
+        "runtime",
+        "number",
+        settings_attr="provider_retry_max_delay",
+        description="Upper bound in seconds for one provider retry backoff.",
+        advanced=True,
+    ),
+    ConfigFieldSpec(
+        "PROVIDER_RETRY_JITTER",
+        "Provider Retry Jitter",
+        "runtime",
+        "number",
+        settings_attr="provider_retry_jitter",
+        description="Maximum random seconds added to each provider retry delay.",
+        advanced=True,
+    ),
+    ConfigFieldSpec(
         "PROVIDER_PROGRESS_TIMEOUT",
         "Provider Progress Timeout",
         "runtime",

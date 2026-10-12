@@ -9,7 +9,7 @@ for a *different* server instance to answer on the same port.
 import socket
 import threading
 import time
-from typing import Iterator
+from collections.abc import Iterator
 
 import httpx
 import pytest
@@ -45,9 +45,7 @@ def supervisor_server(
     )
     apps: list[RuntimeASGIApp] = []
 
-    def create_app(
-        loaded: Settings, *, restart_callback
-    ) -> RuntimeASGIApp:
+    def create_app(loaded: Settings, *, restart_callback) -> RuntimeASGIApp:
         app = build_asgi_app(loaded, restart_callback=restart_callback)
         # Provider discovery is the only outbound call; keep the test hermetic.
         monkeypatch.setattr(
@@ -57,9 +55,7 @@ def supervisor_server(
         return app
 
     monkeypatch.setattr(commands, "load_server_settings", lambda: settings)
-    monkeypatch.setattr(
-        "free_claude_code.runtime.bootstrap.build_asgi_app", create_app
-    )
+    monkeypatch.setattr("free_claude_code.runtime.bootstrap.build_asgi_app", create_app)
     monkeypatch.setattr(commands, "kill_all_best_effort", lambda: None)
 
     supervisor = commands.ServerSupervisor(console_logging=False)
@@ -76,9 +72,9 @@ def supervisor_server(
             time.sleep(0.05)
         return False
 
-    assert wait_for(
-        lambda: supervisor.status == commands.ServerStatus.RUNNING
-    ), "server never reached RUNNING"
+    assert wait_for(lambda: supervisor.status == commands.ServerStatus.RUNNING), (
+        "server never reached RUNNING"
+    )
 
     yield supervisor, thread, port, "127.0.0.1"
 
@@ -100,7 +96,7 @@ def test_server_recovers_from_uncaught_error(
 ) -> None:
     """An unhandled failure must yield a new instance on the same port."""
 
-    supervisor, thread, port, host = supervisor_server
+    supervisor, thread, port, _host = supervisor_server
     first_instance = _instance_id(port)
     assert first_instance
 

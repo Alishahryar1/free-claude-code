@@ -164,7 +164,7 @@ dual-core CPU with Defender real-time scanning every imported file and no
 exclusions. Excluding the project and interpreter directories from Defender is
 worth far more than any timeout change.
 
-## Not fixed: provider throttling
+## Partly mitigated: provider throttling
 
 The throttled entries in `~/.fcc/logs/server.log` are NVIDIA NIM enforcing its own
 free-tier quota, not a fault in FCC. Observed on this machine as:
@@ -174,9 +174,11 @@ POST /v1/messages?beta=true HTTP/1.1" 529
 NIM_ERROR: request_id=req_... exc_type=APIError http_status=None cause_types=None
 ```
 
-The admission controller retries five times with backoff and then surfaces the error,
-which is the correct behaviour. Raising `PROVIDER_RATE_LIMIT` or
-`PROVIDER_MAX_CONCURRENCY` would provoke more throttling, not less.
+The admission controller retries with backoff and then surfaces the error once its
+bounded budget is spent. Raising `PROVIDER_RATE_LIMIT` or `PROVIDER_MAX_CONCURRENCY`
+would provoke more throttling, not less — but lengthening the retry budget itself does
+not, because coordinated recovery keeps retries serial. See "Provider retry budget"
+below.
 
 FCC already implements the mitigation end to end — `MODEL_FALLBACKS` in
 `~/.fcc/.env`, consumed by `config/model_refs.py` and applied as
@@ -205,6 +207,33 @@ MODEL_FALLBACKS=provider/model,provider/model
 
 Note `/models` is unauthenticated on both NVIDIA and QwenCloud and returns 200 with no
 key at all, so it proves nothing. Only `/chat/completions` verifies a credential.
+
+## Provider retry budget
+
+Free tiers throttle without warning (HTTP 429/529 plus vendor-specific codes), so one
+logical request could previously exhaust its five-attempt budget and surface the error
+to the harness, which ends the turn before a per-minute quota window reopens. The retry
+budget and backoff are now configurable, and the server ships with a more patient
+default, so a throttled request waits the provider out instead of failing:
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `PROVIDER_MAX_ATTEMPTS` | `8` | Attempts one request may make before the failure is surfaced. |
+| `PROVIDER_RETRY_BASE_DELAY` | `2.0` | Seconds before the first retry; doubles each attempt. |
+| `PROVIDER_RETRY_MAX_DELAY` | `120.0` | Cap, in seconds, on one backoff. |
+| `PROVIDER_RETRY_JITTER` | `1.0` | Maximum random seconds added per retry. |
+
+The policy lives in `providers/admission_policy.py` (`ProviderAdmissionLimits`), is
+validated in `config/settings.py`, and is plumbed through `ProviderAdmissionRegistry`
+and `ProviderAdmissionController.reconfigure` — so changing it in the Admin takes
+effect on new requests without a restart. The low-level library default stays 5
+attempts; only the application default is raised. Retries stay bounded and serial
+(coordinated recovery keeps a single probe in flight), so a longer budget does not add
+throttle pressure.
+
+Worst case with the defaults is about 2+4+8+16+32+64+120 ≈ 246 s of backoff, well
+inside `PROVIDER_PROGRESS_TIMEOUT` (600 s). If you raise the budget, keep the summed
+backoff below that timeout, or the progress watchdog cuts the request anyway.
 
 ## Not a fault: only some `fcc-*` launchers work
 

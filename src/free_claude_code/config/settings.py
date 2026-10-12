@@ -604,6 +604,33 @@ class Settings(BaseModel):
     provider_max_concurrency: int = Field(
         default=2, gt=0, validation_alias="PROVIDER_MAX_CONCURRENCY"
     )
+    # A free tier may throttle without warning. These bound how long one
+    # logical request waits the provider out before surfacing the failure.
+    # The defaults are deliberately more patient than the library's
+    # conservative controller defaults so a throttled request can finish;
+    # raise them further to ride out longer windows (keep the total under
+    # PROVIDER_PROGRESS_TIMEOUT).
+    provider_max_attempts: int = Field(
+        default=8, ge=1, le=100, validation_alias="PROVIDER_MAX_ATTEMPTS"
+    )
+    provider_retry_base_delay: float = Field(
+        default=2.0,
+        ge=0,
+        allow_inf_nan=False,
+        validation_alias="PROVIDER_RETRY_BASE_DELAY",
+    )
+    provider_retry_max_delay: float = Field(
+        default=120.0,
+        ge=0,
+        allow_inf_nan=False,
+        validation_alias="PROVIDER_RETRY_MAX_DELAY",
+    )
+    provider_retry_jitter: float = Field(
+        default=1.0,
+        ge=0,
+        allow_inf_nan=False,
+        validation_alias="PROVIDER_RETRY_JITTER",
+    )
     provider_progress_timeout: float = Field(
         default=600.0,
         gt=0,

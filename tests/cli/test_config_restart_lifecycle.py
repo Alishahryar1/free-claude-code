@@ -83,7 +83,9 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
         commit(self, values)
 
     def wait_status(client, old_id=None):
-        deadline = time.monotonic() + 10
+        # Generous enough to survive a fully loaded `-n auto` run; readiness on
+        # its own takes well under a second, so this only guards CPU starvation.
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             assert not errors
             try:

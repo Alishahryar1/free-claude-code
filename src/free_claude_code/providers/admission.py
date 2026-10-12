@@ -16,7 +16,13 @@ from typing import TypeVar
 from loguru import logger
 
 from free_claude_code.core.trace import trace_event
-from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
+from free_claude_code.providers.admission_policy import (
+    DEFAULT_UPSTREAM_BASE_DELAY,
+    DEFAULT_UPSTREAM_JITTER,
+    DEFAULT_UPSTREAM_MAX_DELAY,
+    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
+    ProviderAdmissionLimits,
+)
 from free_claude_code.providers.failure_policy import (
     ProviderFailureOverride,
     ProviderRecoveryExhausted,
@@ -25,11 +31,6 @@ from free_claude_code.providers.failure_policy import (
 )
 
 T = TypeVar("T")
-
-UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS = 5
-DEFAULT_UPSTREAM_BASE_DELAY = 2.0
-DEFAULT_UPSTREAM_MAX_DELAY = 60.0
-DEFAULT_UPSTREAM_JITTER = 1.0
 
 
 class ProviderOperationKind(StrEnum):
@@ -417,15 +418,15 @@ class ProviderAdmissionController:
         max_delay: float = DEFAULT_UPSTREAM_MAX_DELAY,
         jitter: float = DEFAULT_UPSTREAM_JITTER,
     ) -> None:
-        limits = ProviderAdmissionLimits(rate_limit, rate_window, max_concurrency)
-        if max_attempts <= 0:
-            raise ValueError("max_attempts must be > 0")
-        if base_delay < 0:
-            raise ValueError("base_delay must be >= 0")
-        if max_delay < base_delay:
-            raise ValueError("max_delay must be >= base_delay")
-        if jitter < 0:
-            raise ValueError("jitter must be >= 0")
+        limits = ProviderAdmissionLimits(
+            rate_limit,
+            rate_window,
+            max_concurrency,
+            max_attempts,
+            base_delay,
+            max_delay,
+            jitter,
+        )
 
         self._provider_name = provider_name
         self._max_attempts = max_attempts
@@ -880,9 +881,13 @@ class ProviderAdmissionController:
             self._notify_recovery_waiters()
 
     def reconfigure(self, limits: ProviderAdmissionLimits) -> None:
-        """Update capacity without resetting occupancy, history, or recovery."""
+        """Update capacity and retry policy without resetting recovery."""
         if limits != self._limits:
             self._limits = limits
+            self._max_attempts = limits.max_attempts
+            self._base_delay = limits.base_delay
+            self._max_delay = limits.max_delay
+            self._jitter = limits.jitter
             self._wake_capacity()
 
     def _wake_capacity(self) -> None:

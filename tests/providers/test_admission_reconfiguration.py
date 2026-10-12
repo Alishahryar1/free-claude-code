@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers import admission as admission_module
 from free_claude_code.providers.admission import (
+    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
     ProviderAdmissionController,
     ProviderOperationKind,
 )
@@ -144,3 +145,75 @@ def test_settings_reject_invalid_admission_limits(field, value):
 def test_internal_policy_rejects_invalid_window(window):
     with pytest.raises(ValueError, match="rate_window"):
         ProviderAdmissionLimits(1, window, 1)
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_publishes_retry_policy_to_new_executions():
+    controller = ProviderAdmissionController(
+        provider_name="test", rate_limit=100, rate_window=60, max_concurrency=2
+    )
+    assert (
+        controller.start_execution().max_attempts == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    )
+
+    controller.reconfigure(
+        ProviderAdmissionLimits(
+            100,
+            60,
+            2,
+            max_attempts=3,
+            base_delay=0.5,
+            max_delay=4.0,
+            jitter=0.25,
+        )
+    )
+
+    assert controller.start_execution().max_attempts == 3
+
+
+def test_limits_from_settings_publish_retry_policy():
+    settings = Settings()
+
+    limits = ProviderAdmissionLimits.from_settings(settings)
+
+    assert limits.max_attempts == settings.provider_max_attempts
+    assert limits.base_delay == settings.provider_retry_base_delay
+    assert limits.max_delay == settings.provider_retry_max_delay
+    assert limits.jitter == settings.provider_retry_jitter
+    # The server default is deliberately more patient than the conservative
+    # library controller default so a throttled free tier can finish.
+    assert limits.max_attempts > UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "provider_retry_base_delay",
+        "provider_retry_max_delay",
+        "provider_retry_jitter",
+    ],
+)
+@pytest.mark.parametrize("value", [-1, float("inf"), float("nan")])
+def test_settings_reject_invalid_provider_retry_delays(field, value):
+    with pytest.raises(ValidationError):
+        Settings.model_validate({field: value})
+
+
+@pytest.mark.parametrize("value", [0, -1, 101])
+def test_settings_reject_invalid_provider_max_attempts(value):
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"provider_max_attempts": value})
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_attempts": 0},
+        {"base_delay": -1},
+        {"base_delay": 2, "max_delay": 1},
+        {"jitter": -1},
+    ],
+)
+def test_internal_policy_rejects_invalid_retry(kwargs):
+    with pytest.raises(ValueError):
+        ProviderAdmissionLimits(1, 60, 1, **kwargs)

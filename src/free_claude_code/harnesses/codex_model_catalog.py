@@ -17,9 +17,16 @@ from free_claude_code.harnesses.model_policy import (
 
 CODEX_BASE_INSTRUCTIONS = (
     "You are Codex, a coding agent. Help the user understand, modify, test, "
-    "and review code in their workspace. Follow the user's instructions, use "
+    "and review code in your workspace. Follow the user's instructions, use "
     "tools when needed, and communicate concise progress and verification."
 )
+
+# Codex truncates oversized tool output per model. FCC advertises an
+# effectively unlimited token budget so native clients receive complete tool
+# results and item payloads instead of head/tail-truncated ones. The value
+# stays within signed 32-bit range so any Codex integer representation accepts
+# it while remaining far larger than a model context window.
+CODEX_TRUNCATION_POLICY: JsonObject = {"mode": "tokens", "limit": 2_147_483_647}
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +87,7 @@ def codex_model_entry(model: CodexModel) -> JsonObject:
         "default_verbosity": "low",
         "apply_patch_tool_type": "freeform",
         "web_search_tool_type": "text_and_image",
-        "truncation_policy": {"mode": "tokens", "limit": 10000},
+        "truncation_policy": dict(CODEX_TRUNCATION_POLICY),
         "supports_parallel_tool_calls": True,
         "supports_image_detail_original": True,
         "context_window": context_window,

@@ -29,6 +29,10 @@ class ProviderAdmissionRegistry:
                 rate_limit=self._limits.rate_limit,
                 rate_window=self._limits.rate_window,
                 max_concurrency=self._limits.max_concurrency,
+                max_attempts=self._limits.max_attempts,
+                base_delay=self._limits.base_delay,
+                max_delay=self._limits.max_delay,
+                jitter=self._limits.jitter,
             )
         return self._controllers[provider_id]
 

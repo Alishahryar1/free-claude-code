@@ -5,10 +5,7 @@ explicit stop request must come back, because a silently dead proxy breaks every
 connected coding agent with no way to recover except a manual relaunch.
 """
 
-import threading
 from unittest.mock import patch
-
-import pytest
 
 from free_claude_code.cli import commands
 from free_claude_code.config.settings import Settings
