@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
 
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
@@ -62,7 +63,10 @@ def test_native_fallback_closes_source_preserves_options_and_filters_candidates(
     app = create_test_app(
         Settings(
             MODEL="anthropic/primary",
-            MODEL_FALLBACKS=["nvidia_nim/excluded", "anthropic/backup"],
+            MODEL_FALLBACKS=[
+                ModelFallback(model="nvidia_nim/excluded"),
+                ModelFallback(model="anthropic/backup"),
+            ],
         ),
         providers={"anthropic": provider(reply, max_attempts=1)},
     )

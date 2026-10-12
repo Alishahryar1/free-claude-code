@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.custom_providers import CustomProviderDefinition
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.model_capabilities import ModelInputModality
 from tests.api.support import create_test_app, provider_manager_for_app
@@ -17,7 +18,7 @@ def _settings(
     model_fable: str | None = None,
     model_opus: str | None = "open_router/anthropic/claude-opus",
     model_haiku: str | None = "deepseek/deepseek-chat",
-    model_fallbacks: tuple[str, ...] | None = None,
+    model_fallbacks: tuple[ModelFallback, ...] | None = None,
 ) -> Settings:
     return Settings.model_construct(
         model=model,
@@ -79,7 +80,10 @@ def test_sorted_catalog_retains_an_explicit_no_thinking_server_default(view):
         model="open_router/Zulu",
         model_opus=None,
         model_haiku=None,
-        model_fallbacks=("wafer/z-fallback", "deepseek/a-fallback"),
+        model_fallbacks=(
+            ModelFallback(model="wafer/z-fallback"),
+            ModelFallback(model="deepseek/a-fallback"),
+        ),
     )
     app = create_test_app(settings)
     provider_manager_for_app(app).cache_model_infos(
@@ -99,7 +103,10 @@ def test_sorted_catalog_retains_an_explicit_no_thinking_server_default(view):
     assert payload["default_model_id"] == "claude-3-freecc-no-thinking/open_router/Zulu"
     assert payload["first_id"] == "deepseek/a-fallback"
     assert payload["last_id"] == "wafer/z-fallback"
-    assert settings.model_fallbacks == ("wafer/z-fallback", "deepseek/a-fallback")
+    assert settings.model_fallbacks == (
+        ModelFallback(model="wafer/z-fallback"),
+        ModelFallback(model="deepseek/a-fallback"),
+    )
 
 
 def test_models_list_includes_configured_refs_cached_provider_models_and_aliases():
@@ -250,7 +257,7 @@ def test_models_list_includes_fallback_refs_without_cached_discovery():
         _settings(
             model_opus=None,
             model_haiku=None,
-            model_fallbacks=("wafer/DeepSeek-V4-Pro",),
+            model_fallbacks=(ModelFallback(model="wafer/DeepSeek-V4-Pro"),),
         )
     )
 

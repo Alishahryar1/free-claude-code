@@ -8,10 +8,56 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.base import BaseProvider
 from tests.api.support import create_test_app
+from tests.providers.test_anthropic_fallback_reasoning import model_metadata
 from tests.providers.test_anthropic_provider import native_body, provider
+
+
+@pytest.mark.parametrize("effort", ["inherit", "client", "off", "low", "high", "max"])
+def test_native_fallback_applies_selected_effort_after_passthrough_primary(effort):
+    sent = []
+
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=model_metadata() | {"id": "backup"})
+        body = json.loads(request.content)
+        sent.append(body)
+        if body["model"] == "primary":
+            return httpx.Response(
+                403,
+                json={"error": {"type": "permission_error", "message": "unavailable"}},
+            )
+        return httpx.Response(
+            200, json={"type": "message", "model": "backup", "content": []}
+        )
+
+    app = create_test_app(
+        Settings(
+            MODEL="anthropic/primary",
+            MODEL_FALLBACKS=[{"model": "anthropic/backup", "reasoning": effort}],
+        ),
+        providers={"anthropic": provider(handle)},
+    )
+    body = native_body()
+    body["thinking"] = {"type": "enabled", "budget_tokens": 6000, "display": "omitted"}
+    body["output_config"] = {"effort": "medium", "format": {"type": "json_schema"}}
+    with TestClient(app) as client:
+        response = client.post("/v1/messages", json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["model"] == body["model"]
+    assert sent[0] == body | {"model": "primary"}
+    assert sent[1]["messages"] == body["messages"] and sent[1]["tools"] == body["tools"]
+    if effort in {"inherit", "client"}:
+        assert sent[1] == body | {"model": "backup"}
+    elif effort == "off":
+        assert sent[1]["thinking"] == {"type": "disabled"}
+        assert sent[1]["output_config"] == {"format": {"type": "json_schema"}}
+    else:
+        assert sent[1]["thinking"] == {"type": "adaptive", "display": "omitted"}
+        assert sent[1]["output_config"]["effort"] == effort
 
 
 def test_native_ingress_preserves_extensions_and_bypasses_local_processing():
@@ -85,7 +131,10 @@ def test_native_fallback_excludes_compatibility_and_preserves_alias():
     settings = Settings(
         MODEL="anthropic/primary",
         ANTHROPIC_API_KEY="key",
-        MODEL_FALLBACKS=["nvidia_nim/never", "anthropic/backup"],
+        MODEL_FALLBACKS=[
+            ModelFallback(model="nvidia_nim/never"),
+            ModelFallback(model="anthropic/backup"),
+        ],
     )
     app = create_test_app(settings, providers={"anthropic": provider(handle)})
     body = native_body()
@@ -128,7 +177,10 @@ def test_leading_pings_allow_exhausted_primary_to_reach_native_fallback():
     app = create_test_app(
         Settings(
             MODEL="anthropic/primary",
-            MODEL_FALLBACKS=["nvidia_nim/excluded", "anthropic/backup"],
+            MODEL_FALLBACKS=[
+                ModelFallback(model="nvidia_nim/excluded"),
+                ModelFallback(model="anthropic/backup"),
+            ],
         ),
         providers={"anthropic": provider(handle)},
     )
@@ -168,7 +220,7 @@ def test_stream_failure_after_metadata_exhausts_then_uses_fallback():
     settings = Settings(
         MODEL="anthropic/primary",
         ANTHROPIC_API_KEY="key",
-        MODEL_FALLBACKS=["anthropic/backup"],
+        MODEL_FALLBACKS=[ModelFallback(model="anthropic/backup")],
     )
     app = create_test_app(settings, providers={"anthropic": provider(handle)})
     with TestClient(app) as client:
@@ -264,7 +316,7 @@ def test_compatibility_primary_keeps_conversion_when_anthropic_is_fallback():
     settings = Settings(
         MODEL="nvidia_nim/primary",
         ANTHROPIC_API_KEY="key",
-        MODEL_FALLBACKS=["anthropic/backup"],
+        MODEL_FALLBACKS=[ModelFallback(model="anthropic/backup")],
         REASONING_POLICY="off",
     )
     p = provider(handle)

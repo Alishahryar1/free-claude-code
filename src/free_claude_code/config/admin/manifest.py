@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import (
+    FALLBACK_REASONING_PREFERENCES,
     ROOT_REASONING_PREFERENCES,
     ROUTE_REASONING_PREFERENCES,
     ReasoningPreference,
@@ -131,6 +132,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_list",
         settings_attr="model_fallbacks",
+        options=_reasoning_options(FALLBACK_REASONING_PREFERENCES),
         description=(
             "Tried in order when the selected provider/model fails before output "
             "starts. Applies to every client. One request may reach multiple "

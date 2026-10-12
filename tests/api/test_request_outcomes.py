@@ -10,6 +10,7 @@ from loguru import logger
 
 from free_claude_code.api.request_ids import RequestCorrelationMiddleware
 from free_claude_code.api.request_outcomes import RequestOutcomeMiddleware
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.request_outcomes import (
@@ -125,7 +126,9 @@ def test_one_final_outcome_for_streamed_inference(outcomes, wire_api, result):
 
 
 def test_fallback_records_selected_provider_without_logging_failed_attempt(outcomes):
-    settings = Settings(model_fallbacks=["open_router/fallback-model"])
+    settings = Settings(
+        model_fallbacks=[ModelFallback(model="open_router/fallback-model")]
+    )
     providers = {
         "nvidia_nim": OutcomeProvider("pre_start"),
         "open_router": OutcomeProvider("success"),

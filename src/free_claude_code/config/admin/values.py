@@ -1,9 +1,11 @@
 """Admin config value state and API response assembly."""
 
+import json
 from enum import Enum
 
 from free_claude_code.config.custom_providers import REASONING_FORMATS
 from free_claude_code.config.loader import ConfigSource, ManagedConfigSnapshot
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.core.json_types import JsonObject
 
 from .manifest import FIELDS, SECTIONS
@@ -14,11 +16,26 @@ from .status import provider_config_status
 MASKED_SECRET = "********"
 
 
-def normalize_for_env(value: object) -> str | None:
+def normalize_for_env(value: object, *, key: str | None = None) -> str | None:
     """Normalize a submitted Admin value for sparse dotenv persistence."""
 
     if value is None:
         return None
+    if key == "MODEL_FALLBACKS" and isinstance(value, list | tuple):
+        return (
+            json.dumps(
+                [
+                    item.model_dump(mode="json")
+                    if isinstance(item, ModelFallback)
+                    else item
+                    for item in value
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            if value
+            else None
+        )
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, Enum):
@@ -49,7 +66,9 @@ def load_value_state(snapshot: ManagedConfigSnapshot) -> ValueState:
     state: ValueState = {}
     for field in FIELDS:
         if field.settings_attr is not None:
-            value = normalize_for_env(getattr(snapshot.settings, field.settings_attr))
+            value = normalize_for_env(
+                getattr(snapshot.settings, field.settings_attr), key=field.key
+            )
             source = snapshot.sources[field.settings_attr].value
         elif field.key in snapshot.process:
             value = snapshot.process[field.key].strip() or None

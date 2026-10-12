@@ -1,7 +1,9 @@
 """Rendered model-fallback controls for the local Admin UI."""
 
+import json
+
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Locator, Page, expect
 
 from e2e.provider_support import close_provider, open_provider
 
@@ -23,6 +25,11 @@ def _refresh_openrouter_models(page: Page) -> None:
     page.get_by_role("button", name="Model Config", exact=True).click()
 
 
+def _fallbacks(editor: Locator) -> list[dict[str, str]]:
+    value = editor.locator("#field-MODEL_FALLBACKS").input_value()
+    return json.loads(value) if value else []
+
+
 def test_fallback_editor_adds_filters_reorders_and_removes_models(
     page: Page,
     admin_base_url: str,
@@ -33,6 +40,7 @@ def test_fallback_editor_adds_filters_reorders_and_removes_models(
 
     editor = page.locator('.field[data-key="MODEL_FALLBACKS"]')
     add_input = editor.locator("#field-MODEL_FALLBACKS-add")
+    add_effort = editor.get_by_label("Fallback reasoning effort", exact=True)
     stored_value = editor.locator("#field-MODEL_FALLBACKS")
     expect(editor.locator(".model-list-empty")).to_have_text(
         "No fallback models configured."
@@ -45,16 +53,25 @@ def test_fallback_editor_adds_filters_reorders_and_removes_models(
     add_input.press("ArrowDown")
     add_input.press("Enter")
     expect(add_input).to_have_value("open_router/vendor/model-b")
+    add_effort.select_option("low")
     editor.get_by_role("button", name="Add", exact=True).click()
+    expect(add_effort).to_have_value("inherit")
+    expect(add_input).to_have_value("")
 
     add_input.fill("groq/custom-model")
     editor.get_by_role("button", name="Add", exact=True).click()
-    expect(stored_value).to_have_value("open_router/vendor/model-b,groq/custom-model")
+    assert _fallbacks(editor) == [
+        {"model": "open_router/vendor/model-b", "reasoning": "low"},
+        {"model": "groq/custom-model", "reasoning": "inherit"},
+    ]
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
     expect(page.locator("#applyButton")).to_be_enabled()
 
     editor.get_by_role("button", name="Move groq/custom-model up", exact=True).click()
-    expect(stored_value).to_have_value("groq/custom-model,open_router/vendor/model-b")
+    assert _fallbacks(editor) == [
+        {"model": "groq/custom-model", "reasoning": "inherit"},
+        {"model": "open_router/vendor/model-b", "reasoning": "low"},
+    ]
     expect(
         editor.get_by_role("button", name="Move groq/custom-model up", exact=True)
     ).to_be_disabled()
@@ -65,7 +82,9 @@ def test_fallback_editor_adds_filters_reorders_and_removes_models(
     ).to_be_disabled()
 
     editor.get_by_role("button", name="Remove groq/custom-model", exact=True).click()
-    expect(stored_value).to_have_value("open_router/vendor/model-b")
+    assert _fallbacks(editor) == [
+        {"model": "open_router/vendor/model-b", "reasoning": "low"}
+    ]
     editor.get_by_role(
         "button", name="Remove open_router/vendor/model-b", exact=True
     ).click()
@@ -91,6 +110,7 @@ def test_fallback_editor_rejects_blank_and_duplicate_rows(
         "Enter a full provider/model fallback."
     )
     add_input.fill("groq/custom-model")
+    editor.get_by_label("Fallback reasoning effort", exact=True).select_option("high")
     add_button.click()
     add_input.fill("groq/custom-model")
     add_button.click()
@@ -114,10 +134,69 @@ def test_process_owned_fallback_list_locks_every_mutation(
 
     editor = page.locator('.field[data-key="MODEL_FALLBACKS"]')
     expect(editor.locator("#field-MODEL_FALLBACKS-add")).to_be_disabled()
+    expect(
+        editor.get_by_label("Fallback reasoning effort", exact=True)
+    ).to_be_disabled()
     expect(editor.get_by_role("button", name="Add", exact=True)).to_be_disabled()
     expect(editor.locator(".model-list-action")).to_have_count(6)
     for button in editor.locator(".model-list-action").all():
         expect(button).to_be_disabled()
+    for effort in editor.locator(".model-list-row select").all():
+        expect(effort).to_be_disabled()
+
+
+def test_fallback_editor_pairs_match_existing_controls_and_save_effort(
+    page: Page, admin_base_url: str
+) -> None:
+    page.set_viewport_size({"width": 1280, "height": 900})
+    _open_models(page, admin_base_url)
+    editor = page.locator('.field[data-key="MODEL_FALLBACKS"]')
+    model = editor.locator("#field-MODEL_FALLBACKS-add")
+    effort = editor.get_by_label("Fallback reasoning effort", exact=True)
+    expect(effort.locator("option")).to_have_text(
+        ["Inherit", "Off", "From client", "Low", "Medium", "High", "X-High", "Max"]
+    )
+    bounds = [
+        control.bounding_box()
+        for control in (
+            model,
+            effort,
+            editor.get_by_role("button", name="Add", exact=True),
+        )
+    ]
+    assert all(box is not None for box in bounds)
+    model_box, effort_box, add_box = bounds
+    assert model_box is not None and effort_box is not None and add_box is not None
+    assert abs(model_box["width"] - effort_box["width"]) <= 1
+    assert abs(model_box["height"] - effort_box["height"]) <= 1
+    assert model_box["x"] < effort_box["x"] < add_box["x"]
+    assert abs(model_box["y"] - effort_box["y"]) <= 1
+    style = "el => { const s = getComputedStyle(el); return [s.fontSize, s.borderRadius, s.borderWidth, s.backgroundSize]; }"
+    assert effort.evaluate(style) == page.locator("#field-REASONING_POLICY").evaluate(
+        style
+    )
+
+    # A fallback can match Default today, even with a different effort.
+    model.fill("open_router/e2e-default")
+    effort.select_option("off")
+    editor.get_by_role("button", name="Add", exact=True).click()
+    row_effort = editor.get_by_label(
+        "Reasoning effort for open_router/e2e-default", exact=True
+    )
+    row_effort.select_option("max")
+    with page.expect_response("**/admin/api/config/apply") as saved:
+        page.locator("#applyButton").click()
+    assert saved.value.json()["applied"] is True
+    expect(page.locator("#dirtyState")).to_have_text("No changes")
+    page.reload()
+    page.get_by_role("button", name="Model Config", exact=True).click()
+    expect(
+        editor.get_by_label("Reasoning effort for open_router/e2e-default", exact=True)
+    ).to_have_value("max")
+    assert _fallbacks(editor) == [
+        {"model": "open_router/e2e-default", "reasoning": "max"}
+    ]
+    expect(page.locator("#dirtyState")).to_have_text("No changes")
 
 
 def test_fallback_editor_remains_usable_at_narrow_viewport(

@@ -10,7 +10,7 @@ import httpx
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.anthropic.models import MessagesRequest, ThinkingConfig
 from free_claude_code.core.anthropic.native import NativeMessagesError
 from free_claude_code.core.anthropic.passthrough import (
     NativeMessagesRequest,
@@ -31,6 +31,7 @@ from free_claude_code.providers.anthropic_messages.passthrough import (
 )
 from free_claude_code.providers.anthropic_messages.request_policy import (
     MessagesModelCapabilities,
+    resolve_messages_options,
 )
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
@@ -48,6 +49,53 @@ from .models import AnthropicModelRecord, model_record
 
 async def _omit_cookies(request: httpx.Request) -> None:
     request.headers.pop("cookie", None)
+
+
+def _apply_native_reasoning(
+    body: JsonObject,
+    *,
+    model: str,
+    reasoning: ReasoningPolicy,
+    capabilities: MessagesModelCapabilities,
+) -> None:
+    """Replace computation controls while retaining native request extensions."""
+
+    raw_thinking = body.get("thinking")
+    raw_output = body.get("output_config")
+    if raw_thinking is not None and not isinstance(raw_thinking, dict):
+        raise NativeMessagesError("Messages thinking must be an object.")
+    if raw_output is not None and not isinstance(raw_output, dict):
+        raise NativeMessagesError("Messages output_config must be an object.")
+    max_tokens = body.get("max_tokens")
+    if max_tokens is not None and not isinstance(max_tokens, int):
+        raise NativeMessagesError("Messages max_tokens must be a positive integer.")
+    display = raw_thinking.get("display") if raw_thinking is not None else None
+    options = resolve_messages_options(
+        model=model,
+        max_tokens=max_tokens,
+        reasoning=reasoning,
+        capabilities=capabilities,
+        thinking=ThinkingConfig.model_validate({"display": display})
+        if display in ("summarized", "omitted", "updates")
+        else None,
+    )
+    body["max_tokens"] = options.max_tokens
+    thinking = dict(raw_thinking or {})
+    for key in ("type", "enabled", "budget_tokens", "display"):
+        thinking.pop(key, None)
+    thinking.update(options.thinking or {})
+    if thinking:
+        body["thinking"] = thinking
+    else:
+        body.pop("thinking", None)
+    output = dict(raw_output or {})
+    output.pop("effort", None)
+    if options.output_effort is not None:
+        output["effort"] = options.output_effort
+    if output:
+        body["output_config"] = output
+    else:
+        body.pop("output_config", None)
 
 
 class AnthropicProvider(BaseProvider):
@@ -155,6 +203,7 @@ class AnthropicProvider(BaseProvider):
         request_id: str | None = None,
         response_model: str | None = None,
         request_headers: Mapping[str, str] | None = None,
+        reasoning_override: ReasoningPolicy | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         body, headers = native_request(request.body, request_headers)
@@ -167,18 +216,43 @@ class AnthropicProvider(BaseProvider):
             )
         except (NativeMessagesError, HistoryReplayError) as error:
             raise InvalidRequestError(str(error)) from error
-        return stream_native_messages(
-            self._http,
-            self._admission,
-            base_url=self._snapshot.base_url,
-            headers={**self._snapshot.headers, **headers},
-            body=body,
-            public_model=response_model or request.model,
-            provider_name="anthropic",
-            read_timeout_s=self._config.http_read_timeout,
-            request_id=request_id,
-            continuation=continuation,
-        )
+
+        def open_stream() -> AsyncIterator[str]:
+            return stream_native_messages(
+                self._http,
+                self._admission,
+                base_url=self._snapshot.base_url,
+                headers={**self._snapshot.headers, **headers},
+                body=body,
+                public_model=response_model or request.model,
+                provider_name="anthropic",
+                read_timeout_s=self._config.http_read_timeout,
+                request_id=request_id,
+                continuation=continuation,
+            )
+
+        if reasoning_override is None:
+            return open_stream()
+
+        async def stream_with_reasoning() -> AsyncIterator[str]:
+            record = await self.model_record(request.model)
+            try:
+                _apply_native_reasoning(
+                    body,
+                    model=request.model,
+                    reasoning=reasoning_override,
+                    capabilities=record.messages,
+                )
+            except NativeMessagesError as error:
+                raise InvalidRequestError(str(error)) from error
+            stream = open_stream()
+            try:
+                async for event in stream:
+                    yield event
+            finally:
+                await maybe_await_aclose(stream)
+
+        return stream_with_reasoning()
 
     async def stream_messages(
         self,

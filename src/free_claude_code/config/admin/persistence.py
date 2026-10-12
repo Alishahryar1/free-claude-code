@@ -98,7 +98,7 @@ def target_values_with_updates(
             or (isinstance(submitted, str) and not submitted.strip())
         ):
             continue
-        value = normalize_for_env(submitted)
+        value = normalize_for_env(submitted, key=key)
         if value is None or (field.nullable and not value):
             values.pop(key, None)
         else:
@@ -161,7 +161,7 @@ def prepare_admin_update(
         for key, submitted in updates.items()
         if key in FIELD_BY_KEY
         and not is_locked_source(state[key].source)
-        and (value := normalize_for_env(submitted))
+        and (value := normalize_for_env(submitted, key=key))
         and value != MASKED_SECRET
         and value != state[key].value
         and key in target_values

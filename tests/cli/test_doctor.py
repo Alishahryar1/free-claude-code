@@ -266,3 +266,15 @@ def test_doctor_version_does_not_collect_or_copy(monkeypatch, capsys):
     monkeypatch.setattr(entrypoints, "package_version", lambda: "1.2.3")
     entrypoints.doctor(["--version"])
     assert capsys.readouterr().out == "free-claude-code 1.2.3\n"
+
+
+def test_fallback_model_efforts_are_json_serializable_in_doctor_report():
+    entries = [
+        {"model": "groq/one", "reasoning": "low"},
+        {"model": "open_router/vendor/two", "reasoning": "client"},
+    ]
+    settings = Settings(MODEL_FALLBACKS=entries)
+    report = json.loads(json.dumps(diagnostics.settings_report(settings, {})))
+    assert report["model_routing"]["model_fallbacks"] == entries
+    assert report["providers"]["groq"]["referenced"] is True
+    assert report["providers"]["open_router"]["referenced"] is True

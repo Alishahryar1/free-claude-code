@@ -338,6 +338,10 @@ Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` 
 
 `MODEL` is the fallback for every request. Select a model for `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, or `MODEL_HAIKU` to override an individual Claude Code tier. Select **None** to use `MODEL`.
 
+In **Admin UI → Model Config**, add **Fallback Models** in the order FCC should try them if the selected model fails. Each fallback has its own reasoning effort: **Inherit**, **Off**, **From client**, **Low**, **Medium**, **High**, **X-High**, or **Max**.
+
+**Inherit** keeps the original request's resolved reasoning setting. **From client** uses the effort or token budget sent by your coding agent, bypassing the global or tier setting. A fallback matching the selected provider/model is skipped.
+
 </details>
 
 <details>

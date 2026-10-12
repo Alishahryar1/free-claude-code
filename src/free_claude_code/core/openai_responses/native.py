@@ -51,7 +51,14 @@ def build_native_responses_request(
     body["store"] = False
     body.pop("previous_response_id", None)
     if reasoning != responses_reasoning_policy(request.reasoning):
-        if reasoning_config := responses_reasoning_config(reasoning):
+        raw_reasoning = body.get("reasoning")
+        reasoning_config = (
+            dict(raw_reasoning) if isinstance(raw_reasoning, dict) else {}
+        )
+        reasoning_config.pop("effort", None)
+        for key, value in responses_reasoning_config(reasoning).items():
+            reasoning_config.setdefault(key, value)
+        if reasoning_config:
             body["reasoning"] = reasoning_config
         else:
             body.pop("reasoning", None)

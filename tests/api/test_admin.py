@@ -17,6 +17,8 @@ from free_claude_code.application.model_metadata import (
     ProviderModelRefreshResult,
 )
 from free_claude_code.config.admin.values import MASKED_SECRET
+from free_claude_code.config.env_files import dotenv_values_from_file
+from free_claude_code.config.model_refs import ModelFallback, decode_model_fallbacks
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.server_urls import local_admin_url
 from free_claude_code.config.settings import Settings
@@ -87,7 +89,9 @@ def test_admin_retirement_preview_apply_and_runtime_agree(monkeypatch, tmp_path)
     assert "MODEL=groq/default" in text
     assert "MODEL_SONNET" not in text
     assert "MODEL_OPUS=groq/managed" in text
-    assert "MODEL_FALLBACKS=groq/a,deepseek/b" in text
+    assert decode_model_fallbacks(
+        dotenv_values_from_file(env_file)["MODEL_FALLBACKS"]
+    ) == (ModelFallback(model="groq/a"), ModelFallback(model="deepseek/b"))
     assert "preserve-secret" in text and "http://user:secret@proxy.test" in text
     assert "preserve-secret" not in body["env_preview"]
     assert "http://user:secret@proxy.test" not in body["env_preview"]
@@ -95,7 +99,10 @@ def test_admin_retirement_preview_apply_and_runtime_agree(monkeypatch, tmp_path)
     effective = provider_manager_for_app(app).current_settings()
     assert effective.model == "groq/default"
     assert effective.model_opus is None and effective.model_sonnet is None
-    assert effective.model_fallbacks == ("groq/a", "deepseek/b")
+    assert effective.model_fallbacks == (
+        ModelFallback(model="groq/a"),
+        ModelFallback(model="deepseek/b"),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -988,15 +995,21 @@ def test_admin_apply_hot_publishes_ordered_model_fallbacks(monkeypatch, tmp_path
     assert body["applied"] is True
     assert body["restart"]["required"] is False
     assert provider_manager_for_app(app).current_settings().model_fallbacks == (
-        "open_router/vendor/model-a",
-        "groq/vendor/model-b",
+        ModelFallback(model="open_router/vendor/model-a"),
+        ModelFallback(model="groq/vendor/model-b"),
     )
     managed_env = tmp_path / ".fcc" / ".env"
-    assert f"MODEL_FALLBACKS={value}" in managed_env.read_text(encoding="utf-8")
+    assert (
+        decode_model_fallbacks(dotenv_values_from_file(managed_env)["MODEL_FALLBACKS"])
+        == provider_manager_for_app(app).current_settings().model_fallbacks
+    )
 
     loaded = _local_client(app).get("/admin/api/config").json()
     field = next(item for item in loaded["fields"] if item["key"] == "MODEL_FALLBACKS")
-    assert field["value"] == value
+    assert (
+        decode_model_fallbacks(field["value"])
+        == provider_manager_for_app(app).current_settings().model_fallbacks
+    )
     assert field["source"] == "managed_env"
 
 

@@ -9,6 +9,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import get_token_count
 from tests.api.support import create_test_app, provider_manager_for_app
@@ -70,7 +71,10 @@ def test_native_count_accepts_and_estimates_opaque_payload_without_provider(fiel
 
 def test_compatibility_primary_keeps_count_validation_with_native_fallback():
     app = create_test_app(
-        Settings(MODEL="nvidia_nim/selected", MODEL_FALLBACKS=["anthropic/backup"])
+        Settings(
+            MODEL="nvidia_nim/selected",
+            MODEL_FALLBACKS=[ModelFallback(model="anthropic/backup")],
+        )
     )
     with TestClient(app) as client:
         response = client.post("/v1/messages/count_tokens", json=count_body())

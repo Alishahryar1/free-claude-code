@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.streaming import format_sse_event
@@ -200,6 +201,8 @@ class ControlledFallbackProvider:
         self._validation_error = validation_error
         self.stream_models: list[str] = []
         self.response_models: list[str] = []
+        self.requests: list[MessagesRequest | OpenAIResponsesRequest] = []
+        self.reasoning_policies: list[ReasoningPolicy] = []
         self.close_calls = 0
 
     async def stream_messages(
@@ -214,10 +217,12 @@ class ControlledFallbackProvider:
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
-        del input_tokens, request_id, reasoning
+        del input_tokens, request_id
         if self._validation_error is not None:
             raise self._validation_error
         self.stream_models.append(request.model)
+        self.requests.append(request.model_copy(deep=True))
+        self.reasoning_policies.append(reasoning)
         public_model = response_model or request.model
         self.response_models.append(public_model)
         try:
@@ -243,10 +248,12 @@ class ControlledFallbackProvider:
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
-        del input_tokens, request_id, reasoning
+        del input_tokens, request_id
         if self._validation_error is not None:
             raise self._validation_error
         self.stream_models.append(request.model)
+        self.requests.append(request.model_copy(deep=True))
+        self.reasoning_policies.append(reasoning)
         public_model = response_model or request.model
         self.response_models.append(public_model)
         try:
@@ -268,11 +275,15 @@ class ControlledFallbackProvider:
 def fallback_client(
     primary: ControlledFallbackProvider,
     fallback: ControlledFallbackProvider,
+    *,
+    settings: Settings | None = None,
+    extra_providers: Mapping[str, ControlledFallbackProvider] | None = None,
 ) -> Iterator[TestClient]:
     app = create_test_app(
-        Settings(
+        settings
+        or Settings(
             model="nvidia_nim/primary-model",
-            model_fallbacks=("groq/fallback-model",),
+            model_fallbacks=(ModelFallback(model="groq/fallback-model"),),
         )
     )
 
@@ -282,7 +293,9 @@ def fallback_client(
         lease: object,
     ) -> ControlledFallbackProvider:
         del lease
-        return {"nvidia_nim": primary, "groq": fallback}[provider_id]
+        return {"nvidia_nim": primary, "groq": fallback, **(extra_providers or {})}[
+            provider_id
+        ]
 
     with (
         patch(

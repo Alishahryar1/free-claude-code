@@ -652,7 +652,7 @@ async def test_native_responses_applies_resolved_reasoning_override() -> None:
     finally:
         await client.close()
 
-    assert captured[0]["reasoning"] == {"effort": "none"}
+    assert captured[0]["reasoning"] == {"effort": "none", "summary": "detailed"}
 
 
 @pytest.mark.asyncio

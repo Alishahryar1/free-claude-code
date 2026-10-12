@@ -52,6 +52,7 @@ class BaseProvider(ABC):
         request_id: str | None = None,
         response_model: str | None = None,
         request_headers: Mapping[str, str] | None = None,
+        reasoning_override: ReasoningPolicy | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         raise InvalidRequestError(

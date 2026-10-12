@@ -16,6 +16,7 @@ from free_claude_code.config.env_migrations import (
     migrate_env_setting_in_text,
 )
 from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.config.model_refs import ModelFallback, decode_model_fallbacks
 
 
 @pytest.mark.parametrize("schema", ["", "FCC_CONFIG_SCHEMA=1\n"])
@@ -34,7 +35,10 @@ def test_retired_models_repair_managed_config_once_preserving_unknowns(
     assert consolidate_managed_config({}).changed
     values = dotenv_values_from_file(managed)
     assert "MODEL" not in values and "MODEL_OPUS" not in values
-    assert values["MODEL_FALLBACKS"] == "groq/a,deepseek/b"
+    assert decode_model_fallbacks(values["MODEL_FALLBACKS"]) == (
+        ModelFallback(model="groq/a"),
+        ModelFallback(model="deepseek/b"),
+    )
     assert values["REASONING_OPUS"] == "off"
     assert values["GITHUB_MODELS_TOKEN"] == "retired-secret"
     assert values["GITHUB_MODELS_PROXY"] == "http://user:password@proxy.test"

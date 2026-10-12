@@ -10,6 +10,7 @@ from typing import Literal
 
 from loguru import logger
 
+from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.core.anthropic import (
     anthropic_request_snapshot,
     get_token_count,
@@ -35,7 +36,14 @@ from free_claude_code.core.trace import (
 )
 
 from .ports import ModelInfoLookup, ProviderResolver
+from .reasoning import (
+    client_reasoning_policy,
+    client_responses_reasoning_policy,
+    prepare_fallback_request,
+    resolve_fallback_reasoning,
+)
 from .routing import (
+    ProviderModelCandidate,
     ProviderModelTarget,
     ResolvedModelRoute,
     RoutedMessagesRequest,
@@ -46,7 +54,8 @@ from .routing import (
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
 WireApi = Literal["messages", "responses"]
 CandidateStreamOpener = Callable[
-    [int, ProviderModelTarget, ContinuationSeed | None], Awaitable[AsyncIterator[str]]
+    [int, ProviderModelCandidate, ContinuationSeed | None],
+    Awaitable[AsyncIterator[str]],
 ]
 
 
@@ -174,17 +183,30 @@ class ProviderExecutor:
         *,
         request_id: str,
     ) -> AsyncIterator[str]:
+        native_reasoning = ReasoningPolicy.provider_default()
+
         async def open_candidate(
             index: int,
-            target: ProviderModelTarget,
+            candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
         ) -> AsyncIterator[str]:
+            target = candidate.target
             provider = await self._provider_resolver(target.provider_id)
             return provider.stream_native_messages(
                 routed.request.with_model(target.provider_model),
                 request_id=request_id,
                 response_model=routed.resolved.original_model,
                 request_headers=self._request_headers,
+                reasoning_override=(
+                    None
+                    if candidate.reasoning_preference
+                    in {ReasoningPreference.INHERIT, ReasoningPreference.CLIENT}
+                    else resolve_fallback_reasoning(
+                        native_reasoning,
+                        candidate.reasoning_preference,
+                        client=native_reasoning,
+                    )
+                ),
                 continuation=continuation,
             )
 
@@ -192,7 +214,7 @@ class ProviderExecutor:
         assert isinstance(messages, list)
         return self._stream_candidates(
             resolved=routed.resolved,
-            reasoning=ReasoningPolicy.provider_default(),
+            reasoning=native_reasoning,
             wire_api="messages",
             raw_log_label="FULL_NATIVE_MESSAGES_PAYLOAD",
             raw_log_payload=lambda: routed.request.body,
@@ -217,6 +239,7 @@ class ProviderExecutor:
         """Execute one Anthropic Messages request."""
 
         primary_request = routed.request.model_copy(deep=True)
+        client_reasoning = client_reasoning_policy(routed.request)
         input_tokens = self._token_counter(
             routed.request.messages,
             routed.request.system,
@@ -225,16 +248,18 @@ class ProviderExecutor:
 
         async def open_candidate(
             index: int,
-            target: ProviderModelTarget,
+            candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
         ) -> AsyncIterator[str]:
+            target = candidate.target
             provider = await self._provider_resolver(target.provider_id)
             request = (
                 primary_request
                 if index == 0
-                else routed.request.model_copy(
-                    update={"model": target.provider_model},
-                    deep=True,
+                else prepare_fallback_request(
+                    routed.request,
+                    model=target.provider_model,
+                    preference=candidate.reasoning_preference,
                 )
             )
             return provider.stream_messages(
@@ -242,7 +267,11 @@ class ProviderExecutor:
                 input_tokens=input_tokens,
                 request_id=request_id,
                 response_model=routed.resolved.original_model,
-                reasoning=routed.reasoning,
+                reasoning=resolve_fallback_reasoning(
+                    routed.reasoning,
+                    candidate.reasoning_preference,
+                    client=client_reasoning,
+                ),
                 model_info=self._model_info_lookup(
                     target.provider_id, target.provider_model
                 ),
@@ -273,20 +302,23 @@ class ProviderExecutor:
         """Execute one native OpenAI Responses request."""
 
         primary_request = routed.request.model_copy(deep=True)
+        client_reasoning = client_responses_reasoning_policy(routed.request)
         input_tokens = self._responses_token_counter(routed.request)
 
         async def open_candidate(
             index: int,
-            target: ProviderModelTarget,
+            candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
         ) -> AsyncIterator[str]:
+            target = candidate.target
             provider = await self._provider_resolver(target.provider_id)
             request = (
                 primary_request
                 if index == 0
-                else routed.request.model_copy(
-                    update={"model": target.provider_model},
-                    deep=True,
+                else prepare_fallback_request(
+                    routed.request,
+                    model=target.provider_model,
+                    preference=candidate.reasoning_preference,
                 )
             )
             return provider.stream_responses(
@@ -294,7 +326,11 @@ class ProviderExecutor:
                 input_tokens=input_tokens,
                 request_id=request_id,
                 response_model=routed.resolved.original_model,
-                reasoning=routed.reasoning,
+                reasoning=resolve_fallback_reasoning(
+                    routed.reasoning,
+                    candidate.reasoning_preference,
+                    client=client_reasoning,
+                ),
                 request_headers=self._request_headers,
                 continuation=continuation,
                 model_info=self._model_info_lookup(
@@ -342,7 +378,7 @@ class ProviderExecutor:
         """Start and consume candidates through one protocol-blind lifecycle."""
 
         primary = resolved.primary
-        candidates = (primary, *resolved.fallbacks)
+        candidates = (ProviderModelCandidate(primary), *resolved.fallbacks)
         gateway_model = resolved.original_model
         route_trace: dict[str, object] = {
             "stage": "routing",
@@ -392,7 +428,8 @@ class ProviderExecutor:
             progress_deadline = loop.time() + self._progress_timeout_seconds
             delivery = current_stream_delivery()
             continuation: ContinuationSeed | None = None
-            for index, target in enumerate(candidates):
+            for index, candidate in enumerate(candidates):
+                target = candidate.target
                 record_request_route(target.provider_id, target.provider_model)
                 provider_stream: AsyncIterator[str] | None = None
                 candidate_committed = False
@@ -401,7 +438,7 @@ class ProviderExecutor:
                     opening_started = monotonic()
                     try:
                         provider_stream = await open_candidate(
-                            index, target, continuation
+                            index, candidate, continuation
                         )
                     except ExecutionFailure as failure:
                         candidate_failure = failure
@@ -510,7 +547,7 @@ class ProviderExecutor:
                     raise candidate_failure
                 if delivery is not None and continuation is not None:
                     delivery.begin_continuation()
-                next_target = candidates[index + 1]
+                next_target = candidates[index + 1].target
                 self._trace_fallback_started(
                     request_id=request_id,
                     wire_api=wire_api,

@@ -1026,9 +1026,7 @@ class ModelListEditor {
   constructor(input, field) {
     this.input = input;
     this.field = field;
-    this.values = input.value
-      ? input.value.split(",").map((value) => value.trim()).filter(Boolean)
-      : [];
+    this.values = input.value ? JSON.parse(input.value) : [];
     this.inputId = `field-${field.key}-add`;
 
     this.element = document.createElement("div");
@@ -1048,6 +1046,8 @@ class ModelListEditor {
       label: "fallback model",
       type: "model",
     });
+    this.addEffort = this.effortSelect("inherit", "Fallback reasoning effort");
+    this.addEffort.id = `field-${field.key}-effort`;
 
     this.addButton = document.createElement("button");
     this.addButton.type = "button";
@@ -1055,7 +1055,7 @@ class ModelListEditor {
     this.addButton.textContent = "Add";
     this.addButton.disabled = field.locked;
     this.addButton.addEventListener("click", () => this.add());
-    addRow.append(addCombobox.element, this.addButton);
+    addRow.append(addCombobox.element, this.addEffort, this.addButton);
 
     this.rows = document.createElement("div");
     this.rows.className = "model-list-rows";
@@ -1069,12 +1069,13 @@ class ModelListEditor {
       showMessage("Enter a full provider/model fallback.", "error");
       return;
     }
-    if (this.values.includes(value)) {
+    if (this.values.some((entry) => entry.model === value)) {
       showMessage("That fallback model is already in the list.", "error");
       return;
     }
-    this.values.push(value);
+    this.values.push({ model: value, reasoning: this.addEffort.value });
     this.addInput.value = "";
+    this.addEffort.value = "inherit";
     showMessage("");
     this.sync();
   }
@@ -1095,7 +1096,7 @@ class ModelListEditor {
   }
 
   sync() {
-    this.input.value = this.values.join(",");
+    this.input.value = this.values.length ? JSON.stringify(this.values) : "";
     this.input.dataset.remove = "false";
     this.input.dispatchEvent(new Event("input", { bubbles: true }));
     this.renderRows();
@@ -1111,30 +1112,44 @@ class ModelListEditor {
       return;
     }
 
-    this.values.forEach((value, index) => {
+    this.values.forEach((entry, index) => {
       const row = document.createElement("div");
       row.className = "model-list-row";
 
       const model = document.createElement("span");
       model.className = "model-list-value";
-      model.textContent = value;
+      model.textContent = entry.model;
+      const effort = this.effortSelect(entry.reasoning, `Reasoning effort for ${entry.model}`);
+      effort.addEventListener("change", () => {
+        entry.reasoning = effort.value;
+        this.sync();
+      });
 
-      const up = this.actionButton("Move up", `Move ${value} up`, () =>
+      const up = this.actionButton("Move up", `Move ${entry.model} up`, () =>
         this.move(index, -1),
       );
       up.disabled = this.field.locked || index === 0;
-      const down = this.actionButton("Move down", `Move ${value} down`, () =>
+      const down = this.actionButton("Move down", `Move ${entry.model} down`, () =>
         this.move(index, 1),
       );
       down.disabled = this.field.locked || index === this.values.length - 1;
-      const remove = this.actionButton("Remove", `Remove ${value}`, () =>
+      const remove = this.actionButton("Remove", `Remove ${entry.model}`, () =>
         this.remove(index),
       );
       remove.disabled = this.field.locked;
 
-      row.append(model, up, down, remove);
+      row.append(model, effort, up, down, remove);
       this.rows.appendChild(row);
     });
+  }
+
+  effortSelect(value, label) {
+    const select = window.FccFormControls.configure(document.createElement("select"));
+    this.field.options.forEach((item) => select.appendChild(option(item.value, item.label)));
+    select.value = value;
+    select.disabled = this.field.locked;
+    select.setAttribute("aria-label", label);
+    return select;
   }
 
   actionButton(text, label, action) {

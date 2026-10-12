@@ -210,10 +210,10 @@ def test_native_request_preserves_reasoning_when_fcc_did_not_override_it() -> No
 @pytest.mark.parametrize(
     ("reasoning", "expected"),
     (
-        (ReasoningPolicy.off(), {"effort": "none"}),
+        (ReasoningPolicy.off(), {"effort": "none", "summary": "detailed"}),
         (
             ReasoningPolicy.on(effort=ReasoningEffort.XHIGH),
-            {"effort": "xhigh", "summary": "auto"},
+            {"effort": "xhigh", "summary": "detailed"},
         ),
     ),
 )

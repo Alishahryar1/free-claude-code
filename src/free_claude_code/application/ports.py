@@ -25,6 +25,7 @@ class ProviderPort(Protocol):
         request_id: str,
         response_model: str,
         request_headers: Mapping[str, str] | None = None,
+        reasoning_override: ReasoningPolicy | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]: ...
 

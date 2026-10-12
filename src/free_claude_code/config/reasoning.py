@@ -22,3 +22,4 @@ ROOT_REASONING_PREFERENCES = tuple(
     if preference is not ReasoningPreference.INHERIT
 )
 ROUTE_REASONING_PREFERENCES = tuple(ReasoningPreference)
+FALLBACK_REASONING_PREFERENCES = tuple(ReasoningPreference)

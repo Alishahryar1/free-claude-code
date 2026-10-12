@@ -38,12 +38,12 @@ def release_provider_events(monkeypatch):
 async def delivered_candidates(senders, wire, *, tools=None, progress_timeout=10):
     history = [{"role": "user", "content": "greet"}]
 
-    async def open_candidate(index, target, continuation=None):
+    async def open_candidate(index, candidate, continuation=None):
         return senders[index](
             wire,
             history,
             tools=tools,
-            model=target.provider_model,
+            model=candidate.target.provider_model,
             continuation=continuation,
         )
 

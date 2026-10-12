@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.providers.admission import (
@@ -45,7 +46,10 @@ def test_only_leading_pings_then_all_candidates_fail_returns_json_error():
         )
 
     app = create_test_app(
-        Settings(MODEL="anthropic/primary", MODEL_FALLBACKS=["anthropic/backup"]),
+        Settings(
+            MODEL="anthropic/primary",
+            MODEL_FALLBACKS=[ModelFallback(model="anthropic/backup")],
+        ),
         providers={"anthropic": provider(handle)},
     )
     with TestClient(app) as client:
@@ -101,7 +105,7 @@ async def test_leading_ping_timeout_or_disconnect_releases_all_resources(disconn
     app = create_test_app(
         Settings(
             MODEL="anthropic/primary",
-            MODEL_FALLBACKS=["anthropic/backup"],
+            MODEL_FALLBACKS=[ModelFallback(model="anthropic/backup")],
             provider_progress_timeout=0.05,
         ),
         providers={"anthropic": p},

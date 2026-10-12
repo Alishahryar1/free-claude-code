@@ -23,6 +23,7 @@ from free_claude_code.config.loader import (
     get_settings,
 )
 from free_claude_code.config.model_refs import (
+    ModelFallback,
     configured_chat_model_refs,
     parse_model_name,
     parse_provider_type,
@@ -87,7 +88,10 @@ def test_retirement_preserves_effective_default_order_and_process_environment(
     assert snapshot.settings.model == "groq/default"
     assert snapshot.settings.model_opus is None
     assert snapshot.sources["model_opus"] is ConfigSource.PROCESS
-    assert snapshot.settings.model_fallbacks == ("groq/first", "deepseek/last")
+    assert snapshot.settings.model_fallbacks == (
+        ModelFallback(model="groq/first"),
+        ModelFallback(model="deepseek/last"),
+    )
     assert loader.os.environ["MODEL_OPUS"] == "github_models/opus"
 
 
@@ -477,8 +481,8 @@ def test_model_fallbacks_preserve_order_and_trim_members(value: object) -> None:
     settings = Settings.model_validate({"MODEL_FALLBACKS": value})
 
     assert settings.model_fallbacks == (
-        "open_router/vendor/model-a",
-        "groq/vendor/model-b",
+        ModelFallback(model="open_router/vendor/model-a"),
+        ModelFallback(model="groq/vendor/model-b"),
     )
 
 
@@ -533,9 +537,9 @@ def test_configured_chat_model_refs_are_unique() -> None:
         model_fable="open_router/anthropic/claude-fable",
         model_sonnet="deepseek/fallback",
         model_fallbacks=(
-            "groq/vendor/model-a",
-            "open_router/anthropic/claude-fable",
-            "lmstudio/vendor/model-b",
+            ModelFallback(model="groq/vendor/model-a"),
+            ModelFallback(model="open_router/anthropic/claude-fable"),
+            ModelFallback(model="lmstudio/vendor/model-b"),
         ),
     )
 

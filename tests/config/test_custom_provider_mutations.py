@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.persistence import prepare_admin_update
 from free_claude_code.config.admin.values import load_config_response
@@ -82,6 +84,24 @@ def test_deletion_requires_reassignment_and_is_idempotent():
         provider_id,
         {"display_name": "stale"},
     ).valid
+
+
+@pytest.mark.parametrize("process_owned", [False, True])
+def test_deletion_recognizes_structured_fallback_references(process_owned):
+    state, provider_id = created()
+    entries = [{"model": f"{provider_id}/one", "reasoning": "low"}]
+    value = json.dumps(entries)
+    selected = snapshot(
+        state.managed | ({} if process_owned else {"MODEL_FALLBACKS": value}),
+        {"MODEL_FALLBACKS": value} if process_owned else {},
+    )
+    rejected = mutate(selected, "delete", provider_id)
+    assert not rejected.valid and "MODEL_FALLBACKS" in str(rejected.errors)
+    if not process_owned:
+        reassigned = mutate(
+            selected, "delete", provider_id, routes={"MODEL_FALLBACKS": None}
+        )
+        assert reassigned.valid and not reassigned.settings.custom_providers
 
 
 def test_invalid_duplicate_or_locked_mutation_does_not_expose_keys():

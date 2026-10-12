@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
     DEEPSEEK_DEFAULT_BASE,
@@ -40,7 +41,7 @@ def _settings(
     model_opus: str | None = None,
     model_sonnet: str | None = None,
     model_haiku: str | None = None,
-    model_fallbacks: tuple[str, ...] | None = None,
+    model_fallbacks: tuple[ModelFallback, ...] | None = None,
     nvidia_nim_api_key: str = "",
     open_router_api_key: str = "",
     deepseek_api_key: str = "",
@@ -407,7 +408,7 @@ class FakeProvider(BaseProvider):
 @pytest.mark.asyncio
 async def test_runtime_warm_caches_all_referenced_provider_models() -> None:
     settings = _settings(
-        model_fallbacks=("open_router/anthropic/claude-opus",),
+        model_fallbacks=(ModelFallback(model="open_router/anthropic/claude-opus"),),
         nvidia_nim_api_key="nim-key",
         open_router_api_key="open-router-key",
     )

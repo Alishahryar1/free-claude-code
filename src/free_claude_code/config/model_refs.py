@@ -1,12 +1,38 @@
 """Provider-prefixed model reference helpers."""
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Annotated, Protocol
+
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    StringConstraints,
+    TypeAdapter,
+    field_validator,
+)
 
 from .constants import DEFAULT_MODEL
+from .reasoning import ReasoningPreference
 
 RETIRED_PROVIDER_IDS = frozenset({"github_models"})
+
+
+class ModelFallback(BaseModel):
+    """One ordered fallback's model and reasoning preference."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    model: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    reasoning: ReasoningPreference = ReasoningPreference.INHERIT
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value: str) -> str:
+        split_provider_model_ref(value)
+        return value
 
 
 def is_retired_model_ref(model_ref: str) -> bool:
@@ -22,10 +48,39 @@ def parse_model_fallbacks(value: object) -> object:
     if isinstance(value, str):
         if not value.strip():
             return None
-        return tuple(part.strip() for part in value.split(","))
-    if isinstance(value, list | tuple) and not value:
-        return None
+        if value.lstrip().startswith("["):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                raise ValueError(
+                    "MODEL_FALLBACKS must contain a valid JSON array."
+                ) from None
+        else:
+            value = value.split(",")
+    if isinstance(value, list | tuple):
+        return (
+            tuple({"model": item} if isinstance(item, str) else item for item in value)
+            or None
+        )
     return value
+
+
+type ModelFallbacks = Annotated[
+    tuple[ModelFallback, ...] | None, BeforeValidator(parse_model_fallbacks)
+]
+_FALLBACKS = TypeAdapter(ModelFallbacks)
+
+
+def decode_model_fallbacks(value: object) -> tuple[ModelFallback, ...] | None:
+    return _FALLBACKS.validate_python(value)
+
+
+def encode_model_fallbacks(value: tuple[ModelFallback, ...]) -> str:
+    return json.dumps(
+        [entry.model_dump(mode="json") for entry in value],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def normalize_retired_model_settings(
@@ -40,14 +95,20 @@ def normalize_retired_model_settings(
                 normalized[key] = DEFAULT_MODEL if key == "MODEL" else ""
             else:
                 normalized.pop(key)
-    fallbacks = parse_model_fallbacks(normalized.get("MODEL_FALLBACKS"))
-    if isinstance(fallbacks, tuple) and all(fallbacks):
-        retained = tuple(ref for ref in fallbacks if not is_retired_model_ref(ref))
-        if retained != fallbacks:
-            if retained or preserve_empty_overrides:
-                normalized["MODEL_FALLBACKS"] = ",".join(retained)
-            else:
-                normalized.pop("MODEL_FALLBACKS")
+    try:
+        fallbacks = decode_model_fallbacks(normalized.get("MODEL_FALLBACKS"))
+    except ValueError:
+        return normalized  # Settings reports the original validation error.
+    if fallbacks:
+        retained = tuple(
+            entry for entry in fallbacks if not is_retired_model_ref(entry.model)
+        )
+        if retained:
+            normalized["MODEL_FALLBACKS"] = encode_model_fallbacks(retained)
+        elif preserve_empty_overrides:
+            normalized["MODEL_FALLBACKS"] = ""
+        else:
+            normalized.pop("MODEL_FALLBACKS", None)
     return normalized
 
 
@@ -66,7 +127,7 @@ class ChatModelConfig(Protocol):
     model_opus: str | None
     model_sonnet: str | None
     model_haiku: str | None
-    model_fallbacks: tuple[str, ...] | None
+    model_fallbacks: tuple[ModelFallback, ...] | None
 
 
 def split_provider_model_ref(model_ref: str) -> tuple[str, str]:
@@ -103,7 +164,7 @@ def configured_chat_model_refs(
             settings.model_opus,
             settings.model_sonnet,
             settings.model_haiku,
-            *(settings.model_fallbacks or ()),
+            *(entry.model for entry in settings.model_fallbacks or ()),
         )
         if model_ref is not None
     )

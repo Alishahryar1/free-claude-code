@@ -10,6 +10,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.routing import (
+    ProviderModelCandidate,
     ProviderModelTarget,
     ResolvedModelRoute,
     RoutedMessagesRequest,
@@ -37,6 +38,7 @@ class FakeProvider:
         request_id: str,
         response_model: str,
         request_headers: Mapping[str, str] | None = None,
+        reasoning_override: ReasoningPolicy | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         raise AssertionError("Compatibility test provider received a native request")
@@ -349,7 +351,7 @@ def _routed_request(
         resolved=ResolvedModelRoute(
             original_model="gateway-model",
             primary=_target("provider", "provider-model"),
-            fallbacks=fallbacks,
+            fallbacks=tuple(ProviderModelCandidate(target) for target in fallbacks),
             reasoning_preference=ReasoningPreference.CLIENT,
         ),
         reasoning=ReasoningPolicy.on(),
@@ -434,7 +436,7 @@ def _routed_responses_request(
         resolved=ResolvedModelRoute(
             original_model="gateway-model",
             primary=_target("provider", "provider-model"),
-            fallbacks=fallbacks,
+            fallbacks=tuple(ProviderModelCandidate(target) for target in fallbacks),
             reasoning_preference=ReasoningPreference.CLIENT,
         ),
         reasoning=ReasoningPolicy.on(),

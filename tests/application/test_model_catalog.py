@@ -8,6 +8,7 @@ from free_claude_code.application.model_catalog import (
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.ports import ModelCatalogSnapshot
 from free_claude_code.config.custom_providers import CustomProviderDefinition
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 
 
@@ -53,7 +54,10 @@ def test_catalog_sorts_components_and_preserves_exact_identity_and_default():
         model_opus=None,
         model_sonnet=None,
         model_haiku=None,
-        model_fallbacks=("wafer/z", "deepseek/a"),
+        model_fallbacks=(
+            ModelFallback(model="wafer/z"),
+            ModelFallback(model="deepseek/a"),
+        ),
     )
     infos = (
         ProviderModelInfo("alpha-2/model"),
@@ -90,7 +94,10 @@ def test_catalog_sorts_components_and_preserves_exact_identity_and_default():
         model for model in catalog.models if model.wire_slug == catalog.default_model_id
     )
     assert selected.context_window_tokens == 32000
-    assert settings.model_fallbacks == ("wafer/z", "deepseek/a")
+    assert settings.model_fallbacks == (
+        ModelFallback(model="wafer/z"),
+        ModelFallback(model="deepseek/a"),
+    )
 
 
 def test_catalog_retains_configured_models_and_enriches_each_reference_once():
@@ -100,7 +107,7 @@ def test_catalog_retains_configured_models_and_enriches_each_reference_once():
         model_fable=None,
         model_sonnet=None,
         model_haiku="deepseek/undiscovered",
-        model_fallbacks=("open_router/shared",),
+        model_fallbacks=(ModelFallback(model="open_router/shared"),),
     )
     info = ProviderModelInfo("open_router/shared", context_window_tokens=65536)
     catalog = read_model_catalog(ModelCatalogSnapshot(settings, (info,)))

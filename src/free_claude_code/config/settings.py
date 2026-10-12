@@ -14,7 +14,7 @@ from pydantic import (
 
 from .constants import DEFAULT_MODEL, HTTP_CONNECT_TIMEOUT_DEFAULT
 from .custom_providers import CustomProviderDefinition, decode_custom_providers
-from .model_refs import parse_model_fallbacks
+from .model_refs import ModelFallback, ModelFallbacks
 from .nim import NimSettings
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
@@ -36,10 +36,6 @@ NonEmptyString = Annotated[
 OptionalNonEmptyString = Annotated[
     NonEmptyString | None,
     BeforeValidator(_empty_to_none),
-]
-OptionalModelFallbacks = Annotated[
-    tuple[NonEmptyString, ...] | None,
-    BeforeValidator(parse_model_fallbacks),
 ]
 
 
@@ -100,7 +96,8 @@ class Settings(BaseModel):
             value = getattr(self, field)
             refs = value if isinstance(value, tuple) else (value,) if value else ()
             for ref in refs:
-                if ref.partition("/")[0] not in self.provider_ids:
+                model_ref = ref.model if isinstance(ref, ModelFallback) else ref
+                if model_ref.partition("/")[0] not in self.provider_ids:
                     raise ValueError(
                         f"{field.upper()}: Invalid provider in model reference"
                     )
@@ -450,7 +447,7 @@ class Settings(BaseModel):
     model_haiku: OptionalNonEmptyString = Field(
         default=None, validation_alias="MODEL_HAIKU"
     )
-    model_fallbacks: OptionalModelFallbacks = Field(
+    model_fallbacks: ModelFallbacks = Field(
         default=None,
         validation_alias="MODEL_FALLBACKS",
     )
@@ -890,14 +887,14 @@ class Settings(BaseModel):
     @field_validator("model_fallbacks")
     @classmethod
     def validate_model_fallbacks(
-        cls, value: tuple[str, ...] | None
-    ) -> tuple[str, ...] | None:
+        cls, value: tuple[ModelFallback, ...] | None
+    ) -> tuple[ModelFallback, ...] | None:
         if value is None:
             return None
-        validated = tuple(_validate_model_ref(model_ref) for model_ref in value)
-        if len(validated) != len(set(validated)):
+        refs = tuple(entry.model for entry in value)
+        if len(refs) != len(set(refs)):
             raise ValueError("MODEL_FALLBACKS must not contain duplicate model refs.")
-        return validated
+        return value
 
     @model_validator(mode="after")
     def check_nvidia_nim_api_key(self) -> Settings:
