@@ -203,13 +203,21 @@ all rejected their credentials, so every fallback added a second failing call:
 | `qwencloud_coding` | `QWENCLOUD_CODING_API_KEY` | `401 invalid access token or token expired` |
 
 That is no longer true: `GROQ_API_KEY` and `MISTRAL_API_KEY` are now configured in
-`~/.fcc/.env`, and the Admin Providers tab reports 11 Groq and 46 Mistral models, so a
-fallback chain is viable. Use `provider/model` entries (the provider id is the first
-path segment), for example:
+`~/.fcc/.env`, and the Admin Providers tab reports 11 Groq and 46 Mistral models from a
+live background `/models` discovery, so a fallback chain is viable. Use `provider/model`
+entries (the provider id is the first path segment); the chain currently deployed is:
 
 ```
-MODEL_FALLBACKS=groq/llama-3.3-70b-versatile,mistral/mistral-large-latest
+MODEL_FALLBACKS=groq/openai/gpt-oss-120b,mistral/codestral-latest,mistral/mistral-medium-latest
 ```
+
+Both provider entries were confirmed with a real `/chat/completions` (HTTP 200), not just
+`/models`. Groq exposes only 11 models on this account — `openai/gpt-oss-120b`,
+`openai/gpt-oss-20b`, `qwen/qwen3.8-27b`, plus audio/guard models — so the obvious first
+guess `llama-3.3-70b-versatile` returns `404 model_not_found`. A raw `urllib`
+(`Python-urllib/…`) client is also rejected by Groq's Cloudflare rule with `403` and
+`error code: 1010`; that is a client-fingerprint block, not a bad key, and FCC's `httpx`
+client is unaffected.
 
 Point `MODEL` at a Groq or Mistral model instead if you would rather not route through
 NIM at all, or at `ollama/<model>` for a zero-quota local path (Ollama is reachable on
