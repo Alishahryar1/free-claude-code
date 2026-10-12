@@ -6,13 +6,18 @@ everything here, so re-apply after updating.
 
 ## Current deployment
 
-As of 2026-10-01 the live install is built from this clone, not from upstream:
+As of 2026-10-12 the live install is built from this clone, not from upstream:
 
 ```
-free-claude-code 6.5.12.dev1+gc1913aae5
+free-claude-code 6.5.12.dev4+g56801f24a
 upstream base:    7195cef  (v6.5.11)
 direct_url.json -> file:///C:/Users/aams1/OneDrive/Documents/Default%20Project/free-claude-code
 ```
+
+It had drifted to the upstream `6.10.4` release (which drops everything below) before
+this; `DEPLOY.ps1` reinstalls from this clone and is the supported way back. The Admin
+serving its assets under `/admin/assets/6.5.12.dev4+g56801f24a/...` is the quick proof
+that site-packages came from here.
 
 The version is stamped from **this** commit, not upstream's, which is the proof that
 site-packages was built from this tree. It previously resolved to `0.0.0` from a
