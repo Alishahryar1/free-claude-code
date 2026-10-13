@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import uvicorn
-from playwright.sync_api import Page
+from playwright.sync_api import Page, expect
 
 from e2e.artifacts import failure_artifacts_recorder as failure_artifacts_recorder
 from e2e.code_support import CodeControl
@@ -49,6 +49,12 @@ from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.folder_picker import NativeFolderPicker
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.web_tools_support import StubWebToolsClient
+
+
+@pytest.fixture(scope="session", autouse=True)
+def browser_assertion_timeout() -> None:
+    # Windows CI can finish UI hydration just beyond Playwright's five-second default.
+    expect.set_options(timeout=10_000)
 
 
 class _ModelListingProvider(BaseProvider):
