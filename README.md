@@ -401,8 +401,9 @@ are configuring.
 
 Configure integrations from **Admin UI → Messaging**, then click **Apply**.
 
-Discord and Telegram preserve line spacing inside Markdown code fences, including
-`~~~` fences and longer backtick fences used to show triple backticks as code.
+Table normalization no longer adds blank lines inside Markdown code blocks,
+including list-contained fences, `~~~` fences and longer backtick fences.
+Platform rendering may still trim trailing blank lines from code blocks.
 
 <details>
 <summary><strong>Discord bot</strong></summary>
