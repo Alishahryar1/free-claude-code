@@ -478,6 +478,8 @@ Stop all running FCC commands, then run:
 fcc-update
 ```
 
+The update installs the checked stable FCC release with its matching installer.
+
 To reinstall FCC or change optional components while already up to date, run the [installer](#install) directly.
 
 For local voice support, include `--voice-local` (macOS/Linux) or `-VoiceLocal` (Windows), plus your `--torch-backend` or `-TorchBackend` option if used.

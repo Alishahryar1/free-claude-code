@@ -1,11 +1,18 @@
 #!/bin/sh
 set -eu
 status=0
-"$(dirname "$0")/_fcc-update-check" || status=$?
+release_version=$("$(dirname "$0")/_fcc-update-check" --print-version) || status=$?
 case "$status" in
     0) exit 0 ;;
     10) ;;
     *) exit "$status" ;;
 esac
-installer=$(curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh")
-exec sh -c "$installer" sh "$@"
+case "$release_version" in
+    ''|*[!0-9.]*) printf 'error: Invalid FCC update version.\n' >&2; exit 1 ;;
+esac
+if ! printf '%s\n' "$release_version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+    printf 'error: Invalid FCC update version.\n' >&2
+    exit 1
+fi
+installer=$(curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v$release_version/scripts/install.sh")
+FCC_INSTALL_VERSION=$release_version exec sh -c "$installer" sh "$@"

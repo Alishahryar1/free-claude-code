@@ -23,6 +23,7 @@ FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fc
 
 dry_run=0
 voice_local=0
+fcc_install_version=${FCC_INSTALL_VERSION:-}
 install_claude=1
 install_codex=1
 install_pi=1
@@ -137,10 +138,23 @@ start_install_step() {
 print_installer_retry() {
     printf 'Retry: '
     if [ -f "$installer_path" ]; then
+        if [ -n "$fcc_install_version" ]; then
+            printf 'FCC_INSTALL_VERSION='
+            shell_quote "$fcc_install_version"
+            printf ' '
+        fi
         printf 'sh '
         shell_quote "$installer_path"
     else
-        printf '%s' "curl -fsSL 'https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh' | sh -s --"
+        installer_ref=main
+        [ -z "$fcc_install_version" ] || installer_ref="v$fcc_install_version"
+        printf "curl -fsSL 'https://raw.githubusercontent.com/Alishahryar1/free-claude-code/%s/scripts/install.sh' | " "$installer_ref"
+        if [ -n "$fcc_install_version" ]; then
+            printf 'FCC_INSTALL_VERSION='
+            shell_quote "$fcc_install_version"
+            printf ' '
+        fi
+        printf 'sh -s --'
     fi
     [ "$voice_local" -eq 0 ] || printf ' --voice-local'
     if [ -n "$torch_backend" ]; then
@@ -1487,6 +1501,13 @@ parse_args() {
 }
 
 validate_args() {
+    if [ -n "$fcc_install_version" ]; then
+        case "$fcc_install_version" in
+            *[!0-9.]*) fail "FCC_INSTALL_VERSION must be a canonical major.minor.patch release." ;;
+        esac
+        printf '%s\n' "$fcc_install_version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
+            fail "FCC_INSTALL_VERSION must be a canonical major.minor.patch release."
+    fi
     if [ -n "$torch_backend" ] && [ "$voice_local" -ne 1 ]; then
         fail "--torch-backend requires --voice-local."
     fi
@@ -1498,6 +1519,7 @@ package_spec() {
     else
         printf '%s' 'free-claude-code'
     fi
+    [ -z "$fcc_install_version" ] || printf '==%s' "$fcc_install_version"
 }
 
 install_free_claude_code() {
