@@ -408,6 +408,75 @@ async def test_settings_cheapest_mode_pins_the_streamed_request():
         await runtime.cleanup()
 
 
+@pytest.mark.asyncio
+async def test_streamed_prompt_count_constrains_the_pin():
+    endpoints_payload = {
+        "data": {
+            "endpoints": [
+                {
+                    "provider_name": "TinyCheap",
+                    "pricing": {"prompt": "0.0000001", "completion": "0.0000002"},
+                    "quantization": "fp8",
+                    "status": 0,
+                    "context_length": 32_000,
+                },
+                {
+                    "provider_name": "RoomyExpensive",
+                    "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+                    "quantization": "fp8",
+                    "status": 0,
+                    "context_length": 200_000,
+                },
+            ]
+        }
+    }
+    settings = Settings.model_validate(
+        {
+            "OPENROUTER_API_KEY": "synthetic-key",
+            "OPENROUTER_USE_CHEAPEST_PROVIDER": "true",
+        }
+    )
+    runtime = ProviderRuntime(
+        settings,
+        ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+    )
+    try:
+        provider = await runtime.resolve_provider("open_router", 1)
+        assert isinstance(provider, OpenRouterProvider)
+        stream = AsyncStream([_chunk(content="done", finish_reason="stop")])
+        with (
+            patch.object(
+                provider._client,
+                "get",
+                new_callable=AsyncMock,
+                return_value=endpoints_payload,
+            ),
+            patch.object(
+                provider._client.chat.completions,
+                "create",
+                new_callable=AsyncMock,
+                return_value=stream,
+            ) as create_mock,
+        ):
+            events = [
+                event
+                async for event in provider.stream_messages(
+                    make_messages_request("moonshotai/kimi-k2.6"),
+                    input_tokens=50_000,
+                )
+            ]
+
+        assert text_content(parse_sse_text("".join(events))) == "done"
+        # The executor's prompt count reaches the pin: the cheapest provider
+        # cannot serve a 50k-token chat, so the roomier one is pinned.
+        assert create_mock.call_args.kwargs["extra_body"]["provider"] == {
+            "only": ["RoomyExpensive"],
+            "allow_fallbacks": False,
+        }
+    finally:
+        await runtime.cleanup()
+
+
 def _chunk(
     *,
     content: str | None = None,

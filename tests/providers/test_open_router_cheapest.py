@@ -180,9 +180,6 @@ async def test_long_chat_moves_the_pin_to_a_provider_that_fits():
     )
     assert provider._cheapest_index is not None
 
-    messages = [
-        {"role": "user", "content": "word " * 40_000},
-    ]
     with patch.object(
         provider._client,
         "get",
@@ -192,8 +189,9 @@ async def test_long_chat_moves_the_pin_to_a_provider_that_fits():
         await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
         body = provider._chat._behavior.prepare_create_body(
             provider._chat._build_request_body(
-                make_messages_request("moonshotai/kimi-k2.6", messages=messages)
-            )
+                make_messages_request("moonshotai/kimi-k2.6")
+            ),
+            input_tokens=50_000,
         )
 
     assert body["extra_body"]["provider"] == {
@@ -223,9 +221,6 @@ async def test_pin_is_dropped_when_no_provider_can_fit_the_chat():
     )
     assert provider._cheapest_index is not None
 
-    messages = [
-        {"role": "user", "content": "word " * 40_000},
-    ]
     with patch.object(
         provider._client,
         "get",
@@ -235,11 +230,53 @@ async def test_pin_is_dropped_when_no_provider_can_fit_the_chat():
         await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
         body = provider._chat._behavior.prepare_create_body(
             provider._chat._build_request_body(
-                make_messages_request("moonshotai/kimi-k2.6", messages=messages)
-            )
+                make_messages_request("moonshotai/kimi-k2.6")
+            ),
+            input_tokens=50_000,
         )
 
     assert "provider" not in body.get("extra_body", {})
+
+
+@pytest.mark.asyncio
+async def test_without_a_counted_prompt_the_pin_stays_unfiltered():
+    endpoints_payload = {
+        "data": {
+            "endpoints": [
+                endpoint("TinyCheap", "0.0000001", "0.0000001")
+                | {"context_length": 32_000},
+                endpoint("RoomyExpensive", "0.000001", "0.000001")
+                | {"context_length": 200_000},
+            ]
+        }
+    }
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    assert provider._cheapest_index is not None
+
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value=endpoints_payload,
+    ):
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        body = provider._chat._behavior.prepare_create_body(
+            provider._chat._build_request_body(
+                make_messages_request("moonshotai/kimi-k2.6")
+            )
+        )
+
+    assert body["extra_body"]["provider"] == {
+        "only": ["TinyCheap"],
+        "allow_fallbacks": False,
+    }
 
 
 @pytest.mark.asyncio

@@ -589,6 +589,7 @@ class OpenAIChatTransport:
         request_client: OpenAIRequestClient | None = None,
         extra_headers: Mapping[str, str] | None = None,
         on_event: Callable[[Any], None] | None = None,
+        input_tokens: int = 0,
     ) -> tuple[Any, dict, ProviderAttempt, dict]:
         """Create a streaming chat completion with bounded request fallbacks."""
         execution = request_recovery.execution
@@ -602,7 +603,9 @@ class OpenAIChatTransport:
             retain_attempt = False
             create_body = body
             try:
-                create_body = self._behavior.prepare_create_body(body)
+                create_body = self._behavior.prepare_create_body(
+                    body, input_tokens=input_tokens
+                )
                 client = self._client
                 if endpoint is not None:
                     assert request_client is not None
@@ -1028,6 +1031,7 @@ class _OpenAIChatStreamRunner:
                     request_client=self._request_client,
                     extra_headers=self._extra_headers,
                     on_event=observe_chunk,
+                    input_tokens=self._input_tokens,
                 )
                 scope = ProviderAttemptScope(
                     attempt,
@@ -1414,6 +1418,7 @@ class _OpenAIChatStreamRunner:
                     endpoint=self._endpoint,
                     request_client=self._request_client,
                     extra_headers=self._extra_headers,
+                    input_tokens=self._input_tokens,
                 )
                 scope = ProviderAttemptScope(
                     attempt,
