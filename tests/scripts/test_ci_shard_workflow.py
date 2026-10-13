@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from scripts.ci_shards import shard_count
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -18,7 +20,7 @@ def workflow():
 @pytest.mark.parametrize("suite", ["pytest", "playwright"])
 def test_shard_jobs_use_generated_matrices_and_existing_parallelism(suite):
     config = workflow()
-    assert config["env"][f"CI_{suite.upper()}_SHARDS"] == "5"
+    shard_count(config["env"][f"CI_{suite.upper()}_SHARDS"])
     prepare = config["jobs"]["prepare-shards"]
     assert f"{suite}_matrix" in prepare["outputs"]
     generate = prepare["steps"][-1]

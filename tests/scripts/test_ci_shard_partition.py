@@ -74,11 +74,14 @@ def split_args(count, group):
     ]
 
 
-def test_five_shards_partition_all_items_once_and_run_with_workstealing(suite):
+@pytest.mark.parametrize("count", [2, 3, 5])
+def test_shards_partition_all_items_once_and_run_with_workstealing(suite, count):
     baseline = collect(suite)
     assert len(baseline) == 16
     assert collect(suite, *split_args(1, 1)) == baseline
-    groups = [collect(suite, *split_args(5, group)) for group in range(1, 6)]
+    groups = [
+        collect(suite, *split_args(count, group)) for group in range(1, count + 1)
+    ]
     selected = [nodeid for group in groups for nodeid in group]
     assert all(groups)
     assert len(selected) == len(set(selected))
@@ -92,7 +95,7 @@ def test_five_shards_partition_all_items_once_and_run_with_workstealing(suite):
     )
     result = run_pytest(
         suite,
-        *split_args(5, skip_group),
+        *split_args(count, skip_group),
         "-n",
         "2",
         "--dist=worksteal",

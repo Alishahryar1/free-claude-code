@@ -32,7 +32,7 @@ def run_matrix(pytest_count, playwright_count):
     )
 
 
-@pytest.mark.parametrize("counts", [(1, 1), (2, 5), (5, 2), (85, 1)])
+@pytest.mark.parametrize("counts", [(1, 1), (2, 3), (2, 5), (5, 2), (85, 1)])
 def test_matrix_outputs_cover_each_os_and_shard(counts):
     result = run_matrix(*counts)
     assert result.returncode == 0, result.stderr
