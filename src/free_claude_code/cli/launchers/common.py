@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -114,30 +115,47 @@ def server_command() -> list[str]:
     )
 
 
-def _spawn_server(env: Mapping[str, str]) -> subprocess.Popen[bytes]:
+def _spawn_server(
+    env: Mapping[str, str],
+) -> tuple[subprocess.Popen[bytes], Path | None]:
     """Detach the owner and retain errors raised before runtime logging starts."""
     command = server_command()
     log_path = paths.server_startup_log_path()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("wb") as output:
-        return subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            env=dict(env),
-            creationflags=(
-                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                | getattr(subprocess, "DETACHED_PROCESS", 0)
-                if sys.platform == "win32"
-                else 0
+    output = subprocess.DEVNULL
+    capture_path = None
+    with ExitStack() as stack:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            output = stack.enter_context(log_path.open("wb"))
+            capture_path = log_path
+        except OSError as exc:
+            print(
+                f"Could not capture startup output in {log_path}: {exc}\n"
+                "FCC will start without early output capture.",
+                file=sys.stderr,
+            )
+        return (
+            subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                env=dict(env),
+                creationflags=(
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                    | getattr(subprocess, "DETACHED_PROCESS", 0)
+                    if sys.platform == "win32"
+                    else 0
+                ),
+                start_new_session=sys.platform != "win32",
             ),
-            start_new_session=sys.platform != "win32",
+            capture_path,
         )
 
 
-def _startup_diagnostics(detail: str) -> str:
-    path = paths.server_startup_log_path()
+def _startup_diagnostics(detail: str, path: Path | None) -> str:
+    if path is None:
+        return f"{detail}\nStartup output was not captured for this attempt."
     try:
         with path.open("rb") as output:
             output.seek(0, os.SEEK_END)
@@ -278,6 +296,7 @@ def ensure_proxy_available(
             proxy_root_url, probe, f"Could not acquire the startup lock: {exc}"
         )
     process = None
+    capture_path = None
     try:
         # The startup budget starts now: time spent waiting for another
         # launcher's attempt must not shorten this launcher's own attempt.
@@ -306,7 +325,7 @@ def ensure_proxy_available(
             and not _owner_running()
         ):
             try:
-                process = _spawn_server(env)
+                process, capture_path = _spawn_server(env)
             except OSError as exc:
                 return _unreachable_message(
                     proxy_root_url, probe, f"Could not start FCC: {exc}"
@@ -321,7 +340,7 @@ def ensure_proxy_available(
             if process is not None:
                 if process.poll() is None:
                     outcome += "\nFCC was left running for inspection."
-                outcome = _startup_diagnostics(outcome)
+                outcome = _startup_diagnostics(outcome, capture_path)
             return _unreachable_message(proxy_root_url, probe, outcome)
         if outcome.state is ProxyState.HEALTHY:
             return None

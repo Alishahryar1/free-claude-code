@@ -8,6 +8,7 @@ import threading
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from http.client import RemoteDisconnected
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from urllib.error import URLError
@@ -285,7 +286,7 @@ def test_unowned_connection_reset_does_not_start_fcc(monkeypatch, spawned) -> No
 def test_cancelled_start_stops_only_new_child(monkeypatch) -> None:
     _responses(monkeypatch, _refused(), _refused())
     child = FakeServer()
-    monkeypatch.setattr(common, "_spawn_server", lambda _env: child)
+    monkeypatch.setattr(common, "_spawn_server", lambda _env: (child, None))
     monkeypatch.setattr(
         common,
         "_wait_for_server",
@@ -330,7 +331,7 @@ def test_manual_listener_wins_the_bind_race(monkeypatch) -> None:
 
             def spawn(_env):
                 assert owner.acquire()
-                return child
+                return child, None
 
             monkeypatch.setattr(common, "_spawn_server", spawn)
             assert common.ensure_proxy_available(url, env={}) is None
@@ -350,7 +351,7 @@ def test_unowned_listener_winning_bind_race_does_not_hide_child_failure(
             monkeypatch, _refused(), _refused(), TimeoutError("starting"), _healthy()
         )
         child = FakeServer(exit_code=1)
-        monkeypatch.setattr(common, "_spawn_server", lambda _env: child)
+        monkeypatch.setattr(common, "_spawn_server", lambda _env: (child, None))
         message = common.ensure_proxy_available(url, env={})
         assert message is not None and "exited with code 1" in message
         assert not child.terminated
@@ -449,6 +450,66 @@ def test_early_startup_error_is_retained_and_reported(monkeypatch) -> None:
     assert "FCC startup: invalid test setting" in log_path.read_text()
 
 
+@pytest.mark.parametrize("failure", ["directory", "file"])
+@pytest.mark.parametrize("outcome", ["ready", "exited", "timeout", "spawn_failure"])
+def test_startup_log_failure_does_not_block_or_reuse_stale_output(
+    monkeypatch, capsys, clock, failure, outcome
+) -> None:
+    log_path = common.paths.server_startup_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("Previous attempt: stale startup error", encoding="utf-8")
+    operation = Path.mkdir if failure == "directory" else Path.open
+
+    def denied(path, *args, **kwargs):
+        if (failure == "directory" and path == log_path.parent) or (
+            failure == "file" and path == log_path and args == ("wb",)
+        ):
+            raise PermissionError("startup log access denied")
+        return operation(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir" if failure == "directory" else "open", denied)
+    if outcome == "timeout":
+        monkeypatch.setattr(
+            common, "open_local_request", MagicMock(side_effect=_refused())
+        )
+    else:
+        _responses(
+            monkeypatch,
+            _refused(),
+            _refused(),
+            _healthy() if outcome == "ready" else _refused(),
+        )
+    child = FakeServer(exit_code=3 if outcome == "exited" else None)
+    popen = MagicMock(return_value=child)
+    if outcome == "spawn_failure":
+        popen.side_effect = OSError("test executable failed")
+    monkeypatch.setattr(common.subprocess, "Popen", popen)
+
+    message = common.ensure_proxy_available(URL, env={"FCC_OPEN_BROWSER": "0"})
+
+    popen.assert_called_once()
+    assert popen.call_args.kwargs["stdout"] is subprocess.DEVNULL
+    assert popen.call_args.kwargs["stderr"] is subprocess.STDOUT
+    assert popen.call_args.kwargs["env"]["FCC_OPEN_BROWSER"] == "0"
+    warning = capsys.readouterr().err
+    assert str(log_path) in warning
+    assert "startup log access denied" in warning
+    if outcome == "ready":
+        assert message is None
+    else:
+        detail = {
+            "exited": "exited with code 3",
+            "timeout": "did not become ready",
+            "spawn_failure": "test executable failed",
+        }[outcome]
+        assert message is not None and detail in message
+        assert "stale startup error" not in message
+    assert not child.terminated
+    lock = InterprocessFileLock(server_startup_lock_path())
+    assert lock.acquire()
+    lock.release()
+
+
 def test_existing_unresponsive_listener_is_not_replaced(
     monkeypatch, spawned, clock
 ) -> None:
@@ -540,7 +601,7 @@ def test_two_launchers_share_one_start_attempt(monkeypatch) -> None:
         spawning.set()
         assert release.wait(5)
         healthy.set()
-        return child
+        return child, None
 
     monkeypatch.setattr(common, "_probe_proxy", probe)
     monkeypatch.setattr(common, "_spawn_server", spawn)

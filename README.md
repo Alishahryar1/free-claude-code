@@ -377,7 +377,8 @@ Providers that do not support a selected control retain their own behavior.
 If FCC is not running when you start a launcher, it starts FCC Desktop on
 Windows/macOS or `fcc-server` on Linux and waits for it to become ready. FCC
 stays running after the client exits. If startup fails, the launcher reports the
-error and startup log location. If startup times out, a running Desktop stays
+error and startup log location. If early output cannot be saved, the launcher
+warns and continues startup. If startup times out, a running Desktop stays
 open so you can check its status and retry. You can also run `fcc-desktop`
 (Windows/macOS) or `fcc-server` (Linux) manually to diagnose startup problems.
 
