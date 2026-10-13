@@ -6,7 +6,9 @@ from free_claude_code.messaging.rendering.discord_markdown import (
     render_markdown_to_discord,
 )
 from free_claude_code.messaging.rendering.markdown_tables import normalize_gfm_tables
-from free_claude_code.messaging.rendering.telegram_markdown import render_markdown_to_mdv2
+from free_claude_code.messaging.rendering.telegram_markdown import (
+    render_markdown_to_mdv2,
+)
 
 
 @pytest.mark.parametrize(
