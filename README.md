@@ -270,10 +270,11 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 <details>
 <summary><strong>Provider-specific setup</strong></summary>
 
-- iFlytek Astron Token Plan uses a paid subscription key from
+- For iFlytek Astron Token Plan, configure a Token Plan subscription key from
   [the MaaS subscription page](https://maas.xfyun.cn/packageSubscription) for
-  coding clients through the local proxy. Pay-as-you-go and Coding Plan use
-  their own endpoints. Its model list includes `spark-x2.5` and
+  coding clients through the local proxy. Configure other plans using the
+  endpoints recommended in their own documentation. The model list includes
+  `spark-x2.5` and
   `xsparkx2flash` from the [Token Plan documentation](https://www.xfyun.cn/doc/spark/TokenPlan.html),
   since the endpoint does not offer model discovery. Client thinking controls
   map to `thinking.type`; a disabled setting disables reasoning computation.
