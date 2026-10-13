@@ -12,6 +12,7 @@ from free_claude_code.providers.open_router.pricing import (
     blended_price,
     cheapest_provider_name,
     endpoints_from_payload,
+    prompt_capacity,
 )
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import immediate_admission, make_provider_config
@@ -112,6 +113,133 @@ def test_cheapest_provider_treats_null_quantization_as_unknown():
     ]
     assert cheapest_provider_name(endpoints, quantizations=("unknown",)) == "Null"
     assert cheapest_provider_name(endpoints, quantizations=("fp8",)) is None
+
+
+def test_prompt_capacity_uses_the_stricter_stated_ceiling():
+    assert prompt_capacity({"max_prompt_tokens": 4000, "context_length": 8192}) == 4000
+    assert prompt_capacity({"max_prompt_tokens": 9000, "context_length": 8192}) == 8192
+    assert prompt_capacity({"context_length": 8192}) == 8192
+    assert prompt_capacity({"max_prompt_tokens": 4096}) == 4096
+    assert prompt_capacity({}) is None
+    assert prompt_capacity({"context_length": "8192"}) is None
+    assert prompt_capacity({"context_length": 0}) is None
+    assert prompt_capacity({"context_length": True}) is None
+
+
+def test_cheapest_provider_skips_endpoints_too_small_for_the_prompt():
+    endpoints = [
+        endpoint("Tiny", "0.0000001", "0.0000001") | {"context_length": 32_000},
+        endpoint("Roomy", "0.000001", "0.000001") | {"context_length": 200_000},
+    ]
+    assert cheapest_provider_name(endpoints, prompt_tokens=1_000) == "Tiny"
+    assert cheapest_provider_name(endpoints, prompt_tokens=100_000) == "Roomy"
+    assert cheapest_provider_name(endpoints, prompt_tokens=1_000_000) is None
+
+
+def test_cheapest_provider_applies_the_capacity_margin():
+    tiny = endpoint("Tiny", "0.0000001", "0.0000001") | {"context_length": 32_000}
+    # Below 90% of 32_000 fits; at 90% it still fits; past it, the estimate
+    # may already undercount the real token count, so the endpoint is out.
+    assert cheapest_provider_name([tiny], prompt_tokens=28_799) == "Tiny"
+    assert cheapest_provider_name([tiny], prompt_tokens=28_801) is None
+
+
+def test_cheapest_provider_keeps_endpoints_with_unknown_capacity():
+    endpoints = [endpoint("Unknown", "0.0000001", "0.0000001")]
+    assert cheapest_provider_name(endpoints, prompt_tokens=1_000_000) == "Unknown"
+
+
+def test_cheapest_provider_uses_max_prompt_tokens_as_capacity():
+    roomy_context = endpoint("Capped", "0.0000001", "0.0000001") | {
+        "context_length": 200_000,
+        "max_prompt_tokens": 8_000,
+    }
+    assert cheapest_provider_name([roomy_context], prompt_tokens=5_000) == "Capped"
+    assert cheapest_provider_name([roomy_context], prompt_tokens=50_000) is None
+
+
+@pytest.mark.asyncio
+async def test_long_chat_moves_the_pin_to_a_provider_that_fits():
+    endpoints_payload = {
+        "data": {
+            "endpoints": [
+                endpoint("TinyCheap", "0.0000001", "0.0000001")
+                | {"context_length": 32_000},
+                endpoint("RoomyExpensive", "0.000001", "0.000001")
+                | {"context_length": 200_000},
+            ]
+        }
+    }
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    assert provider._cheapest_index is not None
+
+    messages = [
+        {"role": "user", "content": "word " * 40_000},
+    ]
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value=endpoints_payload,
+    ):
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        body = provider._chat._behavior.prepare_create_body(
+            provider._chat._build_request_body(
+                make_messages_request("moonshotai/kimi-k2.6", messages=messages)
+            )
+        )
+
+    assert body["extra_body"]["provider"] == {
+        "only": ["RoomyExpensive"],
+        "allow_fallbacks": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pin_is_dropped_when_no_provider_can_fit_the_chat():
+    endpoints_payload = {
+        "data": {
+            "endpoints": [
+                endpoint("Tiny", "0.0000001", "0.0000001") | {"context_length": 32_000},
+                endpoint("AlsoTiny", "0.000001", "0.000001")
+                | {"context_length": 32_000},
+            ]
+        }
+    }
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    assert provider._cheapest_index is not None
+
+    messages = [
+        {"role": "user", "content": "word " * 40_000},
+    ]
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value=endpoints_payload,
+    ):
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        body = provider._chat._behavior.prepare_create_body(
+            provider._chat._build_request_body(
+                make_messages_request("moonshotai/kimi-k2.6", messages=messages)
+            )
+        )
+
+    assert "provider" not in body.get("extra_body", {})
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,7 @@ from free_claude_code.core.reasoning import (
     ReasoningPolicy,
 )
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.core.token_estimation import estimate_text_tokens
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.endpoint_types import EndpointContext
@@ -52,6 +53,27 @@ def _extra_body_mapping(body: Mapping[str, Any]) -> Mapping[str, Any]:
 
     extra = body.get("extra_body")
     return extra if isinstance(extra, Mapping) else {}
+
+
+def _estimate_prompt_tokens(messages: object) -> int:
+    """Best-effort estimate of the request's prompt size from its messages."""
+
+    if not isinstance(messages, list):
+        return 0
+    total = 0
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            total += estimate_text_tokens(content)
+        elif isinstance(content, list):
+            total += sum(
+                estimate_text_tokens(part["text"])
+                for part in content
+                if isinstance(part, Mapping) and isinstance(part.get("text"), str)
+            )
+    return total
 
 
 class OpenRouterChatBehavior(OpenAIChatBehavior):
@@ -95,7 +117,9 @@ class OpenRouterChatBehavior(OpenAIChatBehavior):
         static_block = _extra_body_mapping(body).get("provider")
         constraints = static_block if isinstance(static_block, Mapping) else None
         cheapest = self._cheapest_index.cheapest_provider_block(
-            body.get("model") or "", constraints=constraints
+            body.get("model") or "",
+            constraints=constraints,
+            prompt_tokens=_estimate_prompt_tokens(body.get("messages")),
         )
         if cheapest is None:
             return body

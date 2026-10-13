@@ -57,12 +57,28 @@ def blended_price(pricing: object) -> float | None:
     return blended if math.isfinite(blended) else None
 
 
+def prompt_capacity(endpoint: Mapping[str, Any]) -> int | None:
+    """Return the endpoint's served prompt capacity, when the payload states it.
+
+    ``max_prompt_tokens`` is the input ceiling when present; otherwise the
+    total context length. Missing or malformed fields leave capacity unknown.
+    """
+
+    capacities: list[int] = []
+    for key in ("max_prompt_tokens", "context_length"):
+        value = endpoint.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            capacities.append(value)
+    return min(capacities) if capacities else None
+
+
 def cheapest_provider_name(
     endpoints: Sequence[Mapping[str, Any]],
     *,
     quantizations: Sequence[str] | None = None,
     free_only: bool = False,
     excluded: Sequence[str] = (),
+    prompt_tokens: int = 0,
 ) -> str | None:
     """Return the provider of the cheapest blended-rate endpoint."""
 
@@ -90,6 +106,12 @@ def cheapest_provider_name(
             level = endpoint.get("quantization") or "unknown"
             if level not in quantizations:
                 continue
+        capacity = prompt_capacity(endpoint)
+        if capacity is not None and prompt_tokens > int(capacity * 0.9):
+            # cl100k estimates undercount some tokenizers (~8% observed), so
+            # a request past 90% of the served ceiling is already unsafe;
+            # pinning it under allow_fallbacks: false would fail outright.
+            continue
         if best_price is None or price < best_price:
             best_name, best_price = name, price
     return best_name
@@ -167,13 +189,20 @@ class CheapestProviderIndex:
         self._entries[base] = (self._clock(), endpoints)
 
     def cheapest_provider_block(
-        self, model_id: str, *, constraints: Mapping[str, Any] | None = None
+        self,
+        model_id: str,
+        *,
+        constraints: Mapping[str, Any] | None = None,
+        prompt_tokens: int = 0,
     ) -> dict[str, Any] | None:
         """Return the routing block pinning the cheapest provider, if resolved.
 
         ``constraints`` is the static routing block that survives the merge;
         its ``ignore`` and (when no dynamic selection applies) ``quantizations``
         filters constrain candidacy so the pin cannot contradict them.
+        ``prompt_tokens`` is the estimated request size; pinning a provider
+        whose served capacity cannot fit it would leave the chat with no
+        eligible endpoint, so only providers that can serve it are eligible.
         """
 
         base = base_model_slug(model_id)
@@ -199,6 +228,7 @@ class CheapestProviderIndex:
             quantizations=quantizations,
             free_only=model_id.strip().endswith(":free"),
             excluded=excluded,
+            prompt_tokens=prompt_tokens,
         )
         if name is None:
             return None
