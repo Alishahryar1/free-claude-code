@@ -36,7 +36,7 @@ def cmd_fcc_server() -> list[str]:
     return [
         python_exe(),
         "-c",
-        "from free_claude_code.cli.entrypoints import serve; serve()",
+        "from smoke.lib.server_runtime import serve; serve()",
     ]
 
 

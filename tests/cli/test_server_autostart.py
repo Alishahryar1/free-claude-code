@@ -1,5 +1,6 @@
 """Launchers start one shared platform owner when the local proxy is down."""
 
+import os
 import socket
 import subprocess
 import sys
@@ -126,8 +127,8 @@ def test_missing_server_is_started_once_and_awaited(
     assert kwargs["env"] == env
     assert kwargs["env"] is not env
     assert kwargs["stdin"] is subprocess.DEVNULL
-    assert kwargs["stdout"] is subprocess.DEVNULL
-    assert kwargs["stderr"] is subprocess.DEVNULL
+    assert kwargs["stdout"] not in (None, subprocess.DEVNULL)
+    assert kwargs["stderr"] is subprocess.STDOUT
     if sys.platform == "win32":
         assert kwargs["creationflags"]
     else:
@@ -159,7 +160,7 @@ def test_startup_wait_is_bounded(monkeypatch, spawned, clock) -> None:
     assert clock.now == 1.0
 
 
-def test_timed_out_start_terminates_only_its_child(monkeypatch, clock) -> None:
+def test_timed_out_start_preserves_running_desktop(monkeypatch, clock) -> None:
     monkeypatch.setattr(common, "open_local_request", MagicMock(side_effect=_refused()))
     child = FakeServer()
     monkeypatch.setattr(common, "server_command", lambda: ["fcc-test"])
@@ -168,10 +169,10 @@ def test_timed_out_start_terminates_only_its_child(monkeypatch, clock) -> None:
     message = common.ensure_proxy_available(URL, env={})
 
     assert message is not None and "did not become ready" in message
-    assert child.terminated
+    assert not child.terminated
 
 
-def test_unhealthy_started_server_is_stopped(monkeypatch) -> None:
+def test_unhealthy_started_server_remains_available_for_inspection(monkeypatch) -> None:
     _responses(monkeypatch, _refused(), _refused(), _status(503))
     child = FakeServer()
     monkeypatch.setattr(common, "server_command", lambda: ["fcc-test"])
@@ -180,7 +181,7 @@ def test_unhealthy_started_server_is_stopped(monkeypatch) -> None:
     message = common.ensure_proxy_available(URL, env={})
 
     assert message is not None and "returned HTTP 503" in message
-    assert child.terminated
+    assert not child.terminated
 
 
 def test_ready_server_outlives_harness(monkeypatch) -> None:
@@ -421,8 +422,31 @@ def test_detached_streams_and_browser_preference_are_independent(monkeypatch) ->
 
     assert observed["env"]["FCC_OPEN_BROWSER"] == "0"
     assert observed["stdin"] is subprocess.DEVNULL
-    assert observed["stdout"] is subprocess.DEVNULL
-    assert observed["stderr"] is subprocess.DEVNULL
+    assert observed["stdout"] not in (None, subprocess.DEVNULL)
+    assert observed["stderr"] is subprocess.STDOUT
+
+
+def test_early_startup_error_is_retained_and_reported(monkeypatch) -> None:
+    monkeypatch.setattr(common, "open_local_request", MagicMock(side_effect=_refused()))
+    monkeypatch.setattr(
+        common,
+        "server_command",
+        lambda: [
+            sys.executable,
+            "-c",
+            "import sys; print('FCC startup: invalid test setting', "
+            "file=sys.stderr); raise SystemExit(7)",
+        ],
+    )
+
+    message = common.ensure_proxy_available(URL, env=dict(os.environ))
+
+    assert message is not None
+    assert "exited with code 7" in message
+    assert "FCC startup: invalid test setting" in message
+    log_path = common.paths.server_log_path().with_name("startup.log")
+    assert str(log_path) in message
+    assert "FCC startup: invalid test setting" in log_path.read_text()
 
 
 def test_existing_unresponsive_listener_is_not_replaced(
@@ -598,7 +622,7 @@ def test_launcher_starts_the_server_then_runs_the_client(
 
     def popen(command: list[str], **kwargs: object) -> object:
         if command == server_command:
-            assert kwargs["stdout"] is subprocess.DEVNULL
+            assert kwargs["stdout"] not in (None, subprocess.DEVNULL)
             launch_capture.health_error = None
             return FakeServer()
         env = kwargs["env"]

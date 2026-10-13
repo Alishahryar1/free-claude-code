@@ -115,22 +115,37 @@ def server_command() -> list[str]:
 
 
 def _spawn_server(env: Mapping[str, str]) -> subprocess.Popen[bytes]:
-    """Start an independent owner that manages its own runtime logging."""
+    """Detach the owner and retain errors raised before runtime logging starts."""
     command = server_command()
-    return subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=dict(env),
-        creationflags=(
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0)
-            if sys.platform == "win32"
-            else 0
-        ),
-        start_new_session=sys.platform != "win32",
-    )
+    log_path = paths.server_startup_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("wb") as output:
+        return subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            env=dict(env),
+            creationflags=(
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "DETACHED_PROCESS", 0)
+                if sys.platform == "win32"
+                else 0
+            ),
+            start_new_session=sys.platform != "win32",
+        )
+
+
+def _startup_diagnostics(detail: str) -> str:
+    path = paths.server_startup_log_path()
+    try:
+        with path.open("rb") as output:
+            output.seek(0, os.SEEK_END)
+            output.seek(max(0, output.tell() - 2048))
+            tail = output.read().decode("utf-8", errors="replace").strip()
+    except OSError as exc:
+        return f"{detail}\nCould not read startup output: {exc}"
+    return f"{detail}\nStartup log: {path}" + (f"\n{tail}" if tail else "")
 
 
 def _desktop_owner_running() -> bool:
@@ -263,7 +278,6 @@ def ensure_proxy_available(
             proxy_root_url, probe, f"Could not acquire the startup lock: {exc}"
         )
     process = None
-    ready = False
     try:
         # The startup budget starts now: time spent waiting for another
         # launcher's attempt must not shorten this launcher's own attempt.
@@ -304,19 +318,22 @@ def ensure_proxy_available(
             )
         outcome = _wait_for_server(proxy_root_url, process, deadline=deadline)
         if isinstance(outcome, str):
+            if process is not None:
+                if process.poll() is None:
+                    outcome += "\nFCC was left running for inspection."
+                outcome = _startup_diagnostics(outcome)
             return _unreachable_message(proxy_root_url, probe, outcome)
         if outcome.state is ProxyState.HEALTHY:
-            ready = True
             return None
         return _unreachable_message(
             proxy_root_url, outcome, "Could not use the FCC endpoint."
         )
+    except BaseException:
+        if process is not None:
+            _stop_owned_process(process)
+        raise
     finally:
-        try:
-            if process is not None and not ready:
-                _stop_owned_process(process)
-        finally:
-            lock.release()
+        lock.release()
 
 
 def resolve_client_binary(

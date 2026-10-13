@@ -6,16 +6,26 @@ import textwrap
 
 import pytest
 
+from free_claude_code.core.interprocess_lock import InterprocessFileLock
+
 
 @pytest.mark.parametrize("automatic", [False, True])
-def test_server_entrypoint_routes_logs_across_restarts(tmp_path, automatic):
+def test_server_entrypoint_routes_logs_across_restarts(
+    tmp_path, monkeypatch, automatic
+):
+    user_home = tmp_path / "user-home"
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.setenv("USERPROFILE", str(user_home))
     log_path = tmp_path / "server.log"
     script = textwrap.dedent("""
         import logging
         import sys
+        from pathlib import Path
         from types import SimpleNamespace
         from unittest.mock import patch
         from loguru import logger
+        from free_claude_code.config import paths
+        paths.config_dir_path = lambda: Path(sys.argv[3])
         from free_claude_code.cli import commands, entrypoints, uvicorn_server
         from free_claude_code.config.logging_config import configure_logging
         from free_claude_code.config.settings import Settings
@@ -57,13 +67,21 @@ def test_server_entrypoint_routes_logs_across_restarts(tmp_path, automatic):
         logger.complete()
         assert len(generations) == 2
     """)
-    result = subprocess.run(
-        [sys.executable, "-c", script, str(log_path), str(automatic)],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
+    with InterprocessFileLock(user_home / ".fcc" / "server.owner.lock"):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(log_path),
+                str(automatic),
+                str(tmp_path / "test-config"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
     assert result.returncode == 0, result.stderr
     saved = log_path.read_text(encoding="utf-8")
     for generation in (1, 2):
