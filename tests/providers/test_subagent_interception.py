@@ -1,32 +1,124 @@
 import json
 
+import pytest
+
+from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.openai_responses import (
+    OpenAIResponsesRequest,
+    build_responses_chat_request,
+)
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
+    ChatStreamOutput,
+    ChatStreamUsage,
+    ResponsesChatStreamOutput,
 )
 from free_claude_code.providers.openai_chat.tool_calls import (
-    iter_heuristic_tool_use_events,
+    OpenAIToolCallAssembler,
 )
 
 
-def test_task_tool_interception() -> None:
-    output = AnthropicChatStreamOutput(
-        message_id="msg_test",
-        model="test-model",
-        input_tokens=1,
+@pytest.fixture(params=["messages", "responses"])
+def output(request) -> ChatStreamOutput:
+    if request.param == "messages":
+        return AnthropicChatStreamOutput(
+            message_id="msg_test", model="test-model", input_tokens=1
+        )
+    prepared = build_responses_chat_request(
+        OpenAIResponsesRequest(model="test-model", input="hello"),
+        reasoning_replay=ReasoningReplayMode.DISABLED,
     )
-    tool_use = {
-        "type": "tool_use",
-        "id": "tool_123",
-        "name": "Task",
-        "input": {
-            "description": "test task",
-            "prompt": "do something",
-            "run_in_background": True,
-        },
-    }
+    return ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
 
-    events = list(iter_heuristic_tool_use_events(output, tool_use))
-    delta = next(event for event in events if '"type": "input_json_delta"' in event)
-    payload = json.loads(delta.split("data: ", 1)[1])
-    args_passed = json.loads(payload["delta"]["partial_json"])
-    assert args_passed["run_in_background"] is False
+
+def _argument_deltas(frames: list[str]) -> list[str]:
+    parts = []
+    for event in parse_sse_text("".join(frames)):
+        if event.event == "response.function_call_arguments.delta":
+            parts.append(event.data["delta"])
+        elif event.data.get("delta", {}).get("type") == "input_json_delta":
+            parts.append(event.data["delta"]["partial_json"])
+    return parts
+
+
+@pytest.mark.parametrize("name", ["Task", "ordinary_tool"])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        '{"run_in_background":true,"prompt":"inspect"}',
+        "{}",
+        '{"run_in_background":null}',
+        "[]",
+        "not json",
+        '{"broken":',
+        "",
+    ],
+)
+def test_tool_arguments_stream_without_name_specific_rewrites(output, name, arguments):
+    assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
+    frames = output.start_events()
+    split = len(arguments) // 2
+    for part, tool_name in [(arguments[:split], name), (arguments[split:], None)]:
+        emitted = list(
+            assembler.process_tool_call(
+                {
+                    "index": 0,
+                    "id": "call_task",
+                    "function": {"name": tool_name, "arguments": part},
+                },
+                output,
+            )
+        )
+        if isinstance(output, AnthropicChatStreamOutput):
+            assert _argument_deltas(emitted) == ([part] if part else [])
+        frames.extend(emitted)
+    frames.extend(
+        output.finish_success(
+            stop_reason="tool_use",
+            usage=ChatStreamUsage(input_tokens=1, output_tokens=1),
+        )
+    )
+    assert output.tool_states[0].content == arguments
+    assert output.tool_states[0].tool_id == "call_task"
+    events = parse_sse_text("".join(frames))
+    assert events[-1].event == (
+        "response.completed"
+        if isinstance(output, ResponsesChatStreamOutput)
+        else "message_stop"
+    )
+    assert "".join(_argument_deltas(frames)) == arguments
+
+
+def test_task_argument_aliases_are_restored_recursively(output):
+    assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
+    buffers = {}
+    frames = []
+    for name, part in [
+        ("Task", '{"run_in_background":true,"wire_prompt":"inspect",'),
+        (None, '"nested":[{"wire_prompt":"child"}]}'),
+    ]:
+        frames.extend(
+            assembler.process_tool_call(
+                {
+                    "index": 0,
+                    "id": "call_task",
+                    "function": {"name": name, "arguments": part},
+                },
+                output,
+                tool_argument_aliases={"Task": {"wire_prompt": "prompt"}},
+                tool_argument_alias_buffers=buffers,
+            )
+        )
+    frames.extend(
+        assembler.flush_tool_argument_alias_buffers(
+            output, {"Task": {"wire_prompt": "prompt"}}, buffers
+        )
+    )
+    frames.extend(output.close_all_blocks())
+    assert json.loads("".join(_argument_deltas(frames))) == {
+        "run_in_background": True,
+        "prompt": "inspect",
+        "nested": [{"prompt": "child"}],
+    }
+    assert not buffers

@@ -3,7 +3,10 @@ from typing import cast
 
 import pytest
 
+from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.openai_responses import build_responses_chat_request
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
@@ -17,13 +20,26 @@ def _parse_frame(frame: str) -> tuple[str, dict[str, object]]:
     return lines[0].removeprefix("event: "), json.loads(lines[1].removeprefix("data: "))
 
 
+def _parse_frames(frames: list[str]) -> list[tuple[str, dict[str, object]]]:
+    return [(event.event, event.data) for event in parse_sse_text("".join(frames))]
+
+
 def _object_dict(value: object) -> dict[str, object]:
     assert isinstance(value, dict)
     return value
 
 
+def _responses_output(
+    request: OpenAIResponsesRequest, *, input_tokens: int
+) -> ResponsesChatStreamOutput:
+    prepared = build_responses_chat_request(
+        request, reasoning_replay=ReasoningReplayMode.DISABLED
+    )
+    return ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=input_tokens)
+
+
 def _finished_responses_usage(usage: ChatStreamUsage) -> dict[str, object]:
-    output = ResponsesChatStreamOutput(
+    output = _responses_output(
         OpenAIResponsesRequest.model_validate(
             {"model": "public-model", "input": "Hello"}
         ),
@@ -84,7 +100,7 @@ def test_anthropic_chat_output_preserves_existing_wire_lifecycle() -> None:
 
 
 def test_responses_chat_output_emits_one_native_lifecycle_with_exact_usage() -> None:
-    output = ResponsesChatStreamOutput(
+    output = _responses_output(
         OpenAIResponsesRequest.model_validate(
             {
                 "model": "public-model",
@@ -133,7 +149,7 @@ def test_responses_chat_output_emits_one_native_lifecycle_with_exact_usage() -> 
         )
     )
 
-    events = [_parse_frame(frame) for frame in frames if frame]
+    events = _parse_frames(frames)
     event_types = [event_type for event_type, _ in events]
     assert event_types.count("response.created") == 1
     assert event_types.count("response.completed") == 1
@@ -239,7 +255,7 @@ def test_responses_chat_output_ignores_overflowing_read_without_losing_write() -
 
 
 def test_responses_chat_output_finishes_committed_failure_once() -> None:
-    output = ResponsesChatStreamOutput(
+    output = _responses_output(
         OpenAIResponsesRequest.model_validate(
             {"model": "public-model", "input": "Hello"}
         ),
@@ -256,7 +272,7 @@ def test_responses_chat_output_finishes_committed_failure_once() -> None:
     frames.extend(output.finish_failure(failure))
     frames.extend(output.finish_failure(failure))
 
-    events = [_parse_frame(frame) for frame in frames if frame]
+    events = _parse_frames(frames)
     assert [event_type for event_type, _ in events].count("response.failed") == 1
     final = _object_dict(events[-1][1]["response"])
     assert final["status"] == "failed"
@@ -265,7 +281,7 @@ def test_responses_chat_output_finishes_committed_failure_once() -> None:
 
 
 def test_responses_chat_output_preserves_options_on_incomplete_terminal() -> None:
-    output = ResponsesChatStreamOutput(
+    output = _responses_output(
         OpenAIResponsesRequest.model_validate(
             {
                 "model": "public-model",
@@ -287,7 +303,7 @@ def test_responses_chat_output_preserves_options_on_incomplete_terminal() -> Non
         )
     )
 
-    events = [_parse_frame(frame) for frame in frames if frame]
+    events = _parse_frames(frames)
     assert [event_type for event_type, _ in events].count("response.created") == 1
     assert [event_type for event_type, _ in events].count("response.incomplete") == 1
     final = _object_dict(events[-1][1]["response"])
@@ -301,7 +317,7 @@ def test_responses_chat_output_preserves_options_on_incomplete_terminal() -> Non
 
 
 def test_responses_chat_output_preserves_custom_tool_free_form_input() -> None:
-    output = ResponsesChatStreamOutput(
+    output = _responses_output(
         OpenAIResponsesRequest.model_validate(
             {
                 "model": "public-model",
@@ -328,13 +344,30 @@ def test_responses_chat_output_preserves_custom_tool_free_form_input() -> None:
         )
     )
 
-    events = [_parse_frame(frame) for frame in frames if frame]
+    events = _parse_frames(frames)
     final = _object_dict(events[-1][1]["response"])
     final_output = final["output"]
     assert isinstance(final_output, list)
+    item_id = _object_dict(final_output[0])["id"]
+    assert isinstance(item_id, str) and item_id.startswith("ctc_")
+    assert [kind for kind, _ in events] == [
+        "response.created",
+        "response.output_item.added",
+        "response.custom_tool_call_input.delta",
+        "response.custom_tool_call_input.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert [event["item_id"] for _, event in events if "item_id" in event] == [
+        item_id,
+        item_id,
+    ]
+    assert [
+        _object_dict(event["item"])["id"] for _, event in events if "item" in event
+    ] == [item_id, item_id]
     assert final_output == [
         {
-            "id": _object_dict(final_output[0])["id"],
+            "id": item_id,
             "type": "custom_tool_call",
             "status": "completed",
             "call_id": "call_patch",
@@ -344,8 +377,8 @@ def test_responses_chat_output_preserves_custom_tool_free_form_input() -> None:
     ]
 
 
-def test_responses_chat_output_fails_malformed_function_call_once() -> None:
-    output = ResponsesChatStreamOutput(
+def test_responses_chat_output_completes_malformed_function_call_once() -> None:
+    output = _responses_output(
         OpenAIResponsesRequest.model_validate(
             {
                 "model": "public-model",
@@ -378,10 +411,16 @@ def test_responses_chat_output_fails_malformed_function_call_once() -> None:
         )
     )
 
-    events = [_parse_frame(frame) for frame in frames if frame]
+    events = _parse_frames(frames)
     event_types = [event_type for event_type, _ in events]
-    assert event_types.count("response.failed") == 1
-    assert "response.completed" not in event_types
+    assert event_types.count("response.completed") == 1
+    assert "response.failed" not in event_types
     final = _object_dict(events[-1][1]["response"])
-    assert final["status"] == "failed"
-    assert _object_dict(final["error"])["type"] == "api_error"
+    assert final["status"] == "completed"
+    assert final["error"] is None
+    final_output = final["output"]
+    assert isinstance(final_output, list)
+    assert len(final_output) == 1
+    item = _object_dict(final_output[0])
+    assert item["arguments"] == '{"q":'
+    assert item["call_id"] == "call_bad"

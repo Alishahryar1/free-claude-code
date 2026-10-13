@@ -39,6 +39,47 @@ def resolve_responses_reasoning_policy(
     )
 
 
+def resolve_fallback_reasoning(
+    original: ReasoningPolicy,
+    preference: ReasoningPreference,
+    *,
+    client: ReasoningPolicy,
+) -> ReasoningPolicy:
+    """Resolve a candidate from original intent, never a previous fallback."""
+
+    # Classifier requests keep the handler's tolerant policy on every candidate.
+    if original.control is ReasoningControl.PREFER_OFF:
+        return original
+    if preference is ReasoningPreference.INHERIT:
+        return original
+    if preference is ReasoningPreference.CLIENT:
+        return client
+    return _apply_reasoning_preference(original, preference)
+
+
+def prepare_fallback_request[T: MessagesRequest | OpenAIResponsesRequest](
+    original: T, *, model: str, preference: ReasoningPreference
+) -> T:
+    """Copy a candidate and remove computation controls replaced by its policy."""
+
+    request = original.model_copy(update={"model": model}, deep=True)
+    if preference in {ReasoningPreference.INHERIT, ReasoningPreference.CLIENT}:
+        return request
+    if isinstance(request, MessagesRequest):
+        if request.thinking is not None:
+            thinking = request.thinking.model_dump(exclude_unset=True)
+            for key in ("type", "enabled", "budget_tokens"):
+                thinking.pop(key, None)
+            request.thinking = (
+                ThinkingConfig.model_validate(thinking) if thinking else None
+            )
+        if request.output_config is not None:
+            request.output_config.pop("effort", None)
+    elif request.reasoning is not None:
+        request.reasoning.pop("effort", None)
+    return request
+
+
 def _apply_reasoning_preference(
     client_policy: ReasoningPolicy,
     preference: ReasoningPreference,

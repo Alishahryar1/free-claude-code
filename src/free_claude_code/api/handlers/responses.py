@@ -1,5 +1,7 @@
 """OpenAI Responses API product flow for Codex clients."""
 
+from collections.abc import Mapping
+
 from fastapi.responses import JSONResponse
 
 from free_claude_code.api.request_errors import (
@@ -15,7 +17,7 @@ from free_claude_code.api.response_streams import (
 )
 from free_claude_code.application.errors import ApplicationError, InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor
-from free_claude_code.application.ports import ProviderResolver
+from free_claude_code.application.ports import ModelInfoLookup, ProviderResolver
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.diagnostics import safe_exception_message
@@ -27,6 +29,7 @@ from free_claude_code.core.openai_responses import (
     openai_error_type_for_failure,
     openai_failure_payload,
 )
+from free_claude_code.core.request_outcomes import record_request_route
 
 
 class ResponsesHandler:
@@ -40,6 +43,8 @@ class ResponsesHandler:
         model_router: ModelRouter | None = None,
         provider_executor: ProviderExecutor | None = None,
         generation_id: int | None = None,
+        request_headers: Mapping[str, str] | None = None,
+        model_info_lookup: ModelInfoLookup | None = None,
     ) -> None:
         self._settings = settings
         self._model_router = model_router or ModelRouter(settings)
@@ -48,6 +53,8 @@ class ResponsesHandler:
             progress_timeout_seconds=settings.provider_progress_timeout,
             generation_id=generation_id,
             log_raw_payloads=settings.log_raw_api_payloads,
+            request_headers=request_headers,
+            model_info_lookup=model_info_lookup,
         )
 
     async def create(
@@ -55,7 +62,6 @@ class ResponsesHandler:
     ) -> object:
         """Create a streaming OpenAI Responses-compatible response."""
         request_id = request_id or new_request_id()
-        request_payload = request_data.model_dump(mode="json", exclude_none=True)
         if request_data.stream is False:
             raise InvalidRequestError(
                 "FCC /v1/responses supports streaming only; omit stream or set stream=true."
@@ -71,9 +77,15 @@ class ResponsesHandler:
 
         try:
             routed = self._model_router.resolve_responses_request(request_data)
+            record_request_route(
+                routed.resolved.primary.provider_id,
+                routed.resolved.primary.provider_model,
+            )
             streamed = self._provider_executor.stream_responses(
                 routed,
-                raw_log_payload=request_payload,
+                raw_log_payload=lambda: request_data.model_dump(
+                    mode="json", exclude_none=True
+                ),
                 request_id=request_id,
             )
             return await openai_responses_sse_streaming_response(

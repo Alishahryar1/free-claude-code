@@ -4,20 +4,25 @@ Thanks for helping improve Free Claude Code. Keep changes focused, test the beha
 
 ## Before Opening A Pull Request
 
-- Open an issue before proposing README changes.
+- Standalone documentation PRs are reserved for the repository owner.
+- Include relevant README and other documentation updates with production code changes. These accompanying updates do not require a separate issue.
 - Do not open Docker integration pull requests.
 - For bugs, include every model mapping, the active model when the failure occurred, the complete error, and reproducible steps.
 - Add focused tests for behavior changes and relevant edge cases.
-- Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing package boundaries, providers, protocol conversion, launchers, or messaging.
+
+## Pull Request Titles
+
+Changes to `assets/`, `scripts/`, `src/`, `pyproject.toml`, or `uv.lock` require a title starting with `patch: `, `minor: `, or `major: ` followed by a description. Use exactly one space after the colon.
+
+PRs without changes to those paths must not use a release prefix. Do not edit version numbers. Publishing calculates the version after merge, creates its Git tag, and publishes to PyPI and GitHub Releases.
 
 ## Development Setup
 
-Install [uv](https://docs.astral.sh/uv/) and Python 3.14, then run directly from the checkout:
+Install [uv](https://docs.astral.sh/uv/), then run directly from the checkout. uv automatically installs the Python version required by the project.
 
 ```bash
 git clone https://github.com/Alishahryar1/free-claude-code.git
 cd free-claude-code
-uv python install 3.14.0
 uv run fcc-server
 ```
 
@@ -55,9 +60,3 @@ GitHub CI runs Ruff in check-only mode and also bans `# type: ignore`, `# ty: ig
 - Keep shared Anthropic protocol behavior under `src/free_claude_code/core/anthropic/` rather than importing utilities from another provider.
 - Keep provider-specific configuration in the provider that owns it.
 - Remove dead compatibility code when completing migrations unless preserving a published interface is explicitly required.
-
-## Versioning
-
-Changes to runtime code, packaging, dependencies, or install/CI scripts require a semantic version bump in `pyproject.toml` and a matching `uv lock` update in the same commit. Documentation, tests, smoke coverage, and repository configuration do not require a version bump by themselves.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for extension checklists and the full system design.

@@ -20,7 +20,6 @@ from .platforms.ports import (
 )
 from .rendering.profiles import build_rendering_profile
 from .safe_diagnostics import format_exception_for_log
-from .session import SessionStore
 from .transcript import RenderCtx
 from .trees import (
     CancellationReason,
@@ -28,6 +27,7 @@ from .trees import (
     CancellationUiOwner,
     ConversationSnapshot,
     FailureResult,
+    MessagingStore,
     NodeUiTarget,
     QueueDecision,
     ReplyTarget,
@@ -92,7 +92,7 @@ class MessagingWorkflow:
         self,
         outbound: OutboundMessenger,
         cli_manager: ManagedClaudeSessionManagerProtocol,
-        session_store: SessionStore,
+        session_store: MessagingStore,
         *,
         platform_name: str | None = None,
         voice_cancellation: VoiceCancellation | None = None,
@@ -118,7 +118,6 @@ class MessagingWorkflow:
             platform_name=self.platform_name,
             outbound=outbound,
             cli_manager=cli_manager,
-            session_store=session_store,
             get_tree_queue=lambda: self._tree_queue,
             format_status=self.format_status,
             get_parse_mode=self._parse_mode,
@@ -138,7 +137,6 @@ class MessagingWorkflow:
             admit_turn=self._admit_turn_if_current,
             format_status=self.format_status,
             get_parse_mode=self._parse_mode,
-            record_outgoing_message=self.record_outgoing_message,
         )
         self._tree_queue = self._build_tree_queue()
 
@@ -148,6 +146,7 @@ class MessagingWorkflow:
         if snapshot is None:
             return TreeQueueManager(
                 self.node_runner.process_node,
+                store=self.session_store,
                 queue_update_callback=self.turn_intake.update_queue_positions,
                 node_started_callback=self.turn_intake.mark_node_processing,
                 unexpected_failure_callback=self._apply_unexpected_failure,
@@ -156,6 +155,7 @@ class MessagingWorkflow:
         return TreeQueueManager.from_snapshot(
             snapshot,
             self.node_runner.process_node,
+            store=self.session_store,
             queue_update_callback=self.turn_intake.update_queue_positions,
             node_started_callback=self.turn_intake.mark_node_processing,
             unexpected_failure_callback=self._apply_unexpected_failure,
@@ -179,16 +179,24 @@ class MessagingWorkflow:
         """Expose the manager facade for diagnostics and smoke tests."""
         return self._tree_queue
 
-    def restore(self) -> None:
+    async def restore(self) -> None:
         """Restore and reconcile persisted conversations before platform start."""
-        snapshot = self.session_store.load_conversation_snapshot()
+        snapshot = await self.session_store.load_conversation_snapshot()
         if snapshot.is_empty:
             return
         logger.info("Restoring {} conversation trees...", len(snapshot.trees))
         self._tree_queue = self._build_tree_queue(snapshot)
         normalized = self._tree_queue.restored_snapshot
         if normalized is not None and normalized != snapshot:
-            self.session_store.save_conversation_snapshot(normalized)
+            await self.session_store.commit_trees(
+                tuple(
+                    tree
+                    for tree in normalized.trees.values()
+                    if self.platform_name == "messaging"
+                    or tree.scope.platform == self.platform_name
+                ),
+                removed=tuple(snapshot.trees.keys() - normalized.trees.keys()),
+            )
         self._pending_restored_status_targets = self._tree_queue.restored_stale_targets
 
     async def repair_restored_statuses(self) -> None:
@@ -271,7 +279,7 @@ class MessagingWorkflow:
                 MessageScope(platform=self.platform_name, chat_id=notice.chat_id), 0
             )
             if not must_discard:
-                must_discard = not self.record_outgoing_message(
+                must_discard = not await self.record_outgoing_message(
                     self.platform_name,
                     notice.chat_id,
                     message_id,
@@ -302,7 +310,7 @@ class MessagingWorkflow:
                 ),
             )
             async with self._state_lock:
-                tracked = self.record_outgoing_message(
+                tracked = await self.record_outgoing_message(
                     self.platform_name,
                     chat_id,
                     message_id,
@@ -315,7 +323,7 @@ class MessagingWorkflow:
             return
 
         async with self._state_lock:
-            self.forget_tracked_message_ids(
+            await self.forget_tracked_message_ids(
                 self.platform_name,
                 chat_id,
                 {message_id},
@@ -323,9 +331,13 @@ class MessagingWorkflow:
 
     async def close(self) -> None:
         """Finish every owned task and durable write before releasing delivery."""
-        await self.stop_all_tasks()
+        await self._cancel_all_pending_voices()
+        async with self._state_lock:
+            self._stop_generation += 1
+            result = await self._tree_queue.shutdown()
+            self._apply_cancellation_result(result)
+        await self.cli_manager.stop_all()
         await self._tree_queue.wait_idle()
-        self.session_store.flush_pending_save()
 
     async def handle_message(self, incoming: IncomingMessage) -> None:
         """Handle one platform message."""
@@ -353,7 +365,7 @@ class MessagingWorkflow:
                     clear_generation=self._clear_generations.get(incoming.scope, 0),
                 )
                 if not is_standalone_clear:
-                    self._record_incoming_message(incoming)
+                    await self._record_incoming_message(incoming)
             try:
                 await self.turn_intake.handle_message(
                     incoming,
@@ -362,7 +374,7 @@ class MessagingWorkflow:
             except BaseException:
                 if is_standalone_clear:
                     async with self._state_lock:
-                        self._record_incoming_message(incoming)
+                        await self._record_incoming_message(incoming)
                 raise
 
     async def resolve_reply(
@@ -404,13 +416,14 @@ class MessagingWorkflow:
             )
             if admission_token != current_token:
                 return None
+            await self.record_outgoing_message(
+                incoming.platform, incoming.chat_id, status_message_id, "status"
+            )
             decision = await self._tree_queue.admit(
                 incoming,
                 status_message_id,
                 parent_reference_id=parent_reference_id,
             )
-            if decision.snapshot is not None:
-                self.session_store.save_tree_snapshot(decision.snapshot)
             return decision
 
     def get_tree_count(self) -> int:
@@ -477,9 +490,6 @@ class MessagingWorkflow:
             )
             if not subtree.tree_matched and voice_result is None:
                 return None
-            self._save_cancellation_snapshots(subtree.cancellation)
-            if subtree.removed_tree_identity is not None:
-                self.session_store.remove_tree_snapshot(subtree.removed_tree_identity)
 
         delete_message_ids = set(subtree.delete_message_ids)
         if voice_result is not None:
@@ -501,9 +511,14 @@ class MessagingWorkflow:
         for voice in voice_results:
             self.render_voice_stopped(voice)
         async with self._state_lock:
-            self._stop_generation += 1
+
+            def publish_stop() -> None:
+                self._stop_generation += 1
+
             logger.info("Cancelling tree queue tasks...")
-            result = await self._tree_queue.cancel_all(reason=CancellationReason.STOP)
+            result = await self._tree_queue.cancel_all(
+                reason=CancellationReason.STOP, on_committed=publish_stop
+            )
             logger.info("Cancelled {} nodes", len(result.effects))
             self._apply_cancellation_result(result)
             logger.info("Stopping all CLI sessions...")
@@ -530,37 +545,23 @@ class MessagingWorkflow:
             for voice in voice_results:
                 delete_message_ids.update(voice.delete_message_ids)
             delete_message_ids.update(
-                self.session_store.get_tracked_message_ids_for_chat(platform, chat_id)
+                await self.session_store.get_tracked_message_ids_for_chat(
+                    platform, chat_id
+                )
             )
 
             delete_message_ids.update(
                 await self._tree_queue.get_message_ids_for_chat(platform, chat_id)
             )
-            # All fallible/cancellable reads precede the commit boundary. Once
-            # the scope generation advances, state removal is one-way work.
-            self._clear_generations[clear_scope] = (
-                self._clear_generations.get(clear_scope, 0) + 1
+
+            def publish_clear() -> None:
+                self._clear_generations[clear_scope] = (
+                    self._clear_generations.get(clear_scope, 0) + 1
+                )
+
+            await self._tree_queue.clear_scope(
+                clear_scope, reason=CancellationReason.CLEAR, on_committed=publish_clear
             )
-            failures: list[Exception] = []
-            try:
-                await self._tree_queue.clear_scope(
-                    clear_scope,
-                    reason=CancellationReason.CLEAR,
-                )
-            except Exception as exc:
-                failures.append(exc)
-            try:
-                self.session_store.clear_scope(clear_scope)
-            except Exception as exc:
-                failures.append(exc)
-                logger.warning(
-                    "Failed to persist final cleared session state: {}",
-                    type(exc).__name__,
-                )
-            if len(failures) == 1:
-                raise failures[0]
-            if failures:
-                raise ExceptionGroup("Chat clear failed", failures)
             return frozenset(delete_message_ids)
 
     async def _cancel_all_pending_voices(
@@ -603,14 +604,14 @@ class MessagingWorkflow:
             )
         )
 
-    def forget_tracked_message_ids(
+    async def forget_tracked_message_ids(
         self,
         platform: str,
         chat_id: str,
         message_ids: set[str],
     ) -> None:
         try:
-            self.session_store.forget_tracked_message_ids(
+            await self.session_store.forget_tracked_message_ids(
                 platform, chat_id, message_ids
             )
         except Exception as exc:
@@ -619,7 +620,7 @@ class MessagingWorkflow:
                 type(exc).__name__,
             )
 
-    def record_outgoing_message(
+    async def record_outgoing_message(
         self,
         platform: str,
         chat_id: str,
@@ -630,7 +631,7 @@ class MessagingWorkflow:
         if not msg_id:
             return False
         try:
-            self.session_store.record_message_id(
+            await self.session_store.record_message_id(
                 platform,
                 chat_id,
                 str(msg_id),
@@ -648,7 +649,7 @@ class MessagingWorkflow:
             return False
         return True
 
-    def _record_incoming_message(self, incoming: IncomingMessage) -> bool:
+    async def _record_incoming_message(self, incoming: IncomingMessage) -> bool:
         """Record an inbound prompt, voice note, or command for standalone clear."""
         command = parse_command_base(incoming.text)
         kind = (
@@ -659,7 +660,7 @@ class MessagingWorkflow:
             else "prompt"
         )
         try:
-            self.session_store.record_message_id(
+            await self.session_store.record_message_id(
                 incoming.platform,
                 incoming.chat_id,
                 str(incoming.message_id),
@@ -677,11 +678,6 @@ class MessagingWorkflow:
             return False
         return True
 
-    def _save_cancellation_snapshots(self, result: CancellationResult) -> None:
-        """Persist transition snapshots without publishing cancellation UI."""
-        for snapshot in result.snapshots:
-            self.session_store.save_tree_snapshot(snapshot)
-
     def _apply_cancellation_result(self, result: CancellationResult) -> None:
         """Apply detached UI and persistence effects from one transition."""
         for effect in result.effects:
@@ -694,18 +690,15 @@ class MessagingWorkflow:
                         parse_mode=self._parse_mode(),
                     )
                 )
-        self._save_cancellation_snapshots(result)
 
     def _apply_unexpected_failure(self, result: FailureResult) -> None:
-        """Persist and render a failure that escaped the total node runner."""
-        if result.snapshot is not None:
-            self.session_store.save_tree_snapshot(result.snapshot)
+        """Render a failure reported by the execution owner."""
         for target in result.affected:
             self.outbound.fire_and_forget(
                 self.outbound.queue_edit_message(
                     target.scope.chat_id,
                     target.status_message_id,
-                    self.format_status("💥", "Task Failed"),
+                    self.format_status("💥", "Task Failed", result.message),
                     parse_mode=self._parse_mode(),
                 )
             )

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+status=0
+"$(dirname "$0")/_fcc-update-check" || status=$?
+case "$status" in
+    0) exit 0 ;;
+    10) ;;
+    *) exit "$status" ;;
+esac
+installer=$(curl -fsSL "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh")
+exec sh -c "$installer" sh "$@"

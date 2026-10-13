@@ -1,14 +1,10 @@
 """Anthropic stream state ledger."""
 
-import hashlib
-import json
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
-
-from loguru import logger
 
 from free_claude_code.core.token_estimation import estimate_text_tokens
 
@@ -32,8 +28,6 @@ class ToolBlockState:
     name: str
     extra_content: dict[str, Any] | None = None
     started: bool = False
-    task_arg_buffer: str = ""
-    task_args_emitted: bool = False
     pre_start_args: str = ""
 
 
@@ -98,53 +92,6 @@ class StreamBlockLedger:
             state.name = name
         elif not prev.startswith(name):
             state.name = prev + name
-
-    def buffer_task_args(self, index: int, args: str) -> dict[str, Any] | None:
-        state = self.tool_states.get(index)
-        if state is None or state.task_args_emitted:
-            return None
-
-        state.task_arg_buffer += args
-        try:
-            args_json = json.loads(state.task_arg_buffer)
-        except Exception:
-            return None
-        if not isinstance(args_json, dict):
-            return None
-
-        _normalize_task_run_in_background(args_json)
-        state.task_args_emitted = True
-        state.task_arg_buffer = ""
-        return args_json
-
-    def flush_task_arg_buffers(self) -> list[tuple[int, str]]:
-        results: list[tuple[int, str]] = []
-        for tool_index, state in list(self.tool_states.items()):
-            if not state.task_arg_buffer or state.task_args_emitted:
-                continue
-
-            out = "{}"
-            try:
-                args_json = json.loads(state.task_arg_buffer)
-                if isinstance(args_json, dict):
-                    _normalize_task_run_in_background(args_json)
-                    out = json.dumps(args_json)
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                digest = hashlib.sha256(
-                    state.task_arg_buffer.encode("utf-8", errors="replace")
-                ).hexdigest()[:16]
-                logger.warning(
-                    "Task args invalid JSON (id={} len={} buffer_sha256_prefix={}): {}",
-                    state.tool_id or "unknown",
-                    len(state.task_arg_buffer),
-                    digest,
-                    exc,
-                )
-
-            state.task_args_emitted = True
-            state.task_arg_buffer = ""
-            results.append((tool_index, out))
-        return results
 
 
 class AnthropicStreamLedger:
@@ -381,6 +328,8 @@ class AnthropicStreamLedger:
             if state is not None:
                 state.open = False
                 self._clear_active_content_block(state)
+                if state.block_type == "tool_use":
+                    continue
             yield self._emitter.event(
                 "content_block_stop",
                 {"type": "content_block_stop", "index": idx},
@@ -531,8 +480,3 @@ class AnthropicStreamLedger:
             state.block_type == "thinking" and self.blocks.thinking_index == state.index
         ):
             self.blocks.thinking_started = False
-
-
-def _normalize_task_run_in_background(args_json: dict[str, Any]) -> None:
-    if args_json.get("run_in_background") is not False:
-        args_json["run_in_background"] = False

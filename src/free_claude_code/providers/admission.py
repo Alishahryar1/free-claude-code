@@ -10,12 +10,18 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
+from functools import partial
 from typing import TypeVar
 
 from loguru import logger
 
-from free_claude_code.core.rate_limit import StrictSlidingWindowLimiter
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    current_stream_delivery,
+)
 from free_claude_code.core.trace import trace_event
+from free_claude_code.providers.admission_capacity import ProviderCapacityLimiter
+from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.failure_policy import (
     ProviderFailureOverride,
     ProviderRecoveryExhausted,
@@ -89,6 +95,11 @@ class ProviderExecution:
         self._active_claim: _AttemptClaim | None = None
         self._last_failure: Exception | None = None
         self._state = ProviderExecutionState.ACTIVE
+        self._delivery = current_stream_delivery()
+
+    @property
+    def delivery(self) -> StreamDeliveryState | None:
+        return self._delivery
 
     @property
     def execution_id(self) -> str:
@@ -132,7 +143,13 @@ class ProviderExecution:
         operation_kind: ProviderOperationKind,
     ) -> ProviderAttempt:
         """Open the sole active physical call for this execution."""
-        return await self._controller._open_attempt(self, operation_kind)
+        attempt = await self._controller._open_attempt(self, operation_kind)
+        if self._delivery and operation_kind in {
+            ProviderOperationKind.GENERATION,
+            ProviderOperationKind.CONTINUATION,
+        }:
+            self._delivery.begin_attempt()
+        return attempt
 
     async def run_call(
         self,
@@ -396,7 +413,7 @@ class ProviderAttempt:
 
 
 class ProviderAdmissionController:
-    """Coordinate one provider's rate, concurrency, and recovery state.
+    """Coordinate one credential's recovery within a provider capacity budget.
 
     Normal attempts pass through a strict sliding window and concurrency bulkhead.
     The first shared transient failure opens one recovery episode. Exactly one
@@ -415,13 +432,9 @@ class ProviderAdmissionController:
         base_delay: float = DEFAULT_UPSTREAM_BASE_DELAY,
         max_delay: float = DEFAULT_UPSTREAM_MAX_DELAY,
         jitter: float = DEFAULT_UPSTREAM_JITTER,
+        capacity: ProviderCapacityLimiter | None = None,
     ) -> None:
-        if rate_limit <= 0:
-            raise ValueError("rate_limit must be > 0")
-        if rate_window <= 0:
-            raise ValueError("rate_window must be > 0")
-        if max_concurrency <= 0:
-            raise ValueError("max_concurrency must be > 0")
+        limits = ProviderAdmissionLimits(rate_limit, rate_window, max_concurrency)
         if max_attempts <= 0:
             raise ValueError("max_attempts must be > 0")
         if base_delay < 0:
@@ -436,10 +449,7 @@ class ProviderAdmissionController:
         self._base_delay = base_delay
         self._max_delay = max_delay
         self._jitter = jitter
-        self._proactive_limiter = StrictSlidingWindowLimiter(
-            rate_limit, float(rate_window)
-        )
-        self._concurrency_sem = asyncio.Semaphore(max_concurrency)
+        self._capacity = capacity or ProviderCapacityLimiter(limits)
         self._condition = asyncio.Condition()
         self._episode: _RecoveryEpisode | None = None
         self._next_generation = 1
@@ -485,19 +495,13 @@ class ProviderAdmissionController:
             slot_acquired = False
             claim: _AttemptClaim | None = None
             try:
-                admitted = await self._proactive_limiter.acquire_if(
-                    lambda permit=permit: self._permit_is_current(execution, permit)
+                admitted = await self._capacity.acquire(
+                    partial(self._permit_is_current, execution, permit)
                 )
                 if not admitted:
                     await self._abandon_probe_permit(execution, permit)
                     continue
-                await self._concurrency_sem.acquire()
                 slot_acquired = True
-                if not self._permit_is_current(execution, permit):
-                    self._concurrency_sem.release()
-                    slot_acquired = False
-                    await self._abandon_probe_permit(execution, permit)
-                    continue
                 claim = execution._claim_attempt(operation_kind)
                 attempt = ProviderAttempt(self, execution, permit, claim)
                 trace_event(
@@ -518,7 +522,7 @@ class ProviderAdmissionController:
                 if claim is not None:
                     execution._close_attempt(claim)
                 if slot_acquired:
-                    self._concurrency_sem.release()
+                    self._release_concurrency()
                 await self._abandon_probe_permit(execution, permit)
                 raise
 
@@ -639,7 +643,7 @@ class ProviderAdmissionController:
             if episode is None:
                 return
             self._episode = None
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
         trace_event(
             stage="provider",
             event="provider.recovery.closed",
@@ -664,7 +668,7 @@ class ProviderAdmissionController:
                 return
             episode.probe_active = False
             episode.ready_at = time.monotonic()
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
 
     async def _attempt_rejected(
         self,
@@ -679,7 +683,7 @@ class ProviderAdmissionController:
             if episode is None:
                 return
             self._episode = None
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
         trace_event(
             stage="provider",
             event="provider.recovery.closed",
@@ -705,7 +709,7 @@ class ProviderAdmissionController:
             episode.leader = None
             episode.probe_active = False
             episode.ready_at = time.monotonic()
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
 
     async def _attempt_failed(
         self,
@@ -740,7 +744,7 @@ class ProviderAdmissionController:
                     execution._fail_recovery(episode.last_error)
                 else:
                     episode.waiters.add(execution)
-                self._condition.notify_all()
+                self._notify_recovery_waiters()
             elif episode is None or matching_probe is not None:
                 terminal_delay = self._retry_delay(
                     error,
@@ -761,7 +765,7 @@ class ProviderAdmissionController:
                     waiter._fail_recovery(error)
                 episode.waiters.clear()
                 exhausted_episode = True
-                self._condition.notify_all()
+                self._notify_recovery_waiters()
 
         label = self._failure_label(status, error)
         if became_leader:
@@ -871,7 +875,7 @@ class ProviderAdmissionController:
             episode.leader = None
             episode.probe_active = False
             episode.ready_at = time.monotonic()
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
 
     async def _abandon_waiting_leader(
         self,
@@ -888,10 +892,18 @@ class ProviderAdmissionController:
             ):
                 return
             episode.leader = None
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
+
+    def reconfigure(self, limits: ProviderAdmissionLimits) -> None:
+        """Update capacity without resetting occupancy, history, or recovery."""
+        self._capacity.reconfigure(limits)
+
+    def _notify_recovery_waiters(self) -> None:
+        self._condition.notify_all()
+        self._capacity.wake_waiters()
 
     def _release_concurrency(self) -> None:
-        self._concurrency_sem.release()
+        self._capacity.release()
 
     def _retry_delay(self, error: Exception, attempt: int) -> float:
         exponent = max(0, attempt - 1)

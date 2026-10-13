@@ -1,0 +1,74 @@
+"""Resolve provider tool identities within one Chat response attempt."""
+
+from dataclasses import dataclass
+
+from free_claude_code.providers.failure_policy import RetryableToolProtocolError
+
+
+class AmbiguousToolCallIdentityError(RetryableToolProtocolError):
+    """A fragment lacks sufficient identity to assign its content safely."""
+
+
+@dataclass(slots=True)
+class _ToolCallIdentity:
+    index: int | None = None
+    tool_id: str | None = None
+
+
+class ToolCallIdentityResolver:
+    """Keep upstream indexes and IDs separate from locally allocated slots."""
+
+    def __init__(self) -> None:
+        self._calls: list[_ToolCallIdentity] = []
+
+    def allocate(self) -> int:
+        """Reserve a new logical slot, including for already-completed calls."""
+        slot = len(self._calls)
+        self._calls.append(_ToolCallIdentity())
+        return slot
+
+    def resolve(self, raw_index: object, raw_id: object) -> int:
+        index = (
+            raw_index
+            if isinstance(raw_index, int)
+            and not isinstance(raw_index, bool)
+            and raw_index >= 0
+            else None
+        )
+        tool_id = raw_id if isinstance(raw_id, str) and raw_id.strip() else None
+        if index is None and tool_id is None:
+            raise AmbiguousToolCallIdentityError(
+                "Upstream tool-call fragment has neither a usable index nor an ID."
+            )
+
+        matches = [
+            slot
+            for slot, call in enumerate(self._calls)
+            if (index is None or call.index in (None, index))
+            and (tool_id is None or call.tool_id in (None, tool_id))
+        ]
+        # A new identifier starts a call unless a known field links it to one.
+        # Once linked, missing fields on other calls still make it ambiguous.
+        if not any(
+            (index is not None and self._calls[slot].index == index)
+            or (tool_id is not None and self._calls[slot].tool_id == tool_id)
+            for slot in matches
+        ):
+            matches = []
+        if len(matches) > 1:
+            raise AmbiguousToolCallIdentityError(
+                "Upstream tool-call fragment has ambiguous identity."
+            )
+        slot = matches[0] if matches else self.allocate()
+        call = self._calls[slot]
+        if index is not None:
+            call.index = index
+        if tool_id is not None:
+            call.tool_id = tool_id
+        return slot
+
+    def tool_id(self, slot: int) -> str | None:
+        return self._calls[slot].tool_id
+
+    def order_key(self, slot: int) -> tuple[int, int]:
+        return self._calls[slot].index or 0, slot

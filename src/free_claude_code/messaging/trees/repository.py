@@ -90,6 +90,17 @@ class TreeRepository:
     def trees(self) -> tuple[MessageTree, ...]:
         return tuple(self._trees.values())
 
+    async def restore_tree(
+        self, identity: TreeIdentity, tree: MessageTree | None
+    ) -> None:
+        """Restore publication and indexes after a failed durable transition."""
+        self.remove_tree(identity)
+        if tree is not None:
+            self._trees[identity] = tree
+            snapshot = await tree.snapshot()
+            for reference in snapshot.lookup_ids():
+                self._reference_to_tree[(identity.scope, reference)] = identity
+
     def tree_count(self) -> int:
         return len(self._trees)
 

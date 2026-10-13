@@ -1,12 +1,14 @@
 """Provider test helpers with explicit admission ownership."""
 
 import json
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 
 import httpx2
 from openai import AsyncOpenAI
 
 from free_claude_code.application.reasoning import client_reasoning_policy
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
@@ -20,12 +22,36 @@ REASONING_ON = ReasoningPolicy.on()
 REASONING_OFF = ReasoningPolicy.off()
 
 
+class SDKStreamDouble[EventT](AsyncIterator[EventT]):
+    """Model the SDK iterator and async close API at mocked create boundaries."""
+
+    def __init__(
+        self,
+        source: AsyncIterable[EventT],
+        *,
+        close: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        self._iterator = aiter(source)
+        self._close = close
+
+    def __aiter__(self) -> AsyncIterator[EventT]:
+        return self
+
+    async def __anext__(self) -> EventT:
+        return await anext(self._iterator)
+
+    async def close(self) -> None:
+        try:
+            if isinstance(self._iterator, AsyncCloseable):
+                await self._iterator.aclose()
+        finally:
+            if self._close is not None:
+                await self._close()
+
+
 def make_provider_config(
     api_key: str | None,
     base_url: str,
-    rate_limit: int = 1_000_000,
-    rate_window: int = 1,
-    max_concurrency: int = 1_000,
     http_read_timeout: float = 120.0,
     http_write_timeout: float = 10.0,
     http_connect_timeout: float = 10.0,
@@ -38,9 +64,6 @@ def make_provider_config(
     return ProviderConfig(
         api_key=api_key,
         base_url=base_url,
-        rate_limit=rate_limit,
-        rate_window=rate_window,
-        max_concurrency=max_concurrency,
         http_read_timeout=http_read_timeout,
         http_write_timeout=http_write_timeout,
         http_connect_timeout=http_connect_timeout,

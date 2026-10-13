@@ -26,8 +26,6 @@ def kimi_provider():
         make_provider_config(
             api_key="test_kimi_key",
             base_url=KIMI_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )
@@ -46,7 +44,9 @@ def test_build_request_body_openai_chat(kimi_provider):
         messages=[Message(role="user", content="hi")],
     )
 
-    body = kimi_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = kimi_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body["model"] == "kimi-k2.5"
     assert body["max_tokens"] == 50
@@ -60,7 +60,9 @@ def test_build_request_body_default_max_tokens(kimi_provider):
         messages=[Message(role="user", content="x")],
     )
 
-    body = kimi_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = kimi_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
@@ -75,7 +77,9 @@ def test_build_request_body_rejects_caller_extra_body(kimi_provider):
     )
 
     with pytest.raises(InvalidRequestError, match="Kimi Chat Completions"):
-        kimi_provider._build_request_body(request, reasoning=reasoning_for(request))
+        kimi_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
 
 
 def test_build_request_body_disables_kimi_thinking(kimi_provider):
@@ -87,7 +91,9 @@ def test_build_request_body_disables_kimi_thinking(kimi_provider):
         }
     )
 
-    body = kimi_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = kimi_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body["extra_body"]["thinking"] == {"type": "disabled"}
 

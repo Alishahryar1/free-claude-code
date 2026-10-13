@@ -8,6 +8,7 @@ from free_claude_code.application.model_metadata import (
     ProviderModelInfo as _ProviderModelInfo,
 )
 from free_claude_code.core.model_capabilities import ModelInputModality
+from free_claude_code.core.reasoning import ReasoningCapability
 
 type ModelListScalar = str | bool
 type RequiredPathValues = tuple[
@@ -47,6 +48,7 @@ def extract_openai_model_infos(
     required_null_field: str | None = None,
     required_sequence_items: tuple[tuple[str, str], ...] = (),
     exclude_missing_sequence_fields: bool = False,
+    optional_sequence_items: tuple[tuple[str, str], ...] = (),
     tags_field: str | None = None,
     thinking_tag: str = "reasoning",
     non_thinking_tag: str | None = None,
@@ -123,12 +125,33 @@ def extract_openai_model_infos(
         if missing_sequence_field:
             continue
 
+        for field_name, required_item in optional_sequence_items:
+            values = _field(item, field_name)
+            if values is None:
+                # Absent or null metadata proves nothing: keep the item listed.
+                continue
+            if not _is_sequence(values) or any(
+                not isinstance(value, str) or not value.strip() for value in values
+            ):
+                raise _malformed(
+                    provider_name,
+                    f"expected every {item_location} item to include "
+                    f"{field_name} string array",
+                )
+            if required_item not in values:
+                included = False
+
         supports_thinking: bool | None = None
+        intrinsic_facts: set[bool] = set()
         if tags_field is not None:
             tags_value = _field(item, tags_field)
             tags = _optional_string_sequence(tags_value)
             if tags is not None:
                 tag_set = frozenset(tags)
+                if thinking_tag in tag_set:
+                    intrinsic_facts.add(True)
+                if non_thinking_tag is not None and non_thinking_tag in tag_set:
+                    intrinsic_facts.add(False)
                 if thinking_tag in tag_set:
                     supports_thinking = True
                 elif non_thinking_tag is not None and non_thinking_tag in tag_set:
@@ -138,6 +161,7 @@ def extract_openai_model_infos(
             capability = _path(item, thinking_boolean_path)
             if isinstance(capability, bool):
                 supports_thinking = capability
+                intrinsic_facts.add(capability)
 
         if thinking_sequence_path is not None:
             values = _optional_string_sequence(_path(item, thinking_sequence_path))
@@ -162,6 +186,9 @@ def extract_openai_model_infos(
 
         model_info = _ProviderModelInfo(
             model_id=model_id,
+            reasoning_capability=ReasoningCapability.NONE
+            if intrinsic_facts == {False}
+            else ReasoningCapability.UNKNOWN,
             supports_thinking=supports_thinking,
             input_modalities=input_modalities,
             context_window_tokens=context_window_tokens,
@@ -216,6 +243,9 @@ def extract_tool_capable_model_infos(
         model_infos.add(
             _ProviderModelInfo(
                 model_id=model_id,
+                reasoning_capability=reasoning_capability_from_options(
+                    _field(item, "reasoning")
+                ),
                 supports_thinking=(
                     "reasoning" in capability_parameters
                     if capability_parameters is not None
@@ -234,6 +264,24 @@ def extract_tool_capable_model_infos(
         )
 
     return frozenset(model_infos)
+
+
+def reasoning_capability_from_options(options: object) -> ReasoningCapability:
+    """Retain explicit gateway computation facts; missing controls prove nothing."""
+    if not isinstance(options, Mapping):
+        return ReasoningCapability.UNKNOWN
+    mandatory = options.get("mandatory")
+    efforts = options.get("supported_efforts")
+    if mandatory is not None and not isinstance(mandatory, bool):
+        return ReasoningCapability.UNKNOWN
+    if efforts is not None and _optional_string_sequence(efforts) is None:
+        return ReasoningCapability.UNKNOWN
+    can_disable = isinstance(efforts, (list, tuple)) and "none" in efforts
+    if mandatory is True:
+        return (
+            ReasoningCapability.UNKNOWN if can_disable else ReasoningCapability.REQUIRED
+        )
+    return ReasoningCapability.OPTIONAL if can_disable else ReasoningCapability.UNKNOWN
 
 
 def model_list_items(

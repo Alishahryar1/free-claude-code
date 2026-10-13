@@ -9,6 +9,7 @@ from free_claude_code.config.provider_catalog import SAMBANOVA_DEFAULT_BASE
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -24,8 +25,6 @@ def sambanova_config():
     return make_provider_config(
         api_key="test_sambanova_key",
         base_url=SAMBANOVA_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 
@@ -42,7 +41,7 @@ def test_default_base_url_constant():
 
 def test_init_uses_default_base_url_and_api_key(sambanova_config):
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = profiled_provider(
             "sambanova", sambanova_config, admission=immediate_admission()
@@ -56,7 +55,7 @@ def test_init_uses_default_base_url_and_api_key(sambanova_config):
 def test_init_strips_trailing_slash(sambanova_config):
     config = replace(sambanova_config, base_url=f"{SAMBANOVA_DEFAULT_BASE}/")
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = profiled_provider(
             "sambanova", config, admission=immediate_admission()
         )
@@ -66,7 +65,7 @@ def test_init_strips_trailing_slash(sambanova_config):
 
 def test_build_request_body_basic(sambanova_provider):
     """Basic request body conversion attaches system message and keeps max_tokens."""
-    body = sambanova_provider._build_request_body(make_request())
+    body = sambanova_provider._chat._build_request_body(make_request())
 
     assert body["model"] == "Meta-Llama-3.3-70B-Instruct"
     assert body["messages"][0]["role"] == "system"
@@ -77,7 +76,7 @@ def test_build_request_body_basic(sambanova_provider):
 def test_build_request_body_preserves_caller_extra_body(sambanova_provider):
     req = make_request(extra_body={"metadata": {"user": "u1"}})
 
-    body = sambanova_provider._build_request_body(req)
+    body = sambanova_provider._chat._build_request_body(req)
 
     eb = body.get("extra_body")
     assert isinstance(eb, dict)
@@ -97,7 +96,7 @@ def test_build_request_body_preserves_caller_extra_body(sambanova_provider):
 def test_build_request_body_uses_only_documented_reasoning_efforts(
     sambanova_provider, reasoning, expected
 ):
-    body = sambanova_provider._build_request_body(
+    body = sambanova_provider._chat._build_request_body(
         make_request(),
         reasoning=reasoning,
     )
@@ -127,7 +126,7 @@ async def test_stream_messages_text(sambanova_provider):
     with patch.object(
         sambanova_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in sambanova_provider.stream_messages(make_request())
@@ -162,7 +161,7 @@ async def test_stream_messages_tool_call(sambanova_provider):
     with patch.object(
         sambanova_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in sambanova_provider.stream_messages(make_request())
@@ -198,7 +197,7 @@ async def test_stream_messages_reasoning_content(sambanova_provider):
     with patch.object(
         sambanova_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event async for event in sambanova_provider.stream_messages(make_request())

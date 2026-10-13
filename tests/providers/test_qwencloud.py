@@ -30,8 +30,6 @@ def qwencloud_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-qwencloud-key",
             base_url=QWENCLOUD_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="qwencloud"),
     )
@@ -81,7 +79,7 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
         }
     )
 
-    body = qwencloud_provider._build_request_body(
+    body = qwencloud_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -111,7 +109,7 @@ def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
         }
     )
 
-    body = qwencloud_provider._build_request_body(request, reasoning=reasoning)
+    body = qwencloud_provider._chat._build_request_body(request, reasoning=reasoning)
     extra_body = body.get("extra_body", {})
 
     for field in (
@@ -144,7 +142,7 @@ def test_build_request_body_replays_prior_reasoning_content(
         }
     )
 
-    body = qwencloud_provider._build_request_body(
+    body = qwencloud_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )

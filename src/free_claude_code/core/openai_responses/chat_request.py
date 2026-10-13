@@ -6,44 +6,36 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.history_replay import (
+    has_readable_replay,
+    is_replay,
+    readable_reasoning,
+    reasoning_detail,
+    tool_history_context,
+)
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_chat import (
     IMAGE_TOOL_RESULT_MARKER,
+    ChatToolResultImages,
     close_chat_tool_result_turns,
     computer_screenshot_label,
     image_tool_result_label,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
-from free_claude_code.core.trace import trace_event
 
 from .errors import ResponsesConversionError
 from .models import OpenAIResponsesRequest
 from .reasoning import (
     combine_reasoning,
     encrypted_reasoning_from_item,
-    reasoning_text_from_item,
 )
+from .tool_adaptation import ResponsesToolAdapter, ResponsesToolPolicy
 from .tools import (
     call_id_from_item,
-    custom_tool_input_text,
     optional_str,
-    parse_arguments,
     required_str,
-    responses_tool_name_to_anthropic_name,
 )
 
-_PASSIVE_TOOL_TYPES = frozenset(
-    {
-        "computer",
-        "file_search",
-        "image_generation",
-        "local_shell",
-        "mcp",
-        "tool_search",
-        "web_search",
-        "web_search_preview",
-    }
-)
 _CHAT_OPTION_FIELDS = (
     "frequency_penalty",
     "logit_bias",
@@ -65,28 +57,23 @@ class ResponsesChatRequest:
     tool_names: OpenAIToolNameCodec
     tool_schemas: dict[str, JsonObject]
     reserved_tool_ids: frozenset[str]
+    tool_adapter: ResponsesToolAdapter
 
 
 @dataclass(slots=True)
 class _PendingReasoning:
-    text: str | None = None
-    encrypted: list[str] = field(default_factory=list)
+    items: list[Mapping[str, JsonValue]] = field(default_factory=list)
 
     def add(self, item: Mapping[str, JsonValue]) -> None:
-        self.text = combine_reasoning(self.text, reasoning_text_from_item(item))
-        if encrypted := encrypted_reasoning_from_item(item):
-            self.encrypted.append(encrypted)
+        self.items.append(item)
 
     @property
     def empty(self) -> bool:
-        return self.text is None and not self.encrypted
+        return not self.items
 
-    def take(self) -> tuple[str | None, list[str]]:
-        text = self.text
-        encrypted = list(self.encrypted)
-        self.text = None
-        self.encrypted.clear()
-        return text, encrypted
+    def take(self) -> list[Mapping[str, JsonValue]]:
+        items, self.items = self.items, []
+        return items
 
 
 class _ResponsesChatInputBuilder:
@@ -102,9 +89,9 @@ class _ResponsesChatInputBuilder:
         self._structured_reasoning_details = structured_reasoning_details
         self._pending_reasoning = _PendingReasoning()
         self._pending_rich_output_parts: list[dict[str, object]] = []
-        self._quarantined_call_ids: set[str] = set()
+        self._discovery_outputs: list[dict[str, object]] = []
 
-    def add(self, item: JsonValue) -> None:
+    def add(self, item: JsonValue, *, source_type: str | None = None) -> None:
         if isinstance(item, str):
             self._flush_rich_outputs()
             self._flush_reasoning()
@@ -127,11 +114,11 @@ class _ResponsesChatInputBuilder:
         if item_type == "reasoning":
             self._pending_reasoning.add(item)
             return
-        if item_type in {"function_call", "custom_tool_call"}:
-            self._add_tool_call(item, custom=item_type == "custom_tool_call")
+        if item_type == "function_call":
+            self._add_tool_call(item)
             return
-        if item_type in {"function_call_output", "custom_tool_call_output"}:
-            self._add_tool_output(item, function=item_type == "function_call_output")
+        if item_type == "function_call_output":
+            self._add_tool_output(item, source_type=source_type)
             return
         if item_type == "computer_call_output":
             self._add_computer_output(item)
@@ -144,11 +131,37 @@ class _ResponsesChatInputBuilder:
             image = _image_part(item, context="input_image")
             self._flush_reasoning()
             self.messages.append({"role": "user", "content": [image]})
+            return
+        if isinstance(item_type, str) and item_type.endswith(("_call", "_result")):
+            if item.get("status") not in {
+                None,
+                "completed",
+                "failed",
+                "incomplete",
+                "interrupted",
+            }:
+                raise ResponsesConversionError(
+                    "An active hosted tool cannot continue through Chat Completions."
+                )
+            self._flush_reasoning()
+            self.messages.append(
+                {"role": "assistant", "content": tool_history_context(item)}
+            )
 
     def finish(self) -> tuple[list[str], list[dict[str, object]]]:
         self._flush_rich_outputs()
         self._flush_reasoning()
         return self.system_parts, self.messages
+
+    def encode_discovery_outputs(self, tool_names: OpenAIToolNameCodec) -> None:
+        """Encode FCC's discovery definitions with the final Chat name mapping."""
+        if not tool_names.has_aliases:
+            return
+        for message in self._discovery_outputs:
+            tools = json.loads(cast(str, message["content"]))
+            for tool in tools:
+                tool["name"] = tool_names.encode(tool["name"])
+            message["content"] = json.dumps(tools)
 
     def _add_message(self, item: Mapping[str, JsonValue]) -> None:
         role = required_str(item.get("role", "user"), "input.role")
@@ -172,29 +185,11 @@ class _ResponsesChatInputBuilder:
             return
         self.messages.append(message)
 
-    def _add_tool_call(self, item: Mapping[str, JsonValue], *, custom: bool) -> None:
+    def _add_tool_call(self, item: Mapping[str, JsonValue]) -> None:
         call_id = call_id_from_item(item)
-        name = _tool_identity_name(item)
-        if custom:
-            arguments = json.dumps(
-                {"input": custom_tool_input_text(item.get("input"))},
-                separators=(",", ":"),
-            )
-        else:
-            raw_arguments = item.get("arguments")
-            try:
-                parse_arguments(raw_arguments)
-            except ResponsesConversionError as exc:
-                self._quarantined_call_ids.add(call_id)
-                trace_event(
-                    stage="responses",
-                    event="responses.input.function_call_quarantined",
-                    source="openai_responses",
-                    call_id=call_id,
-                    error_type=type(exc).__name__,
-                )
-                return
-            arguments = _arguments_text(raw_arguments)
+        name = required_str(item.get("name"), "function_call.name")
+        raw_arguments = item.get("arguments")
+        arguments = _arguments_text(raw_arguments)
 
         message: dict[str, object] | None = self._last_tool_call_message()
         if message is None:
@@ -214,13 +209,14 @@ class _ResponsesChatInputBuilder:
                 "function": {"name": name, "arguments": arguments},
             }
         )
+        if self._reasoning_replay is ReasoningReplayMode.REASONING_CONTENT:
+            message.setdefault("reasoning_content", "")
 
     def _add_tool_output(
-        self, item: Mapping[str, JsonValue], *, function: bool
+        self, item: Mapping[str, JsonValue], *, source_type: str | None
     ) -> None:
+        function = source_type != "custom_tool_call_output"
         call_id = call_id_from_item(item)
-        if function and call_id in self._quarantined_call_ids:
-            return
         if not self._pending_reasoning.empty:
             previous = self._last_tool_call_message()
             if previous is not None:
@@ -242,6 +238,8 @@ class _ResponsesChatInputBuilder:
                 ),
             }
         )
+        if source_type == "tool_search_output":
+            self._discovery_outputs.append(self.messages[-1])
         if rich_parts is not None:
             self._pending_rich_output_parts.extend(rich_parts)
 
@@ -276,6 +274,9 @@ class _ResponsesChatInputBuilder:
     def _flush_reasoning(self) -> None:
         if self._pending_reasoning.empty:
             return
+        if self.messages and self.messages[-1].get("role") == "assistant":
+            self._apply_pending_reasoning(self.messages[-1])
+            return
         message: dict[str, object] = {"role": "assistant", "content": ""}
         self._apply_pending_reasoning(message)
         if len(message) > 2 or message.get("content"):
@@ -285,21 +286,74 @@ class _ResponsesChatInputBuilder:
         if not self._pending_rich_output_parts:
             return
         self.messages.append(
-            {
-                "role": "user",
-                "content": list(self._pending_rich_output_parts),
-            }
+            cast(
+                dict[str, object],
+                ChatToolResultImages(
+                    role="user",
+                    content=cast(
+                        list[JsonValue], list(self._pending_rich_output_parts)
+                    ),
+                ),
+            )
         )
         self._pending_rich_output_parts.clear()
 
     def _apply_pending_reasoning(self, message: dict[str, object]) -> None:
-        text, encrypted = self._pending_reasoning.take()
-        if text is not None:
-            _apply_reasoning_text(message, text, self._reasoning_replay)
-        if encrypted and self._structured_reasoning_details:
-            message["reasoning_details"] = [
-                _encrypted_reasoning_detail(value) for value in encrypted
-            ]
+        contexts: list[str] = []
+        details: list[JsonValue] = []
+        for item in self._pending_reasoning.take():
+            encrypted = encrypted_reasoning_from_item(item)
+            if encrypted and has_readable_replay(encrypted):
+                details.extend(reasoning_detail(encrypted))
+                continue
+            readable = readable_reasoning(item)
+            full_text = [text for text, summary in readable if not summary]
+            content = item.get("content")
+            signed = (
+                self._structured_reasoning_details
+                and encrypted
+                and not is_replay(encrypted)
+                and (
+                    full_text
+                    or (
+                        isinstance(content, list)
+                        and any(
+                            isinstance(part, dict)
+                            and part.get("type") == "reasoning_text"
+                            and part.get("text") == ""
+                            for part in content
+                        )
+                    )
+                )
+            )
+            if signed:
+                details.append(
+                    {
+                        "type": "reasoning.text",
+                        "text": "".join(full_text),
+                        "signature": encrypted,
+                    }
+                )
+            else:
+                for text in full_text:
+                    _apply_reasoning_text(message, text, self._reasoning_replay)
+            for text, summary in readable:
+                if not summary:
+                    continue
+                if self._structured_reasoning_details:
+                    details.append({"type": "reasoning.summary", "summary": text})
+                else:
+                    contexts.append(text)
+            if encrypted and not signed:
+                details.extend(reasoning_detail(encrypted))
+        if contexts:
+            message["content"] = "\n\n".join(
+                [*contexts, str(message.get("content") or "")]
+            ).rstrip()
+        if details:
+            existing = message.setdefault("reasoning_details", [])
+            if isinstance(existing, list):
+                existing.extend(details)
 
 
 def build_responses_chat_request(
@@ -309,14 +363,32 @@ def build_responses_chat_request(
     structured_reasoning_details: bool = False,
 ) -> ResponsesChatRequest:
     """Translate a Responses request directly into one Chat Completions body."""
+    adapter = ResponsesToolAdapter(
+        request,
+        ResponsesToolPolicy(
+            custom_tools_as_functions=True,
+            flatten_namespaces=True,
+            client_tool_search=True,
+        ),
+    )
+    request = adapter.request
     builder = _ResponsesChatInputBuilder(
         reasoning_replay=reasoning_replay,
         structured_reasoning_details=structured_reasoning_details,
     )
     if request.instructions:
         builder.system_parts.append(request.instructions)
-    for item in _input_items(request.input):
-        builder.add(item)
+    original_items = _input_items(adapter.original.input)
+    for source_index, item in zip(
+        adapter.input_source_indices, _input_items(request.input), strict=True
+    ):
+        source = original_items[source_index]
+        builder.add(
+            item,
+            source_type=optional_str(source.get("type"))
+            if isinstance(source, dict)
+            else None,
+        )
     system_parts, raw_messages = builder.finish()
     messages = cast(
         list[dict[str, object]],
@@ -363,11 +435,13 @@ def build_responses_chat_request(
     tool_schemas = _body_tool_schemas(body)
     reserved_tool_ids = frozenset(_body_tool_call_ids(body))
     tool_names = OpenAIToolNameCodec.from_names(_body_tool_names(body))
+    builder.encode_discovery_outputs(tool_names)
     return ResponsesChatRequest(
         body=body,
         tool_names=tool_names,
         tool_schemas=tool_schemas,
         reserved_tool_ids=reserved_tool_ids,
+        tool_adapter=adapter,
     )
 
 
@@ -455,12 +529,6 @@ def _image_part(part: Mapping[str, JsonValue], *, context: str) -> dict[str, obj
     return {"type": "image_url", "image_url": image_url}
 
 
-def _tool_identity_name(item: Mapping[str, JsonValue]) -> str:
-    name = required_str(item.get("name"), f"{item.get('type')}.name")
-    namespace = optional_str(item.get("namespace"))
-    return responses_tool_name_to_anthropic_name(name, namespace=namespace)
-
-
 def _arguments_text(value: JsonValue) -> str:
     if isinstance(value, str):
         return value
@@ -505,28 +573,21 @@ def _apply_reasoning_text(
     message: dict[str, object], text: str, mode: ReasoningReplayMode
 ) -> None:
     if mode in {ReasoningReplayMode.REASONING_CONTENT, ReasoningReplayMode.REASONING}:
-        message[mode.value] = text
+        previous = message.get(mode.value)
+        message[mode.value] = combine_reasoning(
+            previous if isinstance(previous, str) else None, text
+        )
         return
-    if mode is not ReasoningReplayMode.THINK_TAGS:
+    replay = (
+        f"<think>\n{text}\n</think>" if mode is ReasoningReplayMode.THINK_TAGS else text
+    )
+    if not replay:
         return
-    replay = f"<think>\n{text}\n</think>"
     content = message.get("content")
     if isinstance(content, str) and content:
         message["content"] = f"{replay}\n\n{content}"
     else:
         message["content"] = replay
-
-
-def _encrypted_reasoning_detail(value: str) -> object:
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, Mapping):
-        return dict(parsed)
-    if isinstance(parsed, list):
-        return parsed
-    return {"type": "reasoning.encrypted", "data": value}
 
 
 def _chat_tools(
@@ -537,37 +598,8 @@ def _chat_tools(
     for tool in tools or ():
         tool_type = tool.get("type")
         if tool_type == "function":
-            converted_tool, name = _chat_function_tool(tool, namespace=None)
+            converted_tool, name = _chat_function_tool(tool)
             _append_unique_chat_tool(converted, names, converted_tool, name)
-        elif tool_type == "custom":
-            converted_tool, name = _chat_custom_tool(tool, namespace=None)
-            _append_unique_chat_tool(converted, names, converted_tool, name)
-        elif tool_type == "namespace":
-            namespace = required_str(tool.get("name"), "tool.namespace.name")
-            nested = tool.get("tools")
-            if not isinstance(nested, Sequence) or isinstance(
-                nested, str | bytes | bytearray
-            ):
-                raise ResponsesConversionError(
-                    f"Responses namespace tool {namespace!r} tools must be a list"
-                )
-            for nested_tool in nested:
-                if not isinstance(nested_tool, Mapping):
-                    continue
-                nested_type = nested_tool.get("type")
-                if nested_type == "function":
-                    converted_tool, name = _chat_function_tool(
-                        nested_tool, namespace=namespace
-                    )
-                elif nested_type == "custom":
-                    converted_tool, name = _chat_custom_tool(
-                        nested_tool, namespace=namespace
-                    )
-                else:
-                    continue
-                _append_unique_chat_tool(converted, names, converted_tool, name)
-        elif isinstance(tool_type, str) and tool_type in _PASSIVE_TOOL_TYPES:
-            continue
     return converted, frozenset(names)
 
 
@@ -585,14 +617,9 @@ def _append_unique_chat_tool(
     names.add(name)
 
 
-def _chat_function_tool(
-    tool: Mapping[str, JsonValue], *, namespace: str | None
-) -> tuple[dict[str, object], str]:
-    nested = tool.get("function")
-    source = nested if isinstance(nested, Mapping) else tool
-    name = required_str(source.get("name"), "tool.name")
-    wire_name = responses_tool_name_to_anthropic_name(name, namespace=namespace)
-    parameters = source.get("parameters")
+def _chat_function_tool(tool: Mapping[str, JsonValue]) -> tuple[dict[str, object], str]:
+    name = required_str(tool.get("name"), "tool.name")
+    parameters = tool.get("parameters")
     if parameters is None:
         parameters = {"type": "object", "properties": {}}
     if not isinstance(parameters, Mapping):
@@ -600,60 +627,15 @@ def _chat_function_tool(
             f"Responses tool {name!r} parameters must be an object"
         )
     function: dict[str, object] = {
-        "name": wire_name,
+        "name": name,
         "parameters": dict(parameters),
     }
-    if description := optional_str(source.get("description")):
+    if description := optional_str(tool.get("description")):
         function["description"] = description
-    strict = source.get("strict")
+    strict = tool.get("strict")
     if isinstance(strict, bool):
         function["strict"] = strict
-    return {"type": "function", "function": function}, wire_name
-
-
-def _chat_custom_tool(
-    tool: Mapping[str, JsonValue], *, namespace: str | None
-) -> tuple[dict[str, object], str]:
-    nested = tool.get("custom")
-    source = nested if isinstance(nested, Mapping) else tool
-    name = required_str(source.get("name"), "tool.name")
-    wire_name = responses_tool_name_to_anthropic_name(name, namespace=namespace)
-    function: dict[str, object] = {
-        "name": wire_name,
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "input": {
-                    "type": "string",
-                    "description": "Free-form input for the custom tool.",
-                }
-            },
-            "required": ["input"],
-        },
-    }
-    if description := _custom_tool_description(source):
-        function["description"] = description
-    return {"type": "function", "function": function}, wire_name
-
-
-def _custom_tool_description(source: Mapping[str, JsonValue]) -> str | None:
-    parts: list[str] = []
-    if description := optional_str(source.get("description")):
-        parts.append(description)
-    format_value = source.get("format")
-    if isinstance(format_value, Mapping):
-        format_type = optional_str(format_value.get("type"))
-        if format_type == "text":
-            parts.append("Custom tool input format: unconstrained text.")
-        elif format_type == "grammar":
-            syntax = optional_str(format_value.get("syntax"))
-            definition = optional_str(format_value.get("definition"))
-            guidance = "Custom tool input format: grammar"
-            if syntax:
-                guidance = f"{guidance} ({syntax})"
-            guidance = f"{guidance}: {definition}" if definition else f"{guidance}."
-            parts.append(guidance)
-    return "\n\n".join(parts) if parts else None
+    return {"type": "function", "function": function}, name
 
 
 def _chat_tool_choice(
@@ -672,20 +654,14 @@ def _chat_tool_choice(
     choice_type = value.get("type")
     if choice_type in {"auto", "any", "required"}:
         return "required" if choice_type in {"any", "required"} else "auto"
-    if choice_type not in {"function", "custom", "tool"}:
+    if choice_type != "function":
         return None
-    source = value.get("custom")
-    choice = source if isinstance(source, Mapping) else value
-    name = optional_str(choice.get("name"))
+    name = optional_str(value.get("name"))
     if not name:
         return None
-    namespace = optional_str(choice.get("namespace")) or optional_str(
-        value.get("namespace")
-    )
-    wire_name = responses_tool_name_to_anthropic_name(name, namespace=namespace)
-    if wire_name not in available_names:
+    if name not in available_names:
         return None
-    return {"type": "function", "function": {"name": wire_name}}
+    return {"type": "function", "function": {"name": name}}
 
 
 def _chat_response_format(value: JsonValue) -> object | None:

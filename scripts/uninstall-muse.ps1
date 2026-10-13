@@ -101,7 +101,7 @@ function Read-MuseOwnershipRecord {
 }
 
 function Get-MuseCanonicalPath {
-    param([Parameter(Mandatory = $true)][string] $Path)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string] $Path)
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
         return $null

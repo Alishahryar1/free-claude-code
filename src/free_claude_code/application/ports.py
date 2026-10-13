@@ -1,13 +1,16 @@
 """Typed capabilities consumed by application use cases."""
 
-from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
+from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 
 from .model_metadata import ProviderModelInfo
 
@@ -15,12 +18,16 @@ from .model_metadata import ProviderModelInfo
 class ProviderPort(Protocol):
     """Minimal provider capability required to execute one request."""
 
-    def preflight_messages(
+    def stream_native_messages(
         self,
-        request: MessagesRequest,
+        request: NativeMessagesRequest,
         *,
-        reasoning: ReasoningPolicy,
-    ) -> None: ...
+        request_id: str,
+        response_model: str,
+        request_headers: Mapping[str, str] | None = None,
+        reasoning_override: ReasoningPolicy | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]: ...
 
     def stream_messages(
         self,
@@ -30,14 +37,10 @@ class ProviderPort(Protocol):
         request_id: str,
         response_model: str,
         reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]: ...
-
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None: ...
 
     def stream_responses(
         self,
@@ -47,10 +50,14 @@ class ProviderPort(Protocol):
         request_id: str,
         response_model: str,
         reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]: ...
 
 
-ProviderResolver = Callable[[str], ProviderPort]
+ProviderResolver = Callable[[str, int], Awaitable[ProviderPort]]
+ModelInfoLookup = Callable[[str, str], ProviderModelInfo | None]
 
 
 class RequestRuntimeLease(Protocol):
@@ -62,22 +69,23 @@ class RequestRuntimeLease(Protocol):
     @property
     def settings(self) -> Settings: ...
 
-    @property
-    def model_infos(self) -> tuple[ProviderModelInfo, ...]: ...
+    def is_provider_cached(self, provider_id: str, api_key_number: int = 1) -> bool: ...
 
-    def is_provider_cached(self, provider_id: str) -> bool: ...
+    async def wait_for_token_estimation(self) -> None: ...
 
-    def resolve_provider(self, provider_id: str) -> ProviderPort: ...
+    async def resolve_provider(
+        self, provider_id: str, api_key_number: int = 1
+    ) -> ProviderPort: ...
+
+    def model_info(
+        self, provider_id: str, model_id: str
+    ) -> ProviderModelInfo | None: ...
 
     async def release(self) -> None: ...
 
 
-class RequestRuntimePort(Protocol):
-    """Provider generation and model metadata required by application requests."""
-
-    async def acquire(
-        self, *, include_model_infos: bool = False
-    ) -> RequestRuntimeLease: ...
+class ModelCatalogPort(Protocol):
+    """A coherent read-only projection of model configuration and metadata."""
 
     def current_settings(self) -> Settings: ...
 
@@ -86,6 +94,41 @@ class RequestRuntimePort(Protocol):
     ) -> ProviderModelInfo | None: ...
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCatalogSnapshot:
+    settings: Settings
+    model_infos: tuple[ProviderModelInfo, ...]
+
+    def current_settings(self) -> Settings:
+        return self.settings
+
+    def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
+        return self.model_infos
+
+    def cached_model_info(
+        self, provider_id: str, model_id: str
+    ) -> ProviderModelInfo | None:
+        prefixed = f"{provider_id}/{model_id}"
+        return next(
+            (
+                replace(info, model_id=model_id)
+                for info in self.model_infos
+                if info.model_id == prefixed
+            ),
+            None,
+        )
+
+
+class RequestRuntimePort(ModelCatalogPort, Protocol):
+    """Provider generation and model metadata required by application requests."""
+
+    async def acquire(self) -> RequestRuntimeLease: ...
+
+    async def wait_for_catalog(self) -> ModelCatalogSnapshot: ...
+
+    def catalog_status(self) -> JsonObject: ...
 
 
 @dataclass(frozen=True, slots=True)

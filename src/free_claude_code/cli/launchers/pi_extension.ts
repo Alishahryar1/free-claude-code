@@ -2,8 +2,7 @@ import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-codin
 
 const API_KEY_ENV = "FCC_PI_API_KEY";
 const BASE_URL_ENV = "FCC_PI_BASE_URL";
-const CATALOG_TIMEOUT_MS = 3000;
-const DEFAULT_CONTEXT_WINDOW = 128000;
+const CATALOG_TIMEOUT_MS = 35000;
 const DEFAULT_MAX_TOKENS = 16384;
 
 function requireEnvironment(name: string): string {
@@ -53,7 +52,7 @@ function modelDefinition(
 	providerModel: string,
 	supportsReasoning: boolean | undefined,
 	input: ("text" | "image")[] | undefined,
-	contextWindow: number | undefined,
+	contextWindow: number,
 	maxTokens: number | undefined,
 ): ProviderModelConfig {
 	return {
@@ -62,7 +61,7 @@ function modelDefinition(
 		reasoning: supportsReasoning ?? true,
 		input: input ?? ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+		contextWindow,
 		maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
 	};
 }
@@ -75,9 +74,13 @@ export function projectFccModels(payload: unknown): ProviderModelConfig[] {
 	const seen = new Set<string>();
 	for (const entry of payload.data) {
 		if (!isRecord(entry) || typeof entry.id !== "string" || typeof entry.provider_model_ref !== "string") continue;
-		const id = entry.id.trim();
-		const providerModel = entry.provider_model_ref.trim();
-		if (!id || !providerModel.includes("/") || seen.has(id)) continue;
+		const id = entry.id;
+		const providerModel = entry.provider_model_ref;
+		if (!id.trim() || !providerModel.includes("/") || seen.has(id)) continue;
+		const contextWindow = optionalPositiveInteger(entry.contextWindow);
+		if (contextWindow === undefined) {
+			throw new Error("FCC model context is missing or invalid. Restart the FCC server after updating.");
+		}
 		seen.add(id);
 		models.push(
 			modelDefinition(
@@ -85,7 +88,7 @@ export function projectFccModels(payload: unknown): ProviderModelConfig[] {
 				providerModel,
 				optionalBoolean(entry.supportsReasoning),
 				inputModalities(entry.inputModalities),
-				optionalPositiveInteger(entry.contextWindow),
+				contextWindow,
 				optionalPositiveInteger(entry.maxCompletionTokens),
 			),
 		);
@@ -151,5 +154,40 @@ export default async function freeClaudeCode(pi: ExtensionAPI): Promise<void> {
 		authHeader: true,
 		api: "anthropic-messages",
 		models,
+	});
+
+	pi.on("before_provider_headers", (event, ctx) => {
+		if (ctx.model?.provider === "free-claude-code") {
+			event.headers["x-opencode-session"] = ctx.sessionManager.getSessionId();
+		}
+	});
+
+	pi.on("before_provider_request", (event, ctx) => {
+		const payload = event.payload;
+		if (
+			ctx.model?.provider !== "free-claude-code" ||
+			ctx.model.api !== "anthropic-messages" ||
+			ctx.model.reasoning === false ||
+			!isRecord(payload) || payload.model !== ctx.model.id ||
+			!isRecord(payload.thinking) || payload.thinking.type !== "enabled" ||
+			optionalPositiveInteger(payload.thinking.budget_tokens) === undefined
+		) return;
+
+		const effort = pi.getThinkingLevel();
+		if (effort === "off") return;
+
+		// Pi synthesizes a token budget from this level. Send the original effort
+		// so FCC can choose the provider's supported thinking mode and encoding.
+		const thinking = { ...payload.thinking };
+		delete thinking.type;
+		delete thinking.budget_tokens;
+		return {
+			...payload,
+			thinking: Object.keys(thinking).length > 0 ? thinking : undefined,
+			output_config: {
+				...(isRecord(payload.output_config) ? payload.output_config : {}),
+				effort,
+			},
+		};
 	});
 }

@@ -2,11 +2,13 @@
 
 from dataclasses import dataclass, field
 
+from free_claude_code.application.model_catalog import (
+    CatalogModel,
+    context_window_for_client,
+)
+from free_claude_code.config.server_urls import proxy_v1_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
-
-from .common import proxy_v1_url
-from .model_catalog import ClientModel
 
 HERMES_PROVIDER_PREFIX = "fcc-"
 HERMES_KEY_ENV_PREFIX = "FCC_HERMES_"
@@ -38,18 +40,17 @@ class HermesManagedConfig:
     """Secret-free managed overlay for one attached Hermes process."""
 
     config: JsonObject = field(repr=False)
-    provider_key: str
     provider_ref: str
     key_env: str
-    selected_model: str
+    default_model: str
 
 
 def build_hermes_managed_config(
-    models: tuple[ClientModel, ...],
+    models: tuple[CatalogModel, ...],
     *,
+    default_model_id: str,
     proxy_root_url: str,
     nonce: str,
-    selected_model: str | None = None,
 ) -> HermesManagedConfig:
     """Translate an FCC catalog into one invocation-specific Hermes overlay."""
 
@@ -59,9 +60,6 @@ def build_hermes_managed_config(
         raise ValueError("Hermes configuration nonce must be alphanumeric")
 
     wire_slugs = tuple(model.wire_slug for model in models)
-    active_model = selected_model or wire_slugs[0]
-    if active_model not in wire_slugs:
-        raise ValueError(f"model is not in the FCC catalog: {active_model}")
 
     provider_key = f"{HERMES_PROVIDER_PREFIX}{nonce.lower()}"
     provider_ref = f"custom:{provider_key}"
@@ -85,17 +83,18 @@ def build_hermes_managed_config(
                     "Authorization": f"Bearer ${{{key_env}}}",
                 },
                 "transport": "codex_responses",
-                "default_model": active_model,
+                "default_model": default_model_id,
                 "models": {wire_slug: {} for wire_slug in wire_slugs},
                 "discover_models": False,
             }
         },
         "model": {
             "provider": provider_ref,
-            "default": active_model,
+            "default": default_model_id,
             "base_url": "",
             "api_key": "",
             "api_mode": "codex_responses",
+            "default_headers": {"x-fcc-launch-id": nonce},
         },
         "fallback_providers": [],
         "fallback_model": [],
@@ -105,10 +104,9 @@ def build_hermes_managed_config(
         config["model_overrides"] = {"custom": model_overrides}
     return HermesManagedConfig(
         config=config,
-        provider_key=provider_key,
         provider_ref=provider_ref,
         key_env=key_env,
-        selected_model=active_model,
+        default_model=default_model_id,
     )
 
 
@@ -126,14 +124,13 @@ def _auxiliary_task_config(task: str, *, provider_ref: str) -> JsonObject:
     return config
 
 
-def _model_override(model: ClientModel) -> JsonObject:
+def _model_override(model: CatalogModel) -> JsonObject:
     override: JsonObject = {}
     if model.supports_reasoning is not None:
         override["supports_reasoning"] = model.supports_reasoning
     if model.input_modalities is not None:
         override["supports_vision"] = ModelInputModality.IMAGE in model.input_modalities
-    if model.context_window_tokens is not None:
-        override["context_window"] = model.context_window_tokens
+    override["context_window"] = context_window_for_client(model)
     if model.max_output_tokens is not None:
         override["max_output_tokens"] = model.max_output_tokens
     return override

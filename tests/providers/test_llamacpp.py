@@ -10,6 +10,7 @@ from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -39,7 +40,7 @@ def provider() -> OpenAIChatProvider:
 )
 def test_init_normalizes_openai_base_url(configured: str, expected: str) -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = profiled_provider(
             "llamacpp",
@@ -60,7 +61,7 @@ def test_init_uses_openai_chat_client() -> None:
         http_connect_timeout=5.0,
     )
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = profiled_provider(
             "llamacpp", config, admission=immediate_admission()
@@ -78,7 +79,7 @@ def test_build_request_body_uses_openai_chat_shape(
 ) -> None:
     request = make_messages_request(LLAMACPP_MODEL, max_tokens=None)
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
     assert body["model"] == LLAMACPP_MODEL
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
@@ -104,7 +105,7 @@ def test_replay_is_independent_of_current_turn_reasoning_control(
         ],
     )
 
-    body = provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
     assert body["messages"][1]["content"] == ("<think>\nprivate\n</think>\n\nvisible")
     assert body["extra_body"]["thinking_budget_tokens"] == 0
@@ -134,7 +135,7 @@ async def test_stream_messages_uses_shared_openai_chat_provider(
         provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=stream(),
+        return_value=SDKStreamDouble(stream()),
     ) as create:
         output = "".join(
             [

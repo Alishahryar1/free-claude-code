@@ -2,10 +2,14 @@ import json
 from collections.abc import AsyncIterator
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.constants import DEFAULT_MODEL
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -22,18 +26,53 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
 )
-from tests.api.support import create_test_app
+from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.test_custom_provider import completion, definition
+from tests.providers.test_custom_provider import provider as custom_provider
 
 _PUBLIC_MODEL = "nvidia_nim/test-model"
 _UPSTREAM_MODEL = "test-model"
 _RESPONSE_ID = "resp_test"
 
 
+def test_responses_route_carries_generation_model_limit_to_messages_egress():
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=completion("anthropic_messages"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    config = definition(api_format="anthropic_messages")
+    instance = custom_provider(config, messages_handler=reply)
+    app = create_test_app(
+        Settings(custom_providers=(config,)), providers={config.provider_id: instance}
+    )
+    provider_manager_for_app(app).cache_model_infos(
+        config.provider_id, {ProviderModelInfo("m", max_output_tokens=4096)}
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": f"{config.provider_id}/m",
+                "input": "Hello",
+                "max_output_tokens": 8192,
+            },
+        )
+    assert response.status_code == 200
+    assert "response.completed" in response.text
+    assert bodies[0]["max_tokens"] == 4096
+
+
 class FakeProvider:
     def __init__(self, chunks: list[str]) -> None:
         self.chunks = chunks
-        self.preflight_responses = MagicMock()
+        self.startup_error: InvalidRequestError | None = None
         self.requests: list[OpenAIResponsesRequest] = []
         self.stream_kwargs: list[dict[str, object]] = []
 
@@ -42,6 +81,8 @@ class FakeProvider:
         request_data: OpenAIResponsesRequest,
         **kwargs: object,
     ) -> AsyncIterator[str]:
+        if self.startup_error is not None:
+            raise self.startup_error
         self.requests.append(request_data)
         self.stream_kwargs.append(kwargs)
         for chunk in self.chunks:
@@ -71,7 +112,7 @@ class PreStartFailingProvider(FakeProvider):
 @pytest.fixture
 def responses_client():
     provider = FakeProvider(_responses_text_stream("Hello from provider"))
-    app = create_test_app()
+    app = create_test_app(Settings())
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
         TestClient(app) as client,
@@ -86,6 +127,19 @@ def test_responses_probe_endpoints_return_204(
 
     assert client.head("/v1/responses").status_code == 204
     assert client.options("/v1/responses").status_code == 204
+
+
+@pytest.mark.parametrize("prefix", ["", "anthropic/", "claude-3-freecc-no-thinking/"])
+def test_retired_response_id_uses_default_provider(responses_client, prefix):
+    client, provider = responses_client
+    original = f"{prefix}github_models/vendor/opus"
+    response = client.post("/v1/responses", json={"model": original, "input": "hello"})
+    assert response.status_code == 200
+    assert "response.completed" in response.text
+    assert provider.requests[0].model == DEFAULT_MODEL.split("/", 1)[1]
+    assert provider.stream_kwargs[0]["response_model"] == original
+    if prefix == "claude-3-freecc-no-thinking/":
+        assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.off()
 
 
 def test_create_response_stream_routes_native_request_through_provider(
@@ -114,7 +168,7 @@ def test_create_response_stream_routes_native_request_through_provider(
     assert events[-1].data["response"]["output"][0]["content"][0]["text"] == (
         "Hello from provider"
     )
-    assert provider.preflight_responses.called
+    assert len(provider.requests) == 1
     routed = provider.requests[0]
     assert routed.model == _UPSTREAM_MODEL
     assert routed.input == "Hello"
@@ -148,9 +202,9 @@ def test_create_response_stream_preserves_output_limit_as_incomplete() -> None:
     assert incomplete["output"][0]["content"][0]["text"] == "partial output"
 
 
-def test_create_response_preflight_rejection_stays_an_ordinary_http_error() -> None:
+def test_create_response_startup_rejection_stays_an_ordinary_http_error() -> None:
     provider = FakeProvider(_responses_text_stream("unused"))
-    provider.preflight_responses.side_effect = InvalidRequestError("bad tool shape")
+    provider.startup_error = InvalidRequestError("bad tool shape")
     app = create_test_app()
 
     with (
@@ -175,7 +229,7 @@ def test_create_response_preflight_rejection_stays_an_ordinary_http_error() -> N
 
 def test_create_response_rejects_unportable_image_as_invalid_request() -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         return_value=MagicMock(),
     ):
         provider = OpenAIChatProvider(
@@ -525,7 +579,7 @@ def test_create_response_preserves_muse_code_request_shape() -> None:
         effort=ReasoningEffort.HIGH,
     )
     assert provider.stream_kwargs[0]["reasoning"] == expected_policy
-    assert provider.preflight_responses.call_args.kwargs["reasoning"] == expected_policy
+    assert provider.stream_kwargs[0]["reasoning"] == expected_policy
 
 
 def test_create_response_preserves_custom_tool_request() -> None:
@@ -685,7 +739,7 @@ def test_create_response_preserves_and_resolves_reasoning_effort(
     assert response.status_code == 200
     assert provider.requests[0].reasoning == reasoning
     assert provider.stream_kwargs[0]["reasoning"] == expected_policy
-    assert provider.preflight_responses.call_args.kwargs["reasoning"] == expected_policy
+    assert provider.stream_kwargs[0]["reasoning"] == expected_policy
 
 
 def test_create_response_relays_encrypted_reasoning() -> None:
@@ -717,7 +771,7 @@ def test_create_response_provider_rejects_unsupported_tool(
     responses_client: tuple[TestClient, FakeProvider],
 ) -> None:
     client, provider = responses_client
-    provider.preflight_responses.side_effect = InvalidRequestError(
+    provider.startup_error = InvalidRequestError(
         "Unsupported Responses tool type: 'web_search_preview'"
     )
 

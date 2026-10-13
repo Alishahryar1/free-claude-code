@@ -1,16 +1,21 @@
 """Model-list response construction for FCC clients."""
 
 import math
-from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from free_claude_code.application.ports import RequestRuntimePort
-from free_claude_code.config.model_refs import configured_chat_model_refs
+from free_claude_code.application.model_catalog import (
+    ModelCatalog,
+    context_window_for_client,
+    read_model_catalog,
+)
+from free_claude_code.application.ports import ModelCatalogPort
+from free_claude_code.application.routing import supports_native_messages
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import (
+    desktop_model_id,
     gateway_model_id,
     no_thinking_gateway_model_id,
 )
@@ -25,8 +30,27 @@ class ModelCatalogView(StrEnum):
     """Client-specific projections of the application model inventory."""
 
     CLAUDE = "claude"
+    CLAUDE_DESKTOP = "claude-desktop"
     MESSAGES = "messages"
     RESPONSES = "responses"
+
+
+class MuseModelLimits(BaseModel):
+    context: int | None = None
+    output: int | None = None
+
+
+class MuseModelMetadata(BaseModel):
+    """Muse's native model visibility and capability metadata."""
+
+    name: str
+    is_hidden: Literal[False] = False
+    reasoning: bool | None = None
+    limit: MuseModelLimits | None = None
+
+
+class MuseMetadataEnvelope(BaseModel):
+    muse_code: MuseModelMetadata = Field(serialization_alias="muse-code")
 
 
 class ModelResponse(BaseModel):
@@ -56,6 +80,9 @@ class ModelResponse(BaseModel):
     context_window_tokens: int | None = Field(
         default=None, serialization_alias="contextWindow"
     )
+    context_window_source: Literal["provider", "default"] | None = Field(
+        default=None, serialization_alias="contextWindowSource"
+    )
     max_output_tokens: int | None = Field(
         default=None, serialization_alias="maxCompletionTokens"
     )
@@ -65,6 +92,7 @@ class ModelResponse(BaseModel):
     inference_idle_timeout_seconds: int | None = Field(
         default=None, serialization_alias="inferenceIdleTimeoutSecs"
     )
+    metadata: MuseMetadataEnvelope | None = None
 
 
 class ModelsListResponse(BaseModel):
@@ -73,6 +101,7 @@ class ModelsListResponse(BaseModel):
     first_id: str | None
     has_more: bool
     last_id: str | None
+    default_model_id: str | None = None
 
 
 SUPPORTED_CLAUDE_MODELS = [
@@ -119,56 +148,75 @@ SUPPORTED_CLAUDE_MODELS = [
 ]
 
 
-@dataclass(frozen=True, slots=True)
-class _InventoryModel:
-    provider_model_ref: str
-    supports_thinking: bool | None
-    input_modalities: frozenset[ModelInputModality] | None
-    context_window_tokens: int | None
-    max_output_tokens: int | None
-
-
 def build_models_list_response(
     settings: Settings,
-    runtime: RequestRuntimePort,
+    runtime: ModelCatalogPort,
     *,
     view: ModelCatalogView = ModelCatalogView.CLAUDE,
 ) -> ModelsListResponse:
     """Return the application model inventory in the requested client view."""
-    if view is ModelCatalogView.CLAUDE:
-        return _build_claude_models_response(settings, runtime)
-    return _build_direct_models_response(settings, runtime, view=view)
+    catalog = read_model_catalog(runtime, settings)
+    if view in {ModelCatalogView.CLAUDE, ModelCatalogView.CLAUDE_DESKTOP}:
+        return _build_claude_models_response(
+            catalog, desktop=view is ModelCatalogView.CLAUDE_DESKTOP
+        )
+    return _build_direct_models_response(settings, catalog, view=view)
+
+
+def build_muse_models_list_response(
+    settings: Settings, runtime: ModelCatalogPort
+) -> ModelsListResponse:
+    """Keep routable IDs while making them visible to Muse's native picker."""
+    catalog = build_models_list_response(
+        settings, runtime, view=ModelCatalogView.RESPONSES
+    )
+    for model in catalog.data:
+        limits = (
+            MuseModelLimits(
+                context=model.context_window_tokens,
+                output=model.max_output_tokens,
+            )
+            if model.context_window_tokens is not None
+            or model.max_output_tokens is not None
+            else None
+        )
+        model.metadata = MuseMetadataEnvelope(
+            muse_code=MuseModelMetadata(
+                name=model.display_name,
+                reasoning=model.supports_reasoning,
+                limit=limits,
+            )
+        )
+    return catalog
 
 
 def _build_claude_models_response(
-    settings: Settings, runtime: RequestRuntimePort
+    catalog: ModelCatalog, *, desktop: bool = False
 ) -> ModelsListResponse:
-    """Preserve the established Claude-compatible catalog exactly."""
-    models: list[ModelResponse] = []
-    seen: set[str] = set()
-
-    for ref in configured_chat_model_refs(settings):
-        model_info = runtime.cached_model_info(ref.provider_id, ref.model_id)
-        _append_provider_model_variants(
-            models,
-            seen,
-            ref.model_ref,
-            supports_thinking=(
-                model_info.supports_thinking if model_info is not None else None
-            ),
+    """Keep shortcuts first and provider variants together in catalog order."""
+    models = list(SUPPORTED_CLAUDE_MODELS)
+    for model in catalog.models:
+        ref = model.provider_model_ref
+        native = supports_native_messages(ref.partition("/")[0])
+        if native or model.supports_reasoning is not False:
+            models.append(
+                _discovered_model_response(
+                    desktop_model_id(ref) if desktop else gateway_model_id(ref),
+                    display_name=ref if native else model.display_name,
+                )
+            )
+        if native:
+            continue
+        models.append(
+            _discovered_model_response(
+                desktop_model_id(ref, no_thinking=True)
+                if desktop
+                else no_thinking_gateway_model_id(ref),
+                display_name=(
+                    f"{model.display_name.removesuffix(' (no thinking)')} (no thinking)"
+                ),
+            )
         )
-
-    for model_info in runtime.cached_prefixed_model_infos():
-        _append_provider_model_variants(
-            models,
-            seen,
-            model_info.model_id,
-            supports_thinking=model_info.supports_thinking,
-        )
-
-    for model in SUPPORTED_CLAUDE_MODELS:
-        _append_unique_model(models, seen, model)
-
     return ModelsListResponse(
         data=models,
         first_id=models[0].id if models else None,
@@ -179,7 +227,7 @@ def _build_claude_models_response(
 
 def _build_direct_models_response(
     settings: Settings,
-    runtime: RequestRuntimePort,
+    catalog: ModelCatalog,
     *,
     view: ModelCatalogView,
 ) -> ModelsListResponse:
@@ -190,34 +238,33 @@ def _build_direct_models_response(
         else None
     )
 
-    for inventory_model in _collect_inventory(settings, runtime):
-        provider_model_ref = inventory_model.provider_model_ref
-        allows_reasoning = inventory_model.supports_thinking is not False
-        model_id = (
-            provider_model_ref
-            if allows_reasoning
-            else no_thinking_gateway_model_id(provider_model_ref)
+    default_model_id = catalog.default_model_id
+    for model in catalog.models:
+        native = view is ModelCatalogView.MESSAGES and supports_native_messages(
+            model.provider_model_ref.partition("/")[0]
         )
+        model_id = model.provider_model_ref if native else model.wire_slug
+        if model.wire_slug == catalog.default_model_id:
+            default_model_id = model_id
+        allows_reasoning = model.supports_reasoning is not False
         models.append(
             ModelResponse(
                 id=model_id,
-                display_name=(
-                    provider_model_ref
-                    if allows_reasoning
-                    else f"{provider_model_ref} (no thinking)"
-                ),
+                display_name=model.provider_model_ref if native else model.display_name,
                 created_at=DISCOVERED_MODEL_CREATED_AT,
-                provider_model_ref=provider_model_ref,
+                provider_model_ref=model.provider_model_ref,
                 api_backend=(
                     "responses" if view is ModelCatalogView.RESPONSES else None
                 ),
                 max_retries=0 if view is ModelCatalogView.RESPONSES else None,
-                supports_reasoning=inventory_model.supports_thinking,
-                input_modalities=_serialize_input_modalities(
-                    inventory_model.input_modalities
-                ),
-                context_window_tokens=inventory_model.context_window_tokens,
-                max_output_tokens=inventory_model.max_output_tokens,
+                supports_reasoning=model.supports_reasoning,
+                input_modalities=_serialize_input_modalities(model.input_modalities),
+                context_window_tokens=context_window_for_client(model),
+                context_window_source="provider"
+                if model.context_window_tokens is not None
+                and model.context_window_tokens > 0
+                else "default",
+                max_output_tokens=model.max_output_tokens,
                 supports_reasoning_effort=(
                     allows_reasoning if view is ModelCatalogView.RESPONSES else None
                 ),
@@ -232,56 +279,11 @@ def _build_direct_models_response(
 
     return ModelsListResponse(
         data=models,
+        default_model_id=default_model_id,
         first_id=models[0].id if models else None,
         has_more=False,
         last_id=models[-1].id if models else None,
     )
-
-
-def _collect_inventory(
-    settings: Settings, runtime: RequestRuntimePort
-) -> tuple[_InventoryModel, ...]:
-    inventory: list[_InventoryModel] = []
-    seen: set[str] = set()
-
-    for ref in configured_chat_model_refs(settings):
-        if ref.model_ref in seen:
-            continue
-        seen.add(ref.model_ref)
-        model_info = runtime.cached_model_info(ref.provider_id, ref.model_id)
-        inventory.append(
-            _InventoryModel(
-                provider_model_ref=ref.model_ref,
-                supports_thinking=(
-                    model_info.supports_thinking if model_info is not None else None
-                ),
-                input_modalities=(
-                    model_info.input_modalities if model_info is not None else None
-                ),
-                context_window_tokens=(
-                    model_info.context_window_tokens if model_info is not None else None
-                ),
-                max_output_tokens=(
-                    model_info.max_output_tokens if model_info is not None else None
-                ),
-            )
-        )
-
-    for model_info in runtime.cached_prefixed_model_infos():
-        if model_info.model_id in seen:
-            continue
-        seen.add(model_info.model_id)
-        inventory.append(
-            _InventoryModel(
-                provider_model_ref=model_info.model_id,
-                supports_thinking=model_info.supports_thinking,
-                input_modalities=model_info.input_modalities,
-                context_window_tokens=model_info.context_window_tokens,
-                max_output_tokens=model_info.max_output_tokens,
-            )
-        )
-
-    return tuple(inventory)
 
 
 def _serialize_input_modalities(
@@ -301,39 +303,4 @@ def _discovered_model_response(model_id: str, *, display_name: str) -> ModelResp
         id=model_id,
         display_name=display_name,
         created_at=DISCOVERED_MODEL_CREATED_AT,
-    )
-
-
-def _append_unique_model(
-    models: list[ModelResponse], seen: set[str], model: ModelResponse
-) -> None:
-    if model.id in seen:
-        return
-    seen.add(model.id)
-    models.append(model)
-
-
-def _append_provider_model_variants(
-    models: list[ModelResponse],
-    seen: set[str],
-    provider_model_ref: str,
-    *,
-    supports_thinking: bool | None = None,
-) -> None:
-    if supports_thinking is not False:
-        _append_unique_model(
-            models,
-            seen,
-            _discovered_model_response(
-                gateway_model_id(provider_model_ref),
-                display_name=provider_model_ref,
-            ),
-        )
-    _append_unique_model(
-        models,
-        seen,
-        _discovered_model_response(
-            no_thinking_gateway_model_id(provider_model_ref),
-            display_name=f"{provider_model_ref} (no thinking)",
-        ),
     )

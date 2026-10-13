@@ -1,17 +1,30 @@
 """FastAPI route handlers."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from loguru import logger
+from collections.abc import Mapping
+from typing import Annotated, Any, cast
 
-from free_claude_code.application.errors import ApplicationError
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
+from loguru import logger
+from pydantic import ValidationError
+
+from free_claude_code.application.errors import ApplicationError, InvalidRequestError
 from free_claude_code.application.ports import ProviderResolver, RequestRuntimeLease
+from free_claude_code.application.routing import ModelRouter, supports_native_messages
 from free_claude_code.config.model_refs import parse_provider_type
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
     MessagesRequest,
+    NativeTokenCountRequest,
     TokenCountRequest,
     get_token_count,
 )
+from free_claude_code.core.anthropic.native import (
+    NativeMessagesError,
+    validate_messages_json,
+)
+from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.trace import trace_event
 
@@ -27,6 +40,7 @@ from .model_catalog import (
     ModelCatalogView,
     ModelsListResponse,
     build_models_list_response,
+    build_muse_models_list_response,
 )
 from .ports import ApiServices
 from .request_errors import ordinary_application_error_response
@@ -37,25 +51,70 @@ router = APIRouter()
 
 
 def _provider_resolver(lease: RequestRuntimeLease) -> ProviderResolver:
-    return lambda provider_type: resolve_provider(provider_type, lease=lease)
+    return lambda provider_type, api_key_number: resolve_provider(
+        provider_type, api_key_number, lease=lease
+    )
 
 
 async def _create_messages_response(
     services: ApiServices,
-    request_data: MessagesRequest,
+    request_data: MessagesRequest | JsonObject,
     *,
     request_id: str,
+    request_headers: Mapping[str, str] | None = None,
 ) -> object:
     lease: RequestRuntimeLease | None = None
     try:
         lease = await services.requests.acquire()
+        router = ModelRouter(lease.settings)
+        raw = (
+            request_data.model_dump(mode="json", exclude_unset=True)
+            if isinstance(request_data, MessagesRequest)
+            else request_data
+        )
+        model = raw.get("model")
+        resolved = (
+            router.resolve(model) if isinstance(model, str) and model.strip() else None
+        )
+        native = resolved is not None and supports_native_messages(
+            resolved.primary.provider_id
+        )
+        if native:
+            try:
+                native_request = NativeMessagesRequest(raw)
+            except NativeMessagesError as error:
+                raise InvalidRequestError(str(error)) from error
+        else:
+            if not isinstance(request_data, MessagesRequest):
+                try:
+                    request_data = MessagesRequest.model_validate(raw)
+                except ValidationError as error:
+                    raise RequestValidationError(
+                        [
+                            {**item, "loc": ("body", *item["loc"])}
+                            for item in error.errors()
+                        ],
+                        body=raw,
+                    ) from error
+            await lease.wait_for_token_estimation()
         handler = MessagesHandler(
             lease.settings,
+            web_tools=services.web_tools,
             provider_resolver=_provider_resolver(lease),
             token_counter=get_token_count,
             generation_id=lease.generation_id,
+            request_headers=request_headers,
+            model_info_lookup=lease.model_info,
         )
-        response = await handler.create(request_data, request_id=request_id)
+        if native:
+            assert resolved is not None
+            response = await handler.create_native(
+                router.route_native_messages(native_request, resolved),
+                request_id=request_id,
+            )
+        else:
+            assert isinstance(request_data, MessagesRequest)
+            response = await handler.create(request_data, request_id=request_id)
     except ApplicationError as exc:
         if lease is not None:
             await lease.release()
@@ -77,14 +136,18 @@ async def _create_responses_response(
     request_data: OpenAIResponsesRequest,
     *,
     request_id: str,
+    request_headers: Mapping[str, str] | None = None,
 ) -> object:
     lease: RequestRuntimeLease | None = None
     try:
         lease = await services.requests.acquire()
+        await lease.wait_for_token_estimation()
         handler = ResponsesHandler(
             lease.settings,
             provider_resolver=_provider_resolver(lease),
             generation_id=lease.generation_id,
+            request_headers=request_headers,
+            model_info_lookup=lease.model_info,
         )
         response = await handler.create(request_data, request_id=request_id)
     except ApplicationError as exc:
@@ -110,15 +173,16 @@ def _probe_response(allow: str) -> Response:
 @router.post("/v1/messages")
 async def create_message(
     request: Request,
-    request_data: MessagesRequest,
+    request_data: Annotated[dict[str, Any], Body()],
     services: ApiServices = Depends(get_services),
     _auth=Depends(require_anthropic_proxy_auth),
 ):
     """Create a message (JSON by default; stream=true returns Anthropic SSE)."""
     return await _create_messages_response(
         services,
-        request_data,
+        cast(JsonObject, request_data),
         request_id=get_request_id(request),
+        request_headers=request.headers,
     )
 
 
@@ -139,6 +203,7 @@ async def create_response(
         services,
         request_data,
         request_id=get_request_id(request),
+        request_headers=request.headers,
     )
 
 
@@ -150,13 +215,46 @@ async def probe_responses(_auth=Depends(require_proxy_auth)):
 @router.post("/v1/messages/count_tokens")
 async def count_tokens(
     request: Request,
-    request_data: TokenCountRequest,
-    settings: Settings = Depends(get_settings),
+    request_data: Annotated[dict[str, Any], Body()],
+    services: ApiServices = Depends(get_services),
     _auth=Depends(require_anthropic_proxy_auth),
 ):
     """Count tokens for a request."""
-    handler = TokenCountHandler(settings, token_counter=get_token_count)
-    return handler.count(request_data, request_id=get_request_id(request))
+    lease = await services.requests.acquire()
+    try:
+        model_router = ModelRouter(lease.settings)
+        model = request_data.get("model")
+        if isinstance(model, str) and not model.strip():
+            raise InvalidRequestError("Messages model must not be empty.")
+        resolved = (
+            model_router.resolve(model)
+            if isinstance(model, str) and model.strip()
+            else None
+        )
+        try:
+            if resolved is not None and supports_native_messages(
+                resolved.primary.provider_id
+            ):
+                validate_messages_json(request_data)
+                counted = NativeTokenCountRequest.model_validate(request_data)
+            else:
+                counted = TokenCountRequest.model_validate(request_data)
+        except NativeMessagesError as error:
+            raise InvalidRequestError(str(error)) from error
+        except ValidationError as error:
+            raise RequestValidationError(
+                [{**item, "loc": ("body", *item["loc"])} for item in error.errors()],
+                body=request_data,
+            ) from error
+        await lease.wait_for_token_estimation()
+        handler = TokenCountHandler(
+            lease.settings, model_router=model_router, token_counter=get_token_count
+        )
+        return handler.count(
+            counted, request_id=get_request_id(request), resolved=resolved
+        )
+    finally:
+        await lease.release()
 
 
 @router.api_route("/v1/messages/count_tokens", methods=["HEAD", "OPTIONS"])
@@ -197,14 +295,19 @@ async def probe_health():
     response_model_exclude_none=True,
 )
 async def list_models(
-    view: ModelCatalogView = ModelCatalogView.CLAUDE,
+    view: ModelCatalogView | None = None,
+    x_fcc_model_view: ModelCatalogView | None = Header(default=None),
     services: ApiServices = Depends(get_services),
-    settings: Settings = Depends(get_settings),
     _auth=Depends(require_proxy_auth),
 ):
     """List the model ids this proxy advertises to compatible clients."""
     trace_event(stage="ingress", event="free_claude_code.api.models.list", source="api")
-    return build_models_list_response(settings, services.requests, view=view)
+    snapshot = await services.requests.wait_for_catalog()
+    return build_models_list_response(
+        snapshot.settings,
+        snapshot,
+        view=view or x_fcc_model_view or ModelCatalogView.CLAUDE,
+    )
 
 
 @router.get(
@@ -214,16 +317,12 @@ async def list_models(
 )
 async def list_muse_models(
     services: ApiServices = Depends(get_services),
-    settings: Settings = Depends(get_settings),
     _auth=Depends(require_proxy_auth),
 ):
     """List the direct Responses models expected by Muse Code."""
     trace_event(stage="ingress", event="free_claude_code.api.models.list", source="api")
-    return build_models_list_response(
-        settings,
-        services.requests,
-        view=ModelCatalogView.RESPONSES,
-    )
+    snapshot = await services.requests.wait_for_catalog()
+    return build_muse_models_list_response(snapshot.settings, snapshot)
 
 
 @router.post("/stop")

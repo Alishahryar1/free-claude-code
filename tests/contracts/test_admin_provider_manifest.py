@@ -115,10 +115,13 @@ def test_openai_proxy_override_applies_to_catalog_proxy_field() -> None:
 def test_provider_catalog_display_names_are_admin_status_source() -> None:
     from free_claude_code.config.admin.status import provider_config_status
     from free_claude_code.config.admin.values import load_value_state
+    from free_claude_code.config.loader import ManagedConfigStore
 
+    store = ManagedConfigStore()
+    store.initialize()
     status_by_provider = {
         entry["provider_id"]: entry
-        for entry in provider_config_status(load_value_state())
+        for entry in provider_config_status(load_value_state(store.read()))
     }
 
     assert set(status_by_provider) == set(PROVIDER_CATALOG)
@@ -156,8 +159,8 @@ def test_vertex_project_and_location_are_admin_provider_fields() -> None:
 def test_qwencloud_coding_key_is_a_distinct_admin_provider_field() -> None:
     entry = FIELD_BY_KEY["QWENCLOUD_CODING_API_KEY"]
 
-    assert entry.label == "QwenCloud Coding Plan API Key"
-    assert entry.settings_attr == "qwencloud_coding_api_key"
+    assert entry.label == "QwenCloud Coding Plan API Keys"
+    assert entry.settings_attr == "qwencloud_coding_api_keys"
     assert entry.section_id == "providers"
     assert entry.secret is True
     assert "separate endpoints" in entry.description
@@ -176,8 +179,8 @@ def test_cline_pass_admin_fields_use_programmatic_key_and_fixed_endpoint() -> No
         if item["provider_id"] == "cline_pass"
     )
 
-    assert key.label == "Cline API Key"
-    assert key.settings_attr == "cline_api_key"
+    assert key.label == "Cline API Keys"
+    assert key.settings_attr == "cline_api_keys"
     assert key.section_id == "providers"
     assert key.secret is True
     assert "Subscribe to ClinePass" in key.description
@@ -202,7 +205,7 @@ def test_zai_shared_key_configures_both_distinct_provider_surfaces() -> None:
     }
 
     assert sum(field.key == "ZAI_API_KEY" for field in FIELDS) == 1
-    assert entry.settings_attr == "zai_api_key"
+    assert entry.settings_attr == "zai_api_keys"
     assert "Coding Plan" in entry.description
     assert "pay-as-you-go" in entry.description
     assert statuses["zai"]["display_name"] == "Z.ai Coding Plan"

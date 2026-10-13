@@ -9,18 +9,49 @@ import pytest
 
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.failures import FailureKind
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderOperationKind
+from free_claude_code.providers.failure_policy import classify_provider_failure
 from free_claude_code.providers.groq import GroqProvider
+from free_claude_code.providers.groq.client import GroqChatBehavior
 from free_claude_code.providers.groq.tpm import correct_tpm_completion_budget
+from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    SDKStreamDouble,
+    immediate_admission,
+    make_provider_config,
+)
 
 _MODEL = "openai/gpt-oss-120b"
 _LIMIT = 8_000
 _REQUESTED = 26_206
 _ORIGINAL_MAX = 24_576
 _CORRECTED_MAX = 6_370
+_ITPM_MESSAGE = (
+    "Request too large for model `qwen/qwen3.8-27b` on input tokens per minute "
+    "(ITPM): Limit 7000, Requested 23253, please reduce your message size"
+)
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("message", [_ITPM_MESSAGE, "Token allowance exceeded"])
+def test_token_limit_failure_is_actionable_without_parsing_prose(wrapped, message):
+    error = _status_error(detail=_detail(message), wrapped=wrapped)
+    failure = classify_provider_failure(
+        error,
+        provider_name="GROQ",
+        read_timeout_s=30,
+        request_id="req_quota",
+        provider_failure_override=GroqChatBehavior().failure_override,
+    )
+    assert failure.status_code == 400
+    assert failure.kind == FailureKind.INVALID_REQUEST
+    assert failure.retryable is False
+    assert message in failure.message
+    assert "req_quota" in failure.message
+    assert "higher" in failure.message
 
 
 def _detail(
@@ -51,6 +82,23 @@ def _status_error(
         response=response,
         body=body,
     )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _status_error(status=429),
+        _status_error(status=401),
+        _status_error(detail=_detail(error_type="invalid_request_error")),
+        _status_error(detail=_detail(code="request_too_large")),
+        _status_error(detail={"message": "body too large"}),
+        _status_error(detail={**_detail(), "message": 42}),
+        _status_error(detail={**_detail(), "error": _detail()}),
+        _status_error(detail="not JSON"),
+    ],
+)
+def test_unrelated_or_ambiguous_errors_defer_to_shared_policy(error):
+    assert GroqChatBehavior().failure_override(error) is None
 
 
 def _body(max_completion_tokens: object = _ORIGINAL_MAX) -> dict:
@@ -110,6 +158,17 @@ def test_exact_tpm_rejection_corrects_only_completion_budget(wrapped: bool) -> N
     assert correction.body == {**body, "max_completion_tokens": _CORRECTED_MAX}
     assert correction.body is not body
     assert body == original
+
+
+@pytest.mark.parametrize(
+    "quota", ["input tokens per minute (ITPM)", "output tokens per minute (OTPM)"]
+)
+def test_separate_token_quotas_do_not_use_combined_tpm_arithmetic(quota):
+    error = _status_error(detail=_detail(f"{quota}: Limit 8000, Requested 26206"))
+    assert correct_tpm_completion_budget(error, _body()) is None
+    failure = GroqChatBehavior().failure_override(error)
+    assert failure is not None
+    assert failure.status_code == 400
 
 
 @pytest.mark.parametrize(
@@ -222,7 +281,9 @@ def test_non_authoritative_tpm_rejection_is_not_corrected(
 async def test_tpm_correction_emits_one_downstream_lifecycle() -> None:
     provider = _provider()
     request = make_messages_request(_MODEL, max_tokens=_ORIGINAL_MAX)
-    create = AsyncMock(side_effect=[_status_error(), _successful_stream()])
+    create = AsyncMock(
+        side_effect=[_status_error(), SDKStreamDouble(_successful_stream())]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
         raw = "".join(
@@ -254,9 +315,9 @@ async def test_tpm_correction_is_one_shot_per_stream_creation() -> None:
         patch.object(provider._client.chat.completions, "create", create),
         pytest.raises(openai.APIStatusError),
     ):
-        await provider._create_stream(
+        await provider._chat._create_stream(
             _body(),
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 
@@ -272,9 +333,9 @@ async def test_tpm_correction_respects_physical_attempt_ceiling() -> None:
         patch.object(provider._client.chat.completions, "create", create),
         pytest.raises(openai.APIStatusError),
     ):
-        await provider._create_stream(
+        await provider._chat._create_stream(
             _body(),
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
 
@@ -296,7 +357,7 @@ async def test_tpm_and_reasoning_corrections_compose(
 ) -> None:
     provider = _provider()
     request = make_messages_request(_MODEL, max_tokens=_ORIGINAL_MAX)
-    body = provider._build_request_body(
+    body = provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
     )
@@ -308,9 +369,14 @@ async def test_tpm_and_reasoning_corrections_compose(
     execution = provider._admission.start_execution()
 
     with patch.object(provider._client.chat.completions, "create", create):
-        _stream, accepted_body, attempt = await provider._create_stream(
+        (
+            _stream,
+            accepted_body,
+            attempt,
+            _sent_body,
+        ) = await provider._chat._create_stream(
             body,
-            execution,
+            RequestRecovery(execution),
             ProviderOperationKind.GENERATION,
         )
         await attempt.aclose()
@@ -331,16 +397,26 @@ async def test_distinct_bodies_get_independent_tpm_corrections() -> None:
     create = AsyncMock(side_effect=[_status_error(), object(), second_error, object()])
 
     with patch.object(provider._client.chat.completions, "create", create):
-        _stream, first_body, first_attempt = await provider._create_stream(
+        (
+            _stream,
+            first_body,
+            first_attempt,
+            _sent_body,
+        ) = await provider._chat._create_stream(
             _body(),
-            execution,
+            RequestRecovery(execution),
             ProviderOperationKind.CONTINUATION,
         )
         await first_attempt.accept()
         await first_attempt.aclose()
-        _stream, second_body, second_attempt = await provider._create_stream(
+        (
+            _stream,
+            second_body,
+            second_attempt,
+            _sent_body,
+        ) = await provider._chat._create_stream(
             _body(20_000),
-            execution,
+            RequestRecovery(execution),
             ProviderOperationKind.TOOL_REPAIR,
         )
         await second_attempt.aclose()

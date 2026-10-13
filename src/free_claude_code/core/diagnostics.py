@@ -56,6 +56,18 @@ class UpstreamErrorDetail:
     category_hint: str | None = None
     body_truncated: bool = False
 
+    def is_invalid_request(self, *, code: object = None) -> bool:
+        """Recognize HTTP validation failures and explicit streamed equivalents."""
+        if self.status_code is not None:
+            return self.status_code in {400, 422}
+        codes = {
+            "invalid_request_error",
+            "invalid_request",
+            "unsupported_parameter",
+            "unsupported_value",
+        }
+        return self.category_hint in codes or (isinstance(code, str) and code in codes)
+
 
 def redact_sensitive_error_text(text: str) -> str:
     """Redact recognizable credentials while preserving diagnostic context."""
@@ -91,6 +103,12 @@ def attach_upstream_error_body(
     setattr(exc, _UPSTREAM_BODY_TRUNCATED_ATTR, truncated)
 
 
+def attached_upstream_error_body(exc: BaseException) -> bytes | str | None:
+    """Return a bounded streamed body previously attached by the transport."""
+    body = getattr(exc, _UPSTREAM_BODY_ATTR, None)
+    return body if isinstance(body, bytes | str) else None
+
+
 def exception_cause_types(exc: BaseException) -> tuple[str, ...]:
     """Return exception cause type names without logging their contents."""
     return tuple(type(cause).__name__ for cause in _exception_causes(exc))
@@ -103,7 +121,7 @@ def redacted_exception_traceback(exc: BaseException) -> str:
 
 def extract_upstream_error_detail(exc: Exception) -> UpstreamErrorDetail:
     """Extract bounded, redacted body, exception, and cause-chain details."""
-    raw_body = getattr(exc, _UPSTREAM_BODY_ATTR, None)
+    raw_body = attached_upstream_error_body(exc)
     body_truncated = bool(getattr(exc, _UPSTREAM_BODY_TRUNCATED_ATTR, False))
     if raw_body is None:
         raw_body = getattr(exc, "body", None)

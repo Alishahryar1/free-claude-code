@@ -280,3 +280,44 @@ def test_tool_capable_parser_retains_exact_input_modalities() -> None:
             ProviderModelInfo("unknown-media", supports_thinking=False),
         }
     )
+
+
+def test_optional_sequence_items_exclude_only_confident_mismatches() -> None:
+    model_infos = extract_openai_model_infos(
+        {
+            "data": [
+                {
+                    "id": "chat",
+                    "supported_endpoint_types": ["openai", "anthropic"],
+                },
+                {
+                    "id": "embeddings-only",
+                    "supported_endpoint_types": ["embeddings"],
+                },
+                {"id": "image-only", "supported_endpoint_types": ["gemini"]},
+                {"id": "unclassified", "supported_endpoint_types": None},
+                {"id": "unreported"},
+            ]
+        },
+        provider_name="TEST",
+        optional_sequence_items=(("supported_endpoint_types", "openai"),),
+    )
+
+    assert model_infos == frozenset(
+        {
+            ProviderModelInfo("chat"),
+            ProviderModelInfo("unclassified"),
+            ProviderModelInfo("unreported"),
+        }
+    )
+
+
+def test_optional_sequence_items_still_reject_non_array_metadata() -> None:
+    with pytest.raises(
+        ModelListResponseError, match="supported_endpoint_types string array"
+    ):
+        extract_openai_model_infos(
+            {"data": [{"id": "model", "supported_endpoint_types": "openai"}]},
+            provider_name="TEST",
+            optional_sequence_items=(("supported_endpoint_types", "openai"),),
+        )

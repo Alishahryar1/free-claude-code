@@ -3,11 +3,13 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from free_claude_code.application.model_catalog import (
+    CatalogModel,
+    context_window_for_client,
+)
+from free_claude_code.config.server_urls import proxy_v1_url
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
-
-from .common import proxy_v1_url
-from .model_catalog import ClientModel
 
 # Cline's released session gateway only instantiates built-in providers. FCC
 # replaces this process-local Responses provider's endpoint and catalog instead
@@ -24,10 +26,12 @@ class ClineConfig:
 
 
 def build_cline_config(
-    models: tuple[ClientModel, ...],
+    models: tuple[CatalogModel, ...],
     *,
+    default_model_id: str,
     proxy_root_url: str,
     auth_token: str,
+    launch_id: str,
     now: datetime | None = None,
 ) -> ClineConfig:
     """Translate a non-empty FCC model snapshot into Cline's file contracts."""
@@ -38,11 +42,11 @@ def build_cline_config(
     timestamp = (
         (now or datetime.now(UTC)).astimezone(UTC).isoformat().replace("+00:00", "Z")
     )
-    default_model = models[0].wire_slug
     provider_settings: JsonObject = {
         "provider": CLINE_PROVIDER_ID,
         "apiKey": auth_token,
-        "model": default_model,
+        "headers": {"x-fcc-launch-id": launch_id},
+        "model": default_model_id,
         "protocol": "openai-responses",
         "baseUrl": proxy_v1_url(proxy_root_url),
         "capabilities": ["streaming", "tools"],
@@ -71,7 +75,7 @@ def build_cline_config(
                     "provider": {
                         "name": "Free Claude Code",
                         "baseUrl": proxy_v1_url(proxy_root_url),
-                        "defaultModelId": default_model,
+                        "defaultModelId": default_model_id,
                         "protocol": "openai-responses",
                         "client": "openai",
                         "capabilities": ["streaming", "tools"],
@@ -83,7 +87,7 @@ def build_cline_config(
     )
 
 
-def _model_entry(model: ClientModel) -> JsonObject:
+def _model_entry(model: CatalogModel) -> JsonObject:
     supports_reasoning = model.supports_reasoning is not False
     supports_vision = (
         model.input_modalities is not None
@@ -113,8 +117,7 @@ def _model_entry(model: ClientModel) -> JsonObject:
                 "outputModalities": ["text"],
             }
         )
-    if model.context_window_tokens is not None:
-        entry["contextWindow"] = model.context_window_tokens
+    entry["contextWindow"] = context_window_for_client(model)
     if model.max_output_tokens is not None:
         entry["maxTokens"] = model.max_output_tokens
     return entry

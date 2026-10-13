@@ -5,23 +5,24 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config import loader
 from free_claude_code.config.constants import (
     ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-    HTTP_CONNECT_TIMEOUT_DEFAULT,
+    DEFAULT_MODEL,
 )
 from free_claude_code.config.env_files import dotenv_values_from_file
 from free_claude_code.config.loader import (
     ConfigSource,
+    ManagedConfigStore,
     clear_settings_cache,
     compose_settings_snapshot,
     get_settings,
-    repair_invalid_managed_provider_proxies,
 )
 from free_claude_code.config.model_refs import (
+    ModelFallback,
     configured_chat_model_refs,
     parse_model_name,
     parse_provider_type,
@@ -36,6 +37,112 @@ from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
 
 
+def test_builtin_effort_is_from_client_with_inherited_tier_efforts():
+    snapshot = compose_settings_snapshot({}, {})
+    settings = snapshot.settings
+    assert settings.reasoning_policy is ReasoningPreference.CLIENT
+    assert snapshot.sources["reasoning_policy"] is ConfigSource.DEFAULT
+    router = ModelRouter(settings)
+    for tier in ("fable", "opus", "sonnet", "haiku"):
+        assert getattr(settings, f"model_{tier}") is None
+        assert getattr(settings, f"reasoning_{tier}") is ReasoningPreference.INHERIT
+        route = router.resolve(f"claude-{tier}-test")
+        assert route.primary.provider_model_ref == settings.model
+        assert route.reasoning_preference is ReasoningPreference.CLIENT
+
+
+@pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
+@pytest.mark.parametrize("effort", ["client", "off", "medium", "high"])
+def test_explicit_default_effort_is_retained(source, effort):
+    values = {"REASONING_POLICY": effort}
+    snapshot = compose_settings_snapshot(
+        values if source is ConfigSource.MANAGED else {},
+        values if source is ConfigSource.PROCESS else {},
+    )
+    assert snapshot.settings.reasoning_policy is ReasoningPreference(effort)
+    assert snapshot.sources["reasoning_policy"] is source
+
+
+@pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
+@pytest.mark.parametrize("tier", ["FABLE", "OPUS", "SONNET", "HAIKU"])
+def test_retirement_normalizes_sources_without_resurrecting_overrides(source, tier):
+    retired = {
+        "MODEL": "github_models/openai/old",
+        f"MODEL_{tier}": "github_models/vendor/opus",
+        "MODEL_FALLBACKS": "github_models/old",
+        f"REASONING_{tier}": "off",
+    }
+    managed = {
+        "MODEL": "groq/managed",
+        f"MODEL_{tier}": "groq/tier",
+        "MODEL_FALLBACKS": "groq/backup",
+    }
+    snapshot = compose_settings_snapshot(
+        retired if source is ConfigSource.MANAGED else managed,
+        retired if source is ConfigSource.PROCESS else {},
+    )
+    assert snapshot.settings.model == DEFAULT_MODEL
+    assert getattr(snapshot.settings, f"model_{tier.lower()}") is None
+    assert (
+        getattr(snapshot.settings, f"reasoning_{tier.lower()}")
+        is ReasoningPreference.OFF
+    )
+    assert snapshot.settings.model_fallbacks is None
+    expected = (
+        ConfigSource.PROCESS if source is ConfigSource.PROCESS else ConfigSource.DEFAULT
+    )
+    assert snapshot.sources["model"] is expected
+    assert snapshot.sources[f"model_{tier.lower()}"] is expected
+    assert snapshot.sources["model_fallbacks"] is expected
+    assert retired["MODEL"] == "github_models/openai/old"
+
+
+def test_retirement_preserves_effective_default_order_and_process_environment(
+    monkeypatch,
+):
+    monkeypatch.delenv("MODEL", raising=False)
+    monkeypatch.setenv("MODEL_OPUS", "github_models/opus")
+    snapshot = compose_settings_snapshot(
+        {
+            "MODEL": "groq/default",
+            "MODEL_OPUS": "groq/managed-tier",
+            "MODEL_FALLBACKS": "groq/first, github_models/old, deepseek/last",
+        },
+        dict(loader.os.environ),
+    )
+    assert snapshot.settings.model == "groq/default"
+    assert snapshot.settings.model_opus is None
+    assert snapshot.sources["model_opus"] is ConfigSource.PROCESS
+    assert snapshot.settings.model_fallbacks == (
+        ModelFallback(model="groq/first"),
+        ModelFallback(model="deepseek/last"),
+    )
+    assert loader.os.environ["MODEL_OPUS"] == "github_models/opus"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"MODEL": "github_models/"},
+        {"MODEL": "other/unknown"},
+        {"MODEL_FALLBACKS": "github_models/old,groq/a,groq/a"},
+        {"MODEL_FALLBACKS": "github_models/old,,groq/a"},
+        {"MODEL_FALLBACKS": "github_models/old,"},
+        {"MODEL_FALLBACKS": ",github_models/old"},
+        {"MODEL_FALLBACKS": "github_models/old, "},
+        {"MODEL_FALLBACKS": "github_models/old,github_models/"},
+    ],
+)
+def test_retirement_does_not_hide_invalid_configuration(values):
+    with pytest.raises(ValidationError):
+        compose_settings_snapshot(values, {})
+
+
+def test_direct_settings_still_reject_retired_provider():
+    with pytest.raises(ValidationError):
+        Settings(MODEL="github_models/openai/old")
+
+
 def test_settings_defaults_are_valid_and_nonempty() -> None:
     settings = Settings()
 
@@ -44,12 +151,13 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
     assert settings.provider_max_concurrency == 2
     assert settings.provider_progress_timeout == 600.0
     assert settings.http_read_timeout == 120.0
-    assert settings.http_write_timeout == 10.0
-    assert settings.http_connect_timeout == HTTP_CONNECT_TIMEOUT_DEFAULT
+    assert settings.http_write_timeout == 30.0
+    assert settings.http_connect_timeout == 30.0
     assert settings.voice_note_enabled is True
     assert settings.whisper_device == "cpu"
     assert settings.whisper_model == "base"
     assert settings.enable_web_server_tools is True
+    assert settings.web_search_provider == "duckduckgo"
     assert settings.proxy_auth_enabled is False
     assert settings.proxy_auth_token == "freecc"
     assert [
@@ -60,6 +168,22 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
         for name, field in Settings.model_fields.items()
         if field.get_default(call_default_factory=True) == ""
     ] == []
+
+
+@pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
+def test_parallel_web_search_can_be_selected_from_configuration(source):
+    values = {"WEB_SEARCH_PROVIDER": "parallel"}
+    snapshot = compose_settings_snapshot(
+        values if source is ConfigSource.MANAGED else {},
+        values if source is ConfigSource.PROCESS else {},
+    )
+    assert snapshot.settings.web_search_provider == "parallel"
+    assert snapshot.sources["web_search_provider"] is source
+
+
+def test_unknown_web_search_provider_is_rejected():
+    with pytest.raises(ValidationError):
+        compose_settings_snapshot({"WEB_SEARCH_PROVIDER": "unknown"}, {})
 
 
 def test_every_external_setting_has_one_explicit_alias() -> None:
@@ -99,7 +223,7 @@ def test_direct_settings_construction_performs_no_environment_io(
         ("HTTP_READ_TIMEOUT", "http_read_timeout", "600", 600.0),
         ("FCC_OPEN_BROWSER", "open_admin_browser", "false", False),
         ("REASONING_POLICY", "reasoning_policy", "off", ReasoningPreference.OFF),
-        ("GROQ_API_KEY", "groq_api_key", " secret ", "secret"),
+        ("GROQ_API_KEY", "groq_api_keys", " secret ", (SecretStr("secret"),)),
         ("OPENROUTER_PROXY", "open_router_proxy", " http://proxy ", "http://proxy"),
     ],
 )
@@ -158,7 +282,9 @@ def test_optional_blank_process_values_normalize_to_none(key: str) -> None:
         if field.validation_alias == key
     )
 
-    assert getattr(snapshot.settings, attribute) is None
+    assert getattr(snapshot.settings, attribute) == (
+        () if key == "GROQ_API_KEY" else None
+    )
 
 
 def test_blank_required_process_value_is_rejected() -> None:
@@ -166,11 +292,24 @@ def test_blank_required_process_value_is_rejected() -> None:
         compose_settings_snapshot({}, {"MODEL": " "})
 
 
-def test_blank_process_auth_token_uses_retained_default() -> None:
-    snapshot = compose_settings_snapshot({}, {"ANTHROPIC_AUTH_TOKEN": ""})
+@pytest.mark.parametrize("process_token", ["", "  ", "terminal-token"])
+def test_process_auth_token_cannot_override_retained_default(
+    process_token: str,
+) -> None:
+    snapshot = compose_settings_snapshot({}, {"ANTHROPIC_AUTH_TOKEN": process_token})
 
     assert snapshot.settings.proxy_auth_token == "freecc"
     assert snapshot.sources["proxy_auth_token"] is ConfigSource.DEFAULT
+
+
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_auth_checkbox_does_not_change_retained_token(enabled: str) -> None:
+    snapshot = compose_settings_snapshot(
+        {"PROXY_AUTH_ENABLED": enabled, "ANTHROPIC_AUTH_TOKEN": "managed-token"},
+        {"ANTHROPIC_AUTH_TOKEN": "terminal-token"},
+    )
+    assert snapshot.settings.proxy_auth_enabled is (enabled == "true")
+    assert snapshot.settings.proxy_auth_token == "managed-token"
 
 
 def test_process_precedence_and_managed_token_exception() -> None:
@@ -212,7 +351,7 @@ def test_repair_invalid_managed_provider_proxies_removes_all_eligible_values() -
     managed = _write_managed_config(
         "\n".join(
             (
-                "FCC_CONFIG_SCHEMA=1",
+                "FCC_CONFIG_SCHEMA=2",
                 "MODEL=nvidia_nim/test-model",
                 "OPENROUTER_PROXY=http://proxy.example:notaport",
                 "GROQ_PROXY=https://proxy.example:8443",
@@ -223,7 +362,7 @@ def test_repair_invalid_managed_provider_proxies_removes_all_eligible_values() -
         )
     )
 
-    removed = repair_invalid_managed_provider_proxies({})
+    removed = ManagedConfigStore().repair_invalid_provider_proxies({})
 
     values = dotenv_values_from_file(managed)
     assert removed == ("OPENROUTER_PROXY", "OPENAI_PROXY")
@@ -238,19 +377,19 @@ def test_repair_invalid_managed_provider_proxies_removes_all_eligible_values() -
 def test_repair_valid_managed_provider_proxy_leaves_file_unchanged() -> None:
     managed = _write_managed_config(
         "# Keep this exact text on a no-op.\n"
-        "FCC_CONFIG_SCHEMA=1\n"
+        "FCC_CONFIG_SCHEMA=2\n"
         "OPENAI_PROXY=https://proxy.example:8443\n"
     )
     baseline = managed.read_bytes()
 
-    assert repair_invalid_managed_provider_proxies({}) == ()
+    assert ManagedConfigStore().repair_invalid_provider_proxies({}) == ()
     assert managed.read_bytes() == baseline
 
 
 def test_repair_without_managed_file_is_a_noop() -> None:
     managed = managed_env_path()
 
-    assert repair_invalid_managed_provider_proxies({}) == ()
+    assert ManagedConfigStore().repair_invalid_provider_proxies({}) == ()
     assert not managed.exists()
 
 
@@ -260,14 +399,16 @@ def test_repair_preserves_process_owned_managed_proxy(
 ) -> None:
     invalid_openai = "invalid://managed-proxy"
     managed = _write_managed_config(
-        "FCC_CONFIG_SCHEMA=1\n"
+        "FCC_CONFIG_SCHEMA=2\n"
         f"OPENAI_PROXY={invalid_openai}\n"
         "OPENROUTER_PROXY=invalid://unshadowed\n"
     )
     process = {"OPENAI_PROXY": process_value, "KEEP_PROCESS": "unchanged"}
     baseline_process = dict(process)
 
-    assert repair_invalid_managed_provider_proxies(process) == ("OPENROUTER_PROXY",)
+    assert ManagedConfigStore().repair_invalid_provider_proxies(process) == (
+        "OPENROUTER_PROXY",
+    )
 
     values = dotenv_values_from_file(managed)
     assert values["OPENAI_PROXY"] == invalid_openai
@@ -277,7 +418,7 @@ def test_repair_preserves_process_owned_managed_proxy(
 
 def test_repair_propagates_atomic_write_failure_without_changing_source() -> None:
     managed = _write_managed_config(
-        "FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY=invalid://managed-proxy\n"
+        "FCC_CONFIG_SCHEMA=2\nOPENAI_PROXY=invalid://managed-proxy\n"
     )
     baseline = managed.read_bytes()
 
@@ -289,14 +430,14 @@ def test_repair_propagates_atomic_write_failure_without_changing_source() -> Non
         ),
         pytest.raises(OSError, match="disk full"),
     ):
-        repair_invalid_managed_provider_proxies({})
+        ManagedConfigStore().repair_invalid_provider_proxies({})
 
     assert managed.read_bytes() == baseline
 
 
 def test_repair_is_idempotent_and_writes_only_once() -> None:
     managed = _write_managed_config(
-        "FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY=invalid://managed-proxy\n"
+        "FCC_CONFIG_SCHEMA=2\nOPENAI_PROXY=invalid://managed-proxy\n"
     )
 
     with patch.object(
@@ -304,20 +445,22 @@ def test_repair_is_idempotent_and_writes_only_once() -> None:
         "atomic_write_managed_config",
         wraps=loader.atomic_write_managed_config,
     ) as writer:
-        assert repair_invalid_managed_provider_proxies({}) == ("OPENAI_PROXY",)
+        assert ManagedConfigStore().repair_invalid_provider_proxies({}) == (
+            "OPENAI_PROXY",
+        )
         repaired = managed.read_bytes()
-        assert repair_invalid_managed_provider_proxies({}) == ()
+        assert ManagedConfigStore().repair_invalid_provider_proxies({}) == ()
 
     assert writer.call_count == 1
     assert managed.read_bytes() == repaired
 
 
 def test_repair_propagates_malformed_managed_config() -> None:
-    managed = _write_managed_config('FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY="unterminated\n')
+    managed = _write_managed_config('FCC_CONFIG_SCHEMA=2\nOPENAI_PROXY="unterminated\n')
     baseline = managed.read_bytes()
 
     with pytest.raises(ValueError, match="Could not parse configuration file"):
-        repair_invalid_managed_provider_proxies({})
+        ManagedConfigStore().repair_invalid_provider_proxies({})
 
     assert managed.read_bytes() == baseline
 
@@ -326,7 +469,7 @@ def test_repair_propagates_config_lock_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     managed = _write_managed_config(
-        "FCC_CONFIG_SCHEMA=1\nOPENAI_PROXY=invalid://managed-proxy\n"
+        "FCC_CONFIG_SCHEMA=2\nOPENAI_PROXY=invalid://managed-proxy\n"
     )
     baseline = managed.read_bytes()
 
@@ -342,7 +485,7 @@ def test_repair_propagates_config_lock_timeout(
     monkeypatch.setattr(loader, "InterprocessFileLock", UnavailableLock)
 
     with pytest.raises(TimeoutError, match="Could not acquire managed-config lock"):
-        repair_invalid_managed_provider_proxies({})
+        ManagedConfigStore().repair_invalid_provider_proxies({})
 
     assert managed.read_bytes() == baseline
 
@@ -357,7 +500,7 @@ def test_optional_strings_share_one_normalization_rule() -> None:
         }
     )
 
-    assert settings.groq_api_key == "key"
+    assert settings.groq_api_keys == (SecretStr("key"),)
     assert settings.open_router_proxy is None
     assert settings.model_opus is None
     assert settings.allowed_dir is None
@@ -382,8 +525,8 @@ def test_model_fallbacks_preserve_order_and_trim_members(value: object) -> None:
     settings = Settings.model_validate({"MODEL_FALLBACKS": value})
 
     assert settings.model_fallbacks == (
-        "open_router/vendor/model-a",
-        "groq/vendor/model-b",
+        ModelFallback(model="open_router/vendor/model-a"),
+        ModelFallback(model="groq/vendor/model-b"),
     )
 
 
@@ -438,9 +581,9 @@ def test_configured_chat_model_refs_are_unique() -> None:
         model_fable="open_router/anthropic/claude-fable",
         model_sonnet="deepseek/fallback",
         model_fallbacks=(
-            "groq/vendor/model-a",
-            "open_router/anthropic/claude-fable",
-            "lmstudio/vendor/model-b",
+            ModelFallback(model="groq/vendor/model-a"),
+            ModelFallback(model="open_router/anthropic/claude-fable"),
+            ModelFallback(model="lmstudio/vendor/model-b"),
         ),
     )
 
@@ -459,6 +602,7 @@ def test_configured_chat_model_refs_are_unique() -> None:
     [
         ("nvidia_nim/meta/llama", "nvidia_nim", "meta/llama"),
         ("open_router/deepseek/r1", "open_router", "deepseek/r1"),
+        ("xkiro/qwen/qwen3.7-flash:free", "xkiro", "qwen/qwen3.7-flash:free"),
         ("ollama_cloud/qwen3-coder:480b", "ollama_cloud", "qwen3-coder:480b"),
     ],
 )

@@ -69,18 +69,30 @@ def test_responses_fallback_emits_one_stable_response_lifecycle() -> None:
         ("/v1/responses", responses_payload()),
     ),
 )
-def test_nonretryable_provider_failure_uses_fallback_before_output(
-    path: str,
-    payload: dict[str, object],
-) -> None:
-    primary = ControlledFallbackProvider(
-        failure=ExecutionFailure(
+@pytest.mark.parametrize(
+    "failure",
+    (
+        ExecutionFailure(
             kind=FailureKind.PERMISSION,
             status_code=403,
             message="primary quota exhausted",
             retryable=False,
-        )
-    )
+        ),
+        ExecutionFailure(
+            kind=FailureKind.CONTEXT_WINDOW_EXCEEDED,
+            status_code=400,
+            message="primary context exhausted",
+            retryable=False,
+        ),
+    ),
+    ids=["permission", "context_window"],
+)
+def test_nonretryable_provider_failure_uses_fallback_before_output(
+    path: str,
+    payload: dict[str, object],
+    failure: ExecutionFailure,
+) -> None:
+    primary = ControlledFallbackProvider(failure=failure)
     fallback = ControlledFallbackProvider(text="fallback worked")
 
     with fallback_client(primary, fallback) as client:
@@ -88,7 +100,7 @@ def test_nonretryable_provider_failure_uses_fallback_before_output(
 
     assert response.status_code == 200
     assert "fallback worked" in response.text
-    assert "primary quota exhausted" not in response.text
+    assert failure.message not in response.text
     assert primary.close_calls == fallback.close_calls == 1
 
 
@@ -132,7 +144,7 @@ def test_final_failure_uses_last_candidate_typed_error(
         ("/v1/responses", responses_payload()),
     ),
 )
-def test_lazy_fallback_preflight_error_remains_ordinary(
+def test_lazy_fallback_validation_error_remains_ordinary(
     path: str,
     payload: dict[str, object],
 ) -> None:
@@ -140,7 +152,7 @@ def test_lazy_fallback_preflight_error_remains_ordinary(
         failure=execution_failure("primary overloaded")
     )
     fallback = ControlledFallbackProvider(
-        preflight_error=InvalidRequestError("fallback configuration is invalid")
+        validation_error=InvalidRequestError("fallback configuration is invalid")
     )
 
     with fallback_client(primary, fallback) as client:
@@ -170,8 +182,7 @@ def test_postframe_failure_never_opens_fallback_for_streaming_messages() -> None
 
     assert response.status_code == 200
     events = parse_sse_text(response.text)
-    assert [event.event for event in events] == ["message_start", "error"]
-    assert fallback.preflight_models == []
+    assert [event.event for event in events] == ["error"]
     assert fallback.stream_models == []
 
 
@@ -192,7 +203,6 @@ def test_postframe_failure_never_opens_fallback_for_responses() -> None:
         "response.created",
         "response.failed",
     ]
-    assert fallback.preflight_models == []
     assert fallback.stream_models == []
 
 

@@ -1,0 +1,51 @@
+name: Release intent
+
+env:
+  CI_UV_VERSION: "0.12.13"
+  UV_MALWARE_CHECK: "1"
+  UV_PREVIEW_FEATURES: "malware-check"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+concurrency:
+  group: release-intent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  version-policy:
+    name: Version policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          fetch-depth: 0
+
+      - name: Read current pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          gh api "repos/$PR_REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/release-pr.json"
+          base=$(jq -r .base.sha "$RUNNER_TEMP/release-pr.json")
+          git fetch --no-tags "$BASE_REPOSITORY_URL" "$base"
+
+      - name: Set up CI environment
+        uses: ./.github/actions/ci-environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ubuntu-latest
+
+      - name: Check version policy
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: uv run --locked python scripts/check_version_policy.py --head "$HEAD_SHA" --pr-json "$RUNNER_TEMP/release-pr.json"

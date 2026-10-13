@@ -1,13 +1,15 @@
 """Controlled provider boundary for model-fallback API and product tests."""
 
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.streaming import format_sse_event
@@ -15,6 +17,7 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.api.support import create_test_app
 
 
@@ -189,28 +192,18 @@ class ControlledFallbackProvider:
         chunks_before_failure: tuple[str, ...] = (),
         responses_chunks_before_failure: tuple[str, ...] = (),
         text: str | None = None,
-        preflight_error: InvalidRequestError | None = None,
+        validation_error: InvalidRequestError | None = None,
     ) -> None:
         self._failure = failure
         self._chunks_before_failure = chunks_before_failure
         self._responses_chunks_before_failure = responses_chunks_before_failure
         self._text = text
-        self._preflight_error = preflight_error
-        self.preflight_models: list[str] = []
+        self._validation_error = validation_error
         self.stream_models: list[str] = []
         self.response_models: list[str] = []
+        self.requests: list[MessagesRequest | OpenAIResponsesRequest] = []
+        self.reasoning_policies: list[ReasoningPolicy] = []
         self.close_calls = 0
-
-    def preflight_messages(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        del reasoning
-        self.preflight_models.append(request.model)
-        if self._preflight_error is not None:
-            raise self._preflight_error
 
     async def stream_messages(
         self,
@@ -220,9 +213,16 @@ class ControlledFallbackProvider:
         request_id: str | None = None,
         response_model: str | None = None,
         reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
-        del input_tokens, request_id, reasoning
+        del input_tokens, request_id
+        if self._validation_error is not None:
+            raise self._validation_error
         self.stream_models.append(request.model)
+        self.requests.append(request.model_copy(deep=True))
+        self.reasoning_policies.append(reasoning)
         public_model = response_model or request.model
         self.response_models.append(public_model)
         try:
@@ -236,17 +236,6 @@ class ControlledFallbackProvider:
         finally:
             self.close_calls += 1
 
-    def preflight_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        del reasoning
-        self.preflight_models.append(request.model)
-        if self._preflight_error is not None:
-            raise self._preflight_error
-
     async def stream_responses(
         self,
         request: OpenAIResponsesRequest,
@@ -255,9 +244,16 @@ class ControlledFallbackProvider:
         request_id: str | None = None,
         response_model: str | None = None,
         reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
-        del input_tokens, request_id, reasoning
+        del input_tokens, request_id
+        if self._validation_error is not None:
+            raise self._validation_error
         self.stream_models.append(request.model)
+        self.requests.append(request.model_copy(deep=True))
+        self.reasoning_policies.append(reasoning)
         public_model = response_model or request.model
         self.response_models.append(public_model)
         try:
@@ -279,21 +275,28 @@ class ControlledFallbackProvider:
 def fallback_client(
     primary: ControlledFallbackProvider,
     fallback: ControlledFallbackProvider,
+    *,
+    settings: Settings | None = None,
+    extra_providers: Mapping[str, ControlledFallbackProvider] | None = None,
 ) -> Iterator[TestClient]:
     app = create_test_app(
-        Settings(
+        settings
+        or Settings(
             model="nvidia_nim/primary-model",
-            model_fallbacks=("groq/fallback-model",),
+            model_fallbacks=(ModelFallback(model="groq/fallback-model"),),
         )
     )
 
     def resolve(
         provider_id: str,
+        _api_key_number: int,
         *,
         lease: object,
     ) -> ControlledFallbackProvider:
         del lease
-        return {"nvidia_nim": primary, "groq": fallback}[provider_id]
+        return {"nvidia_nim": primary, "groq": fallback, **(extra_providers or {})}[
+            provider_id
+        ]
 
     with (
         patch(

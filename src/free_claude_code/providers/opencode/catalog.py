@@ -10,6 +10,7 @@ import httpx
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.model_capabilities import ModelInputModality
+from free_claude_code.core.reasoning import ReasoningCapability
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -47,6 +48,19 @@ class OpenCodeModelRoute:
     input_modalities: frozenset[ModelInputModality] | None
     context_window_tokens: int | None
     max_output_tokens: int | None
+
+    @property
+    def model_info(self) -> ProviderModelInfo:
+        return ProviderModelInfo(
+            model_id=self.selector_id,
+            supports_thinking=self.supports_thinking,
+            input_modalities=self.input_modalities,
+            context_window_tokens=self.context_window_tokens,
+            max_output_tokens=self.max_output_tokens,
+            reasoning_capability=ReasoningCapability.NONE
+            if self.supports_thinking is False
+            else ReasoningCapability.UNKNOWN,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,16 +173,7 @@ def parse_open_code_catalog(
 
     if not routes:
         raise _catalog_error(provider_name, "no active or beta models")
-    model_infos = frozenset(
-        ProviderModelInfo(
-            model_id=route.selector_id,
-            supports_thinking=route.supports_thinking,
-            input_modalities=route.input_modalities,
-            context_window_tokens=route.context_window_tokens,
-            max_output_tokens=route.max_output_tokens,
-        )
-        for route in routes.values()
-    )
+    model_infos = frozenset(route.model_info for route in routes.values())
     return OpenCodeCatalogSnapshot(
         routes=MappingProxyType(routes),
         model_infos=model_infos,

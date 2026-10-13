@@ -45,8 +45,6 @@ def siliconflow_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-siliconflow-key",
             base_url=SILICONFLOW_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="siliconflow"),
     )
@@ -93,7 +91,7 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
         ],
     )
 
-    body = siliconflow_provider._build_request_body(
+    body = siliconflow_provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -126,7 +124,9 @@ def test_build_request_body_omits_model_specific_thinking_controls(
     siliconflow_provider: OpenAIChatProvider,
     reasoning: ReasoningPolicy,
 ) -> None:
-    body = siliconflow_provider._build_request_body(_request(), reasoning=reasoning)
+    body = siliconflow_provider._chat._build_request_body(
+        _request(), reasoning=reasoning
+    )
 
     assert "extra_body" not in body
 
@@ -136,7 +136,7 @@ def test_build_request_body_preserves_unrelated_extra_body(
 ) -> None:
     request = _request(extra_body={"min_p": 0.05})
 
-    body = siliconflow_provider._build_request_body(
+    body = siliconflow_provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
     )
@@ -154,7 +154,7 @@ def test_build_request_body_rejects_caller_thinking_override(
     request = _request(extra_body={field: "caller-owned"})
 
     with pytest.raises(InvalidRequestError, match="must not override reasoning"):
-        siliconflow_provider._build_request_body(request, reasoning=REASONING_ON)
+        siliconflow_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
 
 def test_build_request_body_replays_reasoning_content_verbatim(
@@ -174,7 +174,7 @@ def test_build_request_body_replays_reasoning_content_verbatim(
         ]
     )
 
-    body = siliconflow_provider._build_request_body(
+    body = siliconflow_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -225,7 +225,7 @@ async def test_model_catalog_uses_documented_endpoint_query_and_auth() -> None:
         return AsyncOpenAI(*args, **kwargs)
 
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         side_effect=build_client,
     ):
         provider = profiled_provider(
@@ -233,8 +233,6 @@ async def test_model_catalog_uses_documented_endpoint_query_and_auth() -> None:
             make_provider_config(
                 api_key="wire-siliconflow-key",
                 base_url=SILICONFLOW_DEFAULT_BASE,
-                rate_limit=10,
-                rate_window=60,
             ),
             admission=immediate_admission(provider_name="siliconflow"),
         )

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.config.api_keys import first_api_key
 from free_claude_code.messaging.transcription import TranscriptionService
 from free_claude_code.providers.nvidia_nim.voice import NvidiaNimTranscriber
 from smoke.lib.config import SmokeConfig
@@ -28,7 +29,7 @@ async def test_voice_local_backend_e2e(
     transcriber = TranscriptionService(
         model=smoke_config.settings.whisper_model,
         device=smoke_config.settings.whisper_device,
-        huggingface_api_key=smoke_config.settings.huggingface_api_key,
+        huggingface_api_key=first_api_key(smoke_config.settings.huggingface_api_keys),
     )
     try:
         text = await transcriber.transcribe(wav_path)
@@ -50,7 +51,7 @@ async def test_voice_nim_backend_e2e(smoke_config: SmokeConfig, tmp_path: Path) 
         pytest.skip("missing_env: set FCC_SMOKE_RUN_VOICE=1 to run voice product smoke")
     if smoke_config.settings.whisper_device != "nvidia_nim":
         pytest.skip("missing_env: WHISPER_DEVICE must be nvidia_nim")
-    api_key = smoke_config.settings.nvidia_nim_api_key
+    api_key = first_api_key(smoke_config.settings.nvidia_nim_api_keys)
     if api_key is None:
         pytest.skip("missing_env: NVIDIA_NIM_API_KEY is required")
 

@@ -32,8 +32,6 @@ def xai_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-xai-key",
             base_url=XAI_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="xai"),
     )
@@ -81,7 +79,7 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
         }
     )
 
-    body = xai_provider._build_request_body(
+    body = xai_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -110,7 +108,7 @@ def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
         }
     )
 
-    body = xai_provider._build_request_body(request, reasoning=reasoning)
+    body = xai_provider._chat._build_request_body(request, reasoning=reasoning)
 
     assert "reasoning_effort" not in body
     assert "reasoning" not in body.get("extra_body", {})
@@ -136,7 +134,7 @@ def test_build_request_body_replays_prior_reasoning_content(
         }
     )
 
-    body = xai_provider._build_request_body(
+    body = xai_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )

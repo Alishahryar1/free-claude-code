@@ -1,4 +1,4 @@
-"""Standard OpenAI Responses provider transport."""
+"""Shared OpenAI Responses provider transport."""
 
 from .transport import OpenAIResponsesTransport
 

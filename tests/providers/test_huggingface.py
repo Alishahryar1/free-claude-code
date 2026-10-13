@@ -13,6 +13,7 @@ from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
     profiled_provider,
@@ -28,8 +29,6 @@ def huggingface_config():
     return make_provider_config(
         api_key="test_hf_key",
         base_url=HUGGINGFACE_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 
@@ -46,7 +45,7 @@ def test_default_base_url_constant():
 
 def test_init_uses_default_base_url_and_api_key(huggingface_config):
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = profiled_provider(
             "huggingface", huggingface_config, admission=immediate_admission()
@@ -60,7 +59,7 @@ def test_init_uses_default_base_url_and_api_key(huggingface_config):
 def test_init_strips_trailing_slash(huggingface_config):
     config = replace(huggingface_config, base_url=f"{HUGGINGFACE_DEFAULT_BASE}/")
 
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = profiled_provider(
             "huggingface", config, admission=immediate_admission()
         )
@@ -143,7 +142,7 @@ def test_build_request_body_keeps_max_tokens(huggingface_provider):
             "max_tokens": 42,
         }
 
-        body = huggingface_provider._build_request_body(make_request())
+        body = huggingface_provider._chat._build_request_body(make_request())
 
     mock_convert.assert_called_once()
     assert (
@@ -159,7 +158,7 @@ def test_build_request_body_preserves_caller_extra_body(huggingface_provider):
     extra_body = {"provider": "auto", "routing": {"bill_to": "my-org"}}
     req = make_request(extra_body=extra_body)
 
-    body = huggingface_provider._build_request_body(req)
+    body = huggingface_provider._chat._build_request_body(req)
 
     assert body["extra_body"] == extra_body
     assert body["extra_body"] is not extra_body
@@ -177,7 +176,7 @@ def test_build_request_body_preserves_caller_extra_body(huggingface_provider):
 def test_build_request_body_leaves_reasoning_control_to_selected_upstream(
     huggingface_provider, reasoning
 ):
-    body = huggingface_provider._build_request_body(
+    body = huggingface_provider._chat._build_request_body(
         make_request(),
         reasoning=reasoning,
     )
@@ -204,11 +203,16 @@ def test_build_request_body_does_not_replay_prior_thinking_blocks(
         ],
     )
 
-    body = huggingface_provider._build_request_body(req)
+    body = huggingface_provider._chat._build_request_body(req)
 
-    assert body["messages"] == [{"role": "assistant", "content": "visible answer"}]
+    assert body["messages"] == [
+        {
+            "role": "assistant",
+            "content": "hidden prior thought\n\nvisible answer",
+        }
+    ]
     assert "reasoning_content" not in body["messages"][0]
-    assert "hidden prior thought" not in str(body)
+    assert "hidden prior thought" in str(body)
 
 
 def test_build_request_body_does_not_replay_top_level_reasoning_content(
@@ -225,10 +229,15 @@ def test_build_request_body_does_not_replay_top_level_reasoning_content(
         ],
     )
 
-    body = huggingface_provider._build_request_body(req)
+    body = huggingface_provider._chat._build_request_body(req)
 
-    assert body["messages"] == [{"role": "assistant", "content": "visible answer"}]
-    assert "hidden prior reasoning" not in str(body)
+    assert body["messages"] == [
+        {
+            "role": "assistant",
+            "content": "hidden prior reasoning\n\nvisible answer",
+        }
+    ]
+    assert "hidden prior reasoning" in str(body)
 
 
 @pytest.mark.asyncio
@@ -252,7 +261,7 @@ async def test_stream_messages_text(huggingface_provider):
     with patch.object(
         huggingface_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event
@@ -286,7 +295,7 @@ async def test_stream_messages_reasoning_content(huggingface_provider):
     with patch.object(
         huggingface_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
             event

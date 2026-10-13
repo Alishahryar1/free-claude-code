@@ -54,7 +54,7 @@ def test_finalized_status_502_timeout_keeps_existing_api_error_wire_type() -> No
     assert openai_failure_payload(failure)["error"]["type"] == "api_error"
 
 
-def test_only_anthropic_serialization_adds_the_client_compaction_trigger() -> None:
+def test_each_protocol_adds_its_client_compaction_trigger() -> None:
     failure = ExecutionFailure(
         kind=FailureKind.CONTEXT_WINDOW_EXCEEDED,
         status_code=400,
@@ -78,5 +78,5 @@ def test_only_anthropic_serialization_adds_the_client_compaction_trigger() -> No
         ),
         "type": "invalid_request_error",
         "param": None,
-        "code": None,
+        "code": "context_length_exceeded",
     }

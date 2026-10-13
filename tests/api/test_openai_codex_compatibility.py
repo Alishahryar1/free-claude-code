@@ -1,6 +1,6 @@
 import json
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -55,29 +55,22 @@ def _complete_stream(text: str) -> str:
 
 
 def _openai_provider(
-    upstream_requests: list[httpx.Request],
+    upstream_requests: list[httpx2.Request],
     *,
     response_text: str,
-) -> tuple[OpenAICodexProvider, httpx.AsyncClient]:
-    def handler(request: httpx.Request) -> httpx.Response:
+) -> OpenAICodexProvider:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         upstream_requests.append(request)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             content=_complete_stream(response_text).encode(),
             request=request,
         )
 
-    upstream_client = httpx.AsyncClient(
-        base_url="https://chatgpt.com/backend-api/codex/",
-        transport=httpx.MockTransport(handler),
-    )
     provider = OpenAICodexProvider(
         make_provider_config(
             api_key="",
             base_url="https://chatgpt.com/backend-api/codex",
-            rate_limit=100,
-            rate_window=1,
-            max_concurrency=2,
         ),
         auth=_FakeOpenAIAuth(),
         admission=ProviderAdmissionController(
@@ -89,15 +82,18 @@ def _openai_provider(
             max_delay=0,
             jitter=0,
         ),
-        client=upstream_client,
+        transport=httpx2.MockTransport(handler),
     )
-    return provider, upstream_client
+    return provider
 
 
 @pytest.mark.asyncio
-async def test_messages_accepts_current_claude_controls_for_openai_provider() -> None:
-    upstream_requests: list[httpx.Request] = []
-    provider, upstream_client = _openai_provider(
+@pytest.mark.parametrize("display", ["summarized", "omitted", "updates"])
+async def test_messages_accepts_current_claude_controls_for_openai_provider(
+    display: str,
+) -> None:
+    upstream_requests: list[httpx2.Request] = []
+    provider = _openai_provider(
         upstream_requests,
         response_text="hello",
     )
@@ -112,7 +108,7 @@ async def test_messages_accepts_current_claude_controls_for_openai_provider() ->
                     "max_tokens": 1024,
                     "messages": [{"role": "user", "content": "hello"}],
                     "metadata": {"user_id": "example-user"},
-                    "thinking": {"type": "adaptive", "display": "omitted"},
+                    "thinking": {"type": "adaptive", "display": display},
                     "context_management": {
                         "edits": [
                             {
@@ -126,7 +122,7 @@ async def test_messages_accepts_current_claude_controls_for_openai_provider() ->
                 },
             )
     finally:
-        await upstream_client.aclose()
+        await provider.cleanup()
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -145,8 +141,8 @@ async def test_messages_accepts_current_claude_controls_for_openai_provider() ->
 
 @pytest.mark.asyncio
 async def test_messages_auto_mode_classifier_composes_with_openai_provider() -> None:
-    upstream_requests: list[httpx.Request] = []
-    provider, upstream_client = _openai_provider(
+    upstream_requests: list[httpx2.Request] = []
+    provider = _openai_provider(
         upstream_requests,
         response_text="<severity>0</severity>",
     )
@@ -177,7 +173,7 @@ async def test_messages_auto_mode_classifier_composes_with_openai_provider() -> 
                 },
             )
     finally:
-        await upstream_client.aclose()
+        await provider.cleanup()
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
@@ -194,8 +190,8 @@ async def test_messages_auto_mode_classifier_composes_with_openai_provider() -> 
 
 @pytest.mark.asyncio
 async def test_messages_non_classifier_stop_remains_lossy_for_openai_provider() -> None:
-    upstream_requests: list[httpx.Request] = []
-    provider, upstream_client = _openai_provider(
+    upstream_requests: list[httpx2.Request] = []
+    provider = _openai_provider(
         upstream_requests,
         response_text="unreachable",
     )
@@ -213,7 +209,7 @@ async def test_messages_non_classifier_stop_remains_lossy_for_openai_provider() 
                 },
             )
     finally:
-        await upstream_client.aclose()
+        await provider.cleanup()
 
     assert response.status_code == 400
     body = response.json()

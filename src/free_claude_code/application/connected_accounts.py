@@ -40,6 +40,12 @@ class ConnectedAccountStatus:
     expires_at: int | None = None
     model_count: int | None = None
     message: str | None = None
+    display_identity: str | None = None
+    supported_login_modes: tuple[ConnectedAccountLoginMode, ...] = (
+        ConnectedAccountLoginMode.BROWSER,
+        ConnectedAccountLoginMode.DEVICE,
+    )
+    default_login_mode: ConnectedAccountLoginMode = ConnectedAccountLoginMode.BROWSER
 
     def as_dict(self) -> JsonObject:
         """Serialize only the explicitly safe status contract."""
@@ -49,10 +55,15 @@ class ConnectedAccountStatus:
             "state": self.state,
             "connected": self.connected,
             "revision": self.revision,
+            "supported_login_modes": [
+                mode.value for mode in self.supported_login_modes
+            ],
+            "default_login_mode": self.default_login_mode.value,
         }
         optional_fields: tuple[tuple[str, JsonValue], ...] = (
             ("attempt_id", self.attempt_id),
             ("email", self.email),
+            ("display_identity", self.display_identity),
             ("mode", self.mode),
             ("authorization_url", self.authorization_url),
             ("verification_url", self.verification_url),

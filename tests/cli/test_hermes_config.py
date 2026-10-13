@@ -4,16 +4,16 @@ import json
 
 import pytest
 
+from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.cli.launchers.hermes_config import (
     build_hermes_managed_config,
 )
-from free_claude_code.cli.launchers.model_catalog import ClientModel
 from free_claude_code.core.model_capabilities import ModelInputModality
 
 
-def _models() -> tuple[ClientModel, ...]:
+def _models() -> tuple[CatalogModel, ...]:
     return (
-        ClientModel(
+        CatalogModel(
             wire_slug="nvidia_nim/vendor/model",
             provider_model_ref="nvidia_nim/vendor/model",
             display_name="Nested model",
@@ -24,7 +24,7 @@ def _models() -> tuple[ClientModel, ...]:
             context_window_tokens=131072,
             max_output_tokens=8192,
         ),
-        ClientModel(
+        CatalogModel(
             wire_slug="claude-3-freecc-no-thinking/open_router/plain-model",
             provider_model_ref="open_router/plain-model",
             display_name="No-thinking model",
@@ -32,7 +32,7 @@ def _models() -> tuple[ClientModel, ...]:
             input_modalities=frozenset({ModelInputModality.TEXT}),
             max_output_tokens=4096,
         ),
-        ClientModel(
+        CatalogModel(
             wire_slug="future_provider/unknown-model",
             provider_model_ref="future_provider/unknown-model",
             display_name="Unknown model",
@@ -44,15 +44,14 @@ def _models() -> tuple[ClientModel, ...]:
 def test_hermes_config_pins_responses_catalog_and_fallbacks() -> None:
     managed = build_hermes_managed_config(
         _models(),
+        default_model_id="claude-3-freecc-no-thinking/open_router/plain-model",
         proxy_root_url="http://127.0.0.1:9191/",
         nonce="a1b2c3",
-        selected_model="claude-3-freecc-no-thinking/open_router/plain-model",
     )
 
-    assert managed.provider_key == "fcc-a1b2c3"
     assert managed.provider_ref == "custom:fcc-a1b2c3"
     assert managed.key_env == "FCC_HERMES_A1B2C3"
-    assert managed.selected_model == (
+    assert managed.default_model == (
         "claude-3-freecc-no-thinking/open_router/plain-model"
     )
     assert managed.config["providers"] == {
@@ -79,11 +78,13 @@ def test_hermes_config_pins_responses_catalog_and_fallbacks() -> None:
         "base_url": "",
         "api_key": "",
         "api_mode": "codex_responses",
+        "default_headers": {"x-fcc-launch-id": "a1b2c3"},
     }
     assert managed.config["fallback_providers"] == []
     assert managed.config["fallback_model"] == []
     assert managed.config["model_overrides"] == {
         "custom": {
+            "future_provider/unknown-model": {"context_window": 200000},
             "nvidia_nim/vendor/model": {
                 "supports_reasoning": True,
                 "supports_vision": True,
@@ -93,6 +94,7 @@ def test_hermes_config_pins_responses_catalog_and_fallbacks() -> None:
             "claude-3-freecc-no-thinking/open_router/plain-model": {
                 "supports_reasoning": False,
                 "supports_vision": False,
+                "context_window": 200000,
                 "max_output_tokens": 4096,
             },
         }
@@ -140,15 +142,15 @@ def test_hermes_config_pins_responses_catalog_and_fallbacks() -> None:
     assert "timeout" not in serialized
 
 
-def test_hermes_config_uses_first_model_by_default() -> None:
+def test_hermes_config_uses_explicit_default() -> None:
     managed = build_hermes_managed_config(
         _models(),
+        default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191",
         nonce="ABC123",
     )
 
-    assert managed.selected_model == "nvidia_nim/vendor/model"
-    assert managed.provider_key == "fcc-abc123"
+    assert managed.default_model == "nvidia_nim/vendor/model"
     assert managed.key_env == "FCC_HERMES_ABC123"
 
 
@@ -156,18 +158,9 @@ def test_hermes_config_rejects_empty_catalog() -> None:
     with pytest.raises(ValueError, match="at least one"):
         build_hermes_managed_config(
             (),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
             nonce="abc123",
-        )
-
-
-def test_hermes_config_rejects_unknown_model() -> None:
-    with pytest.raises(ValueError, match="not in the FCC catalog"):
-        build_hermes_managed_config(
-            _models(),
-            proxy_root_url="http://127.0.0.1:9191",
-            nonce="abc123",
-            selected_model="missing/model",
         )
 
 
@@ -176,6 +169,7 @@ def test_hermes_config_rejects_unsafe_nonce(nonce: str) -> None:
     with pytest.raises(ValueError, match="alphanumeric"):
         build_hermes_managed_config(
             _models(),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
             nonce=nonce,
         )

@@ -12,31 +12,21 @@ from pydantic import (
     model_validator,
 )
 
-from .constants import HTTP_CONNECT_TIMEOUT_DEFAULT
+from .api_keys import ApiKeyList
+from .constants import DEFAULT_MODEL, HTTP_CONNECT_TIMEOUT_DEFAULT
+from .custom_providers import CustomProviderDefinition, decode_custom_providers
+from .model_refs import ModelFallback, ModelFallbacks
 from .nim import NimSettings
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
-    NARAROUTE_DEFAULT_BASE,
+    PROVIDER_CATALOG,
     SUPPORTED_PROVIDER_IDS,
-    TOKENROUTER_DEFAULT_BASE,
 )
 from .reasoning import ReasoningPreference
 
 
 def _empty_to_none(value: object) -> object:
     if isinstance(value, str) and not value.strip():
-        return None
-    return value
-
-
-def _parse_model_fallbacks(value: object) -> object:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        if not value.strip():
-            return None
-        return tuple(part.strip() for part in value.split(","))
-    if isinstance(value, list | tuple) and not value:
         return None
     return value
 
@@ -49,10 +39,6 @@ OptionalNonEmptyString = Annotated[
     NonEmptyString | None,
     BeforeValidator(_empty_to_none),
 ]
-OptionalModelFallbacks = Annotated[
-    tuple[NonEmptyString, ...] | None,
-    BeforeValidator(_parse_model_fallbacks),
-]
 
 
 def _validate_model_ref(value: str) -> str:
@@ -63,9 +49,6 @@ def _validate_model_ref(value: str) -> str:
             f"Valid providers: {', '.join(SUPPORTED_PROVIDER_IDS)}. "
             "Format: provider_type/model/name"
         )
-    if provider not in SUPPORTED_PROVIDER_IDS:
-        supported = ", ".join(f"'{item}'" for item in SUPPORTED_PROVIDER_IDS)
-        raise ValueError(f"Invalid provider: '{provider}'. Supported: {supported}")
     if not model:
         raise ValueError("Model reference must include a non-empty model suffix.")
     return value
@@ -78,70 +61,125 @@ class Settings(BaseModel):
         validate_default=True,
         populate_by_name=True,
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
+    custom_providers: Annotated[
+        tuple[CustomProviderDefinition, ...], BeforeValidator(decode_custom_providers)
+    ] = Field(default=(), validation_alias="FCC_CUSTOM_PROVIDERS")
+
+    @property
+    def provider_ids(self) -> tuple[str, ...]:
+        return (
+            *SUPPORTED_PROVIDER_IDS,
+            *(item.provider_id for item in self.custom_providers),
+        )
+
+    def custom_provider(self, provider_id: str) -> CustomProviderDefinition | None:
+        return next(
+            (item for item in self.custom_providers if item.provider_id == provider_id),
+            None,
+        )
+
+    @model_validator(mode="after")
+    def validate_provider_references(self) -> Settings:
+        ids = [item.provider_id for item in self.custom_providers]
+        names = [item.display_name.casefold() for item in self.custom_providers]
+        if len(ids) != len(set(ids)) or len(names) != len(set(names)):
+            raise ValueError("Custom provider names and IDs must be unique")
+        for field in (
+            "model",
+            "model_fable",
+            "model_opus",
+            "model_sonnet",
+            "model_haiku",
+            "model_fallbacks",
+        ):
+            value = getattr(self, field)
+            refs = value if isinstance(value, tuple) else (value,) if value else ()
+            for ref in refs:
+                model_ref = ref.model if isinstance(ref, ModelFallback) else ref
+                provider_id = model_ref.partition("/")[0]
+                if provider_id not in self.provider_ids:
+                    raise ValueError(
+                        f"{field.upper()}: Invalid provider in model reference"
+                    )
+                if isinstance(ref, ModelFallback) and ref.api_key_number > 1:
+                    definition = self.custom_provider(provider_id)
+                    descriptor = PROVIDER_CATALOG.get(provider_id)
+                    if definition is not None:
+                        keys = definition.api_keys
+                    elif descriptor is not None and descriptor.credential_attr:
+                        keys = getattr(self, descriptor.credential_attr)
+                    else:
+                        raise ValueError(
+                            f"MODEL_FALLBACKS: {provider_id} has no API key list."
+                        )
+                    if ref.api_key_number > len(keys):
+                        raise ValueError(
+                            f"MODEL_FALLBACKS: {ref.model} selects Key "
+                            f"{ref.api_key_number}, but only {len(keys)} keys are "
+                            "configured. Update the fallback selection first."
+                        )
+        return self
+
+    # ==================== OpenAI Platform API ====================
+    openai_api_keys: ApiKeyList = Field(default=(), validation_alias="OPENAI_API_KEY")
+
     # ==================== Azure OpenAI ====================
-    azure_openai_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="AZURE_OPENAI_API_KEY"
+    azure_openai_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="AZURE_OPENAI_API_KEY"
     )
     azure_openai_base_url: OptionalNonEmptyString = Field(
         default=None, validation_alias="AZURE_OPENAI_BASE_URL"
     )
 
     # ==================== OpenRouter Config ====================
-    open_router_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="OPENROUTER_API_KEY"
+    open_router_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="OPENROUTER_API_KEY"
     )
 
     # ==================== Mistral La Plateforme ====================
-    mistral_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="MISTRAL_API_KEY"
-    )
+    mistral_api_keys: ApiKeyList = Field(default=(), validation_alias="MISTRAL_API_KEY")
 
     # ==================== Mistral Codestral (codestral.mistral.ai) ====================
-    codestral_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="CODESTRAL_API_KEY"
+    codestral_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="CODESTRAL_API_KEY"
     )
 
     # ==================== DeepSeek Config ====================
-    deepseek_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="DEEPSEEK_API_KEY"
+    deepseek_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="DEEPSEEK_API_KEY"
     )
 
     # ==================== Kimi Config ====================
-    kimi_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="KIMI_API_KEY"
-    )
+    kimi_api_keys: ApiKeyList = Field(default=(), validation_alias="KIMI_API_KEY")
 
     # ==================== Kimi Code Subscription ====================
-    kimi_code_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="KIMI_CODE_API_KEY"
+    kimi_code_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="KIMI_CODE_API_KEY"
     )
 
     # ==================== Wafer Config ====================
-    wafer_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="WAFER_API_KEY"
-    )
+    wafer_api_keys: ApiKeyList = Field(default=(), validation_alias="WAFER_API_KEY")
 
     # ==================== MiniMax Config ====================
-    minimax_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="MINIMAX_API_KEY"
-    )
+    minimax_api_keys: ApiKeyList = Field(default=(), validation_alias="MINIMAX_API_KEY")
 
     # ==================== OpenCode Zen / OpenCode Go ====================
     # Same key from opencode.ai/auth; Zen uses ``opencode_zen/``, Go uses ``opencode_go/``.
-    opencode_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="OPENCODE_API_KEY"
+    opencode_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="OPENCODE_API_KEY"
     )
 
     # ==================== Vercel AI Gateway ====================
-    vercel_ai_gateway_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="AI_GATEWAY_API_KEY"
+    vercel_ai_gateway_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="AI_GATEWAY_API_KEY"
     )
 
     # ==================== Amazon Bedrock Mantle ====================
-    bedrock_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="AWS_BEARER_TOKEN_BEDROCK"
+    bedrock_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="AWS_BEARER_TOKEN_BEDROCK"
     )
     bedrock_base_url: NonEmptyString = Field(
         default=BEDROCK_DEFAULT_BASE,
@@ -149,85 +187,91 @@ class Settings(BaseModel):
     )
 
     # ==================== Hugging Face Inference Providers ====================
-    huggingface_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="HUGGINGFACE_API_KEY"
+    huggingface_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="HUGGINGFACE_API_KEY"
     )
 
     # ==================== Cohere Compatibility API ====================
-    cohere_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="COHERE_API_KEY"
-    )
-
-    # ==================== GitHub Models ====================
-    github_models_token: OptionalNonEmptyString = Field(
-        default=None, validation_alias="GITHUB_MODELS_TOKEN"
-    )
+    cohere_api_keys: ApiKeyList = Field(default=(), validation_alias="COHERE_API_KEY")
 
     # ==================== SambaNova Cloud ====================
-    sambanova_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="SAMBANOVA_API_KEY"
+    sambanova_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="SAMBANOVA_API_KEY"
     )
 
     # ==================== Kilo.ai Config ====================
-    kilo_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="KILO_API_KEY"
-    )
+    kilo_api_keys: ApiKeyList = Field(default=(), validation_alias="KILO_API_KEY")
 
     # ==================== Z.ai Coding Plan / General API ====================
-    zai_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="ZAI_API_KEY"
-    )
+    zai_api_keys: ApiKeyList = Field(default=(), validation_alias="ZAI_API_KEY")
 
     # ==================== TokenRouter Config ====================
-    tokenrouter_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="TOKENROUTER_API_KEY"
-    )
-    tokenrouter_base_url: NonEmptyString = Field(
-        default=TOKENROUTER_DEFAULT_BASE,
-        validation_alias="TOKENROUTER_BASE_URL",
+    tokenrouter_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="TOKENROUTER_API_KEY"
     )
 
     # ==================== NaraRoute Config ====================
-    nararoute_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="NARAROUTE_API_KEY"
-    )
-    nararoute_base_url: NonEmptyString = Field(
-        default=NARAROUTE_DEFAULT_BASE,
-        validation_alias="NARAROUTE_BASE_URL",
+    nararoute_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="NARAROUTE_API_KEY"
     )
 
     # ==================== Poolside AI (OpenAI-compatible) ====================
-    poolside_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="POOLSIDE_API_KEY"
+    poolside_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="POOLSIDE_API_KEY"
     )
 
     # ==================== LLM7.io (OpenAI-compatible) ====================
-    llm7_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="LLM7_API_KEY"
+    llm7_api_keys: ApiKeyList = Field(default=(), validation_alias="LLM7_API_KEY")
+
+    # ==================== Lightning AI (OpenAI-compatible) ====================
+    lightning_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="LIGHTNING_API_KEY"
     )
 
+    # ==================== Experiential Labs (OpenAI-compatible) ====================
+    experiential_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="EXPLABS_API_KEY"
+    )
+
+    # ==================== Cheaper Inference (OpenAI-compatible) ====================
+    cheaperinference_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="CHEAPER_INFERENCE_API_KEY"
+    )
+
+    # ==================== OrcaRouter (OpenAI-compatible gateway) ====================
+    orcarouter_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="ORCAROUTER_API_KEY"
+    )
+
+    # ==================== Atlas Cloud (OpenAI-compatible gateway) ====================
+    atlascloud_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="ATLASCLOUD_API_KEY"
+    )
+
+    # ==================== xKiro (OpenAI-compatible gateway) ====================
+    xkiro_api_keys: ApiKeyList = Field(default=(), validation_alias="XKIRO_API_KEY")
+
+    # ==================== Opper (OpenAI-compatible) ====================
+    opper_api_keys: ApiKeyList = Field(default=(), validation_alias="OPPER_API_KEY")
+
     # ==================== Fireworks AI Config ====================
-    fireworks_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="FIREWORKS_API_KEY"
+    fireworks_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="FIREWORKS_API_KEY"
     )
 
     # ==================== Novita AI Config ====================
-    novita_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="NOVITA_API_KEY"
-    )
+    novita_api_keys: ApiKeyList = Field(default=(), validation_alias="NOVITA_API_KEY")
 
     # ==================== Cloudflare Workers AI Config ====================
-    cloudflare_api_token: OptionalNonEmptyString = Field(
-        default=None, validation_alias="CLOUDFLARE_API_TOKEN"
+    cloudflare_api_tokens: ApiKeyList = Field(
+        default=(), validation_alias="CLOUDFLARE_API_TOKEN"
     )
     cloudflare_account_id: OptionalNonEmptyString = Field(
         default=None, validation_alias="CLOUDFLARE_ACCOUNT_ID"
     )
 
     # ==================== Google Gemini (Google AI Studio) ====================
-    gemini_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="GEMINI_API_KEY"
-    )
+    gemini_api_keys: ApiKeyList = Field(default=(), validation_alias="GEMINI_API_KEY")
 
     # ==================== Google Vertex AI ====================
     vertex_project_id: OptionalNonEmptyString = Field(
@@ -238,84 +282,86 @@ class Settings(BaseModel):
     )
 
     # ==================== Groq (OpenAI-compatible) ====================
-    groq_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="GROQ_API_KEY"
-    )
+    groq_api_keys: ApiKeyList = Field(default=(), validation_alias="GROQ_API_KEY")
 
     # ==================== ClinePass (OpenAI-compatible) ====================
-    cline_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="CLINE_API_KEY"
-    )
+    cline_api_keys: ApiKeyList = Field(default=(), validation_alias="CLINE_API_KEY")
 
     # ==================== xAI / Grok (OpenAI-compatible) ====================
-    xai_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="XAI_API_KEY"
+    xai_api_keys: ApiKeyList = Field(default=(), validation_alias="XAI_API_KEY")
+
+    # ==================== Alibaba Cloud Model Studio ====================
+    anthropic_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="ANTHROPIC_API_KEY"
+    )
+    anthropic_workspace_id: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ANTHROPIC_WORKSPACE_ID"
+    )
+    anthropic_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ANTHROPIC_PROXY"
+    )
+    alibaba_cloud_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="ALIBABA_CLOUD_API_KEY"
+    )
+    alibaba_cloud_base_url: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ALIBABA_CLOUD_BASE_URL"
     )
 
     # ==================== QwenCloud Token Plan (OpenAI-compatible) ====================
-    qwencloud_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="QWENCLOUD_API_KEY"
+    qwencloud_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="QWENCLOUD_API_KEY"
     )
 
     # ==================== QwenCloud Coding Plan (OpenAI-compatible) ====================
-    qwencloud_coding_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="QWENCLOUD_CODING_API_KEY"
+    qwencloud_coding_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="QWENCLOUD_CODING_API_KEY"
     )
 
     # ==================== Together AI (OpenAI-compatible) ====================
-    together_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="TOGETHER_API_KEY"
+    together_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="TOGETHER_API_KEY"
     )
 
     # ==================== DeepInfra (OpenAI-compatible) ====================
-    deepinfra_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="DEEPINFRA_API_KEY"
+    deepinfra_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="DEEPINFRA_API_KEY"
     )
 
     # ==================== SiliconFlow (OpenAI-compatible) ====================
-    siliconflow_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="SILICONFLOW_API_KEY"
+    siliconflow_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="SILICONFLOW_API_KEY"
     )
 
     # ==================== Nebius Token Factory (OpenAI-compatible) ====================
-    nebius_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="NEBIUS_API_KEY"
-    )
+    nebius_api_keys: ApiKeyList = Field(default=(), validation_alias="NEBIUS_API_KEY")
 
     # ==================== Chutes (OpenAI-compatible) ====================
-    chutes_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="CHUTES_API_KEY"
-    )
+    chutes_api_keys: ApiKeyList = Field(default=(), validation_alias="CHUTES_API_KEY")
 
     # ==================== Featherless AI (OpenAI-compatible) ====================
-    featherless_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="FEATHERLESS_API_KEY"
+    featherless_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="FEATHERLESS_API_KEY"
     )
 
     # ==================== Agnes AI (OpenAI-compatible) ====================
-    agnes_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="AGNES_API_KEY"
-    )
+    agnes_api_keys: ApiKeyList = Field(default=(), validation_alias="AGNES_API_KEY")
 
     # ==================== ZenMux (OpenAI-compatible) ====================
-    zenmux_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="ZENMUX_API_KEY"
-    )
+    zenmux_api_keys: ApiKeyList = Field(default=(), validation_alias="ZENMUX_API_KEY")
 
     # ==================== W&B Inference (OpenAI-compatible) ====================
-    wandb_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="WANDB_API_KEY"
-    )
+    wandb_api_keys: ApiKeyList = Field(default=(), validation_alias="WANDB_API_KEY")
 
     # ==================== Cerebras Inference (OpenAI-compatible) ====================
-    cerebras_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="CEREBRAS_API_KEY"
+    cerebras_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="CEREBRAS_API_KEY"
     )
 
+    # ==================== Scaleway (OpenAI-compatible) ====================
+    scw_secret_keys: ApiKeyList = Field(default=(), validation_alias="SCW_SECRET_KEY")
+
     # ==================== Ollama Cloud ====================
-    ollama_api_key: OptionalNonEmptyString = Field(
-        default=None, validation_alias="OLLAMA_API_KEY"
-    )
+    ollama_api_keys: ApiKeyList = Field(default=(), validation_alias="OLLAMA_API_KEY")
 
     # ==================== Messaging Platform Selection ====================
     # Valid: "telegram" | "discord" | "none"
@@ -330,8 +376,8 @@ class Settings(BaseModel):
     )
 
     # ==================== NVIDIA NIM Config ====================
-    nvidia_nim_api_key: OptionalNonEmptyString = Field(
-        default=None,
+    nvidia_nim_api_keys: ApiKeyList = Field(
+        default=(),
         validation_alias="NVIDIA_NIM_API_KEY",
     )
 
@@ -357,7 +403,7 @@ class Settings(BaseModel):
     # All Claude model requests are mapped to this single model (fallback)
     # Format: provider_type/model/name
     model: NonEmptyString = Field(
-        default="nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+        default=DEFAULT_MODEL,
         validation_alias="MODEL",
     )
 
@@ -375,7 +421,7 @@ class Settings(BaseModel):
     model_haiku: OptionalNonEmptyString = Field(
         default=None, validation_alias="MODEL_HAIKU"
     )
-    model_fallbacks: OptionalModelFallbacks = Field(
+    model_fallbacks: ModelFallbacks = Field(
         default=None,
         validation_alias="MODEL_FALLBACKS",
     )
@@ -384,8 +430,14 @@ class Settings(BaseModel):
     openai_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OPENAI_PROXY"
     )
+    openai_api_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="OPENAI_API_PROXY"
+    )
     xai_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="XAI_PROXY"
+    )
+    alibaba_cloud_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ALIBABA_CLOUD_PROXY"
     )
     qwencloud_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="QWENCLOUD_PROXY"
@@ -471,9 +523,6 @@ class Settings(BaseModel):
     cohere_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="COHERE_PROXY"
     )
-    github_models_proxy: OptionalNonEmptyString = Field(
-        default=None, validation_alias="GITHUB_MODELS_PROXY"
-    )
     sambanova_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="SAMBANOVA_PROXY"
     )
@@ -497,6 +546,27 @@ class Settings(BaseModel):
     )
     llm7_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="LLM7_PROXY"
+    )
+    lightning_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="LIGHTNING_PROXY"
+    )
+    experiential_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="EXPLABS_PROXY"
+    )
+    cheaperinference_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="CHEAPER_INFERENCE_PROXY"
+    )
+    orcarouter_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ORCAROUTER_PROXY"
+    )
+    atlascloud_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="ATLASCLOUD_PROXY"
+    )
+    xkiro_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="XKIRO_PROXY"
+    )
+    opper_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="OPPER_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"
@@ -522,16 +592,21 @@ class Settings(BaseModel):
     cerebras_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="CEREBRAS_PROXY"
     )
+    scw_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="SCW_PROXY"
+    )
     ollama_cloud_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OLLAMA_CLOUD_PROXY"
     )
     # ==================== Provider Rate Limiting ====================
-    provider_rate_limit: int = Field(default=1, validation_alias="PROVIDER_RATE_LIMIT")
+    provider_rate_limit: int = Field(
+        default=1, gt=0, validation_alias="PROVIDER_RATE_LIMIT"
+    )
     provider_rate_window: int = Field(
-        default=2, validation_alias="PROVIDER_RATE_WINDOW"
+        default=2, gt=0, validation_alias="PROVIDER_RATE_WINDOW"
     )
     provider_max_concurrency: int = Field(
-        default=2, validation_alias="PROVIDER_MAX_CONCURRENCY"
+        default=2, gt=0, validation_alias="PROVIDER_MAX_CONCURRENCY"
     )
     provider_progress_timeout: float = Field(
         default=600.0,
@@ -568,7 +643,7 @@ class Settings(BaseModel):
         default=120.0, validation_alias="HTTP_READ_TIMEOUT"
     )
     http_write_timeout: float = Field(
-        default=10.0, validation_alias="HTTP_WRITE_TIMEOUT"
+        default=30.0, validation_alias="HTTP_WRITE_TIMEOUT"
     )
     http_connect_timeout: float = Field(
         default=HTTP_CONNECT_TIMEOUT_DEFAULT,
@@ -660,7 +735,7 @@ class Settings(BaseModel):
     )
     # Device: "cpu" | "cuda" | "nvidia_nim"
     # - "cpu"/"cuda": local Whisper (requires voice_local extra: uv sync --extra voice_local)
-    # - "nvidia_nim": NVIDIA NIM Whisper API (requires voice extra: uv sync --extra voice)
+    # - "nvidia_nim": NVIDIA NIM Whisper API (included in the standard installation)
     whisper_device: NonEmptyString = Field(
         default="cpu", validation_alias="WHISPER_DEVICE"
     )
@@ -791,21 +866,23 @@ class Settings(BaseModel):
     @field_validator("model_fallbacks")
     @classmethod
     def validate_model_fallbacks(
-        cls, value: tuple[str, ...] | None
-    ) -> tuple[str, ...] | None:
+        cls, value: tuple[ModelFallback, ...] | None
+    ) -> tuple[ModelFallback, ...] | None:
         if value is None:
             return None
-        validated = tuple(_validate_model_ref(model_ref) for model_ref in value)
-        if len(validated) != len(set(validated)):
-            raise ValueError("MODEL_FALLBACKS must not contain duplicate model refs.")
-        return validated
+        refs = tuple((entry.model, entry.api_key_number) for entry in value)
+        if len(refs) != len(set(refs)):
+            raise ValueError(
+                "MODEL_FALLBACKS must not contain duplicate model/key pairs."
+            )
+        return value
 
     @model_validator(mode="after")
     def check_nvidia_nim_api_key(self) -> Settings:
         if (
             self.voice_note_enabled
             and self.whisper_device == "nvidia_nim"
-            and self.nvidia_nim_api_key is None
+            and not self.nvidia_nim_api_keys
         ):
             raise ValueError(
                 "NVIDIA_NIM_API_KEY is required when WHISPER_DEVICE is 'nvidia_nim'. "

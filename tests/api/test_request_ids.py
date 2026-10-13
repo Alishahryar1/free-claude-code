@@ -16,7 +16,7 @@ from free_claude_code.api.request_ids import (
     RequestCorrelationMiddleware,
     get_request_id,
 )
-from free_claude_code.api.request_lifetime import InferenceRequestLifetimeMiddleware
+from free_claude_code.api.request_lifetime import ClientRequestLifetimeMiddleware
 from tests.api.support import create_test_app
 
 
@@ -48,7 +48,7 @@ def test_application_uses_the_pure_asgi_correlation_owner() -> None:
     assert sum(cls is RequestCorrelationMiddleware for cls in middleware_classes) == 1
     assert middleware_classes.index(
         RequestCorrelationMiddleware
-    ) < middleware_classes.index(InferenceRequestLifetimeMiddleware)
+    ) < middleware_classes.index(ClientRequestLifetimeMiddleware)
     assert all(cls is not BaseHTTPMiddleware for cls in middleware_classes)
 
 

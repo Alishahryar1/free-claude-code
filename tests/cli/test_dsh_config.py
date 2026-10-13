@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from free_claude_code.cli.launchers.dsh_config import build_dsh_launch_config
-from free_claude_code.cli.launchers.model_catalog import ClientModel
+from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.core.model_capabilities import ModelInputModality
+from free_claude_code.harnesses.dsh_config import build_dsh_launch_config
 
 
-def _models() -> tuple[ClientModel, ...]:
+def _models() -> tuple[CatalogModel, ...]:
     return (
-        ClientModel(
+        CatalogModel(
             wire_slug="nvidia_nim/vendor/model",
             provider_model_ref="nvidia_nim/vendor/model",
             display_name="Nested model",
@@ -24,7 +24,7 @@ def _models() -> tuple[ClientModel, ...]:
             context_window_tokens=131072,
             max_output_tokens=8192,
         ),
-        ClientModel(
+        CatalogModel(
             wire_slug="claude-3-freecc-no-thinking/open_router/plain-model",
             provider_model_ref="open_router/plain-model",
             display_name="No-thinking model",
@@ -32,7 +32,7 @@ def _models() -> tuple[ClientModel, ...]:
             input_modalities=frozenset({ModelInputModality.TEXT}),
             max_output_tokens=4096,
         ),
-        ClientModel(
+        CatalogModel(
             wire_slug="future_provider/unknown-model",
             provider_model_ref="future_provider/unknown-model",
             display_name="Unknown model",
@@ -48,33 +48,24 @@ def _row_by_id(patch: tuple[dict, ...], row_id: str) -> dict:
 def test_dsh_config_pins_responses_models_retries_and_private_state(
     tmp_path: Path,
 ) -> None:
-    settings_path = tmp_path / "settings.yaml"
     credentials_path = tmp_path / ".credentials.yaml"
     launch = build_dsh_launch_config(
         _models(),
+        default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191/",
-        settings_path=settings_path,
         credentials_path=credentials_path,
         provider_progress_timeout=600.0,
     )
 
-    assert launch.selected_model == "nvidia_nim/vendor/model"
-    assert launch.api_key_env == "FCC_DSH_API_KEY"
-
-    settings = _row_by_id(launch.patch, "settings")
-    assert settings == {
-        "id": "settings",
-        "name": "@deepseek-ai/dsh-settings-file",
-        "config": {"path": str(settings_path), "watch": False},
-    }
-    credentials = _row_by_id(launch.patch, "credentials")
+    assert all(row["id"] != "settings" for row in launch)
+    credentials = _row_by_id(launch, "credentials")
     assert credentials == {
         "id": "credentials",
         "name": "@deepseek-ai/dsh-credentials-local",
         "config": {"path": str(credentials_path), "watch": False},
     }
 
-    llm = _row_by_id(launch.patch, "llm-pi-ai")
+    llm = _row_by_id(launch, "llm-pi-ai")
     provider = llm["config"]["providers"]["free-claude-code"]
     assert provider == {
         "displayName": "Free Claude Code",
@@ -102,12 +93,14 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
                 "id": "claude-3-freecc-no-thinking/open_router/plain-model",
                 "name": "No-thinking model",
                 "reasoningEfforts": False,
+                "contextWindow": 200000,
                 "input": ["text"],
                 "maxTokens": 4096,
             },
             {
                 "id": "future_provider/unknown-model",
                 "name": "Unknown model",
+                "contextWindow": 200000,
                 "reasoningEfforts": {
                     "off": "none",
                     "minimal": "minimal",
@@ -123,7 +116,7 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
         "retryPolicy": {"mode": "normal", "maxRetries": 0},
         "streamIdleTimeoutMs": 660_000,
     }
-    assert _row_by_id(launch.patch, "agent-default-model") == {
+    assert _row_by_id(launch, "agent-default-model") == {
         "id": "agent-default-model",
         "name": "@deepseek-ai/dsh-agent-default-model",
         "config": {
@@ -133,17 +126,18 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
     }
 
     for row_id, package in (
-        ("llm-deepseek", "@deepseek-ai/dsh-llm-deepseek"),
+        ("llm-deepseek", "@deepseek-ai/dsh-llm-deepseek-api-key"),
+        ("llm-deepseek-account", "@deepseek-ai/dsh-llm-deepseek-account"),
         ("web-search-deepseek", "@deepseek-ai/dsh-web-search-deepseek"),
         ("tool-web", "@deepseek-ai/dsh-tool-web"),
     ):
-        assert _row_by_id(launch.patch, row_id) == {
+        assert _row_by_id(launch, row_id) == {
             "id": row_id,
             "name": package,
             "disabled": True,
         }
 
-    serialized = json.dumps(launch.patch)
+    serialized = json.dumps(launch)
     assert "proxy-token" not in serialized
     for unsupported in ("compat", "headers", "telemetry"):
         assert unsupported not in serialized
@@ -152,13 +146,13 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
 def test_dsh_config_rounds_fractional_progress_timeout_up() -> None:
     launch = build_dsh_launch_config(
         _models(),
+        default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191",
-        settings_path=Path("settings.yaml"),
         credentials_path=Path("credentials.yaml"),
         provider_progress_timeout=0.0001,
     )
 
-    provider = _row_by_id(launch.patch, "llm-pi-ai")["config"]["providers"][
+    provider = _row_by_id(launch, "llm-pi-ai")["config"]["providers"][
         "free-claude-code"
     ]
     assert provider["streamIdleTimeoutMs"] == 60_001
@@ -168,8 +162,8 @@ def test_dsh_config_rejects_empty_catalog() -> None:
     with pytest.raises(ValueError, match="at least one"):
         build_dsh_launch_config(
             (),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
-            settings_path=Path("settings.yaml"),
             credentials_path=Path("credentials.yaml"),
             provider_progress_timeout=600,
         )
@@ -180,8 +174,8 @@ def test_dsh_config_rejects_invalid_progress_timeout(timeout: float) -> None:
     with pytest.raises(ValueError, match="positive finite"):
         build_dsh_launch_config(
             _models(),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
-            settings_path=Path("settings.yaml"),
             credentials_path=Path("credentials.yaml"),
             provider_progress_timeout=timeout,
         )
@@ -191,8 +185,8 @@ def test_dsh_config_rejects_timeout_beyond_node_timer_limit() -> None:
     with pytest.raises(ValueError, match="too large"):
         build_dsh_launch_config(
             _models(),
+            default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
-            settings_path=Path("settings.yaml"),
             credentials_path=Path("credentials.yaml"),
             provider_progress_timeout=2_147_424,
         )

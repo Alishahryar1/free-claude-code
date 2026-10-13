@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from free_claude_code.config.api_keys import api_key_values, normalize_api_keys
 from free_claude_code.config.loader import clear_settings_cache, get_settings
 from free_claude_code.config.model_refs import parse_model_name, parse_provider_type
 from free_claude_code.config.provider_catalog import (
@@ -68,7 +69,6 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "bedrock": "bedrock/openai.gpt-oss-120b",
     "huggingface": "huggingface/openai/gpt-oss-120b:fastest",
     "cohere": "cohere/command-a-plus-05-2026",
-    "github_models": "github_models/openai/gpt-4.1",
     "zai": "zai/glm-5.2",
     "zai_api": "zai_api/glm-4.7-flash",
     "gemini": "gemini/models/gemini-3.1-flash-lite",
@@ -76,12 +76,15 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "groq": "groq/openai/gpt-oss-20b",
     "cline_pass": "cline_pass/cline-pass/deepseek-v4-flash",
     "xai": "xai/grok-4.5",
+    "alibaba_cloud": "alibaba_cloud/qwen3-coder-plus",
     "qwencloud": "qwencloud/qwen3.7-plus",
     "qwencloud_coding": "qwencloud_coding/qwen3.7-plus",
     "together": "together/zai-org/GLM-5.2",
     "deepinfra": "deepinfra/deepseek-ai/DeepSeek-V4-Flash",
     "siliconflow": "siliconflow/Qwen/Qwen3-32B",
     "nebius": "nebius/Qwen/Qwen3-30B-A3B",
+    "scaleway": "scaleway/deepseek/deepseek-v4-flash",
+    "opper": "opper/claude-sonnet-4-6",
     "chutes": "chutes/Qwen/Qwen3-32B-TEE",
     "featherless": "featherless/Qwen/Qwen3-32B",
     "sambanova": "sambanova/Meta-Llama-3.3-70B-Instruct",
@@ -93,11 +96,18 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "nararoute": "nararoute/kimi-k3-free",
     "poolside": "poolside/poolside/laguna-s-2.1",
     "llm7": "llm7/default",
+    "lightning": "lightning/lightning-ai/Qwen3.8-27B",
+    "experiential": "experiential/union-alpha",
+    "cheaperinference": "cheaperinference/gpt-5.4-mini",
+    "orcarouter": "orcarouter/deepseek/deepseek-v4-flash-free",
+    "atlascloud": "atlascloud/deepseek-ai/deepseek-v4-flash",
+    "xkiro": "xkiro/qwen/qwen3.7-flash:free",
     "agnes": "agnes/agnes-2.0-flash",
     "zenmux": "zenmux/deepseek/deepseek-v4-flash-free",
     "wandb": "wandb/openai/gpt-oss-20b",
 }
 MISTRAL_REASONING_SMOKE_DEFAULT_MODEL = "mistral/mistral-medium-3-5"
+MISTRAL_CACHE_SMOKE_DEFAULT_MODEL = "mistral/mistral-large-latest"
 
 NVIDIA_NIM_CLI_DEFAULT_MODELS: tuple[str, ...] = (
     "nvidia/nemotron-3.5-lightning-30b-a3b",
@@ -280,6 +290,21 @@ class SmokeConfig:
             source = "mistral_reasoning_default"
         return ProviderModel(provider="mistral", full_model=full_model, source=source)
 
+    def mistral_cache_smoke_model(self) -> ProviderModel | None:
+        """Return a Mistral model expected to report prompt-cache reads."""
+        if self.provider_matrix and "mistral" not in self.provider_matrix:
+            return None
+        if not self.has_provider_configuration("mistral"):
+            return None
+        override_env = "FCC_SMOKE_MODEL_MISTRAL_CACHE"
+        if override := os.getenv(override_env):
+            full_model = _normalize_provider_model("mistral", override)
+            source = override_env
+        else:
+            full_model = MISTRAL_CACHE_SMOKE_DEFAULT_MODEL
+            source = "mistral_cache_default"
+        return ProviderModel(provider="mistral", full_model=full_model, source=source)
+
     def _include_provider_in_smoke(
         self, provider: str, mapped_providers: set[str]
     ) -> bool:
@@ -426,10 +451,27 @@ def redacted(value: str, env: Mapping[str, str] | None = None) -> str:
         return value
 
     source = env if env is not None else os.environ
-    result = value
+    credential_keys = {
+        descriptor.credential_env
+        for descriptor in PROVIDER_CATALOG.values()
+        if descriptor.credential_env
+    }
+    replacements: dict[str, str] = {}
     for key, secret in source.items():
         if not secret or len(secret) < 4:
             continue
         if any(part in key.upper() for part in SECRET_KEY_PARTS):
-            result = result.replace(secret, f"<redacted:{key}>")
+            marker = f"<redacted:{key}>"
+            replacements.setdefault(secret, marker)
+            if key in credential_keys:
+                try:
+                    entries = api_key_values(normalize_api_keys(secret))
+                except ValueError:
+                    continue  # Error reporting still masks the complete raw value.
+                for entry in entries:
+                    if len(entry) >= 4:
+                        replacements.setdefault(entry, marker)
+    result = value
+    for secret in sorted(replacements, key=len, reverse=True):
+        result = result.replace(secret, replacements[secret])
     return result

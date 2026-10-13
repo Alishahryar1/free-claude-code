@@ -1,15 +1,21 @@
-"""Client-owned lifetime boundary for long-running inference requests."""
+"""Client-owned lifetime boundary for long-running HTTP requests."""
 
 import asyncio
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-_INFERENCE_PATHS = frozenset({"/v1/messages", "/v1/responses"})
-_CHAT_STREAM_ACTIONS = frozenset({"send", "retry", "regenerate", "compact"})
+_CLIENT_OWNED_PATHS = frozenset(
+    {
+        "/v1/messages",
+        "/v1/responses",
+        "/v1/messages/count_tokens",
+        "/admin/api/code/folder-picker",
+    }
+)
 
 
-class InferenceRequestLifetimeMiddleware:
-    """Cancel inference when its HTTP client disconnects."""
+class ClientRequestLifetimeMiddleware:
+    """Cancel client-owned operations when their HTTP client disconnects."""
 
     def __init__(self, app: ASGIApp) -> None:
         self._app = app
@@ -20,7 +26,7 @@ class InferenceRequestLifetimeMiddleware:
         receive: Receive,
         send: Send,
     ) -> None:
-        if not _owns_inference_lifetime(scope):
+        if not _owns_client_lifetime(scope):
             await self._app(scope, receive, send)
             return
 
@@ -41,11 +47,11 @@ class InferenceRequestLifetimeMiddleware:
 
         application_task = asyncio.create_task(
             run_application(),
-            name="fcc-inference-application",
+            name="fcc-client-application",
         )
         receive_task = asyncio.create_task(
             receive_until_disconnect(),
-            name="fcc-inference-disconnect-receiver",
+            name="fcc-client-disconnect-receiver",
         )
         try:
             done, _pending = await asyncio.wait(
@@ -71,30 +77,19 @@ class InferenceRequestLifetimeMiddleware:
         except asyncio.CancelledError:
             cleanup_task = asyncio.create_task(
                 _cancel_and_wait(application_task, receive_task),
-                name="fcc-inference-lifetime-cleanup",
+                name="fcc-client-lifetime-cleanup",
             )
             await _wait_for_cleanup(cleanup_task)
             raise
 
 
-def _owns_inference_lifetime(scope: Scope) -> bool:
+def _owns_client_lifetime(scope: Scope) -> bool:
     path = scope.get("path")
-    return (
-        scope["type"] == "http"
-        and scope.get("method") == "POST"
-        and (path in _INFERENCE_PATHS or _is_chat_stream_path(path))
-    )
-
-
-def _is_chat_stream_path(path: object) -> bool:
-    if not isinstance(path, str):
-        return False
-    parts = path.split("/")
-    return (
-        len(parts) == 7
-        and parts[1:5] == ["admin", "api", "chat", "sessions"]
-        and bool(parts[5])
-        and parts[6] in _CHAT_STREAM_ACTIONS
+    return scope["type"] == "http" and (
+        (scope.get("method") == "POST" and path in _CLIENT_OWNED_PATHS)
+        or (
+            scope.get("method") == "GET" and path in {"/v1/models", "/muse-code/models"}
+        )
     )
 
 

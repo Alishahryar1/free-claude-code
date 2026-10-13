@@ -1,6 +1,9 @@
 """OpenAI Responses SSE event builders."""
 
-from typing import Any
+from collections.abc import Callable, Iterable
+from typing import Any, cast
+
+from free_claude_code.core.json_types import JsonObject
 
 from ..events import format_response_sse_event
 
@@ -8,8 +11,13 @@ from ..events import format_response_sse_event
 class ResponseEventBuilder:
     """Build one ordered Responses event stream."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        transform: Callable[[str, JsonObject], Iterable[tuple[str, JsonObject]]]
+        | None = None,
+    ) -> None:
         self._next_sequence_number = 0
+        self._transform = transform
 
     def response_created(self, response: dict[str, Any]) -> str:
         return self._format(
@@ -30,10 +38,16 @@ class ResponseEventBuilder:
         )
 
     def response_failed(self, response: dict[str, Any]) -> str:
-        return self._format(
+        return format_response_sse_event(
+            "response.failed", self.response_failed_payload(response)
+        )
+
+    def response_failed_payload(self, response: dict[str, Any]) -> JsonObject:
+        ((_, payload),) = self._project(
             "response.failed",
             {"type": "response.failed", "response": response},
         )
+        return payload
 
     def output_item_added(self, output_index: int, item: dict[str, Any]) -> str:
         return self._format(
@@ -127,6 +141,44 @@ class ResponseEventBuilder:
             },
         )
 
+    def reasoning_summary_text(
+        self, item_id: str, output_index: int, text: str, *, done: bool
+    ) -> str:
+        kind = (
+            "response.reasoning_summary_text.done"
+            if done
+            else "response.reasoning_summary_text.delta"
+        )
+        return self._format(
+            kind,
+            {
+                "type": kind,
+                "item_id": item_id,
+                "output_index": output_index,
+                "summary_index": 0,
+                "text" if done else "delta": text,
+            },
+        )
+
+    def reasoning_summary_part(
+        self, item_id: str, output_index: int, text: str, *, done: bool
+    ) -> str:
+        kind = (
+            "response.reasoning_summary_part.done"
+            if done
+            else "response.reasoning_summary_part.added"
+        )
+        return self._format(
+            kind,
+            {
+                "type": kind,
+                "item_id": item_id,
+                "output_index": output_index,
+                "summary_index": 0,
+                "part": {"type": "summary_text", "text": text},
+            },
+        )
+
     def function_call_arguments_delta(
         self, item_id: str, output_index: int, arguments: str
     ) -> str:
@@ -180,6 +232,16 @@ class ResponseEventBuilder:
         )
 
     def _format(self, event_type: str, data: dict[str, Any]) -> str:
+        return "".join(
+            format_response_sse_event(kind, payload)
+            for kind, payload in self._project(event_type, data)
+        )
+
+    def _project(
+        self, event_type: str, data: dict[str, Any]
+    ) -> Iterable[tuple[str, JsonObject]]:
         data["sequence_number"] = self._next_sequence_number
         self._next_sequence_number += 1
-        return format_response_sse_event(event_type, data)
+        if self._transform is not None:
+            return self._transform(event_type, cast(JsonObject, data))
+        return ((event_type, cast(JsonObject, data)),)

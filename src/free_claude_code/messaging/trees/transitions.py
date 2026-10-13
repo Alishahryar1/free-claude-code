@@ -152,6 +152,7 @@ class FailureResult:
     affected: tuple[NodeUiTarget, ...]
     queue_update: tuple[QueueEntry, ...] | None
     snapshot: TreeSnapshot | None
+    message: str | None = None
 
 
 __all__ = [

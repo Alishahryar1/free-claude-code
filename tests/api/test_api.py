@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.config.constants import DEFAULT_MODEL
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.reasoning import ReasoningPolicy
@@ -16,7 +18,34 @@ from free_claude_code.providers.openai_chat import (
 from tests.api.support import create_test_app
 from tests.providers.support import immediate_admission, make_provider_config
 
-app = create_test_app()
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("prefix", ["", "anthropic/", "claude-3-freecc-no-thinking/"])
+def test_retired_model_ingress_calls_default_provider(client, stream, prefix):
+    original = f"{prefix}github_models/vendor/opus"
+    _stream_messages_calls.clear()
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": original,
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": stream,
+        },
+    )
+    assert response.status_code == 200
+    assert len(_stream_messages_calls) == 1
+    args, kwargs = _stream_messages_calls[0]
+    assert args[0].model == DEFAULT_MODEL.split("/", 1)[1]
+    assert kwargs["response_model"] == original
+    if prefix == "claude-3-freecc-no-thinking/":
+        assert kwargs["reasoning"] == ReasoningPolicy.off()
+
+
+@pytest.fixture
+def app():
+    return create_test_app(Settings())
+
 
 # Mock provider
 mock_provider = MagicMock(spec=NvidiaNimProvider)
@@ -64,8 +93,8 @@ def _terminal_json_error(response, *, status_code: int):
 mock_provider.stream_messages = _mock_stream_messages
 
 
-@pytest.fixture(scope="module")
-def client():
+@pytest.fixture
+def client(app):
     """HTTP client with provider resolution stubbed; patch only for this file."""
     with (
         patch(
@@ -164,7 +193,7 @@ def test_auto_mode_classifier_without_stream_returns_json(client: TestClient):
     assert body["usage"] == {"input_tokens": 0, "output_tokens": 0}
     routed_request = _stream_messages_calls[0][0][0]
     assert routed_request.stream is False
-    assert _stream_messages_calls[0][1]["reasoning"] == ReasoningPolicy.off()
+    assert _stream_messages_calls[0][1]["reasoning"] == ReasoningPolicy.prefer_off()
 
 
 def test_create_message_ingress_error_has_request_id_without_terminal_header(
@@ -182,7 +211,7 @@ def test_create_message_ingress_error_has_request_id_without_terminal_header(
 
 def test_create_message_rejects_unportable_image_as_invalid_request() -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         return_value=MagicMock(),
     ):
         provider = OpenAIChatProvider(
@@ -511,7 +540,7 @@ def test_count_tokens_endpoint(client: TestClient):
     assert response.headers["request-id"].startswith("req_")
 
 
-def test_stop_endpoint_no_workflow_no_cli_503(client: TestClient):
+def test_stop_endpoint_no_workflow_no_cli_503(app, client: TestClient):
     """POST /stop without messaging workflow or cli_manager returns 503."""
     # Ensure no messaging workflow or cli_manager on app state
     if hasattr(app.state, "messaging_workflow"):

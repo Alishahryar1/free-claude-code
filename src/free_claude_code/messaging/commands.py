@@ -21,7 +21,7 @@ async def _send_stop_feedback(
         fire_and_forget=False,
         message_thread_id=incoming.message_thread_id,
     )
-    handler.record_outgoing_message(
+    await handler.record_outgoing_message(
         incoming.platform, incoming.chat_id, msg_id, "command"
     )
 
@@ -85,7 +85,7 @@ async def handle_stats_command(
         fire_and_forget=False,
         message_thread_id=incoming.message_thread_id,
     )
-    handler.record_outgoing_message(
+    await handler.record_outgoing_message(
         incoming.platform, incoming.chat_id, msg_id, "command"
     )
 
@@ -157,7 +157,7 @@ async def handle_clear_command(
                 fire_and_forget=False,
                 message_thread_id=incoming.message_thread_id,
             )
-            handler.record_outgoing_message(
+            await handler.record_outgoing_message(
                 incoming.platform, incoming.chat_id, msg_id, "command"
             )
             return
@@ -166,7 +166,7 @@ async def handle_clear_command(
         if incoming.message_id is not None:
             delete_message_ids.add(str(incoming.message_id))
         await _delete_message_ids(handler, incoming.chat_id, delete_message_ids)
-        handler.forget_tracked_message_ids(
+        await handler.forget_tracked_message_ids(
             incoming.platform,
             incoming.chat_id,
             delete_message_ids,

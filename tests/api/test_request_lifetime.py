@@ -1,8 +1,8 @@
-"""Inference request lifetime contracts at the pure-ASGI boundary."""
+"""Client-owned request lifetime contracts at the pure-ASGI boundary."""
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import cast
 
 import pytest
@@ -11,7 +11,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import AdminRuntimePort, ApiServices
 from free_claude_code.api.request_lifetime import (
-    InferenceRequestLifetimeMiddleware,
+    ClientRequestLifetimeMiddleware,
 )
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.ports import (
@@ -25,6 +25,8 @@ from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
+from tests.web_tools_support import StubWebToolsClient
 
 
 def _http_scope(
@@ -60,11 +62,12 @@ async def _unused_send(_message: Message) -> None:
     [
         _http_scope("/health"),
         _http_scope("/v1/messages", method="OPTIONS"),
-        _http_scope("/admin/api/chat/sessions/session/stop"),
+        _http_scope("/admin/api/code/sessions/session/turns"),
+        _http_scope("/admin/api/code/sessions/session/stop"),
         cast(Scope, {"type": "lifespan", "asgi": {"version": "3.0"}}),
     ],
 )
-async def test_non_inference_scopes_delegate_with_original_callables(
+async def test_other_scopes_delegate_with_original_callables(
     scope: Scope,
 ) -> None:
     observed: tuple[Scope, Receive, Send] | None = None
@@ -83,7 +86,7 @@ async def test_non_inference_scopes_delegate_with_original_callables(
         nonlocal observed
         observed = (received_scope, received_receive, received_send)
 
-    await InferenceRequestLifetimeMiddleware(cast(ASGIApp, app))(
+    await ClientRequestLifetimeMiddleware(cast(ASGIApp, app))(
         scope,
         receive,
         send,
@@ -98,7 +101,7 @@ async def test_non_inference_scopes_delegate_with_original_callables(
     [
         "/v1/messages",
         "/v1/responses",
-        "/admin/api/chat/sessions/session/send",
+        "/admin/api/code/folder-picker",
     ],
 )
 async def test_request_body_frames_are_relayed_once_in_order(path: str) -> None:
@@ -132,7 +135,7 @@ async def test_request_body_frames_are_relayed_once_in_order(path: str) -> None:
         received.append(await app_receive())
         received.append(await app_receive())
 
-    await InferenceRequestLifetimeMiddleware(cast(ASGIApp, app))(
+    await ClientRequestLifetimeMiddleware(cast(ASGIApp, app))(
         _http_scope(path),
         receive,
         _unused_send,
@@ -162,7 +165,7 @@ async def test_receive_pump_buffers_only_a_bounded_number_of_frames() -> None:
         await stop_app.wait()
 
     request = asyncio.create_task(
-        InferenceRequestLifetimeMiddleware(cast(ASGIApp, app))(
+        ClientRequestLifetimeMiddleware(cast(ASGIApp, app))(
             _http_scope(),
             receive,
             _unused_send,
@@ -187,6 +190,8 @@ type DisconnectScenario = Callable[
 async def _run_disconnect_scenario(
     app: DisconnectScenario,
     ready: asyncio.Event,
+    *,
+    path: str = "/v1/messages",
 ) -> list[Message]:
     allow_disconnect = asyncio.Event()
     body_consumed = asyncio.Event()
@@ -210,8 +215,8 @@ async def _run_disconnect_scenario(
         sent.append(message)
 
     request = asyncio.create_task(
-        InferenceRequestLifetimeMiddleware(app)(
-            _http_scope(),
+        ClientRequestLifetimeMiddleware(app)(
+            _http_scope(path),
             receive,
             send,
         )
@@ -224,7 +229,10 @@ async def _run_disconnect_scenario(
 
 
 @pytest.mark.asyncio
-async def test_disconnect_before_response_start_cancels_application() -> None:
+@pytest.mark.parametrize(
+    "path", ["/v1/messages", "/v1/responses", "/admin/api/code/folder-picker"]
+)
+async def test_disconnect_before_response_start_cancels_application(path: str) -> None:
     app_started = asyncio.Event()
     app_closed = asyncio.Event()
 
@@ -236,7 +244,7 @@ async def test_disconnect_before_response_start_cancels_application() -> None:
         finally:
             app_closed.set()
 
-    sent = await _run_disconnect_scenario(app, app_started)
+    sent = await _run_disconnect_scenario(app, app_started, path=path)
 
     assert sent == []
     assert app_closed.is_set()
@@ -303,7 +311,7 @@ async def test_application_error_wins_and_receive_pump_is_closed() -> None:
         raise RuntimeError("application failed")
 
     with pytest.raises(RuntimeError, match="application failed"):
-        await InferenceRequestLifetimeMiddleware(cast(ASGIApp, app))(
+        await ClientRequestLifetimeMiddleware(cast(ASGIApp, app))(
             _http_scope(),
             receive,
             _unused_send,
@@ -326,7 +334,7 @@ async def test_receive_error_cancels_application_and_is_preserved() -> None:
             app_closed.set()
 
     with pytest.raises(RuntimeError, match="receive failed"):
-        await InferenceRequestLifetimeMiddleware(cast(ASGIApp, app))(
+        await ClientRequestLifetimeMiddleware(cast(ASGIApp, app))(
             _http_scope(),
             receive,
             _unused_send,
@@ -365,7 +373,7 @@ async def test_outer_cancellation_drains_both_owned_tasks() -> None:
             app_closed.set()
 
     request = asyncio.create_task(
-        InferenceRequestLifetimeMiddleware(cast(ASGIApp, app))(
+        ClientRequestLifetimeMiddleware(cast(ASGIApp, app))(
             _http_scope(),
             receive,
             _unused_send,
@@ -393,22 +401,6 @@ class _ControlledProvider:
         self.closed = asyncio.Event()
         self.request_ids: list[str] = []
 
-    def preflight_messages(
-        self,
-        _request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        del reasoning
-
-    def preflight_responses(
-        self,
-        _request: OpenAIResponsesRequest,
-        *,
-        reasoning: ReasoningPolicy,
-    ) -> None:
-        del reasoning
-
     async def stream_messages(
         self,
         _request: MessagesRequest,
@@ -417,6 +409,9 @@ class _ControlledProvider:
         request_id: str,
         response_model: str,
         reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         del input_tokens, response_model, reasoning
         self.request_ids.append(request_id)
@@ -436,6 +431,9 @@ class _ControlledProvider:
         request_id: str,
         response_model: str,
         reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         del input_tokens, response_model, reasoning
         self.request_ids.append(request_id)
@@ -453,15 +451,22 @@ class _Lease:
 
     def __init__(self, settings: Settings, provider: ProviderPort) -> None:
         self.settings = settings
-        self.model_infos: tuple[ProviderModelInfo, ...] = ()
         self._provider = provider
         self.release_calls = 0
 
-    def is_provider_cached(self, provider_id: str) -> bool:
+    async def wait_for_token_estimation(self) -> None:
+        pass
+
+    def model_info(self, provider_id: str, model_id: str) -> ProviderModelInfo | None:
+        return None
+
+    def is_provider_cached(self, provider_id: str, api_key_number: int = 1) -> bool:
         del provider_id
         return True
 
-    def resolve_provider(self, provider_id: str) -> ProviderPort:
+    async def resolve_provider(
+        self, provider_id: str, api_key_number: int = 1
+    ) -> ProviderPort:
         assert provider_id == "nvidia_nim"
         return self._provider
 
@@ -473,10 +478,7 @@ class _Requests:
     def __init__(self, lease: _Lease) -> None:
         self._lease = lease
 
-    async def acquire(
-        self, *, include_model_infos: bool = False
-    ) -> RequestRuntimeLease:
-        assert include_model_infos is False
+    async def acquire(self) -> RequestRuntimeLease:
         return self._lease
 
     def current_settings(self) -> Settings:
@@ -566,6 +568,7 @@ async def _disconnect_real_app(
             requests=cast(RequestRuntimePort, requests),
             admin=cast(AdminRuntimePort, object()),
             tasks=cast(TaskController, object()),
+            web_tools=StubWebToolsClient(),
         )
     )
     body = json.dumps(payload).encode()

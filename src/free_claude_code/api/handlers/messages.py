@@ -1,7 +1,8 @@
 """Claude Messages API product flow."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+import sys
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, replace
 
 from fastapi.responses import JSONResponse, Response
@@ -23,23 +24,16 @@ from free_claude_code.api.response_streams import (
     terminal_execution_error_response,
     trace_terminal_execution_error,
 )
-from free_claude_code.api.web_tools.automatic_search import (
-    stream_automatic_web_search_response,
-)
-from free_claude_code.api.web_tools.egress import (
-    WebFetchEgressPolicy,
-    web_fetch_allowed_scheme_set,
-)
-from free_claude_code.api.web_tools.request import (
-    is_web_server_tool_request,
-    plan_automatic_web_search,
-    unsupported_server_tool_error,
-)
-from free_claude_code.api.web_tools.streaming import stream_web_server_tool_response
-from free_claude_code.application.errors import ApplicationError, InvalidRequestError
+from free_claude_code.application.errors import ApplicationError
 from free_claude_code.application.execution import ProviderExecutor, TokenCounter
-from free_claude_code.application.ports import ProviderResolver
-from free_claude_code.application.routing import ModelRouter, RoutedMessagesRequest
+from free_claude_code.application.ports import ModelInfoLookup, ProviderResolver
+from free_claude_code.application.routing import (
+    ModelRouter,
+    RoutedMessagesRequest,
+    RoutedNativeMessagesRequest,
+)
+from free_claude_code.application.web_tools.ports import WebToolsPort
+from free_claude_code.application.web_tools.service import WebToolService
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
     MessagesRequest,
@@ -53,7 +47,10 @@ from free_claude_code.core.anthropic import (
 from free_claude_code.core.diagnostics import safe_exception_message
 from free_claude_code.core.failures import ExecutionFailure, find_execution_failure
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
-from free_claude_code.core.trace import trace_event
+from free_claude_code.core.request_outcomes import record_request_route
+from free_claude_code.core.trace import close_stream_input, trace_event
+
+from .classifier_response import classifier_response
 
 
 @dataclass(frozen=True)
@@ -67,7 +64,6 @@ class _MessagesCompleteResult:
 
 
 _MessagesResult = _MessagesStreamResult | _MessagesCompleteResult
-MessageIntercept = Callable[[RoutedMessagesRequest], _MessagesResult | None]
 
 
 class MessagesHandler:
@@ -78,25 +74,58 @@ class MessagesHandler:
         settings: Settings,
         provider_resolver: ProviderResolver,
         *,
+        web_tools: WebToolsPort,
         model_router: ModelRouter | None = None,
         token_counter: TokenCounter = get_token_count,
         provider_executor: ProviderExecutor | None = None,
         generation_id: int | None = None,
+        request_headers: Mapping[str, str] | None = None,
+        model_info_lookup: ModelInfoLookup | None = None,
     ) -> None:
         self._settings = settings
         self._model_router = model_router or ModelRouter(settings)
-        self._token_counter = token_counter
         self._provider_executor = provider_executor or ProviderExecutor(
             provider_resolver,
             progress_timeout_seconds=settings.provider_progress_timeout,
             token_counter=token_counter,
             generation_id=generation_id,
             log_raw_payloads=settings.log_raw_api_payloads,
+            request_headers=request_headers,
+            model_info_lookup=model_info_lookup,
         )
-        self._message_intercepts: tuple[MessageIntercept, ...] = (
-            self._intercept_web_server_tool,
-            self._intercept_local_optimization,
+        self._web_tools = WebToolService(
+            settings=settings,
+            client=web_tools,
+            executor=self._provider_executor,
+            token_counter=token_counter,
         )
+
+    async def create_native(
+        self, routed: RoutedNativeMessagesRequest, *, request_id: str
+    ) -> object:
+        body = self._provider_executor.stream_native_messages(
+            routed, request_id=request_id
+        )
+        if routed.request.stream:
+            return await anthropic_sse_streaming_response(
+                body,
+                pre_start_error_response=lambda exc: self._pre_start_error_response(
+                    exc, request_id=request_id
+                ),
+                request_id=request_id,
+            )
+        try:
+            chunks = [chunk async for chunk in body]
+            return Response(content="".join(chunks), media_type="application/json")
+        except (Exception, BaseExceptionGroup) as error:
+            return self._pre_start_error_response(error, request_id=request_id)
+        finally:
+            await close_stream_input(
+                body,
+                owner="native_messages_json",
+                source="api",
+                preserved_error=sys.exception(),
+            )
 
     async def create(
         self, request_data: MessagesRequest, *, request_id: str | None = None
@@ -107,36 +136,24 @@ class MessagesHandler:
             require_non_empty_messages(request_data.messages)
             routed = self._model_router.resolve_messages_request(request_data)
             routed = self._apply_message_routing_policies(routed)
-            automatic_search = plan_automatic_web_search(
-                routed.request,
-                web_tools_enabled=self._settings.enable_web_server_tools,
+            record_request_route(
+                routed.resolved.primary.provider_id,
+                routed.resolved.primary.provider_model,
             )
-            if automatic_search is None:
-                self._reject_unsupported_server_tools(routed)
-                result = self._run_message_intercepts(routed)
-            else:
-                input_tokens = self._token_counter(
-                    routed.request.messages,
-                    routed.request.system,
-                    routed.request.tools,
-                )
-                result = _MessagesStreamResult(
-                    stream_automatic_web_search_response(
-                        self._provider_executor,
-                        routed,
-                        automatic_search,
-                        request_id=request_id,
-                        fallback_input_tokens=input_tokens,
-                        verbose_client_errors=self._settings.log_api_error_tracebacks,
-                        search_provider=self._settings.web_search_provider,
-                    )
-                )
+            tool_body = self._web_tools.try_stream_messages(
+                routed, request_id=request_id
+            )
+            result = (
+                _MessagesStreamResult(tool_body)
+                if tool_body is not None
+                else self._intercept_local_optimization(routed)
+            )
             if result is None:
                 logger.debug("No optimization matched, routing to provider")
                 result = _MessagesStreamResult(
                     self._provider_executor.stream_messages(
                         routed,
-                        raw_log_payload=routed.request.model_dump(),
+                        raw_log_payload=routed.request.model_dump,
                         request_id=request_id,
                     )
                 )
@@ -144,6 +161,7 @@ class MessagesHandler:
                 result,
                 stream=request_data.stream,
                 request_id=request_id,
+                hide_reasoning=routed.reasoning.control is ReasoningControl.PREFER_OFF,
             )
         except ApplicationError:
             raise
@@ -163,6 +181,7 @@ class MessagesHandler:
         *,
         stream: bool,
         request_id: str,
+        hide_reasoning: bool = False,
     ) -> object:
         if isinstance(result, _MessagesCompleteResult):
             return result.response
@@ -172,7 +191,7 @@ class MessagesHandler:
             # serving that raw here breaks the client SDK's response parse.
             try:
                 message, error, _complete = await aggregate_anthropic_sse_to_message(
-                    result.body
+                    classifier_response(result.body) if hide_reasoning else result.body
                 )
             except GeneratorExit:
                 raise
@@ -223,6 +242,7 @@ class MessagesHandler:
                 exc, request_id=request_id
             ),
             request_id=request_id,
+            hide_reasoning=hide_reasoning,
         )
 
     def _pre_start_error_response(
@@ -294,14 +314,6 @@ class MessagesHandler:
             ),
         )
 
-    def _reject_unsupported_server_tools(self, routed: RoutedMessagesRequest) -> None:
-        tool_err = unsupported_server_tool_error(
-            routed.request,
-            web_tools_enabled=self._settings.enable_web_server_tools,
-        )
-        if tool_err is not None:
-            raise InvalidRequestError(tool_err)
-
     def _apply_message_routing_policies(
         self, routed: RoutedMessagesRequest
     ) -> RoutedMessagesRequest:
@@ -311,7 +323,7 @@ class MessagesHandler:
         if classifier_stop_sequence is None:
             return routed
 
-        reasoning_changed = routed.reasoning.control is not ReasoningControl.OFF
+        reasoning_changed = routed.reasoning.control is not ReasoningControl.PREFER_OFF
         stop_sequences = routed.request.stop_sequences
         remaining_stop_sequences = (
             [
@@ -344,50 +356,7 @@ class MessagesHandler:
             routed,
             request=request,
             reasoning=(
-                ReasoningPolicy.off() if reasoning_changed else routed.reasoning
-            ),
-        )
-
-    def _run_message_intercepts(
-        self, routed: RoutedMessagesRequest
-    ) -> _MessagesResult | None:
-        for intercept in self._message_intercepts:
-            result = intercept(routed)
-            if result is not None:
-                return result
-        return None
-
-    def _intercept_web_server_tool(
-        self, routed: RoutedMessagesRequest
-    ) -> _MessagesResult | None:
-        if not self._settings.enable_web_server_tools:
-            return None
-        if not is_web_server_tool_request(routed.request):
-            return None
-
-        input_tokens = self._token_counter(
-            routed.request.messages, routed.request.system, routed.request.tools
-        )
-        trace_event(
-            stage="routing",
-            event="free_claude_code.api.optimization.web_server_tool",
-            source="api",
-            model=routed.resolved.original_model,
-        )
-        egress = WebFetchEgressPolicy(
-            allow_private_network_targets=self._settings.web_fetch_allow_private_networks,
-            allowed_schemes=web_fetch_allowed_scheme_set(
-                self._settings.web_fetch_allowed_schemes
-            ),
-        )
-        return _MessagesStreamResult(
-            stream_web_server_tool_response(
-                routed.request,
-                input_tokens=input_tokens,
-                web_fetch_egress=egress,
-                response_model=routed.resolved.original_model,
-                verbose_client_errors=self._settings.log_api_error_tracebacks,
-                search_provider=self._settings.web_search_provider,
+                ReasoningPolicy.prefer_off() if reasoning_changed else routed.reasoning
             ),
         )
 

@@ -1,31 +1,124 @@
 """Implementations for installed Free Claude Code commands."""
 
+import errno
+import json
+import socket
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from enum import StrEnum
+from typing import TYPE_CHECKING, Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request
 
-import uvicorn
 from loguru import logger
 
-from free_claude_code.cli.launchers.common import preflight_proxy
+from free_claude_code.cli.local_http import open_local_request
 from free_claude_code.cli.process_registry import kill_all_best_effort
 from free_claude_code.config.loader import (
+    ManagedConfigStore,
     clear_settings_cache,
     get_settings,
-    repair_invalid_managed_provider_proxies,
 )
-from free_claude_code.config.paths import managed_env_path
+from free_claude_code.config.paths import managed_env_path, server_owner_lock_path
 from free_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from free_claude_code.config.settings import Settings
-from free_claude_code.runtime.bootstrap import build_asgi_app
+from free_claude_code.core.interprocess_lock import InterprocessFileLock
+
+from .server_socket import ServerSockets
+
+if TYPE_CHECKING:
+    import uvicorn
 
 SERVER_GRACEFUL_SHUTDOWN_SECONDS = 5
+_BROWSER_HANDOFF_SECONDS = 5.0
 
 
-def serve() -> None:
+def _start_admin_browser(
+    settings: Settings, eligible: Callable[[], bool], *, instance_id: str
+) -> threading.Event:
+    """Hand off an optional browser action without keeping FCC alive."""
+    completed = threading.Event()
+    url = local_admin_url(settings)
+    browser_logger = logger.bind(instance_id=instance_id)
+
+    def open_browser() -> None:
+        try:
+            if eligible() and not webbrowser.open(url):
+                browser_logger.warning(
+                    "Could not open Admin in a browser. Open {} manually.", url
+                )
+        except Exception as exc:
+            browser_logger.warning(
+                "Could not open Admin: {}. Open {} manually.", exc, url
+            )
+        finally:
+            completed.set()
+
+    try:
+        threading.Thread(
+            target=open_browser, name="fcc-open-admin-browser", daemon=True
+        ).start()
+    except Exception as exc:
+        browser_logger.warning(
+            "Could not start the Admin browser: {}. Open {} manually.", exc, url
+        )
+        completed.set()
+    return completed
+
+
+def serve(*, console_logging: bool = True) -> None:
     """Start and supervise the FastAPI server."""
-    ServerSupervisor().run()
+    try:
+        ServerSupervisor(console_logging=console_logging).run()
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            _log_port_in_use(get_settings())
+        else:
+            logger.error("Could not start FCC: {}", exc)
+        raise SystemExit(1) from None
+
+
+def _log_port_in_use(settings: Settings) -> None:
+    """Explain a busy port, telling a running FCC apart from another program."""
+    status = None
+    try:
+        status = _external_fcc_status(settings, timeout=1.5)
+        other_program = status is None
+    except HTTPError as exc:
+        # Admin rejects non-loopback requests, so a 403 cannot rule out FCC.
+        other_program = exc.code != 403
+    except ValueError:
+        other_program = True
+    except OSError:
+        other_program = False
+    if status is not None and status["status"] == "running":
+        logger.error(
+            "FCC is already running on port {}. Use it at {}, or stop it before "
+            "starting another instance.",
+            settings.port,
+            local_admin_url(settings),
+        )
+    elif status is not None:
+        logger.error(
+            "The FCC instance on port {} is still stopping. Try again in a moment.",
+            settings.port,
+        )
+    elif other_program:
+        logger.error(
+            "Could not start FCC: port {} is already in use by another program. "
+            "Stop that program, or set PORT to a free port in {}.",
+            settings.port,
+            managed_env_path(),
+        )
+    else:
+        logger.error(
+            "Could not start FCC: port {} is already in use. If FCC is not already "
+            "running, stop the program using it, or set PORT to a free port in {}.",
+            settings.port,
+            managed_env_path(),
+        )
 
 
 class ServerStatus(StrEnum):
@@ -46,7 +139,12 @@ class ServerSupervisor:
         self._server: uvicorn.Server | None = None
         self._run_scheduled = False
         self._running = False
-        self._stop_requested = False
+        self.stop_event = threading.Event()
+        self._ready_settings: Settings | None = None
+        self._ready_instance_id: str | None = None
+        self._pending_admin = False
+        self._auto_browser_opened = False
+        self._owned_server = False
         self._restart_generation = 0
 
     @property
@@ -68,25 +166,39 @@ class ServerSupervisor:
         """Reserve a worker run before its thread starts."""
 
         with self._lock:
-            if self._stop_requested or self._run_scheduled or self._running:
+            if self.stop_event.is_set() or self._run_scheduled or self._running:
                 return False
             self._run_scheduled = True
             return True
 
-    def run(self, *, open_admin_browser: bool | None = None) -> None:
+    def run(
+        self,
+        *,
+        open_admin_browser: bool | None = None,
+        existing_server: Callable[[Settings], bool] | None = None,
+    ) -> None:
         """Block until stopped, applying only fully closed Admin restarts."""
 
         with self._lock:
             self._run_scheduled = False
             if self._running:
                 raise RuntimeError("The FCC server supervisor is already running.")
-            if self._stop_requested:
+            if self.stop_event.is_set():
                 return
             self._running = True
+            self._owned_server = False
 
-        opened_admin_browser = False
+        self._auto_browser_opened = False
+        owner_lock = InterprocessFileLock(server_owner_lock_path())
         try:
             try:
+                if not owner_lock.acquire():
+                    if existing_server and existing_server(load_server_settings()):
+                        return
+                    raise OSError(
+                        errno.EADDRINUSE,
+                        "Another FCC server already owns this configuration.",
+                    )
                 while not self._is_stop_requested():
                     with self._lock:
                         restart_generation = self._restart_generation
@@ -95,28 +207,41 @@ class ServerSupervisor:
                         settings.open_admin_browser
                         if open_admin_browser is None
                         else open_admin_browser
-                    ) and not opened_admin_browser
-                    if not self._run_once(
-                        settings,
-                        open_admin_browser=should_open_admin,
-                        restart_generation=restart_generation,
-                    ):
+                    ) and not self._auto_browser_opened
+                    try:
+                        restart = self._run_once(
+                            settings,
+                            open_admin_browser=should_open_admin,
+                            restart_generation=restart_generation,
+                        )
+                    except OSError as exc:
+                        if (
+                            exc.errno == errno.EADDRINUSE
+                            and existing_server
+                            and existing_server(settings)
+                        ):
+                            return
+                        raise
+                    if not restart:
                         return
-                    opened_admin_browser = opened_admin_browser or should_open_admin
                     clear_settings_cache()
             except KeyboardInterrupt:
                 return
         finally:
-            with self._lock:
-                self._server = None
-                self._running = False
-            kill_all_best_effort()
+            try:
+                with self._lock:
+                    self._server = None
+                    self._running = False
+                if self._owned_server:
+                    kill_all_best_effort()
+            finally:
+                owner_lock.release()
 
     def request_restart(self) -> bool:
         """Reload an active generation or coalesce into a scheduled fresh run."""
 
         with self._lock:
-            if self._stop_requested:
+            if self.stop_event.is_set():
                 return False
             if self._run_scheduled:
                 self._restart_generation += 1
@@ -132,14 +257,41 @@ class ServerSupervisor:
         """Permanently stop this supervisor after graceful runtime cleanup."""
 
         with self._lock:
-            self._stop_requested = True
+            self.stop_event.set()
             self._run_scheduled = False
             if self._server is not None:
                 self._server.should_exit = True
 
     def _is_stop_requested(self) -> bool:
         with self._lock:
-            return self._stop_requested
+            return self.stop_event.is_set()
+
+    def request_open_admin(self) -> None:
+        with self._lock:
+            if self.stop_event.is_set():
+                return
+            self._pending_admin = True
+            settings = self._ready_settings
+            instance_id = self._ready_instance_id
+            generation = self._restart_generation
+        if settings is not None and instance_id is not None:
+            self._open_admin(settings, generation, instance_id)
+
+    def _open_admin(
+        self, settings: Settings, generation: int, instance_id: str
+    ) -> None:
+        def eligible() -> bool:
+            with self._lock:
+                if (
+                    self.stop_event.is_set()
+                    or self._restart_generation != generation
+                    or self._ready_settings is not settings
+                ):
+                    return False
+                self._pending_admin = False
+                return True
+
+        _start_admin_browser(settings, eligible, instance_id=instance_id)
 
     def _run_once(
         self,
@@ -148,6 +300,31 @@ class ServerSupervisor:
         open_admin_browser: bool,
         restart_generation: int,
     ) -> bool:
+        with ServerSockets.reserve(settings.host, settings.port) as listeners:
+            self._owned_server = True
+            if self.stop_event.is_set():
+                return False
+            return self._run_bound(
+                settings,
+                listeners.sockets,
+                open_admin_browser=open_admin_browser,
+                restart_generation=restart_generation,
+            )
+
+    def _run_bound(
+        self,
+        settings: Settings,
+        sockets: list[socket.socket],
+        *,
+        open_admin_browser: bool,
+        restart_generation: int,
+    ) -> bool:
+        import uvicorn
+
+        from free_claude_code.runtime.bootstrap import build_asgi_app
+
+        from .uvicorn_server import RuntimeServer, uvicorn_log_config
+
         asgi_app = build_asgi_app(
             settings,
             restart_callback=self._request_runtime_restart,
@@ -157,26 +334,56 @@ class ServerSupervisor:
             host=settings.host,
             port=settings.port,
             log_level="debug",
-            log_config=(
-                uvicorn.config.LOGGING_CONFIG if self._console_logging else None
-            ),
+            log_config=uvicorn_log_config(console=self._console_logging),
             timeout_graceful_shutdown=SERVER_GRACEFUL_SHUTDOWN_SECONDS,
         )
-        server = uvicorn.Server(config)
+
+        def on_started() -> None:
+            with self._lock:
+                if (
+                    self._server is not server
+                    or self.stop_event.is_set()
+                    or self._restart_generation != restart_generation
+                ):
+                    return
+                self._ready_settings = settings
+                self._ready_instance_id = asgi_app.runtime.instance_id
+                should_open = open_admin_browser or self._pending_admin
+                if open_admin_browser:
+                    self._auto_browser_opened = True
+            asgi_app.runtime.http_started()
+            if should_open:
+                self._open_admin(
+                    settings, restart_generation, asgi_app.runtime.instance_id
+                )
+
+        server = RuntimeServer(
+            config,
+            begin_shutdown=asgi_app.runtime.begin_shutdown,
+            on_started=on_started,
+            close_runtime=asgi_app.runtime.close,
+        )
         with self._lock:
             self._server = server
-            if self._stop_requested or self._restart_generation != restart_generation:
+            if (
+                self.stop_event.is_set()
+                or self._restart_generation != restart_generation
+            ):
                 server.should_exit = True
 
-        if open_admin_browser:
-            schedule_open_admin_browser(settings)
-        server.run()
+        try:
+            with logger.contextualize(instance_id=asgi_app.runtime.instance_id):
+                server.run(sockets=sockets)
+        finally:
+            with self._lock:
+                if self._server is server:
+                    self._server = None
+                    self._ready_settings = None
+                    self._ready_instance_id = None
 
         with self._lock:
-            if self._server is server:
-                self._server = None
             restart_requested = self._restart_generation != restart_generation
-            stop_requested = self._stop_requested
+            stop_requested = self.stop_event.is_set()
         return restart_requested and not stop_requested and asgi_app.runtime.is_closed
 
     def _request_runtime_restart(self) -> None:
@@ -187,7 +394,7 @@ def load_server_settings() -> Settings:
     """Return canonical settings after repairing invalid managed proxies."""
 
     settings = get_settings()
-    removed = repair_invalid_managed_provider_proxies()
+    removed = ManagedConfigStore().repair_invalid_provider_proxies()
     if not removed:
         return settings
 
@@ -201,25 +408,53 @@ def load_server_settings() -> Settings:
     return get_settings()
 
 
-def open_admin_when_ready(settings: Settings) -> bool:
-    """Wait briefly for /health, then open the current Admin UI."""
+def _external_fcc_status(
+    settings: Settings, *, timeout: float
+) -> dict[str, Any] | None:
+    """Return the status payload an FCC instance reports on this port, or None for other servers."""
+    url = f"{local_proxy_root_url(settings)}/admin/api/status"
+    with open_local_request(Request(url), timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict) or not (
+        isinstance(payload.get("instance_id"), str)
+        and len(payload["instance_id"]) == 32
+        and payload.get("status") in {"running", "stopping"}
+        and isinstance(payload.get("host"), str)
+        and payload.get("port") == settings.port
+        and isinstance(payload.get("provider_status"), list)
+        and isinstance(payload.get("cached_models"), dict)
+    ):
+        return None
+    return payload
 
-    admin_url = local_admin_url(settings)
-    proxy_root_url = local_proxy_root_url(settings)
+
+def open_admin_when_ready(
+    settings: Settings, *, stop_event: threading.Event | None = None
+) -> bool:
+    """Recognize an external FCC instance and attempt to open its local Admin page."""
+    stop = stop_event or threading.Event()
     deadline = time.monotonic() + 30.0
-    while time.monotonic() < deadline:
-        if preflight_proxy(proxy_root_url) is None:
-            return webbrowser.open(admin_url)
-        time.sleep(0.15)
+    while not stop.is_set() and time.monotonic() < deadline:
+        try:
+            status = _external_fcc_status(settings, timeout=1.5)
+            if status is None:
+                return False
+            if status["status"] == "running" and not stop.is_set():
+                completed = _start_admin_browser(
+                    settings,
+                    lambda: not stop.is_set(),
+                    instance_id=status["instance_id"],
+                )
+                # This extra launcher is about to exit: allow a brief URL handoff.
+                handoff_deadline = time.monotonic() + _BROWSER_HANDOFF_SECONDS
+                while not stop.is_set():
+                    remaining = handoff_deadline - time.monotonic()
+                    if remaining <= 0 or completed.wait(min(0.05, remaining)):
+                        break
+                return True
+        except HTTPError, ValueError, UnicodeError:
+            return False
+        except URLError, OSError:
+            pass
+        stop.wait(0.15)
     return False
-
-
-def schedule_open_admin_browser(settings: Settings) -> None:
-    """Open Admin after health succeeds without blocking the caller."""
-
-    threading.Thread(
-        target=open_admin_when_ready,
-        args=(settings,),
-        name="fcc-open-admin-browser",
-        daemon=True,
-    ).start()

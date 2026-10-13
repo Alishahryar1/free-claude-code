@@ -1,55 +1,31 @@
+"""Claude owns permission options and prompt interpretation."""
+
 import pytest
 
-from free_claude_code.cli.launchers.claude import build_claude_launcher_command
-
-
-def test_claude_launcher_defaults_to_non_auto_permission_mode() -> None:
-    assert build_claude_launcher_command(
-        binary_path="claude", argv=["fix the tests"]
-    ) == ["claude", "--permission-mode", "default", "fix the tests"]
+from tests.cli.conftest import LaunchCapture
+from tests.cli.test_launcher_workflow import launch
 
 
 @pytest.mark.parametrize(
-    "argv",
+    "args",
     [
-        ["--permission-mode", "auto", "fix the tests"],
-        ["--permission-mode=acceptEdits", "fix the tests"],
-        ["--dangerously-skip-permissions", "fix the tests"],
-    ],
-)
-def test_claude_launcher_preserves_explicit_permission_choice(
-    argv: list[str],
-) -> None:
-    assert build_claude_launcher_command(binary_path="claude", argv=argv) == [
-        "claude",
-        *argv,
-    ]
-
-
-@pytest.mark.parametrize("argv", [["--permission-mode"], ["--permission-mode="]])
-def test_claude_launcher_leaves_malformed_permission_options_to_claude(
-    argv: list[str],
-) -> None:
-    assert build_claude_launcher_command(binary_path="claude", argv=argv) == [
-        "claude",
-        *argv,
-    ]
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["explain --permission-mode auto"],
+        [],
+        ["--permission-mode", "auto", "fix tests"],
+        ["--permission-mode=acceptEdits", "fix tests"],
+        ["--dangerously-skip-permissions", "fix tests"],
+        ["--permission-mode"],
         ["--", "--permission-mode=auto"],
-        ["--", "--dangerously-skip-permissions"],
+        ["explain --permission-mode auto"],
     ],
 )
-def test_claude_launcher_does_not_treat_prompt_text_as_a_permission_choice(
-    argv: list[str],
+def test_claude_owns_permission_selection(
+    args: list[str], launch_capture: LaunchCapture
 ) -> None:
-    assert build_claude_launcher_command(binary_path="claude", argv=argv) == [
-        "claude",
-        "--permission-mode",
-        "default",
-        *argv,
-    ]
+    launch("claude", args)
+    assert launch_capture.commands == [["claude", *args]]
+    env = launch_capture.environments[0]
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8182"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "launcher-test-token"
+    assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+    assert env["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
+    assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"

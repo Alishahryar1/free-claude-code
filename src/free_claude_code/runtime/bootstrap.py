@@ -3,34 +3,41 @@
 import os
 from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
-from free_claude_code.application.chat import ChatService
+from free_claude_code.application.code_sessions import CodeService
+from free_claude_code.config.api_keys import first_api_key
+from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.logging_config import configure_logging
 from free_claude_code.config.paths import (
-    chat_database_path,
-    chat_lock_path,
+    code_lock_path,
+    fcc_database_path,
+    legacy_code_database_path,
     server_log_path,
 )
 from free_claude_code.config.settings import Settings
-from free_claude_code.messaging.transcription import TranscriptionService
+from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.messaging.voice import Transcriber
-from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
-from free_claude_code.providers.nvidia_nim.voice import NvidiaNimTranscriber
-from free_claude_code.providers.openai_codex import (
-    OpenAIAuthManager,
-    OpenAICodexProvider,
-)
-from free_claude_code.providers.runtime import ProviderRuntime
-from free_claude_code.providers.runtime.factory import create_provider
+from free_claude_code.providers.github_copilot.auth import CopilotAuthManager
+from free_claude_code.providers.openai_codex.auth import OpenAIAuthManager
+from free_claude_code.providers.runtime.runtime import ProviderRuntime, create_provider
+
+if TYPE_CHECKING:
+    from free_claude_code.providers.admission import ProviderAdmissionController
+    from free_claude_code.providers.runtime.factory import ProviderFactory
 
 from .application import ApplicationRuntime, RestartCallback
 from .asgi import RuntimeASGIApp
-from .chat_sqlite import SQLiteChatStore
+from .code_sessions_sqlite import SQLiteCodeStore
+from .codex_app_server import CodexHarnessFactory
 from .codex_catalog import CodexModelCatalogPublisher
+from .configuration import ConfigurationService
 from .provider_manager import ProviderRuntimeManager
+from .sqlite_database import SQLiteDatabase
+from .web_tools.client import HTTPWebToolsClient
 
 
 def build_asgi_app(
@@ -45,10 +52,15 @@ def build_asgi_app(
         verbose_third_party=settings.log_raw_api_payloads,
     )
     openai_auth = OpenAIAuthManager(proxy=settings.openai_proxy)
-    openai_factory = partial(_create_openai_provider, auth=openai_auth)
+    copilot_auth = CopilotAuthManager()
+    copilot_factory = partial(_load_copilot_provider, auth=copilot_auth)
+    openai_factory = partial(_load_openai_provider, auth=openai_auth)
     provider_constructor = partial(
         create_provider,
-        injected_factories={"openai": openai_factory},
+        provider_loaders={
+            "openai": openai_factory,
+            "github_copilot": copilot_factory,
+        },
     )
     runtime_factory = partial(
         ProviderRuntime,
@@ -57,52 +69,91 @@ def build_asgi_app(
     provider_manager = ProviderRuntimeManager(
         settings,
         runtime_factory=runtime_factory,
-        connected_provider_ids=openai_auth.connected_provider_ids,
+        connected_provider_ids=lambda: (
+            *openai_auth.connected_provider_ids(),
+            *copilot_auth.connected_provider_ids(),
+        ),
         model_catalog_publisher=CodexModelCatalogPublisher(),
     )
-    chat_service = ChatService(
-        provider_manager,
-        SQLiteChatStore(chat_database_path(), chat_lock_path()),
+    database = SQLiteDatabase(
+        fcc_database_path(), code_lock_path(), legacy_path=legacy_code_database_path()
+    )
+    code_service = CodeService(
+        SQLiteCodeStore(database),
+        CodexHarnessFactory(provider_manager),
     )
     runtime = ApplicationRuntime(
         provider_manager,
-        chat_service=chat_service,
-        transcriber=_create_transcriber(settings),
+        configuration=ConfigurationService(ManagedConfigStore()),
+        code_service=code_service,
+        database=database,
+        transcriber=None,
+        transcriber_factory=_create_transcriber,
         restart_callback=restart_callback,
-        connected_accounts={"openai": openai_auth},
+        connected_accounts={"openai": openai_auth, "github_copilot": copilot_auth},
     )
     services = ApiServices(
         requests=provider_manager,
         admin=runtime,
         tasks=runtime,
-        chat=chat_service,
+        web_tools=HTTPWebToolsClient(search_provider=settings.web_search_provider),
+        code=code_service,
     )
     return RuntimeASGIApp(create_app(services), runtime)
 
 
-def _create_openai_provider(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-    *,
-    auth: OpenAIAuthManager,
-) -> BaseProvider:
-    return OpenAICodexProvider(config, auth=auth, admission=admission)
+def _load_openai_provider(*, auth: OpenAIAuthManager) -> ProviderFactory:
+    from free_claude_code.providers.openai_codex.provider import OpenAICodexProvider
+
+    def construct(
+        config: ProviderConfig,
+        _settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return OpenAICodexProvider(config, auth=auth, admission=admission)
+
+    return construct
 
 
-def _create_transcriber(settings: Settings) -> Transcriber | None:
+def _load_copilot_provider(*, auth: CopilotAuthManager) -> ProviderFactory:
+    from free_claude_code.providers.github_copilot.provider import GitHubCopilotProvider
+
+    def construct(
+        config: ProviderConfig,
+        _settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return GitHubCopilotProvider(config, auth=auth, admission=admission)
+
+    return construct
+
+
+async def _create_transcriber(settings: Settings) -> Transcriber | None:
     if not settings.voice_note_enabled:
         return None
-    if settings.whisper_device == "nvidia_nim":
-        return NvidiaNimTranscriber(
+
+    def load():
+        if settings.whisper_device == "nvidia_nim":
+            from free_claude_code.providers.nvidia_nim.voice import NvidiaNimTranscriber
+
+            return partial(
+                NvidiaNimTranscriber,
+                model=settings.whisper_model,
+                api_key=_required_voice_key(
+                    first_api_key(settings.nvidia_nim_api_keys)
+                ),
+            )
+        from free_claude_code.messaging.transcription import TranscriptionService
+
+        return partial(
+            TranscriptionService,
             model=settings.whisper_model,
-            api_key=_required_voice_key(settings.nvidia_nim_api_key),
+            device=settings.whisper_device,
+            huggingface_api_key=first_api_key(settings.huggingface_api_keys),
         )
-    return TranscriptionService(
-        model=settings.whisper_model,
-        device=settings.whisper_device,
-        huggingface_api_key=settings.huggingface_api_key,
-    )
+
+    constructor = await run_sync_owned(load)
+    return constructor()
 
 
 def _required_voice_key(api_key: str | None) -> str:

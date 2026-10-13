@@ -3,17 +3,20 @@
 import asyncio
 import json
 from collections.abc import Callable
+from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import httpx2
 import pytest
+from jsonschema import Draft202012Validator
 from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.routing import (
+    ProviderModelCandidate,
     ProviderModelTarget,
     ResolvedModelRoute,
     RoutedMessagesRequest,
@@ -29,7 +32,10 @@ from free_claude_code.core.anthropic.stream_contracts import (
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
-from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
+from free_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningCapability,
+)
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.opencode import (
     OpenCodeProvider,
@@ -41,6 +47,9 @@ from free_claude_code.providers.opencode.catalog import (
     OpenCodeUpstreamTransport,
     parse_open_code_catalog,
 )
+from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from tests.api.test_response_streams import _serve
+from tests.api.test_tool_call_buffer import _response
 from tests.providers.support import (
     capture_openai_chat_wire_body,
     immediate_admission,
@@ -53,8 +62,6 @@ def _config():
     return make_provider_config(
         api_key="test_opencode_key",
         base_url="https://opencode.ai/zen/v1",
-        rate_limit=100,
-        rate_window=1,
     )
 
 
@@ -257,7 +264,7 @@ def _provider_with_wire_transports(
         ),
     )
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         return_value=generation_client,
     ):
         provider = create_opencode_provider(
@@ -308,7 +315,7 @@ def test_client_identifies_as_first_party_opencode_user_agent(
 ) -> None:
     with (
         patch(
-            "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+            "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
         ) as mock_openai,
         patch("httpx.AsyncClient"),
     ):
@@ -382,6 +389,7 @@ def test_catalog_resolves_package_precedence_status_alias_and_reasoning() -> Non
             ProviderModelInfo(
                 "provider-default",
                 supports_thinking=False,
+                reasoning_capability=ReasoningCapability.NONE,
                 input_modalities=frozenset({ModelInputModality.TEXT}),
                 context_window_tokens=131072,
                 max_output_tokens=8192,
@@ -666,6 +674,206 @@ async def test_responses_ingress_uses_catalog_responses_transport_natively() -> 
 
 
 @pytest.mark.asyncio
+async def test_responses_tool_search_accepts_optional_codex_arguments() -> None:
+    # Captured from Codex 0.153.0: OpenCode rejects this client's optional limit.
+    parameters = {
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "number",
+                "description": "Maximum number of tools to return. Defaults to 8.",
+            },
+            "query": {"type": "string"},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    tools = [
+        {"type": "tool_search", "execution": "client", "parameters": parameters},
+        {
+            "type": "function",
+            "name": "ordinary_search",
+            "parameters": deepcopy(parameters),
+            "strict": False,
+        },
+    ]
+    request = _responses_request("responses-selector", tools=tools)
+    original = request.model_dump()
+
+    def upstream(wire_request: httpx2.Request) -> httpx2.Response:
+        schema = json.loads(wire_request.content)["tools"][0]["parameters"]
+        if set(schema["required"]) != set(schema["properties"]):
+            return httpx2.Response(
+                400,
+                json={
+                    "error": {
+                        "type": "invalid_request_error",
+                        "param": "parameters",
+                        "message": "'required' must include every property. Missing 'limit'.",
+                    }
+                },
+            )
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_responses_event_stream("hello"),
+        )
+
+    provider, wire_requests, _ = _provider_with_wire_transports(
+        _catalog_payload(), generation_response=upstream
+    )
+    try:
+        await provider.list_model_infos()
+        body = "".join([chunk async for chunk in provider.stream_responses(request)])
+    finally:
+        await provider.cleanup()
+
+    assert len(wire_requests) == 1
+    assert "hello" in body
+    forwarded = json.loads(wire_requests[0].content)["tools"]
+    validator = Draft202012Validator(forwarded[0]["parameters"])
+    assert validator.is_valid({"query": "files", "limit": None})
+    assert validator.is_valid({"query": "files", "limit": 3})
+    assert not validator.is_valid({"query": "files", "limit": "three"})
+    assert not validator.is_valid({"query": None, "limit": 3})
+    assert forwarded[1] == tools[1]
+    assert request.model_dump() == original
+
+
+@pytest.mark.asyncio
+async def test_codex_custom_tool_round_trip_uses_opencode_function_tools() -> None:
+    patch_text = "*** Begin Patch\n*** Add File: hello.txt\n+hello 🌍\n*** End Patch"
+    custom_tool = {
+        "type": "custom",
+        "name": "edit_file",
+        "description": "Edit a file with a raw patch.",
+        "format": {"type": "text"},
+    }
+    tools = [
+        custom_tool,
+        {
+            "type": "web_search",
+            "external_web_access": False,
+            "search_content_types": ["text", "image"],
+        },
+    ]
+
+    def upstream(wire_request: httpx2.Request) -> httpx2.Response:
+        wire = json.loads(wire_request.content)
+        if any(
+            tool["type"] == "custom" or "search_content_types" in tool
+            for tool in wire["tools"]
+        ):
+            return httpx2.Response(
+                400,
+                json={
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "Unsupported tool format",
+                    }
+                },
+            )
+        packets = [
+            json.loads(line[6:])
+            for line in _responses_event_stream("done").splitlines()
+            if line.startswith("data: ")
+        ]
+        item = {
+            "type": "function_call",
+            "id": "item_custom",
+            "call_id": "call_custom",
+            "name": wire["tools"][0]["name"],
+            "arguments": json.dumps({"input": patch_text}),
+            "status": "completed",
+        }
+        packets = [
+            packets[0],
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {**item, "arguments": "", "status": "in_progress"},
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": item["id"],
+                "output_index": 0,
+                "delta": item["arguments"],
+            },
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": item["id"],
+                "output_index": 0,
+                "arguments": item["arguments"],
+            },
+            {"type": "response.output_item.done", "output_index": 0, "item": item},
+            {**packets[-1], "response": {**packets[-1]["response"], "output": [item]}},
+        ]
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(
+                "data: " + json.dumps({**packet, "sequence_number": index}) + "\n\n"
+                for index, packet in enumerate(packets)
+            ),
+        )
+
+    provider, wire_requests, _ = _provider_with_wire_transports(
+        _catalog_payload(), generation_response=upstream
+    )
+    try:
+        output = await _collect_responses(provider, "responses-selector", tools=tools)
+        events = parse_sse_text(output)
+        call = events[-1].data["response"]["output"][0]
+        assert call == {
+            "type": "custom_tool_call",
+            "id": "item_custom",
+            "call_id": "call_custom",
+            "name": "edit_file",
+            "input": patch_text,
+            "status": "completed",
+        }
+        assert any(
+            event.event == "response.custom_tool_call_input.done"
+            and event.data["input"] == patch_text
+            for event in events
+        )
+        assert not any(
+            event.event.startswith("response.function_call_arguments")
+            for event in events
+        )
+        sequences = [event.data["sequence_number"] for event in events]
+        assert sequences == sorted(set(sequences))
+        await _collect_responses(
+            provider,
+            "responses-selector",
+            tools=tools,
+            input=[
+                call,
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_custom",
+                    "output": "Patch applied",
+                },
+            ],
+        )
+    finally:
+        await provider.cleanup()
+
+    first = json.loads(wire_requests[0].content)
+    assert first["tools"][0]["type"] == "function"
+    assert first["tools"][1] == {"type": "web_search", "external_web_access": False}
+    replay = json.loads(wire_requests[1].content)["input"]
+    assert replay[0]["type"] == "function_call"
+    assert json.loads(replay[0]["arguments"]) == {"input": patch_text}
+    assert replay[1] == {
+        "type": "function_call_output",
+        "call_id": "call_custom",
+        "output": "Patch applied",
+    }
+    assert tools[0] == custom_tool
+
+
+@pytest.mark.asyncio
 async def test_responses_ingress_uses_catalog_chat_transport_directly() -> None:
     provider, generation_requests, catalog_requests = _provider_with_wire_transports(
         _catalog_payload()
@@ -687,6 +895,131 @@ async def test_responses_ingress_uses_catalog_chat_transport_directly() -> None:
     assert events[-1].event == "response.completed"
     assert events[-1].data["response"]["model"] == "chat-selector"
     assert events[-1].data["response"]["output"][0]["content"][0]["text"] == ("chat-ok")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("execution", ["client", "server"])
+async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
+    execution: str,
+) -> None:
+    definition = {
+        "type": "namespace",
+        "name": "editor",
+        "description": "Editing tools",
+        "tools": [
+            {
+                "type": "custom",
+                "name": "edit",
+                "format": {"type": "text"},
+                "defer_loading": True,
+                "allowed_callers": ["direct"],
+                "extension": {"keep": True},
+            }
+        ],
+    }
+    expected_tool = definition["tools"][0]
+    assert isinstance(expected_tool, dict)
+    discovery = {
+        "type": "tool_search_output",
+        "call_id": "search_one",
+        "execution": execution,
+        "status": "completed",
+        "tools": [definition],
+    }
+    history = [discovery, {**discovery, "call_id": "search_two"}]
+
+    def upstream(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        for loaded in body["input"][:2]:
+            if execution == "client":
+                assert loaded["type"] == "function_call_output"
+                tool = json.loads(loaded["output"])[0]
+                assert "defer_loading" not in tool
+                assert tool in body["tools"]
+            else:
+                assert loaded["execution"] == execution
+                tool = loaded["tools"][0]
+                assert tool["defer_loading"] is True
+            assert tool["type"] == "function"
+            assert tool["name"] == "editor__edit"
+            assert "namespace" not in tool
+            for field in ("allowed_callers", "extension"):
+                assert tool[field] == expected_tool[field]
+        if len(body["input"]) > 2:
+            assert body["input"][2]["type"] == "function_call"
+            assert body["input"][2]["name"] == tool["name"]
+            assert "namespace" not in body["input"][2]
+            assert json.loads(body["input"][2]["arguments"]) == {"input": "patch"}
+            assert body["input"][3] == {
+                "type": "function_call_output",
+                "call_id": "edit_one",
+                "output": "applied",
+            }
+            return httpx2.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=_responses_event_stream("done"),
+            )
+        packets = [
+            json.loads(line[6:])
+            for line in _responses_event_stream("done").splitlines()
+            if line.startswith("data: ")
+        ]
+        call = {
+            "type": "function_call",
+            "id": "edit_item",
+            "call_id": "edit_one",
+            "name": tool["name"],
+            "arguments": '{"input":"patch"}',
+            "status": "completed",
+        }
+        events = [
+            packets[0],
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {**call, "status": "in_progress", "arguments": ""},
+            },
+            {"type": "response.output_item.done", "output_index": 0, "item": call},
+            {**packets[-1], "response": {**packets[-1]["response"], "output": [call]}},
+        ]
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(
+                "data: " + json.dumps({**event, "sequence_number": i}) + "\n\n"
+                for i, event in enumerate(events)
+            ),
+        )
+
+    provider, requests, _ = _provider_with_wire_transports(
+        _catalog_payload(), generation_response=upstream
+    )
+    try:
+        response = await _collect_responses(
+            provider, "responses-selector", input=history
+        )
+        call = parse_sse_text(response)[-1].data["response"]["output"][0]
+        assert call["type"] == "custom_tool_call"
+        assert call["name"] == "edit" and call["namespace"] == "editor"
+        reply = await _collect_responses(
+            provider,
+            "responses-selector",
+            input=[
+                *history,
+                call,
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "edit_one",
+                    "output": "applied",
+                },
+            ],
+        )
+        assert "done" in reply
+    finally:
+        await provider.cleanup()
+    assert len(requests) == 2
+    assert history[0]["tools"] == [definition]
 
 
 @pytest.mark.parametrize(
@@ -718,6 +1051,7 @@ async def test_responses_ingress_uses_catalog_chat_transport_directly() -> None:
     ),
 )
 @pytest.mark.asyncio
+@pytest.mark.parametrize("midstream", [False, True])
 async def test_candidate_fallback_resolves_each_opencode_transport(
     wire_api: str,
     primary_model: str,
@@ -725,9 +1059,28 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
     failed_path: str,
     fallback_path: str,
     fallback_text: str,
+    midstream: bool,
+    monkeypatch,
 ) -> None:
+    from tests.api.test_delivered_stream_recovery import text_events
+
+    monkeypatch.setattr(
+        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
+        lambda: RecoveryHoldbackBuffer(max_bytes=1),
+    )
+
     def generation_response(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == failed_path:
+            if midstream:
+                protocol = "responses" if failed_path.endswith("/responses") else "chat"
+                return httpx2.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    text="".join(
+                        f"data: {json.dumps(event)}\n\n"
+                        for event in text_events(protocol, "Before. ", complete=False)
+                    ),
+                )
             return httpx2.Response(503, json={"error": "temporary overload"})
         if request.url.path == "/zen/v1/responses":
             body = _responses_event_stream(fallback_text)
@@ -762,11 +1115,11 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
     resolved = ResolvedModelRoute(
         original_model="public-model",
         primary=target(primary_model),
-        fallbacks=(target(fallback_model),),
+        fallbacks=(ProviderModelCandidate(target(fallback_model)),),
         reasoning_preference=ReasoningPreference.INHERIT,
     )
     executor = ProviderExecutor(
-        lambda _provider_id: provider,
+        AsyncMock(side_effect=lambda _provider_id, _api_key_number: provider),
         progress_timeout_seconds=60.0,
     )
 
@@ -778,7 +1131,7 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
                     resolved=resolved,
                     reasoning=DEFAULT_REASONING_POLICY,
                 ),
-                raw_log_payload={},
+                raw_log_payload=dict,
                 request_id="req_opencode_cross_transport_responses",
             )
         else:
@@ -788,10 +1141,15 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
                     resolved=resolved,
                     reasoning=DEFAULT_REASONING_POLICY,
                 ),
-                raw_log_payload={},
+                raw_log_payload=dict,
                 request_id="req_opencode_cross_transport_messages",
             )
-        body = "".join([chunk async for chunk in stream])
+        if midstream:
+            response = await _response(wire_api, stream)
+            messages = await _serve(response)
+            body = b"".join(message.get("body", b"") for message in messages).decode()
+        else:
+            body = "".join([chunk async for chunk in stream])
     finally:
         await provider.cleanup()
 
@@ -802,6 +1160,9 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
         fallback_path,
     ]
     payloads = [json.loads(request.content) for request in generation_requests]
+    if midstream:
+        history = payloads[-1].get("messages", payloads[-1].get("input"))
+        assert "Before. " in str(history[-2])
     assert [payload["model"] for payload in payloads] == [
         upstream_id(primary_model),
         upstream_id(primary_model),
@@ -812,15 +1173,18 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
         assert [event.event for event in events].count("response.created") == 1
         assert [event.event for event in events].count("response.completed") == 1
         assert events[-1].data["response"]["model"] == "public-model"
-        assert [
-            event.data["delta"]
-            for event in events
-            if event.event == "response.output_text.delta"
-        ] == [fallback_text]
+        assert (
+            "".join(
+                event.data["delta"]
+                for event in events
+                if event.event == "response.output_text.delta"
+            )
+            == ("Before. " if midstream else "") + fallback_text
+        )
     else:
         assert_anthropic_stream_contract(events)
         assert events[0].data["message"]["model"] == "public-model"
-        assert text_content(events) == fallback_text
+        assert text_content(events) == ("Before. " if midstream else "") + fallback_text
     assert "temporary overload" not in body
 
 
@@ -852,7 +1216,11 @@ async def test_model_listing_and_dispatch_use_same_snapshot() -> None:
 
     assert infos == frozenset(
         {
-            ProviderModelInfo("chat-selector", supports_thinking=False),
+            ProviderModelInfo(
+                "chat-selector",
+                supports_thinking=False,
+                reasoning_capability=ReasoningCapability.NONE,
+            ),
             ProviderModelInfo("responses-selector", supports_thinking=True),
         }
     )
@@ -880,18 +1248,16 @@ async def test_cold_route_specific_conversion_failure_precedes_generation() -> N
 
 
 @pytest.mark.asyncio
-async def test_warm_preflight_rejects_unknown_and_route_specific_fields() -> None:
+async def test_warm_startup_rejects_unknown_and_route_specific_fields() -> None:
     provider, generation_requests, _catalog_requests = _provider_with_wire_transports(
         _catalog_payload()
     )
     try:
         await provider.list_model_infos()
         with pytest.raises(InvalidRequestError, match="does not advertise"):
-            provider.preflight_messages(_request("missing"))
+            await _collect(provider, "missing")
         with pytest.raises(InvalidRequestError, match="stop_sequences"):
-            provider.preflight_messages(
-                _request("responses-selector", stop_sequences=["done"])
-            )
+            await _collect(provider, "responses-selector", stop_sequences=["done"])
     finally:
         await provider.cleanup()
 
@@ -922,7 +1288,7 @@ def test_build_request_body_replays_tool_reasoning_natively(
     provider_id: str,
 ) -> None:
     with (
-        patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"),
+        patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"),
         patch("httpx.AsyncClient"),
     ):
         provider = create_opencode_provider(
@@ -965,7 +1331,7 @@ def test_build_request_body_replays_tool_reasoning_natively(
         }
     )
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
     assistant = body["messages"][0]
     assert assistant["content"] == ""
@@ -985,7 +1351,7 @@ async def test_tool_only_history_sends_empty_reasoning_content_on_wire(
     provider_id: str,
 ) -> None:
     with (
-        patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"),
+        patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"),
         patch("httpx.AsyncClient"),
     ):
         provider = create_opencode_provider(
@@ -1022,7 +1388,7 @@ async def test_tool_only_history_sends_empty_reasoning_content_on_wire(
         }
     )
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
     wire = await capture_openai_chat_wire_body(body)
 
     assistant = wire["messages"][0]

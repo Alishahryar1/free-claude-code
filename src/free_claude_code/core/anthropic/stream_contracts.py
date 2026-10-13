@@ -4,11 +4,12 @@ Used by default CI contract tests and by opt-in live smoke scenarios.
 """
 
 import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from .server_tool_sse import (
+from .server_tool_types import (
     SERVER_TOOL_USE,
     WEB_FETCH_TOOL_RESULT,
     WEB_SEARCH_TOOL_RESULT,
@@ -46,7 +47,10 @@ class SSEEvent:
     raw: str
 
 
-def parse_sse_lines(lines: Iterable[str]) -> list[SSEEvent]:
+def parse_sse_lines(
+    lines: Iterable[str], *, event_names: frozenset[str] | None = None
+) -> list[SSEEvent]:
+    """Decode selected named events and all unnamed events when a filter is supplied."""
     events: list[SSEEvent] = []
     current_event = ""
     data_parts: list[str] = []
@@ -55,7 +59,7 @@ def parse_sse_lines(lines: Iterable[str]) -> list[SSEEvent]:
     for line in lines:
         stripped = line.rstrip("\r\n")
         if stripped == "":
-            _append_event(events, current_event, data_parts, raw_parts)
+            _append_event(events, current_event, data_parts, raw_parts, event_names)
             current_event = ""
             data_parts = []
             raw_parts = []
@@ -66,12 +70,15 @@ def parse_sse_lines(lines: Iterable[str]) -> list[SSEEvent]:
         elif stripped.startswith("data:"):
             data_parts.append(stripped.split(":", 1)[1].strip())
 
-    _append_event(events, current_event, data_parts, raw_parts)
+    _append_event(events, current_event, data_parts, raw_parts, event_names)
     return events
 
 
-def parse_sse_text(text: str) -> list[SSEEvent]:
-    return parse_sse_lines(text.splitlines())
+def parse_sse_text(
+    text: str, *, event_names: frozenset[str] | None = None
+) -> list[SSEEvent]:
+    # SSE uses CR/LF framing; Unicode line separators can occur inside JSON text.
+    return parse_sse_lines(re.split(r"\r\n|\r|\n", text), event_names=event_names)
 
 
 def _append_event(
@@ -79,8 +86,11 @@ def _append_event(
     current_event: str,
     data_parts: list[str],
     raw_parts: list[str],
+    event_names: frozenset[str] | None,
 ) -> None:
     if not current_event and not data_parts:
+        return
+    if event_names is not None and current_event and current_event not in event_names:
         return
     data_text = "\n".join(data_parts)
     data: dict[str, Any]

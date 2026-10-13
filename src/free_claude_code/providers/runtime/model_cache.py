@@ -28,6 +28,16 @@ class ProviderModelCache:
         }
         self._model_infos_by_provider[provider_id] = clean_infos
 
+    def copy(self, available_provider_ids: Iterable[str]) -> ProviderModelCache:
+        """Seed a generation without sharing mutable dictionaries with its predecessor."""
+        result = ProviderModelCache(available_provider_ids)
+        for provider_id, infos in self._model_infos_by_provider.items():
+            result.cache_model_infos(provider_id, infos.values())
+        return result
+
+    def provider_infos(self, provider_id: str) -> tuple[ProviderModelInfo, ...]:
+        return tuple(self._model_infos_by_provider.get(provider_id, {}).values())
+
     def set_available_providers(self, provider_ids: Iterable[str]) -> None:
         """Replace the provider scope and discard entries outside it."""
         self._available_provider_ids = frozenset(provider_ids)
@@ -68,7 +78,10 @@ class ProviderModelCache:
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         """Return cached provider models with user-selectable prefixed ids."""
         infos: list[ProviderModelInfo] = []
-        for provider_id in SUPPORTED_PROVIDER_IDS:
+        for provider_id in (
+            *SUPPORTED_PROVIDER_IDS,
+            *sorted(self._available_provider_ids.difference(SUPPORTED_PROVIDER_IDS)),
+        ):
             provider_infos = self._model_infos_by_provider.get(provider_id, {})
             infos.extend(
                 replace(info, model_id=f"{provider_id}/{info.model_id}")

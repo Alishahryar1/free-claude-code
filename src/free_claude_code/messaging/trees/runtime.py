@@ -1,6 +1,7 @@
 """Atomic runtime aggregate for one messaging conversation tree."""
 
 import asyncio
+from copy import deepcopy
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -35,6 +36,13 @@ class _ActiveClaim:
     cancellation_requested: bool = False
 
 
+@dataclass
+class TreeCheckpoint:
+    graph: MessageTreeGraph
+    queue: MessageNodeQueue
+    active: _ActiveClaim | None
+
+
 class MessageTree:
     """Own graph, queue, claim identity, and every concurrency invariant."""
 
@@ -55,6 +63,36 @@ class MessageTree:
     @property
     def root_id(self) -> str:
         return self._graph.root_id
+
+    def checkpoint(self) -> TreeCheckpoint:
+        """Copy only runtime data while the manager owns the transition."""
+        return deepcopy(TreeCheckpoint(self._graph, self._queue, self._active))
+
+    def rollback(self, checkpoint: TreeCheckpoint) -> None:
+        self._graph, self._queue, self._active = (
+            checkpoint.graph,
+            checkpoint.queue,
+            checkpoint.active,
+        )
+
+    async def retire_claim(self, claim_id: str) -> None:
+        """Retire stopped execution without pretending to persist an outcome."""
+        async with self._lock:
+            if self._active is not None and self._active.claim.claim_id == claim_id:
+                self._active = None
+                self._queue.drain()
+
+    async def runnable_targets(self) -> tuple[NodeUiTarget, ...]:
+        async with self._lock:
+            return tuple(
+                self._ui_target(node)
+                for node in self._graph.all_nodes()
+                if node.state in (MessageState.PENDING, MessageState.IN_PROGRESS)
+            )
+
+    async def owns_claim(self, claim_id: str) -> bool:
+        async with self._lock:
+            return self._active is not None and self._active.claim.claim_id == claim_id
 
     @property
     def identity(self) -> TreeIdentity:

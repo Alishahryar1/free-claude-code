@@ -34,8 +34,6 @@ def kimi_code_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-subscription-key",
             base_url=KIMI_CODE_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )
@@ -53,7 +51,7 @@ def test_init_uses_subscription_endpoint_and_identifies_fcc(kimi_code_provider):
 def test_explicit_output_limit_uses_max_completion_tokens(kimi_code_provider):
     request = _request(max_tokens=32_768)
 
-    body = kimi_code_provider._build_request_body(
+    body = kimi_code_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -64,7 +62,7 @@ def test_explicit_output_limit_uses_max_completion_tokens(kimi_code_provider):
 def test_omitted_output_limit_preserves_kimi_default(kimi_code_provider):
     request = _request()
 
-    body = kimi_code_provider._build_request_body(
+    body = kimi_code_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -91,7 +89,7 @@ def test_named_reasoning_effort_uses_kimi_vocabulary(
 ) -> None:
     request = _request(output_config={"effort": client_effort})
 
-    body = kimi_code_provider._build_request_body(
+    body = kimi_code_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -101,7 +99,7 @@ def test_named_reasoning_effort_uses_kimi_vocabulary(
 def test_enabled_reasoning_without_named_effort_uses_max(kimi_code_provider):
     request = _request(thinking={"type": "enabled", "budget_tokens": 4_096})
 
-    body = kimi_code_provider._build_request_body(
+    body = kimi_code_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -111,7 +109,7 @@ def test_enabled_reasoning_without_named_effort_uses_max(kimi_code_provider):
 def test_disabled_reasoning_uses_none(kimi_code_provider):
     request = _request(thinking={"type": "disabled"})
 
-    body = kimi_code_provider._build_request_body(
+    body = kimi_code_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -132,7 +130,7 @@ def test_reasoning_history_uses_reasoning_content(kimi_code_provider):
         ]
     )
 
-    body = kimi_code_provider._build_request_body(
+    body = kimi_code_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
     assistant = body["messages"][0]
@@ -145,7 +143,7 @@ def test_caller_extra_body_is_rejected(kimi_code_provider):
     request = _request(extra_body={"thinking": {"type": "enabled"}})
 
     with pytest.raises(InvalidRequestError, match="Kimi Code Chat Completions"):
-        kimi_code_provider._build_request_body(
+        kimi_code_provider._chat._build_request_body(
             request, reasoning=reasoning_for(request)
         )
 

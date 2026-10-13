@@ -15,7 +15,71 @@ from free_claude_code.config.env_migrations import (
     consolidate_managed_config,
     migrate_env_setting_in_text,
 )
-from free_claude_code.config.loader import resolve_settings_snapshot
+from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.config.model_refs import ModelFallback, decode_model_fallbacks
+
+
+@pytest.mark.parametrize("schema", ["", "FCC_CONFIG_SCHEMA=1\n"])
+def test_retired_models_repair_managed_config_once_preserving_unknowns(
+    monkeypatch, tmp_path, schema
+):
+    managed, _ = _paths(monkeypatch, tmp_path)
+    managed.parent.mkdir(parents=True)
+    managed.write_text(
+        schema + "MODEL=github_models/old\nMODEL_OPUS=github_models/opus\n"
+        "REASONING_OPUS=off\nMODEL_FALLBACKS=groq/a,github_models/old,deepseek/b\n"
+        "GITHUB_MODELS_TOKEN=retired-secret\nGITHUB_MODELS_PROXY=http://user:password@proxy.test\n"
+        "UNKNOWN_PRIVATE=unknown-secret\nCUSTOM=\n",
+        encoding="utf-8",
+    )
+    assert consolidate_managed_config({}).changed
+    values = dotenv_values_from_file(managed)
+    assert "MODEL" not in values and "MODEL_OPUS" not in values
+    assert decode_model_fallbacks(values["MODEL_FALLBACKS"]) == (
+        ModelFallback(model="groq/a"),
+        ModelFallback(model="deepseek/b"),
+    )
+    assert values["REASONING_OPUS"] == "off"
+    assert values["GITHUB_MODELS_TOKEN"] == "retired-secret"
+    assert values["GITHUB_MODELS_PROXY"] == "http://user:password@proxy.test"
+    assert values["CUSTOM"] == ""
+    preview = env_migrations.render_managed_config(values, mask_secrets=True)
+    for secret in ("retired-secret", "password", "unknown-secret"):
+        assert secret not in preview
+    assert "GITHUB_MODELS_TOKEN=********" in preview
+    assert "UNKNOWN_PRIVATE=********" in preview
+    before = managed.read_bytes(), managed.stat().st_mtime_ns
+    assert not consolidate_managed_config({}).changed
+    assert (managed.read_bytes(), managed.stat().st_mtime_ns) == before
+
+
+def test_retired_legacy_import_repairs_refs_without_importing_credentials(
+    monkeypatch, tmp_path
+):
+    managed, legacy = _paths(monkeypatch, tmp_path)
+    legacy.parent.mkdir(parents=True)
+    original = "MODEL=github_models/old\nGITHUB_MODELS_TOKEN=old-secret\nGITHUB_MODELS_PROXY=http://secret@proxy.test\n"
+    legacy.write_text(original, encoding="utf-8")
+    consolidate_managed_config({})
+    values = dotenv_values_from_file(managed)
+    assert not {"MODEL", "GITHUB_MODELS_TOKEN", "GITHUB_MODELS_PROXY"} & values.keys()
+    assert legacy.read_text(encoding="utf-8") == original
+
+
+def test_retirement_atomic_write_failure_preserves_managed_file(monkeypatch, tmp_path):
+    managed, _ = _paths(monkeypatch, tmp_path)
+    managed.parent.mkdir(parents=True)
+    original = b"FCC_CONFIG_SCHEMA=1\nMODEL=github_models/old\n"
+    managed.write_bytes(original)
+
+    def fail_replace(*args):
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(env_migrations.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected"):
+        consolidate_managed_config({})
+    assert managed.read_bytes() == original
+    assert list(managed.parent.glob("*.tmp")) == []
 
 
 def _paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
@@ -72,7 +136,7 @@ def test_legacy_file_imports_only_recognized_values_and_is_untouched(
 
     assert result.imported_from == (legacy.resolve(),)
     assert values["MODEL"] == "deepseek/legacy"
-    assert values["HUGGINGFACE_API_KEY"] == "hf"
+    assert values["HUGGINGFACE_API_KEY"] == '["hf"]'
     assert values["PROXY_AUTH_ENABLED"] == "false"
     assert "UNRELATED_SECRET" not in values
     assert legacy.read_text(encoding="utf-8") == original
@@ -128,7 +192,7 @@ def test_canonical_setting_wins_and_retired_key_is_removed(
     consolidate_managed_config({})
     values = dotenv_values_from_file(managed)
 
-    assert values["HUGGINGFACE_API_KEY"] == "current-token"
+    assert values["HUGGINGFACE_API_KEY"] == '["current-token"]'
     assert "HF_TOKEN" not in values
 
 
@@ -160,7 +224,7 @@ def test_post_schema_invalid_explicit_path_is_never_dereferenced(
 ) -> None:
     managed, _legacy = _paths(monkeypatch, tmp_path)
     managed.parent.mkdir(parents=True)
-    managed.write_text("FCC_CONFIG_SCHEMA=1\n", encoding="utf-8")
+    managed.write_text("FCC_CONFIG_SCHEMA=2\n", encoding="utf-8")
 
     result = consolidate_managed_config({"FCC_ENV_FILE": str(tmp_path / "missing.env")})
 
@@ -211,7 +275,7 @@ def test_explicit_managed_path_is_deduplicated(
     [
         ("ANTHROPIC_AUTH_TOKEN=secret\n", {}, "true", "secret"),
         ("ANTHROPIC_AUTH_TOKEN=\n", {}, "false", None),
-        ("", {"ANTHROPIC_AUTH_TOKEN": "process-secret"}, "true", None),
+        ("", {"ANTHROPIC_AUTH_TOKEN": "process-secret"}, "false", None),
         ("", {}, "false", None),
         (
             "PROXY_AUTH_ENABLED=false\nANTHROPIC_AUTH_TOKEN=secret\n",
@@ -250,6 +314,18 @@ def test_process_auth_flag_is_not_persisted(
     assert "PROXY_AUTH_ENABLED" not in dotenv_values_from_file(managed)
 
 
+def test_fresh_install_ignores_process_token(monkeypatch, tmp_path):
+    managed, _ = _paths(monkeypatch, tmp_path)
+    process = {"ANTHROPIC_AUTH_TOKEN": "process-secret"}
+    consolidate_managed_config(process)
+    values = dotenv_values_from_file(managed)
+    assert "ANTHROPIC_AUTH_TOKEN" not in values
+    assert "PROXY_AUTH_ENABLED" not in values
+    settings = ManagedConfigStore().read(process).settings
+    assert settings.proxy_auth_token == "freecc"
+    assert settings.proxy_auth_enabled is False
+
+
 def test_only_managed_schema_marker_is_trusted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -260,7 +336,7 @@ def test_only_managed_schema_marker_is_trusted(
     consolidate_managed_config({"FCC_CONFIG_SCHEMA": "99"})
 
     values = dotenv_values_from_file(managed)
-    assert values["FCC_CONFIG_SCHEMA"] == "1"
+    assert values["FCC_CONFIG_SCHEMA"] == "2"
     assert values["MODEL"] == "deepseek/imported"
 
 
@@ -316,15 +392,18 @@ def test_concurrent_loaders_produce_one_valid_managed_file(
     legacy.parent.mkdir(parents=True)
     legacy.write_text("MODEL=deepseek/concurrent\n", encoding="utf-8")
 
+    def initialize_and_read(_index):
+        store = ManagedConfigStore()
+        store.initialize({})
+        return store.read({})
+
     with ThreadPoolExecutor(max_workers=8) as executor:
-        snapshots = list(
-            executor.map(lambda _index: resolve_settings_snapshot({}), range(8))
-        )
+        snapshots = list(executor.map(initialize_and_read, range(8)))
 
     assert {snapshot.settings.model for snapshot in snapshots} == {
         "deepseek/concurrent"
     }
-    assert dotenv_values_from_file(managed)["FCC_CONFIG_SCHEMA"] == "1"
+    assert dotenv_values_from_file(managed)["FCC_CONFIG_SCHEMA"] == "2"
     assert list(managed.parent.glob("*.tmp")) == []
 
 
@@ -363,7 +442,7 @@ def test_newer_managed_schema_fails_closed(
 ) -> None:
     managed, _legacy = _paths(monkeypatch, tmp_path)
     managed.parent.mkdir(parents=True)
-    managed.write_text("FCC_CONFIG_SCHEMA=2\n", encoding="utf-8")
+    managed.write_text("FCC_CONFIG_SCHEMA=3\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="unsupported schema"):
         consolidate_managed_config({})

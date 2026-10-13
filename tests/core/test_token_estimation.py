@@ -21,20 +21,20 @@ def test_encoder_is_loaded_by_canonical_name() -> None:
     encoder = MagicMock()
 
     with patch.object(
-        token_estimation.tiktoken,
-        "get_encoding",
+        __import__("tiktoken"),
+        "Encoding",
         return_value=encoder,
     ) as get_encoding:
         assert token_estimation._load_encoder() is encoder
 
-    get_encoding.assert_called_once_with("cl100k_base")
+    assert get_encoding.call_args.kwargs["name"] == "cl100k_base"
 
 
 def test_encoder_acquisition_failure_uses_safe_fallback_warning() -> None:
     with (
         patch.object(
-            token_estimation.tiktoken,
-            "get_encoding",
+            __import__("tiktoken.load", fromlist=["load_tiktoken_bpe"]),
+            "load_tiktoken_bpe",
             side_effect=RuntimeError("Bearer secret"),
         ),
         patch.object(token_estimation.logger, "warning") as warning,

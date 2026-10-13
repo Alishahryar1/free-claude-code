@@ -14,9 +14,9 @@ from .command_dispatcher import (
 )
 from .models import AdmissionToken, IncomingMessage, MessageScope
 from .platforms.ports import OutboundMessenger
-from .session import SessionStore
 from .trees import (
     AdmissionRejection,
+    MessagingStore,
     NodeClaim,
     QueueDecision,
     QueueEntry,
@@ -32,7 +32,7 @@ class MessagingTurnIntake:
         *,
         platform_name: str,
         outbound: OutboundMessenger,
-        session_store: SessionStore,
+        session_store: MessagingStore,
         command_context: MessagingCommandContext,
         resolve_reply: Callable[[MessageScope, str], Awaitable[ReplyTarget | None]],
         admit_turn: Callable[
@@ -41,7 +41,6 @@ class MessagingTurnIntake:
         ],
         format_status: Callable[[str, str, str | None], str],
         get_parse_mode: Callable[[], str | None],
-        record_outgoing_message: Callable[[str, str, str | None, str], bool],
     ) -> None:
         self.platform_name = platform_name
         self.outbound = outbound
@@ -51,7 +50,6 @@ class MessagingTurnIntake:
         self._admit_turn = admit_turn
         self._format_status = format_status
         self._get_parse_mode = get_parse_mode
-        self._record_outgoing_message = record_outgoing_message
 
     async def handle_message(
         self,
@@ -100,9 +98,6 @@ class MessagingTurnIntake:
                 fire_and_forget=False,
                 message_thread_id=incoming.message_thread_id,
             )
-        self._record_outgoing_message(
-            incoming.platform, incoming.chat_id, status_msg_id, "status"
-        )
         if status_msg_id is None:
             return
 
@@ -183,7 +178,7 @@ class MessagingTurnIntake:
                 type(exc).__name__,
             )
         try:
-            self.session_store.forget_tracked_message_ids(
+            await self.session_store.forget_tracked_message_ids(
                 incoming.platform,
                 incoming.chat_id,
                 message_ids,

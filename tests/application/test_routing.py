@@ -4,6 +4,7 @@ import pytest
 
 from free_claude_code.application.errors import UnknownProviderError
 from free_claude_code.application.routing import ModelRouter
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
@@ -14,6 +15,56 @@ from free_claude_code.core.anthropic.models import (
 )
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningEffort
+
+
+@pytest.mark.parametrize(
+    "prefix,off",
+    [("", False), ("anthropic/", False), ("claude-3-freecc-no-thinking/", True)],
+)
+@pytest.mark.parametrize(
+    "suffix", ["openai/gpt-4.1", "vendor/opus", "sonnet", "haiku", "fable"]
+)
+def test_retired_direct_ids_route_to_default_before_family_aliases(prefix, off, suffix):
+    settings = Settings(
+        MODEL="groq/default",
+        MODEL_OPUS="deepseek/opus",
+        MODEL_SONNET="deepseek/sonnet",
+        MODEL_HAIKU="deepseek/haiku",
+        MODEL_FABLE="deepseek/fable",
+        MODEL_FALLBACKS=(
+            ModelFallback(model="groq/default"),
+            ModelFallback(model="groq/backup"),
+        ),
+        REASONING_POLICY="high",
+        REASONING_OPUS="off",
+    )
+    original = f"{prefix}github_models/{suffix}"
+    router = ModelRouter(settings)
+    route = router.resolve(original)
+    assert route.original_model == original
+    assert route.primary.provider_model_ref == "groq/default"
+    assert [candidate.target.provider_model_ref for candidate in route.fallbacks] == [
+        "groq/backup"
+    ]
+    assert route.reasoning_preference is (
+        ReasoningPreference.OFF if off else ReasoningPreference.HIGH
+    )
+    messages = router.resolve_messages_request(
+        MessagesRequest(
+            model=original,
+            max_tokens=100,
+            messages=[Message(role="user", content="hi")],
+        )
+    )
+    responses = router.resolve_responses_request(
+        OpenAIResponsesRequest(model=original, input="hi")
+    )
+    count = router.resolve_token_count_request(
+        TokenCountRequest(model=original, messages=[Message(role="user", content="hi")])
+    )
+    for routed in (messages, responses, count):
+        assert routed.request.model == "default"
+        assert routed.resolved == route
 
 
 @pytest.fixture
@@ -272,7 +323,7 @@ def test_model_router_routes_token_count_request(settings):
 
 
 def test_model_router_routes_responses_request_without_protocol_conversion(settings):
-    settings.model_fallbacks = ("open_router/vendor/fallback",)
+    settings.model_fallbacks = (ModelFallback(model="open_router/vendor/fallback"),)
     request = OpenAIResponsesRequest(
         model="opencode_zen/responses-model",
         input=[{"role": "user", "content": "hello"}],
@@ -288,9 +339,9 @@ def test_model_router_routes_responses_request_without_protocol_conversion(setti
     assert routed.resolved.original_model == "opencode_zen/responses-model"
     assert routed.resolved.primary.provider_id == "opencode_zen"
     assert routed.resolved.primary.provider_model == "responses-model"
-    assert [target.provider_model_ref for target in routed.resolved.fallbacks] == [
-        "open_router/vendor/fallback"
-    ]
+    assert [
+        candidate.target.provider_model_ref for candidate in routed.resolved.fallbacks
+    ] == ["open_router/vendor/fallback"]
     assert routed.reasoning.control is ReasoningControl.DEFAULT
     assert routed.reasoning.effort is ReasoningEffort.HIGH
     assert request.model == "opencode_zen/responses-model"
@@ -298,16 +349,64 @@ def test_model_router_routes_responses_request_without_protocol_conversion(setti
 
 def test_model_router_appends_global_fallbacks_and_skips_only_primary(settings):
     settings.model_fallbacks = (
-        "nvidia_nim/fallback-model",
-        "nvidia_nim/alternate-model",
-        "open_router/vendor/model-b",
+        ModelFallback(model="nvidia_nim/fallback-model"),
+        ModelFallback(model="nvidia_nim/alternate-model"),
+        ModelFallback(model="open_router/vendor/model-b"),
     )
 
     resolved = ModelRouter(settings).resolve("claude-2.1")
 
-    assert [target.provider_model_ref for target in resolved.fallbacks] == [
+    assert [
+        candidate.target.provider_model_ref for candidate in resolved.fallbacks
+    ] == [
         "nvidia_nim/alternate-model",
         "open_router/vendor/model-b",
+    ]
+
+
+@pytest.mark.parametrize(
+    "requested", ["claude-2.1", "nvidia_nim/primary", "claude-opus-4"]
+)
+def test_fallback_effort_does_not_change_primary_identity(requested):
+    settings = Settings(
+        MODEL="nvidia_nim/primary",
+        MODEL_OPUS="nvidia_nim/primary",
+        MODEL_FALLBACKS=[
+            {"model": "nvidia_nim/primary", "reasoning": "off"},
+            {"model": "groq/backup", "reasoning": "low"},
+        ],
+    )
+    route = ModelRouter(settings).resolve(requested)
+    assert [
+        (candidate.target.provider_model_ref, candidate.reasoning_preference)
+        for candidate in route.fallbacks
+    ] == [("groq/backup", ReasoningPreference.LOW)]
+
+
+@pytest.mark.parametrize("requested", ["claude-opus-4", "groq/primary"])
+def test_same_model_fallbacks_keep_alternate_keys_and_their_efforts(requested):
+    settings = Settings(
+        MODEL="groq/primary",
+        MODEL_OPUS="groq/primary",
+        GROQ_API_KEY=["synthetic-first", "synthetic-second", "synthetic-third"],
+        MODEL_FALLBACKS=[
+            {"model": "groq/primary", "reasoning": "off", "api_key_number": 1},
+            {"model": "groq/primary", "reasoning": "low", "api_key_number": 2},
+            {"model": "groq/primary", "reasoning": "high", "api_key_number": 3},
+        ],
+    )
+    route = ModelRouter(settings).resolve(requested)
+    assert route.primary.api_key_number == 1
+    assert [
+        (
+            candidate.target.provider_model_ref,
+            candidate.target.api_key_number,
+            candidate.reasoning_preference,
+        )
+        for candidate in route.fallbacks
+    ] == [
+        ("groq/primary", 2, ReasoningPreference.LOW),
+        ("groq/primary", 3, ReasoningPreference.HIGH),
     ]
 
 
@@ -315,8 +414,8 @@ def test_direct_gateway_route_preserves_original_and_deduplicates_canonical_targ
     settings,
 ):
     settings.model_fallbacks = (
-        "nvidia_nim/deepseek-ai/deepseek-v4-pro",
-        "groq/vendor/model-b",
+        ModelFallback(model="nvidia_nim/deepseek-ai/deepseek-v4-pro"),
+        ModelFallback(model="groq/vendor/model-b"),
     )
     model = "anthropic/nvidia_nim/deepseek-ai/deepseek-v4-pro"
 
@@ -326,9 +425,9 @@ def test_direct_gateway_route_preserves_original_and_deduplicates_canonical_targ
     assert (
         resolved.primary.provider_model_ref == "nvidia_nim/deepseek-ai/deepseek-v4-pro"
     )
-    assert [target.provider_model_ref for target in resolved.fallbacks] == [
-        "groq/vendor/model-b"
-    ]
+    assert [
+        candidate.target.provider_model_ref for candidate in resolved.fallbacks
+    ] == ["groq/vendor/model-b"]
 
 
 def test_model_router_logs_mapping(settings):

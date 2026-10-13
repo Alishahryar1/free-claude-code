@@ -171,7 +171,7 @@ function Invoke-PlaywrightCheck {
     Write-Step "playwright"
     Invoke-CiCommand -FilePath "uv" -Arguments @("run", "playwright", "install", "chromium")
     Invoke-CiCommand -FilePath "uv" -Arguments @(
-        "run", "pytest", "e2e", "-n", "0", "-v", "--tb=short",
+        "run", "pytest", "e2e", "-v", "--tb=short",
         "--tracing=retain-on-failure", "--screenshot=only-on-failure",
         "--full-page-screenshot", "--output=test-results"
     )

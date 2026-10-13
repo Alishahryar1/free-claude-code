@@ -6,11 +6,11 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
-from free_claude_code.cli.claude_env import (
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.harnesses.claude import (
     CLAUDE_BINARY_NAME,
     build_claude_proxy_env,
 )
-from free_claude_code.core.json_types import JsonObject, JsonValue
 
 MANAGED_CLAUDE_MODEL_TIER = "fable"
 

@@ -1,6 +1,7 @@
 """Mistral La Plateforme reasoning compatibility helpers."""
 
 import json
+import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
 from copy import deepcopy
 from types import SimpleNamespace
@@ -9,7 +10,7 @@ from typing import Any
 import openai
 
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
-from free_claude_code.providers.http import maybe_await_aclose
+from free_claude_code.providers.http import close_provider_stream
 
 MISTRAL_REASONING_EFFORT = "high"
 
@@ -109,7 +110,12 @@ def normalize_mistral_stream(stream: Any) -> AsyncIterator[Any]:
             async for chunk in stream:
                 yield normalize_mistral_chunk(chunk)
         finally:
-            await maybe_await_aclose(stream)
+            await close_provider_stream(
+                stream,
+                active_error=sys.exception(),
+                provider_name="MISTRAL",
+                request_id=None,
+            )
 
     return _iter()
 

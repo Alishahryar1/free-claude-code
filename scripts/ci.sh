@@ -160,7 +160,7 @@ run_pytest() {
 run_playwright() {
     step "playwright"
     run uv run playwright install chromium
-    run uv run pytest e2e -n 0 -v --tb=short \
+    run uv run pytest e2e -v --tb=short \
         --tracing=retain-on-failure --screenshot=only-on-failure \
         --full-page-screenshot --output=test-results
 }

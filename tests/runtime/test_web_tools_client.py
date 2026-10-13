@@ -1,0 +1,153 @@
+"""Outbound request, parsing, and resource ownership with no network access."""
+
+import asyncio
+
+import httpx
+import pytest
+
+from free_claude_code.core.web_tools import WebSearchResult
+from free_claude_code.runtime.web_tools import client as web_client
+
+
+def _httpx_clients(monkeypatch, handler):
+    original_client = httpx.AsyncClient
+    clients = []
+
+    def construct(**kwargs):
+        client = original_client(transport=httpx.MockTransport(handler), **kwargs)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(web_client.httpx, "AsyncClient", construct)
+    return clients
+
+
+@pytest.mark.asyncio
+async def test_search_request_parsing_limit_and_client_closure(monkeypatch):
+    def handle(request):
+        assert str(request.url).startswith("https://lite.duckduckgo.com/lite/")
+        assert request.url.params["q"] == "query & details"
+        assert "free-claude-code/" in request.headers["User-Agent"]
+        links = [
+            f'<a href="/l/?uddg=https%3A%2F%2Fexample.com%2F{index}">Title {index}</a>'
+            for index in range(12)
+        ]
+        links.insert(1, links[0])
+        return httpx.Response(200, text="".join(links))
+
+    clients = _httpx_clients(monkeypatch, handle)
+    result = await web_client.HTTPWebToolsClient().search("query & details")
+    assert result == [
+        WebSearchResult(title=f"Title {index}", url=f"https://example.com/{index}")
+        for index in range(10)
+    ]
+    assert len(clients) == 1 and clients[0].is_closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_during_body", [False, True])
+async def test_search_cancellation_closes_client_and_open_response(
+    monkeypatch, cancel_during_body
+):
+    entered = asyncio.Event()
+
+    class Body(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            entered.set()
+            await asyncio.Event().wait()
+            yield b""
+
+        async def aclose(self):
+            self.closed = True
+
+    body = Body()
+
+    async def handle(request):
+        if not cancel_during_body:
+            entered.set()
+            await asyncio.Event().wait()
+        return httpx.Response(200, stream=body)
+
+    clients = _httpx_clients(monkeypatch, handle)
+    task = asyncio.create_task(web_client.HTTPWebToolsClient().search("held"))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert len(clients) == 1 and clients[0].is_closed
+        assert body.closed is cancel_during_body
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_fetch_cancellation_closes_response_session_and_connector(monkeypatch):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from free_claude_code.application.web_tools.ports import WebFetchEgressPolicy
+
+    entered = asyncio.Event()
+    response_closed, session_closed = [], []
+    connectors = []
+    original_connector = web_client.TCPConnector
+
+    def connector(**kwargs):
+        value = original_connector(**kwargs)
+        connectors.append(value)
+        return value
+
+    async def chunks(_size):
+        entered.set()
+        await asyncio.Event().wait()
+        yield b""
+
+    @asynccontextmanager
+    async def response(url, *, allow_redirects):
+        assert url == "https://8.8.8.8/"
+        assert allow_redirects is False
+        try:
+            yield SimpleNamespace(
+                status=200,
+                url=url,
+                headers={},
+                get_encoding=lambda: "utf-8",
+                raise_for_status=lambda: None,
+                content=SimpleNamespace(iter_chunked=chunks),
+            )
+        finally:
+            response_closed.append(True)
+
+    @asynccontextmanager
+    async def session(**kwargs):
+        assert kwargs["connector"] is connectors[-1]
+        try:
+            yield SimpleNamespace(get=response)
+        finally:
+            session_closed.append(True)
+
+    monkeypatch.setattr(web_client, "TCPConnector", connector)
+    monkeypatch.setattr(web_client, "ClientSession", session)
+    task = asyncio.create_task(
+        web_client.HTTPWebToolsClient().fetch(
+            "https://8.8.8.8/",
+            egress=WebFetchEgressPolicy(False, frozenset({"https"})),
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert response_closed == [True]
+        assert session_closed == [True]
+        assert len(connectors) == 1 and connectors[0].closed
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

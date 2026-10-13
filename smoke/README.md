@@ -1,11 +1,13 @@
 # Product E2E Smoke Tests
 
 `smoke/` is local-only. It can launch subprocesses, call real providers, touch
-local model servers, and optionally send/delete bot messages. Hermetic contracts
-belong under `tests/` and must stay green with plain `uv run pytest`.
+local model servers, and optionally send/delete bot messages. Installer checks
+also live here as an opt-in suite. Regular CI collects only `tests/` and `e2e/`.
 
 ## Taxonomy
 
+- `smoke/installers/`: installer, uninstaller, and harness lifecycle checks with
+  isolated files and simulated downloads. These do not install real tools.
 - `smoke/prereq/`: liveness checks that prove the server, routes, auth, CLI
   scripts, provider pings, local `/models`, and bot permissions are reachable.
   These are prerequisites only.
@@ -23,6 +25,13 @@ uv run pytest smoke -n 0 -s --tb=short
 
 The second command skips everything unless `FCC_LIVE_SMOKE=1` is set, but still
 writes skip entries to `.smoke-results/`.
+
+Run only the installer checks:
+
+```powershell
+$env:FCC_LIVE_SMOKE = "1"
+uv run pytest smoke/installers
+```
 
 ## Product Smoke Run
 
@@ -146,6 +155,28 @@ FCC_SMOKE_MODEL_NVIDIA_NIM_VISION=meta/llama-3.2-11b-vision-instruct \
 uv run pytest smoke/product/test_nvidia_nim_vision_product_live.py -n 0 -s --tb=short
 ```
 
+## Codex Code session modes
+
+Run the installed Codex against a local simulated provider, with disposable
+sessions and folders. This checks Ask, Auto-review, Full access, and returning
+to Use config without spending provider credits. It also checks a sub-agent's
+review completing after the parent reply and a subsequent message:
+
+```powershell
+$env:FCC_LIVE_SMOKE = "1"
+$env:FCC_SMOKE_TARGETS = "clients"
+uv run pytest smoke/product/test_codex_modes_product_live.py -n 0 -s -k local_e2e
+```
+
+For a real model smoke, set `FCC_SMOKE_CODEX_FREE_MODEL` to an explicitly chosen
+`open_router/<model>` reference and run the same file with
+`-k free_provider_e2e`. The test checks OpenRouter's current prompt and completion
+prices are zero and uses only that route; it never falls back to a paid model.
+The local cases do not need that setting or any provider credentials.
+
+Both runs print the installed Codex version. They require native sandbox support
+for restricted modes and never set up the sandbox or change your Codex config.
+
 ## Environment
 
 - Runtime settings use the isolated managed `~/.fcc/.env`; `FCC_ENV_FILE` is
@@ -155,9 +186,8 @@ uv run pytest smoke/product/test_nvidia_nim_vision_product_live.py -n 0 -s --tb=
 - `FCC_SMOKE_TARGETS`: comma-separated targets, or `all`.
 - `FCC_SMOKE_PROVIDER_MATRIX`: comma-separated provider prefixes to require.
 - `FCC_SMOKE_MODEL_<PROVIDER>`: optional per-provider smoke model override.
-  Use the uppercase provider ID, such as `FCC_SMOKE_MODEL_KILO`; the complete
-  variable inventory is in [.env.example](../.env.example). Values may include
-  the provider prefix or just the model name for that provider.
+  Use the uppercase provider ID, such as `FCC_SMOKE_MODEL_KILO`. Values may
+  include the provider prefix or just the model name for that provider.
 - `FCC_SMOKE_MODEL_NVIDIA_NIM_VISION`: required explicit NIM vision model for
   the opt-in `nvidia_nim_vision` target; it never falls back to the text model.
 - `FCC_SMOKE_MODEL_MISTRAL_REASONING`: optional override for the dedicated

@@ -139,9 +139,10 @@ def test_build_responses_chat_request_preserves_rich_supported_semantics() -> No
             {
                 "role": "assistant",
                 "content": "",
-                "reasoning_content": "Use the tool.",
+                "reasoning_content": "",
                 "reasoning_details": [
-                    {"type": "reasoning.encrypted", "data": "opaque-replay"}
+                    {"type": "reasoning.summary", "summary": "Use the tool."},
+                    {"type": "reasoning.encrypted", "data": "opaque-replay"},
                 ],
                 "tool_calls": [
                     {
@@ -175,6 +176,7 @@ def test_build_responses_chat_request_preserves_rich_supported_semantics() -> No
                 "type": "function",
                 "function": {
                     "name": "apply patch",
+                    "strict": False,
                     "description": (
                         "Apply a patch\n\nCustom tool input format: unconstrained text."
                     ),
@@ -220,7 +222,10 @@ def test_build_responses_chat_request_preserves_rich_supported_semantics() -> No
         (ReasoningReplayMode.REASONING_CONTENT, {"reasoning_content": "Think"}),
         (ReasoningReplayMode.REASONING, {"reasoning": "Think"}),
         (ReasoningReplayMode.THINK_TAGS, {"content": "<think>\nThink\n</think>"}),
-        (ReasoningReplayMode.DISABLED, {}),
+        (
+            ReasoningReplayMode.DISABLED,
+            {"content": "Think\n\nAnswer"},
+        ),
     ],
 )
 def test_build_responses_chat_request_uses_provider_reasoning_replay(
@@ -250,10 +255,13 @@ def test_build_responses_chat_request_uses_provider_reasoning_replay(
         for key, value in expected.items():
             assert assistant[key] == value
         if mode is ReasoningReplayMode.DISABLED:
-            assert assistant == {"role": "assistant", "content": "Answer"}
+            assert assistant == {
+                "role": "assistant",
+                "content": "Think\n\nAnswer",
+            }
 
 
-def test_build_responses_chat_request_quarantines_one_malformed_call_pair() -> None:
+def test_build_responses_chat_request_keeps_malformed_call_and_error_result() -> None:
     translated = build_responses_chat_request(
         _request(
             input=[
@@ -267,7 +275,7 @@ def test_build_responses_chat_request_quarantines_one_malformed_call_pair() -> N
                 {
                     "type": "function_call_output",
                     "call_id": "call_bad",
-                    "output": "stale",
+                    "output": "Invalid arguments",
                 },
                 {
                     "type": "function_call",
@@ -290,6 +298,20 @@ def test_build_responses_chat_request_quarantines_one_malformed_call_pair() -> N
         {
             "role": "assistant",
             "content": "",
+            "reasoning_content": "",
+            "tool_calls": [
+                {
+                    "id": "call_bad",
+                    "type": "function",
+                    "function": {"name": "echo", "arguments": "{"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_bad", "content": "Invalid arguments"},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "",
             "tool_calls": [
                 {
                     "id": "call_good",
@@ -660,7 +682,7 @@ def test_build_responses_chat_request_rejects_message_with_only_file_id_image() 
 
 
 def test_build_responses_chat_request_rejects_colliding_tool_wire_names() -> None:
-    with pytest.raises(ResponsesConversionError, match="same Chat-compatible name"):
+    with pytest.raises(ResponsesConversionError, match="collide"):
         build_responses_chat_request(
             _request(
                 tools=[

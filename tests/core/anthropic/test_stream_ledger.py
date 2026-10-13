@@ -101,15 +101,16 @@ def test_tool_blocks_drive_stop_reason_and_salvage() -> None:
     )
 
 
-def test_close_unclosed_blocks_closes_each_block_once() -> None:
+def test_failure_cleanup_closes_text_without_completing_unfinished_tool() -> None:
     ledger = AnthropicStreamLedger("msg_1", "model")
     ledger.start_text_block()
     ledger.start_tool_block(0, "toolu_1", "Read")
 
     events = list(ledger.close_unclosed_blocks())
 
-    assert len(events) == 2
-    assert all(_payload(event)["type"] == "content_block_stop" for event in events)
+    assert [_payload(event) for event in events] == [
+        {"type": "content_block_stop", "index": 0}
+    ]
     assert list(ledger.close_unclosed_blocks()) == []
 
 

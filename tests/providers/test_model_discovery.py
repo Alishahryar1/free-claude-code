@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.api_keys import normalize_api_keys
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
     DEEPSEEK_DEFAULT_BASE,
@@ -16,6 +18,7 @@ from free_claude_code.config.provider_catalog import (
 )
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.model_listing import ModelListResponseError
@@ -39,13 +42,13 @@ def _settings(
     model_opus: str | None = None,
     model_sonnet: str | None = None,
     model_haiku: str | None = None,
-    model_fallbacks: tuple[str, ...] | None = None,
-    nvidia_nim_api_key: str = "",
-    open_router_api_key: str = "",
-    deepseek_api_key: str = "",
-    wafer_api_key: str = "",
-    opencode_api_key: str = "",
-    zai_api_key: str = "",
+    model_fallbacks: tuple[ModelFallback, ...] | None = None,
+    nvidia_nim_api_keys: str = "",
+    open_router_api_keys: str = "",
+    deepseek_api_keys: str = "",
+    wafer_api_keys: str = "",
+    opencode_api_keys: str = "",
+    zai_api_keys: str = "",
     vertex_project_id: str = "",
 ) -> Settings:
     return Settings.model_construct(
@@ -55,12 +58,12 @@ def _settings(
         model_sonnet=model_sonnet,
         model_haiku=model_haiku,
         model_fallbacks=model_fallbacks,
-        nvidia_nim_api_key=nvidia_nim_api_key,
-        open_router_api_key=open_router_api_key,
-        deepseek_api_key=deepseek_api_key,
-        wafer_api_key=wafer_api_key,
-        opencode_api_key=opencode_api_key,
-        zai_api_key=zai_api_key,
+        nvidia_nim_api_keys=normalize_api_keys(nvidia_nim_api_keys),
+        open_router_api_keys=normalize_api_keys(open_router_api_keys),
+        deepseek_api_keys=normalize_api_keys(deepseek_api_keys),
+        wafer_api_keys=normalize_api_keys(wafer_api_keys),
+        opencode_api_keys=normalize_api_keys(opencode_api_keys),
+        zai_api_keys=normalize_api_keys(zai_api_keys),
         vertex_project_id=vertex_project_id,
         log_api_error_tracebacks=False,
     )
@@ -73,7 +76,11 @@ def _manager(
     providers = providers or {}
     return ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda snapshot: ProviderRuntime(snapshot, dict(providers)),
+        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
+            snapshot,
+            admission_registry,
+            {(provider_id, 1): provider for provider_id, provider in providers.items()},
+        ),
     )
 
 
@@ -89,7 +96,7 @@ def test_provider_catalog_contract_is_metadata_only() -> None:
 @pytest.mark.asyncio
 async def test_nim_lists_openai_compatible_model_infos() -> None:
     config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
-    with patch("free_claude_code.providers.openai_chat.provider.AsyncOpenAI"):
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = NvidiaNimProvider(
             config, nim_settings=NimSettings(), admission=immediate_admission()
         )
@@ -101,6 +108,102 @@ async def test_nim_lists_openai_compatible_model_infos() -> None:
         return_value=SimpleNamespace(data=[SimpleNamespace(id="nvidia/model")]),
     ):
         assert await provider.list_model_infos() == _infos("nvidia/model")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_id,provider_base_url,filtered",
+    [
+        ("nvidia_nim", NVIDIA_NIM_DEFAULT_BASE, True),
+        ("nvidia_nim", NVIDIA_NIM_DEFAULT_BASE + "/", True),
+        ("nvidia_nim", "https://private-nim.example/v1", False),
+        ("deepseek", NVIDIA_NIM_DEFAULT_BASE, False),
+    ],
+)
+async def test_nim_exclusions_apply_only_to_hosted_nim_discovery(
+    provider_id, provider_base_url, filtered
+) -> None:
+    config = make_provider_config(api_key="test-key", base_url=provider_base_url)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = (
+            NvidiaNimProvider(
+                config, nim_settings=NimSettings(), admission=immediate_admission()
+            )
+            if provider_id == "nvidia_nim"
+            else DeepSeekProvider(config, admission=immediate_admission())
+        )
+    excluded = (
+        "01-ai/yi-large",  # Observed model-specific 404.
+        "meta/muse-glimmer-30b",
+        "nvidia/cosmos-reason2-8b",
+        "nvidia/ising-calibration-1-35b-a3b",  # Explicit retirement 410.
+        "nvidia/llama-nemotron-embed-vl-1b-v2",  # Working embedding service.
+        "nvidia/ai-synthetic-video-detector",
+    )
+    retained = (
+        "nvidia/nemotron-3-super-120b-a12b",
+        "nvidia/future-chat-model",
+        "01-ai/yi-large-successor",  # Exact IDs, not substring matching.
+        "deepseek-ai/deepseek-v4.1-flash",  # Timeouts are not exclusions.
+        "meta/llama-3.2-90b-vision-instruct",
+        "meta/llama-guard-4-12b",
+        "nvidia/llama-3.1-nemoguard-8b-content-safety",
+        "nvidia/llama-3.1-nemoguard-8b-topic-control",  # Upstream 500.
+    )
+    ids = (*excluded, *retained)
+    with patch.object(
+        provider._client.models,
+        "list",
+        new_callable=AsyncMock,
+        return_value=SimpleNamespace(data=[SimpleNamespace(id=id_) for id_ in ids]),
+    ) as mock_list:
+        assert await provider.list_model_infos() == _infos(
+            *(retained if filtered else ids)
+        )
+    mock_list.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_nim_exclusions_preserve_retained_metadata() -> None:
+    config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = NvidiaNimProvider(
+            config, nim_settings=NimSettings(), admission=immediate_admission()
+        )
+    retained = ProviderModelInfo(
+        "nvidia/future-chat-model",
+        supports_thinking=True,
+        context_window_tokens=131072,
+        max_output_tokens=8192,
+    )
+    with patch.object(
+        OpenAIChatProvider,
+        "list_model_infos",
+        return_value=frozenset({ProviderModelInfo("01-ai/yi-large"), retained}),
+    ):
+        infos = await provider.list_model_infos()
+    assert len(infos) == 1
+    assert next(iter(infos)) is retained
+
+
+@pytest.mark.asyncio
+async def test_nim_exclusions_preserve_discovery_errors() -> None:
+    config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = NvidiaNimProvider(
+            config, nim_settings=NimSettings(), admission=immediate_admission()
+        )
+    with (
+        patch.object(
+            provider._client.models,
+            "list",
+            new_callable=AsyncMock,
+            return_value=SimpleNamespace(data=[SimpleNamespace(id=None)]),
+        ) as mock_list,
+        pytest.raises(ModelListResponseError),
+    ):
+        await provider.list_model_infos()
+    mock_list.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
@@ -354,22 +457,6 @@ class FakeProvider(BaseProvider):
         self.cleaned = False
         self.model_list_calls = 0
 
-    def preflight_messages(
-        self,
-        request: Any,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        return None
-
-    def preflight_responses(
-        self,
-        request: Any,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> None:
-        return None
-
     async def cleanup(self) -> None:
         self.cleaned = True
 
@@ -394,6 +481,9 @@ class FakeProvider(BaseProvider):
         request_id: str | None = None,
         response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         if False:
             yield ""
@@ -406,6 +496,9 @@ class FakeProvider(BaseProvider):
         request_id: str | None = None,
         response_model: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         if False:
             yield ""
@@ -414,9 +507,9 @@ class FakeProvider(BaseProvider):
 @pytest.mark.asyncio
 async def test_runtime_warm_caches_all_referenced_provider_models() -> None:
     settings = _settings(
-        model_fallbacks=("open_router/anthropic/claude-opus",),
-        nvidia_nim_api_key="nim-key",
-        open_router_api_key="open-router-key",
+        model_fallbacks=(ModelFallback(model="open_router/anthropic/claude-opus"),),
+        nvidia_nim_api_keys="nim-key",
+        open_router_api_keys="open-router-key",
     )
     nim = FakeProvider(_infos("nim-model"))
     router = FakeProvider(_infos("anthropic/claude-opus"))
@@ -428,7 +521,7 @@ async def test_runtime_warm_caches_all_referenced_provider_models() -> None:
         },
     )
 
-    result = await runtime.warm_referenced_model_cache()
+    result = await runtime.refresh_model_list_cache()
 
     assert result.refreshed_provider_ids == ("nvidia_nim", "open_router")
     assert result.failed_provider_ids == ()
@@ -444,14 +537,14 @@ async def test_runtime_warm_caches_all_referenced_provider_models() -> None:
 async def test_runtime_warm_treats_model_lists_as_discovery_metadata() -> None:
     settings = _settings(
         model_sonnet="nvidia_nim/nim-model",
-        nvidia_nim_api_key="nim-key",
+        nvidia_nim_api_keys="nim-key",
     )
     runtime = _manager(
         settings,
         {"nvidia_nim": FakeProvider(_infos("different-model"))},
     )
 
-    result = await runtime.warm_referenced_model_cache()
+    result = await runtime.refresh_model_list_cache()
 
     assert result.refreshed_provider_ids == ("nvidia_nim",)
     assert result.failed_provider_ids == ()
@@ -462,8 +555,8 @@ async def test_runtime_warm_treats_model_lists_as_discovery_metadata() -> None:
 async def test_runtime_warm_reports_query_failures_without_blocking() -> None:
     settings = _settings(
         model_opus="open_router/anthropic/claude-opus",
-        nvidia_nim_api_key="nim-key",
-        open_router_api_key="open-router-key",
+        nvidia_nim_api_keys="nim-key",
+        open_router_api_keys="open-router-key",
     )
     runtime = _manager(
         settings,
@@ -475,10 +568,8 @@ async def test_runtime_warm_reports_query_failures_without_blocking() -> None:
         },
     )
 
-    with patch(
-        "free_claude_code.providers.runtime.discovery.logger.warning"
-    ) as warning:
-        result = await runtime.warm_referenced_model_cache()
+    with patch("free_claude_code.runtime.provider_manager.logger.warning") as warning:
+        result = await runtime.refresh_model_list_cache()
 
     assert result.refreshed_provider_ids == ("nvidia_nim",)
     assert result.failed_provider_ids == ("open_router",)
@@ -509,14 +600,14 @@ async def test_runtime_warm_queries_referenced_providers_concurrently() -> None:
         },
     )
 
-    await asyncio.wait_for(runtime.warm_referenced_model_cache(), timeout=1.0)
+    await asyncio.wait_for(runtime.refresh_model_list_cache(), timeout=1.0)
 
 
 @pytest.mark.asyncio
 async def test_startup_discovery_queries_each_successful_provider_once() -> None:
     settings = _settings(
-        nvidia_nim_api_key="nim-key",
-        open_router_api_key="open-router-key",
+        nvidia_nim_api_keys="nim-key",
+        open_router_api_keys="open-router-key",
     )
     nim = FakeProvider(_infos("nim-model"))
     router = FakeProvider(_infos("anthropic/claude-sonnet"))
@@ -525,9 +616,9 @@ async def test_startup_discovery_queries_each_successful_provider_once() -> None
         {"nvidia_nim": nim, "open_router": router},
     )
 
-    await runtime.warm_referenced_model_cache()
+    await runtime.refresh_model_list_cache()
     runtime.start_model_list_refresh()
-    refresh_task = runtime._refresh_task
+    refresh_task = runtime._current.refresh_task
     assert refresh_task is not None
     await refresh_task
 
@@ -540,16 +631,13 @@ async def test_startup_discovery_queries_each_successful_provider_once() -> None
 
 
 @pytest.mark.asyncio
-async def test_failed_startup_warm_remains_eligible_for_background_refresh() -> None:
-    settings = _settings(nvidia_nim_api_key="nim-key")
+async def test_failed_startup_discovery_remains_eligible_for_explicit_refresh() -> None:
+    settings = _settings(nvidia_nim_api_keys="nim-key")
     nim = FakeProvider(error=RuntimeError("upstream unavailable"))
     runtime = _manager(settings, {"nvidia_nim": nim})
 
-    warm_result = await runtime.warm_referenced_model_cache()
-    runtime.start_model_list_refresh()
-    refresh_task = runtime._refresh_task
-    assert refresh_task is not None
-    await refresh_task
+    warm_result = await runtime.refresh_model_list_cache()
+    await runtime.refresh_model_list_cache()
 
     assert warm_result.failed_provider_ids == ("nvidia_nim",)
     assert nim.model_list_calls == 2
@@ -562,7 +650,7 @@ async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_
 ):
     settings = _settings(
         model="lmstudio/local-qwen",
-        open_router_api_key="open-router-key",
+        open_router_api_keys="open-router-key",
     )
     runtime = _manager(
         settings,
@@ -579,7 +667,7 @@ async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_
         "open_router": frozenset({"anthropic/claude-sonnet"}),
         "lmstudio": frozenset({"local-qwen"}),
     }
-    assert result.refreshed_provider_ids == ("open_router", "lmstudio")
+    assert result.refreshed_provider_ids == ("lmstudio", "open_router")
     assert result.failed_provider_ids == ()
 
 
@@ -602,14 +690,14 @@ async def test_runtime_refresh_model_list_cache_treats_vertex_project_as_configu
         "vertex": frozenset({"google/gemini-3.5-flash"})
     }
     assert result.refreshed_provider_ids == ("vertex",)
-    assert result.failed_provider_ids == ()
+    assert result.failed_provider_ids == ("nvidia_nim",)
 
 
 @pytest.mark.asyncio
 async def test_runtime_refresh_model_list_cache_keeps_prior_cache_on_failure() -> None:
     settings = _settings(
         model="nvidia_nim/cached-model",
-        nvidia_nim_api_key="nim-key",
+        nvidia_nim_api_keys="nim-key",
     )
     runtime = _manager(
         settings,

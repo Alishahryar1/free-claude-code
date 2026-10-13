@@ -8,11 +8,13 @@
         values,
         emptyMessage,
         registry,
+        displayValue = (value) => value,
         onSelect = null,
         onClose = null,
       },
     ) {
       this.input = input;
+      this.displayValue = displayValue;
       this.getValues = values;
       this.getEmptyMessage = emptyMessage;
       this.registry = registry;
@@ -106,7 +108,7 @@
       const allValues = this.getValues();
       const values = normalizedQuery
         ? allValues.filter((value) =>
-            value.toLocaleLowerCase().includes(normalizedQuery),
+            (value + " " + this.displayValue(value)).toLocaleLowerCase().includes(normalizedQuery),
           )
         : allValues;
       this.listbox.replaceChildren();
@@ -127,7 +129,7 @@
         optionEl.id = `${this.listbox.id}-option-${index}`;
         optionEl.dataset.value = value;
         optionEl.setAttribute("role", "option");
-        optionEl.textContent = value;
+        optionEl.textContent = this.displayValue(value);
         this.listbox.appendChild(optionEl);
       });
       const selectedIndex = values.indexOf(this.input.value);

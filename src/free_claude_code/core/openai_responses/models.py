@@ -1,6 +1,6 @@
 """Pydantic models for OpenAI Responses-compatible ingress."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
@@ -24,3 +24,10 @@ class OpenAIResponsesRequest(BaseModel):
     reasoning: JsonObject | None = None
     previous_response_id: str | None = None
     store: bool | None = None
+
+    @field_validator("max_output_tokens", mode="before")
+    @classmethod
+    def _reject_boolean_output_limit(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("max_output_tokens must not be a boolean")
+        return value

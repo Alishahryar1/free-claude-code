@@ -33,8 +33,6 @@ def nebius_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-nebius-key",
             base_url=NEBIUS_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="nebius"),
     )
@@ -65,7 +63,7 @@ def test_encodes_documented_reasoning_effort(
         }
     )
 
-    body = nebius_provider._build_request_body(request, reasoning=reasoning)
+    body = nebius_provider._chat._build_request_body(request, reasoning=reasoning)
 
     assert body["reasoning_effort"] == expected
     assert "extra_body" not in body
@@ -89,7 +87,7 @@ def test_replays_reasoning_content(nebius_provider: OpenAIChatProvider) -> None:
         }
     )
 
-    body = nebius_provider._build_request_body(
+    body = nebius_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )

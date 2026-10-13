@@ -6,12 +6,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-from free_claude_code.application.chat import (
-    ChatConflictError,
-    ChatError,
-    ChatNotFoundError,
-    ChatUnavailableError,
-    ChatValidationError,
+from free_claude_code.application.code_sessions import (
+    CodeConflictError,
+    CodeError,
+    CodeNotFoundError,
+    CodeUnavailableError,
+    CodeValidationError,
 )
 from free_claude_code.application.errors import ApplicationError
 from free_claude_code.core.anthropic import anthropic_error_payload
@@ -28,7 +28,7 @@ from free_claude_code.core.version import package_version
 
 from .admin_cache import AdminNoStoreMiddleware, attach_admin_no_store
 from .admin_routes import router as admin_router
-from .chat_routes import router as chat_router
+from .code_sessions_routes import router as code_router
 from .ports import ApiServices
 from .request_errors import ordinary_application_error_response
 from .request_ids import (
@@ -36,7 +36,8 @@ from .request_ids import (
     attach_request_id_headers,
     get_request_id,
 )
-from .request_lifetime import InferenceRequestLifetimeMiddleware
+from .request_lifetime import ClientRequestLifetimeMiddleware
+from .request_outcomes import RequestOutcomeMiddleware
 from .routes import router
 from .validation_log import summarize_request_validation_body
 
@@ -46,24 +47,23 @@ def create_app(services: ApiServices) -> FastAPI:
     app = FastAPI(title="Claude Code Proxy", version=package_version())
     app.state.services = services
     app.add_middleware(AdminNoStoreMiddleware)
-    app.add_middleware(InferenceRequestLifetimeMiddleware)
+    app.add_middleware(ClientRequestLifetimeMiddleware)
+    app.add_middleware(RequestOutcomeMiddleware)
     app.add_middleware(RequestCorrelationMiddleware)
 
     app.include_router(admin_router)
-    app.include_router(chat_router)
+    app.include_router(code_router)
     app.include_router(router)
 
-    @app.exception_handler(ChatError)
-    async def chat_error_handler(request: Request, exc: ChatError):
-        """Serialize Chat application failures for the local Admin client."""
-
-        if isinstance(exc, ChatNotFoundError):
+    @app.exception_handler(CodeError)
+    async def code_error_handler(request: Request, exc: CodeError):
+        if isinstance(exc, CodeNotFoundError):
             status_code = 404
-        elif isinstance(exc, ChatConflictError):
+        elif isinstance(exc, CodeConflictError):
             status_code = 409
-        elif isinstance(exc, ChatValidationError):
+        elif isinstance(exc, CodeValidationError):
             status_code = 400
-        elif isinstance(exc, ChatUnavailableError):
+        elif isinstance(exc, CodeUnavailableError):
             status_code = 503
         else:
             status_code = 500
@@ -95,6 +95,16 @@ def create_app(services: ApiServices) -> FastAPI:
             message_summary=message_summary,
             tool_names=tool_names,
         )
+        if request.url.path == "/admin/api/config/apply":
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": [
+                        {key: error[key] for key in ("loc", "msg", "type")}
+                        for error in exc.errors()
+                    ]
+                },
+            )
         return await request_validation_exception_handler(request, exc)
 
     @app.exception_handler(ApplicationError)

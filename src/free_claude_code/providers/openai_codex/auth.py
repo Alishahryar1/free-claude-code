@@ -130,6 +130,30 @@ class _Credentials:
         }
 
 
+def _read_saved_credentials(path: Path) -> _Credentials | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            raise ValueError("credential document has an unsupported schema")
+        return _Credentials.from_json(payload.get("credentials"))
+    except (OSError, json.JSONDecodeError, OpenAILoginError, ValueError) as exc:
+        raise ValueError("OpenAI credential file is invalid") from exc
+
+
+def saved_connection_state() -> str:
+    """Inspect saved credentials without creating a client or refreshing tokens."""
+    try:
+        return (
+            "connected"
+            if _read_saved_credentials(openai_auth_path())
+            else "disconnected"
+        )
+    except OSError, ValueError:
+        return "unavailable"
+
+
 class OpenAIAuthManager:
     """Own credentials, interactive login, refresh, and revocation."""
 
@@ -515,15 +539,7 @@ class OpenAIAuthManager:
         self._credential_path.unlink(missing_ok=True)
 
     def _read_credentials(self) -> _Credentials | None:
-        if not self._credential_path.is_file():
-            return None
-        try:
-            payload = json.loads(self._credential_path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict) or payload.get("version") != 1:
-                raise ValueError("credential document has an unsupported schema")
-            return _Credentials.from_json(payload.get("credentials"))
-        except (OSError, json.JSONDecodeError, OpenAILoginError, ValueError) as exc:
-            raise ValueError("OpenAI credential file is invalid") from exc
+        return _read_saved_credentials(self._credential_path)
 
     def _detach_login_locked(
         self,

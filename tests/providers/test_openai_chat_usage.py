@@ -19,6 +19,7 @@ from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.openai_chat import (
+    OpenAIChatBehavior,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
@@ -30,11 +31,23 @@ from free_claude_code.providers.openai_chat.usage import (
     request_stream_usage,
     usage_int,
 )
+from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
     make_provider_config,
 )
+
+
+class _UsageTestBehavior(OpenAIChatBehavior):
+    def build_messages_body(
+        self,
+        request: MessagesRequest,
+        *,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+    ) -> dict:
+        return {"model": request.model, "messages": [{"role": "user", "content": "x"}]}
 
 
 class _UsageTestProvider(OpenAIChatProvider):
@@ -43,26 +56,18 @@ class _UsageTestProvider(OpenAIChatProvider):
             make_provider_config(
                 api_key="test_key",
                 base_url="https://provider.example/v1",
-                rate_limit=100,
-                rate_window=60,
             ),
-            profile=OpenAIChatProfile(
-                OpenAIChatRequestPolicy(
-                    provider_name="USAGE_TEST",
-                    reasoning_replay=ReasoningReplayMode.DISABLED,
-                ),
-                NO_REASONING,
+            behavior=_UsageTestBehavior(
+                OpenAIChatProfile(
+                    OpenAIChatRequestPolicy(
+                        provider_name="USAGE_TEST",
+                        reasoning_replay=ReasoningReplayMode.DISABLED,
+                    ),
+                    NO_REASONING,
+                )
             ),
             admission=immediate_admission(),
         )
-
-    def _build_request_body(
-        self,
-        request: MessagesRequest,
-        *,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> dict:
-        return {"model": request.model, "messages": [{"role": "user", "content": "x"}]}
 
 
 def _bad_request(message: str, body: object | None = None) -> openai.BadRequestError:
@@ -188,7 +193,7 @@ def test_usage_int_reads_dict_object_and_model_extra():
 def test_extracts_standard_chat_cache_write_tokens(usage, expected) -> None:
     provider = _UsageTestProvider()
 
-    assert provider._cache_write_input_tokens(usage) == expected
+    assert provider._behavior.cache_write_input_tokens(usage) == expected
 
 
 @pytest.mark.parametrize(
@@ -277,7 +282,7 @@ def test_extracts_standard_chat_cache_write_tokens(usage, expected) -> None:
 def test_maps_standard_chat_cache_usage_to_anthropic_fields(usage, expected):
     provider = _UsageTestProvider()
 
-    assert provider._anthropic_usage_fields(usage) == expected
+    assert provider._behavior.anthropic_usage_fields(usage) == expected
 
 
 @pytest.mark.parametrize(
@@ -330,7 +335,7 @@ def test_maps_standard_chat_cache_usage_to_anthropic_fields(usage, expected):
 def test_ignores_incomplete_or_inconsistent_standard_cache_usage(usage):
     provider = _UsageTestProvider()
 
-    assert provider._anthropic_usage_fields(usage) == {}
+    assert provider._behavior.anthropic_usage_fields(usage) == {}
 
 
 def test_stream_usage_rejection_matches_usage_option_400():
@@ -365,12 +370,14 @@ async def test_openai_chat_stream_requests_usage_and_uses_provider_prompt_tokens
         ),
     )
     create = AsyncMock(
-        return_value=_stream(
-            [
-                _chunk(content="hello"),
-                _chunk(finish_reason="stop"),
-                _chunk(usage=usage),
-            ]
+        return_value=SDKStreamDouble(
+            _stream(
+                [
+                    _chunk(content="hello"),
+                    _chunk(finish_reason="stop"),
+                    _chunk(usage=usage),
+                ]
+            )
         )
     )
 
@@ -417,12 +424,14 @@ async def test_openai_chat_nonstream_message_uses_final_cache_partition():
         ),
     )
     create = AsyncMock(
-        return_value=_stream(
-            [
-                _chunk(content="hello"),
-                _chunk(finish_reason="stop"),
-                _chunk(usage=usage),
-            ]
+        return_value=SDKStreamDouble(
+            _stream(
+                [
+                    _chunk(content="hello"),
+                    _chunk(finish_reason="stop"),
+                    _chunk(usage=usage),
+                ]
+            )
         )
     )
 
@@ -454,12 +463,14 @@ async def test_openai_chat_responses_stream_preserves_cache_write_usage():
         ),
     )
     create = AsyncMock(
-        return_value=_stream(
-            [
-                _chunk(content="hello"),
-                _chunk(finish_reason="stop"),
-                _chunk(usage=usage),
-            ]
+        return_value=SDKStreamDouble(
+            _stream(
+                [
+                    _chunk(content="hello"),
+                    _chunk(finish_reason="stop"),
+                    _chunk(usage=usage),
+                ]
+            )
         )
     )
 
@@ -490,11 +501,13 @@ async def test_openai_chat_stream_keeps_response_model_separate_from_upstream_mo
     provider = _UsageTestProvider()
     request = make_messages_request(model="upstream/model")
     create = AsyncMock(
-        return_value=_stream(
-            [
-                _chunk(content="hello"),
-                _chunk(finish_reason="stop"),
-            ]
+        return_value=SDKStreamDouble(
+            _stream(
+                [
+                    _chunk(content="hello"),
+                    _chunk(finish_reason="stop"),
+                ]
+            )
         )
     )
 
@@ -533,9 +546,14 @@ async def test_openai_chat_stream_retries_without_usage_when_option_is_rejected(
     )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        _stream_obj, used_body, attempt = await provider._create_stream(
+        (
+            _stream_obj,
+            used_body,
+            attempt,
+            _sent_body,
+        ) = await provider._chat._create_stream(
             body,
-            provider._admission.start_execution(),
+            RequestRecovery(provider._admission.start_execution()),
             ProviderOperationKind.GENERATION,
         )
         await attempt.aclose()

@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -243,7 +243,6 @@ async def test_node_runner_process_node_session_limit_marks_error_and_updates_ui
         claim,
         propagate=False,
     )
-    session_store.save_tree_snapshot.assert_called_once_with(snapshot)
 
 
 @pytest.mark.asyncio
@@ -286,7 +285,6 @@ async def test_node_runner_cancellation_marks_error_and_saves_tree():
         claim,
         propagate=False,
     )
-    session_store.save_tree_snapshot.assert_called_once_with(snapshot)
 
 
 @pytest.mark.asyncio
@@ -314,7 +312,12 @@ async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
         ),
         snapshots=(snapshot,),
     )
-    cancel_all = AsyncMock(return_value=result)
+
+    async def commit_cancel(*, reason, on_committed):
+        on_committed()
+        return result
+
+    cancel_all = AsyncMock(side_effect=commit_cancel)
     with patch.object(
         handler.tree_queue,
         "cancel_all",
@@ -326,9 +329,10 @@ async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
         status_feedback_scopes=frozenset({_SCOPE}),
         fallback_required=False,
     )
-    cancel_all.assert_awaited_once_with(reason=CancellationReason.STOP)
+    cancel_all.assert_awaited_once_with(
+        reason=CancellationReason.STOP, on_committed=ANY
+    )
     cli_manager.stop_all.assert_awaited_once()
-    session_store.save_tree_snapshot.assert_called_once_with(snapshot)
 
 
 @pytest.mark.asyncio
@@ -521,6 +525,52 @@ async def test_process_parsed_event_failed_complete_does_not_mark_success():
     update_ui.assert_not_awaited()
     complete_claim.assert_not_awaited()
     fail_claim.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [{"type": "complete", "status": "success"}, {"type": "error", "message": "failed"}],
+)
+@pytest.mark.parametrize("save_fails", [False, True])
+async def test_terminal_status_waits_for_its_durable_outcome(event, save_fails):
+    from free_claude_code.messaging.trees import MessagingStorageError
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    ui = AsyncMock()
+
+    async def save(*_args):
+        entered.set()
+        await release.wait()
+        if save_fails:
+            raise MessagingStorageError("disk full")
+
+    operation = asyncio.create_task(
+        process_parsed_cli_event(
+            parsed=event,
+            transcript=MagicMock(),
+            update_ui=ui,
+            last_status=None,
+            had_transcript_events=True,
+            claim=_claim(),
+            captured_session_id="session",
+            format_status=lambda *args: " ".join(args),
+            complete_claim=save,
+            fail_claim=save,
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        ui.assert_not_awaited()
+    finally:
+        release.set()
+    if save_fails:
+        with pytest.raises(MessagingStorageError):
+            await operation
+        ui.assert_not_awaited()
+    else:
+        await operation
+        ui.assert_awaited_once()
 
 
 @pytest.mark.asyncio

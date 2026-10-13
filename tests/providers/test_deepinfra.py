@@ -13,7 +13,11 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.config.provider_catalog import DEEPINFRA_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.reasoning import (
+    ReasoningCapability,
+    ReasoningEffort,
+    ReasoningPolicy,
+)
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.support import (
@@ -67,8 +71,6 @@ def deepinfra_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-deepinfra-key",
             base_url=DEEPINFRA_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="deepinfra"),
     )
@@ -118,7 +120,7 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
         }
     )
 
-    body = deepinfra_provider._build_request_body(
+    body = deepinfra_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -154,7 +156,7 @@ def test_build_request_body_encodes_documented_reasoning_effort(
 ) -> None:
     request = _request()
 
-    body = deepinfra_provider._build_request_body(request, reasoning=reasoning)
+    body = deepinfra_provider._chat._build_request_body(request, reasoning=reasoning)
 
     assert body["extra_body"] == {"reasoning_effort": expected}
 
@@ -164,7 +166,7 @@ def test_build_request_body_preserves_extra_body_without_reasoning_override(
 ) -> None:
     request = _request(extra_body={"service_tier": "priority"})
 
-    body = deepinfra_provider._build_request_body(request, reasoning=REASONING_ON)
+    body = deepinfra_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
     assert body["extra_body"] == {
         "service_tier": "priority",
@@ -180,7 +182,7 @@ def test_build_request_body_rejects_caller_reasoning_override(
     request = _request(extra_body={field: "caller-owned"})
 
     with pytest.raises(InvalidRequestError, match="must not override reasoning"):
-        deepinfra_provider._build_request_body(request, reasoning=REASONING_ON)
+        deepinfra_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
 
 def test_build_request_body_replays_documented_reasoning_content(
@@ -203,7 +205,7 @@ def test_build_request_body_replays_documented_reasoning_content(
         }
     )
 
-    body = deepinfra_provider._build_request_body(
+    body = deepinfra_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -245,7 +247,11 @@ async def test_lists_only_active_text_models_with_thinking_metadata(
     assert model_infos == frozenset(
         {
             ProviderModelInfo("reasoning-model", supports_thinking=True),
-            ProviderModelInfo("plain-model", supports_thinking=False),
+            ProviderModelInfo(
+                "plain-model",
+                supports_thinking=False,
+                reasoning_capability=ReasoningCapability.NONE,
+            ),
             ProviderModelInfo("hybrid-model", supports_thinking=True),
             ProviderModelInfo("unknown-model"),
         }
@@ -274,7 +280,7 @@ async def test_model_catalog_uses_absolute_public_url() -> None:
         return AsyncOpenAI(*args, **kwargs)
 
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI",
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
         side_effect=build_client,
     ):
         provider = profiled_provider(
@@ -282,8 +288,6 @@ async def test_model_catalog_uses_absolute_public_url() -> None:
             make_provider_config(
                 api_key="wire-deepinfra-key",
                 base_url=DEEPINFRA_DEFAULT_BASE,
-                rate_limit=10,
-                rate_window=60,
             ),
             admission=immediate_admission(provider_name="deepinfra"),
         )

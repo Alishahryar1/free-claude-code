@@ -1,20 +1,12 @@
 """Block finalization for OpenAI Responses streams."""
 
-from collections.abc import Callable
-
-from ..errors import ResponsesConversionError
 from ..items import encrypted_reasoning_item, message_item, reasoning_item
 from ..tools import (
     custom_tool_input_text_from_arguments,
-    normalized_function_call_arguments,
 )
 from .blocks import BlockState, ReasoningBlockState, TextBlockState, ToolBlockState
 from .event_builders import ResponseEventBuilder
 from .ledger import ResponsesOutputLedger
-
-InvalidFunctionCallHandler = Callable[
-    [ToolBlockState, ResponsesConversionError], list[str]
-]
 
 
 class ResponseBlockCompleter:
@@ -25,11 +17,9 @@ class ResponseBlockCompleter:
         ledger: ResponsesOutputLedger,
         *,
         events: ResponseEventBuilder,
-        on_invalid_function_call: InvalidFunctionCallHandler,
     ) -> None:
         self._ledger = ledger
         self._events = events
-        self._on_invalid_function_call = on_invalid_function_call
 
     def complete_block(self, state: BlockState) -> list[str]:
         if isinstance(state, TextBlockState):
@@ -37,6 +27,19 @@ class ResponseBlockCompleter:
         if isinstance(state, ReasoningBlockState):
             return self._complete_reasoning_block(state)
         return self._complete_tool_block(state)
+
+    def retain_incomplete_blocks(self) -> None:
+        """Keep a failure snapshot without publishing synthetic completions."""
+        for state in self._ledger.pop_active_blocks_by_output_order():
+            if isinstance(state, TextBlockState):
+                item = message_item(
+                    state.item_id, "".join(state.text_parts), "incomplete"
+                )
+            elif isinstance(state, ReasoningBlockState):
+                item = reasoning_output_item(state, status="incomplete")
+            else:
+                item = tool_item(state, status="incomplete")
+            self._ledger.commit_output(state.output_index, item)
 
     def _complete_text_block(self, state: TextBlockState) -> list[str]:
         text = "".join(state.text_parts)
@@ -60,19 +63,27 @@ class ResponseBlockCompleter:
                     state.item_id, state.output_index, text
                 )
             )
+        if state.summary_parts:
+            summary = "".join(state.summary_parts)
+            self._ledger.add_reasoning_text(summary)
+            chunks.extend(
+                [
+                    self._events.reasoning_summary_text(
+                        state.item_id, state.output_index, summary, done=True
+                    ),
+                    self._events.reasoning_summary_part(
+                        state.item_id, state.output_index, summary, done=True
+                    ),
+                ]
+            )
         chunks.append(self._events.output_item_done(state.output_index, item))
         return chunks
 
     def _complete_tool_block(self, state: ToolBlockState) -> list[str]:
         if state.kind == "custom":
             return self._complete_custom_tool_block(state)
-        raw_arguments = "".join(state.argument_parts) or "{}"
-        try:
-            arguments = normalized_function_call_arguments(raw_arguments)
-        except ResponsesConversionError as exc:
-            return self._on_invalid_function_call(state, exc)
+        arguments = "".join(state.argument_parts)
         item = tool_item(state, status="completed", arguments=arguments)
-        self._ledger.commit_output(state.output_index, item)
         chunks: list[str] = []
         if arguments:
             chunks.append(
@@ -88,6 +99,7 @@ class ResponseBlockCompleter:
                 self._events.output_item_done(state.output_index, item),
             ]
         )
+        self._ledger.commit_output(state.output_index, item)
         return chunks
 
     def _complete_custom_tool_block(self, state: ToolBlockState) -> list[str]:
@@ -148,8 +160,18 @@ def reasoning_output_item(
     state: ReasoningBlockState, *, status: str
 ) -> dict[str, object]:
     if state.encrypted_content is not None:
-        return encrypted_reasoning_item(state.item_id, state.encrypted_content, status)
-    return reasoning_item(state.item_id, "".join(state.text_parts), status)
+        item = encrypted_reasoning_item(state.item_id, state.encrypted_content, status)
+        if state.text_parts:
+            item["content"] = [
+                {"type": "reasoning_text", "text": "".join(state.text_parts)}
+            ]
+    else:
+        item = reasoning_item(state.item_id, "".join(state.text_parts), status)
+    if state.summary_parts:
+        item["summary"] = [
+            {"type": "summary_text", "text": "".join(state.summary_parts)}
+        ]
+    return item
 
 
 def _reasoning_output_item(

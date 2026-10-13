@@ -9,10 +9,7 @@ if os.name == "nt":
     import msvcrt
 
     def _try_lock(handle: BinaryIO) -> bool:
-        if os.fstat(handle.fileno()).st_size == 0:
-            handle.seek(0)
-            handle.write(b"\0")
-            handle.flush()
+        # Windows can lock beyond EOF, so no initialization write is needed.
         handle.seek(0)
         try:
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
@@ -60,14 +57,17 @@ class InterprocessFileLock:
             raise ValueError("timeout must be non-negative")
         self._path.parent.mkdir(parents=True, exist_ok=True)
         handle = self._path.open("a+b")
-        deadline = None if timeout is None else time.monotonic() + timeout
-        while not _try_lock(handle):
-            if not wait or (deadline is not None and time.monotonic() >= deadline):
+        try:
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while not _try_lock(handle):
+                if not wait or (deadline is not None and time.monotonic() >= deadline):
+                    return False
+                time.sleep(poll_interval)
+            self._handle = handle
+            return True
+        finally:
+            if self._handle is not handle:
                 handle.close()
-                return False
-            time.sleep(poll_interval)
-        self._handle = handle
-        return True
 
     def release(self) -> None:
         """Release a held lock; repeated calls are harmless."""

@@ -1,8 +1,13 @@
+import json
 import math
 
+import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.api_keys import normalize_api_keys
+from free_claude_code.config.custom_providers import CustomProviderDefinition
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.model_capabilities import ModelInputModality
 from tests.api.support import create_test_app, provider_manager_for_app
@@ -14,7 +19,7 @@ def _settings(
     model_fable: str | None = None,
     model_opus: str | None = "open_router/anthropic/claude-opus",
     model_haiku: str | None = "deepseek/deepseek-chat",
-    model_fallbacks: tuple[str, ...] | None = None,
+    model_fallbacks: tuple[ModelFallback, ...] | None = None,
 ) -> Settings:
     return Settings.model_construct(
         model=model,
@@ -25,9 +30,9 @@ def _settings(
         model_fallbacks=model_fallbacks,
         proxy_auth_enabled=False,
         proxy_auth_token="freecc",
-        deepseek_api_key="deepseek-key",
-        open_router_api_key="open-router-key",
-        wafer_api_key="wafer-key",
+        deepseek_api_keys=normalize_api_keys("deepseek-key"),
+        open_router_api_keys=normalize_api_keys("open-router-key"),
+        wafer_api_keys=normalize_api_keys("wafer-key"),
     )
 
 
@@ -35,6 +40,73 @@ def _cache_models(app, provider_id: str, *model_ids: str) -> None:
     provider_manager_for_app(app).cache_model_infos(
         provider_id,
         {ProviderModelInfo(model_id) for model_id in model_ids},
+    )
+
+
+@pytest.mark.parametrize("view", ["messages", "responses"])
+def test_context_fallback_round_trip_preserves_reported_capabilities(view):
+    from free_claude_code.application.model_catalog import read_model_catalog
+    from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
+    from free_claude_code.cli.launchers.opencode_config import build_opencode_config
+
+    app = create_test_app(_settings(model_opus=None))
+    manager = provider_manager_for_app(app)
+    manager.cache_model_infos(
+        "deepseek", {ProviderModelInfo("known", context_window_tokens=8000)}
+    )
+    before = read_model_catalog(manager)
+    payload = TestClient(app).get(f"/v1/models?view={view}").json()
+    rows = {row["id"]: row for row in payload["data"]}
+    assert rows["deepseek/deepseek-chat"]["contextWindow"] == 200000
+    assert rows["deepseek/deepseek-chat"]["contextWindowSource"] == "default"
+    assert rows["deepseek/known"]["contextWindow"] == 8000
+    assert rows["deepseek/known"]["contextWindowSource"] == "provider"
+    decoded = model_catalog_from_response(payload)
+    assert decoded == before
+    config = build_opencode_config(
+        decoded.models,
+        default_model_id=decoded.default_model_id,
+        proxy_root_url="http://localhost:8082",
+    )
+    models = json.loads(json.dumps(config.file))["providers"]["free-claude-code"][
+        "models"
+    ]
+    assert models["deepseek/deepseek-chat"]["limit"] == {"context": 200000}
+    assert models["deepseek/known"]["limit"] == {"context": 8000, "output": 2000}
+
+
+@pytest.mark.parametrize("view", ["messages", "responses"])
+def test_sorted_catalog_retains_an_explicit_no_thinking_server_default(view):
+    settings = _settings(
+        model="open_router/Zulu",
+        model_opus=None,
+        model_haiku=None,
+        model_fallbacks=(
+            ModelFallback(model="wafer/z-fallback"),
+            ModelFallback(model="deepseek/a-fallback"),
+        ),
+    )
+    app = create_test_app(settings)
+    provider_manager_for_app(app).cache_model_infos(
+        "open_router",
+        {
+            ProviderModelInfo("Zulu", supports_thinking=False),
+            ProviderModelInfo("apple"),
+        },
+    )
+    payload = TestClient(app).get(f"/v1/models?view={view}").json()
+    assert [row["provider_model_ref"] for row in payload["data"]] == [
+        "deepseek/a-fallback",
+        "open_router/apple",
+        "open_router/Zulu",
+        "wafer/z-fallback",
+    ]
+    assert payload["default_model_id"] == "claude-3-freecc-no-thinking/open_router/Zulu"
+    assert payload["first_id"] == "deepseek/a-fallback"
+    assert payload["last_id"] == "wafer/z-fallback"
+    assert settings.model_fallbacks == (
+        ModelFallback(model="wafer/z-fallback"),
+        ModelFallback(model="deepseek/a-fallback"),
     )
 
 
@@ -53,7 +125,8 @@ def test_models_list_includes_configured_refs_cached_provider_models_and_aliases
     assert response.status_code == 200
     data = response.json()
     ids = [item["id"] for item in data["data"]]
-    assert ids[:6] == [
+    assert ids[0] == "claude-fable-5"
+    assert [model_id for model_id in ids if "/" in model_id] == [
         "anthropic/deepseek/deepseek-chat",
         "claude-3-freecc-no-thinking/deepseek/deepseek-chat",
         "anthropic/open_router/anthropic/claude-opus",
@@ -80,6 +153,42 @@ def test_models_list_includes_configured_refs_cached_provider_models_and_aliases
     assert all(
         "provider_model_ref" not in item and "apiBackend" not in item
         for item in data["data"]
+    )
+
+
+def test_claude_models_use_custom_provider_display_name_without_changing_ids():
+    provider_id = "custom_f526dba2aa0a472f9c506ba236056d57"
+    model_ref = f"{provider_id}/deepseek-v4.1-flash"
+    definition = CustomProviderDefinition(
+        provider_id=provider_id,
+        display_name="Phoenix",
+        base_url="https://gateway.example/v1",
+    )
+    settings = _settings(model=model_ref, model_opus=None, model_haiku=None).model_copy(
+        update={"custom_providers": (definition,)}
+    )
+    app = create_test_app(settings)
+    provider_manager_for_app(app).cache_model_infos(
+        provider_id,
+        {
+            ProviderModelInfo("deepseek-v4.1-flash", supports_thinking=True),
+            ProviderModelInfo("deepseek-plain", supports_thinking=False),
+        },
+    )
+
+    response = TestClient(app).get("/v1/models")
+
+    assert response.status_code == 200
+    rows = {row["id"]: row for row in response.json()["data"]}
+    assert rows[f"anthropic/{model_ref}"]["display_name"] == (
+        "Phoenix/deepseek-v4.1-flash"
+    )
+    assert rows[f"claude-3-freecc-no-thinking/{model_ref}"]["display_name"] == (
+        "Phoenix/deepseek-v4.1-flash (no thinking)"
+    )
+    plain_ref = f"{provider_id}/deepseek-plain"
+    assert rows[f"claude-3-freecc-no-thinking/{plain_ref}"]["display_name"] == (
+        "Phoenix/deepseek-plain (no thinking)"
     )
 
 
@@ -122,7 +231,7 @@ def test_models_list_uses_cached_metadata_for_configured_refs():
 
     ids = [item["id"] for item in response.json()["data"]]
     assert "anthropic/open_router/plain-model" not in ids
-    assert ids[0] == "claude-3-freecc-no-thinking/open_router/plain-model"
+    assert ids[-1] == "claude-3-freecc-no-thinking/open_router/plain-model"
 
 
 def test_models_list_includes_cached_wafer_models():
@@ -149,7 +258,7 @@ def test_models_list_includes_fallback_refs_without_cached_discovery():
         _settings(
             model_opus=None,
             model_haiku=None,
-            model_fallbacks=("wafer/DeepSeek-V4-Pro",),
+            model_fallbacks=(ModelFallback(model="wafer/DeepSeek-V4-Pro"),),
         )
     )
 
@@ -168,7 +277,8 @@ def test_models_list_works_with_empty_discovery_catalog():
 
     assert response.status_code == 200
     ids = [item["id"] for item in response.json()["data"]]
-    assert ids[:4] == [
+    assert ids[0] == "claude-fable-5"
+    assert [model_id for model_id in ids if "/" in model_id] == [
         "anthropic/deepseek/deepseek-chat",
         "claude-3-freecc-no-thinking/deepseek/deepseek-chat",
         "anthropic/open_router/anthropic/claude-opus",
@@ -209,6 +319,8 @@ def test_direct_model_views_exclude_claude_aliases_and_duplicate_variants():
         "provider_model_ref": "deepseek/deepseek-chat",
         "apiBackend": "responses",
         "maxRetries": 0,
+        "contextWindow": 200000,
+        "contextWindowSource": "default",
         "supportsReasoningEffort": True,
         "reasoningEfforts": [
             "none",
@@ -273,7 +385,8 @@ def test_direct_model_views_serialize_known_capabilities_and_omit_unknowns():
     assert "maxCompletionTokens" not in messages["open_router/text-only"]
     assert "supportsReasoning" not in messages["open_router/unknown"]
     assert "inputModalities" not in messages["open_router/unknown"]
-    assert "contextWindow" not in messages["open_router/unknown"]
+    assert messages["open_router/unknown"]["contextWindow"] == 200000
+    assert messages["open_router/unknown"]["contextWindowSource"] == "default"
     assert "maxCompletionTokens" not in messages["open_router/unknown"]
     assert responses["open_router/text-only"]["supportsReasoningEffort"] is False
     assert "reasoningEfforts" not in responses["open_router/text-only"]
@@ -309,7 +422,7 @@ def test_claude_model_view_does_not_expose_capability_fields():
     )
 
 
-def test_muse_model_catalog_is_the_fixed_responses_projection():
+def test_muse_model_catalog_marks_every_routable_model_visible():
     app = create_test_app(_settings(model_opus=None, model_haiku=None))
     manager = provider_manager_for_app(app)
     manager.cache_model_infos(
@@ -326,12 +439,61 @@ def test_muse_model_catalog_is_the_fixed_responses_projection():
 
     assert responses.status_code == 200
     assert muse.status_code == 200
-    assert muse.json() == responses.json()
+    assert all("metadata" not in row for row in responses.json()["data"])
+    for row in muse.json()["data"]:
+        metadata = row["metadata"]["muse-code"]
+        assert metadata["is_hidden"] is False
+        assert metadata["name"] == row["display_name"]
+        assert metadata["limit"] == {"context": 200000}
+        original = {key: value for key, value in row.items() if key != "metadata"}
+        assert original in responses.json()["data"]
     assert [row["id"] for row in muse.json()["data"]] == [
         "deepseek/deepseek-chat",
         "claude-3-freecc-no-thinking/open_router/plain-model",
         "open_router/reasoning-model",
     ]
+
+
+def test_muse_catalog_uses_native_metadata_for_known_limits_and_reasoning():
+    app = create_test_app(_settings(model_opus=None, model_haiku=None))
+    provider_manager_for_app(app).cache_model_infos(
+        "open_router",
+        {
+            ProviderModelInfo(
+                "reasoning-model",
+                supports_thinking=True,
+                context_window_tokens=131072,
+                max_output_tokens=8192,
+            ),
+            ProviderModelInfo(
+                "plain-model",
+                supports_thinking=False,
+                context_window_tokens=65536,
+            ),
+        },
+    )
+    rows = {
+        row["provider_model_ref"]: row["metadata"]["muse-code"]
+        for row in TestClient(app).get("/muse-code/models").json()["data"]
+    }
+
+    assert rows["open_router/reasoning-model"] == {
+        "name": "open_router/reasoning-model",
+        "is_hidden": False,
+        "reasoning": True,
+        "limit": {"context": 131072, "output": 8192},
+    }
+    assert rows["open_router/plain-model"] == {
+        "name": "open_router/plain-model (no thinking)",
+        "is_hidden": False,
+        "reasoning": False,
+        "limit": {"context": 65536},
+    }
+    assert rows["deepseek/deepseek-chat"] == {
+        "name": "deepseek/deepseek-chat",
+        "is_hidden": False,
+        "limit": {"context": 200000},
+    }
 
 
 def test_responses_model_view_rounds_timeout_up_before_margin():
@@ -366,3 +528,31 @@ def test_unknown_model_view_is_rejected():
     response = TestClient(create_test_app(_settings())).get("/v1/models?view=other")
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("view", ["messages", "responses"])
+def test_real_json_catalog_agrees_with_application_identity_and_known_metadata(view):
+    from free_claude_code.application.model_catalog import read_model_catalog
+    from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
+
+    app = create_test_app(
+        _settings(model="open_router/Zulu", model_opus=None, model_haiku=None)
+    )
+    provider_manager_for_app(app).cache_model_infos(
+        "open_router",
+        {
+            ProviderModelInfo(
+                "Zulu", supports_thinking=False, context_window_tokens=32000
+            ),
+            ProviderModelInfo(
+                "vendor/vision ",
+                input_modalities=frozenset(
+                    {ModelInputModality.TEXT, ModelInputModality.IMAGE}
+                ),
+                max_output_tokens=4096,
+            ),
+        },
+    )
+    expected = read_model_catalog(app.state.services.requests)
+    payload = TestClient(app).get(f"/v1/models?view={view}").json()
+    assert model_catalog_from_response(payload) == expected

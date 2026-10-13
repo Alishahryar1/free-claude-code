@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -57,7 +58,7 @@ async def test_active_cancel_returns_runner_owned_effect_and_terminal_snapshot()
         started.set()
         await asyncio.Event().wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("root"), "status-root")
     await started.wait()
 
@@ -96,7 +97,9 @@ async def test_queued_cancel_returns_workflow_effect_and_exact_queue_update() ->
             tuple((entry.node.node_id, entry.position) for entry in queue)
         )
 
-    manager = TreeQueueManager(process, queue_update_callback=capture_queue)
+    manager = TreeQueueManager(
+        process, queue_update_callback=capture_queue, store=AsyncMock()
+    )
     await manager.admit(_incoming("root"), "status-root")
     await root_started.wait()
     decision = await manager.admit(
@@ -142,7 +145,7 @@ async def test_cancel_cleanup_timeout_is_bounded_and_task_remains_owned(
             await release_cleanup.wait()
             raise
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("root"), "status-root")
     await started.wait()
 
@@ -186,6 +189,7 @@ async def test_escaped_processor_failure_persists_effects_through_manager_owner(
         process,
         queue_update_callback=capture_queue,
         unexpected_failure_callback=failures.append,
+        store=AsyncMock(),
     )
     await manager.admit(_incoming("root"), "status-root")
     await started.wait()
@@ -222,7 +226,7 @@ async def test_wait_idle_spans_successor_publication_and_completion() -> None:
         child_started.set()
         await release_child.wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await asyncio.wait_for(manager.wait_idle(), timeout=0.1)
     await manager.admit(_incoming("root"), "status-root")
     await asyncio.wait_for(root_started.wait(), timeout=1)
@@ -426,6 +430,7 @@ async def test_processor_failure_logging_respects_diagnostic_policy(
     manager = TreeQueueManager(
         process,
         log_messaging_error_details=log_messaging_error_details,
+        store=AsyncMock(),
     )
     with caplog.at_level(logging.ERROR):
         await manager.admit(_incoming("root"), "status-root")

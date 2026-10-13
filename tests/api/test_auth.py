@@ -1,15 +1,19 @@
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.api.dependencies import get_settings
 from free_claude_code.config.settings import Settings
 from tests.api.support import create_test_app
 
-app = create_test_app()
+
+@pytest.fixture
+def app():
+    return create_test_app(Settings())
 
 
-def test_anthropic_post_routes_accept_x_api_key():
+def test_anthropic_post_routes_accept_x_api_key(app):
     client = TestClient(app)
     settings = Settings(proxy_auth_enabled=True, proxy_auth_token="s3cr3t")
     app.dependency_overrides[get_settings] = lambda: settings
@@ -46,7 +50,7 @@ def test_anthropic_post_routes_accept_x_api_key():
     app.dependency_overrides.clear()
 
 
-def test_anthropic_probe_routes_accept_x_api_key():
+def test_anthropic_probe_routes_accept_x_api_key(app):
     client = TestClient(app)
     settings = Settings(proxy_auth_enabled=True, proxy_auth_token="probe-token")
     app.dependency_overrides[get_settings] = lambda: settings
@@ -60,7 +64,7 @@ def test_anthropic_probe_routes_accept_x_api_key():
     app.dependency_overrides.clear()
 
 
-def test_anthropic_routes_still_reject_anthropic_auth_token_only():
+def test_anthropic_routes_still_reject_anthropic_auth_token_only(app):
     client = TestClient(app)
     settings = Settings(proxy_auth_enabled=True, proxy_auth_token="s3cr3t")
     app.dependency_overrides[get_settings] = lambda: settings
@@ -73,7 +77,7 @@ def test_anthropic_routes_still_reject_anthropic_auth_token_only():
     app.dependency_overrides.clear()
 
 
-def test_messages_auth_gives_authorization_precedence_over_x_api_key():
+def test_messages_auth_gives_authorization_precedence_over_x_api_key(app):
     client = TestClient(app)
     settings = Settings(proxy_auth_enabled=True, proxy_auth_token="b3artoken")
     app.dependency_overrides[get_settings] = lambda: settings
@@ -114,7 +118,7 @@ def test_messages_auth_gives_authorization_precedence_over_x_api_key():
     app.dependency_overrides.clear()
 
 
-def test_x_api_key_remains_rejected_on_non_messages_routes():
+def test_x_api_key_remains_rejected_on_non_messages_routes(app):
     client = TestClient(app)
     settings = Settings(proxy_auth_enabled=True, proxy_auth_token="route-token")
     app.dependency_overrides[get_settings] = lambda: settings
@@ -130,7 +134,7 @@ def test_x_api_key_remains_rejected_on_non_messages_routes():
     app.dependency_overrides.clear()
 
 
-def test_proxy_auth_token_normalizes_configured_whitespace():
+def test_proxy_auth_token_normalizes_configured_whitespace(app):
     client = TestClient(app)
     settings = Settings(
         proxy_auth_enabled=True,
@@ -155,7 +159,7 @@ def test_proxy_auth_token_normalizes_configured_whitespace():
     app.dependency_overrides.clear()
 
 
-def test_proxy_auth_token_applies_to_model_catalog_endpoints():
+def test_proxy_auth_token_applies_to_model_catalog_endpoints(app):
     client = TestClient(app)
     settings = Settings(proxy_auth_enabled=True, proxy_auth_token="models-token")
     app.dependency_overrides[get_settings] = lambda: settings
@@ -173,7 +177,7 @@ def test_proxy_auth_token_applies_to_model_catalog_endpoints():
     app.dependency_overrides.clear()
 
 
-def test_root_get_requires_auth_but_root_probes_are_public():
+def test_root_get_requires_auth_but_root_probes_are_public(app):
     client = TestClient(app)
     settings = Settings(proxy_auth_enabled=True, proxy_auth_token="root-token")
     app.dependency_overrides[get_settings] = lambda: settings

@@ -1,7 +1,7 @@
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -23,6 +23,8 @@ from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_recovery import ContinuationSeed
+from tests.web_tools_support import StubWebToolsClient
 
 _LEGACY_CLASSIFIER_SYSTEM = (
     "You are a security monitor. Respond with <block>yes</block> or <block>no</block>."
@@ -39,10 +41,6 @@ _CLASSIFIER_USER = (
 
 class FakeProvider:
     def __init__(self, events: list[str] | None = None) -> None:
-        self.preflight_calls: list[tuple[MessagesRequest, ReasoningPolicy]] = []
-        self.responses_preflight_calls: list[
-            tuple[OpenAIResponsesRequest, ReasoningPolicy]
-        ] = []
         self.requests: list[MessagesRequest] = []
         self.responses_requests: list[OpenAIResponsesRequest] = []
         self.stream_kwargs: list[dict[str, Any]] = []
@@ -50,16 +48,6 @@ class FakeProvider:
             'event: message_start\ndata: {"type":"message_start"}\n\n',
             'event: message_stop\ndata: {"type":"message_stop"}\n\n',
         ]
-
-    def preflight_messages(
-        self, request: MessagesRequest, *, reasoning: ReasoningPolicy
-    ) -> None:
-        self.preflight_calls.append((request, reasoning))
-
-    def preflight_responses(
-        self, request: OpenAIResponsesRequest, *, reasoning: ReasoningPolicy
-    ) -> None:
-        self.responses_preflight_calls.append((request, reasoning))
 
     async def cleanup(self) -> None:
         return None
@@ -75,6 +63,9 @@ class FakeProvider:
         request_id: str | None = None,
         response_model: str | None = None,
         reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         self.requests.append(request)
         self.stream_kwargs.append(
@@ -96,6 +87,9 @@ class FakeProvider:
         request_id: str | None = None,
         response_model: str | None = None,
         reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         self.responses_requests.append(request)
         self.stream_kwargs.append(
@@ -136,7 +130,11 @@ def _trace_events(trace_mock: MagicMock, event: str) -> list[dict[str, Any]]:
 @pytest.mark.asyncio
 async def test_messages_handler_passes_routed_request_and_stream_metadata() -> None:
     provider = FakeProvider()
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,
@@ -154,25 +152,32 @@ async def test_messages_handler_passes_routed_request_and_stream_metadata() -> N
     assert provider.stream_kwargs[0]["request_id"].startswith("req_")
     assert provider.stream_kwargs[0]["response_model"] == "nvidia_nim/test-model"
     assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
-    assert len(provider.preflight_calls) == 1
+    assert len(provider.requests) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [True, False])
-async def test_messages_handler_preflight_invalid_request_stays_http_error(
+async def test_messages_handler_startup_invalid_request_stays_http_error(
     stream: bool,
 ) -> None:
-    class RejectPreflightProvider(FakeProvider):
-        def preflight_messages(
+    class RejectStartupProvider(FakeProvider):
+        def stream_messages(
             self,
             request: MessagesRequest,
+            input_tokens: int = 0,
             *,
             reasoning: ReasoningPolicy,
-        ) -> None:
+            model_info: ProviderModelInfo | None = None,
+            **kwargs: object,
+        ) -> AsyncIterator[str]:
             raise InvalidRequestError("bad tool shape")
 
-    provider = RejectPreflightProvider()
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    provider = RejectStartupProvider()
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,
@@ -180,8 +185,14 @@ async def test_messages_handler_preflight_invalid_request_stays_http_error(
         stream=stream,
     )
 
-    with pytest.raises(InvalidRequestError):
-        await handler.create(request)
+    if stream:
+        response = await handler.create(request)
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
+        assert json.loads(bytes(response.body))["error"]["message"] == "bad tool shape"
+    else:
+        with pytest.raises(InvalidRequestError, match="bad tool shape"):
+            await handler.create(request)
 
 
 @pytest.mark.asyncio
@@ -238,7 +249,11 @@ async def test_messages_handler_aggregates_provider_stream_when_stream_false() -
             format_sse_event("message_stop", {"type": "message_stop"}),
         ]
     )
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,
@@ -277,7 +292,11 @@ async def test_messages_handler_returns_error_json_for_stream_false_sse_error() 
             )
         ]
     )
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,
@@ -344,7 +363,11 @@ async def test_messages_handler_discards_partial_stream_false_output_on_error() 
             ),
         ]
     )
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,
@@ -376,6 +399,9 @@ async def test_messages_handler_stream_false_provider_exception_keeps_status() -
             request_id: str | None = None,
             response_model: str | None = None,
             reasoning: ReasoningPolicy,
+            request_headers: Mapping[str, str] | None = None,
+            model_info: ProviderModelInfo | None = None,
+            continuation: ContinuationSeed | None = None,
         ) -> AsyncIterator[str]:
             self.requests.append(request)
             self.stream_kwargs.append(
@@ -395,7 +421,11 @@ async def test_messages_handler_stream_false_provider_exception_keeps_status() -
             yield "unreachable"
 
     provider = FailingProvider()
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,
@@ -428,7 +458,11 @@ async def test_messages_handler_normalizes_safety_classifier_policy(
     classifier_stop_sequence: str,
 ) -> None:
     provider = FakeProvider()
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,
@@ -443,11 +477,11 @@ async def test_messages_handler_normalizes_safety_classifier_policy(
         assert isinstance(response, StreamingResponse)
         await _streaming_body_text(response)
 
-    assert provider.preflight_calls[0][1] == ReasoningPolicy.off()
-    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.off()
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.prefer_off()
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.prefer_off()
     assert provider.requests[0].model == "test-model"
     assert provider.requests[0].system == system
-    assert provider.preflight_calls[0][0].stop_sequences is None
+    assert provider.requests[0].stop_sequences is None
     assert provider.requests[0].stop_sequences is None
     assert request.stop_sequences == [classifier_stop_sequence]
     assert _trace_events(
@@ -468,7 +502,11 @@ async def test_messages_handler_normalizes_safety_classifier_policy(
 @pytest.mark.asyncio
 async def test_messages_handler_preserves_thinking_for_non_classifier() -> None:
     provider = FakeProvider()
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,
@@ -491,7 +529,7 @@ async def test_messages_handler_preserves_thinking_for_non_classifier() -> None:
         assert isinstance(response, StreamingResponse)
         await _streaming_body_text(response)
 
-    assert provider.preflight_calls[0][1] == ReasoningPolicy.provider_default()
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
     assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
     assert provider.requests[0].stop_sequences == ["</severity>"]
     assert (
@@ -504,9 +542,13 @@ async def test_messages_handler_preserves_thinking_for_non_classifier() -> None:
 
 
 @pytest.mark.asyncio
-async def test_messages_handler_keeps_existing_no_thinking_for_classifier() -> None:
+async def test_messages_handler_tolerates_required_thinking_for_classifier() -> None:
     provider = FakeProvider()
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="claude-3-freecc-no-thinking/nvidia_nim/test-model",
         max_tokens=100,
@@ -521,8 +563,8 @@ async def test_messages_handler_keeps_existing_no_thinking_for_classifier() -> N
         assert isinstance(response, StreamingResponse)
         await _streaming_body_text(response)
 
-    assert provider.preflight_calls[0][1] == ReasoningPolicy.off()
-    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.off()
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.prefer_off()
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.prefer_off()
     assert provider.requests[0].stop_sequences is None
     assert request.stop_sequences == ["</block>"]
     assert _trace_events(
@@ -534,18 +576,22 @@ async def test_messages_handler_keeps_existing_no_thinking_for_classifier() -> N
             "source": "api",
             "model": "claude-3-freecc-no-thinking/nvidia_nim/test-model",
             "classifier_stop_sequence": "</block>",
-            "reasoning_changed": False,
+            "reasoning_changed": True,
             "stop_sequence_removed": True,
         }
     ]
 
 
 @pytest.mark.asyncio
-async def test_messages_handler_forces_no_thinking_without_classifier_stop_hint() -> (
+async def test_messages_handler_prefers_no_thinking_without_classifier_stop_hint() -> (
     None
 ):
     provider = FakeProvider()
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,
@@ -559,7 +605,7 @@ async def test_messages_handler_forces_no_thinking_without_classifier_stop_hint(
         assert isinstance(response, StreamingResponse)
         await _streaming_body_text(response)
 
-    assert provider.preflight_calls[0][1] == ReasoningPolicy.off()
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.prefer_off()
     assert provider.requests[0].stop_sequences is None
     assert _trace_events(
         trace_mock, "free_claude_code.api.route.safety_classifier_policy"
@@ -579,7 +625,11 @@ async def test_messages_handler_forces_no_thinking_without_classifier_stop_hint(
 @pytest.mark.asyncio
 async def test_messages_handler_preserves_unowned_classifier_stop_sequences() -> None:
     provider = FakeProvider()
-    handler = MessagesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        web_tools=StubWebToolsClient(),
+    )
     original_stops = ["custom", "</severity>", "custom", "</severity>", "tail"]
     request = MessagesRequest(
         model="nvidia_nim/test-model",
@@ -594,8 +644,8 @@ async def test_messages_handler_preserves_unowned_classifier_stop_sequences() ->
     assert isinstance(response, StreamingResponse)
     await _streaming_body_text(response)
 
-    assert provider.preflight_calls[0][1] == ReasoningPolicy.off()
-    assert provider.preflight_calls[0][0].stop_sequences == [
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.prefer_off()
+    assert provider.requests[0].stop_sequences == [
         "custom",
         "custom",
         "tail",
@@ -608,8 +658,10 @@ async def test_messages_handler_preserves_unowned_classifier_stop_sequences() ->
 async def test_messages_handler_optimization_intercepts_before_provider_execution() -> (
     None
 ):
-    provider_resolver = MagicMock()
-    handler = MessagesHandler(Settings(), provider_resolver=provider_resolver)
+    provider_resolver = AsyncMock()
+    handler = MessagesHandler(
+        Settings(), provider_resolver=provider_resolver, web_tools=StubWebToolsClient()
+    )
     request = MessagesRequest(
         model="nvidia_nim/test-model",
         max_tokens=100,
@@ -629,7 +681,10 @@ async def test_messages_handler_optimization_intercepts_before_provider_executio
 @pytest.mark.asyncio
 async def test_responses_handler_bypasses_message_only_optimizations() -> None:
     provider = FakeProvider()
-    handler = ResponsesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = ResponsesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+    )
 
     with patch(
         "free_claude_code.api.handlers.messages.try_optimizations",
@@ -651,7 +706,10 @@ async def test_responses_handler_bypasses_message_only_optimizations() -> None:
 @pytest.mark.asyncio
 async def test_responses_handler_does_not_apply_safety_classifier_policy() -> None:
     provider = FakeProvider()
-    handler = ResponsesHandler(Settings(), provider_resolver=lambda _: provider)
+    handler = ResponsesHandler(
+        Settings(),
+        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+    )
 
     with patch("free_claude_code.api.handlers.messages.trace_event") as trace_mock:
         response = await handler.create(
@@ -665,9 +723,7 @@ async def test_responses_handler_does_not_apply_safety_classifier_policy() -> No
         assert isinstance(response, StreamingResponse)
         await _streaming_body_text(response)
 
-    assert (
-        provider.responses_preflight_calls[0][1] == ReasoningPolicy.provider_default()
-    )
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
     assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
     assert (
         _trace_events(

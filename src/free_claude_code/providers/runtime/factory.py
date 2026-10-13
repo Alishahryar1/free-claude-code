@@ -1,14 +1,17 @@
 """Provider construction from declarative profiles and exceptional adapters."""
 
+import importlib
 from collections.abc import Callable, Mapping
 
 from free_claude_code.application.errors import (
     ApplicationUnavailableError,
     UnknownProviderError,
 )
+from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
@@ -22,165 +25,234 @@ ProviderFactory = Callable[
 ]
 
 
-def _create_nvidia_nim(
-    config: ProviderConfig,
-    settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_anthropic() -> ProviderFactory:
+    from free_claude_code.providers.anthropic import AnthropicProvider
+
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return AnthropicProvider(
+            config, workspace_id=settings.anthropic_workspace_id, admission=admission
+        )
+
+    return construct
+
+
+def _load_nvidia_nim() -> ProviderFactory:
     from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 
-    return NvidiaNimProvider(
-        config,
-        nim_settings=settings.nim,
-        admission=admission,
-    )
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return NvidiaNimProvider(
+            config,
+            nim_settings=settings.nim,
+            admission=admission,
+        )
+
+    return construct
 
 
-def _create_open_router(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_open_router() -> ProviderFactory:
     from free_claude_code.providers.open_router import OpenRouterProvider
 
-    return OpenRouterProvider(config, admission=admission)
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return OpenRouterProvider(config, admission=admission)
+
+    return construct
 
 
-def _create_mistral(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_openai_api() -> ProviderFactory:
+    from free_claude_code.providers.openai_api import OpenAIAPIProvider
+
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return OpenAIAPIProvider(config, admission=admission)
+
+    return construct
+
+
+def _load_mistral() -> ProviderFactory:
     from free_claude_code.providers.mistral import MistralProvider
 
-    return MistralProvider(config, admission=admission)
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return MistralProvider(config, admission=admission)
+
+    return construct
 
 
-def _create_kilo(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_kilo() -> ProviderFactory:
     from free_claude_code.providers.kilo import KiloProvider
 
-    return KiloProvider(config, admission=admission)
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return KiloProvider(config, admission=admission)
+
+    return construct
 
 
-def _create_deepseek(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_deepseek() -> ProviderFactory:
     from free_claude_code.providers.deepseek import DeepSeekProvider
 
-    return DeepSeekProvider(config, admission=admission)
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return DeepSeekProvider(config, admission=admission)
+
+    return construct
 
 
-def _create_lmstudio(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_alibaba_cloud() -> ProviderFactory:
+    from free_claude_code.providers.alibaba_cloud import AlibabaCloudProvider
+
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return AlibabaCloudProvider(config, admission=admission)
+
+    return construct
+
+
+def _load_lmstudio() -> ProviderFactory:
     from free_claude_code.providers.lmstudio import LMStudioProvider
 
-    return LMStudioProvider(config, admission=admission)
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return LMStudioProvider(config, admission=admission)
+
+    return construct
 
 
-def _create_cloudflare(
-    config: ProviderConfig,
-    settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_cloudflare() -> ProviderFactory:
     from free_claude_code.providers.cloudflare import CloudflareProvider
 
-    return CloudflareProvider(
-        config,
-        account_id=_required_setting(settings, "cloudflare_account_id"),
-        admission=admission,
-    )
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return CloudflareProvider(
+            config,
+            account_id=_required_setting(settings, "cloudflare_account_id"),
+            admission=admission,
+        )
+
+    return construct
 
 
-def _create_gemini(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_gemini() -> ProviderFactory:
     from free_claude_code.providers.gemini import GeminiProvider
 
-    return GeminiProvider(config, admission=admission)
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return GeminiProvider(config, admission=admission)
+
+    return construct
 
 
-def _create_vertex(
-    config: ProviderConfig,
-    settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_vertex() -> ProviderFactory:
     from free_claude_code.providers.vertex import VertexProvider
 
-    return VertexProvider(
-        config,
-        project_id=_required_setting(settings, "vertex_project_id"),
-        location=settings.vertex_location,
-        admission=admission,
-    )
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return VertexProvider(
+            config,
+            project_id=_required_setting(settings, "vertex_project_id"),
+            location=settings.vertex_location,
+            admission=admission,
+        )
+
+    return construct
 
 
-def _create_github_models(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
-    from free_claude_code.providers.github_models import GitHubModelsProvider
-
-    return GitHubModelsProvider(config, admission=admission)
-
-
-def _create_groq(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_groq() -> ProviderFactory:
     from free_claude_code.providers.groq import GroqProvider
 
-    return GroqProvider(config, admission=admission)
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return GroqProvider(config, admission=admission)
+
+    return construct
 
 
-def _create_opencode_zen(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_opencode_zen() -> ProviderFactory:
     from free_claude_code.providers.opencode import create_opencode_provider
 
-    return create_opencode_provider("opencode_zen", config, admission)
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return create_opencode_provider("opencode_zen", config, admission)
+
+    return construct
 
 
-def _create_opencode_go(
-    config: ProviderConfig,
-    _settings: Settings,
-    admission: ProviderAdmissionController,
-) -> BaseProvider:
+def _load_opencode_go() -> ProviderFactory:
     from free_claude_code.providers.opencode import create_opencode_provider
 
-    return create_opencode_provider("opencode_go", config, admission)
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return create_opencode_provider("opencode_go", config, admission)
+
+    return construct
 
 
-_SPECIAL_PROVIDER_FACTORIES: dict[str, ProviderFactory] = {
-    "nvidia_nim": _create_nvidia_nim,
-    "open_router": _create_open_router,
-    "mistral": _create_mistral,
-    "kilo": _create_kilo,
-    "deepseek": _create_deepseek,
-    "lmstudio": _create_lmstudio,
-    "cloudflare": _create_cloudflare,
-    "gemini": _create_gemini,
-    "vertex": _create_vertex,
-    "github_models": _create_github_models,
-    "groq": _create_groq,
-    "opencode_zen": _create_opencode_zen,
-    "opencode_go": _create_opencode_go,
+_SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
+    "anthropic": _load_anthropic,
+    "alibaba_cloud": _load_alibaba_cloud,
+    "nvidia_nim": _load_nvidia_nim,
+    "open_router": _load_open_router,
+    "openai_api": _load_openai_api,
+    "mistral": _load_mistral,
+    "kilo": _load_kilo,
+    "deepseek": _load_deepseek,
+    "lmstudio": _load_lmstudio,
+    "cloudflare": _load_cloudflare,
+    "gemini": _load_gemini,
+    "vertex": _load_vertex,
+    "groq": _load_groq,
+    "opencode_zen": _load_opencode_zen,
+    "opencode_go": _load_opencode_go,
 }
-_INJECTED_PROVIDER_IDS = {"openai"}
+_INJECTED_PROVIDER_IDS = {"openai", "github_copilot"}
 
 
 def _required_setting(settings: Settings, attr_name: str) -> str:
@@ -206,30 +278,65 @@ if (
     )
 
 
-def create_provider(
+def prepare_provider(
     provider_id: str,
-    settings: Settings,
+    provider_loaders: Mapping[str, Callable[[], ProviderFactory]],
+    custom_definition: CustomProviderDefinition | None = None,
     *,
-    injected_factories: Mapping[str, ProviderFactory] | None = None,
-) -> BaseProvider:
-    """Create a provider instance for a supported provider id."""
+    api_key_number: int = 1,
+) -> Callable[[Settings, ProviderAdmissionRegistry], BaseProvider]:
+    """Load implementation modules in a worker; return a loop-owned constructor."""
+
+    # The SDK lazily imports these on first client resource access. Keep that
+    # work in this loader, before constructing clients on their owner loop.
+    importlib.import_module("openai.resources")
+    if custom_definition is not None:
+        from free_claude_code.providers.custom import CustomProvider
+
+        from .config import build_custom_provider_config
+
+        def construct_custom(
+            settings: Settings, admission_registry: ProviderAdmissionRegistry
+        ) -> BaseProvider:
+            config = build_custom_provider_config(
+                custom_definition, settings, api_key_number=api_key_number
+            )
+            admission = admission_registry.get(provider_id, api_key=config.api_key)
+            return CustomProvider(
+                config, definition=custom_definition, admission=admission
+            )
+
+        return construct_custom
     descriptor = PROVIDER_CATALOG.get(provider_id)
     if descriptor is None:
         raise UnknownProviderError.for_provider(provider_id, PROVIDER_CATALOG)
-
-    config = build_provider_config(descriptor, settings)
-    admission = ProviderAdmissionController(
-        provider_name=provider_id,
-        rate_limit=config.rate_limit,
-        rate_window=config.rate_window,
-        max_concurrency=config.max_concurrency,
+    loader = provider_loaders.get(provider_id) or _SPECIAL_PROVIDER_FACTORIES.get(
+        provider_id
     )
-    factory = (injected_factories or {}).get(provider_id)
-    if provider_id in _INJECTED_PROVIDER_IDS and factory is None:
+    if provider_id in _INJECTED_PROVIDER_IDS and loader is None:
         raise ApplicationUnavailableError(
             f"Provider {provider_id!r} is unavailable in this runtime."
         )
-    factory = factory or _SPECIAL_PROVIDER_FACTORIES.get(provider_id)
-    if factory is not None:
-        return factory(config, settings, admission)
-    return create_openai_chat_provider(provider_id, config, admission)
+    factory = loader() if loader is not None else None
+
+    def construct(
+        settings: Settings, admission_registry: ProviderAdmissionRegistry
+    ) -> BaseProvider:
+        config = build_provider_config(
+            descriptor, settings, api_key_number=api_key_number
+        )
+        admission = admission_registry.get(provider_id, api_key=config.api_key)
+        if factory is not None:
+            provider = factory(config, settings, admission)
+            if (
+                descriptor.native_messages_passthrough
+                and type(provider).stream_native_messages
+                is BaseProvider.stream_native_messages
+            ):
+                raise AssertionError(
+                    f"Provider {provider_id!r} lacks native Messages execution"
+                )
+            return provider
+        return create_openai_chat_provider(provider_id, config, admission)
+
+    return construct

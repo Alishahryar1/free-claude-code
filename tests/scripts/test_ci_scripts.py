@@ -76,7 +76,7 @@ def test_ci_sh_runs_ci_checks_in_order() -> None:
     assert "uv run ty check" in text
     assert "uv run pytest -v --tb=short" in text
     assert "uv run playwright install chromium" in text
-    assert "uv run pytest e2e -n 0" in text
+    assert "uv run pytest e2e -v --tb=short" in text
     assert "--only" in text
     assert "--skip" in text
     assert "--dry-run" in text
@@ -125,7 +125,7 @@ def test_ci_sh_playwright_dry_run_prints_browser_and_test_commands() -> None:
 
     assert result.returncode == 0
     assert "+ uv run playwright install chromium" in result.stdout
-    assert "+ uv run pytest e2e -n 0" in result.stdout
+    assert "+ uv run pytest e2e -v --tb=short" in result.stdout
     assert "uv is required" not in result.stderr
 
 
@@ -234,7 +234,7 @@ def test_ci_ps1_runs_ci_checks_in_order() -> None:
     assert '"run", "ruff", "check", "--fix"' in text
     assert '"-v", "--tb=short"' in text
     assert '"run", "playwright", "install", "chromium"' in text
-    assert '"run", "pytest", "e2e", "-n", "0"' in text
+    assert '"run", "pytest", "e2e", "-v", "--tb=short"' in text
     assert "-Only" in text
     assert "-Skip" in text
     assert "-DryRun" in text
@@ -287,7 +287,7 @@ def test_ci_ps1_playwright_dry_run_prints_browser_and_test_commands() -> None:
 
     assert result.returncode == 0
     assert "+ uv run playwright install chromium" in result.stdout
-    assert "+ uv run pytest e2e -n 0" in result.stdout
+    assert "+ uv run pytest e2e -v --tb=short" in result.stdout
     assert "uv is required" not in result.stderr
 
 

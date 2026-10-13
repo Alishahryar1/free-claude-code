@@ -25,8 +25,6 @@ def fireworks_provider():
         make_provider_config(
             api_key="test_fireworks_key",
             base_url=FIREWORKS_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )
@@ -50,7 +48,7 @@ def test_build_request_body_openai_chat_shape(fireworks_provider):
         system="System prompt",
     )
 
-    body = fireworks_provider._build_request_body(
+    body = fireworks_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -68,7 +66,7 @@ def test_build_request_body_default_max_tokens(fireworks_provider):
         messages=[Message(role="user", content="x")],
     )
 
-    body = fireworks_provider._build_request_body(
+    body = fireworks_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -81,8 +79,6 @@ def test_replay_is_independent_of_current_turn_reasoning_control():
         make_provider_config(
             api_key="k",
             base_url=FIREWORKS_DEFAULT_BASE,
-            rate_limit=1,
-            rate_window=1,
         ),
         admission=immediate_admission(),
     )
@@ -98,7 +94,7 @@ def test_replay_is_independent_of_current_turn_reasoning_control():
         }
     )
 
-    body = provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
     assert body["messages"][0]["reasoning_content"] == "hidden"
     assert body["reasoning_effort"] == "none"
@@ -113,7 +109,7 @@ def test_build_request_body_preserves_validated_extra_body(fireworks_provider):
         }
     )
 
-    body = fireworks_provider._build_request_body(
+    body = fireworks_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -130,7 +126,7 @@ def test_build_request_body_rejects_reserved_extra_body_keys(fireworks_provider)
     )
 
     with pytest.raises(InvalidRequestError, match="extra_body must not override"):
-        fireworks_provider._build_request_body(
+        fireworks_provider._chat._build_request_body(
             request, reasoning=reasoning_for(request)
         )
 

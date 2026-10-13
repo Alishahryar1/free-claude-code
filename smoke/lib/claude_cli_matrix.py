@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from free_claude_code.cli.claude_env import build_claude_proxy_env
+from free_claude_code.harnesses.claude import build_claude_proxy_env
 from smoke.lib.child_process import run_captured_text
 from smoke.lib.config import ProviderModel, SmokeConfig, redacted
 from smoke.lib.outcomes import is_upstream_unavailable_text

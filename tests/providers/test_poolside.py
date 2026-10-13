@@ -34,8 +34,6 @@ def poolside_provider() -> OpenAIChatProvider:
         make_provider_config(
             api_key="test-poolside-key",
             base_url=POOLSIDE_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(provider_name="poolside", max_attempts=1),
     )
@@ -59,7 +57,7 @@ def test_encodes_documented_chat_template_thinking_control(
     reasoning: ReasoningPolicy,
     enabled: bool,
 ) -> None:
-    body = poolside_provider._build_request_body(
+    body = poolside_provider._chat._build_request_body(
         _request(extra_body={"top_k": 20}),
         reasoning=reasoning,
     )
@@ -74,7 +72,7 @@ def test_encodes_documented_chat_template_thinking_control(
 def test_omits_thinking_control_for_poolside_default(
     poolside_provider: OpenAIChatProvider,
 ) -> None:
-    body = poolside_provider._build_request_body(
+    body = poolside_provider._chat._build_request_body(
         _request(),
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -93,7 +91,7 @@ def test_rejects_caller_reasoning_override(
     request = _request(extra_body={field: "caller-owned"})
 
     with pytest.raises(InvalidRequestError, match="must not override reasoning"):
-        poolside_provider._build_request_body(request, reasoning=REASONING_ON)
+        poolside_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
 
 def test_replays_reasoning_content_with_tool_history(
@@ -128,7 +126,7 @@ def test_replays_reasoning_content_with_tool_history(
         ]
     )
 
-    body = poolside_provider._build_request_body(
+    body = poolside_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -165,7 +163,7 @@ def test_replays_reasoning_content_with_tool_history(
 async def test_thinking_control_reaches_wire_as_top_level_extension(
     poolside_provider: OpenAIChatProvider,
 ) -> None:
-    body = poolside_provider._build_request_body(
+    body = poolside_provider._chat._build_request_body(
         _request(),
         reasoning=REASONING_OFF,
     )

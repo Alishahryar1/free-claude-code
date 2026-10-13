@@ -1,26 +1,51 @@
 """Admin config value state and API response assembly."""
 
-import os
+import json
 from enum import Enum
 
-from free_claude_code.config.env_files import dotenv_values_from_file
-from free_claude_code.config.loader import ConfigSource, resolve_settings_snapshot
-from free_claude_code.config.paths import managed_env_path
+from free_claude_code.config.api_keys import encode_api_keys, normalize_api_keys
+from free_claude_code.config.custom_providers import REASONING_FORMATS
+from free_claude_code.config.loader import ConfigSource, ManagedConfigSnapshot
+from free_claude_code.config.model_refs import ModelFallback
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.core.json_types import JsonObject
 
+from .credentials import credential_projection
 from .manifest import FIELDS, SECTIONS
 from .specs import ConfigFieldSpec, ConfigOptionSpec
 from .state import ConfigValueState, ValueState
 from .status import provider_config_status
 
 MASKED_SECRET = "********"
+_CREDENTIAL_KEYS = frozenset(
+    provider.credential_env
+    for provider in PROVIDER_CATALOG.values()
+    if provider.credential_env
+)
 
 
-def normalize_for_env(value: object) -> str | None:
+def normalize_for_env(value: object, *, key: str | None = None) -> str | None:
     """Normalize a submitted Admin value for sparse dotenv persistence."""
 
     if value is None:
         return None
+    if key in _CREDENTIAL_KEYS and isinstance(value, list | tuple):
+        return encode_api_keys(normalize_api_keys(value))
+    if key == "MODEL_FALLBACKS" and isinstance(value, list | tuple):
+        return (
+            json.dumps(
+                [
+                    item.model_dump(mode="json")
+                    if isinstance(item, ModelFallback)
+                    else item
+                    for item in value
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            if value
+            else None
+        )
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, Enum):
@@ -44,19 +69,19 @@ def is_locked_source(source: str | ConfigSource) -> bool:
     return str(source) == ConfigSource.PROCESS.value
 
 
-def load_value_state() -> ValueState:
+def load_value_state(snapshot: ManagedConfigSnapshot) -> ValueState:
     """Load effective Admin values from the canonical Settings resolver."""
 
-    snapshot = resolve_settings_snapshot()
-    managed_path = managed_env_path()
-    managed = dotenv_values_from_file(managed_path) if managed_path.is_file() else {}
+    managed = snapshot.managed
     state: ValueState = {}
     for field in FIELDS:
         if field.settings_attr is not None:
-            value = normalize_for_env(getattr(snapshot.settings, field.settings_attr))
+            value = normalize_for_env(
+                getattr(snapshot.settings, field.settings_attr), key=field.key
+            )
             source = snapshot.sources[field.settings_attr].value
-        elif field.key in os.environ:
-            value = os.environ[field.key].strip() or None
+        elif field.key in snapshot.process:
+            value = snapshot.process[field.key].strip() or None
             source = ConfigSource.PROCESS.value
         elif field.key in managed:
             value = managed[field.key].strip() or None
@@ -68,22 +93,33 @@ def load_value_state() -> ValueState:
     return state
 
 
-def load_config_response() -> JsonObject:
+def load_config_response(
+    snapshot: ManagedConfigSnapshot, *, revision_key: bytes
+) -> JsonObject:
     """Return manifest and current config values for the Admin UI."""
 
-    state = load_value_state()
+    state = load_value_state(snapshot)
     fields: list[JsonObject] = []
     for field in FIELDS:
         entry = state[field.key]
         source = entry.source
         raw_value = entry.value
+        value = display_value(field, raw_value)
+        if field.field_type == "api_key_list":
+            assert field.settings_attr is not None
+            value = credential_projection(
+                field.key,
+                getattr(snapshot.settings, field.settings_attr),
+                source,
+                revision_key,
+            )
         fields.append(
             {
                 "key": field.key,
                 "label": field.label,
                 "section": field.section_id,
                 "type": field.field_type,
-                "value": display_value(field, raw_value),
+                "value": value,
                 "configured": raw_value is not None,
                 "source": source,
                 "locked": is_locked_source(source),
@@ -115,6 +151,23 @@ def load_config_response() -> JsonObject:
             for section in SECTIONS
         ],
         "fields": fields,
-        "paths": {"managed": str(managed_env_path())},
+        "paths": {"managed": str(snapshot.path)},
         "provider_status": provider_config_status(state),
+        "custom_providers": [
+            item.model_dump(mode="json")
+            | {
+                "api_keys": credential_projection(
+                    "custom:" + item.provider_id,
+                    item.api_keys,
+                    snapshot.sources["custom_providers"].value,
+                    revision_key,
+                )
+            }
+            for item in snapshot.settings.custom_providers
+        ],
+        "custom_providers_locked": snapshot.sources["custom_providers"]
+        == ConfigSource.PROCESS,
+        "custom_reasoning_formats": {
+            key: list(values) for key, values in REASONING_FORMATS.items()
+        },
     }

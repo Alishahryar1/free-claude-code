@@ -1,6 +1,7 @@
 """Provider-owned admission and coordinated recovery contracts."""
 
 import asyncio
+import ssl
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -286,17 +287,21 @@ async def test_attempt_cancellation_releases_concurrency() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_call_uses_one_five_attempt_budget() -> None:
+@pytest.mark.parametrize(
+    "error",
+    [_status_error(503), ssl.SSLWantReadError("read would block")],
+    ids=["http_503", "tls_want_read"],
+)
+async def test_run_call_uses_one_five_attempt_budget(error: Exception) -> None:
     controller = _controller()
     attempts = 0
-    error = _status_error(503)
 
     async def fail() -> None:
         nonlocal attempts
         attempts += 1
         raise error
 
-    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+    with pytest.raises(type(error)) as exc_info:
         await controller.start_execution().run_call(
             fail,
             operation_kind=ProviderOperationKind.GENERATION,
@@ -307,7 +312,12 @@ async def test_run_call_uses_one_five_attempt_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_call_succeeds_without_multiplying_attempts() -> None:
+@pytest.mark.parametrize(
+    "error",
+    [_status_error(429), ssl.SSLWantReadError("read would block")],
+    ids=["http_429", "tls_want_read"],
+)
+async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) -> None:
     controller = _controller(max_concurrency=1)
     attempts = 0
 
@@ -315,7 +325,7 @@ async def test_run_call_succeeds_without_multiplying_attempts() -> None:
         nonlocal attempts
         attempts += 1
         if attempts < 3:
-            raise _status_error(429)
+            raise error
         return "recovered"
 
     assert (

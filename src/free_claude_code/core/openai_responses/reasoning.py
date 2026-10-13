@@ -12,20 +12,6 @@ from free_claude_code.core.reasoning import (
 from .tools import optional_str
 
 
-def reasoning_text_from_item(item: Mapping[str, Any]) -> str | None:
-    content_parts = _text_parts_from_items(
-        item.get("content"), item_type="reasoning_text"
-    )
-    if content_parts:
-        return "\n".join(content_parts)
-    summary_parts = _text_parts_from_items(
-        item.get("summary"), item_type="summary_text"
-    )
-    if summary_parts:
-        return "\n".join(summary_parts)
-    return None
-
-
 def encrypted_reasoning_from_item(item: Mapping[str, Any]) -> str | None:
     """Return opaque reasoning content without interpreting it."""
 
@@ -85,15 +71,3 @@ def responses_reasoning_config(reasoning: ReasoningPolicy) -> dict[str, str]:
     if reasoning.requests_reasoning:
         return {"summary": "auto"}
     return {}
-
-
-def _text_parts_from_items(value: Any, *, item_type: str) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    parts: list[str] = []
-    for item in value:
-        if isinstance(item, dict) and item.get("type") == item_type:
-            text = optional_str(item.get("text"))
-            if text is not None:
-                parts.append(text)
-    return parts

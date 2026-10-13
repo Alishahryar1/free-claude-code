@@ -11,6 +11,7 @@ from free_claude_code.core.reasoning import ReasoningPolicy
 
 from .errors import openai_error_from_failure
 from .events import format_response_sse_event
+from .ids import tool_item_id_for_kind
 from .models import OpenAIResponsesRequest
 from .reasoning import responses_reasoning_config, responses_reasoning_policy
 
@@ -31,12 +32,33 @@ def build_native_responses_request(
         JsonObject,
         request.model_dump(mode="json", exclude_none=True),
     )
+    if isinstance(items := body.get("input"), list):
+        for item in items:
+            if not isinstance(item, dict) or item.get("type") not in (
+                "function_call",
+                "custom_tool_call",
+            ):
+                continue
+            item_id = item.get("id")
+            if isinstance(item_id, str) and item_id != tool_item_id_for_kind(
+                item_id,
+                kind="custom" if item["type"] == "custom_tool_call" else "function",
+            ):
+                # Full calls replay by call_id; incompatible item IDs are optional.
+                del item["id"]
     body["model"] = model
     body["stream"] = True
     body["store"] = False
     body.pop("previous_response_id", None)
     if reasoning != responses_reasoning_policy(request.reasoning):
-        if reasoning_config := responses_reasoning_config(reasoning):
+        raw_reasoning = body.get("reasoning")
+        reasoning_config = (
+            dict(raw_reasoning) if isinstance(raw_reasoning, dict) else {}
+        )
+        reasoning_config.pop("effort", None)
+        for key, value in responses_reasoning_config(reasoning).items():
+            reasoning_config.setdefault(key, value)
+        if reasoning_config:
             body["reasoning"] = reasoning_config
         else:
             body.pop("reasoning", None)
@@ -66,7 +88,10 @@ class NativeResponsesRelay:
         return self._terminal_type is not None
 
     def feed(self, event_type: str, payload: Mapping[str, object]) -> str:
-        """Format one upstream event after rewriting FCC-owned model metadata."""
+        return format_response_sse_event(event_type, self.project(event_type, payload))
+
+    def project(self, event_type: str, payload: Mapping[str, object]) -> JsonObject:
+        """Format public model metadata and canonical whole-second timestamps."""
 
         if self._terminal_type is not None:
             raise ValueError(
@@ -77,6 +102,12 @@ class NativeResponsesRelay:
         response = data.get("response")
         if isinstance(response, dict):
             response["model"] = self._public_model
+            # SDK models coerce integer timestamps to floats; strict clients
+            # require JSON integers. Preserve any actual fractional precision.
+            for field in ("created_at", "completed_at"):
+                timestamp = response.get(field)
+                if isinstance(timestamp, float) and timestamp.is_integer():
+                    response[field] = int(timestamp)
             self._response = cast(JsonObject, deepcopy(response))
             response_id = response.get("id")
             if isinstance(response_id, str) and response_id:
@@ -89,9 +120,14 @@ class NativeResponsesRelay:
             )
         if event_type in _TERMINAL_EVENT_TYPES:
             self._terminal_type = event_type
-        return format_response_sse_event(event_type, data)
+        return data
 
     def synthesize_failure(self, failure: ExecutionFailure) -> str:
+        return format_response_sse_event(
+            "response.failed", self.failure_payload(failure)
+        )
+
+    def failure_payload(self, failure: ExecutionFailure) -> JsonObject:
         """Terminate one already-public truncated stream with a safe failure."""
 
         if self._terminal_type is not None:
@@ -116,7 +152,7 @@ class NativeResponsesRelay:
         response["model"] = self._public_model
         response["status"] = "failed"
         response["error"] = cast(JsonValue, openai_error_from_failure(failure))
-        return self.feed(
+        return self.project(
             "response.failed",
             {
                 "type": "response.failed",
