@@ -12,7 +12,6 @@ from free_claude_code.config import loader
 from free_claude_code.config.constants import (
     ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MODEL,
-    HTTP_CONNECT_TIMEOUT_DEFAULT,
 )
 from free_claude_code.config.env_files import dotenv_values_from_file
 from free_claude_code.config.loader import (
@@ -152,8 +151,8 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
     assert settings.provider_max_concurrency == 2
     assert settings.provider_progress_timeout == 600.0
     assert settings.http_read_timeout == 120.0
-    assert settings.http_write_timeout == 10.0
-    assert settings.http_connect_timeout == HTTP_CONNECT_TIMEOUT_DEFAULT
+    assert settings.http_write_timeout == 30.0
+    assert settings.http_connect_timeout == 30.0
     assert settings.voice_note_enabled is True
     assert settings.whisper_device == "cpu"
     assert settings.whisper_model == "base"
