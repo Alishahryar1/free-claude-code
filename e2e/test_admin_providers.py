@@ -380,6 +380,74 @@ def test_local_availability_failure_does_not_fail_admin_loading(
     assert errors == []
 
 
+@pytest.mark.parametrize(
+    "viewport",
+    ({"width": 1280, "height": 720}, {"width": 390, "height": 844}),
+)
+def test_local_provider_diagnostics_are_visible_on_cards_and_in_the_dialog(
+    page: Page, admin_base_url: str, viewport: ViewportSize
+) -> None:
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    timeout_message = (
+        "The local provider availability check timed out. "
+        "Check that its server is responsive and retry."
+    )
+    results = {
+        "lmstudio": {
+            "provider_id": "lmstudio",
+            "status": "reachable",
+            "base_url": "http://localhost:1234/v1",
+            "probe_path": "/models",
+            "latency_ms": 12.5,
+            "error_type": None,
+        },
+        "llamacpp": {
+            "provider_id": "llamacpp",
+            "status": "offline",
+            "base_url": "http://localhost:8080/v1",
+            "status_code": 503,
+            "probe_path": "/models",
+            "latency_ms": 8,
+            "error_type": "http_error",
+        },
+        "ollama": {
+            "provider_id": "ollama",
+            "status": "offline",
+            "base_url": "http://localhost:11434",
+            "message": timeout_message,
+            "probe_path": "/api/tags",
+            "latency_ms": 1500,
+            "error_type": "timeout",
+            "private_diagnostic": "private-credential-marker",
+        },
+    }
+
+    def reply(route: Route) -> None:
+        provider_id = route.request.url.split("/")[-2]
+        route.fulfill(json=results[provider_id])
+
+    page.route("**/admin/api/providers/*/local-status", reply)
+    _open_admin(page, admin_base_url, viewport)
+
+    expect(page.locator('[data-provider-check-result="lmstudio"]')).to_have_text(
+        "Reachable: http://localhost:1234/v1 (GET /models, 12.5 ms)"
+    )
+    expect(page.locator('[data-provider-check-result="llamacpp"]')).to_have_text(
+        "Unavailable: http://localhost:8080/v1 returned HTTP 503 (GET /models, 8 ms)"
+    )
+    expected_timeout = f"Unavailable: {timeout_message} (GET /api/tags, 1500 ms)"
+    expect(page.locator('[data-provider-check-result="ollama"]')).to_have_text(
+        expected_timeout
+    )
+    dialog = open_provider(page, "ollama")
+    expect(dialog.locator("#providerDialogCheck")).to_have_text(expected_timeout)
+    expect(dialog.locator("#providerDialogCheck")).to_be_in_viewport()
+    expect(dialog.get_by_role("button", name="Test", exact=True)).to_be_enabled()
+    assert "private-credential-marker" not in page.locator("body").inner_text()
+    assert errors == []
+
+
 @pytest.mark.parametrize("manual_finished", [False, True])
 def test_manual_provider_test_takes_precedence_over_automatic_availability(
     page: Page, admin_base_url: str, manual_finished: bool

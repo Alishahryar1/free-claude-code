@@ -2,6 +2,7 @@
 
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
+from time import perf_counter
 
 import httpx
 from fastapi import (
@@ -550,9 +551,13 @@ async def _check_local_provider(
             "status": "missing_url",
             "label": "Missing URL",
             "base_url": base_url,
+            "probe_path": path,
+            "latency_ms": None,
+            "error_type": None,
         }
 
     url = f"{clean_url}{path}"
+    started = perf_counter()
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
             response = await client.get(url)
@@ -563,6 +568,9 @@ async def _check_local_provider(
             "label": "Reachable" if ok else "Offline",
             "base_url": base_url,
             "status_code": response.status_code,
+            "probe_path": path,
+            "latency_ms": round((perf_counter() - started) * 1000, 2),
+            "error_type": None if ok else "http_error",
         }
     except Exception as exc:
         logger.debug(
@@ -570,13 +578,38 @@ async def _check_local_provider(
             provider_id,
             type(exc).__name__,
         )
+        error_type, message = _local_provider_failure(exc)
         return {
             "provider_id": provider_id,
             "status": "offline",
             "label": "Offline",
             "base_url": base_url,
-            "message": _LOCAL_PROVIDER_CHECK_FAILURE_MESSAGE,
+            "message": message,
+            "probe_path": path,
+            "latency_ms": round((perf_counter() - started) * 1000, 2),
+            "error_type": error_type,
         }
+
+
+def _local_provider_failure(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, httpx.TimeoutException):
+        return (
+            "timeout",
+            "The local provider availability check timed out. Check that its server is responsive and retry.",
+        )
+    if isinstance(exc, (httpx.ConnectError, httpx.ProxyError)):
+        return "connection_error", _LOCAL_PROVIDER_CHECK_FAILURE_MESSAGE
+    if isinstance(exc, (httpx.InvalidURL, httpx.UnsupportedProtocol)):
+        return (
+            "invalid_url",
+            "Check the local provider's HTTP or HTTPS base URL and port.",
+        )
+    if isinstance(exc, httpx.RequestError):
+        return (
+            "transport_error",
+            "The connection ended before the availability check completed. Retry and check the local server logs.",
+        )
+    return "unexpected_error", _LOCAL_PROVIDER_CHECK_FAILURE_MESSAGE
 
 
 def _require_connected_account_provider(provider_id: str) -> None:

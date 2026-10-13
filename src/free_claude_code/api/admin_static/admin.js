@@ -1653,8 +1653,14 @@ async function refreshLocalStatus(config) {
         const provider = await api(`/admin/api/providers/${providerId}/local-status`);
         if (state.localStatusRequest !== request || !request.providerIds.has(providerId)) return;
         if (provider.status === "missing_url") return;
+        const diagnostics = [];
+        if (provider.probe_path) diagnostics.push(`GET ${provider.probe_path}`);
+        if (typeof provider.latency_ms === "number" && Number.isFinite(provider.latency_ms)) {
+          diagnostics.push(`${provider.latency_ms} ms`);
+        }
+        const suffix = diagnostics.length ? ` (${diagnostics.join(", ")})` : "";
         if (provider.status === "reachable") {
-          updateProviderCheckResult(providerId, "ok", `Reachable: ${provider.base_url}`, "availability");
+          updateProviderCheckResult(providerId, "ok", `Reachable: ${provider.base_url}${suffix}`, "availability");
           return;
         }
         const detail = provider.message
@@ -1662,7 +1668,7 @@ async function refreshLocalStatus(config) {
           : provider.status_code
             ? `${provider.base_url} returned HTTP ${provider.status_code}`
             : "The local provider did not respond.";
-        updateProviderCheckResult(providerId, "error", `Unavailable: ${detail}`, "availability");
+        updateProviderCheckResult(providerId, "error", `Unavailable: ${detail}${suffix}`, "availability");
       } catch {
         if (state.localStatusRequest !== request || !request.providerIds.has(providerId)) return;
         updateProviderCheckResult(providerId, "error", "Availability check failed. Use Test to retry.", "availability");

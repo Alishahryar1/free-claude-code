@@ -2379,7 +2379,9 @@ def test_admin_local_provider_failure_does_not_return_exception_text(
     )
     assert "CREDENTIAL[unrecognized-format-987654321]" not in provider["message"]
     assert "RuntimeError" not in provider["message"]
-    assert "error_type" not in provider
+    assert provider["error_type"] == "unexpected_error"
+    assert "CREDENTIAL[unrecognized-format-987654321]" not in response.text
+    assert "RuntimeError" not in response.text
 
 
 @pytest.mark.parametrize(
