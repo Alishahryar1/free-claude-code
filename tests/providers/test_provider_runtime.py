@@ -57,6 +57,7 @@ from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.github_copilot.provider import GitHubCopilotProvider
 from free_claude_code.providers.groq import GroqProvider
+from free_claude_code.providers.iflytek_token_plan import IFlytekTokenPlanProvider
 from free_claude_code.providers.kilo import KiloProvider
 from free_claude_code.providers.lmstudio import LMStudioProvider
 from free_claude_code.providers.mistral import MistralProvider
@@ -104,6 +105,7 @@ def _make_settings(**overrides):
     mock.nebius_api_keys = "test_nebius_key"
     mock.scw_secret_keys = "test_scw_key"
     mock.opper_api_keys = "test_opper_key"
+    mock.iflytek_token_plan_api_keys = "test_token_plan_key"
     mock.chutes_api_keys = "test_chutes_key"
     mock.featherless_api_keys = "test_featherless_key"
     mock.mistral_api_keys = "test_mistral_key"
@@ -200,6 +202,7 @@ def _make_settings(**overrides):
     mock.nebius_proxy = None
     mock.scw_proxy = None
     mock.opper_proxy = None
+    mock.iflytek_token_plan_proxy = None
     mock.chutes_proxy = None
     mock.featherless_proxy = None
     mock.azure_openai_proxy = None
@@ -1163,6 +1166,7 @@ async def test_create_provider_instantiates_each_builtin():
         cohere_api_keys="test_cohere_key",
         kimi_api_keys="test_kimi_key",
         kimi_code_api_keys="test_kimi_code_key",
+        iflytek_token_plan_api_keys="test_token_plan_key",
         provider_rate_limit=7,
         provider_rate_window=11,
         provider_max_concurrency=3,
@@ -1185,6 +1189,7 @@ async def test_create_provider_instantiates_each_builtin():
         "nebius": OpenAIChatProvider,
         "scaleway": OpenAIChatProvider,
         "opper": OpenAIChatProvider,
+        "iflytek_token_plan": IFlytekTokenPlanProvider,
         "chutes": OpenAIChatProvider,
         "featherless": OpenAIChatProvider,
         "azure_openai": OpenAIChatProvider,
