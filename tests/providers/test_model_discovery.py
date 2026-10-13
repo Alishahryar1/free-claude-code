@@ -193,12 +193,15 @@ async def test_nim_exclusions_preserve_discovery_errors() -> None:
         provider = NvidiaNimProvider(
             config, nim_settings=NimSettings(), admission=immediate_admission()
         )
-    with patch.object(
-        provider._client.models,
-        "list",
-        new_callable=AsyncMock,
-        return_value=SimpleNamespace(data=[SimpleNamespace(id=None)]),
-    ) as mock_list, pytest.raises(ModelListResponseError):
+    with (
+        patch.object(
+            provider._client.models,
+            "list",
+            new_callable=AsyncMock,
+            return_value=SimpleNamespace(data=[SimpleNamespace(id=None)]),
+        ) as mock_list,
+        pytest.raises(ModelListResponseError),
+    ):
         await provider.list_model_infos()
     mock_list.assert_awaited_once_with()
 
