@@ -64,7 +64,7 @@ Windows PowerShell:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1")))
 ```
 
-When prompted, choose at least one coding agent and optionally enable [RTK](https://github.com/rtk-ai/rtk) + [Headroom](https://github.com/headroomlabs-ai/headroom) token optimization for supported agents. You can review the installers before running them: [install.sh](scripts/install.sh) and [install.ps1](scripts/install.ps1).
+When prompted, choose at least one coding agent and optionally enable [RTK](https://github.com/rtk-ai/rtk) + [Headroom](https://github.com/headroomlabs-ai/headroom) token optimization for supported agents.
 
 ### 2. Start FCC
 
@@ -187,13 +187,7 @@ Optional: add an ordered **Fallback Models** list under **Model Config**. It
 applies to every connected client. A failed request may reach and consume usage
 from more than one provider before succeeding.
 
-Provider modals support numbered API keys. Use **Add key**, remove rows, or drag their handles to reorder them. FCC uses key 1. Saving checks every key, blocks confirmed invalid keys, and shows warnings for keys it cannot verify.
-
-The same API key environment variable also accepts a JSON array:
-
-```dotenv
-NVIDIA_NIM_API_KEY='["your-first-key","your-second-key"]'
-```
+Provider modals support numbered API keys. Use **Add key**, remove rows, or drag their handles to reorder them. FCC uses key 1.
 
 For another API endpoint, open **Providers → Custom providers → Add provider**. Enter its API base URL, optional keys, and API format. Leave **Model IDs** empty to discover models automatically, or enter one upstream model ID per line. Save, then select a model in **Model Config**.
 
@@ -275,9 +269,6 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 - Anthropic uses a separately billed API key. Add it under
   **Providers → Cloud providers → Anthropic → Configure**, then choose a discovered
   model. Multi-workspace keys also require `ANTHROPIC_WORKSPACE_ID`.
-  Messages requests use Anthropic's native tools and the client's thinking controls.
-  FCC local web tools and prompt optimizations apply to other routes. Native requests
-  can fall back only to other Anthropic models. Anthropic tool access and charges apply.
 - OpenAI API uses a separate Platform API key. Enter it under
   **Providers → Cloud providers → OpenAI API → Configure**. The model list may
   include IDs that cannot handle coding requests. Choose a text-generation model.
@@ -348,9 +339,9 @@ Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` 
 
 In **Admin UI → Model Config**, add **Fallback Models** in the order FCC should try them if the selected model fails. Each fallback has its own reasoning effort: **Inherit**, **Off**, **From client**, **Low**, **Medium**, **High**, **X-High**, or **Max**.
 
-Choose a model, effort, and API key number in the bottom row, then click **+**. **Key 1**, **Key 2**, and so on refer to the current numbered keys in that provider's settings. Existing fallbacks use **Key 1**. Edit the selections in place, drag the handle to change the order, or click the red trash button to remove a fallback.
+Choose a model, effort, and API key number in the bottom row, then click **+**. **Key 1**, **Key 2**, and so on refer to the current numbered keys in that provider's settings. Edit the selections in place, drag the handle to change the order, or click the red trash button to remove a fallback.
 
-**Inherit** keeps the original request's resolved reasoning setting. **From client** uses the effort or token budget sent by your coding agent, bypassing the global or tier setting. A fallback matching the selected provider, model, and key is skipped. You can select the same model with another key number.
+**Inherit** keeps the original request's resolved reasoning setting. **From client** uses the effort or token budget sent by your coding agent, bypassing the global or tier setting. You can select the same model with another key number.
 
 </details>
 
@@ -366,21 +357,13 @@ Open **Admin UI → Model Config → Model Routing** and choose an effort beside
 | **Low**, **Medium**, **High**, **X-High**, or **Max** | Override the client with the selected reasoning level. |
 | **Inherit** | Tier overrides use Default Effort. Fallbacks keep the original request's resolved effort. |
 
-Providers that do not support a selected control retain their own behavior.
-
 </details>
 
 <a id="connect-your-client"></a>
 
 ## Connect Your Client
 
-If FCC is not running when you start a launcher, it starts FCC Desktop on
-Windows/macOS or `fcc-server` on Linux and waits for it to become ready. FCC
-stays running after the client exits. If startup fails, the launcher reports the
-error and startup log location. If early output cannot be saved, the launcher
-warns and continues startup. If startup times out, a running Desktop stays
-open so you can check its status and retry. You can also run `fcc-desktop`
-(Windows/macOS) or `fcc-server` (Linux) manually to diagnose startup problems.
+FCC launchers automatically start the server.
 
 For editor and app integrations, install the client, start FCC, then open
 **Admin UI → Integrations** and click **Connect** on its card.
@@ -495,13 +478,9 @@ Stop all running FCC commands, then run:
 fcc-update
 ```
 
-If FCC is already up to date, the command stops without running the installer. Otherwise, it shows the installed and available versions before updating. If the version check fails, retry the command.
-
 To reinstall FCC or change optional components while already up to date, run the [installer](#install) directly.
 
 For local voice support, include `--voice-local` (macOS/Linux) or `-VoiceLocal` (Windows), plus your `--torch-backend` or `-TorchBackend` option if used.
-
-If your installation does not have `fcc-update` yet, run the [installer](#install) once to add it.
 
 ### Muse Code on native Windows
 
@@ -547,7 +526,7 @@ Windows PowerShell:
 
 ## Project Links
 
-For a problem after installation, run the command below and paste its output into your bug report. It also copies the JSON to your clipboard when available.
+For a problem after installation, run the command below and paste its output into your bug report.
 
 ```bash
 fcc-doctor
