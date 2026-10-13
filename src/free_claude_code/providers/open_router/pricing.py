@@ -9,6 +9,7 @@ from typing import Any
 from loguru import logger
 
 DEFAULT_ENDPOINTS_TTL_S = 600.0
+PRICING_FETCH_TIMEOUT_S = 5.0
 
 EndpointFetcher = Callable[[str], Awaitable[Sequence[Mapping[str, Any]] | None]]
 
@@ -61,9 +62,11 @@ def cheapest_provider_name(
     *,
     quantizations: Sequence[str] | None = None,
     free_only: bool = False,
+    excluded: Sequence[str] = (),
 ) -> str | None:
     """Return the provider of the cheapest blended-rate endpoint."""
 
+    excluded_names = frozenset(excluded)
     best_name: str | None = None
     best_price: float | None = None
     for endpoint in endpoints:
@@ -73,6 +76,10 @@ def cheapest_provider_name(
             continue
         name = endpoint.get("provider_name")
         if not isinstance(name, str) or not name:
+            continue
+        if name in excluded_names:
+            # A static routing block may ignore this provider; pinning it
+            # would leave the merged block with no eligible endpoint.
             continue
         price = blended_price(endpoint.get("pricing"))
         if price is None:
@@ -98,11 +105,13 @@ class CheapestProviderIndex:
         quantizations: tuple[str, ...] | None = None,
         ttl_s: float = DEFAULT_ENDPOINTS_TTL_S,
         clock: Callable[[], float] = time.monotonic,
+        fetch_timeout_s: float = PRICING_FETCH_TIMEOUT_S,
     ) -> None:
         self._fetch = fetch
         self._quantizations = quantizations or None
         self._ttl_s = ttl_s
         self._clock = clock
+        self._fetch_timeout_s = fetch_timeout_s
         self._entries: dict[str, tuple[float, Sequence[Mapping[str, Any]] | None]] = {}
         self._inflight: dict[str, asyncio.Task[None]] = {}
 
@@ -119,11 +128,10 @@ class CheapestProviderIndex:
         if task is None:
             task = asyncio.create_task(self._load(base))
             self._inflight[base] = task
-        try:
-            await task
-        finally:
-            if self._inflight.get(base) is task:
-                del self._inflight[base]
+            task.add_done_callback(self._drop_inflight(base))
+        # Shield the shared fetch: one caller disconnecting must not cancel
+        # the lookup that concurrent requests for the same model still need.
+        await asyncio.shield(task)
 
     def needs_refresh(self, model_id: str) -> bool:
         """Return whether a request for this model must refresh pricing first."""
@@ -134,19 +142,39 @@ class CheapestProviderIndex:
         entry = self._entries.get(base)
         return entry is None or self._clock() - entry[0] >= self._ttl_s
 
+    def _drop_inflight(self, base: str) -> Callable[[asyncio.Task[None]], None]:
+        """Return a done-callback that retires this model's finished fetch."""
+
+        def drop(task: asyncio.Task[None]) -> None:
+            if self._inflight.get(base) is task:
+                del self._inflight[base]
+
+        return drop
+
     async def _load(self, base: str) -> None:
         try:
-            endpoints = await self._fetch(base)
+            endpoints = await asyncio.wait_for(
+                self._fetch(base), timeout=self._fetch_timeout_s
+            )
         except Exception as exc:
             # Pricing lookup is best-effort; degrade to unconstrained routing.
+            # The bounded timeout keeps a stalled metadata response from
+            # holding up chat startup behind the client's read timeout.
             logger.warning(
                 "OpenRouter endpoint pricing fetch failed for {}: {}", base, exc
             )
             endpoints = None
         self._entries[base] = (self._clock(), endpoints)
 
-    def cheapest_provider_block(self, model_id: str) -> dict[str, Any] | None:
-        """Return the routing block pinning the cheapest provider, if resolved."""
+    def cheapest_provider_block(
+        self, model_id: str, *, constraints: Mapping[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """Return the routing block pinning the cheapest provider, if resolved.
+
+        ``constraints`` is the static routing block that survives the merge;
+        its ``ignore`` and (when no dynamic selection applies) ``quantizations``
+        filters constrain candidacy so the pin cannot contradict them.
+        """
 
         base = base_model_slug(model_id)
         if base is None:
@@ -154,10 +182,23 @@ class CheapestProviderIndex:
         entry = self._entries.get(base)
         if entry is None or entry[1] is None:
             return None
+        excluded: tuple[str, ...] = ()
+        quantizations = self._quantizations
+        if constraints is not None:
+            ignored = constraints.get("ignore")
+            if isinstance(ignored, list):
+                excluded = tuple(name for name in ignored if isinstance(name, str))
+            if self._quantizations is None:
+                static_levels = constraints.get("quantizations")
+                if isinstance(static_levels, list) and all(
+                    isinstance(level, str) for level in static_levels
+                ):
+                    quantizations = tuple(static_levels)
         name = cheapest_provider_name(
             entry[1],
-            quantizations=self._quantizations,
+            quantizations=quantizations,
             free_only=model_id.strip().endswith(":free"),
+            excluded=excluded,
         )
         if name is None:
             return None

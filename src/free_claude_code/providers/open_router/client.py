@@ -47,6 +47,13 @@ _REQUEST_POLICY = OpenAIChatRequestPolicy(
 )
 
 
+def _extra_body_mapping(body: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return the body's caller-supplied extra fields, if any."""
+
+    extra = body.get("extra_body")
+    return extra if isinstance(extra, Mapping) else {}
+
+
 class OpenRouterChatBehavior(OpenAIChatBehavior):
     """OpenRouter Chat adaptation without HTTP ownership."""
 
@@ -64,25 +71,40 @@ class OpenRouterChatBehavior(OpenAIChatBehavior):
     def finalize_chat_body(
         self, body: dict[str, Any], *, reasoning: ReasoningPolicy
     ) -> dict[str, Any]:
-        """Attach configured static routing preferences to every request."""
+        """Attach configured static routing preferences to every request.
+
+        The block travels inside ``extra_body``: the SDK merges it into the
+        wire JSON verbatim, while a top-level key would be passed to
+        ``chat.completions.create`` as a kwarg it does not accept.
+        """
+
         body = super().finalize_chat_body(body, reasoning=reasoning)
         if self._provider_preferences is not None:
-            body["provider"] = self._provider_preferences.to_request_field()
+            block = self._provider_preferences.to_request_field()
+            body["extra_body"] = {
+                **_extra_body_mapping(body),
+                "provider": block,
+            }
         return body
 
     def prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:
         """Pin the request to the cheapest provider when pricing resolves."""
+
         if self._cheapest_index is None:
             return body
-        cheapest = self._cheapest_index.cheapest_provider_block(body.get("model") or "")
+        static_block = _extra_body_mapping(body).get("provider")
+        constraints = static_block if isinstance(static_block, Mapping) else None
+        cheapest = self._cheapest_index.cheapest_provider_block(
+            body.get("model") or "", constraints=constraints
+        )
         if cheapest is None:
             return body
+        merged = {**(constraints or {}), **cheapest}
         prepared = dict(body)
-        existing = prepared.get("provider")
-        if isinstance(existing, Mapping):
-            prepared["provider"] = {**existing, **cheapest}
-        else:
-            prepared["provider"] = cheapest
+        prepared["extra_body"] = {
+            **_extra_body_mapping(body),
+            "provider": merged,
+        }
         return prepared
 
     def failure_override(self, error: Exception) -> ExecutionFailure | None:

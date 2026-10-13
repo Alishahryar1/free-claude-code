@@ -33,6 +33,7 @@ from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
     SDKStreamDouble,
+    capture_openai_chat_wire_body,
     immediate_admission,
     make_provider_config,
     reasoning_for,
@@ -185,7 +186,7 @@ def test_configured_preferences_become_the_provider_request_field():
 
     body = provider._chat._build_request_body(make_request())
 
-    assert body["provider"] == {
+    assert body["extra_body"]["provider"] == {
         "only": ["DeepInfra"],
         "quantizations": ["fp8"],
         "allow_fallbacks": False,
@@ -195,7 +196,7 @@ def test_configured_preferences_become_the_provider_request_field():
 def test_absent_preferences_omit_the_provider_request_field(open_router_provider):
     body = open_router_provider._chat._build_request_body(make_request())
 
-    assert "provider" not in body
+    assert "provider" not in body.get("extra_body", {})
 
 
 def test_preferences_serialize_documented_object_shapes():
@@ -208,7 +209,7 @@ def test_preferences_serialize_documented_object_shapes():
 
     body = provider._chat._build_request_body(make_request())
 
-    assert body["provider"] == {
+    assert body["extra_body"]["provider"] == {
         "sort": {"by": "price", "partition": "none"},
         "max_price": {"prompt": 0.25, "completion": 1.25},
         "preferred_max_latency": {"p90": 5.0},
@@ -236,9 +237,100 @@ async def test_settings_preferences_reach_the_built_provider_request():
 
         body = provider._chat._build_request_body(make_request())
 
-        assert body["provider"] == {"only": ["DeepInfra"], "allow_fallbacks": False}
+        assert body["extra_body"]["provider"] == {
+            "only": ["DeepInfra"],
+            "allow_fallbacks": False,
+        }
     finally:
         await runtime.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_static_preferences_reach_the_wire_body_through_the_real_sdk():
+    provider = _routed_provider(
+        only=["DeepInfra"], quantizations=["fp8"], allow_fallbacks=False
+    )
+    body = provider._chat._behavior.prepare_create_body(
+        provider._chat._build_request_body(make_request())
+    )
+
+    wire = await capture_openai_chat_wire_body(body)
+
+    assert wire["provider"] == {
+        "only": ["DeepInfra"],
+        "quantizations": ["fp8"],
+        "allow_fallbacks": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_cheapest_pin_reaches_the_wire_body_through_the_real_sdk():
+    endpoints_payload = {"data": {"endpoints": MIXED_ENDPOINTS}}
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        provider_preferences=OpenRouterProviderPreferences.model_validate(
+            {"data_collection": "deny"}
+        ),
+        quantizations=("fp8",),
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value=endpoints_payload,
+    ):
+        assert provider._cheapest_index is not None
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        body = provider._chat._behavior.prepare_create_body(
+            provider._chat._build_request_body(
+                make_messages_request("moonshotai/kimi-k2.6")
+            )
+        )
+
+    wire = await capture_openai_chat_wire_body(body)
+
+    assert wire["provider"] == {
+        "data_collection": "deny",
+        "only": ["Cheap"],
+        "allow_fallbacks": False,
+        "quantizations": ["fp8"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_caller_extra_fields_survive_the_routing_merge():
+    provider = _routed_provider(only=["DeepInfra"])
+    body = provider._chat._behavior.prepare_create_body(
+        provider._chat._build_request_body(
+            make_messages_request(extra_body={"custom_field": "value"})
+        )
+    )
+
+    wire = await capture_openai_chat_wire_body(body)
+
+    assert wire["custom_field"] == "value"
+    assert wire["provider"] == {"only": ["DeepInfra"]}
+
+
+MIXED_ENDPOINTS = [
+    {
+        "provider_name": "Expensive",
+        "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+        "quantization": "fp16",
+        "status": 0,
+    },
+    {
+        "provider_name": "Cheap",
+        "pricing": {"prompt": "0.0000001", "completion": "0.0000002"},
+        "quantization": "fp8",
+        "status": 0,
+    },
+]
 
 
 @pytest.mark.asyncio
@@ -307,7 +399,7 @@ async def test_settings_cheapest_mode_pins_the_streamed_request():
         get_mock.assert_awaited_once_with(
             "/models/moonshotai/kimi-k2.6/endpoints", cast_to=object
         )
-        assert create_mock.call_args.kwargs["provider"] == {
+        assert create_mock.call_args.kwargs["extra_body"]["provider"] == {
             "only": ["Cheap"],
             "allow_fallbacks": False,
             "quantizations": ["fp8"],

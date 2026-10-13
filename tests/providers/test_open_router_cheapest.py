@@ -248,7 +248,7 @@ async def test_provider_pins_cheapest_provider_in_the_request_body():
         )
 
     assert get_mock.call_args.args[0] == "/models/moonshotai/kimi-k2.6/endpoints"
-    assert body["provider"] == {
+    assert body["extra_body"]["provider"] == {
         "only": ["Cheap"],
         "allow_fallbacks": False,
         "quantizations": ["fp8"],
@@ -305,11 +305,173 @@ async def test_provider_merges_static_preferences_with_the_cheapest_pin():
             )
         )
 
-    assert body["provider"] == {
+    assert body["extra_body"]["provider"] == {
         "data_collection": "deny",
         "only": ["Cheap"],
         "allow_fallbacks": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_static_ignore_excludes_a_pinned_candidate():
+    from free_claude_code.config.open_router_preferences import (
+        OpenRouterProviderPreferences,
+    )
+
+    preferences = OpenRouterProviderPreferences.model_validate({"ignore": ["Cheap"]})
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        provider_preferences=preferences,
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    assert provider._cheapest_index is not None
+
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value={"data": {"endpoints": MIXED_ENDPOINTS}},
+    ):
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        body = provider._chat._behavior.prepare_create_body(
+            provider._chat._build_request_body(
+                make_messages_request("moonshotai/kimi-k2.6")
+            )
+        )
+
+    assert body["extra_body"]["provider"] == {
+        "ignore": ["Cheap"],
+        "only": ["Expensive"],
+        "allow_fallbacks": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_static_quantizations_constrain_candidacy_when_unset():
+    from free_claude_code.config.open_router_preferences import (
+        OpenRouterProviderPreferences,
+    )
+
+    preferences = OpenRouterProviderPreferences.model_validate(
+        {"quantizations": ["fp16"]}
+    )
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        provider_preferences=preferences,
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    assert provider._cheapest_index is not None
+
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value={"data": {"endpoints": MIXED_ENDPOINTS}},
+    ):
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        body = provider._chat._behavior.prepare_create_body(
+            provider._chat._build_request_body(
+                make_messages_request("moonshotai/kimi-k2.6")
+            )
+        )
+
+    assert body["extra_body"]["provider"] == {
+        "quantizations": ["fp16"],
+        "only": ["Expensive"],
+        "allow_fallbacks": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_static_filters_that_exclude_every_candidate_drop_the_pin():
+    from free_claude_code.config.open_router_preferences import (
+        OpenRouterProviderPreferences,
+    )
+
+    preferences = OpenRouterProviderPreferences.model_validate(
+        {"ignore": ["Cheap", "Expensive"]}
+    )
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        provider_preferences=preferences,
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    assert provider._cheapest_index is not None
+
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value={"data": {"endpoints": MIXED_ENDPOINTS}},
+    ):
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        body = provider._chat._behavior.prepare_create_body(
+            provider._chat._build_request_body(
+                make_messages_request("moonshotai/kimi-k2.6")
+            )
+        )
+
+    assert body["extra_body"]["provider"] == {"ignore": ["Cheap", "Expensive"]}
+
+
+@pytest.mark.asyncio
+async def test_one_callers_cancellation_does_not_cancel_the_shared_fetch():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def fetch(base):
+        calls.append(base)
+        started.set()
+        await release.wait()
+        return MIXED_ENDPOINTS
+
+    index = CheapestProviderIndex(fetch=fetch)
+
+    first = asyncio.create_task(index.ensure("moonshotai/kimi-k2.6"))
+    await asyncio.wait_for(started.wait(), 1)
+    second = asyncio.create_task(index.ensure("moonshotai/kimi-k2.6"))
+    await asyncio.sleep(0)
+
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    release.set()
+    await asyncio.wait_for(second, 1)
+
+    assert calls == ["moonshotai/kimi-k2.6"]
+    assert index.needs_refresh("moonshotai/kimi-k2.6") is False
+    assert index._inflight == {}
+
+
+@pytest.mark.asyncio
+async def test_stalled_pricing_degrades_without_blocking_the_refresh():
+    started = asyncio.Event()
+
+    async def fetch(base):
+        started.set()
+        await asyncio.Event().wait()
+
+    index = CheapestProviderIndex(fetch=fetch, fetch_timeout_s=0.05)
+
+    await asyncio.wait_for(index.ensure("moonshotai/kimi-k2.6"), 5)
+
+    assert index.needs_refresh("moonshotai/kimi-k2.6") is False
+    assert index.cheapest_provider_block("moonshotai/kimi-k2.6") is None
+    assert index._inflight == {}
 
 
 @pytest.mark.asyncio
@@ -327,7 +489,7 @@ async def test_provider_omits_the_provider_field_when_cheapest_is_unresolved():
             )
         )
 
-    assert "provider" not in body
+    assert "provider" not in body.get("extra_body", {})
 
 
 def test_provider_without_cheapest_mode_never_fetches_pricing():
