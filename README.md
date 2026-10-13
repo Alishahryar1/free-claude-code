@@ -500,7 +500,16 @@ Uninstalling FCC leaves Muse Code installed.
 
 ### Uninstall
 
-Stop every running FCC command before uninstalling.
+Stop every running FCC command and quit connected desktop/editor apps before uninstalling.
+The uninstaller disconnects recognized FCC integrations before removing the tool,
+preserving unrelated application settings. If cleanup fails, FCC and `~/.fcc/`
+remain available so you can correct the problem and retry.
+You can also run `fcc-doctor --disconnect-integrations` separately.
+If a VS Code gateway's address or token no longer matches FCC's current settings,
+cleanup stops without changing that connection; disconnect it manually before retrying.
+For older FCC versions without this command, update first or disconnect through
+Admin, then use `--keep-integrations` (PowerShell: `-KeepIntegrations`) to skip
+automatic cleanup. This option intentionally leaves application settings unchanged.
 
 **Removes**
 

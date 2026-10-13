@@ -11,10 +11,29 @@ from .clipboard import ClipboardUnavailable, copy_text
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="fcc-doctor",
         description="Print and copy FCC diagnostics for a bug report.",
-    ).parse_args(argv)
+    )
+    parser.add_argument(
+        "--disconnect-integrations",
+        action="store_true",
+        help="Disconnect recognized FCC editor/app integrations before uninstalling.",
+    )
+    args = parser.parse_args(argv)
+    if args.disconnect_integrations:
+        from free_claude_code.harnesses.integration_cleanup import (
+            IntegrationCleanupError,
+            disconnect_integrations,
+        )
+
+        try:
+            disconnect_integrations()
+        except IntegrationCleanupError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from None
+        print("Disconnected recognized FCC editor/app integrations.")
+        return
     text = json.dumps(collect_report(), indent=2, ensure_ascii=False) + "\n"
     sys.stdout.write(text)
     try:

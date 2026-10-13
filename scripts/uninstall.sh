@@ -9,6 +9,7 @@ FCC_MACOS_OWNER_FILE=".free-claude-code-owner"
 FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-doctor fcc-update fcc-init free-claude-code"
 
 dry_run=0
+keep_integrations=0
 uv_tool_bin=""
 
 show_usage() {
@@ -20,6 +21,7 @@ Does not remove uv, Claude Code, Codex, Pi, OpenCode, Cline, Hermes Agent, DeepS
 
 Options:
   --dry-run                Print commands without running them.
+  --keep-integrations      Leave editor/app integrations unchanged.
   --help                   Show this help text.
 USAGE
 }
@@ -184,6 +186,23 @@ uninstall_free_claude_code() {
     fail "uv tool uninstall $PACKAGE_NAME failed with exit code $status; ~/.fcc was not deleted."
 }
 
+disconnect_integrations() {
+    [ "$keep_integrations" -eq 0 ] || return 0
+    if [ "$dry_run" -eq 1 ]; then
+        print_command fcc-doctor --disconnect-integrations
+        return 0
+    fi
+    doctor="$uv_tool_bin/fcc-doctor"
+    if [ ! -x "$doctor" ]; then
+        fail "FCC's integration cleanup command is unavailable. Update FCC first, or disconnect editor/app integrations manually and rerun with --keep-integrations. FCC data was not deleted."
+    fi
+    print_command "$doctor" --disconnect-integrations
+    if "$doctor" --disconnect-integrations; then
+        return 0
+    fi
+    fail "Editor/app integration cleanup failed. Correct the reported problem and retry. For older FCC versions, update first or disconnect manually and rerun with --keep-integrations. FCC and its data were not deleted."
+}
+
 verify_fcc_commands_removed() {
     if [ "$dry_run" -eq 1 ]; then
         printf '+ verify all Free Claude Code entry points are absent from the uv tool bin directory\n'
@@ -260,6 +279,9 @@ parse_args() {
             --dry-run)
                 dry_run=1
                 ;;
+            --keep-integrations)
+                keep_integrations=1
+                ;;
             --help|-h)
                 show_usage
                 exit 0
@@ -281,6 +303,9 @@ assert_no_fcc_processes_running
 
 step "Locating the uv-managed Free Claude Code installation"
 initialize_uv_context
+
+step "Disconnecting FCC editor/app integrations"
+disconnect_integrations
 
 step "Removing the Free Claude Code uv tool"
 uninstall_free_claude_code

@@ -105,6 +105,44 @@ def refresh_connected(path: Path, proxy_root_url: str, auth_token: str) -> bool:
     return _connect(path, document, entries, values)
 
 
+def _disconnect(
+    path: Path, document: JsonObject, entries: list[JsonObject], values: dict[str, str]
+) -> None:
+    before = json.dumps(document, allow_nan=False)
+    document.pop(_LOGIN, None)
+    retained = [entry for entry in entries if entry["name"] not in values]
+    if len(retained) != len(entries):
+        if retained:
+            document[_ENV] = retained
+        else:
+            document.pop(_ENV, None)
+    if json.dumps(document, allow_nan=False) != before:
+        atomic_write_text(path, json.dumps(document, indent=2, allow_nan=False) + "\n")
+
+
+def disconnect_existing(
+    path: Path, proxy_root_url: str | None, auth_token: str | None
+) -> bool:
+    """Remove a recognized connection; stop cleanup when ownership is uncertain."""
+    path = path.resolve()
+    values = claude_proxy_values(proxy_root_url or "", auth_token or "")
+    document, entries = _read(path, set(values))
+    if (
+        proxy_root_url is None
+        or auth_token is None
+        or not _connected(document, entries, values)
+    ):
+        environment = {entry["name"]: entry["value"] for entry in entries}
+        if (
+            document.get(_LOGIN) is True
+            and environment.get("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") == "1"
+        ):
+            raise ValueError("Existing gateway connection identity cannot be confirmed")
+        return False
+    _disconnect(path, document, entries, values)
+    return True
+
+
 def configure(
     path: Path,
     proxy_root_url: str,
@@ -118,18 +156,7 @@ def configure(
     if connected is True:
         _connect(path, document, entries, values)
     elif connected is False:
-        before = json.dumps(document, allow_nan=False)
-        document.pop(_LOGIN, None)
-        retained = [entry for entry in entries if entry["name"] not in values]
-        if len(retained) != len(entries):
-            if retained:
-                document[_ENV] = retained
-            else:
-                document.pop(_ENV, None)
-        if json.dumps(document, allow_nan=False) != before:
-            atomic_write_text(
-                path, json.dumps(document, indent=2, allow_nan=False) + "\n"
-            )
+        _disconnect(path, document, entries, values)
     if connected is not None:
         document, entries = _read(path, set(values))
     result: JsonObject = {"connected": _connected(document, entries, values)}
