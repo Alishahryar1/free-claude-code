@@ -1,15 +1,16 @@
-# Branch protection: require every status check this workflow reports, for example:
+# Branch protection: require these stable checks, not individual shard jobs:
 #   Ban suppressions and legacy annotations
 #   ruff-format, ruff-check, ty
 #   Version policy
-#   pytest (Linux), pytest (Windows), pytest (macOS)
-#   playwright (Linux), playwright (Windows), playwright (macOS)
+#   pytest, playwright
 # GitHub may prefix with the workflow name (e.g. "CI / ruff-format"); use the names the branch protection UI offers after a run.
 
 name: CI
 
 env:
   CI_UV_VERSION: "0.12.13"
+  CI_PYTEST_SHARDS: "5"
+  CI_PLAYWRIGHT_SHARDS: "5"
   UV_MALWARE_CHECK: "1"
   UV_PREVIEW_FEATURES: "malware-check"
 
@@ -74,22 +75,38 @@ jobs:
       - name: Run
         run: ${{ matrix.run }}
 
-  pytest:
-    name: pytest (${{ matrix.os }})
+  prepare-shards:
+    name: Prepare test shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      pytest_matrix: ${{ steps.matrix.outputs.pytest_matrix }}
+      playwright_matrix: ${{ steps.matrix.outputs.playwright_matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+
+      - name: Generate test matrices
+        id: matrix
+        run: |
+          python scripts/ci_shards.py \
+            --pytest-shards "$CI_PYTEST_SHARDS" \
+            --playwright-shards "$CI_PLAYWRIGHT_SHARDS" >> "$GITHUB_OUTPUT"
+
+  pytest-shards:
+    name: pytest (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
+    needs: prepare-shards
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     permissions:
       contents: read
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: Linux
-            runner: ubuntu-latest
-          - os: Windows
-            runner: windows-latest
-          - os: macOS
-            runner: macos-latest
+      matrix: ${{ fromJSON(needs.prepare-shards.outputs.pytest_matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -105,24 +122,21 @@ jobs:
           prepare-node: "true"
 
       - name: Run pytest
-        run: uv run --locked pytest -v --tb=short -o thread_dump_timeout=15 --durations=50
+        run: >-
+          uv run --locked pytest -v --tb=short -o thread_dump_timeout=15 --durations=50
+          --splits ${{ matrix.shards }} --group ${{ matrix.shard }}
+          --splitting-algorithm=least_duration
 
-  playwright:
-    name: playwright (${{ matrix.os }})
+  playwright-shards:
+    name: playwright (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
+    needs: prepare-shards
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     permissions:
       contents: read
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: Linux
-            runner: ubuntu-latest
-          - os: Windows
-            runner: windows-latest
-          - os: macOS
-            runner: macos-latest
+      matrix: ${{ fromJSON(needs.prepare-shards.outputs.playwright_matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -145,12 +159,46 @@ jobs:
           -o thread_dump_timeout=10 --durations=20
           --tracing=retain-on-failure --screenshot=only-on-failure
           --full-page-screenshot --output=test-results
+          --splits ${{ matrix.shards }} --group ${{ matrix.shard }}
+          --splitting-algorithm=least_duration
 
       - name: Upload Playwright failure artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: playwright-results-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: playwright-results-${{ runner.os }}-${{ runner.arch }}-shard-${{ matrix.shard }}-of-${{ matrix.shards }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  pytest-summary:
+    name: pytest
+    needs: [prepare-shards, pytest-shards]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Require successful preparation and every shard
+        env:
+          PREPARATION_RESULT: ${{ needs.prepare-shards.result }}
+          SHARDS_RESULT: ${{ needs.pytest-shards.result }}
+        run: |
+          test "$PREPARATION_RESULT" = success && test "$SHARDS_RESULT" = success
+
+  playwright-summary:
+    name: playwright
+    needs: [prepare-shards, playwright-shards]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Require successful preparation and every shard
+        env:
+          PREPARATION_RESULT: ${{ needs.prepare-shards.result }}
+          SHARDS_RESULT: ${{ needs.playwright-shards.result }}
+        run: |
+          test "$PREPARATION_RESULT" = success && test "$SHARDS_RESULT" = success

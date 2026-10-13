@@ -101,6 +101,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "pytest-playwright>=0.9.0",
     "pyyaml>=6.0.3",
+    "pytest-split>=0.11.0",
 ]
 
 [tool.ruff]
