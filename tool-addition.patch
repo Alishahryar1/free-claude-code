@@ -1,0 +1,42 @@
+--- a/src/free_claude_code/core/anthropic/models.py
++++ b/src/free_claude_code/core/anthropic/models.py
+@@ -73,6 +73,13 @@
+     content: Any
+ 
+ 
++class ContentBlockToolAddition(_AnthropicBlockBase):
++    """Advisor-style beta block: adds a tool reference inline in a message."""
++
++    type: Literal["tool_addition"]
++    tool: dict[str, Any]
++
++
+ class SystemContent(_AnthropicBlockBase):
+     type: Literal["text"]
+     text: str
+@@ -93,6 +100,7 @@
+             | ContentBlockServerToolUse
+             | ContentBlockWebSearchToolResult
+             | ContentBlockWebFetchToolResult
++            | ContentBlockToolAddition
+         ]
+     )
+     reasoning_content: str | None = None
+--- a/src/free_claude_code/core/anthropic/__init__.py
++++ b/src/free_claude_code/core/anthropic/__init__.py
+@@ -20,6 +20,7 @@
+     ContentBlockRedactedThinking,
+     ContentBlockServerToolUse,
+     ContentBlockText,
++    ContentBlockToolAddition,
+     ContentBlockThinking,
+     ContentBlockToolResult,
+     ContentBlockToolUse,
+@@ -59,6 +60,7 @@
+     "ContentBlockRedactedThinking",
+     "ContentBlockServerToolUse",
+     "ContentBlockText",
++    "ContentBlockToolAddition",
+     "ContentBlockThinking",
+     "ContentBlockToolResult",
+     "ContentBlockToolUse",

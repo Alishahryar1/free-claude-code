@@ -73,6 +73,13 @@ class ContentBlockWebFetchToolResult(_AnthropicBlockBase):
     content: Any
 
 
+class ContentBlockToolAddition(_AnthropicBlockBase):
+    """Advisor-style beta block: adds a tool reference inline in a message."""
+
+    type: Literal["tool_addition"]
+    tool: dict[str, Any]
+
+
 class SystemContent(_AnthropicBlockBase):
     type: Literal["text"]
     text: str
@@ -93,6 +100,7 @@ class Message(BaseModel):
             | ContentBlockServerToolUse
             | ContentBlockWebSearchToolResult
             | ContentBlockWebFetchToolResult
+            | ContentBlockToolAddition
         ]
     )
     reasoning_content: str | None = None
