@@ -4,6 +4,28 @@ Changes layered on top of upstream `Alishahryar1/free-claude-code` that are not
 part of any release. `fcc-update` reinstalls from upstream and will silently drop
 everything here, so re-apply after updating.
 
+## TEOS Free AI rebrand (branch `teos-free-ai`)
+
+A product rebrand of the user-visible surface to **TEOS Free AI**, on branch
+`teos-free-ai` (based on `local-hardening`). It is a *surgical* rebrand, not a package
+rename: internal names (`free_claude_code`, the `fcc-*` commands, the `free-claude-code`
+distribution name, `~/.fcc`) are unchanged, so upstream merges and the test suite stay
+intact. AGPL-3.0 attribution is preserved (LICENSE kept verbatim, upstream GitHub link
+kept in the Admin UI).
+
+Changed display strings: Admin UI `<title>` / `<h1>`, desktop tray name and icon id,
+the `fcc-server --version` banner, and the harness/launcher provider names (opencode,
+codex, cline, hermes, dsh, vs-code, pi), plus user-facing error messages and the managed
+`.env` header. Matching test assertions were updated.
+
+The distributable **offline Windows bundle** is built by
+`../teos-free-ai/Build-OfflineBundle.ps1` (kept outside this repo so sales tooling does
+not pollute the public fork). It stamps a clean product version via
+`SETUPTOOLS_SCM_PRETEND_VERSION`, bundles the wheel + sdist + full Corresponding Source
+(AGPL-3.0 §4/§6), and ships `Install-TEOSFreeAI.ps1`, which installs the wheel,
+**stubs `fcc-update`** (so upstream auto-update can never overwrite this build), adds a
+`teosfreeai` command, and creates shortcuts.
+
 ## Current deployment
 
 As of 2026-10-12 the live install is built from this clone, not from upstream:
