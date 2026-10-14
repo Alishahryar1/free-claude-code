@@ -172,6 +172,66 @@ def test_missing_reference_targets_its_item_only():
     assert result["input"] == [body["input"][0]]
 
 
+@pytest.mark.parametrize("quote", ["'", '"'])
+@pytest.mark.parametrize("item_id", ["rs_a:rs_b", "rs_a.part", "rs_a/part"])
+def test_quoted_legacy_id_recovers_without_matching_its_prefix(quote, item_id):
+    body = {
+        "input": [
+            {"type": "reasoning", "id": "rs_a", "encrypted_content": "keep"},
+            {
+                "type": "reasoning",
+                "id": item_id,
+                "encrypted_content": "reject",
+                "summary": [{"type": "summary_text", "text": "Keep context"}],
+            },
+        ]
+    }
+    original = deepcopy(body)
+    result = history_retry_body(
+        _error(
+            f"Referenced reasoning item {quote}{item_id}{quote} was not found or has expired."
+        ),
+        body,
+        "responses",
+    )
+    assert result == {
+        "input": [body["input"][0], {"role": "assistant", "content": "Keep context"}]
+    }
+    assert body == original
+
+
+@pytest.mark.parametrize(
+    "ids,message",
+    [
+        (
+            ["rs_a"],
+            "The encrypted content for item 'rs_a:unknown' could not be verified.",
+        ),
+        (
+            ["rs_a:rs_b", "rs_a:rs_b"],
+            'The encrypted content for item "rs_a:rs_b" could not be verified.',
+        ),
+        (
+            ["rs_a:rs_b", "rs_other"],
+            "The encrypted content for item 'rs_a:rs_b' and item rs_other could not be verified.",
+        ),
+    ],
+)
+def test_quoted_legacy_id_recovery_remains_unambiguous(ids, message):
+    body = {
+        "input": [
+            {"type": "reasoning", "id": item_id, "encrypted_content": "opaque"}
+            for item_id in ids
+        ]
+    }
+    assert (
+        history_retry_body(
+            _error(message, code="invalid_encrypted_content"), body, "responses"
+        )
+        is None
+    )
+
+
 def test_messages_signature_path_retains_readable_text_and_other_blocks():
     body = {
         "messages": [

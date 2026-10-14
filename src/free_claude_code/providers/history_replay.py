@@ -264,13 +264,17 @@ def _rejected_record(
         )
         return next((entry for entry in candidates if entry[0] == path), None)
     message = str(error.get("message", ""))
-    named_ids = set(
-        re.findall(
-            r"\b(?:for item|reasoning item|and item)\s+['\"]?([A-Za-z0-9_-]+)['\"]?(?=\s|[.,:]|$)",
+    named_ids = {
+        value
+        for match in re.findall(
+            r"\b(?:for item|reasoning item|and item)\s+"
+            r"(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z0-9_-]+))(?=\s|[.,:]|$)",
             message,
             re.I,
         )
-    )
+        for value in match
+        if value
+    }
     identified = [
         entry
         for entry in candidates
