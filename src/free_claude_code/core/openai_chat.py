@@ -92,6 +92,9 @@ def _chat_message_tokens(message: Mapping[str, Any]) -> int:
     reasoning = message.get("reasoning_content")
     if isinstance(reasoning, str):
         total += estimate_text_tokens(reasoning)
+    details = message.get("reasoning_details")
+    if isinstance(details, list):
+        total += _reasoning_details_tokens(details)
     for tool_call in message.get("tool_calls") or ():
         if not isinstance(tool_call, Mapping):
             continue
@@ -99,6 +102,28 @@ def _chat_message_tokens(message: Mapping[str, Any]) -> int:
         if isinstance(function, Mapping):
             total += estimate_text_tokens(str(function.get("name") or ""))
             total += estimate_text_tokens(str(function.get("arguments") or ""))
+    return total
+
+
+def _reasoning_details_tokens(details: list[Any]) -> int:
+    """Count the thinking payload a message carries in ``reasoning_details``.
+
+    Signed thinking replayed into the chat body lands here rather than in
+    ``reasoning_content``, and the provider receives every payload in the
+    wire JSON, so each entry's readable text, encrypted data, and signature
+    all count as prompt tokens. Fields are counted directly rather than
+    through history_replay's ``readable_reasoning``: that helper dedupes
+    representations for replay fidelity, while estimation measures the wire
+    payload, and importing it would cross the module boundary the other way.
+    """
+    total = 0
+    for detail in details:
+        if not isinstance(detail, Mapping):
+            continue
+        for field in ("text", "summary", "thinking", "data", "signature"):
+            value = detail.get(field)
+            if isinstance(value, str) and value:
+                total += estimate_text_tokens(value)
     return total
 
 

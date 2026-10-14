@@ -85,6 +85,50 @@ def test_estimate_chat_input_tokens_counts_tool_calls_and_reasoning() -> None:
     assert estimate_chat_input_tokens(with_calls) > estimate_chat_input_tokens(plain)
 
 
+def test_estimate_chat_input_tokens_counts_signed_thinking_details() -> None:
+    without_details = {
+        "messages": [{"role": "assistant", "content": "ok"}],
+    }
+    with_details = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "ok",
+                "reasoning_details": [
+                    {
+                        "type": "reasoning.text",
+                        "text": "thinking " * 500,
+                        "signature": "S" * 500,
+                    }
+                ],
+            }
+        ],
+    }
+    with_encrypted = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "ok",
+                "reasoning_details": [
+                    {"type": "reasoning.encrypted", "data": "E" * 2_000}
+                ],
+            }
+        ],
+    }
+
+    # Signed thinking replayed into reasoning_details must count; the
+    # previous prompt count included it, and omitting it let the pin pick a
+    # provider that could not fit the request.
+    assert (
+        estimate_chat_input_tokens(with_details)
+        > estimate_chat_input_tokens(without_details) + 500
+    )
+    # Opaque encrypted payloads are received by the provider too.
+    assert estimate_chat_input_tokens(with_encrypted) > estimate_chat_input_tokens(
+        without_details
+    )
+
+
 def test_estimate_chat_input_tokens_counts_data_url_images_by_payload() -> None:
     small = {
         "messages": [
