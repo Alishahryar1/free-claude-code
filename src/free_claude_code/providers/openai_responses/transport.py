@@ -85,6 +85,7 @@ from .presentation import (
     NativeResponsesPresenter,
     ResponsesExecutionOutcome,
     ResponsesPresenterFactory,
+    ResponsesStreamPresenter,
 )
 
 type ResponsesEventAdapter = Callable[[str, JsonObject], JsonObject]
@@ -162,11 +163,12 @@ class OpenAIResponsesTransport:
             extra_headers=dict(extra_headers or {}),
             request_id=request_id,
             response_model=response_model,
-            presenter_factory=lambda pad_empty: MessagesResponsesPresenter(
+            presenter_factory=lambda pad_empty, origin: MessagesResponsesPresenter(
                 ResponsesProviderStream(
                     message_id=message_id,
                     model=response_model,
                     input_tokens=input_tokens,
+                    origin=origin,
                     tool_names=tool_names,
                     log_raw_events=self._log_raw_sse_events,
                     pad_empty=pad_empty,
@@ -195,7 +197,7 @@ class OpenAIResponsesTransport:
             extra_headers=dict(extra_headers or {}),
             request_id=request_id,
             response_model=response_model,
-            presenter_factory=lambda _pad_empty: NativeResponsesPresenter(
+            presenter_factory=lambda _pad_empty, _origin: NativeResponsesPresenter(
                 public_model=response_model, tool_events=tools.event_adapter()
             ),
             continuation=continuation,
@@ -355,10 +357,7 @@ class OpenAIResponsesTransport:
         while execution.can_attempt:
             normal_stop_seen = False
             source = SourceRecoveryState(execution, previous=source)
-            presenter = presenter_factory(
-                operation_kind is ProviderOperationKind.GENERATION
-            )
-            start_events = tuple(presenter.start())
+            presenter: ResponsesStreamPresenter | None = None
             presenter_started = False
             adapt_event = (
                 self._event_adapter_factory()
@@ -382,6 +381,10 @@ class OpenAIResponsesTransport:
                     endpoint=endpoint.snapshot if endpoint is not None else None,
                 )
                 sent_body = prepare_history(body, origin)
+                presenter = presenter_factory(
+                    operation_kind is ProviderOperationKind.GENERATION, origin
+                )
+                start_events = tuple(presenter.start())
                 attempt = await execution.open_attempt(operation_kind)
                 scope = ProviderAttemptScope(
                     attempt,
@@ -581,11 +584,13 @@ class OpenAIResponsesTransport:
                         body=body,
                         protocol="responses",
                         normal_stop_seen=normal_stop_seen,
-                        responses_failure_payload=presenter.failure_payload(
-                            raw_error, failure
+                        responses_failure_payload=(
+                            presenter.failure_payload(raw_error, failure)
+                            if presenter is not None
+                            else None
                         ),
                     ) from raw_error
-                if not decision.committed:
+                if not decision.committed or presenter is None:
                     recovery.discard()
                     raise failure from raw_error
                 for event in presenter.terminal_failure(raw_error, failure):

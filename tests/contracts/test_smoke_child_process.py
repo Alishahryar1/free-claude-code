@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
 from smoke.lib import child_process
 from smoke.lib import e2e as smoke_e2e
@@ -46,11 +47,12 @@ def test_fcc_server_command_uses_cli_entrypoint() -> None:
     assert cmd_fcc_server() == [
         child_process.python_exe(),
         "-c",
-        "from free_claude_code.cli.entrypoints import serve; serve()",
+        "from smoke.lib.server_runtime import serve; serve()",
     ]
 
 
 def test_start_server_disables_cli_admin_browser(monkeypatch, tmp_path: Path) -> None:
+    ManagedConfigStore().initialize({})
     captured: dict[str, object] = {}
 
     class FakeProcess:

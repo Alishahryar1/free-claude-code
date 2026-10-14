@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-INSTALL_URL = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install"
+RELEASE_URL = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code"
 SCRIPTS = ("fcc-update", "fcc-update.cmd")
 
 
@@ -29,7 +29,7 @@ def installer_server(body, status, outcome):
             response_status = status
             if self.path == "/metadata":
                 version = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
-                    outcome, "2.0.0"
+                    outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
                 )
                 payload = json.dumps(
                     {"info": {"version": version}, "urls": [{"yanked": False}]}
@@ -50,14 +50,14 @@ def installer_server(body, status, outcome):
     )
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}/install", requests
+        yield f"http://127.0.0.1:{server.server_port}", requests
     finally:
         server.shutdown()
         server.server_close()
         thread.join()
 
 
-def fixture_wheel(area, url):
+def fixture_wheel(area, url, outcome):
     wheel = area / "free_claude_code-1.0.0-py3-none-any.whl"
     dist = "free_claude_code-1.0.0"
     with zipfile.ZipFile(wheel, "w") as archive:
@@ -73,7 +73,7 @@ def fixture_wheel(area, url):
         for name in SCRIPTS:
             source = (ROOT / "scripts/update" / name).read_text(encoding="utf-8")
             archive.writestr(
-                f"{dist}.data/scripts/{name}", source.replace(INSTALL_URL, url)
+                f"{dist}.data/scripts/{name}", source.replace(RELEASE_URL, url)
             )
         archive.writestr(
             f"{dist}.dist-info/entry_points.txt",
@@ -81,11 +81,26 @@ def fixture_wheel(area, url):
         )
         for name in ("__init__.py", "updater/__init__.py", "updater/check.py"):
             source = (ROOT / "src/free_claude_code" / name).read_text(encoding="utf-8")
+            if (
+                name == "updater/check.py"
+                and outcome.startswith("checker-")
+                and outcome != "checker-missing"
+            ):
+                invalid = {
+                    "checker-invalid": "2.0.0/../main",
+                    "checker-multiline": "2.0.0\n3.0.0",
+                    "checker-empty": "",
+                    "checker-exit": "2.0.0",
+                }[outcome]
+                exit_code = 37 if outcome == "checker-exit" else 10
+                source = (
+                    f"def main():\n    print({invalid!r})\n    return {exit_code}\n"
+                )
             archive.writestr(
                 f"free_claude_code/{name}",
                 source.replace(
                     "https://pypi.org/pypi/free-claude-code/json",
-                    url.removesuffix("/install") + "/metadata",
+                    url + "/metadata",
                 ),
             )
         archive.writestr(
@@ -106,6 +121,12 @@ def fixture_wheel(area, url):
         "current",
         "newer-installed",
         "check-error",
+        "invalid-release",
+        "checker-invalid",
+        "checker-multiline",
+        "checker-empty",
+        "checker-exit",
+        "checker-missing",
     ],
 )
 def test_installed_update_delegates_and_survives_replacement(tmp_path, outcome):
@@ -120,6 +141,7 @@ def test_installed_update_delegates_and_survives_replacement(tmp_path, outcome):
         UV_TOOL_BIN_DIR=str(area / "bin"),
         UV_NO_CONFIG="1",
         UV_PYTHON_DOWNLOADS="never",
+        FCC_INSTALL_VERSION="9.9.9",
         FCC_TEST_LAUNCHER=str(
             area / "bin" / ("fcc-update.cmd" if os.name == "nt" else "fcc-update")
         ),
@@ -132,12 +154,12 @@ def test_installed_update_delegates_and_survives_replacement(tmp_path, outcome):
     if os.name == "nt":
         body = """param([switch] $VoiceLocal, [string] $TorchBackend)
 $answer = Read-Host 'Continue'
-Write-Output "installer:$VoiceLocal|$TorchBackend|$answer"
+Write-Output "installer:$VoiceLocal|$TorchBackend|$answer|$env:FCC_INSTALL_VERSION"
 [IO.File]::WriteAllText($env:FCC_TEST_LAUNCHER, 'exit /b 99')
 [IO.File]::WriteAllText($env:FCC_TEST_CHECKER, 'replaced after checker exited')
 """
         arguments = "-VoiceLocal -TorchBackend cu130"
-        expected = "installer:True|cu130|yes"
+        expected = "installer:True|cu130|yes|2.0.0"
         body += {
             "success": "",
             "exit": "exit 23",
@@ -146,12 +168,12 @@ Write-Output "installer:$VoiceLocal|$TorchBackend|$answer"
         }.get(outcome, "")
     else:
         body = """read -r answer
-printf 'installer:%s|%s|%s|%s\\n' "$1" "$2" "$3" "$answer"
+printf 'installer:%s|%s|%s|%s|%s\\n' "$1" "$2" "$3" "$answer" "$FCC_INSTALL_VERSION"
 printf 'exit 99\\n' > "$FCC_TEST_LAUNCHER"
 printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
 """
         arguments = ["--voice-local", "--torch-backend", "cu130"]
-        expected = "installer:--voice-local|--torch-backend|cu130|yes"
+        expected = "installer:--voice-local|--torch-backend|cu130|yes|2.0.0"
         body += {
             "success": "",
             "exit": "exit 23",
@@ -164,7 +186,7 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
         url,
         requests,
     ):
-        wheel = fixture_wheel(area, url)
+        wheel = fixture_wheel(area, url, outcome)
         result = subprocess.run(
             [
                 uv,
@@ -179,6 +201,8 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             timeout=90,
         )
         assert result.returncode == 0, result.stderr
+        if outcome == "checker-missing":
+            Path(env["FCC_TEST_CHECKER"]).unlink()
         launcher = env["FCC_TEST_LAUNCHER"]
         command = (
             f'"{os.environ.get("COMSPEC", "cmd.exe")}" /d /s /c ""{launcher}" {arguments}"'
@@ -194,12 +218,25 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             text=True,
             timeout=30,
         )
-        skipped = outcome in {"current", "newer-installed", "check-error"}
-        assert requests == ["/metadata"] + (
-            [] if skipped else ["/install.ps1" if os.name == "nt" else "/install.sh"]
+        skipped = outcome in {
+            "current",
+            "newer-installed",
+            "check-error",
+            "invalid-release",
+        } or outcome.startswith("checker-")
+        assert requests == ([] if outcome.startswith("checker-") else ["/metadata"]) + (
+            []
+            if skipped
+            else [f"/v2.0.0/scripts/install.{'ps1' if os.name == 'nt' else 'sh'}"]
         ), result.stdout + result.stderr
         if skipped:
-            assert result.returncode == (1 if outcome == "check-error" else 0)
+            expected_exit = 37 if outcome == "checker-exit" else 1
+            if outcome in {"current", "newer-installed"}:
+                expected_exit = 0
+            if outcome == "checker-missing":
+                assert result.returncode != 0
+            else:
+                assert result.returncode == expected_exit
             assert "installer:" not in result.stdout
         elif outcome == "download-error":
             assert result.returncode != 0

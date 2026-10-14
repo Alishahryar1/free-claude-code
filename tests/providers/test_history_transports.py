@@ -237,6 +237,51 @@ async def _saved_reply(stream, wire):
     return events[-1].data["response"]["output"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opaque_only", [False, True])
+async def test_responses_messages_roundtrip_preserves_bound_reasoning(opaque_only):
+    native = [
+        {
+            "type": "reasoning",
+            "id": f"rs_original_{i}",
+            "summary": []
+            if opaque_only
+            else [{"type": "summary_text", "text": f"Plan {i}."}],
+            "content": [],
+            "encrypted_content": f"cipher-bound-to-original-{i}",
+        }
+        for i in range(2)
+    ]
+    completed = _completed_response(model="requested")
+    completed["output"] = native
+    events = [
+        {"type": "response.created", "response": {**completed, "output": []}},
+        *[
+            {"type": "response.output_item.done", "output_index": i, "item": item}
+            for i, item in enumerate(native)
+        ],
+        {"type": "response.completed", "response": completed},
+    ]
+
+    def responder(bodies):
+        if len(bodies) > 1:
+            replayed = [x for x in bodies[-1]["input"] if x.get("type") == "reasoning"]
+            assert replayed == native
+        return 200, events
+
+    async with _harness("responses", responder) as (send, bodies, _):
+        saved = await _saved_reply(
+            send("messages", [{"role": "user", "content": "hello"}]), "messages"
+        )
+        history = json.loads(
+            json.dumps([*saved, {"role": "user", "content": "continue"}])
+        )
+        original = deepcopy(history)
+        await _saved_reply(send("messages", history), "messages")
+        assert history == original
+        assert len(bodies) == 2
+
+
 def _carrier(history, wire):
     if wire == "responses":
         return next(
@@ -251,6 +296,64 @@ def _carrier(history, wire):
         and block["type"] in {"thinking", "redacted_thinking"}
         and block.get("signature", block.get("data"))
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_attempts", [2, 5])
+async def test_old_raw_thinking_recovers_named_rejections_within_budget(max_attempts):
+    history = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Keep first context",
+                    "signature": "old-first",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Keep second context",
+                    "signature": "old-second",
+                },
+                {"type": "text", "text": "Keep answer"},
+            ],
+        },
+        {"role": "user", "content": "continue"},
+    ]
+    original = deepcopy(history)
+
+    def responder(bodies):
+        body = bodies[-1]
+        items = [x for x in body["input"] if x.get("type") == "reasoning"]
+        for item in items:
+            assert "content" not in item
+        for text in ("Keep first context", "Keep second context", "Keep answer"):
+            assert json.dumps(body).count(text) == 1
+        if items:
+            return 400, {
+                "code": "invalid_encrypted_content",
+                "param": None,
+                "message": f"The encrypted content for item {items[0]['id']} could not be verified. Reason: Encrypted content item_id did not match the target item id.",
+            }
+        return 200, _events_for("responses")
+
+    async with _harness("responses", responder, max_attempts=max_attempts) as (
+        send,
+        bodies,
+        _,
+    ):
+        if max_attempts == 2:
+            with pytest.raises(ExecutionFailure):
+                await _saved_reply(send("messages", history), "messages")
+        else:
+            await _saved_reply(send("messages", history), "messages")
+        assert len(bodies) == min(max_attempts, 3)
+        assert [
+            x["encrypted_content"]
+            for x in bodies[1]["input"]
+            if x.get("type") == "reasoning"
+        ] == ["old-second"]
+        assert history == original
 
 
 @pytest.mark.asyncio

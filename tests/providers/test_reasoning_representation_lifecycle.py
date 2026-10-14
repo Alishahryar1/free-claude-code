@@ -6,6 +6,7 @@ from copy import deepcopy
 import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.kilo import KiloProvider
 from free_claude_code.providers.openai_chat.reasoning_details import (
@@ -217,7 +218,10 @@ async def test_independent_native_items_keep_their_own_text_and_signature():
             send("messages", [{"role": "user", "content": "hello"}]), "messages"
         )
     thinking = [
-        (block["thinking"], block.get("signature"))
+        (
+            block["thinking"],
+            decode_replay(block["signature"]).native["encrypted_content"],
+        )
         for block in saved[0]["content"]
         if block["type"] == "thinking"
     ]
@@ -233,11 +237,13 @@ async def test_native_signed_empty_thinking_keeps_its_block_kind():
         saved = await _saved_reply(
             send("messages", [{"role": "user", "content": "hello"}]), "messages"
         )
-    assert saved[0]["content"][0] == {
-        "type": "thinking",
-        "thinking": "",
-        "signature": "empty-signed",
-    }
+    block = saved[0]["content"][0]
+    assert block["type"] == "thinking"
+    assert block["thinking"] == ""
+    assert (
+        decode_replay(block["signature"]).native
+        == upstream[-1]["response"]["output"][0]
+    )
 
 
 @pytest.mark.asyncio

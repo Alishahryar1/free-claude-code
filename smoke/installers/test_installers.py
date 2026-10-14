@@ -46,6 +46,83 @@ CODING_AGENTS = (
 )
 
 
+@pytest.mark.parametrize("voice", [False, True])
+def test_install_sh_pins_selected_fcc_release(posix_harness, voice):
+    posix_harness.env["FCC_INSTALL_VERSION"] = "2.0.0"
+    posix_harness.add_uv("0.12.13")
+    result = posix_harness.run_functions(
+        f"voice_local={int(voice)}\nvalidate_args\ninstall_free_claude_code\ninstaller_path=''\nprint_installer_retry"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    spec = (
+        "free-claude-code[voice_local]==2.0.0" if voice else "free-claude-code==2.0.0"
+    )
+    assert any(call.endswith(spec) for call in posix_harness.calls())
+    assert "/v2.0.0/scripts/install.sh" in result.stdout
+    assert "FCC_INSTALL_VERSION=" in result.stdout
+
+
+@pytest.mark.parametrize("voice", [False, True])
+def test_install_ps1_pins_selected_fcc_release(powershell_harness, voice):
+    powershell_harness.env["FCC_INSTALL_VERSION"] = "2.0.0"
+    powershell_harness.add_uv("0.12.13")
+    result = powershell_harness.run_functions(
+        "Install-FreeClaudeCode\n$script:InstallerPath = ''\nWrite-Output (Get-InstallerRetryCommand)",
+        *(["-VoiceLocal"] if voice else []),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    spec = (
+        "free-claude-code[voice_local]==2.0.0" if voice else "free-claude-code==2.0.0"
+    )
+    assert any(call.endswith(spec) for call in powershell_harness.calls())
+    assert "/v2.0.0/scripts/install.ps1" in result.stdout
+    assert "$env:FCC_INSTALL_VERSION = '2.0.0'" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "2.0",
+        "v2.0.0",
+        "02.0.0",
+        "2.0.0rc1",
+        "2.0.0+local",
+        "2.0.0\n3.0.0",
+        "2.0.0/../main",
+    ],
+)
+def test_install_sh_rejects_invalid_fcc_release_before_changes(posix_harness, version):
+    posix_harness.env["FCC_INSTALL_VERSION"] = version
+    result = posix_harness.run("--dry-run")
+    assert result.returncode != 0
+    assert "FCC_INSTALL_VERSION" in result.stderr
+    assert posix_harness.calls() == []
+    assert not (Path(posix_harness.env["HOME"]) / ".fcc/logs").exists()
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "2.0",
+        "v2.0.0",
+        "02.0.0",
+        "2.0.0rc1",
+        "2.0.0+local",
+        "2.0.0\n3.0.0",
+        "2.0.0/../main",
+    ],
+)
+def test_install_ps1_rejects_invalid_fcc_release_before_changes(
+    powershell_harness, version
+):
+    powershell_harness.env["FCC_INSTALL_VERSION"] = version
+    result = powershell_harness.run("-DryRun")
+    assert result.returncode != 0
+    assert "FCC_INSTALL_VERSION" in result.stderr
+    assert powershell_harness.calls() == []
+    assert not (Path(powershell_harness.env["USERPROFILE"]) / ".fcc/logs").exists()
+
+
 def test_install_ps1_bundle_dry_run_includes_headroom(powershell_harness):
     result = powershell_harness.run("-RtkHeadroom", "-DryRun")
     assert result.returncode == 0, result.stderr

@@ -112,6 +112,102 @@ async def test_nim_lists_openai_compatible_model_infos() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "provider_id,provider_base_url,filtered",
+    [
+        ("nvidia_nim", NVIDIA_NIM_DEFAULT_BASE, True),
+        ("nvidia_nim", NVIDIA_NIM_DEFAULT_BASE + "/", True),
+        ("nvidia_nim", "https://private-nim.example/v1", False),
+        ("deepseek", NVIDIA_NIM_DEFAULT_BASE, False),
+    ],
+)
+async def test_nim_exclusions_apply_only_to_hosted_nim_discovery(
+    provider_id, provider_base_url, filtered
+) -> None:
+    config = make_provider_config(api_key="test-key", base_url=provider_base_url)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = (
+            NvidiaNimProvider(
+                config, nim_settings=NimSettings(), admission=immediate_admission()
+            )
+            if provider_id == "nvidia_nim"
+            else DeepSeekProvider(config, admission=immediate_admission())
+        )
+    excluded = (
+        "01-ai/yi-large",  # Observed model-specific 404.
+        "meta/muse-glimmer-30b",
+        "nvidia/cosmos-reason2-8b",
+        "nvidia/ising-calibration-1-35b-a3b",  # Explicit retirement 410.
+        "nvidia/llama-nemotron-embed-vl-1b-v2",  # Working embedding service.
+        "nvidia/ai-synthetic-video-detector",
+    )
+    retained = (
+        "nvidia/nemotron-3-super-120b-a12b",
+        "nvidia/future-chat-model",
+        "01-ai/yi-large-successor",  # Exact IDs, not substring matching.
+        "deepseek-ai/deepseek-v4.1-flash",  # Timeouts are not exclusions.
+        "meta/llama-3.2-90b-vision-instruct",
+        "meta/llama-guard-4-12b",
+        "nvidia/llama-3.1-nemoguard-8b-content-safety",
+        "nvidia/llama-3.1-nemoguard-8b-topic-control",  # Upstream 500.
+    )
+    ids = (*excluded, *retained)
+    with patch.object(
+        provider._client.models,
+        "list",
+        new_callable=AsyncMock,
+        return_value=SimpleNamespace(data=[SimpleNamespace(id=id_) for id_ in ids]),
+    ) as mock_list:
+        assert await provider.list_model_infos() == _infos(
+            *(retained if filtered else ids)
+        )
+    mock_list.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_nim_exclusions_preserve_retained_metadata() -> None:
+    config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = NvidiaNimProvider(
+            config, nim_settings=NimSettings(), admission=immediate_admission()
+        )
+    retained = ProviderModelInfo(
+        "nvidia/future-chat-model",
+        supports_thinking=True,
+        context_window_tokens=131072,
+        max_output_tokens=8192,
+    )
+    with patch.object(
+        OpenAIChatProvider,
+        "list_model_infos",
+        return_value=frozenset({ProviderModelInfo("01-ai/yi-large"), retained}),
+    ):
+        infos = await provider.list_model_infos()
+    assert len(infos) == 1
+    assert next(iter(infos)) is retained
+
+
+@pytest.mark.asyncio
+async def test_nim_exclusions_preserve_discovery_errors() -> None:
+    config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = NvidiaNimProvider(
+            config, nim_settings=NimSettings(), admission=immediate_admission()
+        )
+    with (
+        patch.object(
+            provider._client.models,
+            "list",
+            new_callable=AsyncMock,
+            return_value=SimpleNamespace(data=[SimpleNamespace(id=None)]),
+        ) as mock_list,
+        pytest.raises(ModelListResponseError),
+    ):
+        await provider.list_model_infos()
+    mock_list.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "provider",
     [
         profiled_provider(

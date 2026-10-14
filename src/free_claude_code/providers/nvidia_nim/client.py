@@ -8,7 +8,9 @@ from typing import Any
 import openai
 from loguru import logger
 
+from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.nim import NimSettings
+from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
@@ -25,6 +27,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
 )
 
+from .models import HOSTED_MODEL_EXCLUSIONS
 from .native_tool_stream import normalize_nim_native_tool_stream
 from .request_options import (
     NIM_REQUEST_POLICY,
@@ -166,6 +169,15 @@ class NvidiaNimProvider(OpenAIChatProvider):
             config,
             behavior=NvidiaNimChatBehavior(nim_settings),
             admission=admission,
+        )
+
+    async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
+        """Filter known unavailable and non-chat models from hosted discovery."""
+        infos = await super().list_model_infos()
+        if self._base_url != NVIDIA_NIM_DEFAULT_BASE:
+            return infos
+        return frozenset(
+            info for info in infos if info.model_id not in HOSTED_MODEL_EXCLUSIONS
         )
 
 
