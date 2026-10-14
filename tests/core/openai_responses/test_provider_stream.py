@@ -5,6 +5,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
     thinking_content,
 )
+from free_claude_code.core.history_replay import ReplayOrigin, decode_replay
 from free_claude_code.core.openai_responses.provider_stream import (
     ResponsesProviderStream,
     ResponsesStreamFailure,
@@ -14,6 +15,7 @@ from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 def _terminal_usage(usage: dict[str, object]) -> dict[str, object]:
     stream = ResponsesProviderStream(
+        origin=ReplayOrigin("test", "responses", "", "", "m"),
         message_id="msg_test",
         model="openai/gpt-test",
         input_tokens=12,
@@ -34,6 +36,7 @@ def _terminal_usage(usage: dict[str, object]) -> dict[str, object]:
 
 def test_responses_provider_stream_preserves_reasoning_tools_usage_and_ids() -> None:
     stream = ResponsesProviderStream(
+        origin=ReplayOrigin("test", "responses", "", "", "m"),
         message_id="msg_test",
         model="openai/gpt-test",
         input_tokens=12,
@@ -134,7 +137,7 @@ def test_responses_provider_stream_preserves_reasoning_tools_usage_and_ids() -> 
         if event.event == "content_block_start"
     ]
     assert [
-        event.data["delta"]["signature"]
+        decode_replay(event.data["delta"]["signature"]).native["encrypted_content"]
         for event in events
         if event.data.get("delta", {}).get("type") == "signature_delta"
     ] == ["opaque"]
@@ -264,6 +267,7 @@ def test_responses_provider_stream_ignores_invalid_cache_partitions(
     expected_input_tokens: int,
 ) -> None:
     stream = ResponsesProviderStream(
+        origin=ReplayOrigin("test", "responses", "", "", "m"),
         message_id="msg_test",
         model="openai/gpt-test",
         input_tokens=12,
@@ -297,6 +301,7 @@ def test_responses_provider_stream_ignores_invalid_cache_partitions(
 
 def test_responses_provider_stream_surfaces_failed_event() -> None:
     stream = ResponsesProviderStream(
+        origin=ReplayOrigin("test", "responses", "", "", "m"),
         message_id="msg_test",
         model="gpt-test",
         input_tokens=0,
@@ -325,6 +330,7 @@ def test_responses_provider_stream_restores_added_and_done_only_tool_names() -> 
     )
     codec = OpenAIToolNameCodec.from_names(originals)
     stream = ResponsesProviderStream(
+        origin=ReplayOrigin("test", "responses", "", "", "m"),
         message_id="msg_test",
         model="gpt-test",
         input_tokens=0,
