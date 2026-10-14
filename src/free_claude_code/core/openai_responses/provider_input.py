@@ -235,6 +235,16 @@ def _assistant_items(
             }
             if isinstance(signature, str) and signature:
                 item["encrypted_content"] = signature
+                if not is_replay(signature):
+                    items.append(item)
+                    thinking = str(get_block_attr(block, "thinking", ""))
+                    if thinking:
+                        items.append(
+                            _assistant_message(
+                                [{"type": "output_text", "text": thinking}]
+                            )
+                        )
+                    continue
             if not signature or (
                 not is_replay(signature) or not has_readable_replay(signature)
             ):

@@ -99,6 +99,63 @@ def test_unidentified_cipher_failure_with_multiple_records_is_not_guessed():
     )
 
 
+@pytest.mark.parametrize("quote", ["", "'", '"'])
+def test_encrypted_rejection_matches_exact_named_item(quote):
+    body = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": name,
+                "encrypted_content": name,
+                "summary": [{"type": "summary_text", "text": name}],
+            }
+            for name in ("rs_a", "rs_ab")
+        ]
+    }
+    original = deepcopy(body)
+    result = history_retry_body(
+        _error(
+            f"The encrypted content for item {quote}rs_ab{quote} could not be verified. Reason: Encrypted content item_id did not match the target item id.",
+            code="invalid_encrypted_content",
+        ),
+        body,
+        "responses",
+    )
+    assert result == {
+        "input": [body["input"][0], {"role": "assistant", "content": "rs_ab"}]
+    }
+    assert body == original
+
+
+@pytest.mark.parametrize(
+    "ids,message",
+    [
+        (["rs_a"], "The encrypted content for item rs_unknown could not be verified."),
+        (
+            ["rs_a", "rs_a"],
+            "The encrypted content for item rs_a could not be verified.",
+        ),
+        (
+            ["rs_a", "rs_b"],
+            "The encrypted content for item rs_a and item rs_b could not be verified.",
+        ),
+    ],
+)
+def test_named_rejection_never_guesses(ids, message):
+    body = {
+        "input": [
+            {"type": "reasoning", "id": id_, "encrypted_content": "opaque"}
+            for id_ in ids
+        ]
+    }
+    assert (
+        history_retry_body(
+            _error(message, code="invalid_encrypted_content"), body, "responses"
+        )
+        is None
+    )
+
+
 def test_missing_reference_targets_its_item_only():
     body = {
         "input": [

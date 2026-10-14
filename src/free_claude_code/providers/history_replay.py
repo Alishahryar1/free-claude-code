@@ -264,13 +264,29 @@ def _rejected_record(
         )
         return next((entry for entry in candidates if entry[0] == path), None)
     message = str(error.get("message", ""))
+    named_ids = set(
+        re.findall(
+            r"\b(?:for item|reasoning item|and item)\s+['\"]?([A-Za-z0-9_-]+)['\"]?(?=\s|[.,:]|$)",
+            message,
+            re.I,
+        )
+    )
     identified = [
         entry
         for entry in candidates
-        if isinstance(entry[1].get("id"), str) and f"'{entry[1]['id']}'" in message
+        if isinstance(entry[1].get("id"), str)
+        and (
+            entry[1]["id"] in named_ids
+            or f"'{entry[1]['id']}'" in message
+            or f'"{entry[1]["id"]}"' in message
+        )
     ]
-    if len(identified) == 1:
+    if len(identified) == 1 and (
+        not named_ids or named_ids == {identified[0][1]["id"]}
+    ):
         return identified[0]
+    if named_ids or identified:
+        return None
     opaque = [
         entry
         for entry in candidates
