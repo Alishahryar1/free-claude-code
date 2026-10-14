@@ -122,9 +122,16 @@ _OPENAI_UNVERIFIED = (
 )
 
 
-@pytest.mark.parametrize("named", ["rs_1", "rs_12"])
-def test_openai_unquoted_item_targets_that_item_only(named):
-    # ``rs_1`` must not match inside ``rs_12`` (or the reverse).
+@pytest.mark.parametrize(
+    "ids,named",
+    [
+        (ids, named)
+        for ids in [("rs_1", "rs_12"), ("rs_a", "rs_a:rs_b")]
+        for named in ids
+    ],
+)
+def test_openai_unquoted_item_targets_that_item_only(ids, named):
+    # One id must not match inside the other (``rs_1``/``rs_12``, ``rs_a``/``rs_a:rs_b``).
     body = {
         "input": [
             {
@@ -133,7 +140,7 @@ def test_openai_unquoted_item_targets_that_item_only(named):
                 "encrypted_content": f"opaque-{item_id}",
                 "summary": [{"type": "summary_text", "text": f"thought {item_id}"}],
             }
-            for item_id in ("rs_1", "rs_12")
+            for item_id in ids
         ]
     }
     result = history_retry_body(
