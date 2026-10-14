@@ -86,9 +86,7 @@ class OpenAIChatBehavior:
         """Return provider-specific failure semantics, or defer to shared policy."""
         return None
 
-    def prepare_create_body(
-        self, body: dict[str, Any], input_tokens: int = 0
-    ) -> dict[str, Any]:
+    def prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:
         """Return the body passed to the upstream OpenAI-compatible client."""
         return body
 

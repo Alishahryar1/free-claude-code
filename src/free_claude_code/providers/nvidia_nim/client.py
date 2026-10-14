@@ -92,9 +92,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         apply_nim_request_options(body, reasoning, nim=self._nim_settings)
         return body
 
-    def prepare_create_body(
-        self, body: dict[str, Any], input_tokens: int = 0
-    ) -> dict[str, Any]:
+    def prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:
         """Strip private request metadata before calling NVIDIA NIM."""
         return body_without_nim_tool_argument_aliases(body)
 

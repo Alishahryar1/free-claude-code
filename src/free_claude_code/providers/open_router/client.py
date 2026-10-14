@@ -13,6 +13,7 @@ from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.openai_chat import estimate_chat_input_tokens
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
@@ -87,14 +88,13 @@ class OpenRouterChatBehavior(OpenAIChatBehavior):
             }
         return body
 
-    def prepare_create_body(
-        self, body: dict[str, Any], input_tokens: int = 0
-    ) -> dict[str, Any]:
+    def prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:
         """Pin the request to the cheapest provider when pricing resolves.
 
-        ``input_tokens`` is the request's prompt size as counted by the
-        executor (messages, system, and tools); providers whose served
-        capacity cannot fit it are not eligible for the pin.
+        The capacity constraint counts the body being sent, not the
+        executor's original count: continuation and recovery paths grow the
+        message list after that count is taken, and only the body reflects
+        the request the provider actually receives.
         """
 
         if self._cheapest_index is None:
@@ -104,7 +104,7 @@ class OpenRouterChatBehavior(OpenAIChatBehavior):
         cheapest = self._cheapest_index.cheapest_provider_block(
             body.get("model") or "",
             constraints=constraints,
-            prompt_tokens=input_tokens,
+            prompt_tokens=estimate_chat_input_tokens(body),
         )
         if cheapest is None:
             return body

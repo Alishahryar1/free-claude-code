@@ -409,7 +409,7 @@ async def test_settings_cheapest_mode_pins_the_streamed_request():
 
 
 @pytest.mark.asyncio
-async def test_streamed_prompt_count_constrains_the_pin():
+async def test_streamed_body_size_constrains_the_pin():
     endpoints_payload = {
         "data": {
             "endpoints": [
@@ -461,14 +461,16 @@ async def test_streamed_prompt_count_constrains_the_pin():
             events = [
                 event
                 async for event in provider.stream_messages(
-                    make_messages_request("moonshotai/kimi-k2.6"),
-                    input_tokens=50_000,
+                    make_messages_request(
+                        "moonshotai/kimi-k2.6",
+                        messages=[{"role": "user", "content": "word " * 40_000}],
+                    )
                 )
             ]
 
         assert text_content(parse_sse_text("".join(events))) == "done"
-        # The executor's prompt count reaches the pin: the cheapest provider
-        # cannot serve a 50k-token chat, so the roomier one is pinned.
+        # The streamed body's size reaches the pin through the real runner
+        # path: the cheapest provider cannot serve it, so the roomier one wins.
         assert create_mock.call_args.kwargs["extra_body"]["provider"] == {
             "only": ["RoomyExpensive"],
             "allow_fallbacks": False,
