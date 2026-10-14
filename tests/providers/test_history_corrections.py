@@ -115,6 +115,60 @@ def test_missing_reference_targets_its_item_only():
     assert result["input"] == [body["input"][0]]
 
 
+# OpenAI's rejection names the item unquoted, with ``param`` null (#2080).
+_OPENAI_UNVERIFIED = (
+    "The encrypted content for item {} could not be verified. "
+    "Reason: Encrypted content organization_id did not match the target organization."
+)
+
+
+@pytest.mark.parametrize("named", ["rs_1", "rs_12"])
+def test_openai_unquoted_item_targets_that_item_only(named):
+    # ``rs_1`` must not match inside ``rs_12`` (or the reverse).
+    body = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": item_id,
+                "encrypted_content": f"opaque-{item_id}",
+                "summary": [{"type": "summary_text", "text": f"thought {item_id}"}],
+            }
+            for item_id in ("rs_1", "rs_12")
+        ]
+    }
+    result = history_retry_body(
+        _error(_OPENAI_UNVERIFIED.format(named), code="invalid_encrypted_content"),
+        body,
+        "responses",
+    )
+    assert result is not None
+    assert result["input"] == [
+        {"role": "assistant", "content": f"thought {item['id']}"}
+        if item["id"] == named
+        else item
+        for item in body["input"]
+    ]
+
+
+def test_openai_unquoted_item_targets_its_chat_reasoning_detail():
+    details = [
+        {"type": "reasoning.encrypted", "id": f"rs_{i}", "data": f"opaque{i}"}
+        for i in range(2)
+    ]
+    body = {
+        "messages": [
+            {"role": "assistant", "content": "17", "reasoning_details": details}
+        ]
+    }
+    result = history_retry_body(
+        _error(_OPENAI_UNVERIFIED.format("rs_1"), code="invalid_encrypted_content"),
+        body,
+        "chat",
+    )
+    assert result is not None
+    assert result["messages"][0]["reasoning_details"] == [details[0]]
+
+
 def test_messages_signature_path_retains_readable_text_and_other_blocks():
     body = {
         "messages": [

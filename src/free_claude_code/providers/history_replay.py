@@ -264,10 +264,13 @@ def _rejected_record(
         )
         return next((entry for entry in candidates if entry[0] == path), None)
     message = str(error.get("message", ""))
+    # OpenAI names the item unquoted ("for item rs_... could not be verified").
     identified = [
         entry
         for entry in candidates
-        if isinstance(entry[1].get("id"), str) and f"'{entry[1]['id']}'" in message
+        if isinstance(entry[1].get("id"), str)
+        and entry[1]["id"]
+        and re.search(rf"(?<![\w:-]){re.escape(entry[1]['id'])}(?![\w:-])", message)
     ]
     if len(identified) == 1:
         return identified[0]

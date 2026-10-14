@@ -363,6 +363,55 @@ async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reject", ["first", "every"])
+async def test_openai_rejection_naming_its_item_corrects_a_multi_turn_history(reject):
+    # OpenAI names the rejected item unquoted with ``param`` null (#2080). With two
+    # reasoning turns the item could not be told apart, so the 400 reached the client.
+    history: list[dict[str, Any]] = []
+    for turn in ("one", "two"):
+        events = json.loads(
+            json.dumps(_events_for("responses"))
+            .replace("rs_a:rs_b", f"rs_{turn}")
+            .replace("Find 17.", f"Thought {turn}.")
+        )
+        history.append({"role": "user", "content": f"question {turn}"})
+        async with _harness("responses", lambda _bodies, e=events: (200, e)) as (
+            send,
+            _,
+            _,
+        ):
+            history += await _saved_reply(send("messages", history), "messages")
+    history.append({"role": "user", "content": "continue"})
+
+    def responder(bodies):
+        opaque = [
+            item
+            for item in bodies[-1]["input"]
+            if item.get("type") == "reasoning" and item.get("encrypted_content")
+        ]
+        if opaque and (len(bodies) == 1 or reject == "every"):
+            return 400, {
+                "message": f"The encrypted content for item {opaque[0]['id']} could not "
+                "be verified. Reason: Encrypted content organization_id did not "
+                "match the target organization.",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": "invalid_encrypted_content",
+            }
+        return 200, _events_for("responses")
+
+    async with _harness("responses", responder) as (send, bodies, _):
+        await _saved_reply(send("messages", history), "messages")
+    first, second = [
+        item for item in bodies[0]["input"] if item.get("type") == "reasoning"
+    ]
+    assert len(bodies) == (2 if reject == "first" else 3)
+    assert {"role": "assistant", "content": "Thought one."} in bodies[-1]["input"]
+    assert (second in bodies[-1]["input"]) is (reject == "first")
+    assert first not in bodies[-1]["input"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["responses", "messages", "chat"])
 async def test_explicit_legacy_rejection_corrects_only_history_before_commit(protocol):
     def responder(bodies):
