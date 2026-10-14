@@ -148,7 +148,7 @@ export default async function freeClaudeCode(pi: ExtensionAPI): Promise<void> {
 	const models = await fetchFccModels(baseUrl, apiKey);
 
 	pi.registerProvider("free-claude-code", {
-		name: "Free Claude Code",
+		name: "TEOS Free AI",
 		baseUrl,
 		apiKey: `$${API_KEY_ENV}`,
 		authHeader: true,

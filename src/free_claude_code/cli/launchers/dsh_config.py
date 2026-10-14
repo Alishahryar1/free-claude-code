@@ -44,7 +44,7 @@ def build_dsh_launch_config(
 
     stream_idle_timeout_ms = _stream_idle_timeout_ms(provider_progress_timeout)
     provider: JsonObject = {
-        "displayName": "Free Claude Code",
+        "displayName": "TEOS Free AI",
         "apiKeyEnv": DSH_API_KEY_ENV,
         "api": "openai-responses",
         "baseURL": proxy_v1_url(proxy_root_url),

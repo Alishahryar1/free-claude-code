@@ -109,7 +109,7 @@ async def test_factory_open_preserves_setup_and_catalog_until_process_exit(
         )
         assert config["model"] == no_thinking_gateway_model_id(selection.model)
         assert config["model_providers"]["fcc"] == {
-            "name": "Free Claude Code",
+            "name": "TEOS Free AI",
             "base_url": "http://127.0.0.1:8182/v1",
             "auth": {"command": "fcc-codex", "args": ["--print-proxy-auth-token"]},
             "wire_api": "responses",

@@ -75,7 +75,7 @@ def test_cline_config_uses_responses_and_only_known_metadata() -> None:
         "providers": {
             "openai-native": {
                 "provider": {
-                    "name": "Free Claude Code",
+                    "name": "TEOS Free AI",
                     "baseUrl": "http://127.0.0.1:9191/v1",
                     "defaultModelId": "nvidia_nim/vendor/model",
                     "protocol": "openai-responses",

@@ -70,7 +70,7 @@ def test_fcc_server_reports_version_without_side_effects(
     with patch.object(entrypoints, "package_version", return_value="9.8.7"):
         entrypoints.serve(argv)
 
-    assert capsys.readouterr() == ("free-claude-code 9.8.7\n", "")
+    assert capsys.readouterr() == ("TEOS Free AI 9.8.7\n", "")
 
 
 def test_version_entrypoint_does_not_import_command_runtime() -> None:

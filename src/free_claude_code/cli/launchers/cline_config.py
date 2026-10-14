@@ -73,7 +73,7 @@ def build_cline_config(
             "providers": {
                 CLINE_PROVIDER_ID: {
                     "provider": {
-                        "name": "Free Claude Code",
+                        "name": "TEOS Free AI",
                         "baseUrl": proxy_v1_url(proxy_root_url),
                         "defaultModelId": default_model_id,
                         "protocol": "openai-responses",

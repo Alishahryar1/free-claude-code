@@ -30,7 +30,7 @@ def _configure(
     extension_path = pi_extension_path()
     if not extension_path.is_file():
         raise ValueError(
-            "Free Claude Code's bundled Pi extension is missing. Reinstall FCC."
+            "TEOS Free AI's bundled Pi extension is missing. Reinstall TEOS Free AI."
         )
     return PreparedLaunch(
         [

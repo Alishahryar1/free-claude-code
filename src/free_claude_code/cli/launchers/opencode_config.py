@@ -34,7 +34,7 @@ def build_opencode_config(
         model.wire_slug: _model_config(model) for model in models
     }
     provider_config: JsonObject = {
-        "name": "Free Claude Code",
+        "name": "TEOS Free AI",
         "package": "@opencode/ai/providers/openai/responses",
         "settings": {
             "baseURL": proxy_v1_url(proxy_root_url),

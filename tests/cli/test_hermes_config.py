@@ -56,7 +56,7 @@ def test_hermes_config_pins_responses_catalog_and_fallbacks() -> None:
     )
     assert managed.config["providers"] == {
         "fcc-a1b2c3": {
-            "name": "Free Claude Code",
+            "name": "TEOS Free AI",
             "api": "http://127.0.0.1:9191/v1",
             "key_env": "FCC_HERMES_A1B2C3",
             "extra_headers": {

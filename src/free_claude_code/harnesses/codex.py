@@ -39,7 +39,7 @@ def codex_config_values(
 
     values: dict[str, str | list[str]] = {
         "model_provider": "fcc",
-        "model_providers.fcc.name": "Free Claude Code",
+        "model_providers.fcc.name": "TEOS Free AI",
         "model_providers.fcc.base_url": proxy_v1_url(api_url),
         "model_providers.fcc.auth.command": "fcc-codex",
         "model_providers.fcc.auth.args": [PRINT_PROXY_AUTH_TOKEN_FLAG],
