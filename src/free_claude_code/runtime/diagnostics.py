@@ -313,7 +313,7 @@ def model_discovery_report(settings: Settings) -> dict[str, Any]:
         )
         response.raise_for_status()
         payload = response.json()
-    except httpx.HTTPError, ValueError:
+    except httpx.HTTPError, httpx.InvalidURL, ValueError:
         return unavailable
     if not isinstance(payload, dict) or payload.get("status") != "running":
         return unavailable

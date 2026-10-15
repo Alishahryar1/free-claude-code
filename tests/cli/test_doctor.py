@@ -156,10 +156,19 @@ def test_discovery_status_failure_does_not_expose_exception_or_contact_remote_ho
     )
 
 
-@pytest.mark.parametrize("host", ["http://127.0.0.1", "[::1"])
+@pytest.mark.parametrize(
+    "host", ["http://127.0.0.1", "[::1", "[::1]:8082", "local\nhost"]
+)
 def test_malformed_host_still_produces_a_doctor_report(monkeypatch, host):
     ManagedConfigStore().initialize({})
     monkeypatch.setenv("HOST", host)
+
+    # Exercise real URL validation without connecting to a user-owned server.
+    def validate_url(url, **kwargs):
+        httpx.Request("GET", url)
+        raise httpx.ConnectError("unavailable")
+
+    monkeypatch.setattr(httpx, "get", validate_url)
     monkeypatch.setattr(diagnostics, "harness_report", lambda: {})
     monkeypatch.setattr(diagnostics, "integration_report", lambda settings: {})
     report = diagnostics.collect_report()
