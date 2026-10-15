@@ -253,6 +253,9 @@ async def test_unsupported_shared_credentials_never_send_http(monkeypatch):
     assert all(
         check.status == validation.CredentialStatus.UNVERIFIED for check in result
     )
+    nim = next(check for check in result if check.key == "NVIDIA_NIM_API_KEY")
+    assert nim.message == "Automatic verification is unavailable for NVIDIA NIM."
+    assert "saved" not in nim.message.lower()
 
 
 @pytest.mark.asyncio

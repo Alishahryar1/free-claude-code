@@ -292,12 +292,16 @@ class ProviderRuntimeManager:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            message = _provider_query_failure_reason(exc)
             logger.warning(
                 "Provider model discovery skipped: provider={} reason={}",
                 provider_id,
-                _provider_query_failure_reason(exc, generation.settings),
+                message,
             )
-            result = ProviderModelRefreshResult(failed_provider_ids=(provider_id,))
+            result = ProviderModelRefreshResult(
+                failed_provider_ids=(provider_id,),
+                failure_messages={provider_id: message},
+            )
         else:
             self._cache_result(generation, provider_id, infos)
             logger.info(
@@ -368,6 +372,12 @@ class ProviderRuntimeManager:
                 if isinstance(result, ProviderModelRefreshResult)
                 for provider in result.failed_provider_ids
             ),
+            failure_messages={
+                provider: message
+                for result in results
+                if isinstance(result, ProviderModelRefreshResult)
+                for provider, message in result.failure_messages.items()
+            },
         )
 
     def start_model_list_refresh(self) -> None:
@@ -464,7 +474,10 @@ class ProviderRuntimeManager:
     def catalog_status(self) -> JsonObject:
         generation = self._current
         providers: JsonObject = {}
-        for provider_id in generation.initial_ids:
+        errors: JsonObject = {}
+        for provider_id in dict.fromkeys(
+            (*generation.initial_ids, *generation.catalog_tasks)
+        ):
             task = generation.catalog_tasks.get(provider_id)
             if task is None or not task.done():
                 state = "starting"
@@ -472,6 +485,8 @@ class ProviderRuntimeManager:
                 state = "failed"
             else:
                 state = "failed" if task.result().failed_provider_ids else "ready"
+                if message := task.result().failure_messages.get(provider_id):
+                    errors[provider_id] = message
             providers[provider_id] = state
         return {
             "generation_id": generation.generation_id,
@@ -479,6 +494,7 @@ class ProviderRuntimeManager:
             "catalog": "ready" if generation.initial_complete else "starting",
             "catalog_file": generation.file_state,
             "providers": providers,
+            "provider_errors": errors,
         }
 
     async def connected_provider_changed(

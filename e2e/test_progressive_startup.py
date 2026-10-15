@@ -1,7 +1,45 @@
+import pytest
 from playwright.sync_api import expect
 
 from e2e.provider_support import api_key_input, close_provider, open_provider
 from e2e.test_code_sessions import create_session
+
+
+@pytest.mark.parametrize(
+    "admin_base_url", [{"NVIDIA_NIM_API_KEY": "e2e-nim-key"}], indirect=True
+)
+def test_discovery_error_is_visible_in_provider_card_and_refresh_result(
+    page, admin_base_url
+):
+    proxy_message = "The network proxy rejected or failed the connection. Check your proxy settings."
+    http_message = "The model-list request returned HTTP 403."
+
+    def status(route):
+        data = route.fetch().json()
+        data["startup"]["providers"]["nvidia_nim"] = "failed"
+        data["startup"]["provider_errors"] = {"nvidia_nim": proxy_message}
+        route.fulfill(json=data)
+
+    page.route("**/admin/api/status", status)
+    page.route(
+        "**/admin/api/providers/nvidia_nim/test",
+        lambda route: route.fulfill(
+            json={"provider_id": "nvidia_nim", "ok": False, "message": http_message}
+        ),
+    )
+    page.goto(f"{admin_base_url}/admin")
+    card = page.locator('[data-provider-check-result="nvidia_nim"]')
+    expect(card).to_have_text(proxy_message)
+    dialog = open_provider(page, "nvidia_nim")
+    expect(dialog.locator("#providerDialogCheck")).to_have_text(proxy_message)
+    expect(
+        dialog.get_by_text(
+            "Optional network proxy. Leave blank unless you use one", exact=True
+        )
+    ).to_be_visible()
+    dialog.get_by_role("button", name="Refresh models", exact=True).click()
+    expect(dialog.locator("#providerDialogCheck")).to_contain_text(http_message)
+    expect(card).to_contain_text(http_message)
 
 
 def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url):

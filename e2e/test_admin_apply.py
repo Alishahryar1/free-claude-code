@@ -147,7 +147,9 @@ def test_unverified_warning_survives_apply(
     open_provider(page, "nvidia_nim")
     api_key_input(page, "NVIDIA_NIM_API_KEY").fill("new-key")
     page.get_by_role("button", name="Save", exact=True).click()
-    expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
+    expect(page.locator("#messageArea")).to_contain_text(
+        "Key saved. Verification unavailable."
+    )
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     expect(page.locator('[data-provider="nvidia_nim"]')).to_be_enabled()
     expect(page.locator("#applyButton")).to_have_text("Apply")
