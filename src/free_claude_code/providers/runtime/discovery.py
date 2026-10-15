@@ -43,15 +43,20 @@ def _provider_query_failure_reason(exc: BaseException) -> str:
     """Classify the transport cause without copying upstream text or URLs."""
     import openai
 
+    from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
+
     chain: list[BaseException] = []
     seen: set[int] = set()
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         chain.append(current)
-        current = current.__cause__ or (
-            None if current.__suppress_context__ else current.__context__
-        )
+        if isinstance(current, ProviderRecoveryExhausted):
+            current = current.last_error
+        else:
+            current = current.__cause__ or (
+                None if current.__suppress_context__ else current.__context__
+            )
     # The SDK often wraps a more useful transport or OS error.
     for error in reversed(chain):
         if isinstance(error, (httpx.ProxyError, httpx2.ProxyError)):

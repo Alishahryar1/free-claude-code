@@ -321,13 +321,13 @@ async def check_credentials(
             submission.key,
             CredentialStatus.UNVERIFIED,
             "Automatic verification is unavailable for "
-            + next(
-                (
+            + (
+                " and ".join(
                     descriptor.display_name
                     for descriptor in PROVIDER_CATALOG.values()
                     if descriptor.credential_env == submission.key
-                ),
-                "this provider",
+                )
+                or "this provider"
             )
             + ".",
             index,

@@ -301,10 +301,10 @@ def harness_report() -> dict[str, Any]:
 def model_discovery_report(settings: Settings) -> dict[str, Any]:
     """Read a safe snapshot from an existing local server without refreshing it."""
     unavailable = {"status": "unavailable", "source": "running_server"}
-    url = local_proxy_root_url(settings)
-    if urlsplit(url).hostname not in {"127.0.0.1", "localhost", "::1"}:
-        return unavailable
     try:
+        url = local_proxy_root_url(settings)
+        if urlsplit(url).hostname not in {"127.0.0.1", "localhost", "::1"}:
+            return unavailable
         response = httpx.get(
             f"{url}/admin/api/status",
             timeout=2.0,

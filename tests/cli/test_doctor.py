@@ -156,6 +156,19 @@ def test_discovery_status_failure_does_not_expose_exception_or_contact_remote_ho
     )
 
 
+@pytest.mark.parametrize("host", ["http://127.0.0.1", "[::1"])
+def test_malformed_host_still_produces_a_doctor_report(monkeypatch, host):
+    ManagedConfigStore().initialize({})
+    monkeypatch.setenv("HOST", host)
+    monkeypatch.setattr(diagnostics, "harness_report", lambda: {})
+    monkeypatch.setattr(diagnostics, "integration_report", lambda settings: {})
+    report = diagnostics.collect_report()
+    assert report["configuration"]["status"] == "available"
+    assert report["runtime"]["host"] == host
+    assert report["model_discovery"]["status"] == "unavailable"
+    assert json.dumps(report)
+
+
 def test_missing_configuration_still_produces_report(monkeypatch):
     monkeypatch.setattr(diagnostics, "harness_report", lambda: {})
     report = diagnostics.collect_report()

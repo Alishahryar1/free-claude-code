@@ -256,6 +256,13 @@ async def test_unsupported_shared_credentials_never_send_http(monkeypatch):
     nim = next(check for check in result if check.key == "NVIDIA_NIM_API_KEY")
     assert nim.message == "Automatic verification is unavailable for NVIDIA NIM."
     assert "saved" not in nim.message.lower()
+    messages = {check.key: check.message for check in result}
+    assert messages["OPENCODE_API_KEY"] == (
+        "Automatic verification is unavailable for OpenCode Zen and OpenCode Go."
+    )
+    assert messages["ZAI_API_KEY"] == (
+        "Automatic verification is unavailable for Z.ai Coding Plan and Z.ai API."
+    )
 
 
 @pytest.mark.asyncio

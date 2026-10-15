@@ -2,6 +2,7 @@
 
 import socket
 import ssl
+from unittest.mock import AsyncMock
 
 import httpx
 import httpx2
@@ -10,6 +11,11 @@ import pytest
 
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.providers.admission import (
+    ProviderAdmissionController,
+    ProviderOperationKind,
+)
+from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.runtime.discovery import _provider_query_failure_reason
 
@@ -75,3 +81,41 @@ def test_exception_context_and_cycles_are_safe():
     message = _provider_query_failure_reason(error)
     assert "DNS" not in message
     assert "secret-canary" not in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error", [httpx2.ReadTimeout("secret-canary"), httpx2.ConnectError("secret-canary")]
+)
+async def test_real_admission_cooldown_retains_discovery_failure(error):
+    controller = ProviderAdmissionController(
+        provider_name="TEST",
+        max_attempts=1,
+        base_delay=30,
+        max_delay=30,
+        jitter=0,
+    )
+    fetch = AsyncMock(side_effect=error)
+    with pytest.raises(type(error)):
+        await controller.start_execution().run_call(
+            fetch, operation_kind=ProviderOperationKind.MODEL_DISCOVERY
+        )
+    with pytest.raises(ProviderRecoveryExhausted) as cooldown:
+        await controller.start_execution().run_call(
+            fetch, operation_kind=ProviderOperationKind.MODEL_DISCOVERY
+        )
+    fetch.assert_awaited_once()
+    assert cooldown.value.__cause__ is None
+    assert cooldown.value.__context__ is None
+    assert _provider_query_failure_reason(
+        cooldown.value
+    ) == _provider_query_failure_reason(error)
+
+
+def test_recovery_wrapper_cycles_do_not_hang_classification():
+    wrapper = ProviderRecoveryExhausted(RuntimeError("secret-canary"))
+    wrapper.last_error = wrapper
+    assert (
+        _provider_query_failure_reason(wrapper)
+        == "Could not load models. Check the provider's settings and retry."
+    )
