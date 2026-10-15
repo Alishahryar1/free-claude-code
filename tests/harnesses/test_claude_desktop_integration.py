@@ -375,14 +375,14 @@ def test_other_profiles_and_unknown_settings_are_preserved(tmp_path):
     config = read(profile(tmp_path))
     config["keep"] = True
     config["inferenceCustomHeaders"]["X-Other"] = "value"
-    config["inferenceModels"] = ["old-model"]
+    config["inferenceModels"] = ["pinned-model"]
     write(profile(tmp_path), config)
     desktop.refresh_connected(
         tmp_path, URL, TOKEN, disconnect_path=claude_desktop_disconnect_path()
     )
     assert read(profile(tmp_path))["keep"] is True
     assert read(profile(tmp_path))["inferenceCustomHeaders"]["X-Other"] == "value"
-    assert "inferenceModels" not in read(profile(tmp_path))
+    assert read(profile(tmp_path))["inferenceModels"] == ["pinned-model"]
     metadata = read(meta(tmp_path))
     metadata["appliedId"] = other
     metadata["hybridPointer"] = {"bootstrapUrl": "https://example.test"}
@@ -398,6 +398,22 @@ def test_other_profiles_and_unknown_settings_are_preserved(tmp_path):
     assert read(meta(tmp_path))["extra"] == 1
     assert read(mode(tmp_path)) == {"deploymentMode": "3p", "keep": "yes"}
     assert other_path.read_bytes() == before
+
+
+def test_model_list_override_survives_refresh(tmp_path):
+    record = claude_desktop_disconnect_path()
+    desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
+    config = read(profile(tmp_path))
+    config["inferenceModels"] = ["gateway/fast", "gateway/cheap"]
+    write(profile(tmp_path), config)
+    before = profile(tmp_path).read_bytes()
+    assert not desktop.refresh_connected(tmp_path, URL, TOKEN, disconnect_path=record)
+    assert read(profile(tmp_path))["inferenceModels"] == [
+        "gateway/fast",
+        "gateway/cheap",
+    ]
+    assert profile(tmp_path).read_bytes() == before
+    assert desktop.configure(tmp_path, URL, TOKEN, disconnect_path=record)["connected"]
 
 
 @pytest.mark.parametrize("failed_write", [1, 2, 3, 4])
