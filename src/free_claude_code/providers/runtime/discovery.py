@@ -54,9 +54,9 @@ def _provider_query_failure_reason(exc: BaseException) -> str:
         if isinstance(current, ProviderRecoveryExhausted):
             current = current.last_error
         else:
-            current = current.__cause__ or (
-                None if current.__suppress_context__ else current.__context__
-            )
+            # HTTPCore hides transport context with `raise exc from None`.
+            # It still carries the DNS/TLS cause needed for this classification.
+            current = current.__cause__ or current.__context__
     # The SDK often wraps a more useful transport or OS error.
     for error in reversed(chain):
         if isinstance(error, (httpx.ProxyError, httpx2.ProxyError)):

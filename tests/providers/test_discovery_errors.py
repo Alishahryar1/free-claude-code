@@ -4,6 +4,8 @@ import socket
 import ssl
 from unittest.mock import AsyncMock
 
+import anyio
+import anyio.streams.tls
 import httpx
 import httpx2
 import openai
@@ -61,6 +63,36 @@ def test_sdk_status_error_preserves_status_without_body():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure, expected", [("dns", "DNS"), ("certificate", "certificate")]
+)
+async def test_sdk_connection_pool_preserves_os_failure_diagnostics(
+    monkeypatch, failure, expected
+):
+    stream = AsyncMock(spec=anyio.abc.ByteStream)
+    connect = AsyncMock(return_value=stream)
+    if failure == "dns":
+        connect.side_effect = socket.gaierror(-2, "secret-canary")
+    monkeypatch.setattr(anyio, "connect_tcp", connect)
+    monkeypatch.setattr(
+        anyio.streams.tls.TLSStream,
+        "wrap",
+        AsyncMock(side_effect=ssl.SSLCertVerificationError(1, "secret-canary")),
+    )
+    async with openai.AsyncOpenAI(
+        api_key="secret-canary",
+        base_url="https://provider.invalid/v1",
+        max_retries=0,
+        http_client=httpx2.AsyncClient(trust_env=False),
+    ) as client:
+        with pytest.raises(openai.APIConnectionError) as caught:
+            await client.models.list()
+    message = _provider_query_failure_reason(caught.value)
+    assert expected in message
+    assert "secret-canary" not in message
+
+
 @pytest.mark.parametrize("client", [httpx, httpx2])
 def test_http_status_is_preserved_without_url_body_or_exception_message(client):
     request = client.Request("GET", "https://user:secret-canary@example.test/models")
@@ -79,7 +111,7 @@ def test_exception_context_and_cycles_are_safe():
     assert "DNS" in _provider_query_failure_reason(error)
     error.__suppress_context__ = True
     message = _provider_query_failure_reason(error)
-    assert "DNS" not in message
+    assert "DNS" in message
     assert "secret-canary" not in message
 
 
