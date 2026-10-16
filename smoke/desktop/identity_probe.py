@@ -5,10 +5,9 @@ import os
 import subprocess
 import sys
 import threading
+from importlib import import_module
 from pathlib import Path
 
-import AppKit
-import Foundation
 from PIL import Image
 from pystray import Icon, Menu, MenuItem
 
@@ -17,6 +16,8 @@ def main():
     if sys.argv[1:2] == ["--export-icon"]:
         Image.new("RGBA", (512, 512), "red").save(sys.argv[2])
         return
+    AppKit = import_module("AppKit")
+    Foundation = import_module("Foundation")
     output = Path(os.environ["FCC_MACOS_PROBE_OUTPUT"])
     bundle = Foundation.NSBundle.mainBundle()
     report = {

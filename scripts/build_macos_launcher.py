@@ -47,7 +47,7 @@ def build() -> None:
             check=True,
         )
         subprocess.run(
-            ["/usr/bin/lipo", "-verify_arch", architecture, str(output)], check=True
+            ["/usr/bin/lipo", str(output), "-verify_arch", architecture], check=True
         )
         subprocess.run(["/usr/bin/otool", "-L", str(output)], check=True)
         subprocess.run(["/usr/bin/otool", "-l", str(output)], check=True)
