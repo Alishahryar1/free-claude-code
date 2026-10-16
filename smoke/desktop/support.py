@@ -41,15 +41,28 @@ def capture(output):
     )
 
 
+def bundle_pids(app):
+    rows = subprocess.check_output(["/bin/ps", "-axo", "pid=,comm="], text=True)
+    result = set()
+    for row in rows.splitlines():
+        pid, _, executable = row.strip().partition(" ")
+        if executable.strip() == str(app / "Contents/MacOS/fcc-desktop"):
+            result.add(int(pid))
+    return result
+
+
 @contextmanager
-def launched(app, output, env, *, args=()):
+def launched(app, output, env, *, args=(), wait=True):
+    existing = bundle_pids(app)
     for path in (
         output,
         output.with_suffix(".captured"),
         output.with_suffix(".command"),
     ):
         path.unlink(missing_ok=True)
-    command = ["/usr/bin/open", "-n", "-W"]
+    command = ["/usr/bin/open", "-n"]
+    if wait:
+        command.append("-W")
     for key, value in (env | {"FCC_MACOS_PROBE_OUTPUT": str(output)}).items():
         command.extend(["--env", f"{key}={value}"])
     command.extend(["--stderr", str(output.with_suffix(".stderr.log")), str(app)])
@@ -62,16 +75,10 @@ def launched(app, output, env, *, args=()):
             yield process
         finally:
             if process.poll() is None:
-                # Match the executable in this test-owned bundle, including paths with spaces.
-                rows = subprocess.check_output(
-                    ["/bin/ps", "-axo", "pid=,comm="], text=True
-                )
-                for row in rows.splitlines():
-                    pid, _, executable = row.strip().partition(" ")
-                    if executable.strip() == str(app / "Contents/MacOS/fcc-desktop"):
-                        with suppress(ProcessLookupError):
-                            if sys.platform == "darwin":
-                                os.kill(int(pid), signal.SIGKILL)
+                for pid in bundle_pids(app) - existing:
+                    with suppress(ProcessLookupError):
+                        if sys.platform == "darwin":
+                            os.kill(pid, signal.SIGKILL)
                 try:
                     process.wait(timeout=10)
                 except subprocess.TimeoutExpired:

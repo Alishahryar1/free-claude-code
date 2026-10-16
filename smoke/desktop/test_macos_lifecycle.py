@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from free_claude_code.cli.commands import ServerStatus
-from smoke.desktop.support import capture, launched, wait_report
+from smoke.desktop.support import bundle_pids, capture, launched, wait_report
 
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS")
@@ -80,14 +80,38 @@ def test_installed_native_app_lifecycle(installed_desktop):
             )
             assert str(report["pid"]) in guard.stdout + guard.stderr
             assert (guard.returncode != 0) == (script == "install.sh")
-        duplicate = installed["output"] / "duplicate.json"
+        finder_duplicate = installed["output"] / "finder-duplicate.json"
         with launched(
-            installed["app"], duplicate, env, args=("--auto-started",)
+            installed["app"],
+            finder_duplicate,
+            env,
+            args=("--auto-started",),
+            wait=False,
         ) as second:
-            assert second.wait(timeout=30) == 0
+            assert second.wait(timeout=10) == 0
+        duplicate = installed["output"] / "duplicate.json"
+        with (
+            duplicate.with_suffix(".stderr.log").open("w") as errors,
+            subprocess.Popen(
+                [
+                    str(installed["app"] / "Contents/MacOS/fcc-desktop"),
+                    "--auto-started",
+                ],
+                env=env | {"FCC_MACOS_PROBE_OUTPUT": str(duplicate)},
+                stdout=subprocess.DEVNULL,
+                stderr=errors,
+            ) as second,
+        ):
+            try:
+                assert second.wait(timeout=30) == 0
+            finally:
+                if second.poll() is None:
+                    second.kill()
+                    second.wait()
         duplicate_report = json.loads(duplicate.read_text())
         assert duplicate_report["pid"] != report["pid"]
         assert duplicate_report["loop_finished"]
+        assert bundle_pids(installed["app"]) == {report["pid"]}
         assert wait_status(port)["instance_id"] == initial["instance_id"]
 
         command(output, "subprocess")
