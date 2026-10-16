@@ -1,0 +1,26 @@
+GESTION SCOLAIRE — DÉMARRAGE WINDOWS
+
+1. (Facultatif) Pour installer l'application dans votre profil Windows et
+   créer des raccourcis sur le Bureau et dans le menu Démarrer, ouvrez
+   PowerShell dans ce dossier et lancez :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Installer-GestionScolaire.ps1
+2. Vous pouvez aussi utiliser le paquet sans installation en double-cliquant
+   sur GestionScolaire.exe.
+3. Gardez la fenêtre noire ouverte pendant l'utilisation.
+4. L'application s'ouvre dans votre navigateur à http://127.0.0.1:8765.
+5. Première connexion : Moussa / 79408093Ms@
+6. Remplacez le mot de passe dans Paramètres après la première connexion.
+7. Fermez la fenêtre noire pour arrêter l'application.
+
+Ne copiez pas seulement le fichier EXE : laissez-le dans ce dossier avec
+le sous-dossier _internal et les autres fichiers générés.
+
+Les données restent sur ce PC dans :
+%LOCALAPPDATA%\FreeClaudeCode\
+
+Les sauvegardes automatiques se trouvent dans le sous-dossier
+school-management-backups. Protégez ces fichiers, car ils contiennent des
+données personnelles d'élèves.
+
+L'icône Gestion scolaire est intégrée dans l'EXE Windows et les raccourcis.
+Ce paquet n'envoie pas les données vers un service cloud.

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#173d53" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <title>Gestion scolaire</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!--
+      THESIS: A school's daily ledger keeps student, class, and money records connected.
+      OWN-WORLD: Ink-blue register spine, chalk-white working sheets, and signal-orange marks.
+      STORY: Staff see today's school at a glance, then move directly into the relevant register.
+      FIRST VIEWPORT: Fixed school-name rail, dated dashboard heading, one cashbook equation from receipts
+      through expenses to the operating balance, with student credits held as a separate obligation.
+      FORM: Daily register, fourth grounded composition; the financial relationship leads and examples are labeled synthetic.
+    -->
+    <div id="loginScreen" class="login-screen">
+      <section class="login-panel" aria-labelledby="loginTitle">
+        <div class="login-brand">
+          <div class="brand-emblem" aria-hidden="true">GS</div>
+          <div>
+            <strong id="loginSchoolName">Groupe scolaire Les Flamboyants</strong>
+            <span>Registre de l’établissement</span>
+          </div>
+        </div>
+        <div class="login-copy">
+          <p class="section-kicker">ESPACE ADMINISTRATIF</p>
+          <h1 id="loginTitle">La journée<br />commence ici.</h1>
+          <p>Retrouvez en un seul endroit la vie de l’établissement, les élèves et les comptes.</p>
+        </div>
+        <form id="loginForm" class="login-form">
+          <label for="loginUsername">Nom d’utilisateur</label>
+          <input id="loginUsername" name="username" autocomplete="username" required />
+          <label for="loginPassword">Mot de passe</label>
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+          <p id="loginError" class="form-error" role="alert" hidden></p>
+          <button class="button button-primary login-submit" type="submit">Se connecter <span aria-hidden="true">→</span></button>
+          <p class="login-help">Première connexion : <strong>Moussa</strong></p>
+        </form>
+        <p class="login-footnote">Application scolaire · Les comptes et données sont protégés sur cet appareil</p>
+      </section>
+      <aside class="login-scene" aria-label="Présentation de l’application">
+        <div class="scene-topline"><span>ANNÉE SCOLAIRE</span><strong>2025 — 2026</strong></div>
+        <div class="scene-main">
+          <p class="scene-small">UNE ÉCOLE, BIEN SUIVIE</p>
+          <h2>Les bonnes<br />informations.<br /><span>Au bon moment.</span></h2>
+          <div class="scene-annotation"><span class="scene-line"></span><span>Inscriptions · Paiements · Résultats</span></div>
+        </div>
+        <div class="scene-bottom"><span>GESTION SCOLAIRE</span><span>01 / 01</span></div>
+      </aside>
+    </div>
+
+    <div id="appShell" class="app-shell" hidden>
+      <aside class="sidebar" id="sidebar">
+        <a class="brand-lockup" href="#dashboard" aria-label="Accueil Gestion scolaire">
+          <div class="brand-emblem" id="sidebarLogo">GS</div>
+          <div class="brand-copy"><strong id="sidebarSchoolName">Les Flamboyants</strong><span>GESTION SCOLAIRE</span></div>
+        </a>
+        <div class="nav-caption">ESPACE DE TRAVAIL</div>
+        <nav class="main-nav" aria-label="Navigation principale">
+          <button class="nav-item active" data-page="dashboard"><span class="nav-icon">⌂</span>Tableau de bord</button>
+          <p class="nav-caption nav-caption-spaced">SCOLARITÉ</p>
+          <button class="nav-item" data-page="eleves"><span class="nav-icon">♙</span>Élèves <span class="nav-count" id="studentCountNav">0</span></button>
+          <button class="nav-item" data-page="classes"><span class="nav-icon">▦</span>Classes</button>
+          <button class="nav-item" data-page="presences"><span class="nav-icon">✓</span>Présences</button>
+          <button class="nav-item" data-page="matieres"><span class="nav-icon">∑</span>Matières & coefficients</button>
+          <button class="nav-item" data-page="dossiers"><span class="nav-icon">▣</span>Dossiers élèves</button>
+          <button class="nav-item" data-page="enseignants"><span class="nav-icon">♧</span>Enseignants & contrats</button>
+          <button class="nav-item" data-page="discipline"><span class="nav-icon">✓</span>Conduite & incidents</button>
+          <button class="nav-item" data-page="bulletins"><span class="nav-icon">▤</span>Notes & bulletins</button>
+          <button class="nav-item" data-page="cartes"><span class="nav-icon">▤</span>Cartes scolaires</button>
+          <p class="nav-caption nav-caption-spaced">FINANCES</p>
+          <button class="nav-item" data-page="paiements"><span class="nav-icon">↙</span>Paiements</button>
+          <button class="nav-item" data-page="depenses"><span class="nav-icon">↗</span>Dépenses</button>
+          <button class="nav-item" data-page="comptabilite"><span class="nav-icon">≋</span>Comptabilité & rapports</button>
+          <p class="nav-caption nav-caption-spaced">ADMINISTRATION</p>
+          <button class="nav-item" data-page="comptes"><span class="nav-icon">♧</span>Comptes & accès</button>
+          <button class="nav-item" data-page="audit"><span class="nav-icon">◷</span>Journal d’audit</button>
+          <button class="nav-item" data-page="reglages"><span class="nav-icon">⚙</span>Établissement</button>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="demo-note"><span class="demo-dot"></span><span id="runtimeModeLabel">Mode démonstration<br /><small>Données propres à cet appareil</small></span></div>
+          <button id="logoutButton" class="logout-button"><span aria-hidden="true">↪</span> Se déconnecter</button>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <button id="menuToggle" class="menu-toggle" aria-label="Ouvrir le menu">☰</button>
+          <div class="breadcrumb"><span id="breadcrumbSchool">Les Flamboyants</span><span aria-hidden="true">/</span><strong id="breadcrumbPage">Vue d’ensemble</strong></div>
+          <div class="topbar-actions"><span class="school-year">2025 — 2026</span><span class="topbar-divider"></span><div class="user-chip"><span class="avatar" id="userAvatar">M</span><span><strong id="currentUserName">Moussa</strong><small id="currentUserRole">Administrateur</small></span></div></div>
+        </header>
+        <div id="pageContent" class="page-content" tabindex="-1"></div>
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+      </main>
+      <div id="sidebarScrim" class="sidebar-scrim"></div>
+    </div>
+
+    <dialog id="recordDialog" class="record-dialog" aria-labelledby="dialogTitle">
+      <form id="recordForm" method="dialog">
+        <div class="dialog-heading"><div><p class="section-kicker" id="dialogKicker">NOUVEAU DOSSIER</p><h2 id="dialogTitle">Ajouter un élément</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Fermer">×</button></div>
+        <div id="dialogFields" class="dialog-fields"></div>
+        <p id="dialogError" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions"><button type="button" class="button button-secondary" data-close-dialog>Annuler</button><button type="submit" class="button button-primary">Enregistrer</button></div>
+      </form>
+    </dialog>
+    <script src="app.js"></script>
+  </body>
+</html>

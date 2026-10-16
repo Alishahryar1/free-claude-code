@@ -3,9 +3,11 @@ __pycache__
 .cursor
 .pytest_cache
 .ruff_cache
+.impeccable
 .serena
 .venv
 agent_workspace
+/dist/
 .env
 /logs/
 server.log
