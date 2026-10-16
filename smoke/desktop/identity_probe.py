@@ -105,6 +105,8 @@ def main():
         icon.run()
     finally:
         timer.invalidate()
+        report["loop_finished"] = True
+        write_report(output, report)
 
 
 if __name__ == "__main__":

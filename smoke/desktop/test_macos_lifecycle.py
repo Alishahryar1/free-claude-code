@@ -132,6 +132,10 @@ def test_installed_native_app_lifecycle(installed_desktop):
         assert report["actions"] == ["Restart Server", "Quit"]
         assert report["loop_finished"]
     with socket.socket() as freed:
+        assert freed.connect_ex(("127.0.0.1", port)) != 0
+    assert bundle_pids(installed["app"]) == set()
+    with socket.socket() as freed:
+        freed.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         freed.bind(("127.0.0.1", port))
     # Locks must be available to a fresh interpreter after Quit.
     subprocess.run(

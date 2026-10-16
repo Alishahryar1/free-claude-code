@@ -7,6 +7,22 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager, suppress
+from pathlib import Path
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def wait_exit(pid):
+    deadline = time.monotonic() + 10
+    while pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not pid_alive(pid), f"Test process {pid} did not exit"
 
 
 def wait_report(output, predicate, process, timeout=30):
@@ -18,7 +34,10 @@ def wait_report(output, predicate, process, timeout=30):
             assert "error" not in report, report.get("error")
             if predicate(report):
                 return report
-        assert process.poll() is None, f"Launcher exited before observation: {report}"
+        # Launch Services can stop tracking the old shell wrapper after exec.
+        assert process.poll() is None or (
+            report.get("pid") and pid_alive(report["pid"])
+        ), f"Launcher exited before observation: {report}"
         time.sleep(0.1)
     raise AssertionError(f"Native observation timed out: {report}")
 
@@ -41,19 +60,26 @@ def capture(output):
     )
 
 
-def bundle_pids(app):
+def process_paths():
     rows = subprocess.check_output(["/bin/ps", "-axo", "pid=,comm="], text=True)
-    result = set()
+    result = {}
     for row in rows.splitlines():
         pid, _, executable = row.strip().partition(" ")
-        if executable.strip() == str(app / "Contents/MacOS/fcc-desktop"):
-            result.add(int(pid))
+        result[int(pid)] = executable.strip()
     return result
+
+
+def bundle_pids(app):
+    return {
+        pid
+        for pid, executable in process_paths().items()
+        if executable == str(app / "Contents/MacOS/fcc-desktop")
+    }
 
 
 @contextmanager
 def launched(app, output, env, *, args=(), wait=True):
-    existing = bundle_pids(app)
+    existing = set(process_paths())
     for path in (
         output,
         output.with_suffix(".captured"),
@@ -74,8 +100,19 @@ def launched(app, output, env, *, args=(), wait=True):
         try:
             yield process
         finally:
-            if process.poll() is None:
-                for pid in bundle_pids(app) - existing:
+            if wait or process.poll() is None:
+                owned = bundle_pids(app)
+                if output.exists():
+                    report = json.loads(output.read_text())
+                    pid = report.get("pid")
+                    executable = process_paths().get(pid)
+                    if (
+                        executable == report.get("process_executable")
+                        and executable
+                        and Path(executable).is_relative_to(Path(env["HOME"]).parent)
+                    ):
+                        owned.add(pid)
+                for pid in owned - existing:
                     with suppress(ProcessLookupError):
                         if sys.platform == "darwin":
                             os.kill(pid, signal.SIGKILL)

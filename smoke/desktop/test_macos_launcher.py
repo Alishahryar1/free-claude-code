@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from smoke.desktop.support import capture, launched, wait_report
+from smoke.desktop.support import capture, launched, wait_exit, wait_report
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS")
 
@@ -38,6 +38,10 @@ def observed_launches(installed_desktop):
     (contents / "Info.plist").write_bytes(
         (installed["app"] / "Contents/Info.plist").read_bytes()
     )
+    (contents / "Resources").mkdir()
+    (contents / "Resources/AppIcon.icns").write_bytes(
+        (installed["app"] / "Contents/Resources/AppIcon.icns").read_bytes()
+    )
     executable = contents / "MacOS/fcc-desktop"
     executable.write_text(
         f"#!/bin/sh\nexec {shlex.quote(str(installed['python']))} {shlex.quote(str(probe))}\n"
@@ -54,6 +58,7 @@ def observed_launches(installed_desktop):
             capture(output)
             output.with_suffix(".captured").touch()
             assert process.wait(timeout=10) == 0
+            wait_exit(report["pid"])
             print(json.dumps(report, indent=2))
             reports.append(report)
     return terminal, *reports

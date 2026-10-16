@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Never
 from unittest.mock import patch
 
+_installed = False
+
 
 def _spawned_child(queue):
     import free_claude_code
@@ -50,9 +52,11 @@ def subprocess_checks():
 
 
 def install():
+    global _installed
     case = os.environ.get("FCC_NATIVE_CASE")
-    if not case:
+    if not case or _installed:
         return
+    _installed = True
     if "FCC_NATIVE_DIALOG_RESULT" in os.environ:
         original_exec = os.execv
 
