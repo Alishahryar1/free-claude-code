@@ -10,7 +10,7 @@ permissions:
 jobs:
   native:
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -20,13 +20,21 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/ci-environment
+        id: environment
         with:
           uv-version: "0.12.13"
           runner-label: ${{ matrix.runner }}
-      - name: Build native launcher
-        run: uv run --locked python scripts/build_macos_launcher.py
-      - name: Run native identity regression
-        run: uv run --locked pytest --confcutdir=smoke/desktop -n 0 -s -v smoke/desktop
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.environment.outputs.dependencies-hit != 'true'
+        with:
+          path: ${{ steps.environment.outputs.dependencies-path }}
+          key: ${{ steps.environment.outputs.dependencies-key }}
+      - name: Run native desktop checks
+        run: sh scripts/ci.sh --only macos-desktop
+      - name: Check installer and uninstaller boundaries
+        env:
+          FCC_LIVE_SMOKE: "1"
+        run: uv run --locked pytest smoke/installers -n 0 -q -k 'macos or removes_and_verifies_only_fcc or pins_selected_fcc_release'
       - name: Upload observations
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

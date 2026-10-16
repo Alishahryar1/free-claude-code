@@ -1,173 +1,85 @@
-"""Native application identity must survive the installer-created launcher."""
+"""Compare the historical shell app with the installed native launcher."""
 
 import json
-import os
-import platform
-import plistlib
 import shlex
-import shutil
-import signal
-import site
 import subprocess
 import sys
-import sysconfig
-from contextlib import suppress
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+from smoke.desktop.support import capture, launched, wait_report
+
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS")
 
 
-def run_probe(command, output, env):
-    try:
-        result = subprocess.run(
-            command,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert output.exists(), "The launched app did not write its identity"
-        report = json.loads(output.read_text(encoding="utf-8"))
-        print(json.dumps(report, indent=2))
-        return report
-    finally:
-        if output.exists():
-            pid = json.loads(output.read_text(encoding="utf-8"))["pid"]
-            with suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGTERM)
-
-
 @pytest.fixture(scope="module")
-def launched_app(tmp_path_factory):
-    home = tmp_path_factory.mktemp("fcc native home")
-    tool_bin = home / "tool's bin"
-    tool_bin.mkdir()
-    command = tool_bin / "fcc-desktop"
+def observed_launches(installed_desktop):
+    installed = installed_desktop
     probe = Path(__file__).with_name("identity_probe.py")
-    command.write_text(
-        f"#!{sys.executable}\n"
-        "import runpy\n"
-        f"runpy.run_path({str(probe)!r}, run_name='__main__')\n",
-        encoding="utf-8",
+    output = installed["output"] / "terminal.json"
+    output.unlink(missing_ok=True)
+    output.with_suffix(".captured").unlink(missing_ok=True)
+    env = installed["launch_env"] | {"FCC_MACOS_PROBE_OUTPUT": str(output)}
+    with subprocess.Popen([str(installed["python"]), str(probe)], env=env) as process:
+        try:
+            terminal = wait_report(output, lambda r: "intersects_screen" in r, process)
+            capture(output)
+            output.with_suffix(".captured").touch()
+            assert process.wait(timeout=10) == 0
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+    # Preserve the pre-fix exec wrapper as the regression control.
+    legacy = installed["home"] / "Legacy FCC.app"
+    contents = legacy / "Contents"
+    (contents / "MacOS").mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(
+        (installed["app"] / "Contents/Info.plist").read_bytes()
     )
-    command.chmod(0o755)
-    env = os.environ | {"HOME": str(home)}
-    source = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
-    scenario = home / "install-app.sh"
-    scenario.write_text(
-        source.split('\nparse_args "$@"\n', 1)[0]
-        + f"\ntool_bin={shlex.quote(str(tool_bin))}\ninstall_macos_desktop_app\n",
-        encoding="utf-8",
-    )
-    subprocess.run(["/bin/sh", str(scenario)], env=env, check=True, timeout=30)
-    output_dir = ROOT / "test-results/native"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    terminal_output = output_dir / "terminal.json"
-    terminal = run_probe(
-        [str(command)],
-        terminal_output,
-        env | {"FCC_MACOS_PROBE_OUTPUT": str(terminal_output)},
-    )
-    app = home / "Applications/Free Claude Code.app"
-    output = output_dir / "app.json"
-    baseline = run_probe(
-        [
-            "/usr/bin/open",
-            "-n",
-            "-W",
-            "--env",
-            f"HOME={home}",
-            "--env",
-            f"FCC_MACOS_PROBE_OUTPUT={output}",
-            str(app),
-        ],
-        output,
-        env,
-    )
-    native = home / "Applications/FCC Native Probe.app"
-    shutil.copytree(app, native)
-    # Signed bundles keep non-code files in Resources.
-    (native / "Contents/.free-claude-code-owner").rename(
-        native / "Contents/Resources/.free-claude-code-owner"
-    )
-    executable = native / "Contents/MacOS/fcc-desktop"
-    shutil.copyfile(
-        ROOT
-        / "src/free_claude_code/assets/macos"
-        / f"fcc-desktop-{platform.machine()}",
-        executable,
+    executable = contents / "MacOS/fcc-desktop"
+    executable.write_text(
+        f"#!/bin/sh\nexec {shlex.quote(str(installed['python']))} {shlex.quote(str(probe))}\n"
     )
     executable.chmod(0o755)
-    with (native / "Contents/Resources/runtime.plist").open("wb") as stream:
-        plistlib.dump(
-            {
-                "PythonExecutable": sys.executable,
-                "PythonLibrary": str(
-                    Path(sys.base_prefix)
-                    / "lib"
-                    / sysconfig.get_config_var("LDLIBRARY")
-                ),
-                "PythonVersion": platform.python_version(),
-            },
-            stream,
-        )
-    subprocess.run(
-        ["/usr/bin/codesign", "--force", "--sign", "-", str(native)], check=True
-    )
-    subprocess.run(
-        ["/usr/bin/codesign", "--verify", "--strict", str(native)], check=True
-    )
-    packages = Path(site.getsitepackages()[0])
-    bootstrap = packages / "zzz_fcc_native_probe.py"
-    pth = packages / "zzz_fcc_native_probe.pth"
-    bootstrap.write_text(
-        "import os\n"
-        "if 'FCC_MACOS_PROBE_OUTPUT' in os.environ:\n"
-        "    import runpy\n"
-        "    from free_claude_code.cli import desktop_entrypoint\n"
-        f"    desktop_entrypoint.launch = runpy.run_path({str(probe)!r})['main']\n",
-        encoding="utf-8",
-    )
-    pth.write_text("import zzz_fcc_native_probe\n", encoding="utf-8")
-    output = output_dir / "native.json"
-    try:
-        actual = run_probe(
-            [
-                "/usr/bin/open",
-                "-n",
-                "-W",
-                "--env",
-                f"HOME={home}",
-                "--env",
-                f"FCC_MACOS_PROBE_OUTPUT={output}",
-                "--stderr",
-                str(output_dir / "native-stderr.log"),
-                str(native),
-            ],
-            output,
-            env,
-        )
-    finally:
-        pth.unlink()
-        bootstrap.unlink()
-    return native, terminal, baseline, actual
+    reports = []
+    for name, app, extra in (
+        ("legacy", legacy, {}),
+        ("native", installed["app"], {"FCC_NATIVE_CASE": "identity"}),
+    ):
+        output = installed["output"] / f"{name}.json"
+        with launched(app, output, installed["launch_env"] | extra) as process:
+            report = wait_report(output, lambda r: "intersects_screen" in r, process)
+            capture(output)
+            output.with_suffix(".captured").touch()
+            assert process.wait(timeout=10) == 0
+            print(json.dumps(report, indent=2))
+            reports.append(report)
+    return terminal, *reports
 
 
-def test_finder_launch_keeps_fcc_bundle_identity(launched_app):
-    app, _terminal, baseline, actual = launched_app
-    assert baseline["bundle_id"] != "io.github.alishahryar1.free-claude-code"
+def test_finder_launch_keeps_fcc_bundle_identity(installed_desktop, observed_launches):
+    _terminal, legacy, actual = observed_launches
+    assert legacy["bundle_id"] != "io.github.alishahryar1.free-claude-code"
     assert actual["bundle_id"] == "io.github.alishahryar1.free-claude-code"
-    assert Path(actual["bundle_path"]) == app
+    assert Path(actual["bundle_path"]).resolve() == installed_desktop["app"].resolve()
+    assert (
+        Path(actual["process_executable"]).resolve()
+        == (installed_desktop["app"] / "Contents/MacOS/fcc-desktop").resolve()
+    )
     assert actual["main_thread"]
+    assert actual["executable"] == str(installed_desktop["python"])
+    assert actual["prefix"] == str(installed_desktop["venv"])
+    assert actual["server_command"] == [
+        str(installed_desktop["venv"] / "bin/fcc-desktop"),
+        "--auto-started",
+    ]
 
 
-def test_finder_status_item_is_placed_on_screen(launched_app):
-    _app, terminal, _baseline, actual = launched_app
+def test_finder_status_item_is_placed_on_screen(observed_launches):
+    terminal, _legacy, actual = observed_launches
     assert terminal["intersects_screen"], terminal
     assert actual["visible"] and not actual["button_hidden"], actual
     assert actual["intersects_screen"], actual
+    assert actual["frame"][2] > 0 and actual["frame"][3] > 0

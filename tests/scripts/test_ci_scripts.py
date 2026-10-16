@@ -62,7 +62,8 @@ def test_ci_sh_runs_ci_checks_in_order() -> None:
     legacy_future_import = "from __future__ import " + "annotations"
 
     assert (
-        'CHECK_ORDER="suppressions ruff-format ruff-check ty pytest playwright"' in text
+        'CHECK_ORDER="suppressions ruff-format ruff-check ty pytest playwright macos-desktop"'
+        in text
     )
     assert "grep -rE" in text
     assert "Fix the underlying type/import issue instead" in text
@@ -82,7 +83,7 @@ def test_ci_sh_runs_ci_checks_in_order() -> None:
     assert "--dry-run" in text
     assert "uv is required but was not found on PATH" in text
     assert "npm" not in text
-    assert "smoke/" not in text
+    assert "--confcutdir=smoke/desktop" in text
     assert "uv self update" not in text
 
 
@@ -240,7 +241,7 @@ def test_ci_ps1_runs_ci_checks_in_order() -> None:
     assert "-DryRun" in text
     assert "uv is required but was not found on PATH" in text
     assert "npm" not in text
-    assert "smoke/" not in text
+    assert "--confcutdir=smoke/desktop" in text
     assert "uv self update" not in text
 
 

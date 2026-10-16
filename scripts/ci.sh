@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-CHECK_ORDER="suppressions ruff-format ruff-check ty pytest playwright"
+CHECK_ORDER="suppressions ruff-format ruff-check ty pytest playwright macos-desktop"
 
 dry_run=0
 only_checks=""
@@ -22,6 +22,7 @@ Checks (in order):
   ty             uv run ty check
   pytest         uv run pytest -v --tb=short
   playwright     Install Chromium and run deterministic Admin browser tests
+  macos-desktop  Build and test the native app (macOS GUI required, --only)
 
 Options:
   --only ID                Run only the given check (repeatable)
@@ -70,7 +71,7 @@ run() {
 
 valid_check_id() {
     case "$1" in
-        suppressions | ruff-format | ruff-check | ty | pytest | playwright) return 0 ;;
+        suppressions | ruff-format | ruff-check | ty | pytest | playwright | macos-desktop) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -92,6 +93,10 @@ contains_check_id() {
 
 should_run_check() {
     check_id=$1
+
+    if [ "$check_id" = "macos-desktop" ] && [ -z "$only_checks" ]; then
+        return 1
+    fi
 
     if [ -n "$only_checks" ] && ! contains_check_id "$only_checks" "$check_id"; then
         return 1
@@ -173,6 +178,11 @@ run_check() {
         ty) run_ty ;;
         pytest) run_pytest ;;
         playwright) run_playwright ;;
+        macos-desktop)
+            step "macOS desktop"
+            run uv run --locked python scripts/build_macos_launcher.py
+            run uv run --locked pytest --confcutdir=smoke/desktop -n 0 -s -v smoke/desktop
+            ;;
         *) fail "unknown check id: $1" ;;
     esac
 }

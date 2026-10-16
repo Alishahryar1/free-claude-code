@@ -72,6 +72,9 @@ voice_local = [
 [tool.hatch.version]
 source = "vcs"
 
+[tool.hatch.build]
+artifacts = ["src/free_claude_code/assets/macos/fcc-desktop-*"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/free_claude_code"]
 

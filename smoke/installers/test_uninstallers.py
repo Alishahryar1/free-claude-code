@@ -247,9 +247,16 @@ printf '%s\n' "$FAKE_UNAME"
     return PosixUninstallHarness(home, bin_dir, tool_bin, fcc_home, log, env)
 
 
+@pytest.mark.parametrize("marker_directory", ["Contents", "Contents/Resources"])
 def test_uninstall_sh_removes_and_verifies_only_fcc(
     posix_uninstall_harness: PosixUninstallHarness,
+    marker_directory: str,
 ) -> None:
+    app = posix_uninstall_harness.home / "Applications/Free Claude Code.app"
+    if marker_directory != "Contents":
+        destination = app / marker_directory / ".free-claude-code-owner"
+        destination.parent.mkdir()
+        (app / "Contents/.free-claude-code-owner").rename(destination)
     result = posix_uninstall_harness.run()
 
     assert result.returncode == 0, result.stderr

@@ -825,10 +825,8 @@ echo "$name:$*" >> "$CALL_LOG"
 if [ "$FAIL_STEP" = "fcc-verify" ]; then
     exit 36
 fi
-if [ "$name" = "fcc-desktop" ] && [ "${1:-}" = "--export-icon" ]; then
-    [ "$FAIL_STEP" = "desktop-icon-export" ] && exit 37
-    mkdir -p "$(dirname "$2")"
-    printf 'fake icon\n' > "$2"
+if [ "$name" = "fcc-desktop" ] && [ "${1:-}" = "--install-macos-app" ]; then
+    [ "$FAIL_STEP" = "macos-app-setup" ] && exit 37
 fi
 if [ "$name" = "fcc-server" ] && [ "${1:-}" = "--version" ]; then
     echo "free-claude-code 3.5.18"
@@ -1604,47 +1602,42 @@ def test_install_sh_rejects_uninstalled_only_selection(
     _assert_uv_ready_without_fcc_install(posix_harness.calls())
 
 
-def test_install_sh_creates_native_macos_app_and_desktop_link(
-    posix_harness: PosixHarness,
-) -> None:
+def test_install_sh_delegates_macos_bundle_to_installed_helper(posix_harness):
     posix_harness.env["FAKE_UNAME"] = "Darwin"
-    tool_bin = posix_harness.root / "tool's bin"
-    posix_harness.env["FAKE_TOOL_BIN"] = str(tool_bin)
-
+    posix_harness.env["FAKE_TOOL_BIN"] = str(posix_harness.root / "tool's bin")
     result = posix_harness.run()
-
     assert result.returncode == 0, result.stderr
-    app = posix_harness.root / "home" / "Applications" / "Free Claude Code.app"
-    plist = app / "Contents" / "Info.plist"
-    owner_file = app / "Contents" / ".free-claude-code-owner"
-    launcher = app / "Contents" / "MacOS" / "fcc-desktop"
-    icon = app / "Contents" / "Resources" / "AppIcon.icns"
-    desktop_link = posix_harness.root / "home" / "Desktop" / "Free Claude Code.app"
-    assert owner_file.read_text(encoding="utf-8").strip() == (
-        "io.github.alishahryar1.free-claude-code"
+    calls = posix_harness.calls()
+    assert calls.count("fcc-desktop:--install-macos-app") == 1
+    assert calls.index("fcc-server:--version") < calls.index(
+        "fcc-desktop:--install-macos-app"
     )
-    plist_text = plist.read_text(encoding="utf-8")
-    assert "<key>CFBundleIconFile</key>" in plist_text
-    assert "<string>AppIcon</string>" in plist_text
-    assert "<key>LSUIElement</key>" in plist_text
-    assert "<key>LSMultipleInstancesProhibited</key>" in plist_text
-    assert icon.read_bytes() == b"fake icon\n"
-    assert launcher.stat().st_mode & 0o111
-    expected_command = str(tool_bin / "fcc-desktop").replace("'", "'\\''")
-    assert f"exec '{expected_command}'" in launcher.read_text(encoding="utf-8")
-    assert desktop_link.is_symlink()
-    assert desktop_link.readlink() == app
-    assert any(
-        call == f"fcc-desktop:--export-icon {icon}" for call in posix_harness.calls()
+    install = next(
+        call for call in calls if "--refresh-package free-claude-code" in call
     )
+    assert "--managed-python" in install and "+gil" in install
 
 
-def test_install_sh_stops_if_macos_icon_export_fails(
+@pytest.mark.parametrize("system,dry_run", [("Darwin", True), ("Linux", False)])
+def test_install_sh_macos_helper_dry_run_and_platform_scope(
+    posix_harness, system, dry_run
+):
+    posix_harness.env["FAKE_UNAME"] = system
+    result = posix_harness.run_functions(
+        f"dry_run={int(dry_run)}\ninstall_macos_desktop_app"
+    )
+    assert result.returncode == 0, result.stderr
+    assert not any(call.startswith("fcc-desktop:") for call in posix_harness.calls())
+    assert ("--install-macos-app" in result.stdout) == dry_run
+    assert not (posix_harness.root / "home/Applications").exists()
+
+
+def test_install_sh_stops_if_macos_bundle_setup_fails(
     posix_harness: PosixHarness,
 ) -> None:
     posix_harness.env["FAKE_UNAME"] = "Darwin"
 
-    result = posix_harness.run(fail_step="desktop-icon-export")
+    result = posix_harness.run(fail_step="macos-app-setup")
 
     assert result.returncode != 0
     assert "Command failed with exit code 37" in result.stderr
@@ -1654,64 +1647,6 @@ def test_install_sh_stops_if_macos_icon_export_fails(
     assert not (
         posix_harness.root / "home" / "Desktop" / "Free Claude Code.app"
     ).exists()
-
-
-def test_install_sh_rejects_unowned_macos_app_bundle(
-    posix_harness: PosixHarness,
-) -> None:
-    posix_harness.env["FAKE_UNAME"] = "Darwin"
-    app = posix_harness.root / "home" / "Applications" / "Free Claude Code.app"
-    contents = app / "Contents"
-    contents.mkdir(parents=True)
-    plist = contents / "Info.plist"
-    plist.write_text("foreign app", encoding="utf-8")
-
-    result = posix_harness.run()
-
-    assert result.returncode != 0
-    assert "not managed by Free Claude Code" in result.stderr
-    assert plist.read_text(encoding="utf-8") == "foreign app"
-    assert not (contents / ".free-claude-code-owner").exists()
-
-
-def test_install_sh_preserves_unrelated_macos_desktop_link(
-    posix_harness: PosixHarness,
-) -> None:
-    posix_harness.env["FAKE_UNAME"] = "Darwin"
-    desktop = posix_harness.root / "home" / "Desktop"
-    desktop.mkdir()
-    unrelated = posix_harness.root / "Unrelated.app"
-    unrelated.mkdir()
-    desktop_link = desktop / "Free Claude Code.app"
-    desktop_link.symlink_to(unrelated, target_is_directory=True)
-
-    result = posix_harness.run()
-
-    assert result.returncode == 0, result.stderr
-    assert "non-FCC link" in result.stdout
-    assert desktop_link.readlink() == unrelated
-
-
-@pytest.mark.parametrize("uv_version", ("0.12.13", "0.12.13+build.1", "0.12.14"))
-def test_install_sh_preserves_valid_existing_tools(
-    posix_harness: PosixHarness,
-    uv_version: str,
-) -> None:
-    posix_harness.add_client("claude")
-    posix_harness.add_client("codex")
-    posix_harness.add_client("pi")
-    posix_harness.add_client("cline")
-    posix_harness.add_client("hermes")
-    posix_harness.add_client("grok")
-    posix_harness.add_client("muse")
-    posix_harness.add_client("aider")
-    posix_harness.add_uv(uv_version)
-
-    result = posix_harness.run()
-
-    assert result.returncode == 0, result.stderr
-    assert not any(call.startswith("download:") for call in posix_harness.calls())
-    assert "leaving it unchanged" in result.stdout
 
 
 @pytest.mark.parametrize("interactive", (False, True))

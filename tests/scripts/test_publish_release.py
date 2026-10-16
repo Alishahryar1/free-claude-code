@@ -26,6 +26,8 @@ def releases_template(tmp_path_factory):
     tmp_path = tmp_path_factory.mktemp("publish-release-template")
     git(tmp_path, "init", "--template=", "-b", "main")
     write(tmp_path, "src/file.py", "base")
+    write(tmp_path, "scripts/build_macos_launcher.py", "# target builder")
+    write(tmp_path, "scripts/validate_release.py", "# target validator")
     base = commit(tmp_path)
     git(tmp_path, "tag", "v1.2.3")
     git(tmp_path, "update-ref", "refs/remotes/origin/main", base)
@@ -72,6 +74,7 @@ class FakeRemote:
         self.calls = []
         self.fail = None
         self.builds = 0
+        self.native_builds = []
         self.uploaded = {}
         self.real_command = publishing.command
 
@@ -147,6 +150,7 @@ class FakeRemote:
         elif args[:2] == ["uv", "build"]:
             self.builds += 1
             assert cwd is not None
+            assert self.native_builds[-1] == git(Path(cwd), "rev-parse", "HEAD")
             version = git(Path(cwd), "describe", "--tags", "--exact-match")[1:]
             out = Path(args[args.index("--out-dir") + 1])
             for name in publishing.distribution_names(version):
@@ -161,7 +165,12 @@ class FakeRemote:
                     self.fail = None
                     raise RuntimeError("interrupted publication")
         elif args[0] == publishing.sys.executable:
-            pass  # Archive validation is exercised separately using real archives.
+            assert cwd is not None
+            assert Path(args[1]).parent == Path(cwd) / "scripts"
+            if Path(args[1]).name == "build_macos_launcher.py":
+                assert Path(args[1]).read_text() == "# target builder"
+                self.native_builds.append(git(Path(cwd), "rev-parse", "HEAD"))
+            # Archive validation is exercised separately using real archives.
         else:
             raise AssertionError(args)
         return ""

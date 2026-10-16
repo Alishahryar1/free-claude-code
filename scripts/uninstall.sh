@@ -204,11 +204,13 @@ verify_fcc_commands_removed() {
 
 macos_app_is_fcc_owned() {
     app_dir=$1
-    owner_file="$app_dir/Contents/$FCC_MACOS_OWNER_FILE"
-    [ -d "$app_dir" ] &&
-        [ ! -L "$app_dir" ] &&
-        [ -f "$owner_file" ] &&
-        [ "$(cat "$owner_file")" = "$FCC_MACOS_BUNDLE_ID" ]
+    [ -d "$app_dir" ] && [ ! -L "$app_dir" ] || return 1
+    for owner_file in "$app_dir/Contents/Resources/$FCC_MACOS_OWNER_FILE" "$app_dir/Contents/$FCC_MACOS_OWNER_FILE"; do
+        if [ -f "$owner_file" ] && [ "$(cat "$owner_file")" = "$FCC_MACOS_BUNDLE_ID" ]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 remove_macos_desktop_app() {
