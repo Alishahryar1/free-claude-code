@@ -1,0 +1,33 @@
+name: macOS launcher investigation
+
+on:
+  push:
+    branches: [fix/macos-native-launcher]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-intel]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/ci-environment
+        with:
+          uv-version: "0.12.13"
+          runner-label: ${{ matrix.runner }}
+      - name: Run native identity regression
+        run: uv run --locked pytest --confcutdir=smoke/desktop -n 0 -s -v smoke/desktop
+      - name: Upload observations
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-${{ matrix.runner }}
+          path: test-results/native/
