@@ -38,6 +38,7 @@ def test_static_application_assets_are_served(client):
     page = client.get("/")
     script = client.get("/app.js")
     icon = client.get("/favicon.ico")
+    styles = client.get("/styles.css")
 
     assert page.status_code == 200
     assert "/favicon.ico" in page.text
@@ -56,6 +57,10 @@ def test_static_application_assets_are_served(client):
     for index in range(count):
         image_offset = struct.unpack_from("<I", icon.content, 6 + index * 16 + 12)[0]
         assert icon.content[image_offset : image_offset + 8] == b"\x89PNG\r\n\x1a\n"
+    assert styles.status_code == 200
+    assert ".main-nav { display: flex; min-height: 0; flex: 1 1 0;" in styles.text
+    assert "overflow-y: auto; overscroll-behavior: contain;" in styles.text
+    assert ".sidebar-bottom { flex: 0 0 auto; margin-top: auto; }" in styles.text
 
 
 def test_legacy_terminal_series_aliases_are_normalized():

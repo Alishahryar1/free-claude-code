@@ -78,22 +78,28 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .scene-bottom { position: relative; z-index: 1; }
 
 .app-shell { min-height: 100vh; }
-.sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; display: flex; width: 248px; flex-direction: column; padding: 24px 16px 14px; background: var(--ink-deep); color: #fff; }
-.brand-lockup { gap: 10px; padding: 0 8px 26px; color: #fff; }
+.sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; display: flex; width: 248px; height: 100vh; height: 100dvh; min-height: 0; flex-direction: column; overflow-x: hidden; overflow-y: auto; padding: 24px 16px 14px; background: var(--ink-deep); color: #fff; scrollbar-color: rgba(194,208,212,.35) transparent; scrollbar-width: thin; }
+.sidebar::-webkit-scrollbar, .main-nav::-webkit-scrollbar { width: 6px; }
+.sidebar::-webkit-scrollbar-thumb, .main-nav::-webkit-scrollbar-thumb { border-radius: 6px; background: rgba(194,208,212,.35); }
+.sidebar::-webkit-scrollbar-track, .main-nav::-webkit-scrollbar-track { background: transparent; }
+.brand-lockup { flex: 0 0 auto; gap: 10px; padding: 0 8px 26px; color: #fff; }
+.sidebar > .nav-caption { flex: 0 0 auto; }
 .brand-lockup .brand-emblem { background: #f2a178; color: #173a4d; border-radius: 9px 9px 9px 3px; }
 .brand-copy strong { max-width: 157px; overflow: hidden; color: #fff; font: 700 13px Manrope, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
 .brand-copy span { color: #a7bbc2; font-size: 9px; }
 .nav-caption { margin: 5px 10px 8px; color: #91a8b0; font-size: 9px; font-weight: 700; letter-spacing: .12em; }
 .nav-caption-spaced { margin-top: 19px; }
-.main-nav { display: flex; flex-direction: column; min-height: 0; gap: 3px; }
-.nav-item { display: flex; align-items: center; width: 100%; min-height: 39px; gap: 11px; border: 0; border-radius: 5px; padding: 7px 10px; background: transparent; color: #c2d0d4; text-align: left; font-size: 12px; cursor: pointer; }
+.main-nav { display: flex; min-height: 0; flex: 1 1 0; flex-direction: column; gap: 3px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: rgba(194,208,212,.35) transparent; scrollbar-width: thin; }
+.nav-item { display: flex; flex: 0 0 auto; align-items: center; width: 100%; min-height: 39px; gap: 11px; border: 0; border-radius: 5px; padding: 7px 10px; background: transparent; color: #c2d0d4; text-align: left; font-size: 12px; cursor: pointer; }
 .nav-item:hover { background: rgba(255,255,255,.07); color: #fff; }
 .nav-item.active { background: #28495a; color: #fff; font-weight: 700; }
 .nav-icon { display: grid; width: 19px; place-items: center; color: #a5bdc5; font-size: 16px; }
 .nav-item.active .nav-icon { color: #f2a178; }
 .nav-count { margin-left: auto; border-radius: 10px; padding: 2px 7px; background: rgba(255,255,255,.12); color: #d7e0e2; font-size: 10px; }
-.sidebar-bottom { margin-top: auto; }
+.sidebar-bottom { flex: 0 0 auto; margin-top: auto; }
 .demo-note { display: flex; align-items: center; gap: 10px; border-top: 1px solid rgba(255,255,255,.12); padding: 15px 8px 14px; color: #d9e1e2; font-size: 11px; line-height: 1.5; }
+.demo-note > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.demo-dot { flex: 0 0 7px; }
 .demo-note small { color: #92a8ae; font-size: 10px; }
 .demo-dot { width: 7px; height: 7px; border-radius: 50%; background: #7ec59f; box-shadow: 0 0 0 4px rgba(126,197,159,.12); }
 .logout-button { width: 100%; border: 0; border-radius: 5px; padding: 10px; background: transparent; color: #b5c4c8; text-align: left; font-size: 11px; cursor: pointer; }
