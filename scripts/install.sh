@@ -1558,6 +1558,11 @@ configure_and_verify_free_claude_code() {
     fcc_verified=1
 }
 
+shell_quote() {
+    escaped=$(printf '%s' "$1" | sed "s/'/'\\\\''/g")
+    printf "'%s'" "$escaped"
+}
+
 install_macos_desktop_app() {
     [ "$(uname -s)" = "Darwin" ] || return 0
     if [ "$dry_run" -eq 1 ]; then
