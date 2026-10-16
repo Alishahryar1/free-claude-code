@@ -150,7 +150,8 @@ class FakeRemote:
         elif args[:2] == ["uv", "build"]:
             self.builds += 1
             assert cwd is not None
-            assert self.native_builds[-1] == git(Path(cwd), "rev-parse", "HEAD")
+            if (Path(cwd) / "scripts/build_macos_launcher.py").is_file():
+                assert self.native_builds[-1] == git(Path(cwd), "rev-parse", "HEAD")
             version = git(Path(cwd), "describe", "--tags", "--exact-match")[1:]
             out = Path(args[args.index("--out-dir") + 1])
             for name in publishing.distribution_names(version):
@@ -191,6 +192,33 @@ def test_nonrelease_never_allocates_or_builds(releases):
     remote.publisher().publish(head)
     assert remote.builds == 0
     assert not any(c[:2] == ["git", "push"] for c in remote.calls)
+
+
+def test_native_preparation_uses_release_commit_despite_dirty_current_checkout(
+    releases,
+):
+    repo, remote = releases
+    head = remote.advance()
+    write(
+        repo, "scripts/build_macos_launcher.py", "# unrelated work in current checkout"
+    )
+    remote.publisher().publish(head)
+    assert remote.native_builds == [head]
+    assert (
+        repo / "scripts/build_macos_launcher.py"
+    ).read_text() == "# unrelated work in current checkout"
+
+
+def test_historical_release_without_native_builder_can_resume(releases):
+    repo, remote = releases
+    git(repo, "rm", "scripts/build_macos_launcher.py")
+    head = remote.advance()
+    remote.fail = "publish"
+    with pytest.raises(RuntimeError, match="interrupted publication"):
+        remote.publisher().publish(head)
+    remote.publisher().publish(head)
+    assert remote.native_builds == []
+    assert remote.builds == 1
 
 
 @pytest.mark.parametrize("existing_draft", [False, True])

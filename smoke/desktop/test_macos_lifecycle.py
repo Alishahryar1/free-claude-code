@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from free_claude_code.cli.commands import ServerStatus
 from smoke.desktop.support import capture, launched, wait_report
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,7 +51,8 @@ def test_installed_native_app_lifecycle(installed_desktop):
         report = wait_report(
             output,
             lambda r: (
-                r.get("intersects_screen") and r.get("server_status") == "running"
+                r.get("intersects_screen")
+                and r.get("server_status") == ServerStatus.RUNNING
             ),
             process,
         )
@@ -136,7 +138,8 @@ def test_installed_native_app_lifecycle(installed_desktop):
         report = wait_report(
             output,
             lambda r: (
-                r.get("intersects_screen") and r.get("server_status") == "running"
+                r.get("intersects_screen")
+                and r.get("server_status") == ServerStatus.RUNNING
             ),
             process,
         )

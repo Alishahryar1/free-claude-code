@@ -4,6 +4,11 @@ on:
   push:
     branches: [fix/macos-native-launcher]
 
+env:
+  CI_UV_VERSION: "0.12.13"
+  UV_MALWARE_CHECK: "1"
+  UV_PREVIEW_FEATURES: "malware-check"
+
 permissions:
   contents: read
 
@@ -41,3 +46,34 @@ jobs:
         with:
           name: native-${{ matrix.runner }}
           path: test-results/native/
+
+  sdist-rebuild:
+    name: sdist rebuild (${{ matrix.runner }})
+    needs: native
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 0
+      - uses: ./.github/actions/ci-environment
+        id: environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ${{ matrix.runner }}
+          sync-dependencies: "false"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: native-macos-26
+          path: test-results/native
+      - name: Rebuild the Mac-produced sdist without a native compiler
+        run: uv run --no-project --python ${{ steps.environment.outputs.python-version }} python smoke/desktop/rebuild_sdist.py test-results/native/dist
+

@@ -44,6 +44,22 @@ def test_runtime_uses_venv_executable_and_interpreter_architecture(runtime):
     assert architecture == "x86_64"
 
 
+def test_runtime_keeps_symlinked_venv_identity(runtime):
+    executable, library, _variables = runtime
+    base_executable = library.parent / "python"
+    executable.rename(base_executable)
+    executable.symlink_to(base_executable)
+    settings, _architecture = macos_app.runtime_settings()
+    assert settings["PythonExecutable"] == str(executable)
+    assert Path(settings["PythonExecutable"]).resolve() == base_executable
+
+
+def test_unsupported_interpreter_architecture_is_rejected(runtime, monkeypatch):
+    monkeypatch.setattr(macos_app.platform, "machine", lambda: "armv7l")
+    with pytest.raises(ValueError, match="architecture"):
+        macos_app.runtime_settings()
+
+
 @pytest.mark.parametrize("variable", ["Py_GIL_DISABLED", "Py_DEBUG"])
 def test_unsupported_runtime_build_is_rejected(runtime, variable):
     runtime[2][variable] = 1

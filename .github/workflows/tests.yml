@@ -192,11 +192,6 @@ jobs:
         with:
           uv-version: ${{ env.CI_UV_VERSION }}
           runner-label: ${{ matrix.runner }}
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        if: steps.environment.outputs.dependencies-hit != 'true'
-        with:
-          path: ${{ steps.environment.outputs.dependencies-path }}
-          key: ${{ steps.environment.outputs.dependencies-key }}
       - name: Run native desktop checks
         run: sh scripts/ci.sh --only macos-desktop
       - name: Check installer and uninstaller boundaries
