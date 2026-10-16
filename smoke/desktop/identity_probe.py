@@ -1,6 +1,7 @@
 """Observe real AppKit process identity and status-item geometry."""
 
 import json
+import locale
 import os
 import subprocess
 import sys
@@ -39,6 +40,7 @@ def process_report():
             ["/bin/ps", "-p", str(os.getpid()), "-o", "comm="], text=True
         ).strip(),
         "executable": sys.executable,
+        "text_encoding": locale.getpreferredencoding(False),
         "prefix": sys.prefix,
         "base_prefix": sys.base_prefix,
         "bundle_path": str(bundle.bundlePath()),

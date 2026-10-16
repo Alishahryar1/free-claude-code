@@ -135,6 +135,7 @@ def test_ci_sh_playwright_dry_run_prints_browser_and_test_commands() -> None:
     [
         ("ruff-format", "+ uv run ruff format"),
         ("ruff-check", "+ uv run ruff check --fix"),
+        ("macos-desktop", "+ uv run --locked python scripts/build_macos_launcher.py"),
     ],
 )
 def test_ci_sh_dry_run_prints_local_ruff_repair_commands(

@@ -231,6 +231,7 @@ def test_retries_keep_version_and_published_bytes(releases, failure):
     assert not remote.releases["v1.2.4"]["draft"]
     assert git(repo, "rev-parse", "v1.2.4") == head
     assert remote.builds == (2 if failure == "stage" else 1)
+    assert remote.native_builds == [head] * remote.builds
     assert all(remote.uploaded[name] == value for name, value in first_uploaded.items())
     builds = remote.builds
     remote.publisher().publish(head)

@@ -69,6 +69,7 @@ def test_finder_launch_keeps_fcc_bundle_identity(installed_desktop, observed_lau
         == (installed_desktop["app"] / "Contents/MacOS/fcc-desktop").resolve()
     )
     assert actual["main_thread"]
+    assert actual["text_encoding"].lower().replace("-", "") == "utf8"
     assert actual["executable"] == str(installed_desktop["python"])
     assert actual["prefix"] == str(installed_desktop["venv"])
     assert actual["server_command"] == [

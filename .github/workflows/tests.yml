@@ -171,9 +171,79 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  macos-desktop:
+    name: macOS desktop (${{ matrix.runner }})
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-intel]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 0
+      - uses: ./.github/actions/ci-environment
+        id: environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ${{ matrix.runner }}
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.environment.outputs.dependencies-hit != 'true'
+        with:
+          path: ${{ steps.environment.outputs.dependencies-path }}
+          key: ${{ steps.environment.outputs.dependencies-key }}
+      - name: Run native desktop checks
+        run: sh scripts/ci.sh --only macos-desktop
+      - name: Check installer and uninstaller boundaries
+        env:
+          FCC_LIVE_SMOKE: "1"
+        run: uv run --locked pytest smoke/installers -n 0 -q -k 'macos or removes_and_verifies_only_fcc or pins_selected_fcc_release'
+      - name: Upload observations
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-${{ matrix.runner }}-${{ github.run_attempt }}
+          path: test-results/native/
+          retention-days: 7
+
+  sdist-rebuild:
+    name: sdist rebuild (${{ matrix.runner }})
+    needs: macos-desktop
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 0
+      - uses: ./.github/actions/ci-environment
+        id: environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ${{ matrix.runner }}
+          sync-dependencies: "false"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: native-macos-26-${{ github.run_attempt }}
+          path: test-results/native
+      - name: Rebuild the Mac-produced sdist without a native compiler
+        run: uv run --no-project --python ${{ steps.environment.outputs.python-version }} python smoke/desktop/rebuild_sdist.py test-results/native/dist
+
   pytest-summary:
     name: pytest
-    needs: [prepare-shards, pytest-shards]
+    needs: [prepare-shards, pytest-shards, macos-desktop, sdist-rebuild]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -184,8 +254,10 @@ jobs:
         env:
           PREPARATION_RESULT: ${{ needs.prepare-shards.result }}
           SHARDS_RESULT: ${{ needs.pytest-shards.result }}
+          NATIVE_RESULT: ${{ needs.macos-desktop.result }}
+          REBUILD_RESULT: ${{ needs.sdist-rebuild.result }}
         run: |
-          test "$PREPARATION_RESULT" = success && test "$SHARDS_RESULT" = success
+          test "$PREPARATION_RESULT" = success && test "$SHARDS_RESULT" = success && test "$NATIVE_RESULT" = success && test "$REBUILD_RESULT" = success
 
   playwright-summary:
     name: playwright

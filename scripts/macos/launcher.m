@@ -80,7 +80,9 @@ int main(int argc, char **argv) {
         unsetenv("__PYVENV_LAUNCHER__");
         PyInitConfig *config = PyInitConfig_Create();
         if (!config) return fail(@"Python initialization ran out of memory.");
-        int status = PyInitConfig_SetStr(config, "executable", executable.UTF8String);
+        // Finder need not supply a locale. Isolated CPython otherwise defaults to ASCII text I/O.
+        int status = PyInitConfig_SetInt(config, "utf8_mode", 1);
+        if (status == 0) status = PyInitConfig_SetStr(config, "executable", executable.UTF8String);
         if (status == 0) status = PyInitConfig_SetInt(config, "parse_argv", 0);
         if (status == 0) status = PyInitConfig_SetInt(config, "site_import", 1);
         if (status == 0) status = PyInitConfig_SetInt(config, "install_signal_handlers", 1);

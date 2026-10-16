@@ -1618,6 +1618,33 @@ def test_install_sh_delegates_macos_bundle_to_installed_helper(posix_harness):
     assert "--managed-python" in install and "+gil" in install
 
 
+@pytest.mark.parametrize(
+    "system,preference", [("Darwin", "unset"), ("Linux", "system")]
+)
+def test_install_sh_macos_python_selection_overrides_only_its_preference(
+    posix_harness, system, preference
+):
+    posix_harness.env["FAKE_UNAME"] = system
+    posix_harness.env["UV_PYTHON_PREFERENCE"] = "system"
+    _write_executable(
+        posix_harness.bin_dir / "uv",
+        _posix_uv_command("0.12.13").replace(
+            "#!/bin/sh\n",
+            f'#!/bin/sh\n[ "${{UV_PYTHON_PREFERENCE-unset}}" = "{preference}" ] || exit 83\n',
+            1,
+        ),
+    )
+    result = posix_harness.run_functions("install_free_claude_code")
+    assert result.returncode == 0, result.stderr
+    install = next(
+        call
+        for call in posix_harness.calls()
+        if "--refresh-package free-claude-code" in call
+    )
+    assert ("--managed-python" in install) == (system == "Darwin")
+    assert ("+gil" in install) == (system == "Darwin")
+
+
 @pytest.mark.parametrize("system,dry_run", [("Darwin", True), ("Linux", False)])
 def test_install_sh_macos_helper_dry_run_and_platform_scope(
     posix_harness, system, dry_run
