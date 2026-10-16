@@ -164,7 +164,7 @@ jobs:
 
       - name: Upload Playwright failure artifacts
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: playwright-results-${{ runner.os }}-${{ runner.arch }}-shard-${{ matrix.shard }}-of-${{ matrix.shards }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
@@ -200,7 +200,7 @@ jobs:
         run: uv run --locked pytest smoke/installers -n 0 -q --output=test-results/installer -k 'macos or removes_and_verifies_only_fcc or pins_selected_fcc_release or preserves_compatible_uv'
       - name: Upload observations
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-${{ matrix.runner }}-${{ github.run_attempt }}
           path: test-results/native/
