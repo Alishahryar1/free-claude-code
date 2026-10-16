@@ -91,6 +91,10 @@ def launched_app(tmp_path_factory):
     )
     native = home / "Applications/FCC Native Probe.app"
     shutil.copytree(app, native)
+    # Signed bundles keep non-code files in Resources.
+    (native / "Contents/.free-claude-code-owner").rename(
+        native / "Contents/Resources/.free-claude-code-owner"
+    )
     executable = native / "Contents/MacOS/fcc-desktop"
     shutil.copyfile(
         ROOT
@@ -114,6 +118,9 @@ def launched_app(tmp_path_factory):
         )
     subprocess.run(
         ["/usr/bin/codesign", "--force", "--sign", "-", str(native)], check=True
+    )
+    subprocess.run(
+        ["/usr/bin/codesign", "--verify", "--strict", str(native)], check=True
     )
     packages = Path(site.getsitepackages()[0])
     bootstrap = packages / "zzz_fcc_native_probe.py"
