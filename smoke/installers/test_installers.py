@@ -1676,6 +1676,23 @@ def test_install_sh_stops_if_macos_bundle_setup_fails(
     ).exists()
 
 
+@pytest.mark.parametrize("uv_version", ("0.12.13", "0.12.13+build.1", "0.12.14"))
+def test_install_sh_preserves_compatible_uv(
+    posix_harness: PosixHarness, uv_version: str
+) -> None:
+    posix_harness.add_uv(uv_version)
+    executable = posix_harness.bin_dir / "uv"
+    original = executable.read_bytes()
+
+    result = posix_harness.run_functions("ensure_uv")
+
+    assert result.returncode == 0, result.stderr
+    assert not any(call.startswith("download:") for call in posix_harness.calls())
+    assert "uv-install" not in posix_harness.calls()
+    assert executable.read_bytes() == original
+    assert "leaving it unchanged" in result.stdout
+
+
 @pytest.mark.parametrize("interactive", (False, True))
 def test_install_sh_replaces_unrelated_pi_command(
     posix_harness: PosixHarness,

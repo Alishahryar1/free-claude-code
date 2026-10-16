@@ -197,7 +197,7 @@ jobs:
       - name: Check installer and uninstaller boundaries
         env:
           FCC_LIVE_SMOKE: "1"
-        run: uv run --locked pytest smoke/installers -n 0 -q --output=test-results/installer -k 'macos or removes_and_verifies_only_fcc or pins_selected_fcc_release'
+        run: uv run --locked pytest smoke/installers -n 0 -q --output=test-results/installer -k 'macos or removes_and_verifies_only_fcc or pins_selected_fcc_release or preserves_compatible_uv'
       - name: Upload observations
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
