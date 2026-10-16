@@ -1526,7 +1526,7 @@ install_free_claude_code() {
 
     set -- uv tool install --force --refresh-package free-claude-code
     if [ "$(uname -s)" = "Darwin" ]; then
-        set -- "$@" --managed-python --python "$PYTHON_VERSION+gil"
+        set -- env -u UV_PYTHON_PREFERENCE "$@" --managed-python --python "$PYTHON_VERSION+gil"
     else
         set -- "$@" --python "$PYTHON_VERSION"
     fi

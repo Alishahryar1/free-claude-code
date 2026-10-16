@@ -21,6 +21,8 @@ def installed_desktop(tmp_path_factory):
     home = root / "home"
     home.mkdir()
     env = os.environ | {"HOME": str(home)}
+    # CI's legacy preference option conflicts with the explicit managed-only flag.
+    env.pop("UV_PYTHON_PREFERENCE", None)
     output = ROOT / "test-results/native"
     output.mkdir(parents=True, exist_ok=True)
     dist = output / "dist"
