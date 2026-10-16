@@ -2,10 +2,15 @@
 
 import json
 import os
+import platform
+import plistlib
 import shlex
+import shutil
 import signal
+import site
 import subprocess
 import sys
+import sysconfig
 from contextlib import suppress
 from pathlib import Path
 
@@ -70,7 +75,7 @@ def launched_app(tmp_path_factory):
     )
     app = home / "Applications/Free Claude Code.app"
     output = output_dir / "app.json"
-    actual = run_probe(
+    baseline = run_probe(
         [
             "/usr/bin/open",
             "-n",
@@ -84,18 +89,78 @@ def launched_app(tmp_path_factory):
         output,
         env,
     )
-    return app, terminal, actual
+    native = home / "Applications/FCC Native Probe.app"
+    shutil.copytree(app, native)
+    executable = native / "Contents/MacOS/fcc-desktop"
+    shutil.copyfile(
+        ROOT
+        / "src/free_claude_code/assets/macos"
+        / f"fcc-desktop-{platform.machine()}",
+        executable,
+    )
+    executable.chmod(0o755)
+    with (native / "Contents/Resources/runtime.plist").open("wb") as stream:
+        plistlib.dump(
+            {
+                "PythonExecutable": sys.executable,
+                "PythonLibrary": str(
+                    Path(sys.base_prefix)
+                    / "lib"
+                    / sysconfig.get_config_var("LDLIBRARY")
+                ),
+                "PythonVersion": platform.python_version(),
+            },
+            stream,
+        )
+    subprocess.run(
+        ["/usr/bin/codesign", "--force", "--sign", "-", str(native)], check=True
+    )
+    packages = Path(site.getsitepackages()[0])
+    bootstrap = packages / "zzz_fcc_native_probe.py"
+    pth = packages / "zzz_fcc_native_probe.pth"
+    bootstrap.write_text(
+        "import os\n"
+        "if 'FCC_MACOS_PROBE_OUTPUT' in os.environ:\n"
+        "    import runpy\n"
+        "    from free_claude_code.cli import desktop_entrypoint\n"
+        f"    desktop_entrypoint.launch = runpy.run_path({str(probe)!r})['main']\n",
+        encoding="utf-8",
+    )
+    pth.write_text("import zzz_fcc_native_probe\n", encoding="utf-8")
+    output = output_dir / "native.json"
+    try:
+        actual = run_probe(
+            [
+                "/usr/bin/open",
+                "-n",
+                "-W",
+                "--env",
+                f"HOME={home}",
+                "--env",
+                f"FCC_MACOS_PROBE_OUTPUT={output}",
+                "--stderr",
+                str(output_dir / "native-stderr.log"),
+                str(native),
+            ],
+            output,
+            env,
+        )
+    finally:
+        pth.unlink()
+        bootstrap.unlink()
+    return native, terminal, baseline, actual
 
 
 def test_finder_launch_keeps_fcc_bundle_identity(launched_app):
-    app, _terminal, actual = launched_app
+    app, _terminal, baseline, actual = launched_app
+    assert baseline["bundle_id"] != "io.github.alishahryar1.free-claude-code"
     assert actual["bundle_id"] == "io.github.alishahryar1.free-claude-code"
     assert Path(actual["bundle_path"]) == app
     assert actual["main_thread"]
 
 
 def test_finder_status_item_is_placed_on_screen(launched_app):
-    _app, terminal, actual = launched_app
+    _app, terminal, _baseline, actual = launched_app
     assert terminal["intersects_screen"], terminal
     assert actual["visible"] and not actual["button_hidden"], actual
     assert actual["intersects_screen"], actual

@@ -23,6 +23,8 @@ jobs:
         with:
           uv-version: "0.12.13"
           runner-label: ${{ matrix.runner }}
+      - name: Build native launcher
+        run: uv run --locked python scripts/build_macos_launcher.py
       - name: Run native identity regression
         run: uv run --locked pytest --confcutdir=smoke/desktop -n 0 -s -v smoke/desktop
       - name: Upload observations
