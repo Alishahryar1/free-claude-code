@@ -1,5 +1,6 @@
 """Lightweight entrypoint for the optional FCC desktop shell."""
 
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -14,6 +15,15 @@ def launch(argv: Sequence[str] | None = None) -> None:
     args = tuple(sys.argv[1:] if argv is None else argv)
     if len(args) == 2 and args[0] == "--export-icon":
         export_app_icon(Path(args[1]))
+        return
+    if args == ("--install-macos-app",) and sys.platform == "darwin":
+        from free_claude_code.cli.macos_app import install
+
+        try:
+            install()
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            print(f"Could not install the macOS app: {error}", file=sys.stderr)
+            raise SystemExit(1) from error
         return
     auto_started = args == ("--auto-started",)
     if args and not auto_started:

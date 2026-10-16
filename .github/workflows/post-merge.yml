@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   warm-dependency-cache:
-    name: Warm dependency cache (${{ matrix.os }})
+    name: Warm dependency cache (${{ matrix.runner }})
     if: github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
@@ -38,6 +38,10 @@ jobs:
             runner: windows-latest
           - os: macOS
             runner: macos-latest
+          - os: macOS
+            runner: macos-26
+          - os: macOS
+            runner: macos-26-intel
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -82,7 +86,7 @@ jobs:
   publish:
     name: Publish to PyPI
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: macos-26
     timeout-minutes: 15
     environment: pypi
     permissions:
@@ -99,7 +103,7 @@ jobs:
         uses: ./.github/actions/ci-environment
         with:
           uv-version: ${{ env.CI_UV_VERSION }}
-          runner-label: ubuntu-latest
+          runner-label: macos-26
           lookup-only: "true"
           sync-dependencies: "false"
 

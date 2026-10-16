@@ -59,6 +59,30 @@ def test_desktop_entrypoint_rejects_unknown_arguments(
     assert "Usage: fcc-desktop" in capsys.readouterr().err
 
 
+def test_macos_installer_mode_does_not_import_tray(monkeypatch):
+    from free_claude_code.cli import macos_app
+
+    installed = []
+    monkeypatch.setattr(desktop_entrypoint.sys, "platform", "darwin")
+    monkeypatch.setattr(macos_app, "install", lambda: installed.append(True))
+    original_import = builtins.__import__
+
+    def checked_import(name, *args, **kwargs):
+        assert name not in {"pystray", "free_claude_code.cli.desktop_tray"}
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", checked_import)
+    desktop_entrypoint.launch(["--install-macos-app"])
+    assert installed == [True]
+
+
+def test_macos_installer_mode_is_rejected_on_windows(monkeypatch):
+    monkeypatch.setattr(desktop_entrypoint.sys, "platform", "win32")
+    with pytest.raises(SystemExit) as error:
+        desktop_entrypoint.launch(["--install-macos-app"])
+    assert error.value.code == 2
+
+
 @pytest.mark.parametrize("auto_started", [False, True])
 def test_desktop_sets_scaling_before_importing_native_tray(monkeypatch, auto_started):
     calls = []

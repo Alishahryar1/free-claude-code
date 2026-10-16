@@ -71,23 +71,49 @@ def test_browser_artifacts_identify_each_shard_and_run_attempt():
     assert upload["with"]["retention-days"] == 7
 
 
-@pytest.mark.parametrize("suite", ["pytest", "playwright"])
-@pytest.mark.parametrize("preparation", ["success", "failure", "cancelled", "skipped"])
-@pytest.mark.parametrize("shards", ["success", "failure", "cancelled", "skipped"])
+@pytest.mark.parametrize(
+    "suite,preparation,shards,native,rebuild",
+    [
+        (suite, preparation, shards, "success", "success")
+        for suite in ("pytest", "playwright")
+        for preparation in ("success", "failure", "cancelled", "skipped")
+        for shards in ("success", "failure", "cancelled", "skipped")
+    ]
+    + [
+        ("pytest", "success", "success", native, rebuild)
+        for native, rebuild in (
+            ("failure", "success"),
+            ("cancelled", "success"),
+            ("skipped", "success"),
+            ("success", "failure"),
+            ("success", "cancelled"),
+            ("success", "skipped"),
+        )
+    ],
+)
 def test_summary_only_passes_when_preparation_and_all_shards_succeed(
-    suite, preparation, shards
+    suite, preparation, shards, native, rebuild
 ):
     job = workflow()["jobs"][f"{suite}-summary"]
     assert job["name"] == suite
-    assert set(job["needs"]) == {"prepare-shards", f"{suite}-shards"}
+    expected_needs = {"prepare-shards", f"{suite}-shards"}
+    if suite == "pytest":
+        expected_needs |= {"macos-desktop", "sdist-rebuild"}
+    assert set(job["needs"]) == expected_needs
     assert job["if"] == "${{ always() }}"
     assert "continue-on-error" not in job
     assert len(job["steps"]) == 1
     step = job["steps"][0]
-    assert step["env"] == {
+    expected_env = {
         "PREPARATION_RESULT": "${{ needs.prepare-shards.result }}",
         "SHARDS_RESULT": "${{ needs." + suite + "-shards.result }}",
     }
+    if suite == "pytest":
+        expected_env |= {
+            "NATIVE_RESULT": "${{ needs.macos-desktop.result }}",
+            "REBUILD_RESULT": "${{ needs.sdist-rebuild.result }}",
+        }
+    assert step["env"] == expected_env
     bash = shutil.which("bash")
     if os.name == "nt":
         # WSL's bash.exe does not inherit arbitrary Windows environment variables.
@@ -101,12 +127,35 @@ def test_summary_only_passes_when_preparation_and_all_shards_succeed(
         pytest.skip("bash is required to execute the GitHub summary check")
     result = subprocess.run(
         [bash, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
-        env={**os.environ, "PREPARATION_RESULT": preparation, "SHARDS_RESULT": shards},
+        env={
+            **os.environ,
+            "PREPARATION_RESULT": preparation,
+            "SHARDS_RESULT": shards,
+            "NATIVE_RESULT": native,
+            "REBUILD_RESULT": rebuild,
+        },
         capture_output=True,
         text=True,
         check=False,
         timeout=30,
     )
-    assert (result.returncode == 0) == (preparation == shards == "success"), (
-        result.stderr
+    assert (result.returncode == 0) == (
+        preparation == shards == native == rebuild == "success"
+    ), result.stderr
+
+
+def test_native_checks_cover_both_macs_and_nonmac_sdist_rebuilds():
+    jobs = workflow()["jobs"]
+    native = jobs["macos-desktop"]
+    assert native["strategy"]["matrix"]["runner"] == ["macos-26", "macos-26-intel"]
+    assert any(
+        step.get("run") == "sh scripts/ci.sh --only macos-desktop"
+        for step in native["steps"]
     )
+    rebuild = jobs["sdist-rebuild"]
+    assert rebuild["needs"] == "macos-desktop"
+    assert rebuild["strategy"]["matrix"]["runner"] == [
+        "ubuntu-latest",
+        "windows-latest",
+    ]
+    assert "rebuild_sdist.py" in rebuild["steps"][-1]["run"]
