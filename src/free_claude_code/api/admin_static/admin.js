@@ -407,6 +407,10 @@ function updateProviderCard(provider) {
   result.className = "provider-check-result";
   result.dataset.providerCheckResult = provider.provider_id;
   result.hidden = true;
+  const availability = document.createElement("span");
+  availability.className = "provider-availability-result";
+  availability.dataset.providerAvailabilityResult = provider.provider_id;
+  availability.hidden = true;
   const actions = document.createElement("div");
   actions.className = "provider-actions";
   if (oauth) populateConnectedAccountActions(provider, status, actions);
@@ -418,7 +422,7 @@ function updateProviderCard(provider) {
     settings.setAttribute("aria-controls", "providerDialog");
     actions.appendChild(settings);
   }
-  card.replaceChildren(title, meta, result, actions);
+  card.replaceChildren(title, meta, result, availability, actions);
   const next = [...grid.children].find((other) => other !== card &&
     connectedAccountName(provider).localeCompare(providerDisplayName(other.dataset.provider), "en", { sensitivity: "base" }) < 0);
   if (card.parentElement !== grid || card.nextElementSibling !== (next || null)) grid.insertBefore(card, next || null);
@@ -489,6 +493,7 @@ async function openCustomProviderDialog(providerId = null) {
   byId("providerDialogTitle").textContent = providerId ? provider.display_name : "Add provider";
   byId("providerMessage").textContent = "";
   byId("providerDialogCheck").hidden = true;
+  renderProviderCheckMessage(byId("providerDialogAvailability"), null);
   const fields = byId("providerFields");
   fields.replaceChildren();
   const formats = (state.config.custom_reasoning_formats || {})[provider.api_format] || ["provider_default"];
@@ -553,10 +558,8 @@ function renderProviderDialogActions(provider) {
     actions.appendChild(button);
   }
   const check = oauth ? null : providerCheckResult(provider.provider_id);
-  const result = byId("providerDialogCheck");
-  result.className = `provider-check-result ${check?.status || ""}`;
-  result.textContent = check?.message || "";
-  result.hidden = !check?.message;
+  renderProviderCheckMessage(byId("providerDialogCheck"), check);
+  renderProviderCheckMessage(byId("providerDialogAvailability"), check?.availability);
   byId("saveProvider").hidden = !provider.settings_keys?.length;
   renderStartup();
 }
@@ -779,14 +782,16 @@ function providerCheckResult(providerId) {
   // An explicit check takes precedence over background discovery and reachability.
   if (check?.source === "manual") return check;
   const discovery = state.startup?.startup?.providers?.[providerId];
-  if (discovery === "starting") return { status: "checking", message: "Checking models…" };
-  if (discovery === "failed") {
-    return { status: "error", message: state.startup.startup.provider_errors?.[providerId] || "Could not load models. Check the provider's settings and retry." };
+  let result;
+  if (discovery === "starting") {
+    result = { status: "checking", message: "Checking models…" };
+  } else if (discovery === "failed") {
+    result = { status: "error", message: state.startup.startup.provider_errors?.[providerId] || "Could not load models. Check the provider's settings and retry." };
+  } else if (discovery === "ready") {
+    result = { status: "ok", message: modelCountMessage(state.startup.cached_models[providerId]?.length || 0) };
   }
-  if (discovery === "ready") {
-    return { status: "ok", message: modelCountMessage(state.startup.cached_models[providerId]?.length || 0) };
-  }
-  return check;
+  // Model discovery and endpoint reachability are separate observations.
+  return result ? { ...result, availability: check } : check;
 }
 
 function updateProviderCheckResult(providerId, status, message, source = "manual") {
@@ -794,8 +799,17 @@ function updateProviderCheckResult(providerId, status, message, source = "manual
   renderProviderCheckResult(providerId);
 }
 
+function renderProviderCheckMessage(element, check) {
+  for (const status of ["ok", "error", "checking"]) {
+    element.classList.toggle(status, check?.status === status);
+  }
+  element.textContent = check?.message || "";
+  element.hidden = !check?.message;
+}
+
 function renderProviderCheckResult(providerId) {
-  const { status = "", message = "" } = providerCheckResult(providerId) || {};
+  const check = providerCheckResult(providerId);
+  const { status = "" } = check || {};
   const card = document.querySelector(`[data-provider="${providerId}"]`);
   if (!card) return;
   const provider = connectedAccountDescriptor(providerId);
@@ -810,15 +824,11 @@ function renderProviderCheckResult(providerId) {
     if (account?.state === "error") meta.classList.add("error");
     return;
   }
-  const result = card.querySelector(".provider-check-result");
-  result.className = `provider-check-result ${status}`;
-  result.textContent = message;
-  result.hidden = !message;
+  renderProviderCheckMessage(card.querySelector(".provider-check-result"), check);
+  renderProviderCheckMessage(card.querySelector(".provider-availability-result"), check?.availability);
   if (state.providerId === providerId) {
-    const modalResult = byId("providerDialogCheck");
-    modalResult.className = result.className;
-    modalResult.textContent = message;
-    modalResult.hidden = !message;
+    renderProviderCheckMessage(byId("providerDialogCheck"), check);
+    renderProviderCheckMessage(byId("providerDialogAvailability"), check?.availability);
   }
 }
 
