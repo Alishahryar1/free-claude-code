@@ -127,20 +127,27 @@ def disconnect_existing(
     path = path.resolve()
     values = claude_proxy_values(proxy_root_url or "", auth_token or "")
     document, entries = _read(path, set(values))
+    environment = {entry["name"]: entry["value"] for entry in entries}
+    matching_url = proxy_root_url is not None and same_proxy_url(
+        environment.get("ANTHROPIC_BASE_URL"), proxy_root_url
+    )
+    matching_token = (
+        auth_token is not None and environment.get("ANTHROPIC_AUTH_TOKEN") == auth_token
+    )
+    # Login and discovery preferences can change without changing the gateway.
+    if matching_url and matching_token:
+        _disconnect(path, document, entries, values)
+        return True
     if (
-        proxy_root_url is None
-        or auth_token is None
-        or not _connected(document, entries, values)
-    ):
-        environment = {entry["name"]: entry["value"] for entry in entries}
-        if (
+        matching_url
+        or matching_token
+        or (
             document.get(_LOGIN) is True
             and environment.get("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") == "1"
-        ):
-            raise ValueError("Existing gateway connection identity cannot be confirmed")
-        return False
-    _disconnect(path, document, entries, values)
-    return True
+        )
+    ):
+        raise ValueError("Existing gateway connection identity cannot be confirmed")
+    return False
 
 
 def configure(

@@ -1,4 +1,6 @@
+import genericpath
 import json
+import os
 import tomllib
 from pathlib import Path
 
@@ -183,7 +185,7 @@ def test_cleanup_of_connection_from_process_override(
 )
 def test_unmarked_vscode_settings_are_preserved_without_blocking(paths, key, value):
     claude_integration.configure(
-        paths.claude_vscode, "https://other.example", TOKEN, True
+        paths.claude_vscode, "https://other.example", "unrelated-token", True
     )
     document = json.loads(paths.claude_vscode.read_text())
     if key == "claudeCode.disableLoginPrompt":
@@ -203,6 +205,102 @@ def test_unmarked_vscode_settings_are_preserved_without_blocking(paths, key, val
     before = paths.claude_vscode.read_bytes()
     disconnect_integrations(paths)
     assert paths.claude_vscode.read_bytes() == before
+
+
+@pytest.mark.parametrize("change", ["login", "discovery", "both"])
+@pytest.mark.parametrize("remove", [False, True])
+@pytest.mark.parametrize("mismatch", [None, "url", "token"])
+def test_vscode_cleanup_uses_gateway_identity_without_optional_flags(
+    paths, change, remove, mismatch
+):
+    claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
+    document = json.loads(paths.claude_vscode.read_text())
+    document["editor.fontSize"] = 17
+    if change in {"login", "both"}:
+        if remove:
+            document.pop("claudeCode.disableLoginPrompt")
+        else:
+            document["claudeCode.disableLoginPrompt"] = False
+    entries = document["claudeCode.environmentVariables"]
+    if change in {"discovery", "both"}:
+        discovery = next(
+            entry
+            for entry in entries
+            if entry["name"] == "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
+        )
+        if remove:
+            entries.remove(discovery)
+        else:
+            discovery["value"] = "0"
+    if mismatch is not None:
+        name, value = (
+            ("ANTHROPIC_BASE_URL", "https://other.example")
+            if mismatch == "url"
+            else ("ANTHROPIC_AUTH_TOKEN", "changed-token")
+        )
+        next(entry for entry in entries if entry["name"] == name)["value"] = value
+    paths.claude_vscode.write_text(json.dumps(document))
+    before = paths.claude_vscode.read_bytes()
+
+    if mismatch is None:
+        disconnect_integrations(paths)
+        assert json.loads(paths.claude_vscode.read_text()) == {"editor.fontSize": 17}
+    else:
+        with pytest.raises(IntegrationCleanupError, match="Claude Code in VS Code"):
+            disconnect_integrations(paths)
+        assert paths.claude_vscode.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("env", "connection settings"),
+        ("desktop", "Claude Desktop"),
+        ("desktop_disconnect", "Claude Desktop"),
+        ("dsh", "DSH Desktop"),
+    ],
+)
+@pytest.mark.parametrize("failure", [PermissionError, OSError])
+def test_cleanup_fails_when_path_access_cannot_be_confirmed(
+    paths, monkeypatch, field, message, failure
+):
+    blocked = getattr(paths, field)
+    if field == "desktop":
+        claude_desktop_integration.configure(
+            paths.desktop, URL, TOKEN, True, disconnect_path=paths.desktop_disconnect
+        )
+    elif field == "dsh":
+        paths.dsh.mkdir()
+        (paths.dsh / ".credentials.yaml").write_text(
+            f"version: 1\nrefs:\n  FCC_DSH_DESKTOP_API_KEY: {TOKEN}\n"
+        )
+    elif field == "desktop_disconnect":
+        blocked.write_text(
+            json.dumps(
+                {"root": str(paths.desktop.resolve()), "return_to_sign_in": True}
+            )
+        )
+    before = {
+        path: path.read_bytes()
+        for path in paths.env.parent.parent.rglob("*")
+        if path.is_file()
+    }
+    original_stat = os.stat
+
+    def inaccessible(path, *args, **kwargs):
+        if Path(path) == blocked:
+            raise failure("private-filesystem-detail")
+        return original_stat(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "stat", inaccessible)
+        # Exercise POSIX existence semantics on Windows too, where exists uses
+        # a separate native fast path instead of os.stat.
+        patch.setattr(os.path, "exists", genericpath.exists)
+        with pytest.raises(IntegrationCleanupError, match=message) as error:
+            disconnect_integrations(paths)
+        assert "private-filesystem-detail" not in str(error.value)
+    assert {path: path.read_bytes() for path in before} == before
 
 
 @pytest.mark.parametrize(

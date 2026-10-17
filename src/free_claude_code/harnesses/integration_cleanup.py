@@ -55,8 +55,17 @@ class IntegrationPaths:
         )
 
 
+def _path_exists(path: Path) -> bool:
+    """Treat missing paths as absent, but let access failures stop uninstall."""
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def _connection_settings(path: Path) -> Settings | None:
-    if not path.exists():
+    if not _path_exists(path):
         return None
     # Cleanup must also work when an unrelated provider or model setting is invalid.
     keys = {"HOST", "PORT", "ANTHROPIC_AUTH_TOKEN"}
@@ -115,7 +124,7 @@ def disconnect_integrations(paths: IntegrationPaths | None = None) -> None:
                     False,
                     disconnect_path=paths.desktop_disconnect,
                 )
-                if paths.desktop.exists() or paths.desktop_disconnect.exists()
+                if _path_exists(paths.desktop) or _path_exists(paths.desktop_disconnect)
                 else None
             ),
         ),
@@ -123,7 +132,7 @@ def disconnect_integrations(paths: IntegrationPaths | None = None) -> None:
             "DSH Desktop",
             lambda: (
                 dsh_desktop_integration.disconnect(paths.dsh)
-                if paths.dsh.exists()
+                if _path_exists(paths.dsh)
                 else None
             ),
         ),
