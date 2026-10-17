@@ -5,7 +5,9 @@ import math
 import random
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -35,6 +37,23 @@ UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS = 5
 DEFAULT_UPSTREAM_BASE_DELAY = 2.0
 DEFAULT_UPSTREAM_MAX_DELAY = 60.0
 DEFAULT_UPSTREAM_JITTER = 1.0
+
+_quiet_discovery = ContextVar("quiet_discovery_recovery_logs", default=False)
+
+
+@contextmanager
+def quiet_discovery_recovery_logs(enabled: bool) -> Generator[None]:
+    """Keep optional probe retries at debug level without silencing other tasks."""
+    token = _quiet_discovery.set(enabled)
+    try:
+        yield
+    finally:
+        _quiet_discovery.reset(token)
+
+
+def _log_recovery(message: str, *args: object) -> None:
+    log = logger.debug if _quiet_discovery.get() else logger.warning
+    log(message, *args)
 
 
 class ProviderOperationKind(StrEnum):
@@ -179,8 +198,16 @@ class ProviderExecution:
                     return result
                 finally:
                     await attempt.aclose()
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancelled:
             self.abandon()
+            # A discovery deadline can interrupt retry backoff. Retain the
+            # provider failure so diagnostics can distinguish absence from DNS,
+            # TLS or HTTP failures while cancellation still propagates.
+            if (
+                operation_kind is ProviderOperationKind.MODEL_DISCOVERY
+                and self._last_failure is not None
+            ):
+                raise cancelled from self._last_failure
             raise
         except Exception as error:
             self.fail(error)
@@ -577,7 +604,7 @@ class ProviderAdmissionController:
                 continue
             try:
                 if sleep_delay > 0:
-                    logger.warning(
+                    _log_recovery(
                         "Provider {} recovery active, waiting {:.1f}s for one probe",
                         self._provider_name,
                         sleep_delay,
@@ -769,7 +796,7 @@ class ProviderAdmissionController:
 
         label = self._failure_label(status, error)
         if became_leader:
-            logger.warning(
+            _log_recovery(
                 "{}, attempt {}/{} failed; one provider recovery probe in {:.1f}s",
                 label,
                 execution.attempts_started,
@@ -802,7 +829,7 @@ class ProviderAdmissionController:
                 max_attempts=execution.max_attempts,
             )
         else:
-            logger.warning(
+            _log_recovery(
                 "{} retry exhausted (attempts={})",
                 label,
                 execution.attempts_started,

@@ -1,5 +1,7 @@
 """Endpoint diagnostics remain visible beside selected-provider discovery."""
 
+import re
+
 import httpx
 import pytest
 from playwright.sync_api import Page, Route, expect
@@ -31,6 +33,35 @@ def timeout_probe(provider_id):
         "latency_ms": 1500,
         "error_type": "timeout",
     }
+
+
+@pytest.mark.parametrize("provider_id", ["lmstudio", "llamacpp", "ollama"])
+def test_optional_local_absence_is_neutral_and_manual_test_reports_error(
+    page: Page, admin_base_url: str, provider_id: str
+):
+    page.route(
+        f"**/admin/api/providers/{provider_id}/local-status",
+        lambda route: route.fulfill(json=timeout_probe(provider_id)),
+    )
+    page.goto(f"{admin_base_url}/admin")
+    primary = page.locator(f'[data-provider-check-result="{provider_id}"]')
+    detail = page.locator(f'[data-provider-availability-result="{provider_id}"]')
+    expect(primary).to_have_text("Local server unavailable")
+    expect(primary).not_to_have_class(re.compile(r"\berror\b"))
+    expect(detail).to_contain_text("1500 ms")
+    expect(detail).not_to_have_class(re.compile(r"\berror\b"))
+    dialog = open_provider(page, provider_id)
+    expect(dialog.locator("#providerDialogAvailability")).to_have_text(
+        detail.inner_text()
+    )
+    dialog.get_by_role("button", name="Test", exact=True).click()
+    expect(primary).to_contain_text("timed out")
+    expect(primary).to_have_class(re.compile(r"\berror\b"))
+    expect(detail).to_be_hidden()
+    assert "private-provider-error" not in page.locator("body").inner_text()
+    close_provider(page)
+    page.evaluate("load({providersOnly: true})")
+    expect(primary).to_have_text("Local server unavailable")
 
 
 @pytest.mark.parametrize(

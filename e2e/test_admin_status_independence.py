@@ -81,14 +81,14 @@ def test_local_cards_render_before_slowest_check(page, admin_base_url):
         page.wait_for_function("window.heldLocalCheck === true")
     lmstudio_response.value.finished()
     llamacpp_response.value.finished()
-    expect(page.locator('[data-provider-check-result="lmstudio"]')).to_have_text(
+    expect(page.locator('[data-provider-availability-result="lmstudio"]')).to_have_text(
         "Reachable: http://localhost:1234/v1"
     )
-    expect(page.locator('[data-provider-check-result="llamacpp"]')).to_have_text(
+    expect(page.locator('[data-provider-availability-result="llamacpp"]')).to_have_text(
         "Availability check failed. Use Test to retry."
     )
     assert len(pending) == 1
-    expect(page.locator('[data-provider-check-result="ollama"]')).to_be_hidden()
+    expect(page.locator('[data-provider-availability-result="ollama"]')).to_be_hidden()
     pending.pop().fulfill(
         json={
             "provider_id": "ollama",
@@ -96,7 +96,7 @@ def test_local_cards_render_before_slowest_check(page, admin_base_url):
             "base_url": "http://localhost:11434",
         }
     )
-    expect(page.locator('[data-provider-check-result="ollama"]')).to_have_text(
+    expect(page.locator('[data-provider-availability-result="ollama"]')).to_have_text(
         "Reachable: http://localhost:11434"
     )
 

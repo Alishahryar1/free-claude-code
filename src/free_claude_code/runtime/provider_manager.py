@@ -15,6 +15,7 @@ from free_claude_code.application.model_metadata import (
 )
 from free_claude_code.application.ports import ModelCatalogPort, ModelCatalogSnapshot
 from free_claude_code.application.readiness import InitializationWait
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.core.json_types import JsonObject
@@ -26,6 +27,8 @@ from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.model_listing import model_infos_from_ids
 from free_claude_code.providers.runtime.discovery import (
     _provider_query_failure_reason,
+    is_optional_local_failure,
+    is_optional_local_provider,
     model_cache_provider_ids_for_settings,
     model_list_provider_ids_for_settings,
     referenced_provider_ids,
@@ -38,6 +41,8 @@ ProviderRuntimeFactory = Callable[
 ]
 ConnectedProviderIds = Callable[[], tuple[str, ...]]
 CommitConfig = Callable[[], Awaitable[None]]
+
+LOCAL_DISCOVERY_TIMEOUT_SECONDS = 5.0
 
 
 class ModelCatalogPublisher(Protocol):
@@ -288,12 +293,31 @@ class ProviderRuntimeManager:
             return ProviderModelRefreshResult(refreshed_provider_ids=(provider_id,))
         try:
             provider = await generation.runtime.resolve_provider(provider_id)
-            infos = await provider.list_model_infos()
+            from free_claude_code.providers.admission import (
+                quiet_discovery_recovery_logs,
+            )
+
+            descriptor = PROVIDER_CATALOG.get(provider_id)
+            timeout = (
+                LOCAL_DISCOVERY_TIMEOUT_SECONDS
+                if descriptor is not None and descriptor.local
+                else None
+            )
+            with quiet_discovery_recovery_logs(
+                is_optional_local_provider(generation.settings, provider_id)
+            ):
+                async with asyncio.timeout(timeout):
+                    infos = await provider.list_model_infos()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             message = _provider_query_failure_reason(exc)
-            logger.warning(
+            log = (
+                logger.debug
+                if is_optional_local_failure(generation.settings, provider_id, message)
+                else logger.warning
+            )
+            log(
                 "Provider model discovery skipped: provider={} reason={}",
                 provider_id,
                 message,
@@ -359,6 +383,21 @@ class ProviderRuntimeManager:
                 for provider_id in generation.initial_ids
             ):
                 break
+        failures = {
+            provider: message
+            for result in results
+            if isinstance(result, ProviderModelRefreshResult)
+            for provider, message in result.failure_messages.items()
+        }
+        failed_ids = tuple(
+            provider
+            for result in results
+            if isinstance(result, ProviderModelRefreshResult)
+            for provider in result.failed_provider_ids
+            if not is_optional_local_failure(
+                generation.settings, provider, failures.get(provider)
+            )
+        )
         return ProviderModelRefreshResult(
             refreshed_provider_ids=tuple(
                 provider
@@ -366,18 +405,8 @@ class ProviderRuntimeManager:
                 if isinstance(result, ProviderModelRefreshResult)
                 for provider in result.refreshed_provider_ids
             ),
-            failed_provider_ids=tuple(
-                provider
-                for result in results
-                if isinstance(result, ProviderModelRefreshResult)
-                for provider in result.failed_provider_ids
-            ),
-            failure_messages={
-                provider: message
-                for result in results
-                if isinstance(result, ProviderModelRefreshResult)
-                for provider, message in result.failure_messages.items()
-            },
+            failed_provider_ids=failed_ids,
+            failure_messages={provider: failures[provider] for provider in failed_ids},
         )
 
     def start_model_list_refresh(self) -> None:
@@ -484,8 +513,12 @@ class ProviderRuntimeManager:
             elif task.cancelled() or task.exception() is not None:
                 state = "failed"
             else:
-                state = "failed" if task.result().failed_provider_ids else "ready"
-                if message := task.result().failure_messages.get(provider_id):
+                result = task.result()
+                message = result.failure_messages.get(provider_id)
+                state = "failed" if result.failed_provider_ids else "ready"
+                if is_optional_local_failure(generation.settings, provider_id, message):
+                    state = "unavailable"
+                elif message:
                     errors[provider_id] = message
             providers[provider_id] = state
         return {
@@ -584,6 +617,23 @@ class ProviderRuntimeManager:
                         settings, self._connected_provider_ids()
                     )
                 )
+                for provider_id in cache.cached_model_ids():
+                    descriptor = PROVIDER_CATALOG.get(provider_id)
+                    if (
+                        descriptor is not None
+                        and descriptor.local
+                        and any(
+                            attr is not None
+                            and getattr(previous.settings, attr)
+                            != getattr(settings, attr)
+                            for attr in (
+                                descriptor.base_url_attr,
+                                descriptor.proxy_attr,
+                            )
+                        )
+                    ):
+                        cache.remove_provider(provider_id)
+                        cache.add_provider(provider_id)
                 for definition in settings.custom_providers:
                     old = previous.settings.custom_provider(definition.provider_id)
                     if old is None or not definition.same_inventory(old):

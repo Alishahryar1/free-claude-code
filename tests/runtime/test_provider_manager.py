@@ -32,6 +32,8 @@ class FakeRuntime(ProviderRuntime):
     async def resolve_provider(
         self, provider_id: str, api_key_number: int = 1
     ) -> BaseProvider:
+        if provider_id in {"lmstudio", "llamacpp", "ollama"}:
+            raise ConnectionError("Local fixture is offline")
         return cast(BaseProvider, self.provider)
 
     async def cleanup(self) -> None:
@@ -111,11 +113,18 @@ async def test_discovery_error_follows_attempt_and_generation_without_losing_cac
         provider.list_model_infos.side_effect = held
         refresh = asyncio.create_task(manager.refresh_provider("nvidia_nim"))
         await entered.wait()
-        assert manager.catalog_status()["providers"] == {"nvidia_nim": "starting"}
+        local_states = dict.fromkeys(("lmstudio", "llamacpp", "ollama"), "unavailable")
+        assert manager.catalog_status()["providers"] == {
+            "nvidia_nim": "starting",
+            **local_states,
+        }
         assert manager.catalog_status()["provider_errors"] == {}
         release.set()
         assert (await refresh).failure_messages == {}
-        assert manager.catalog_status()["providers"] == {"nvidia_nim": "ready"}
+        assert manager.catalog_status()["providers"] == {
+            "nvidia_nim": "ready",
+            **local_states,
+        }
         provider.list_model_infos.side_effect = httpx2.ProxyError("secret-canary")
         await manager.refresh_provider("nvidia_nim")
         await manager.replace(settings, commit=AsyncMock())

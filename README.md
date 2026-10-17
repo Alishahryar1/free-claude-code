@@ -313,6 +313,8 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 <details>
 <summary><strong>Local provider setup</strong></summary>
 
+FCC automatically discovers models from running local servers at startup. If you start a server later, click **Refresh models** in Admin to add its models to the picker.
+
 ### LM Studio
 
 Start LM Studio's local server, load a tool-capable model, and use the model identifier shown by LM Studio with the `lmstudio/` prefix. The default URL is `http://localhost:1234/v1`.

@@ -73,7 +73,13 @@ def _manager(
     settings: Settings,
     providers: dict[str, BaseProvider] | None = None,
 ) -> ProviderRuntimeManager:
-    providers = providers or {}
+    providers = {
+        **{
+            provider_id: FakeProvider(error=ConnectionError("Local fixture is offline"))
+            for provider_id in ("lmstudio", "llamacpp", "ollama")
+        },
+        **(providers or {}),
+    }
     return ProviderRuntimeManager(
         settings,
         runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
@@ -646,7 +652,7 @@ async def test_failed_startup_discovery_remains_eligible_for_explicit_refresh() 
 
 
 @pytest.mark.asyncio
-async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_referenced_local() -> (
+async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_all_locals() -> (
     None
 ):
     settings = _settings(
@@ -667,8 +673,9 @@ async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_
     assert runtime.cached_model_ids() == {
         "open_router": frozenset({"anthropic/claude-sonnet"}),
         "lmstudio": frozenset({"local-qwen"}),
+        "ollama": frozenset({"llama3.1"}),
     }
-    assert result.refreshed_provider_ids == ("lmstudio", "open_router")
+    assert result.refreshed_provider_ids == ("lmstudio", "open_router", "ollama")
     assert result.failed_provider_ids == ()
 
 
