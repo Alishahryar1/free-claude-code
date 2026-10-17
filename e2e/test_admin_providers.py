@@ -263,8 +263,7 @@ def test_provider_check_failure_is_separate_and_never_exposes_exception_text(
 
     result = card.locator(".provider-check-result")
     expect(result).to_have_text(
-        "Unavailable: Could not refresh this provider's models. "
-        "Verify its configuration and access."
+        "Unavailable: Could not load models. Check the provider's settings and retry."
     )
     expect(card.get_by_role("button", name="Edit", exact=True)).to_have_class(
         "secondary-button"

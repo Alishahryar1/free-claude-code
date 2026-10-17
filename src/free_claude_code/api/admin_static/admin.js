@@ -781,7 +781,7 @@ function providerCheckResult(providerId) {
   const discovery = state.startup?.startup?.providers?.[providerId];
   if (discovery === "starting") return { status: "checking", message: "Checking models…" };
   if (discovery === "failed") {
-    return { status: "error", message: "Could not load models. Check the provider's settings and retry." };
+    return { status: "error", message: state.startup.startup.provider_errors?.[providerId] || "Could not load models. Check the provider's settings and retry." };
   }
   if (discovery === "ready") {
     return { status: "ok", message: modelCountMessage(state.startup.cached_models[providerId]?.length || 0) };
@@ -1544,7 +1544,7 @@ async function showRestartNotice() {
 async function restoreSavedProvider(providerId, checks) {
   if (!connectedAccountDescriptor(providerId)) return;
   await openProviderDialog(providerId);
-  showCredentialErrors(checks);
+  showCredentialErrors(checks.map((check) => ({ ...check, message: `Key saved. ${check.message}` })));
   byId("providerMessage").textContent = "Saved. Some keys could not be verified.";
   byId("providerMessage").className = "message-area warn";
 }
@@ -1598,7 +1598,7 @@ async function apply(providerId = null, customAction = null) {
     applied = true;
     const warningChecks = checks.filter((check) => check.status === "unverified");
     const warnings = warningChecks.map((check) =>
-      `${state.fields.get(check.key)?.label || "API keys"}, Key ${check.index + 1}: ${check.message}`
+      `${state.fields.get(check.key)?.label || "API keys"}, Key ${check.index + 1}: Key saved. ${check.message}`
     );
     const savedProviderId = warnings.length && providerId && mutation?.action !== "delete" ? result.custom_provider_id || providerId : null;
     if (providerId && !savedProviderId) byId("providerDialog").close();

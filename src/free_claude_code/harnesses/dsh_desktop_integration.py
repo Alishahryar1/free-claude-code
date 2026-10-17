@@ -2,7 +2,7 @@
 
 import copy
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
@@ -78,7 +78,7 @@ def has_provider(home: Path) -> bool:
 
 
 @contextmanager
-def _locked(home: Path) -> Iterator[None]:
+def _locked(home: Path) -> Generator[None]:
     # Use DSH's locks so a native edit cannot lose unrelated settings during our write.
     _read(home)
     with ExitStack() as locks:

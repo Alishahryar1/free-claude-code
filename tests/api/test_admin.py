@@ -2412,6 +2412,26 @@ def test_admin_provider_test_route_preserves_runtime_result(
     assert response.json() == result
 
 
+def test_admin_provider_test_exposes_completed_attempt_failure():
+    app = create_test_app()
+    manager = provider_manager_for_app(app)
+    message = "The model-list request returned HTTP 403."
+    result = ProviderModelRefreshResult(
+        failed_provider_ids=("nvidia_nim",),
+        failure_messages={"nvidia_nim": message},
+    )
+    with patch.object(manager, "refresh_provider", new=AsyncMock(return_value=result)):
+        response = _local_client(app).post(
+            "/admin/api/providers/nvidia_nim/test", json={}
+        )
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider_id": "nvidia_nim",
+        "ok": False,
+        "message": message,
+    }
+
+
 def test_admin_launch_url_uses_loopback_for_wildcard_host():
     settings = Settings.model_construct(host="0.0.0.0", port=8082)
 

@@ -4,7 +4,7 @@ import os
 import socket
 import subprocess
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,7 +40,7 @@ def start_server(
     env_unset: Iterable[str] = (),
     command: list[str] | None = None,
     name: str = "server",
-) -> Iterator[RunningServer]:
+) -> Generator[RunningServer]:
     port = find_free_port()
     config.results_dir.mkdir(parents=True, exist_ok=True)
     log_path = config.results_dir / f"{name}-{config.worker_id}-{port}.log"

@@ -1,7 +1,7 @@
 """Private smoke runtime state with the developer's original credential ownership."""
 
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,7 +18,7 @@ _SOURCE_DIR = "FCC_SMOKE_SOURCE_CONFIG_DIR"
 @contextmanager
 def server_environment(
     env: Mapping[str, str], *, caller_home: bool
-) -> Iterator[dict[str, str]]:
+) -> Generator[dict[str, str]]:
     child_env = dict(env)
     child_env.pop(_CONFIG_DIR, None)
     child_env.pop(_SOURCE_DIR, None)

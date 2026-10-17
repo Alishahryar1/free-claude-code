@@ -32,6 +32,7 @@ def test_post_merge_serializes_and_limits_publish_permissions():
         "macOS",
     }
     publish = config["jobs"]["publish"]
+    assert publish["runs-on"] == "macos-26"
     assert "needs" not in publish
     assert publish["environment"] == "pypi"
     assert publish["permissions"] == {"contents": "write", "id-token": "write"}

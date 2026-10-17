@@ -1,10 +1,16 @@
 """Translate upstream OpenAI Responses events into Anthropic Messages SSE."""
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from free_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from free_claude_code.core.anthropic.usage import anthropic_input_usage_fields
+from free_claude_code.core.history_replay import (
+    ReplayOrigin,
+    ReplayRecord,
+    encode_replay,
+)
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 
@@ -59,6 +65,7 @@ class ResponsesProviderStream:
         message_id: str,
         model: str,
         input_tokens: int,
+        origin: ReplayOrigin,
         log_raw_events: bool = False,
         tool_names: OpenAIToolNameCodec | None = None,
         pad_empty: bool = True,
@@ -70,6 +77,7 @@ class ResponsesProviderStream:
             log_raw_events=log_raw_events,
         )
         self.completed = False
+        self._origin = origin
         self._pad_empty = pad_empty
         self.generated_output = False
         self._tool_names = tool_names or OpenAIToolNameCodec.from_names(())
@@ -257,6 +265,7 @@ class ResponsesProviderStream:
             return events
         if item_type == "reasoning":
             encrypted = item.get("encrypted_content")
+            carrier = encode_replay(ReplayRecord(self._origin, cast(JsonObject, item)))
             events = self._item_readable(item, completed=True)
             state = self._reasoning[item_id]
             if (
@@ -272,14 +281,13 @@ class ResponsesProviderStream:
             ):
                 events.extend(self._ensure_reasoning_started(state, completed=True))
             if state.block_index is not None:
-                if isinstance(encrypted, str) and encrypted:
-                    events.append(
-                        self.ledger.content_block_delta(
-                            state.block_index,
-                            "signature_delta",
-                            encrypted,
-                        )
+                events.append(
+                    self.ledger.content_block_delta(
+                        state.block_index,
+                        "signature_delta",
+                        carrier,
                     )
+                )
                 events.append(self.ledger.content_block_stop(state.block_index))
                 state.stopped = True
                 return events
@@ -287,7 +295,7 @@ class ResponsesProviderStream:
                 index = self.ledger.blocks.allocate_index()
                 events.append(
                     self.ledger.content_block_start(
-                        index, "redacted_thinking", data=encrypted
+                        index, "redacted_thinking", data=carrier
                     )
                 )
                 events.append(self.ledger.content_block_stop(index))

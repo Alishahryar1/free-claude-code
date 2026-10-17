@@ -86,5 +86,5 @@ def _response_event_payload(chunk: str) -> JsonObject | None:
         except json.JSONDecodeError:
             continue
         if isinstance(raw, Mapping):
-            return cast(JsonObject, dict(raw))
+            return dict(raw)
     return None

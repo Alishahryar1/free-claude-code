@@ -2,7 +2,7 @@
 
 import json
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -54,7 +54,7 @@ class DshProvider:
 
 
 @contextmanager
-def dsh_provider(scenario: DshProvider) -> Iterator[str]:
+def dsh_provider(scenario: DshProvider) -> Generator[str]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 

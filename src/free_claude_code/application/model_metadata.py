@@ -1,6 +1,6 @@
 """Application-owned model metadata."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningCapability
@@ -24,3 +24,4 @@ class ProviderModelRefreshResult:
 
     refreshed_provider_ids: tuple[str, ...] = ()
     failed_provider_ids: tuple[str, ...] = ()
+    failure_messages: dict[str, str] = field(default_factory=dict)

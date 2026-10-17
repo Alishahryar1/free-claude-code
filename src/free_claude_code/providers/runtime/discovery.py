@@ -1,28 +1,106 @@
 """Provider model-list discovery and background refresh."""
 
+import re
+import socket
+import ssl
+
 import httpx
+import httpx2
 
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.config.model_refs import configured_chat_model_refs
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.providers.model_listing import ModelListResponseError
 
 from .config import has_provider_configuration
 
+_FAILURE_MESSAGES = {
+    "proxy": "The network proxy rejected or failed the connection. Check your proxy settings.",
+    "dns": "DNS lookup failed. Check your network and provider or proxy address.",
+    "certificate": "TLS certificate verification failed. Check your network's certificate configuration.",
+    "tls": "The TLS connection failed. Check your network and proxy settings.",
+    "timeout": "The model-list request timed out. Check connectivity and retry.",
+    "connection": "Could not connect to the provider. Check your network and proxy settings.",
+    "response": "The provider returned an invalid model list.",
+    "unavailable": "The provider is unavailable. Check its configuration and access.",
+    "unknown": "Could not load models. Check the provider's settings and retry.",
+}
 
-def _provider_query_failure_reason(exc: BaseException, settings: Settings) -> str:
-    """Return a concise model-list query failure reason for user-facing logs."""
-    if isinstance(exc, ModelListResponseError):
-        return f"malformed model-list response: {exc.message}"
-    if isinstance(exc, httpx.HTTPStatusError):
-        return f"query failure: HTTP {exc.response.status_code}"
-    if isinstance(exc, ApplicationUnavailableError):
-        return f"query failure: {exc.message}"
-    if isinstance(exc, ExecutionFailure) and settings.log_api_error_tracebacks:
-        return f"query failure: {exc.message}"
-    return f"query failure: {type(exc).__name__}"
+
+def safe_discovery_failure_message(value: object) -> str:
+    """Allow only classifier output into shareable diagnostics."""
+    if isinstance(value, str) and (
+        value in _FAILURE_MESSAGES.values()
+        or re.fullmatch(r"The model-list request returned HTTP [1-5][0-9]{2}\.", value)
+    ):
+        return value
+    return _FAILURE_MESSAGES["unknown"]
+
+
+def _provider_query_failure_reason(exc: BaseException) -> str:
+    """Classify the transport cause without copying upstream text or URLs."""
+    import openai
+
+    from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
+
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        if isinstance(current, ProviderRecoveryExhausted):
+            current = current.last_error
+        else:
+            # HTTPCore hides transport context with `raise exc from None`.
+            # It still carries the DNS/TLS cause needed for this classification.
+            current = current.__cause__ or current.__context__
+    # The SDK often wraps a more useful transport or OS error.
+    for error in reversed(chain):
+        if isinstance(error, (httpx.ProxyError, httpx2.ProxyError)):
+            return _FAILURE_MESSAGES["proxy"]
+        if isinstance(error, socket.gaierror):
+            return _FAILURE_MESSAGES["dns"]
+        if isinstance(error, ssl.SSLCertVerificationError):
+            return _FAILURE_MESSAGES["certificate"]
+        if isinstance(error, ssl.SSLError):
+            return _FAILURE_MESSAGES["tls"]
+        if isinstance(
+            error,
+            (
+                TimeoutError,
+                httpx.TimeoutException,
+                httpx2.TimeoutException,
+                openai.APITimeoutError,
+            ),
+        ):
+            return _FAILURE_MESSAGES["timeout"]
+        if isinstance(
+            error,
+            (httpx.HTTPStatusError, httpx2.HTTPStatusError, openai.APIStatusError),
+        ):
+            return safe_discovery_failure_message(
+                f"The model-list request returned HTTP {error.response.status_code}."
+            )
+        if isinstance(error, ModelListResponseError):
+            return _FAILURE_MESSAGES["response"]
+        if isinstance(
+            error,
+            (
+                ConnectionError,
+                httpx.NetworkError,
+                httpx2.NetworkError,
+                openai.APIConnectionError,
+            ),
+        ):
+            return _FAILURE_MESSAGES["connection"]
+        if isinstance(error, ExecutionFailure) and error.kind is FailureKind.TIMEOUT:
+            return _FAILURE_MESSAGES["timeout"]
+        if isinstance(error, (ApplicationUnavailableError, ExecutionFailure)):
+            return _FAILURE_MESSAGES["unavailable"]
+    return _FAILURE_MESSAGES["unknown"]
 
 
 def referenced_provider_ids(settings: Settings) -> tuple[str, ...]:

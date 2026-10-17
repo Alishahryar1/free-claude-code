@@ -175,7 +175,7 @@ def test_uv_workflows_share_managed_python_cache_policy() -> None:
         assert "uv-python-v" not in workflow
 
 
-def test_shared_setup_installs_dependencies_except_for_post_merge_jobs() -> None:
+def test_shared_setup_installs_dependencies_for_jobs_running_project_code() -> None:
     setup = yaml.safe_load(CI_SETUP.read_text(encoding="utf-8"))
     assert setup["inputs"]["sync-dependencies"]["default"] == "true"
     sync = next(
@@ -187,10 +187,12 @@ def test_shared_setup_installs_dependencies_except_for_post_merge_jobs() -> None
     assert sync["if"] == "inputs.sync-dependencies == 'true'"
     for path in UV_WORKFLOWS:
         jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
-        for job in jobs.values():
+        for name, job in jobs.items():
             for step in job["steps"]:
                 if step.get("uses") == "./.github/actions/ci-environment":
                     assert step["with"].get("sync-dependencies", "true") == (
-                        "false" if path.name == "post-merge.yml" else "true"
+                        "false"
+                        if path.name == "post-merge.yml" or name == "sdist-rebuild"
+                        else "true"
                     )
                 assert step.get("run") != "uv sync --locked --group dev"

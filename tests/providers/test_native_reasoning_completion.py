@@ -11,6 +11,7 @@ from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.history_replay import ReplayOrigin, decode_replay
 from free_claude_code.core.openai_responses.chat_request import (
     build_responses_chat_request,
 )
@@ -377,7 +378,7 @@ async def test_responses_late_cipher_preserves_thinking_and_final_answer():
         event.data["index"] for event in events if event.event == "content_block_stop"
     ][-1] == text_index
     assert [
-        event.data["delta"]["signature"]
+        decode_replay(event.data["delta"]["signature"]).native["encrypted_content"]
         for event in events
         if event.data.get("delta", {}).get("type") == "signature_delta"
     ] == ["opaque-original"]
@@ -503,7 +504,10 @@ def test_responses_summary_maps_to_structured_chat_summary():
 
 def test_existing_responses_tool_delta_does_not_close_final_text():
     stream = ResponsesProviderStream(
-        message_id="msg_test", model="native", input_tokens=1
+        origin=ReplayOrigin("test", "responses", "", "", "m"),
+        message_id="msg_test",
+        model="native",
+        input_tokens=1,
     )
     frames = stream.start()
     frames += stream.feed(
@@ -713,7 +717,10 @@ async def test_completed_full_reasoning_survives_streamed_summary(answer_before_
 @pytest.mark.parametrize("summary", [False, True])
 def test_responses_seeded_reasoning_and_fragments_are_completed_once(summary):
     stream = ResponsesProviderStream(
-        message_id="msg_test", model="native", input_tokens=1
+        origin=ReplayOrigin("test", "responses", "", "", "m"),
+        message_id="msg_test",
+        model="native",
+        input_tokens=1,
     )
     field = "summary" if summary else "content"
     part = "summary_text" if summary else "reasoning_text"

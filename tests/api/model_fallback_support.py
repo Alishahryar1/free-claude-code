@@ -1,7 +1,7 @@
 """Controlled provider boundary for model-fallback API and product tests."""
 
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Generator, Mapping
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -278,7 +278,7 @@ def fallback_client(
     *,
     settings: Settings | None = None,
     extra_providers: Mapping[str, ControlledFallbackProvider] | None = None,
-) -> Iterator[TestClient]:
+) -> Generator[TestClient]:
     app = create_test_app(
         settings
         or Settings(

@@ -279,7 +279,6 @@ def _current(library: _Library, values: JsonObject) -> bool:
             profile.get("inferenceGatewayBaseUrl"),
             str(values["inferenceGatewayBaseUrl"]),
         )
-        and "inferenceModels" not in profile
     )
 
 
@@ -293,7 +292,6 @@ def _update_profile(library: _Library, values: JsonObject) -> bool:
     # Desktop otherwise restricts tool network access to the inference gateway.
     profile.setdefault("coworkEgressAllowedHosts", ["*"])
     profile["inferenceCustomHeaders"] = headers
-    profile.pop("inferenceModels", None)
     return _write(library.profile_path, profile)
 
 
