@@ -351,13 +351,13 @@ def test_admin_loading_finishes_before_local_availability_checks(
         elif payload["provider_id"] == "ollama":
             payload.update(status="missing_url", label="Missing URL", base_url="")
         route.fulfill(json=payload)
-    expect(page.locator('[data-provider-check-result="lmstudio"]')).to_have_text(
+    expect(page.locator('[data-provider-availability-result="lmstudio"]')).to_have_text(
         "Reachable: http://localhost:1234/v1"
     )
-    expect(page.locator('[data-provider-check-result="llamacpp"]')).to_have_text(
+    expect(page.locator('[data-provider-availability-result="llamacpp"]')).to_have_text(
         "Unavailable: http://localhost:8080/v1 returned HTTP 503"
     )
-    expect(page.locator('[data-provider-check-result="ollama"]')).to_be_hidden()
+    expect(page.locator('[data-provider-availability-result="ollama"]')).to_be_hidden()
     expect(
         page.locator('[data-provider="lmstudio"]').get_by_role(
             "button", name="Edit", exact=True
@@ -392,11 +392,13 @@ def test_local_availability_failure_does_not_fail_admin_loading(
     for provider_id in ("lmstudio", "llamacpp", "ollama"):
         card = page.locator(f'[data-provider="{provider_id}"]')
         if provider_id == "lmstudio":
-            expect(card.locator(".provider-check-result")).to_have_text(
+            expect(card.locator(".provider-availability-result")).to_have_text(
                 "Availability check failed. Use Test to retry."
             )
         else:
-            expect(card.locator(".provider-check-result")).to_contain_text("Reachable:")
+            expect(card.locator(".provider-availability-result")).to_contain_text(
+                "Reachable:"
+            )
         expect(card.get_by_role("button", name="Edit", exact=True)).to_have_class(
             "secondary-button"
         )
@@ -461,19 +463,19 @@ def test_local_provider_diagnostics_are_visible_on_cards_and_in_the_dialog(
     page.route("**/admin/api/providers/*/local-status", reply)
     _open_admin(page, admin_base_url, viewport)
 
-    expect(page.locator('[data-provider-check-result="lmstudio"]')).to_have_text(
+    expect(page.locator('[data-provider-availability-result="lmstudio"]')).to_have_text(
         "Reachable: http://localhost:1234/v1 (GET /models, 12.5 ms)"
     )
-    expect(page.locator('[data-provider-check-result="llamacpp"]')).to_have_text(
+    expect(page.locator('[data-provider-availability-result="llamacpp"]')).to_have_text(
         "Unavailable: http://localhost:8080/v1 returned HTTP 503 (GET /models, 8 ms)"
     )
     expected_timeout = f"Unavailable: {timeout_message} (GET /api/tags, 1500 ms)"
-    expect(page.locator('[data-provider-check-result="ollama"]')).to_have_text(
+    expect(page.locator('[data-provider-availability-result="ollama"]')).to_have_text(
         expected_timeout
     )
     dialog = open_provider(page, "ollama")
-    expect(dialog.locator("#providerDialogCheck")).to_have_text(expected_timeout)
-    expect(dialog.locator("#providerDialogCheck")).to_be_in_viewport()
+    expect(dialog.locator("#providerDialogAvailability")).to_have_text(expected_timeout)
+    expect(dialog.locator("#providerDialogAvailability")).to_be_in_viewport()
     expect(dialog.get_by_role("button", name="Test", exact=True)).to_be_enabled()
     assert "private-credential-marker" not in page.locator("body").inner_text()
     assert errors == []
@@ -520,7 +522,7 @@ def test_manual_provider_test_takes_precedence_over_automatic_availability(
             availability.pop().continue_()
     response.value.finished()
     page.evaluate("() => new Promise(requestAnimationFrame)")
-    other = page.locator('[data-provider-check-result="ollama"]')
+    other = page.locator('[data-provider-availability-result="ollama"]')
     if manual_finished:
         expect(result).to_have_text(
             "Unavailable: Could not refresh this provider's models."

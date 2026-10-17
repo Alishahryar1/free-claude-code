@@ -343,7 +343,7 @@ def model_discovery_report(settings: Settings) -> dict[str, Any]:
             r"custom_[a-f0-9]{32}", provider_id
         ):
             continue
-        if state not in ("starting", "ready", "failed"):
+        if state not in ("starting", "ready", "failed", "unavailable"):
             continue
         row = {"state": state}
         if state == "failed":
