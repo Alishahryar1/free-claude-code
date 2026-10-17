@@ -679,6 +679,11 @@ class Settings(BaseModel):
     enable_web_server_tools: bool = Field(
         default=True, validation_alias="ENABLE_WEB_SERVER_TOOLS"
     )
+    web_search_provider: str = Field(
+        default="duckduckgo",
+        validation_alias="WEB_SEARCH_PROVIDER",
+        pattern=r"^(duckduckgo|parallel)$",
+    )
     # Comma-separated URL schemes allowed for web_fetch (default: http,https).
     web_fetch_allowed_schemes: NonEmptyString = Field(
         default="http,https", validation_alias="WEB_FETCH_ALLOWED_SCHEMES"

@@ -157,6 +157,7 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
     assert settings.whisper_device == "cpu"
     assert settings.whisper_model == "base"
     assert settings.enable_web_server_tools is True
+    assert settings.web_search_provider == "duckduckgo"
     assert settings.proxy_auth_enabled is False
     assert settings.proxy_auth_token == "freecc"
     assert [
@@ -167,6 +168,22 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
         for name, field in Settings.model_fields.items()
         if field.get_default(call_default_factory=True) == ""
     ] == []
+
+
+@pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
+def test_parallel_web_search_can_be_selected_from_configuration(source):
+    values = {"WEB_SEARCH_PROVIDER": "parallel"}
+    snapshot = compose_settings_snapshot(
+        values if source is ConfigSource.MANAGED else {},
+        values if source is ConfigSource.PROCESS else {},
+    )
+    assert snapshot.settings.web_search_provider == "parallel"
+    assert snapshot.sources["web_search_provider"] is source
+
+
+def test_unknown_web_search_provider_is_rejected():
+    with pytest.raises(ValidationError):
+        compose_settings_snapshot({"WEB_SEARCH_PROVIDER": "unknown"}, {})
 
 
 def test_every_external_setting_has_one_explicit_alias() -> None:
