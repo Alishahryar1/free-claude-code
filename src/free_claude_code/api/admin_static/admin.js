@@ -1030,6 +1030,18 @@ function inputForField(field) {
     return select;
   }
 
+  if (field.type === "multiselect") {
+    const select = document.createElement("select");
+    select.multiple = true;
+    const selected = (field.value || "").split(",");
+    field.options.forEach((item) => {
+      const opt = option(item.value, item.label);
+      opt.selected = selected.includes(item.value);
+      select.appendChild(opt);
+    });
+    return select;
+  }
+
   if (field.type === "textarea") {
     const textarea = document.createElement("textarea");
     textarea.value = field.value || "";
@@ -1369,6 +1381,10 @@ function option(value, label) {
 function readFieldValue(input) {
   if (input.dataset.fieldType === "api_key_list") return JSON.parse(input.value);
   if (input.type === "checkbox") return input.checked ? "true" : "false";
+  if (input.multiple) {
+    const selected = Array.from(input.selectedOptions).map((item) => item.value);
+    return selected.length ? selected.join(",") : null;
+  }
   if (input.dataset.remove === "true") return null;
   if (
     input.dataset.fieldType === "optional_model" &&

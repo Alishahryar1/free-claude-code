@@ -15,6 +15,7 @@ type FieldType = Literal[
     "model",
     "optional_model",
     "model_list",
+    "multiselect",
     "select",
     "textarea",
 ]

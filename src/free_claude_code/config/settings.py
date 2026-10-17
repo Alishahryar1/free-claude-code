@@ -17,6 +17,10 @@ from .constants import DEFAULT_MODEL, HTTP_CONNECT_TIMEOUT_DEFAULT
 from .custom_providers import CustomProviderDefinition, decode_custom_providers
 from .model_refs import ModelFallback, ModelFallbacks
 from .nim import NimSettings
+from .open_router_preferences import (
+    OpenRouterProviderPreferencesField,
+    OpenRouterQuantizationsField,
+)
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
     PROVIDER_CATALOG,
@@ -137,6 +141,15 @@ class Settings(BaseModel):
     # ==================== OpenRouter Config ====================
     open_router_api_keys: ApiKeyList = Field(
         default=(), validation_alias="OPENROUTER_API_KEY"
+    )
+    open_router_provider_preferences: OpenRouterProviderPreferencesField = Field(
+        default=None, validation_alias="OPENROUTER_PROVIDER_PREFERENCES"
+    )
+    open_router_use_cheapest_provider: bool = Field(
+        default=False, validation_alias="OPENROUTER_USE_CHEAPEST_PROVIDER"
+    )
+    open_router_quantizations: OpenRouterQuantizationsField = Field(
+        default=None, validation_alias="OPENROUTER_QUANTIZATIONS"
     )
 
     # ==================== Mistral La Plateforme ====================
