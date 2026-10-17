@@ -445,3 +445,39 @@ def test_fallback_model_efforts_are_json_serializable_in_doctor_report():
     ]
     assert report["providers"]["groq"]["referenced"] is True
     assert report["providers"]["open_router"]["referenced"] is True
+
+
+def test_disconnect_mode_does_not_collect_or_copy_diagnostics(monkeypatch, capsys):
+    from free_claude_code.harnesses import integration_cleanup
+
+    calls = []
+    monkeypatch.setattr(
+        integration_cleanup,
+        "disconnect_integrations",
+        lambda: calls.append("disconnect"),
+    )
+
+    def forbidden(*args):
+        pytest.fail("cleanup must not collect diagnostics or use the clipboard")
+
+    monkeypatch.setattr(doctor, "collect_report", forbidden)
+    monkeypatch.setattr(doctor, "copy_text", forbidden)
+    doctor.main(["--disconnect-integrations"])
+    assert calls == ["disconnect"]
+    assert capsys.readouterr() == (
+        "Disconnected recognized FCC editor/app integrations.\n",
+        "",
+    )
+
+
+def test_disconnect_mode_reports_failure_and_nonzero_exit(monkeypatch, capsys):
+    from free_claude_code.harnesses import integration_cleanup
+
+    def fail():
+        raise integration_cleanup.IntegrationCleanupError("Could not disconnect Codex.")
+
+    monkeypatch.setattr(integration_cleanup, "disconnect_integrations", fail)
+    with pytest.raises(SystemExit) as error:
+        doctor.main(["--disconnect-integrations"])
+    assert error.value.code == 1
+    assert capsys.readouterr() == ("", "Could not disconnect Codex.\n")

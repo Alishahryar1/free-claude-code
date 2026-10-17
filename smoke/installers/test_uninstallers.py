@@ -45,11 +45,13 @@ def _create_windows_shortcut(
     powershell: str,
     shortcut_path: Path,
     target_path: Path,
+    module_path: str,
 ) -> None:
     shortcut_path.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ | {
         "FCC_TEST_SHORTCUT": str(shortcut_path),
         "FCC_TEST_TARGET": str(target_path),
+        "PSMODULEPATH": module_path,
     }
     subprocess.run(
         [
@@ -84,10 +86,13 @@ class PosixUninstallHarness:
         *args: str,
         fail_step: str = "",
         include_uv: bool = True,
+        include_doctor: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         uv = self.bin_dir / "uv"
         if not include_uv and uv.exists():
             uv.unlink()
+        if not include_doctor:
+            (self.tool_bin / "fcc-doctor").unlink(missing_ok=True)
         return subprocess.run(
             ["/bin/sh", str(_repo_root() / "scripts" / "uninstall.sh"), *args],
             check=False,
@@ -117,7 +122,11 @@ printf '%s\n' "$FCC_PS_OUTPUT"
         awk = shutil.which("awk", path=self.env["PATH"])
         if awk is None:
             pytest.skip("awk is required for the POSIX process fallback scenario")
-        shutil.copy(awk, fallback_bin / "awk")
+        _write_executable(
+            fallback_bin / "awk",
+            '#!/bin/sh\nexec "$FCC_TEST_AWK" "$@"\n',
+        )
+        self.env["FCC_TEST_AWK"] = awk
         self.env["FCC_PS_OUTPUT"] = process_line
         self.env["PATH"] = str(fallback_bin)
 
@@ -137,6 +146,22 @@ def posix_uninstall_harness(tmp_path: Path) -> PosixUninstallHarness:
     (fcc_home / "config.json").write_text("{}", encoding="utf-8")
     for name in FCC_COMMANDS:
         _write_executable(tool_bin / name, "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        tool_bin / "fcc-doctor",
+        """#!/bin/sh
+echo "doctor:$*" >> "$CALL_LOG"
+[ "$*" = "--disconnect-integrations" ] || exit 45
+if [ "$FAIL_STEP" = "cleanup" ]; then
+    echo "simulated integration cleanup failure" >&2
+    exit 46
+fi
+if [ "$FAIL_STEP" = "legacy-helper" ]; then
+    echo "unrecognized arguments: --disconnect-integrations" >&2
+    exit 2
+fi
+echo "Disconnected recognized FCC editor/app integrations."
+""",
+    )
 
     _write_executable(bin_dir / "claude", "#!/bin/sh\nexit 0\n")
     _write_executable(bin_dir / "codex", "#!/bin/sh\nexit 0\n")
@@ -298,6 +323,7 @@ def test_uninstall_sh_removes_and_verifies_only_fcc(
     ).read_text(encoding="utf-8") == '{"native": true}\n'
     assert posix_uninstall_harness.calls() == [
         "uv:tool dir --bin",
+        "doctor:--disconnect-integrations",
         "uv:tool uninstall free-claude-code",
         f"rm:-f {posix_uninstall_harness.home / 'Desktop' / 'Free Claude Code.app'}",
         f"rm:-rf {posix_uninstall_harness.home / 'Applications' / 'Free Claude Code.app'}",
@@ -310,11 +336,71 @@ def test_uninstall_sh_is_idempotent_when_tool_is_already_absent(
 ) -> None:
     posix_uninstall_harness.remove_entry_points()
 
-    result = posix_uninstall_harness.run(fail_step="missing")
+    result = posix_uninstall_harness.run("--keep-integrations", fail_step="missing")
 
     assert result.returncode == 0, result.stderr
     assert not posix_uninstall_harness.fcc_home.exists()
     assert "already absent" in result.stdout
+    assert not any(
+        call.startswith("doctor:") for call in posix_uninstall_harness.calls()
+    )
+
+
+@pytest.mark.parametrize("failure", ["cleanup", "legacy-helper", "missing-helper"])
+def test_uninstall_sh_preserves_tool_and_config_when_cleanup_is_unconfirmed(
+    posix_uninstall_harness: PosixUninstallHarness,
+    failure: str,
+) -> None:
+    before = (posix_uninstall_harness.fcc_home / "config.json").read_bytes()
+
+    result = posix_uninstall_harness.run(
+        fail_step=failure, include_doctor=failure != "missing-helper"
+    )
+
+    assert result.returncode != 0
+    assert "--keep-integrations" in result.stderr
+    assert (posix_uninstall_harness.fcc_home / "config.json").read_bytes() == before
+    assert all(
+        (posix_uninstall_harness.tool_bin / name).exists()
+        for name in FCC_COMMANDS
+        if name != "fcc-doctor" or failure != "missing-helper"
+    )
+    assert posix_uninstall_harness.calls() == ["uv:tool dir --bin"] + (
+        [] if failure == "missing-helper" else ["doctor:--disconnect-integrations"]
+    )
+    assert "Free Claude Code has been removed and verified." not in result.stdout
+
+
+def test_uninstall_sh_can_explicitly_keep_integrations_without_cleanup_helper(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    result = posix_uninstall_harness.run("--keep-integrations", include_doctor=False)
+
+    assert result.returncode == 0, result.stderr
+    assert not posix_uninstall_harness.fcc_home.exists()
+    assert all(
+        not (posix_uninstall_harness.tool_bin / name).exists() for name in FCC_COMMANDS
+    )
+    assert posix_uninstall_harness.calls()[:2] == [
+        "uv:tool dir --bin",
+        "uv:tool uninstall free-claude-code",
+    ]
+    assert not any(
+        call.startswith("doctor:") for call in posix_uninstall_harness.calls()
+    )
+
+
+def test_uninstall_sh_does_not_purge_when_tool_and_cleanup_helper_are_absent(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    posix_uninstall_harness.remove_entry_points()
+
+    result = posix_uninstall_harness.run(fail_step="missing")
+
+    assert result.returncode != 0
+    assert posix_uninstall_harness.fcc_home.exists()
+    assert "--keep-integrations" in result.stderr
+    assert posix_uninstall_harness.calls() == ["uv:tool dir --bin"]
 
 
 def test_uninstall_sh_preserves_unrelated_macos_desktop_link(
@@ -402,17 +488,22 @@ def test_uninstall_sh_reports_purge_failure_after_verified_tool_removal(
     assert "Free Claude Code has been removed and verified." not in result.stdout
 
 
+@pytest.mark.parametrize("include_doctor", [True, False])
 def test_uninstall_sh_dry_run_is_non_mutating(
     posix_uninstall_harness: PosixUninstallHarness,
+    include_doctor: bool,
 ) -> None:
-    result = posix_uninstall_harness.run("--dry-run")
+    result = posix_uninstall_harness.run("--dry-run", include_doctor=include_doctor)
 
     assert result.returncode == 0, result.stderr
     assert posix_uninstall_harness.fcc_home.exists()
     assert all(
-        (posix_uninstall_harness.tool_bin / name).exists() for name in FCC_COMMANDS
+        (posix_uninstall_harness.tool_bin / name).exists()
+        for name in FCC_COMMANDS
+        if name != "fcc-doctor" or include_doctor
     )
     assert posix_uninstall_harness.calls() == []
+    assert "fcc-doctor --disconnect-integrations" in result.stdout
     assert "Dry run complete. No changes were made." in result.stdout
 
 
@@ -482,11 +573,15 @@ class PowerShellUninstallHarness:
         *,
         fail_step: str = "",
         include_uv: bool = True,
+        include_doctor: bool = True,
         dry_run: bool = False,
+        keep_integrations: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         uv = self.bin_dir / "uv.cmd"
         if not include_uv and uv.exists():
             uv.unlink()
+        if not include_doctor:
+            (self.tool_bin / "fcc-doctor.cmd").unlink(missing_ok=True)
         return subprocess.run(
             [
                 self.powershell,
@@ -503,6 +598,7 @@ class PowerShellUninstallHarness:
             | {
                 "FAIL_STEP": fail_step,
                 "UNINSTALL_DRY_RUN": "1" if dry_run else "0",
+                "UNINSTALL_KEEP_INTEGRATIONS": "1" if keep_integrations else "0",
             },
         )
 
@@ -543,6 +639,23 @@ def powershell_uninstall_harness(
         (tool_bin / f"{name}.cmd").write_text(
             "@echo off\nexit /b 0\n", encoding="utf-8"
         )
+    (tool_bin / "fcc-doctor.cmd").write_text(
+        r"""@echo off
+echo doctor:%*>>"%CALL_LOG%"
+if not "%*"=="--disconnect-integrations" exit /b 55
+if "%FAIL_STEP%"=="cleanup" (
+    echo simulated integration cleanup failure 1>&2
+    exit /b 56
+)
+if "%FAIL_STEP%"=="legacy-helper" (
+    echo unrecognized arguments: --disconnect-integrations 1>&2
+    exit /b 2
+)
+echo Disconnected recognized FCC editor/app integrations.
+exit /b 0
+""",
+        encoding="utf-8",
+    )
     for name in (
         "claude",
         "codex",
@@ -579,13 +692,25 @@ if "%1"=="tool" if "%2"=="dir" if "%3"=="--bin" goto tool_bin
 if "%1"=="tool" if "%2"=="uninstall" goto uninstall
 exit /b 53
 :tool_bin
-if "%FAIL_STEP%"=="tool-dir" echo tool directory unavailable 1>&2 & exit /b 51
+if "%FAIL_STEP%"=="tool-dir" (
+    echo tool directory unavailable 1>&2
+    exit /b 51
+)
 echo %FAKE_TOOL_BIN%
 exit /b 0
 :uninstall
-if "%FAIL_STEP%"=="uninstall" echo permission denied while removing tool 1>&2 & exit /b 52
-if "%FAIL_STEP%"=="missing" echo Tool `free-claude-code` is not installed 1>&2 & exit /b 2
-if "%FAIL_STEP%"=="stale-entrypoint" echo Tool `free-claude-code` is not installed 1>&2 & exit /b 2
+if "%FAIL_STEP%"=="uninstall" (
+    echo permission denied while removing tool 1>&2
+    exit /b 52
+)
+if "%FAIL_STEP%"=="missing" (
+    echo Tool `free-claude-code` is not installed 1>&2
+    exit /b 2
+)
+if "%FAIL_STEP%"=="stale-entrypoint" (
+    echo Tool `free-claude-code` is not installed 1>&2
+    exit /b 2
+)
 for %%C in ({uv_commands}) do del /q "%FAKE_TOOL_BIN%\%%C.cmd" 2>nul
 echo Uninstalled free-claude-code
 exit /b 0
@@ -627,12 +752,14 @@ function Get-Process {
     }
 }
 $installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_UNINSTALLER))
+$uninstallOptions = @{}
 if ($env:UNINSTALL_DRY_RUN -eq "1") {
-    & $installer -DryRun
+    $uninstallOptions.DryRun = $true
 }
-else {
-    & $installer
+if ($env:UNINSTALL_KEEP_INTEGRATIONS -eq "1") {
+    $uninstallOptions.KeepIntegrations = $true
 }
+& $installer @uninstallOptions
 """,
         encoding="utf-8",
     )
@@ -651,6 +778,7 @@ else {
             powershell,
             shortcut,
             tool_bin / "fcc-desktop.cmd",
+            powershell_module_paths[powershell],
         )
 
     system_root = os.environ["SYSTEMROOT"]
@@ -672,6 +800,7 @@ else {
             "FCC_RUNNING_COMMAND": "",
             "FAIL_STEP": "",
             "UNINSTALL_DRY_RUN": "0",
+            "UNINSTALL_KEEP_INTEGRATIONS": "0",
         }
     )
     return PowerShellUninstallHarness(
@@ -722,6 +851,7 @@ def test_uninstall_ps1_removes_and_verifies_only_fcc(
     ).read_text(encoding="utf-8") == '{"native": true}\n'
     assert powershell_uninstall_harness.calls() == [
         "uv:tool dir --bin",
+        "doctor:--disconnect-integrations",
         "uv:tool uninstall free-claude-code",
         f"remove:{Path(powershell_uninstall_harness.env['USERPROFILE']) / 'Desktop' / 'Free Claude Code.lnk'}",
         f"remove:{Path(powershell_uninstall_harness.env['APPDATA']) / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs' / 'Free Claude Code.lnk'}",
@@ -743,6 +873,7 @@ def test_uninstall_ps1_preserves_unowned_desktop_shortcut(
         powershell_uninstall_harness.powershell,
         desktop_shortcut,
         unrelated_target,
+        powershell_uninstall_harness.env["PSMODULEPATH"],
     )
     original_shortcut = desktop_shortcut.read_bytes()
 
@@ -758,11 +889,78 @@ def test_uninstall_ps1_is_idempotent_when_tool_is_already_absent(
 ) -> None:
     powershell_uninstall_harness.remove_entry_points()
 
-    result = powershell_uninstall_harness.run(fail_step="missing")
+    result = powershell_uninstall_harness.run(
+        fail_step="missing", keep_integrations=True
+    )
 
     assert result.returncode == 0, result.stderr
     assert not powershell_uninstall_harness.fcc_home.exists()
     assert "already absent" in result.stdout
+    assert not any(
+        call.startswith("doctor:") for call in powershell_uninstall_harness.calls()
+    )
+
+
+@pytest.mark.parametrize("failure", ["cleanup", "legacy-helper", "missing-helper"])
+def test_uninstall_ps1_preserves_tool_and_config_when_cleanup_is_unconfirmed(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+    failure: str,
+) -> None:
+    before = (powershell_uninstall_harness.fcc_home / "config.json").read_bytes()
+
+    result = powershell_uninstall_harness.run(
+        fail_step=failure, include_doctor=failure != "missing-helper"
+    )
+
+    assert result.returncode != 0
+    assert "-KeepIntegrations" in result.stderr
+    assert (
+        powershell_uninstall_harness.fcc_home / "config.json"
+    ).read_bytes() == before
+    assert all(
+        (powershell_uninstall_harness.tool_bin / f"{name}.cmd").exists()
+        for name in FCC_COMMANDS
+        if name != "fcc-doctor" or failure != "missing-helper"
+    )
+    assert powershell_uninstall_harness.calls() == ["uv:tool dir --bin"] + (
+        [] if failure == "missing-helper" else ["doctor:--disconnect-integrations"]
+    )
+    assert "Free Claude Code has been removed and verified." not in result.stdout
+
+
+def test_uninstall_ps1_can_explicitly_keep_integrations_without_cleanup_helper(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    result = powershell_uninstall_harness.run(
+        keep_integrations=True, include_doctor=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not powershell_uninstall_harness.fcc_home.exists()
+    assert all(
+        not (powershell_uninstall_harness.tool_bin / f"{name}.cmd").exists()
+        for name in FCC_COMMANDS
+    )
+    assert powershell_uninstall_harness.calls()[:2] == [
+        "uv:tool dir --bin",
+        "uv:tool uninstall free-claude-code",
+    ]
+    assert not any(
+        call.startswith("doctor:") for call in powershell_uninstall_harness.calls()
+    )
+
+
+def test_uninstall_ps1_does_not_purge_when_tool_and_cleanup_helper_are_absent(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    powershell_uninstall_harness.remove_entry_points()
+
+    result = powershell_uninstall_harness.run(fail_step="missing")
+
+    assert result.returncode != 0
+    assert powershell_uninstall_harness.fcc_home.exists()
+    assert "-KeepIntegrations" in result.stderr
+    assert powershell_uninstall_harness.calls() == ["uv:tool dir --bin"]
 
 
 @pytest.mark.parametrize("failure", ["tool-dir", "uninstall", "stale-entrypoint"])
@@ -805,18 +1003,24 @@ def test_uninstall_ps1_reports_purge_failure_after_verified_tool_removal(
     assert "Free Claude Code has been removed and verified." not in result.stdout
 
 
+@pytest.mark.parametrize("include_doctor", [True, False])
 def test_uninstall_ps1_dry_run_is_non_mutating(
     powershell_uninstall_harness: PowerShellUninstallHarness,
+    include_doctor: bool,
 ) -> None:
-    result = powershell_uninstall_harness.run(dry_run=True)
+    result = powershell_uninstall_harness.run(
+        dry_run=True, include_doctor=include_doctor
+    )
 
     assert result.returncode == 0, result.stderr
     assert powershell_uninstall_harness.fcc_home.exists()
     assert all(
         (powershell_uninstall_harness.tool_bin / f"{name}.cmd").exists()
         for name in FCC_COMMANDS
+        if name != "fcc-doctor" or include_doctor
     )
     assert powershell_uninstall_harness.calls() == []
+    assert "fcc-doctor --disconnect-integrations" in result.stdout
     assert "Dry run complete. No changes were made." in result.stdout
 
 
