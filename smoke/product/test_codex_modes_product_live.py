@@ -9,7 +9,7 @@ import sqlite3
 import sys
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import closing, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -105,7 +105,7 @@ def _marker_command(marker: Path) -> str:
 def _canned_provider(
     review_release: threading.Event | None = None,
     child_finished: threading.Event | None = None,
-) -> Iterator[tuple[str, dict[str, Any]]]:
+) -> Generator[tuple[str, dict[str, Any]]]:
     state: dict[str, Any] = {"requests": [], "command": None, "reviews": 0}
 
     class Handler(BaseHTTPRequestHandler):

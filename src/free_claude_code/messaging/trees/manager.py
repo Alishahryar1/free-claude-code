@@ -1,7 +1,7 @@
 """Public facade for atomic messaging tree aggregates."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -120,7 +120,7 @@ class TreeQueueManager:
     @asynccontextmanager
     async def _transaction(
         self, *, worker: NodeClaim | None = None, allow_closing: bool = False
-    ) -> AsyncIterator[TreeTransaction]:
+    ) -> AsyncGenerator[TreeTransaction]:
         async with self._lock:
             if self._closing and worker is None and not allow_closing:
                 raise RuntimeError("Messaging is shutting down")
