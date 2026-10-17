@@ -9,6 +9,7 @@ from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.github_copilot.provider import GitHubCopilotProvider
 from free_claude_code.providers.groq import GroqProvider
+from free_claude_code.providers.iflytek_token_plan import IFlytekTokenPlanProvider
 from free_claude_code.providers.kilo import KiloProvider
 from free_claude_code.providers.lmstudio import LMStudioProvider
 from free_claude_code.providers.mistral import MistralProvider
@@ -80,6 +81,7 @@ def test_provider_and_platform_registries_include_builtins() -> None:
         "open_router": OpenRouterProvider,
         "mistral": MistralProvider,
         "deepseek": DeepSeekProvider,
+        "iflytek_token_plan": IFlytekTokenPlanProvider,
         "kilo": KiloProvider,
         "cloudflare": CloudflareProvider,
         "lmstudio": LMStudioProvider,
