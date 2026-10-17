@@ -576,7 +576,8 @@ async def test_runtime_warm_reports_query_failures_without_blocking() -> None:
     assert runtime.cached_model_ids() == {"nvidia_nim": frozenset({"nim-model"})}
     logged = " ".join(str(arg) for call in warning.call_args_list for arg in call.args)
     assert "open_router" in logged
-    assert "malformed model-list response: bad model-list shape" in logged
+    assert "The provider returned an invalid model list." in logged
+    assert "bad model-list shape" not in logged
 
 
 @pytest.mark.asyncio

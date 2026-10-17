@@ -2,6 +2,7 @@ import asyncio
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx2
 import pytest
 
 from free_claude_code.application.errors import ApplicationUnavailableError
@@ -78,6 +79,51 @@ def _settings(model: str) -> Settings:
     return Settings().model_copy(
         update={"model": model, "nvidia_nim_api_keys": normalize_api_keys("test-key")}
     )
+
+
+@pytest.mark.asyncio
+async def test_discovery_error_follows_attempt_and_generation_without_losing_cache():
+    factory = RuntimeFactory()
+    settings = _settings("nvidia_nim/one")
+    manager = ProviderRuntimeManager(settings, runtime_factory=factory)
+    provider = factory.runtimes[0].provider
+    manager.cache_model_infos("nvidia_nim", {ProviderModelInfo("one")})
+    provider.list_model_infos.side_effect = httpx2.ProxyError("secret-canary")
+    try:
+        with patch(
+            "free_claude_code.runtime.provider_manager.logger.warning"
+        ) as warning:
+            result = await manager.refresh_model_list_cache()
+        message = result.failure_messages["nvidia_nim"]
+        assert "proxy" in message
+        assert manager.catalog_status()["provider_errors"] == {"nvidia_nim": message}
+        assert manager.cached_model_ids()["nvidia_nim"] == frozenset({"one"})
+        assert warning.call_args.args[-1] == message
+        assert "secret-canary" not in str(warning.call_args)
+
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def held():
+            entered.set()
+            await release.wait()
+            return frozenset({ProviderModelInfo("two")})
+
+        provider.list_model_infos.side_effect = held
+        refresh = asyncio.create_task(manager.refresh_provider("nvidia_nim"))
+        await entered.wait()
+        assert manager.catalog_status()["providers"] == {"nvidia_nim": "starting"}
+        assert manager.catalog_status()["provider_errors"] == {}
+        release.set()
+        assert (await refresh).failure_messages == {}
+        assert manager.catalog_status()["providers"] == {"nvidia_nim": "ready"}
+        provider.list_model_infos.side_effect = httpx2.ProxyError("secret-canary")
+        await manager.refresh_provider("nvidia_nim")
+        await manager.replace(settings, commit=AsyncMock())
+        assert manager.catalog_status()["provider_errors"] == {}
+        await manager.wait_for_catalog()
+        assert manager.catalog_status()["provider_errors"] == {}
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio

@@ -2379,7 +2379,9 @@ def test_admin_local_provider_failure_does_not_return_exception_text(
     )
     assert "CREDENTIAL[unrecognized-format-987654321]" not in provider["message"]
     assert "RuntimeError" not in provider["message"]
-    assert "error_type" not in provider
+    assert provider["error_type"] == "unexpected_error"
+    assert "CREDENTIAL[unrecognized-format-987654321]" not in response.text
+    assert "RuntimeError" not in response.text
 
 
 @pytest.mark.parametrize(
@@ -2408,6 +2410,26 @@ def test_admin_provider_test_route_preserves_runtime_result(
 
     assert response.status_code == 200
     assert response.json() == result
+
+
+def test_admin_provider_test_exposes_completed_attempt_failure():
+    app = create_test_app()
+    manager = provider_manager_for_app(app)
+    message = "The model-list request returned HTTP 403."
+    result = ProviderModelRefreshResult(
+        failed_provider_ids=("nvidia_nim",),
+        failure_messages={"nvidia_nim": message},
+    )
+    with patch.object(manager, "refresh_provider", new=AsyncMock(return_value=result)):
+        response = _local_client(app).post(
+            "/admin/api/providers/nvidia_nim/test", json={}
+        )
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider_id": "nvidia_nim",
+        "ok": False,
+        "message": message,
+    }
 
 
 def test_admin_launch_url_uses_loopback_for_wildcard_host():

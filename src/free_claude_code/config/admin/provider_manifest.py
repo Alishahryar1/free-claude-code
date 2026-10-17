@@ -27,7 +27,8 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
     },
     "OPENAI_PROXY": {
         "description": (
-            "Optional proxy used for OpenAI sign-in and ChatGPT Codex requests. "
+            "Optional network proxy. Leave blank unless you use one. "
+            "Used for OpenAI sign-in and ChatGPT Codex requests. "
             "Changing it restarts FCC."
         ),
         "restart_required": True,
@@ -474,6 +475,7 @@ def _proxy_field_specs() -> tuple[ConfigFieldSpec, ...]:
                 ConfigFieldSpec(
                     key=_settings_env_key(descriptor.proxy_attr),
                     label=f"{descriptor.display_name} Proxy",
+                    description="Optional network proxy. Leave blank unless you use one",
                     section_id="providers",
                     field_type="secret",
                     settings_attr=descriptor.proxy_attr,

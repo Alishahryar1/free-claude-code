@@ -4,7 +4,7 @@ import os
 import sys
 import threading
 import traceback
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TextIO
 
@@ -16,7 +16,7 @@ _output = pytest.StashKey[TextIO]()
 @contextmanager
 def dump_threads_after(
     timeout: float, output: TextIO, test_name: str
-) -> Iterator[None]:
+) -> Generator[None]:
     def dump() -> None:
         print(f"Test still running after {timeout:g}s: {test_name}", file=output)
         for thread_id, frame in sys._current_frames().items():

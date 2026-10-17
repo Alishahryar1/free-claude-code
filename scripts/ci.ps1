@@ -16,7 +16,8 @@ $CheckOrder = @(
     "ruff-check",
     "ty",
     "pytest",
-    "playwright"
+    "playwright",
+    "macos-desktop"
 )
 
 function Show-Usage {
@@ -34,6 +35,7 @@ Checks (in order):
   ty             uv run ty check
   pytest         uv run pytest -v --tb=short
   playwright     Install Chromium and run deterministic Admin browser tests
+  macos-desktop  Build and test the native app (macOS GUI required, -Only)
 
 Options:
   -Only ID              Run only the given check (repeatable)
@@ -94,6 +96,10 @@ function Assert-ValidCheckId {
 
 function Test-ShouldRunCheck {
     param([string] $CheckId)
+
+    if ($CheckId -eq "macos-desktop" -and $Only.Count -eq 0) {
+        return $false
+    }
 
     if ($Only.Count -gt 0 -and ($Only -notcontains $CheckId)) {
         return $false
@@ -187,6 +193,11 @@ function Invoke-Check {
         "ty" { Invoke-TyCheck }
         "pytest" { Invoke-PytestCheck }
         "playwright" { Invoke-PlaywrightCheck }
+        "macos-desktop" {
+            Write-Step "macOS desktop"
+            Invoke-CiCommand -FilePath "uv" -Arguments @("run", "--locked", "python", "scripts/build_macos_launcher.py")
+            Invoke-CiCommand -FilePath "uv" -Arguments @("run", "--locked", "pytest", "--confcutdir=smoke/desktop", "-n", "0", "-s", "-v", "smoke/desktop")
+        }
         default { throw "unknown check id: $CheckId" }
     }
 }

@@ -1,7 +1,7 @@
 """Tests for the pure-ASGI ingress correlation owner."""
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import cast
 from unittest.mock import patch
@@ -82,7 +82,7 @@ async def test_correlation_context_and_headers_span_the_complete_stream() -> Non
         )
 
     @contextmanager
-    def contextualize(**fields: object) -> Iterator[None]:
+    def contextualize(**fields: object) -> Generator[None]:
         context_entries.append(fields)
         try:
             yield

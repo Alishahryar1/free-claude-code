@@ -43,6 +43,7 @@ $script:InstallAider = $true
 $script:PiAvailable = $false
 $script:MuseAvailable = $false
 $script:EnableRtkHeadroom = $RtkHeadroom.IsPresent
+$FccInstallVersion = [Environment]::GetEnvironmentVariable("FCC_INSTALL_VERSION")
 $script:InstallLog = ""
 $script:InstallLogWarning = $false
 $script:InstallSteps = [ordered] @{}
@@ -153,13 +154,19 @@ function Start-InstallStep {
 
 function Get-InstallerRetryCommand {
     $options = @()
+    $prefix = ""
+    $installerRef = "main"
+    if ($FccInstallVersion) {
+        $prefix = "`$env:FCC_INSTALL_VERSION = '$FccInstallVersion'; "
+        $installerRef = "v$FccInstallVersion"
+    }
     if ($VoiceLocal) { $options += "-VoiceLocal" }
     if ($TorchBackend) { $options += @("-TorchBackend", $TorchBackend) }
     if ($script:EnableRtkHeadroom) { $options += "-RtkHeadroom" }
     if ($script:InstallerPath -and (Test-Path -LiteralPath $script:InstallerPath -PathType Leaf)) {
-        return "& " + (Format-Command $script:InstallerPath $options)
+        return $prefix + "& " + (Format-Command $script:InstallerPath $options)
     }
-    return "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1'))) " + (($options | ForEach-Object { Format-Argument $_ }) -join " ")
+    return $prefix + "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Alishahryar1/free-claude-code/$installerRef/scripts/install.ps1'))) " + (($options | ForEach-Object { Format-Argument $_ }) -join " ")
 }
 
 function Show-InstallReport {
@@ -1656,10 +1663,9 @@ function Ensure-Uv {
 }
 
 function Get-PackageSpec {
-    if ($VoiceLocal) {
-        return "free-claude-code[voice_local]"
-    }
-    return "free-claude-code"
+    $spec = if ($VoiceLocal) { "free-claude-code[voice_local]" } else { "free-claude-code" }
+    if ($FccInstallVersion) { $spec += "==$FccInstallVersion" }
+    return $spec
 }
 
 function Install-FreeClaudeCode {
@@ -1891,6 +1897,10 @@ if ($Help) {
 if ($RemainingArgs.Count -gt 0) {
     Show-Usage
     throw "Unknown option: $($RemainingArgs -join ' ')"
+}
+
+if ($FccInstallVersion -and $FccInstallVersion -notmatch '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z') {
+    throw "FCC_INSTALL_VERSION must be a canonical major.minor.patch release."
 }
 
 if ((-not [string]::IsNullOrWhiteSpace($TorchBackend)) -and (-not $VoiceLocal)) {

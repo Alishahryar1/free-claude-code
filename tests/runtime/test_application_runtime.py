@@ -290,10 +290,7 @@ async def test_provider_check_returns_stable_failure_for_application_error() -> 
     assert result == {
         "provider_id": "nvidia_nim",
         "ok": False,
-        "message": (
-            "Could not refresh this provider's models. "
-            "Verify its configuration and access."
-        ),
+        "message": "The provider is unavailable. Check its configuration and access.",
     }
     assert "error_type" not in result
     await manager.close()
@@ -315,14 +312,12 @@ async def test_provider_check_never_returns_unrecognized_credentials(
     assert result == {
         "provider_id": "nvidia_nim",
         "ok": False,
-        "message": (
-            "Could not refresh this provider's models. "
-            "Verify its configuration and access."
-        ),
+        "message": "Could not load models. Check the provider's settings and retry.",
     }
     log_text = " | ".join(record.getMessage() for record in caplog.records)
     assert "provider=nvidia_nim" in log_text
-    assert "RuntimeError" in log_text
+    assert isinstance(result["message"], str)
+    assert result["message"] in log_text
     assert secret not in log_text
     assert "error_type" not in result
     await manager.close()

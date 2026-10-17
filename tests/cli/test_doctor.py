@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 
+import httpx
 import pytest
 
 from free_claude_code.cli import doctor
@@ -12,6 +13,169 @@ from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.openai_codex import auth as openai_auth
 from free_claude_code.runtime import diagnostics
+
+
+@pytest.fixture(autouse=True)
+def offline_discovery_status(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise httpx.ConnectError("private-canary")
+
+    monkeypatch.setattr(httpx, "get", unavailable)
+
+
+def test_live_discovery_report_projects_only_safe_current_errors(monkeypatch):
+    requests = []
+    message = "The network proxy rejected or failed the connection. Check your proxy settings."
+
+    def get(url, **kwargs):
+        requests.append((url, kwargs))
+        return httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={
+                "status": "running",
+                "token": "private-canary",
+                "startup": {
+                    "providers": {
+                        "nvidia_nim": "failed",
+                        "open_router": "ready",
+                        "private-canary": "failed",
+                    },
+                    "provider_errors": {
+                        "nvidia_nim": message,
+                        "open_router": "private-canary",
+                    },
+                },
+            },
+        )
+
+    monkeypatch.setattr(httpx, "get", get)
+    result = diagnostics.model_discovery_report(Settings())
+    assert result["status"] == "available"
+    assert result["providers"]["nvidia_nim"] == {"state": "failed", "message": message}
+    assert result["providers"]["open_router"] == {"state": "ready"}
+    assert "private-canary" not in json.dumps(result)
+    assert requests == [
+        (
+            "http://127.0.0.1:8082/admin/api/status",
+            {
+                "timeout": 2.0,
+                "trust_env": False,
+                "follow_redirects": False,
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        {},
+        {"status": "running"},
+        {"status": "running", "startup": {"providers": []}},
+    ],
+)
+def test_missing_or_incompatible_live_status_is_unavailable(monkeypatch, payload):
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda url, **kwargs: httpx.Response(
+            200, request=httpx.Request("GET", url), json=payload
+        ),
+    )
+    assert diagnostics.model_discovery_report(Settings())["status"] == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "private-canary",
+        "The model-list request returned HTTP 403. private-canary",
+        {},
+        None,
+    ],
+)
+def test_doctor_does_not_trust_arbitrary_server_failure_text(monkeypatch, message):
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda url, **kwargs: httpx.Response(
+            200,
+            request=httpx.Request("GET", url),
+            json={
+                "status": "running",
+                "startup": {
+                    "providers": {"nvidia_nim": "failed"},
+                    "provider_errors": {"nvidia_nim": message},
+                },
+            },
+        ),
+    )
+    result = diagnostics.model_discovery_report(Settings())
+    assert result["providers"]["nvidia_nim"] == {
+        "state": "failed",
+        "message": "Could not load models. Check the provider's settings and retry.",
+    }
+    assert "private-canary" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "status, body",
+    [(302, "private-canary"), (500, "private-canary"), (200, "private-canary")],
+)
+def test_unusable_local_http_response_is_unavailable(monkeypatch, status, body):
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda url, **kwargs: httpx.Response(
+            status,
+            request=httpx.Request("GET", url),
+            text=body,
+            headers={"Location": "https://private-canary.test"},
+        ),
+    )
+    result = diagnostics.model_discovery_report(Settings())
+    assert result["status"] == "unavailable"
+    assert "private-canary" not in json.dumps(result)
+
+
+def test_discovery_status_failure_does_not_expose_exception_or_contact_remote_host(
+    monkeypatch,
+):
+    assert diagnostics.model_discovery_report(Settings())["status"] == "unavailable"
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("doctor must only contact the local server")
+
+    monkeypatch.setattr(httpx, "get", forbidden)
+    assert (
+        diagnostics.model_discovery_report(Settings(HOST="remote.test"))["status"]
+        == "unavailable"
+    )
+
+
+@pytest.mark.parametrize(
+    "host", ["http://127.0.0.1", "[::1", "[::1]:8082", "local\nhost"]
+)
+def test_malformed_host_still_produces_a_doctor_report(monkeypatch, host):
+    ManagedConfigStore().initialize({})
+    monkeypatch.setenv("HOST", host)
+
+    # Exercise real URL validation without connecting to a user-owned server.
+    def validate_url(url, **kwargs):
+        httpx.Request("GET", url)
+        raise httpx.ConnectError("unavailable")
+
+    monkeypatch.setattr(httpx, "get", validate_url)
+    monkeypatch.setattr(diagnostics, "harness_report", lambda: {})
+    monkeypatch.setattr(diagnostics, "integration_report", lambda settings: {})
+    report = diagnostics.collect_report()
+    assert report["configuration"]["status"] == "available"
+    assert report["runtime"]["host"] == host
+    assert report["model_discovery"]["status"] == "unavailable"
+    assert json.dumps(report)
 
 
 def test_missing_configuration_still_produces_report(monkeypatch):
@@ -116,6 +280,7 @@ def test_complete_report_reads_real_files_without_mutation(
     assert report["integrations"]["claude-vscode"]["connected"] is True
     assert report["providers"]["github_copilot"]["saved_connection"] == "connected"
     assert report["errors"] == []
+    assert report["model_discovery"]["status"] == "unavailable"
     assert all(not item["installed"] for item in report["harnesses"].values())
     for private in (
         "managed-secret",

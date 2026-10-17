@@ -46,6 +46,83 @@ CODING_AGENTS = (
 )
 
 
+@pytest.mark.parametrize("voice", [False, True])
+def test_install_sh_pins_selected_fcc_release(posix_harness, voice):
+    posix_harness.env["FCC_INSTALL_VERSION"] = "2.0.0"
+    posix_harness.add_uv("0.12.13")
+    result = posix_harness.run_functions(
+        f"voice_local={int(voice)}\nvalidate_args\ninstall_free_claude_code\ninstaller_path=''\nprint_installer_retry"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    spec = (
+        "free-claude-code[voice_local]==2.0.0" if voice else "free-claude-code==2.0.0"
+    )
+    assert any(call.endswith(spec) for call in posix_harness.calls())
+    assert "/v2.0.0/scripts/install.sh" in result.stdout
+    assert "FCC_INSTALL_VERSION=" in result.stdout
+
+
+@pytest.mark.parametrize("voice", [False, True])
+def test_install_ps1_pins_selected_fcc_release(powershell_harness, voice):
+    powershell_harness.env["FCC_INSTALL_VERSION"] = "2.0.0"
+    powershell_harness.add_uv("0.12.13")
+    result = powershell_harness.run_functions(
+        "Install-FreeClaudeCode\n$script:InstallerPath = ''\nWrite-Output (Get-InstallerRetryCommand)",
+        *(["-VoiceLocal"] if voice else []),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    spec = (
+        "free-claude-code[voice_local]==2.0.0" if voice else "free-claude-code==2.0.0"
+    )
+    assert any(call.endswith(spec) for call in powershell_harness.calls())
+    assert "/v2.0.0/scripts/install.ps1" in result.stdout
+    assert "$env:FCC_INSTALL_VERSION = '2.0.0'" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "2.0",
+        "v2.0.0",
+        "02.0.0",
+        "2.0.0rc1",
+        "2.0.0+local",
+        "2.0.0\n3.0.0",
+        "2.0.0/../main",
+    ],
+)
+def test_install_sh_rejects_invalid_fcc_release_before_changes(posix_harness, version):
+    posix_harness.env["FCC_INSTALL_VERSION"] = version
+    result = posix_harness.run("--dry-run")
+    assert result.returncode != 0
+    assert "FCC_INSTALL_VERSION" in result.stderr
+    assert posix_harness.calls() == []
+    assert not (Path(posix_harness.env["HOME"]) / ".fcc/logs").exists()
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "2.0",
+        "v2.0.0",
+        "02.0.0",
+        "2.0.0rc1",
+        "2.0.0+local",
+        "2.0.0\n3.0.0",
+        "2.0.0/../main",
+    ],
+)
+def test_install_ps1_rejects_invalid_fcc_release_before_changes(
+    powershell_harness, version
+):
+    powershell_harness.env["FCC_INSTALL_VERSION"] = version
+    result = powershell_harness.run("-DryRun")
+    assert result.returncode != 0
+    assert "FCC_INSTALL_VERSION" in result.stderr
+    assert powershell_harness.calls() == []
+    assert not (Path(powershell_harness.env["USERPROFILE"]) / ".fcc/logs").exists()
+
+
 def test_install_ps1_bundle_dry_run_includes_headroom(powershell_harness):
     result = powershell_harness.run("-RtkHeadroom", "-DryRun")
     assert result.returncode == 0, result.stderr
@@ -748,10 +825,8 @@ echo "$name:$*" >> "$CALL_LOG"
 if [ "$FAIL_STEP" = "fcc-verify" ]; then
     exit 36
 fi
-if [ "$name" = "fcc-desktop" ] && [ "${1:-}" = "--export-icon" ]; then
-    [ "$FAIL_STEP" = "desktop-icon-export" ] && exit 37
-    mkdir -p "$(dirname "$2")"
-    printf 'fake icon\n' > "$2"
+if [ "$name" = "fcc-desktop" ] && [ "${1:-}" = "--install-macos-app" ]; then
+    [ "$FAIL_STEP" = "macos-app-setup" ] && exit 37
 fi
 if [ "$name" = "fcc-server" ] && [ "${1:-}" = "--version" ]; then
     echo "free-claude-code 3.5.18"
@@ -1527,47 +1602,69 @@ def test_install_sh_rejects_uninstalled_only_selection(
     _assert_uv_ready_without_fcc_install(posix_harness.calls())
 
 
-def test_install_sh_creates_native_macos_app_and_desktop_link(
-    posix_harness: PosixHarness,
-) -> None:
+def test_install_sh_delegates_macos_bundle_to_installed_helper(posix_harness):
     posix_harness.env["FAKE_UNAME"] = "Darwin"
-    tool_bin = posix_harness.root / "tool's bin"
-    posix_harness.env["FAKE_TOOL_BIN"] = str(tool_bin)
-
+    posix_harness.env["FAKE_TOOL_BIN"] = str(posix_harness.root / "tool's bin")
     result = posix_harness.run()
-
     assert result.returncode == 0, result.stderr
-    app = posix_harness.root / "home" / "Applications" / "Free Claude Code.app"
-    plist = app / "Contents" / "Info.plist"
-    owner_file = app / "Contents" / ".free-claude-code-owner"
-    launcher = app / "Contents" / "MacOS" / "fcc-desktop"
-    icon = app / "Contents" / "Resources" / "AppIcon.icns"
-    desktop_link = posix_harness.root / "home" / "Desktop" / "Free Claude Code.app"
-    assert owner_file.read_text(encoding="utf-8").strip() == (
-        "io.github.alishahryar1.free-claude-code"
+    calls = posix_harness.calls()
+    assert calls.count("fcc-desktop:--install-macos-app") == 1
+    assert calls.index("fcc-server:--version") < calls.index(
+        "fcc-desktop:--install-macos-app"
     )
-    plist_text = plist.read_text(encoding="utf-8")
-    assert "<key>CFBundleIconFile</key>" in plist_text
-    assert "<string>AppIcon</string>" in plist_text
-    assert "<key>LSUIElement</key>" in plist_text
-    assert "<key>LSMultipleInstancesProhibited</key>" in plist_text
-    assert icon.read_bytes() == b"fake icon\n"
-    assert launcher.stat().st_mode & 0o111
-    expected_command = str(tool_bin / "fcc-desktop").replace("'", "'\\''")
-    assert f"exec '{expected_command}'" in launcher.read_text(encoding="utf-8")
-    assert desktop_link.is_symlink()
-    assert desktop_link.readlink() == app
-    assert any(
-        call == f"fcc-desktop:--export-icon {icon}" for call in posix_harness.calls()
+    install = next(
+        call for call in calls if "--refresh-package free-claude-code" in call
     )
+    assert "--managed-python" in install and "+gil" in install
 
 
-def test_install_sh_stops_if_macos_icon_export_fails(
+@pytest.mark.parametrize(
+    "system,preference", [("Darwin", "unset"), ("Linux", "system")]
+)
+def test_install_sh_macos_python_selection_overrides_only_its_preference(
+    posix_harness, system, preference
+):
+    posix_harness.env["FAKE_UNAME"] = system
+    posix_harness.env["UV_PYTHON_PREFERENCE"] = "system"
+    _write_executable(
+        posix_harness.bin_dir / "uv",
+        _posix_uv_command("0.12.13").replace(
+            "#!/bin/sh\n",
+            f'#!/bin/sh\n[ "${{UV_PYTHON_PREFERENCE-unset}}" = "{preference}" ] || exit 83\n',
+            1,
+        ),
+    )
+    result = posix_harness.run_functions("install_free_claude_code")
+    assert result.returncode == 0, result.stderr
+    install = next(
+        call
+        for call in posix_harness.calls()
+        if "--refresh-package free-claude-code" in call
+    )
+    assert ("--managed-python" in install) == (system == "Darwin")
+    assert ("+gil" in install) == (system == "Darwin")
+
+
+@pytest.mark.parametrize("system,dry_run", [("Darwin", True), ("Linux", False)])
+def test_install_sh_macos_helper_dry_run_and_platform_scope(
+    posix_harness, system, dry_run
+):
+    posix_harness.env["FAKE_UNAME"] = system
+    result = posix_harness.run_functions(
+        f"dry_run={int(dry_run)}\ninstall_macos_desktop_app"
+    )
+    assert result.returncode == 0, result.stderr
+    assert not any(call.startswith("fcc-desktop:") for call in posix_harness.calls())
+    assert ("--install-macos-app" in result.stdout) == dry_run
+    assert not (posix_harness.root / "home/Applications").exists()
+
+
+def test_install_sh_stops_if_macos_bundle_setup_fails(
     posix_harness: PosixHarness,
 ) -> None:
     posix_harness.env["FAKE_UNAME"] = "Darwin"
 
-    result = posix_harness.run(fail_step="desktop-icon-export")
+    result = posix_harness.run(fail_step="macos-app-setup")
 
     assert result.returncode != 0
     assert "Command failed with exit code 37" in result.stderr
@@ -1579,61 +1676,20 @@ def test_install_sh_stops_if_macos_icon_export_fails(
     ).exists()
 
 
-def test_install_sh_rejects_unowned_macos_app_bundle(
-    posix_harness: PosixHarness,
-) -> None:
-    posix_harness.env["FAKE_UNAME"] = "Darwin"
-    app = posix_harness.root / "home" / "Applications" / "Free Claude Code.app"
-    contents = app / "Contents"
-    contents.mkdir(parents=True)
-    plist = contents / "Info.plist"
-    plist.write_text("foreign app", encoding="utf-8")
-
-    result = posix_harness.run()
-
-    assert result.returncode != 0
-    assert "not managed by Free Claude Code" in result.stderr
-    assert plist.read_text(encoding="utf-8") == "foreign app"
-    assert not (contents / ".free-claude-code-owner").exists()
-
-
-def test_install_sh_preserves_unrelated_macos_desktop_link(
-    posix_harness: PosixHarness,
-) -> None:
-    posix_harness.env["FAKE_UNAME"] = "Darwin"
-    desktop = posix_harness.root / "home" / "Desktop"
-    desktop.mkdir()
-    unrelated = posix_harness.root / "Unrelated.app"
-    unrelated.mkdir()
-    desktop_link = desktop / "Free Claude Code.app"
-    desktop_link.symlink_to(unrelated, target_is_directory=True)
-
-    result = posix_harness.run()
-
-    assert result.returncode == 0, result.stderr
-    assert "non-FCC link" in result.stdout
-    assert desktop_link.readlink() == unrelated
-
-
 @pytest.mark.parametrize("uv_version", ("0.12.13", "0.12.13+build.1", "0.12.14"))
-def test_install_sh_preserves_valid_existing_tools(
-    posix_harness: PosixHarness,
-    uv_version: str,
+def test_install_sh_preserves_compatible_uv(
+    posix_harness: PosixHarness, uv_version: str
 ) -> None:
-    posix_harness.add_client("claude")
-    posix_harness.add_client("codex")
-    posix_harness.add_client("pi")
-    posix_harness.add_client("cline")
-    posix_harness.add_client("hermes")
-    posix_harness.add_client("grok")
-    posix_harness.add_client("muse")
-    posix_harness.add_client("aider")
     posix_harness.add_uv(uv_version)
+    executable = posix_harness.bin_dir / "uv"
+    original = executable.read_bytes()
 
-    result = posix_harness.run()
+    result = posix_harness.run_functions("ensure_uv")
 
     assert result.returncode == 0, result.stderr
     assert not any(call.startswith("download:") for call in posix_harness.calls())
+    assert "uv-install" not in posix_harness.calls()
+    assert executable.read_bytes() == original
     assert "leaving it unchanged" in result.stdout
 
 

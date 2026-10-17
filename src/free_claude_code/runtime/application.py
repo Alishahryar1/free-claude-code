@@ -486,7 +486,9 @@ class ApplicationRuntime:
             return {
                 "provider_id": provider_id,
                 "ok": False,
-                "message": _PROVIDER_CHECK_FAILURE_MESSAGE,
+                "message": result.failure_messages.get(
+                    provider_id, _PROVIDER_CHECK_FAILURE_MESSAGE
+                ),
             }
         return {
             "provider_id": provider_id,

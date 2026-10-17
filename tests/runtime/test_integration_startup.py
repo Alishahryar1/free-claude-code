@@ -15,6 +15,7 @@ from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.paths import claude_desktop_disconnect_path
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.gateway_model_ids import desktop_model_id
 from free_claude_code.harnesses import (
     claude_desktop_integration as desktop,
 )
@@ -377,9 +378,21 @@ async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off
         True,
         disconnect_path=claude_desktop_disconnect_path(),
     )
+    profile = root / "configLibrary" / f"{desktop.FCC_ID}.json"
+    config = json.loads(profile.read_text())
+    models = [
+        {"name": desktop_model_id("nvidia_nim/one"), "labelOverride": "Pinned model"},
+        {"name": desktop_model_id("nvidia_nim/two"), "maxEffort": "high"},
+    ]
+    config["inferenceModels"] = models
+    profile.write_text(json.dumps(config))
     try:
         await runtime.start()
         await runtime._integrations._desktop_update.task
+        refreshed = json.loads(profile.read_text())
+        assert refreshed["inferenceModels"] == models
+        assert refreshed["inferenceGatewayApiKey"] == TOKEN
+        assert refreshed["inferenceGatewayBaseUrl"] == "http://127.0.0.1:8000"
         result = await runtime.claude_desktop_status()
         assert result["connected"] is True
         assert result["update"]["changed"] is True
