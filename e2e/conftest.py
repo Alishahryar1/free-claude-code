@@ -257,6 +257,12 @@ def admin_base_url(
 
     provider_secret = "CREDENTIAL[unrecognized-format-987654321]"
     providers: dict[str, BaseProvider] = {
+        **{
+            name: _ModelListingProvider(
+                error=ConnectionError("Local fixture is offline")
+            )
+            for name in ("lmstudio", "llamacpp", "ollama")
+        },
         "nvidia_nim": _ModelListingProvider(),
         "open_router": _ModelListingProvider(
             frozenset(

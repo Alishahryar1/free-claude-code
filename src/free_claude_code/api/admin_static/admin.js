@@ -789,6 +789,12 @@ function providerCheckResult(providerId) {
     result = { status: "error", message: state.startup.startup.provider_errors?.[providerId] || "Could not load models. Check the provider's settings and retry." };
   } else if (discovery === "ready") {
     result = { status: "ok", message: modelCountMessage(state.startup.cached_models[providerId]?.length || 0) };
+  } else if (discovery === "unavailable") {
+    return {
+      status: "",
+      message: "Local server unavailable",
+      availability: check ? { ...check, status: "" } : undefined,
+    };
   }
   // Model discovery and endpoint reachability are separate observations.
   return result ? { ...result, availability: check } : check;

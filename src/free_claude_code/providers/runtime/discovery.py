@@ -133,13 +133,27 @@ def model_list_provider_ids_for_settings(
     connected_provider_ids: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Return providers worth discovering for this process configuration."""
-    referenced_ids = referenced_provider_ids(settings)
-    return tuple(
-        provider_id
-        for provider_id in model_cache_provider_ids_for_settings(
-            settings, connected_provider_ids
-        )
-        if settings.custom_provider(provider_id) is not None
-        or not PROVIDER_CATALOG[provider_id].local
-        or provider_id in referenced_ids
+    return model_cache_provider_ids_for_settings(settings, connected_provider_ids)
+
+
+def is_optional_local_provider(settings: Settings, provider_id: str) -> bool:
+    """Identify default local endpoints the user has not explicitly configured."""
+    descriptor = PROVIDER_CATALOG.get(provider_id)
+    return (
+        descriptor is not None
+        and descriptor.local
+        and provider_id not in referenced_provider_ids(settings)
+        # Validation retains explicitly supplied fields, even default-valued URLs.
+        and descriptor.base_url_attr not in settings.model_fields_set
+        and not (descriptor.proxy_attr and getattr(settings, descriptor.proxy_attr))
     )
+
+
+def is_optional_local_failure(
+    settings: Settings, provider_id: str, message: str | None
+) -> bool:
+    """An unused default endpoint being absent is normal during discovery."""
+    return is_optional_local_provider(settings, provider_id) and message in {
+        _FAILURE_MESSAGES["connection"],
+        _FAILURE_MESSAGES["timeout"],
+    }

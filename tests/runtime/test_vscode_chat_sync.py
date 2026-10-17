@@ -30,7 +30,9 @@ async def runtime(request):
         return_value=frozenset({ProviderModelInfo("one")})
     )
 
-    async def construct(*_):
+    async def construct(provider_id, *_):
+        if provider_id in {"lmstudio", "llamacpp", "ollama"}:
+            raise ConnectionError()
         return provider
 
     manager = ProviderRuntimeManager(

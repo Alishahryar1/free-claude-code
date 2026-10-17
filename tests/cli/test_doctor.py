@@ -39,11 +39,15 @@ def test_live_discovery_report_projects_only_safe_current_errors(monkeypatch):
                     "providers": {
                         "nvidia_nim": "failed",
                         "open_router": "ready",
+                        "lmstudio": "unavailable",
+                        "llamacpp": "unavailable",
+                        "ollama": "unavailable",
                         "private-canary": "failed",
                     },
                     "provider_errors": {
                         "nvidia_nim": message,
                         "open_router": "private-canary",
+                        "ollama": "private-canary",
                     },
                 },
             },
@@ -54,6 +58,8 @@ def test_live_discovery_report_projects_only_safe_current_errors(monkeypatch):
     assert result["status"] == "available"
     assert result["providers"]["nvidia_nim"] == {"state": "failed", "message": message}
     assert result["providers"]["open_router"] == {"state": "ready"}
+    for provider_id in ("lmstudio", "llamacpp", "ollama"):
+        assert result["providers"][provider_id] == {"state": "unavailable"}
     assert "private-canary" not in json.dumps(result)
     assert requests == [
         (

@@ -54,6 +54,8 @@ def runtime():
     )
 
     async def construct(_id, _settings, _admission_registry, _api_key_number):
+        if _id in {"lmstudio", "llamacpp", "ollama"}:
+            raise ConnectionError("Local fixture is offline")
         return provider
 
     manager = ProviderRuntimeManager(
