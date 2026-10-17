@@ -55,6 +55,26 @@ def _extra_body_mapping(body: Mapping[str, Any]) -> Mapping[str, Any]:
     return extra if isinstance(extra, Mapping) else {}
 
 
+def _required_endpoint_parameters(body: Mapping[str, Any]) -> frozenset[str]:
+    """Return the endpoint parameters the request itself uses.
+
+    The pin runs under ``allow_fallbacks: false``, so a provider that
+    cannot serve one of these would fail the request outright. Only the
+    live body knows what the request uses: the tool catalog and the
+    encoded reasoning control both vary per request.
+    """
+
+    required: set[str] = set()
+    if body.get("tools"):
+        required.add("tools")
+    reasoning = _extra_body_mapping(body).get("reasoning")
+    if isinstance(reasoning, Mapping) and reasoning.get("enabled") is not False:
+        # ``reasoning: {"enabled": false}` is the disable request, not a
+        # capability requirement; the disable-retry path strips it anyway.
+        required.add("reasoning")
+    return frozenset(required)
+
+
 class OpenRouterChatBehavior(OpenAIChatBehavior):
     """OpenRouter Chat adaptation without HTTP ownership."""
 
@@ -105,6 +125,7 @@ class OpenRouterChatBehavior(OpenAIChatBehavior):
             body.get("model") or "",
             constraints=constraints,
             prompt_tokens=estimate_chat_input_tokens(body),
+            required_parameters=_required_endpoint_parameters(body),
         )
         if cheapest is None:
             return body

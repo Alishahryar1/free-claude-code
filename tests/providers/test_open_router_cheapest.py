@@ -137,6 +137,52 @@ def test_cheapest_provider_skips_endpoints_too_small_for_the_prompt():
     assert cheapest_provider_name(endpoints, prompt_tokens=1_000_000) is None
 
 
+def test_cheapest_provider_skips_endpoints_missing_required_parameters():
+    toolless = endpoint("Toolless", "0.0000001", "0.0000001")
+    capable = endpoint("Capable", "0.000001", "0.000001") | {
+        "supported_parameters": ["tools"]
+    }
+    assert (
+        cheapest_provider_name([toolless, capable], required_parameters={"tools"})
+        == "Capable"
+    )
+    assert cheapest_provider_name([toolless], required_parameters={"tools"}) is None
+
+
+def test_cheapest_provider_requires_every_required_parameter():
+    partial = endpoint("Partial", "0.0000001", "0.0000001") | {
+        "supported_parameters": ["tools"]
+    }
+    assert (
+        cheapest_provider_name([partial], required_parameters={"tools", "reasoning"})
+        is None
+    )
+    assert cheapest_provider_name([partial]) == "Partial"
+
+
+def test_cheapest_provider_treats_malformed_support_as_unsupported():
+    malformed = endpoint("Malformed", "0.0000001", "0.0000001") | {
+        "supported_parameters": "tools"
+    }
+    assert cheapest_provider_name([malformed], required_parameters={"tools"}) is None
+    assert cheapest_provider_name([malformed]) == "Malformed"
+
+
+def test_cheapest_provider_skips_endpoints_missing_the_reasoning_parameter():
+    plain = endpoint("Plain", "0.0000001", "0.0000001")
+    reasoning_capable = endpoint("ReasoningCapable", "0.000001", "0.000001") | {
+        "supported_parameters": ["reasoning"]
+    }
+    assert (
+        cheapest_provider_name(
+            [plain, reasoning_capable], required_parameters={"reasoning"}
+        )
+        == "ReasoningCapable"
+    )
+    # A request that uses no endpoint parameters needs no declaration.
+    assert cheapest_provider_name([plain, reasoning_capable]) == "Plain"
+
+
 def test_cheapest_provider_applies_the_capacity_margin():
     tiny = endpoint("Tiny", "0.0000001", "0.0000001") | {"context_length": 32_000}
     # Below 90% of 32_000 fits; at 90% it still fits; past it, the estimate
@@ -157,6 +203,185 @@ def test_cheapest_provider_uses_max_prompt_tokens_as_capacity():
     }
     assert cheapest_provider_name([roomy_context], prompt_tokens=5_000) == "Capped"
     assert cheapest_provider_name([roomy_context], prompt_tokens=50_000) is None
+
+
+@pytest.mark.asyncio
+async def test_tools_request_pins_a_provider_that_supports_tools():
+    endpoints_payload = {
+        "data": {
+            "endpoints": [
+                endpoint("ToollessCheap", "0.0000001", "0.0000001"),
+                endpoint("CapableExpensive", "0.000001", "0.000001")
+                | {"supported_parameters": ["tools"]},
+            ]
+        }
+    }
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    assert provider._cheapest_index is not None
+
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value=endpoints_payload,
+    ):
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        body = provider._chat._behavior.prepare_create_body(
+            provider._chat._build_request_body(
+                make_messages_request(
+                    "moonshotai/kimi-k2.6",
+                    tools=[
+                        {
+                            "name": "get_weather",
+                            "description": "Look up the weather",
+                            "input_schema": {"type": "object"},
+                        }
+                    ],
+                )
+            )
+        )
+
+    assert body["extra_body"]["provider"] == {
+        "only": ["CapableExpensive"],
+        "allow_fallbacks": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pin_is_dropped_when_no_provider_supports_tools():
+    endpoints_payload = {
+        "data": {
+            "endpoints": [
+                endpoint("ToollessCheap", "0.0000001", "0.0000001"),
+                endpoint("ToollessExpensive", "0.000001", "0.000001"),
+            ]
+        }
+    }
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    assert provider._cheapest_index is not None
+
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value=endpoints_payload,
+    ):
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        body = provider._chat._behavior.prepare_create_body(
+            provider._chat._build_request_body(
+                make_messages_request(
+                    "moonshotai/kimi-k2.6",
+                    tools=[
+                        {
+                            "name": "get_weather",
+                            "description": "Look up the weather",
+                            "input_schema": {"type": "object"},
+                        }
+                    ],
+                )
+            )
+        )
+
+    assert "provider" not in body.get("extra_body", {})
+
+
+@pytest.mark.asyncio
+async def test_a_plain_request_still_pins_the_undeclared_cheapest_provider():
+    endpoints_payload = {
+        "data": {
+            "endpoints": [
+                endpoint("PlainCheap", "0.0000001", "0.0000001"),
+                endpoint("CapableExpensive", "0.000001", "0.000001")
+                | {"supported_parameters": ["tools", "reasoning"]},
+            ]
+        }
+    }
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    assert provider._cheapest_index is not None
+
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value=endpoints_payload,
+    ):
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        body = provider._chat._behavior.prepare_create_body(
+            provider._chat._build_request_body(
+                make_messages_request("moonshotai/kimi-k2.6")
+            )
+        )
+
+    assert body["extra_body"]["provider"] == {
+        "only": ["PlainCheap"],
+        "allow_fallbacks": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_explicit_reasoning_request_pins_a_reasoning_capable_provider():
+    from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
+
+    endpoints_payload = {
+        "data": {
+            "endpoints": [
+                endpoint("PlainCheap", "0.0000001", "0.0000001"),
+                endpoint("ReasoningCapable", "0.000001", "0.000001")
+                | {"supported_parameters": ["reasoning"]},
+            ]
+        }
+    }
+    provider = OpenRouterProvider(
+        make_provider_config(
+            api_key="test_openrouter_key",
+            base_url="https://openrouter.ai/api/v1",
+        ),
+        use_cheapest_provider=True,
+        admission=immediate_admission(),
+    )
+    assert provider._cheapest_index is not None
+
+    policy_on = ReasoningPolicy(control=ReasoningControl.ON)
+    body_with_reasoning = provider._chat._build_request_body(
+        make_messages_request("moonshotai/kimi-k2.6"), reasoning=policy_on
+    )
+    assert isinstance(body_with_reasoning["extra_body"], dict)
+    assert "reasoning" in body_with_reasoning["extra_body"]
+
+    with patch.object(
+        provider._client,
+        "get",
+        new_callable=AsyncMock,
+        return_value=endpoints_payload,
+    ):
+        await provider._cheapest_index.ensure("moonshotai/kimi-k2.6")
+        pinned = provider._chat._behavior.prepare_create_body(body_with_reasoning)
+
+    assert pinned["extra_body"]["provider"] == {
+        "only": ["ReasoningCapable"],
+        "allow_fallbacks": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -209,9 +434,15 @@ async def test_tools_count_toward_the_capacity_requirement():
         "data": {
             "endpoints": [
                 endpoint("TinyCheap", "0.0000001", "0.0000001")
-                | {"context_length": 32_000},
+                | {
+                    "context_length": 32_000,
+                    "supported_parameters": ["tools"],
+                },
                 endpoint("RoomyExpensive", "0.000001", "0.000001")
-                | {"context_length": 200_000},
+                | {
+                    "context_length": 200_000,
+                    "supported_parameters": ["tools"],
+                },
             ]
         }
     }

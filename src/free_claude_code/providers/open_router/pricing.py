@@ -4,6 +4,7 @@ import asyncio
 import math
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from typing import Any
 
 from loguru import logger
@@ -72,6 +73,28 @@ def prompt_capacity(endpoint: Mapping[str, Any]) -> int | None:
     return min(capacities) if capacities else None
 
 
+def supports_required_parameters(
+    endpoint: Mapping[str, Any], required: AbstractSet[str] | None
+) -> bool:
+    """Return whether the endpoint declares support for every required parameter.
+
+    ``required`` holds the endpoint parameters the request itself uses, such
+    as ``tools`` or ``reasoning``; a request that uses none needs no check.
+    A request that uses some only qualifies endpoints that explicitly list
+    them: the pin runs under ``allow_fallbacks: false``, so an endpoint
+    that cannot serve the request would fail it outright.
+    """
+
+    if not required:
+        return True
+    supported = endpoint.get("supported_parameters")
+    if not isinstance(supported, list) or not all(
+        isinstance(name, str) for name in supported
+    ):
+        return False
+    return required <= set(supported)
+
+
 def cheapest_provider_name(
     endpoints: Sequence[Mapping[str, Any]],
     *,
@@ -79,6 +102,7 @@ def cheapest_provider_name(
     free_only: bool = False,
     excluded: Sequence[str] = (),
     prompt_tokens: int = 0,
+    required_parameters: AbstractSet[str] | None = None,
 ) -> str | None:
     """Return the provider of the cheapest blended-rate endpoint."""
 
@@ -111,6 +135,11 @@ def cheapest_provider_name(
             # cl100k estimates undercount some tokenizers (~8% observed), so
             # a request past 90% of the served ceiling is already unsafe;
             # pinning it under allow_fallbacks: false would fail outright.
+            continue
+        if not supports_required_parameters(endpoint, required_parameters):
+            # The endpoint does not declare a parameter the request uses;
+            # pinning it under allow_fallbacks: false would leave the
+            # request with no eligible endpoint.
             continue
         if best_price is None or price < best_price:
             best_name, best_price = name, price
@@ -194,6 +223,7 @@ class CheapestProviderIndex:
         *,
         constraints: Mapping[str, Any] | None = None,
         prompt_tokens: int = 0,
+        required_parameters: AbstractSet[str] | None = None,
     ) -> dict[str, Any] | None:
         """Return the routing block pinning the cheapest provider, if resolved.
 
@@ -203,6 +233,9 @@ class CheapestProviderIndex:
         ``prompt_tokens`` is the estimated request size; pinning a provider
         whose served capacity cannot fit it would leave the chat with no
         eligible endpoint, so only providers that can serve it are eligible.
+        ``required_parameters`` are the endpoint parameters the request uses
+        (tools, reasoning); the pin may only land on a provider that declares
+        support for them.
         """
 
         base = base_model_slug(model_id)
@@ -229,6 +262,7 @@ class CheapestProviderIndex:
             free_only=model_id.strip().endswith(":free"),
             excluded=excluded,
             prompt_tokens=prompt_tokens,
+            required_parameters=required_parameters,
         )
         if name is None:
             return None
