@@ -214,8 +214,14 @@ def test_delayed_startup_status_does_not_replace_a_manual_provider_check(
 
 
 @pytest.mark.parametrize("availability_first", [False, True])
+@pytest.mark.parametrize("discovery", ["starting", "ready", "failed"])
+@pytest.mark.parametrize("available", [False, True])
 def test_local_model_discovery_takes_precedence_over_reachability(
-    page: Page, admin_base_url: str, availability_first: bool
+    page: Page,
+    admin_base_url: str,
+    availability_first: bool,
+    discovery: str,
+    available: bool,
 ) -> None:
     startup: list[Route] = []
     availability: list[Route] = []
@@ -227,18 +233,44 @@ def test_local_model_discovery_takes_precedence_over_reachability(
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
     page.wait_for_function("!!state.startupRequest && !!state.localStatusRequest")
     snapshot = page.request.get(f"{admin_base_url}/admin/api/status").json()
-    snapshot["startup"]["providers"]["lmstudio"] = "ready"
+    snapshot["startup"]["providers"]["lmstudio"] = discovery
     snapshot["cached_models"]["lmstudio"] = ["local-model"]
+    primary = {
+        "starting": "Checking models…",
+        "ready": "1 model available",
+        "failed": "Could not load models. Check the provider's settings and retry.",
+    }[discovery]
+    probe = {
+        "status": "reachable" if available else "offline",
+        "base_url": "http://localhost:1234/v1",
+        "status_code": 200 if available else 503,
+        "probe_path": "/models",
+        "latency_ms": 12.5,
+    }
+    diagnostic = (
+        "Reachable: http://localhost:1234/v1"
+        if available
+        else "Unavailable: http://localhost:1234/v1 returned HTTP 503"
+    ) + " (GET /models, 12.5 ms)"
     result = page.locator('[data-provider-check-result="lmstudio"]')
+    detail = page.locator('[data-provider-availability-result="lmstudio"]')
+    dialog = open_provider(page, "lmstudio")
     if availability_first:
-        availability.pop().continue_()
-        expect(result).to_have_text("Reachable: http://localhost:1234/v1")
+        availability.pop().fulfill(json=probe)
+        expect(result).to_have_text(diagnostic)
+        expect(detail).to_be_hidden()
     startup.pop(0).fulfill(json=snapshot)
-    expect(result).to_have_text("1 model available")
+    expect(result).to_have_text(primary)
     if not availability_first:
-        availability.pop().continue_()
+        availability.pop().fulfill(json=probe)
         page.wait_for_function("!state.localStatusRequest")
-        expect(result).to_have_text("1 model available")
+    expect(result).to_have_text(primary)
+    expect(detail).to_have_text(diagnostic)
+    expect(detail).to_have_class(
+        "provider-availability-result " + ("ok" if available else "error")
+    )
+    expect(dialog.locator("#providerDialogCheck")).to_have_text(primary)
+    expect(dialog.locator("#providerDialogAvailability")).to_have_text(diagnostic)
 
 
 def test_provider_check_failure_is_separate_and_never_exposes_exception_text(
@@ -376,6 +408,74 @@ def test_local_availability_failure_does_not_fail_admin_loading(
     )
     expect(page.locator("#messageArea")).to_have_text("")
     assert "private-diagnostic-marker" not in page.locator("body").inner_text()
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    "viewport",
+    ({"width": 1280, "height": 720}, {"width": 390, "height": 844}),
+)
+def test_local_provider_diagnostics_are_visible_on_cards_and_in_the_dialog(
+    page: Page, admin_base_url: str, viewport: ViewportSize
+) -> None:
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    timeout_message = (
+        "The local provider availability check timed out. "
+        "Check that its server is responsive and retry."
+    )
+    results = {
+        "lmstudio": {
+            "provider_id": "lmstudio",
+            "status": "reachable",
+            "base_url": "http://localhost:1234/v1",
+            "probe_path": "/models",
+            "latency_ms": 12.5,
+            "error_type": None,
+        },
+        "llamacpp": {
+            "provider_id": "llamacpp",
+            "status": "offline",
+            "base_url": "http://localhost:8080/v1",
+            "status_code": 503,
+            "probe_path": "/models",
+            "latency_ms": 8,
+            "error_type": "http_error",
+        },
+        "ollama": {
+            "provider_id": "ollama",
+            "status": "offline",
+            "base_url": "http://localhost:11434",
+            "message": timeout_message,
+            "probe_path": "/api/tags",
+            "latency_ms": 1500,
+            "error_type": "timeout",
+            "private_diagnostic": "private-credential-marker",
+        },
+    }
+
+    def reply(route: Route) -> None:
+        provider_id = route.request.url.split("/")[-2]
+        route.fulfill(json=results[provider_id])
+
+    page.route("**/admin/api/providers/*/local-status", reply)
+    _open_admin(page, admin_base_url, viewport)
+
+    expect(page.locator('[data-provider-check-result="lmstudio"]')).to_have_text(
+        "Reachable: http://localhost:1234/v1 (GET /models, 12.5 ms)"
+    )
+    expect(page.locator('[data-provider-check-result="llamacpp"]')).to_have_text(
+        "Unavailable: http://localhost:8080/v1 returned HTTP 503 (GET /models, 8 ms)"
+    )
+    expected_timeout = f"Unavailable: {timeout_message} (GET /api/tags, 1500 ms)"
+    expect(page.locator('[data-provider-check-result="ollama"]')).to_have_text(
+        expected_timeout
+    )
+    dialog = open_provider(page, "ollama")
+    expect(dialog.locator("#providerDialogCheck")).to_have_text(expected_timeout)
+    expect(dialog.locator("#providerDialogCheck")).to_be_in_viewport()
+    expect(dialog.get_by_role("button", name="Test", exact=True)).to_be_enabled()
+    assert "private-credential-marker" not in page.locator("body").inner_text()
     assert errors == []
 
 
