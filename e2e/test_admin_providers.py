@@ -225,7 +225,14 @@ def test_local_model_discovery_takes_precedence_over_reachability(
 ) -> None:
     startup: list[Route] = []
     availability: list[Route] = []
-    page.route("**/admin/api/status", lambda route: startup.append(route))
+
+    def status(route: Route) -> None:
+        if startup:
+            route.fulfill(json=snapshot)
+        else:
+            startup.append(route)
+
+    page.route("**/admin/api/status", status)
     page.route(
         "**/admin/api/providers/lmstudio/local-status",
         lambda route: availability.append(route),
@@ -259,7 +266,7 @@ def test_local_model_discovery_takes_precedence_over_reachability(
         availability.pop().fulfill(json=probe)
         expect(result).to_have_text(diagnostic)
         expect(detail).to_be_hidden()
-    startup.pop(0).fulfill(json=snapshot)
+    startup[0].fulfill(json=snapshot)
     expect(result).to_have_text(primary)
     if not availability_first:
         availability.pop().fulfill(json=probe)
@@ -271,6 +278,9 @@ def test_local_model_discovery_takes_precedence_over_reachability(
     )
     expect(dialog.locator("#providerDialogCheck")).to_have_text(primary)
     expect(dialog.locator("#providerDialogAvailability")).to_have_text(diagnostic)
+    if discovery == "starting":
+        with page.expect_response("**/admin/api/status"):
+            page.evaluate("void refreshStartup()")
 
 
 def test_provider_check_failure_is_separate_and_never_exposes_exception_text(

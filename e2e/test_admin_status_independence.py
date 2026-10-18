@@ -1,6 +1,131 @@
 import pytest
 from playwright.sync_api import expect
 
+from e2e.provider_support import api_key_input, open_provider
+from e2e.test_code_sessions import create_session
+
+
+def test_code_bootstrap_cannot_stall_other_pages_status(page, admin_base_url):
+    pending = []
+    starting = True
+
+    def status(route):
+        payload = route.fetch().json()
+        payload["startup"]["providers"]["open_router"] = (
+            "starting" if starting else "ready"
+        )
+        route.fulfill(json=payload)
+
+    def hold(route):
+        pending.append(route)
+        page.evaluate("window.heldBootstrap = true")
+
+    page.route("**/admin/api/status", status)
+    page.route("**/admin/api/code/bootstrap", hold)
+    page.goto(f"{admin_base_url}/admin")
+    page.wait_for_function("window.heldBootstrap === true")
+    expect(page.locator('[data-provider-check-result="open_router"]')).to_have_text(
+        "Checking models…"
+    )
+    starting = False
+    expect(page.locator('[data-provider-check-result="open_router"]')).to_have_text(
+        "3 models available"
+    )
+    assert len(pending) == 1
+    pending.pop().fulfill(
+        response=page.request.get(f"{admin_base_url}/admin/api/code/bootstrap")
+    )
+    page.unroute("**/admin/api/code/bootstrap", hold)
+
+
+def test_partial_catalog_keeps_code_selection_and_send_usable(
+    page, admin_base_url, tmp_path
+):
+    def bootstrap(route):
+        payload = route.fetch().json()
+        assert payload["models"]
+        payload["startup"]["catalog"] = "starting"
+        route.fulfill(json=payload)
+
+    page.route("**/admin/api/code/bootstrap", bootstrap)
+    create_session(page, admin_base_url, tmp_path)
+    page.locator("#codeComposer").fill("Use the available model")
+    expect(page.locator("#codeProvider")).to_be_enabled()
+    expect(page.locator("#codeSend")).to_be_enabled()
+
+
+def test_saved_settings_finish_before_unrelated_account_check(page, admin_base_url):
+    page.goto(f"{admin_base_url}/admin")
+    expect(page.locator("#messageArea")).to_have_text("")
+    open_provider(page, "nvidia_nim")
+    api_key_input(page, "NVIDIA_NIM_API_KEY").fill("test-new-key")
+    pending = []
+
+    def hold(route):
+        pending.append(route)
+        page.evaluate("window.heldAccountCheck = true")
+
+    page.route("**/admin/api/providers/github_copilot/auth", hold)
+    page.locator("#saveProvider").click()
+    page.wait_for_function("window.heldAccountCheck === true")
+    expect(page.locator("#messageArea")).to_have_text("Applied")
+    assert not page.evaluate("state.applying")
+    for request in pending:
+        request.fulfill(
+            json={
+                "provider_id": "github_copilot",
+                "connected": False,
+                "state": "disconnected",
+            }
+        )
+    page.unroute("**/admin/api/providers/github_copilot/auth", hold)
+    expect(page.locator("#messageArea")).to_have_text("Applied")
+
+
+def test_provider_refresh_finishes_before_optional_model_suggestions(
+    page, admin_base_url
+):
+    page.goto(f"{admin_base_url}/admin")
+    dialog = open_provider(page, "open_router")
+    button = dialog.get_by_role("button", name="Refresh models", exact=True)
+    expect(button).to_be_enabled()
+    pending = []
+
+    def hold(route):
+        pending.append(route)
+        page.evaluate("window.heldModelSuggestions = true")
+
+    page.route("**/admin/api/models", hold)
+    button.click()
+    page.wait_for_function("window.heldModelSuggestions === true")
+    expect(button).to_be_enabled()
+    expect(dialog.locator("#providerDialogCheck")).to_contain_text("models available")
+    for request in tuple(pending):
+        request.fulfill(response=request.fetch())
+    page.unroute("**/admin/api/models", hold)
+
+
+def test_refresh_all_finishes_without_waiting_for_code(page, admin_base_url):
+    page.goto(f"{admin_base_url}/admin")
+    page.get_by_role("button", name="Model Config", exact=True).click()
+    button = page.locator("[data-startup-catalog]")
+    expect(button).to_be_enabled()
+    pending = []
+
+    def hold(route):
+        pending.append(route)
+        page.evaluate("window.heldRefreshBootstrap = true")
+
+    page.route("**/admin/api/code/bootstrap", hold)
+    button.click()
+    page.wait_for_function("window.heldRefreshBootstrap === true")
+    expect(button).to_be_enabled()
+    expect(button).to_have_text("Refresh models")
+    expect(page.locator("#messageArea")).to_contain_text("models available")
+    for request in tuple(pending):
+        request.fulfill(response=request.fetch())
+    page.unroute("**/admin/api/code/bootstrap", hold)
+
 
 @pytest.mark.parametrize(
     "held_id,held_button",

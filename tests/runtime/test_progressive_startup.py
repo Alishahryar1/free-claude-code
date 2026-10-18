@@ -22,6 +22,7 @@ from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.codex_catalog import CodexModelCatalogPublisher
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.runtime.catalog_support import finish_discovery
 from tests.web_tools_support import StubWebToolsClient
 
 
@@ -326,7 +327,7 @@ async def test_late_retired_discovery_cannot_replace_current_metadata():
 
 
 @pytest.mark.asyncio
-async def test_complete_catalog_publication_preserves_prior_file_until_all_attempts(
+async def test_catalog_publication_exposes_configured_models_before_discovery(
     tmp_path,
 ):
     entered, release = asyncio.Event(), asyncio.Event()
@@ -353,27 +354,26 @@ async def test_complete_catalog_publication_preserves_prior_file_until_all_attem
         ),
         model_catalog_publisher=CodexModelCatalogPublisher(path),
     )
-    waiter = asyncio.create_task(manager.wait_for_catalog())
+    manager.start_model_list_refresh()
     try:
         await entered.wait()
-        assert not waiter.done()
-        assert path.read_text(encoding="utf-8") == "prior complete catalog"
+        await manager.wait_for_catalog_file(InitializationWait())
+        assert "nvidia_nim/one" in path.read_text(encoding="utf-8")
+        assert "new-model" not in path.read_text(encoding="utf-8")
         release.set()
-        catalog = await waiter
+        await finish_discovery(manager)
+        await manager.wait_for_catalog_file(InitializationWait())
+        catalog = manager.catalog_snapshot()
         assert catalog.cached_model_info("nvidia_nim", "new-model") is not None
         assert "new-model" in path.read_text(encoding="utf-8")
     finally:
         release.set()
-        await asyncio.gather(waiter, return_exceptions=True)
         await manager.close()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retained_request", [False, True])
-@pytest.mark.parametrize("catalog_file", [False, True])
-async def test_catalog_wait_follows_replacement(
-    tmp_path, retained_request, catalog_file
-):
+async def test_catalog_wait_follows_replacement(tmp_path, retained_request):
     entered, release = asyncio.Event(), asyncio.Event()
     count = 0
 
@@ -410,25 +410,14 @@ async def test_catalog_wait_follows_replacement(
     request = (
         asyncio.create_task(lease.resolve_provider("nvidia_nim")) if lease else None
     )
-    waiting = asyncio.create_task(
-        manager.wait_for_catalog_file(InitializationWait())
-        if catalog_file
-        else manager.wait_for_catalog()
-    )
+    waiting = asyncio.create_task(manager.wait_for_model_catalog("nvidia_nim/one"))
     try:
         await entered.wait()
-        settings = _settings().model_copy(update={"model": "nvidia_nim/current"})
+        settings = _settings().model_copy(update={"proxy_auth_token": "rotated"})
         await manager.replace(settings, commit=AsyncMock())
-        await manager.wait_for_catalog()
         result = await asyncio.wait_for(asyncio.shield(waiting), 1)
-        if catalog_file:
-            assert isinstance(result, int)
-            assert result == manager.current_generation_id
-            assert "nvidia_nim/current" in path.read_text(encoding="utf-8")
-        else:
-            assert not isinstance(result, int)
-            assert result.settings is settings
-            assert result.cached_model_info("nvidia_nim", "current") is not None
+        assert result.settings is settings
+        assert result.cached_model_info("nvidia_nim", "current") is not None
         if request is not None:
             assert lease is not None
             assert not request.done()
@@ -447,11 +436,8 @@ async def test_catalog_wait_follows_replacement(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("catalog_file", [False, True])
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_catalog_waiter_exit_preserves_shared_discovery(
-    monkeypatch, catalog_file, cancel
-):
+async def test_catalog_waiter_exit_preserves_shared_discovery(monkeypatch, cancel):
     existing_tasks = asyncio.all_tasks()
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(spec=BaseProvider)
@@ -478,11 +464,7 @@ async def test_catalog_waiter_exit_preserves_shared_discovery(
     monkeypatch.setattr(
         "free_claude_code.runtime.provider_manager.InitializationWait", lambda: wait
     )
-    waiting = asyncio.create_task(
-        manager.wait_for_catalog_file(wait)
-        if catalog_file
-        else manager.wait_for_catalog()
-    )
+    waiting = asyncio.create_task(manager.wait_for_model_catalog("nvidia_nim/one"))
     try:
         await entered.wait()
         if cancel:
@@ -497,7 +479,7 @@ async def test_catalog_waiter_exit_preserves_shared_discovery(
             InitializationWait,
         )
         release.set()
-        snapshot = await manager.wait_for_catalog()
+        snapshot = await manager.wait_for_model_catalog("nvidia_nim/one")
         assert snapshot.cached_model_info("nvidia_nim", "one") is not None
     finally:
         release.set()

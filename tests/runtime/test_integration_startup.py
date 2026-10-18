@@ -276,7 +276,6 @@ async def test_shutdown_drains_integration_writer(runtime, monkeypatch):
         close = asyncio.create_task(runtime.close())
         await asyncio.sleep(0)
         assert not close.done()
-        assert runtime._config_lock.locked()
         release.set()
         assert await asyncio.wait_for(close, 5)
     finally:

@@ -146,6 +146,7 @@ def test_initial_code_catalog_wait_keeps_history_and_draft(
         if starting:
             data["models"] = []
             data["startup"]["catalog"] = "starting"
+            data["startup"]["providers"]["provider"] = "starting"
         route.fulfill(json=data)
 
     def status(route):
@@ -157,12 +158,14 @@ def test_initial_code_catalog_wait_keeps_history_and_draft(
     page.route("**/admin/api/code/bootstrap", bootstrap)
     page.route("**/admin/api/status", status)
     create_session(page, admin_base_url, tmp_path)
+    assert page.evaluate("window.CodeSessions.refresh()") is True
     composer = page.locator("#codeComposer")
     composer.fill("Keep my draft")
     send = page.locator("#codeSend")
     expect(send).to_be_disabled()
     expect(send).to_have_attribute("aria-busy", "true")
     expect(page.locator("#codeProvider")).to_be_disabled()
+    expect(page.locator("#codeMode")).to_be_enabled()
     starting = False
     expect(send).to_be_enabled()
     expect(composer).to_have_value("Keep my draft")
@@ -221,3 +224,46 @@ def test_code_catalog_cannot_roll_back_after_a_newer_startup_status(
         page.evaluate("status => window.CodeSessions.refresh(status)", status) is True
     )
     expect(page.locator("#codeSelectionError")).to_be_hidden()
+
+
+def test_code_catalog_coalesces_notifications_and_catches_up_to_latest_version(
+    page, admin_base_url, tmp_path
+):
+    create_session(page, admin_base_url, tmp_path)
+    page.wait_for_function("!state.startupRequest && !state.startupTimer")
+    assert page.evaluate("window.CodeSessions.refresh()") is True
+    data = page.request.get(f"{admin_base_url}/admin/api/code/bootstrap").json()
+    status = page.request.get(f"{admin_base_url}/admin/api/status").json()
+    generation = status["startup"]["generation_id"] + 1
+    status["startup"].update(generation_id=generation, catalog_revision=1)
+    first = data | {"startup": data["startup"] | status["startup"]}
+    latest = data | {
+        "startup": first["startup"] | {"catalog_revision": 5},
+        "models": [
+            *data["models"],
+            data["models"][0]
+            | {"id": "extra/later", "provider_id": "extra", "model_name": "later"},
+        ],
+    }
+    pending = []
+    calls = 0
+
+    def bootstrap(route):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            pending.append(route)
+            page.evaluate("window.heldCatalogVersion = true")
+        else:
+            route.fulfill(json=latest)
+
+    page.route("**/admin/api/code/bootstrap", bootstrap)
+    page.evaluate("status => { void window.CodeSessions.refresh(status); }", status)
+    page.wait_for_function("window.heldCatalogVersion === true")
+    for revision in range(2, 6):
+        status["startup"]["catalog_revision"] = revision
+        page.evaluate("status => { void window.CodeSessions.refresh(status); }", status)
+    assert calls == 1
+    pending.pop().fulfill(json=first)
+    expect(page.locator('#codeProvider option[value="extra"]')).to_have_count(1)
+    assert calls == 2

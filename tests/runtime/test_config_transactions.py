@@ -53,7 +53,7 @@ async def test_integration_write_finishes_before_configuration_publication(
             writer.cancel()
         apply = asyncio.create_task(apply_config())
         await asyncio.wait_for(apply_started.wait(), 5)
-        configuration.prepare.assert_not_awaited()
+        configuration.prepare.assert_awaited_once()
         configuration.commit.assert_not_awaited()
         assert manager.current_generation_id == 1
         assert not writer.done()
@@ -70,6 +70,34 @@ async def test_integration_write_finishes_before_configuration_publication(
         await asyncio.gather(
             writer, *([apply] if apply else []), return_exceptions=True
         )
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_credential_validation_does_not_block_integrations(tmp_path, monkeypatch):
+    manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
+    configuration = AsyncMock(spec=ConfigurationService)
+    configuration.prepare.return_value = _prepared(
+        _settings("nvidia_nim/new"), tmp_path
+    )
+    runtime = ApplicationRuntime(manager, configuration=configuration, transcriber=None)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def check(*_args):
+        entered.set()
+        await release.wait()
+        return ()
+
+    monkeypatch.setattr("free_claude_code.runtime.application.check_credentials", check)
+    apply = asyncio.create_task(runtime.apply_admin_config({}))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        assert (await asyncio.wait_for(runtime.connect_claude_vscode(), 1))["connected"]
+        assert not apply.done()
+        configuration.commit.assert_not_awaited()
+    finally:
+        apply.cancel()
+        await asyncio.gather(apply, return_exceptions=True)
         await runtime.close()
 
 

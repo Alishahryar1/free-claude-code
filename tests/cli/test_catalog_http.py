@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from free_claude_code.cli.launchers.catalog_http import fetch_proxy_model_catalog
+from tests.cli.test_launcher_workflow import launch
 
 
 class _ModelsResponse:
@@ -75,3 +76,30 @@ def test_fetch_proxy_models_rejects_non_object_json() -> None:
         pytest.raises(ValueError, match="JSON object"),
     ):
         fetch_proxy_model_catalog("http://127.0.0.1:9191", "proxy-token")
+
+
+@pytest.mark.parametrize("harness", ["codex", "opencode", "aider"])
+def test_native_launch_uses_current_catalog_without_waiting_for_more_models(
+    launch_capture, harness
+):
+    launch_capture.catalog = {
+        "default_model_id": "nvidia_nim/configured",
+        "data": [
+            {
+                "id": "nvidia_nim/configured",
+                "provider_model_ref": "nvidia_nim/configured",
+            }
+        ],
+    }
+    launch(harness, [])
+    assert len(launch_capture.commands) == 1
+    assert (
+        len(
+            [
+                request
+                for request in launch_capture.requests
+                if "/v1/models" in request.full_url
+            ]
+        )
+        == 1
+    )
