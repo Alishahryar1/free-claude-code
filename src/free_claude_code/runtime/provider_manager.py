@@ -9,12 +9,14 @@ from typing import Protocol
 from loguru import logger
 
 from free_claude_code.application.errors import ApplicationUnavailableError
+from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import (
     ProviderModelInfo,
     ProviderModelRefreshResult,
 )
 from free_claude_code.application.ports import ModelCatalogPort, ModelCatalogSnapshot
 from free_claude_code.application.readiness import InitializationWait
+from free_claude_code.config.model_refs import split_provider_model_ref
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.async_tasks import run_sync_owned
@@ -182,7 +184,8 @@ class ProviderRuntimeManager:
         self._next_generation_id = 2
         self._retired: dict[int, _ProviderGeneration] = {}
         self._unpublished: set[ProviderRuntime] = set()
-        self._publications: set[asyncio.Task[None]] = set()
+        self._publication_task: asyncio.Task[None] | None = None
+        self._published_version: tuple[int, int] | None = None
         self._encoder_task: asyncio.Task[object] | None = None
         self._catalog_revision = 0
         self._closing = False
@@ -249,6 +252,11 @@ class ProviderRuntimeManager:
         self._synchronize_model_cache_scope()
         return self._current.cache.cached_prefixed_model_infos()
 
+    def catalog_snapshot(self) -> ModelCatalogSnapshot:
+        self._ensure_open()
+        self._synchronize_model_cache_scope()
+        return self._current.snapshot()
+
     def cache_model_infos(
         self, provider_id: str, model_infos: Iterable[ProviderModelInfo]
     ) -> None:
@@ -266,10 +274,7 @@ class ProviderRuntimeManager:
             provider_id
         ):
             self._catalog_revision += 1
-            if generation.initial_complete:
-                task = asyncio.create_task(self._publish_generation(generation))
-                self._publications.add(task)
-                task.add_done_callback(self._publications.discard)
+            self._catalog_updated()
 
     def _catalog_task(
         self,
@@ -352,6 +357,8 @@ class ProviderRuntimeManager:
                     )
                 )
             )
+            if generation is self._current:
+                self._catalog_updated()
         if generation.refresh_task is not None and not generation.refresh_task.done():
             return generation.refresh_task
         for provider_id in generation.initial_ids:
@@ -377,7 +384,6 @@ class ProviderRuntimeManager:
                 if isinstance(result, asyncio.CancelledError):
                     raise result
             generation.initial_complete = True
-            await self._publish_generation(generation)
             if generation.initial_complete and tasks == tuple(
                 generation.catalog_tasks[provider_id]
                 for provider_id in generation.initial_ids
@@ -431,26 +437,34 @@ class ProviderRuntimeManager:
         finally:
             await self._release(generation)
 
-    async def wait_for_catalog(self) -> ModelCatalogSnapshot:
+    async def wait_for_model_catalog(self, model: str) -> ModelCatalogSnapshot:
+        """Wait only for a selection's metadata, following settings replacement."""
         wait = InitializationWait()
         while True:
-            self._ensure_open()
+            snapshot = self.catalog_snapshot()
+            if not any(
+                entry.provider_model_ref == model
+                for entry in read_model_catalog(snapshot).models
+            ):
+                return snapshot
             generation = self._current
-            if not generation.initial_complete:
-                task = self._start_pass(generation)
+            provider_id, _ = split_provider_model_ref(model)
+            if provider_id not in generation.initialized:
                 try:
-                    await self._wait_for_catalog_work(generation, task, wait)
+                    await self._wait_for_catalog_work(
+                        generation, self._catalog_task(generation, provider_id), wait
+                    )
                 except ApplicationUnavailableError:
                     if generation is self._current:
                         raise
                     continue
-            if generation is self._current and generation.initial_complete:
-                return generation.snapshot()
+            if generation is self._current:
+                return self.catalog_snapshot()
 
-    async def _wait_for_catalog_work(
+    async def _wait_for_catalog_work[T](
         self,
         generation: _ProviderGeneration,
-        task: asyncio.Task[ProviderModelRefreshResult],
+        task: asyncio.Task[T],
         wait: InitializationWait,
     ) -> None:
         if generation is not self._current:
@@ -472,33 +486,31 @@ class ProviderRuntimeManager:
             replaced.cancel()
             await asyncio.gather(settled, replaced, return_exceptions=True)
 
-    async def wait_for_catalog_file(self, wait: InitializationWait) -> int:
+    async def wait_for_catalog_file(self, wait: InitializationWait) -> tuple[int, int]:
         while True:
             self._ensure_open()
             generation = self._current
-            if not generation.initial_complete:
+            version = (generation.generation_id, self._catalog_revision)
+            if self._published_version != version:
                 try:
                     await self._wait_for_catalog_work(
-                        generation, self._start_pass(generation), wait
+                        generation, self._request_publication(), wait
                     )
                 except ApplicationUnavailableError:
                     if generation is self._current:
                         raise
                     continue
-            if generation is not self._current or not generation.initial_complete:
-                continue
-            if generation.file_state != "ready":
-                publication = asyncio.create_task(self._publish_generation(generation))
-                self._publications.add(publication)
-                publication.add_done_callback(self._publications.discard)
-                await wait.wait(publication)
             if generation is not self._current:
                 continue
             if generation.file_state != "ready":
                 raise ApplicationUnavailableError(
                     "Could not publish the Codex model catalog. Check file permissions and retry."
                 )
-            return generation.generation_id
+            if self._published_version == (
+                generation.generation_id,
+                self._catalog_revision,
+            ):
+                return self._published_version
 
     def catalog_status(self) -> JsonObject:
         generation = self._current
@@ -554,32 +566,52 @@ class ProviderRuntimeManager:
             generation.file_state = "starting"
             self._catalog_revision += 1
             self._start_pass(generation)
+            self._catalog_updated()
         return ProviderModelRefreshResult()
 
-    async def _publish_generation(self, generation: _ProviderGeneration) -> None:
-        async with self._publication_lock:
-            if (
-                generation is not self._current
-                or self._closing
-                or not generation.initial_complete
-            ):
-                return
-            publisher = self._model_catalog_publisher
-            try:
-                if publisher is not None:
-                    snapshot = generation.snapshot()
-                    await run_sync_owned(partial(publisher.publish, snapshot))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                generation.file_state = "failed"
-                logger.warning(
-                    "Model catalog publication failed: exc_type={}", type(exc).__name__
-                )
-            else:
-                generation.file_state = "ready"
+    def _catalog_updated(self) -> None:
+        if self._closing or not self._current.catalog_started:
+            return
+        self._request_publication()
         if self._catalog_changed is not None and not self._closing:
             self._catalog_changed()
+
+    def _request_publication(self) -> asyncio.Task[None]:
+        self._current.file_state = "starting"
+        if self._publication_task is None or self._publication_task.done():
+            self._publication_task = asyncio.create_task(
+                self._publish_catalog(), name="fcc-model-catalog"
+            )
+        return self._publication_task
+
+    async def _publish_catalog(self) -> None:
+        while not self._closing:
+            async with self._publication_lock:
+                if self._closing:
+                    return
+                generation = self._current
+                version = (generation.generation_id, self._catalog_revision)
+                try:
+                    publisher = self._model_catalog_publisher
+                    if publisher is not None and self._published_version != version:
+                        snapshot = generation.snapshot()
+                        await run_sync_owned(partial(publisher.publish, snapshot))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    generation.file_state = "failed"
+                    logger.warning(
+                        "Model catalog publication failed: exc_type={}",
+                        type(exc).__name__,
+                    )
+                    if version[1] == self._catalog_revision:
+                        return
+                else:
+                    self._published_version = version
+                    if version[1] == self._catalog_revision:
+                        generation.file_state = "ready"
+                        return
+                generation.file_state = "starting"
 
     async def replace(
         self, settings: Settings, *, commit: CommitConfig, reason: str = "admin_apply"
@@ -690,7 +722,8 @@ class ProviderRuntimeManager:
             await asyncio.gather(
                 *(self._cancel_generation_work(g) for g in generations)
             )
-            await asyncio.gather(*tuple(self._publications), return_exceptions=True)
+            if self._publication_task is not None:
+                await asyncio.gather(self._publication_task, return_exceptions=True)
             if self._encoder_task is not None:
                 self._encoder_task.cancel()
                 await asyncio.gather(self._encoder_task, return_exceptions=True)

@@ -77,7 +77,7 @@ def factory_runtime():
             "open_router/selected", supports_thinking=False, context_window_tokens=32000
         ),
     )
-    runtime.wait_for_catalog.return_value = ModelCatalogSnapshot(
+    runtime.wait_for_model_catalog.return_value = ModelCatalogSnapshot(
         runtime.current_settings(), runtime.cached_prefixed_model_infos()
     )
     runtime.acquire.side_effect = AssertionError("Setup must not acquire a provider")

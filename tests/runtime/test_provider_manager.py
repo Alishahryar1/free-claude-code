@@ -14,6 +14,7 @@ from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.runtime.catalog_support import finish_discovery, finish_publication
 
 
 class FakeRuntime(ProviderRuntime):
@@ -129,7 +130,7 @@ async def test_discovery_error_follows_attempt_and_generation_without_losing_cac
         await manager.refresh_provider("nvidia_nim")
         await manager.replace(settings, commit=AsyncMock())
         assert manager.catalog_status()["provider_errors"] == {}
-        await manager.wait_for_catalog()
+        await finish_discovery(manager)
         assert manager.catalog_status()["provider_errors"] == {}
     finally:
         await manager.close()
@@ -223,7 +224,7 @@ async def test_connected_provider_refresh_and_eviction_are_targeted() -> None:
 
     connected.add("openai")
     await manager.connected_provider_changed("openai", connected=True)
-    await manager.wait_for_catalog()
+    await finish_discovery(manager)
     assert manager.cached_model_ids()["openai"] == frozenset({"gpt-visible"})
 
     connected.clear()
@@ -249,6 +250,7 @@ async def test_catalog_publication_tracks_warm_refresh_and_direct_cache() -> Non
     )
 
     await manager.refresh_model_list_cache()
+    await finish_publication(manager)
     manager.start_model_list_refresh()
     refresh_task = manager._current.refresh_task
     assert refresh_task is not None
@@ -258,16 +260,11 @@ async def test_catalog_publication_tracks_warm_refresh_and_direct_cache() -> Non
         {ProviderModelInfo("tested-model")},
     )
 
-    await asyncio.gather(*manager._publications)
-    assert publisher.events == ["publish", "publish", "publish"]
-    assert publisher.snapshots == [
-        ("nvidia_nim/one", ("nvidia_nim/warm-model",)),
-        ("nvidia_nim/one", ("nvidia_nim/warm-model",)),
-        ("nvidia_nim/one", ("nvidia_nim/tested-model",)),
-    ]
+    await finish_publication(manager)
+    assert ("nvidia_nim/one", ("nvidia_nim/warm-model",)) in publisher.snapshots
+    assert publisher.snapshots[-1] == ("nvidia_nim/one", ("nvidia_nim/tested-model",))
 
     await manager.close()
-    assert publisher.events == ["publish", "publish", "publish"]
 
 
 @pytest.mark.asyncio
@@ -286,6 +283,7 @@ async def test_failed_startup_discovery_still_ensures_a_fresh_catalog() -> None:
     result = await manager.refresh_model_list_cache()
 
     assert result.failed_provider_ids == ("nvidia_nim",)
+    await finish_publication(manager)
     assert publisher.events == ["publish"]
     assert publisher.snapshots == [("nvidia_nim/configured", ())]
     await manager.close()
@@ -302,7 +300,8 @@ async def test_catalog_publication_tracks_connected_account_changes() -> None:
         connected_provider_ids=lambda: tuple(connected),
         model_catalog_publisher=publisher,
     )
-    await manager.wait_for_catalog()
+    await finish_discovery(manager)
+    await finish_publication(manager)
     publisher.events.clear()
     publisher.snapshots.clear()
     factory.runtimes[0].provider.list_model_infos = AsyncMock(
@@ -311,16 +310,15 @@ async def test_catalog_publication_tracks_connected_account_changes() -> None:
 
     connected.add("openai")
     await manager.connected_provider_changed("openai", connected=True)
-    await manager.wait_for_catalog()
+    await finish_discovery(manager)
+    await finish_publication(manager)
+    assert publisher.snapshots[-1] == ("nvidia_nim/one", ("openai/gpt-connected",))
     connected.clear()
     await manager.connected_provider_changed("openai", connected=False)
-    await manager.wait_for_catalog()
+    await finish_discovery(manager)
+    await finish_publication(manager)
 
-    assert publisher.events == ["publish", "publish"]
-    assert publisher.snapshots == [
-        ("nvidia_nim/one", ("openai/gpt-connected",)),
-        ("nvidia_nim/one", ()),
-    ]
+    assert publisher.snapshots[-1] == ("nvidia_nim/one", ())
     await manager.close()
 
 
@@ -342,6 +340,7 @@ async def test_catalog_publication_tracks_replacement_and_its_refresh() -> None:
     assert refresh_task is not None
     await refresh_task
 
+    await finish_publication(manager)
     assert publisher.events == ["publish"]
     assert publisher.snapshots == [
         ("nvidia_nim/two", ()),
@@ -363,11 +362,12 @@ async def test_catalog_publication_failure_is_warning_only_and_secret_safe() -> 
 
     with patch("free_claude_code.runtime.provider_manager.logger.warning") as warning:
         await manager.refresh_model_list_cache()
+        await finish_publication(manager)
         manager.cache_model_infos(
             "nvidia_nim",
             {ProviderModelInfo("tested-model")},
         )
-        await asyncio.gather(*manager._publications)
+        await finish_publication(manager)
 
     assert warning.call_count == 2
     log_blob = " ".join(

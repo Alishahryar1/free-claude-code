@@ -87,7 +87,8 @@
     input.autocomplete = "off";
     input.value = value;
     input.setAttribute("aria-label", "Selected model");
-    let committed = value;
+    let committed = value,
+      optionsSignature = JSON.stringify(values());
     const combobox = new window.FccModelCombobox(input, {
       listboxId: `${id}-options`,
       label: "model",
@@ -114,6 +115,14 @@
         input.disabled = disabled;
         combobox.toggle.disabled = disabled;
         if (disabled) combobox.close();
+        const signature = JSON.stringify(values());
+        if (combobox.isOpen && signature !== optionsSignature) {
+          const active = combobox.visibleOptions[combobox.activeIndex]?.dataset.value;
+          combobox.render(combobox.query);
+          const index = combobox.visibleOptions.findIndex((option) => option.dataset.value === active);
+          if (index >= 0) combobox.setActive(index, false);
+        }
+        optionsSignature = signature;
       },
     };
   }

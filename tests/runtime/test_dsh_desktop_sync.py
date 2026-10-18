@@ -11,6 +11,11 @@ from ruamel.yaml import YAML
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.harnesses import dsh_desktop_integration as desktop
+from tests.runtime.catalog_support import (
+    finish_discovery,
+    finish_publication,
+    pause_next_write,
+)
 from tests.runtime.test_integration_startup import runtime as runtime
 
 
@@ -42,7 +47,7 @@ def route():
 
 
 async def settle(runtime):
-    await runtime.provider_manager.wait_for_catalog()
+    await finish_discovery(runtime.provider_manager)
     task = runtime._integrations._dsh_update.task
     if task:
         await asyncio.wait_for(asyncio.shield(task), 5)
@@ -66,7 +71,7 @@ async def test_late_catalog_updates_and_disconnect_remains_removed(connected):
     runtime.provider_manager.cache_model_infos(
         "nvidia_nim", (ProviderModelInfo("two"),)
     )
-    await asyncio.gather(*runtime.provider_manager._publications)
+    await finish_publication(runtime.provider_manager)
     await settle(runtime)
     assert {model["id"] for model in route()["models"]} == {
         "nvidia_nim/one",
@@ -80,19 +85,13 @@ async def test_late_catalog_updates_and_disconnect_remains_removed(connected):
 
 
 @pytest.mark.asyncio
-async def test_disconnect_during_catalog_wait_cannot_be_reconnected(
+async def test_disconnect_during_write_wait_cannot_be_reconnected(
     connected, monkeypatch
 ):
     runtime = connected
-    entered, release = asyncio.Event(), asyncio.Event()
-    original = runtime.provider_manager.wait_for_catalog
-
-    async def held():
-        entered.set()
-        await release.wait()
-        return await original()
-
-    monkeypatch.setattr(runtime.provider_manager, "wait_for_catalog", held)
+    entered, release = pause_next_write(
+        monkeypatch, runtime._integrations._dsh_update.access
+    )
     try:
         await runtime.refresh_dsh_desktop()
         await asyncio.wait_for(entered.wait(), 5)
@@ -111,7 +110,7 @@ async def test_status_and_disconnect_do_not_need_catalog(connected, monkeypatch)
     runtime = connected
     monkeypatch.setattr(
         runtime.provider_manager,
-        "wait_for_catalog",
+        "catalog_snapshot",
         AsyncMock(side_effect=AssertionError("must not wait")),
     )
     assert (await runtime.dsh_desktop_status())["connected"]
@@ -121,20 +120,9 @@ async def test_status_and_disconnect_do_not_need_catalog(connected, monkeypatch)
 @pytest.mark.asyncio
 async def test_new_generation_replaces_old_url_and_credential(connected, monkeypatch):
     runtime = connected
-    entered, release = asyncio.Event(), asyncio.Event()
-    original = runtime.provider_manager.wait_for_catalog
-    calls = 0
-
-    async def held():
-        nonlocal calls
-        snapshot = await original()
-        calls += 1
-        if calls == 1:
-            entered.set()
-            await release.wait()
-        return snapshot
-
-    monkeypatch.setattr(runtime.provider_manager, "wait_for_catalog", held)
+    entered, release = pause_next_write(
+        monkeypatch, runtime._integrations._dsh_update.access
+    )
     try:
         await runtime.refresh_dsh_desktop()
         await asyncio.wait_for(entered.wait(), 5)
@@ -179,7 +167,7 @@ async def test_catalog_change_during_write_is_coalesced_without_loss(
         runtime.provider_manager.cache_model_infos(
             "nvidia_nim", (ProviderModelInfo("late"),)
         )
-        await asyncio.gather(*runtime.provider_manager._publications)
+        await finish_publication(runtime.provider_manager)
     finally:
         release.set()
     await settle(runtime)
@@ -199,21 +187,15 @@ async def test_startup_without_connection_does_not_create_native_profile(runtime
 
 
 @pytest.mark.asyncio
-async def test_first_configure_waiting_for_catalog_is_superseded_by_disconnect(
+async def test_first_configure_waiting_for_ownership_is_superseded_by_disconnect(
     runtime, monkeypatch
 ):
     install()
     await runtime.start()
     await settle(runtime)
-    entered, release = asyncio.Event(), asyncio.Event()
-    original = runtime.provider_manager.wait_for_catalog
-
-    async def held():
-        entered.set()
-        await release.wait()
-        return await original()
-
-    monkeypatch.setattr(runtime.provider_manager, "wait_for_catalog", held)
+    entered, release = pause_next_write(
+        monkeypatch, runtime._integrations._dsh_update.access
+    )
     task = asyncio.create_task(runtime.connect_dsh_desktop())
     try:
         await asyncio.wait_for(entered.wait(), 5)

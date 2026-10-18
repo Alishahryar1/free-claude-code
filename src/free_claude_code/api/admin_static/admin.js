@@ -19,7 +19,7 @@ const state = {
   startupRequest: null,
   startupTimer: null,
   startupAgain: false,
-  codeCatalogRetry: false,
+  configRequest: 0,
   modelOptionsRequest: 0,
   activeView: viewFromLocation(),
 };
@@ -177,8 +177,8 @@ async function refreshStartup() {
     const changed = !previous || previous.instance_id !== result.instance_id ||
       JSON.stringify(previous.startup) !== JSON.stringify(current);
     if (changed) void hydrateModelOptions();
-    if (changed || state.codeCatalogRetry) state.codeCatalogRetry = await window.CodeSessions?.refresh(result) === false;
-    pending = state.codeCatalogRetry || current.catalog === "starting" || current.catalog_file === "starting" ||
+    if (changed) void window.CodeSessions?.refresh(result);
+    pending = current.catalog === "starting" || current.catalog_file === "starting" ||
       current.code?.state === "starting" || current.messaging?.state === "starting" ||
       Object.values(current.integrations || {}).some((update) => update.state === "starting") ||
       Object.values(current.providers || {}).includes("starting");
@@ -209,11 +209,13 @@ window.addEventListener("pagehide", () => {
 });
 
 async function load({ providersOnly = false } = {}) {
+  const request = ++state.configRequest;
   state.localStatusRequest = null;
   state.startupRequest?.controller.abort();
   state.startupRequest = null;
   showMessage("Loading admin config");
   const config = await api("/admin/api/config");
+  if (request !== state.configRequest) return;
   config.custom_providers ||= [];
   config.provider_status.push(...config.custom_providers.map((provider) => ({ ...provider, kind: "custom", status: "configured", settings_keys: [], missing_configuration_keys: [] })));
   state.config = config;
@@ -229,11 +231,10 @@ async function load({ providersOnly = false } = {}) {
   byId("configPath").textContent = config.paths.managed;
   void refreshLocalStatus(config);
   void refreshStartup();
-  await Promise.all([
-    refreshConnectedAccounts(),
-    hydrateModelOptions(),
-    providersOnly ? window.CodeSessions.refresh() : window.CodeSessions.initialize(api),
-  ]);
+  void refreshConnectedAccounts();
+  void hydrateModelOptions();
+  if (providersOnly) void window.CodeSessions.refresh();
+  else window.CodeSessions.initialize(api);
   if (state.config !== config) return;
   updateDirtyState();
   showMessage("");
@@ -265,7 +266,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   state.activeView = activeView.id;
   byId("pageTitle").textContent = activeView.title;
   renderStartup();
-  if (activeView.id === "code") state.codeCatalogRetry = true;
+  if (activeView.id === "code") void window.CodeSessions.refresh();
   void refreshStartup();
   const sessionActive = activeView.id === "code";
   document.querySelector(".app-shell").classList.toggle("session-active", sessionActive);
@@ -1715,7 +1716,7 @@ async function testProvider(providerId, button) {
         "ok",
         modelCountMessage(result.models.length),
       );
-      await hydrateModelOptions();
+      void hydrateModelOptions();
     } else {
       updateProviderCheckResult(
         providerId,
@@ -1755,7 +1756,7 @@ async function loadModelOptions(refresh = false) {
     method: refresh ? "POST" : "GET",
   });
   if (request === state.modelOptionsRequest && config === state.config) { state.modelLabels = new Map(Object.entries(result.model_labels || {})); setModelOptions(result.models); }
-  if (refresh && window.CodeSessions) await window.CodeSessions.refresh();
+  if (refresh && window.CodeSessions) void window.CodeSessions.refresh();
   return result;
 }
 

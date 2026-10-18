@@ -15,6 +15,11 @@ from free_claude_code.providers.runtime.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.runtime.catalog_support import (
+    finish_discovery,
+    finish_publication,
+    pause_next_write,
+)
 
 
 @pytest_asyncio.fixture
@@ -58,7 +63,7 @@ async def runtime(request):
 
 
 async def settle(runtime):
-    await runtime.provider_manager.wait_for_catalog()
+    await finish_discovery(runtime.provider_manager)
     task = runtime._integrations._vscode_update.task
     if task:
         await asyncio.wait_for(asyncio.shield(task), 5)
@@ -72,7 +77,7 @@ async def test_catalog_updates_connected_file_and_disconnect_stays_removed(runti
     runtime.provider_manager.cache_model_infos(
         "nvidia_nim", (ProviderModelInfo("two"),)
     )
-    await asyncio.gather(*runtime.provider_manager._publications)
+    await finish_publication(runtime.provider_manager)
     await settle(runtime)
     models = json.loads(path.read_text())[0]["models"]
     assert {m["id"] for m in models} == {"nvidia_nim/one", "nvidia_nim/two"}
@@ -108,7 +113,7 @@ async def test_update_arriving_during_write_is_not_lost(runtime, monkeypatch):
         runtime.provider_manager.cache_model_infos(
             "nvidia_nim", (ProviderModelInfo("late"),)
         )
-        await asyncio.gather(*runtime.provider_manager._publications)
+        await finish_publication(runtime.provider_manager)
     finally:
         release.set()
     await settle(runtime)
@@ -134,7 +139,7 @@ async def test_bad_file_does_not_fail_catalog_and_disconnect_needs_no_catalog(
     await runtime.connect_vscode_chat()
     monkeypatch.setattr(
         runtime.provider_manager,
-        "wait_for_catalog",
+        "catalog_snapshot",
         AsyncMock(side_effect=AssertionError("Must not wait")),
     )
     assert (await runtime.disconnect_vscode_chat())["connected"] is False
@@ -164,20 +169,14 @@ async def test_startup_refreshes_owned_group_and_only_writes_once(runtime):
 
 
 @pytest.mark.asyncio
-async def test_disconnect_while_refresh_waits_for_catalog_never_reconnects(
+async def test_disconnect_while_refresh_waits_for_ownership_never_reconnects(
     runtime, monkeypatch
 ):
     await runtime.connect_vscode_chat()
     await settle(runtime)
-    entered, release = asyncio.Event(), asyncio.Event()
-    original = runtime.provider_manager.wait_for_catalog
-
-    async def held():
-        entered.set()
-        await release.wait()
-        return await original()
-
-    monkeypatch.setattr(runtime.provider_manager, "wait_for_catalog", held)
+    entered, release = pause_next_write(
+        monkeypatch, runtime._integrations._vscode_update.access
+    )
     try:
         await runtime.refresh_vscode_chat()
         await asyncio.wait_for(entered.wait(), 5)
@@ -194,20 +193,9 @@ async def test_replaced_generation_cannot_publish_old_url_or_token(
 ):
     await runtime.connect_vscode_chat()
     await settle(runtime)
-    entered, release = asyncio.Event(), asyncio.Event()
-    original = runtime.provider_manager.wait_for_catalog
-    calls = 0
-
-    async def held():
-        nonlocal calls
-        snapshot = await original()
-        calls += 1
-        if calls == 1:
-            entered.set()
-            await release.wait()
-        return snapshot
-
-    monkeypatch.setattr(runtime.provider_manager, "wait_for_catalog", held)
+    entered, release = pause_next_write(
+        monkeypatch, runtime._integrations._vscode_update.access
+    )
     try:
         await runtime.refresh_vscode_chat()
         await asyncio.wait_for(entered.wait(), 5)
@@ -238,7 +226,7 @@ async def test_codex_publication_failure_does_not_block_vscode(runtime):
     runtime.provider_manager.cache_model_infos(
         "nvidia_nim", (ProviderModelInfo("new"),)
     )
-    await asyncio.gather(*runtime.provider_manager._publications)
+    await finish_publication(runtime.provider_manager)
     await settle(runtime)
     assert runtime.provider_manager.catalog_status()["catalog_file"] == "failed"
     assert runtime._integrations._vscode_update.state == "ready"

@@ -22,6 +22,7 @@ from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime import provider_manager
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.runtime.catalog_support import finish_discovery, finish_publication
 
 LOCAL_IDS = ("lmstudio", "llamacpp", "ollama")
 
@@ -62,9 +63,10 @@ async def test_startup_discovers_unselected_locals_once_and_publishes_them():
     manager = manager_for(providers=providers, model_catalog_publisher=publisher)
     try:
         manager.start_model_list_refresh()
-        await manager.wait_for_catalog()
+        await finish_discovery(manager)
         manager.start_model_list_refresh()
-        await manager.wait_for_catalog()
+        await finish_discovery(manager)
+        await finish_publication(manager)
         assert set(LOCAL_IDS) <= manager.cached_model_ids().keys()
         assert all(
             value.list_model_infos.await_count == 1 for value in providers.values()
@@ -98,7 +100,7 @@ async def test_cancelled_local_waiter_preserves_probe_and_refresh_recovers_inven
         with pytest.raises(asyncio.CancelledError):
             await waiter
         release.set()
-        await manager.wait_for_catalog()
+        await finish_discovery(manager)
         assert local.list_model_infos.await_count == 1
         assert manager.cached_model_ids()["ollama"] == {"installed"}
         local.list_model_infos.side_effect = ConnectionError()
@@ -317,7 +319,7 @@ async def test_local_endpoint_change_discards_old_inventory_on_failed_rediscover
             update={attr: "http://localhost:9999"}
         )
         await manager.replace(settings, commit=AsyncMock())
-        await manager.wait_for_catalog()
+        await finish_discovery(manager)
         assert local_id not in manager.cached_model_ids()
         assert local_id + "/old-server-model" not in {
             model.provider_model_ref for model in read_model_catalog(manager).models

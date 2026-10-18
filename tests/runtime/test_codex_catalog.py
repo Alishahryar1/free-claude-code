@@ -40,8 +40,11 @@ class FakeRequestRuntime(RequestRuntimePort):
         del include_model_infos
         raise AssertionError("Catalog publication must not acquire a provider lease.")
 
-    async def wait_for_catalog(self) -> ModelCatalogSnapshot:
+    def catalog_snapshot(self) -> ModelCatalogSnapshot:
         return ModelCatalogSnapshot(self._settings, self._cached_infos)
+
+    async def wait_for_model_catalog(self, model: str) -> ModelCatalogSnapshot:
+        return self.catalog_snapshot()
 
     def catalog_status(self) -> JsonObject:
         raise AssertionError("Catalog publication must not query startup status.")

@@ -660,7 +660,7 @@ class CodexHarnessFactory:
         binary = self._binary or shutil.which("codex")
         if binary is None:
             raise CodeUnavailableError("Codex is not installed. " + CODEX_INSTALL_HINT)
-        snapshot = await self._runtime.wait_for_catalog()
+        snapshot = await self._runtime.wait_for_model_catalog(model)
         settings = snapshot.settings
         models = read_model_catalog(snapshot, settings).models
         projected = project_codex_models(models)

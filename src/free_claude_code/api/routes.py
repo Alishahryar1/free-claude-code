@@ -302,7 +302,7 @@ async def list_models(
 ):
     """List the model ids this proxy advertises to compatible clients."""
     trace_event(stage="ingress", event="free_claude_code.api.models.list", source="api")
-    snapshot = await services.requests.wait_for_catalog()
+    snapshot = services.requests.catalog_snapshot()
     return build_models_list_response(
         snapshot.settings,
         snapshot,
@@ -321,7 +321,7 @@ async def list_muse_models(
 ):
     """List the direct Responses models expected by Muse Code."""
     trace_event(stage="ingress", event="free_claude_code.api.models.list", source="api")
-    snapshot = await services.requests.wait_for_catalog()
+    snapshot = services.requests.catalog_snapshot()
     return build_muse_models_list_response(snapshot.settings, snapshot)
 
 

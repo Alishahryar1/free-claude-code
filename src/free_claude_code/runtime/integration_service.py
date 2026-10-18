@@ -63,12 +63,12 @@ class IntegrationService:
         self,
         provider_manager: ProviderRuntimeManager,
         *,
-        config_lock: asyncio.Lock,
+        config_publication: AsyncReadWriteLock,
         is_draining: Callable[[], bool],
         has_pending_restart: Callable[[], bool],
     ) -> None:
         self.provider_manager = provider_manager
-        self._config_lock = config_lock
+        self._config_publication = config_publication
         self._is_draining = is_draining
         self._has_pending_restart = has_pending_restart
         self._claude_update = _IntegrationUpdate()
@@ -261,9 +261,12 @@ class IntegrationService:
                 if not current["connected"]:
                     return {"changed": False}
             while True:
-                snapshot = await self.provider_manager.wait_for_catalog()
+                snapshot = self.provider_manager.catalog_snapshot()
                 revision = self.provider_manager.catalog_status()["catalog_revision"]
-                async with self._config_lock, self._dsh_update.access.write():
+                async with (
+                    self._dsh_update.access.write(),
+                    self._config_publication.read(),
+                ):
                     self._check_integration_available()
                     if action_revision != self._dsh_action_revision:
                         return await run_sync_owned(
@@ -278,7 +281,6 @@ class IntegrationService:
                         snapshot.current_settings() is not self.settings
                         or revision
                         != self.provider_manager.catalog_status()["catalog_revision"]
-                        or self.provider_manager.catalog_status()["catalog"] != "ready"
                     ):
                         continue
                     catalog = read_model_catalog(snapshot)
@@ -346,18 +348,20 @@ class IntegrationService:
                     return {"changed": False}
             while True:
                 snapshot = (
-                    await self.provider_manager.wait_for_catalog()
+                    self.provider_manager.catalog_snapshot()
                     if action in {"connect", "refresh"}
                     else None
                 )
                 revision = self.provider_manager.catalog_status()["catalog_revision"]
-                async with self._config_lock, self._vscode_update.access.write():
+                async with (
+                    self._vscode_update.access.write(),
+                    self._config_publication.read(),
+                ):
                     self._check_integration_available()
                     if snapshot is not None and (
                         snapshot.current_settings() is not self.settings
                         or revision
                         != self.provider_manager.catalog_status()["catalog_revision"]
-                        or self.provider_manager.catalog_status()["catalog"] != "ready"
                     ):
                         continue
                     catalog = (
@@ -424,7 +428,10 @@ class IntegrationService:
 
         try:
             if complete:
-                async with self._config_lock, self._claude_update.access.write():
+                async with (
+                    self._claude_update.access.write(),
+                    self._config_publication.read(),
+                ):
                     self._check_integration_available()
                     return await run_sync_owned(operate)
             async with self._claude_update.access.read():
@@ -494,7 +501,7 @@ class IntegrationService:
             return await self._read_status(
                 update, operation, mask_when_unready=mask_when_unready
             )
-        async with self._config_lock, update.access.write():
+        async with update.access.write(), self._config_publication.read():
             self._check_integration_available()
             url = local_proxy_root_url(self.settings)
             token = self.settings.proxy_auth_token
@@ -733,16 +740,22 @@ class IntegrationService:
                 if not existing["connected"]:
                     return {"changed": False}
             while True:
-                generation_id = (
+                catalog_version = (
                     await self.provider_manager.wait_for_catalog_file(wait)
                     if needs_catalog
                     else None
                 )
-                async with self._config_lock, self._codex_update.access.write():
+                async with (
+                    self._codex_update.access.write(),
+                    self._config_publication.read(),
+                ):
                     self._check_integration_available()
                     if needs_catalog and (
-                        generation_id != self.provider_manager.current_generation_id
-                        or self.provider_manager.catalog_status()["catalog"] != "ready"
+                        catalog_version
+                        != (
+                            self.provider_manager.current_generation_id,
+                            self.provider_manager.catalog_status()["catalog_revision"],
+                        )
                     ):
                         continue
                     url = local_proxy_root_url(self.settings)

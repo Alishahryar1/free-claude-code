@@ -9,7 +9,49 @@ from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.harnesses import claude_integration as claude
 from free_claude_code.harnesses import claude_onboarding
 from free_claude_code.harnesses import vscode_chat_integration as vscode
+from tests.runtime.catalog_support import finish_discovery
 from tests.runtime.test_integration_startup import runtime as runtime
+
+
+@pytest.mark.asyncio
+async def test_slow_integration_writer_does_not_block_another(runtime, monkeypatch):
+    entered, release = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def held(*_args, **_kwargs):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        return {"connected": True}
+
+    monkeypatch.setattr(vscode, "configure", held)
+    first = asyncio.create_task(runtime.connect_vscode_chat())
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        result = await asyncio.wait_for(runtime.disconnect_claude_vscode(), 1)
+        assert result["connected"] is False
+        assert not first.done()
+    finally:
+        release.set()
+        await asyncio.gather(first, return_exceptions=True)
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_queued_integration_writer_does_not_block_another(runtime):
+    update = runtime._integrations._vscode_update
+    first = None
+    try:
+        async with update.access.read():
+            first = asyncio.create_task(runtime.disconnect_vscode_chat())
+            while not update.access._waiting_writers:
+                await asyncio.sleep(0)
+            result = await asyncio.wait_for(runtime.disconnect_claude_vscode(), 1)
+            assert result["connected"] is False
+            assert not first.done()
+    finally:
+        if first is not None:
+            await asyncio.gather(first, return_exceptions=True)
+        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -76,7 +118,7 @@ async def test_cancelled_reader_drains_before_writer_enters(runtime, monkeypatch
         await asyncio.sleep(0)
         reader.cancel()
         writer = asyncio.create_task(runtime.connect_vscode_chat())
-        await runtime.provider_manager.wait_for_catalog()
+        await finish_discovery(runtime.provider_manager)
         await asyncio.sleep(0)
         assert not reader.done()
         assert not writer_entered.is_set()
@@ -208,7 +250,6 @@ async def test_cancelled_onboarding_write_is_drained_before_shutdown(
         close = asyncio.create_task(runtime.close())
         await asyncio.sleep(0)
         assert not writer.done() and not close.done()
-        assert runtime._config_lock.locked()
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(writer, 5)
