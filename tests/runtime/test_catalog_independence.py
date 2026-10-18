@@ -10,6 +10,7 @@ import pytest_asyncio
 
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
+from free_claude_code.application.code_sessions.models import CodeValidationError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.readiness import InitializationWait
 from free_claude_code.config.loader import ManagedConfigStore
@@ -19,8 +20,10 @@ from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.codex_app_server import CodexHarnessFactory
+from free_claude_code.runtime.codex_catalog import CodexModelCatalogPublisher
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.runtime.catalog_support import finish_discovery, finish_publication
 from tests.web_tools_support import StubWebToolsClient
 
 
@@ -132,6 +135,122 @@ async def test_code_waits_for_its_provider_and_validates_settled_metadata(
     finally:
         release.set()
         await asyncio.gather(waiting, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replace_settings", [False, True])
+async def test_code_waits_for_model_absent_from_partial_catalog(
+    catalog_runtime, replace_settings
+):
+    runtime, release = catalog_runtime
+    manager = runtime.provider_manager
+    factory = CodexHarnessFactory(manager, binary="codex")
+    model = "groq/configured" if replace_settings else "groq/discovered"
+    waiting = asyncio.create_task(factory.prepare(model, None, "config"))
+    try:
+        await asyncio.sleep(0)
+        if replace_settings:
+            settings = manager.current_settings().model_copy(
+                update={"model_sonnet": "groq/other"}
+            )
+            await manager.replace(settings, commit=AsyncMock())
+            await asyncio.sleep(0)
+        assert not waiting.done()
+        release.set()
+        selected = await asyncio.wait_for(waiting, 1)
+        assert selected.model == model
+    finally:
+        release.set()
+        await asyncio.gather(waiting, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["unknown/model", "", "groq", "groq/"])
+async def test_code_rejects_invalid_selection_without_waiting(catalog_runtime, model):
+    runtime, release = catalog_runtime
+    factory = CodexHarnessFactory(runtime.provider_manager, binary="codex")
+    with pytest.raises(CodeValidationError, match="model is unavailable"):
+        await asyncio.wait_for(factory.prepare(model, None, "config"), 1)
+    assert not release.is_set()
+
+
+@pytest.mark.asyncio
+async def test_code_rejects_selection_when_its_provider_is_removed(catalog_runtime):
+    runtime, release = catalog_runtime
+    manager = runtime.provider_manager
+    factory = CodexHarnessFactory(manager, binary="codex")
+    waiting = asyncio.create_task(factory.prepare("groq/configured", None, "config"))
+    try:
+        await asyncio.sleep(0)
+        settings = manager.current_settings().model_copy(
+            update={"model_sonnet": None, "groq_api_keys": ()}
+        )
+        await manager.replace(settings, commit=AsyncMock())
+        with pytest.raises(CodeValidationError, match="model is unavailable"):
+            await asyncio.wait_for(waiting, 1)
+        assert "groq" not in manager.catalog_status()["providers"]
+        assert not release.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(waiting, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair", [False, True])
+async def test_model_refresh_retries_failed_file_with_unchanged_metadata(
+    catalog_runtime, tmp_path, repair
+):
+    runtime, release = catalog_runtime
+    manager = runtime.provider_manager
+    release.set()
+    await finish_discovery(manager)
+    await finish_publication(manager)
+    directory = tmp_path / "catalog"
+    directory.write_text("block directory creation", encoding="utf-8")
+    path = directory / "models.json"
+    publisher = CodexModelCatalogPublisher(path)
+    manager._model_catalog_publisher = publisher
+    manager.cache_model_infos("nvidia_nim", [ProviderModelInfo("new")])
+    await finish_publication(manager)
+    assert manager.catalog_status()["catalog_file"] == "failed"
+    # First refresh restores the fixture's normal provider metadata.
+    await manager.refresh_model_list_cache()
+    await finish_publication(manager)
+    revision = manager.catalog_status()["catalog_revision"]
+    if repair:
+        directory.unlink()
+    with pytest.MonkeyPatch.context() as patch:
+        publish = MagicMock(wraps=publisher.publish)
+        patch.setattr(publisher, "publish", publish)
+        result = await manager.refresh_model_list_cache()
+        await finish_publication(manager)
+        publish.assert_called_once()
+    assert "nvidia_nim" in result.refreshed_provider_ids
+    assert manager.catalog_status()["catalog_revision"] == revision
+    assert manager.catalog_status()["catalog_file"] == ("ready" if repair else "failed")
+    assert path.exists() is repair
+
+
+@pytest.mark.asyncio
+async def test_unchanged_refresh_does_not_republish_current_file(
+    catalog_runtime, tmp_path, monkeypatch
+):
+    runtime, release = catalog_runtime
+    manager = runtime.provider_manager
+    release.set()
+    await finish_discovery(manager)
+    await finish_publication(manager)
+    publisher = CodexModelCatalogPublisher(tmp_path / "models.json")
+    manager._model_catalog_publisher = publisher
+    manager.cache_model_infos("nvidia_nim", [ProviderModelInfo("new")])
+    await manager.refresh_model_list_cache()
+    await finish_publication(manager)
+    assert manager.catalog_status()["catalog_file"] == "ready"
+    publish = MagicMock(wraps=publisher.publish)
+    monkeypatch.setattr(publisher, "publish", publish)
+    await manager.refresh_model_list_cache()
+    await finish_publication(manager)
+    publish.assert_not_called()
 
 
 @pytest.mark.asyncio

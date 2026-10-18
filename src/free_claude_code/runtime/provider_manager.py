@@ -9,7 +9,6 @@ from typing import Protocol
 from loguru import logger
 
 from free_claude_code.application.errors import ApplicationUnavailableError
-from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import (
     ProviderModelInfo,
     ProviderModelRefreshResult,
@@ -359,6 +358,13 @@ class ProviderRuntimeManager:
             )
             if generation is self._current:
                 self._catalog_updated()
+        elif (
+            refresh
+            and generation is self._current
+            and self._published_version
+            != (generation.generation_id, self._catalog_revision)
+        ):
+            self._request_publication()
         if generation.refresh_task is not None and not generation.refresh_task.done():
             return generation.refresh_task
         for provider_id in generation.initial_ids:
@@ -442,13 +448,18 @@ class ProviderRuntimeManager:
         wait = InitializationWait()
         while True:
             snapshot = self.catalog_snapshot()
-            if not any(
-                entry.provider_model_ref == model
-                for entry in read_model_catalog(snapshot).models
-            ):
+            try:
+                provider_id, _ = split_provider_model_ref(model)
+            except ValueError:
                 return snapshot
             generation = self._current
-            provider_id, _ = split_provider_model_ref(model)
+            if provider_id not in (
+                *referenced_provider_ids(generation.settings),
+                *model_list_provider_ids_for_settings(
+                    generation.settings, self._connected_provider_ids()
+                ),
+            ):
+                return snapshot
             if provider_id not in generation.initialized:
                 try:
                     await self._wait_for_catalog_work(
