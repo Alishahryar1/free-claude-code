@@ -100,6 +100,23 @@ def test_all_project_setup_jobs_have_history_and_fetch_canonical_tags():
     assert fetch["env"]["CI_REPOSITORY"] == "${{ github.repository }}"
 
 
+def test_ci_checks_out_the_event_merge_commit_from_the_base_repository():
+    config = load("tests.yml")
+    assert set(config[True]) == {"pull_request"}
+    checkouts = [
+        step["with"]
+        for job in config["jobs"].values()
+        for step in job["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert checkouts
+    for checkout in checkouts:
+        assert checkout["ref"] == "${{ github.sha }}"
+        assert checkout.get("repository", "${{ github.repository }}") == (
+            "${{ github.repository }}"
+        )
+
+
 @pytest.mark.parametrize("conflicting_tag", [False, True])
 def test_ci_tag_fetch_uses_only_canonical_tags(tmp_path, conflicting_tag):
     upstream = tmp_path / "upstream.git"
