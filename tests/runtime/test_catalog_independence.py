@@ -11,6 +11,7 @@ import pytest_asyncio
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.code_sessions.models import CodeValidationError
+from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.readiness import InitializationWait
 from free_claude_code.config.loader import ManagedConfigStore
@@ -323,6 +324,62 @@ async def test_file_publication_coalesces_changes_and_tracks_written_version(
     finally:
         release.set()
         await manager.wait_for_catalog_file(InitializationWait())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_next", [False, True])
+async def test_file_waiter_follows_publication_started_after_previous_write(
+    catalog_runtime, fail_next
+):
+    runtime, _ = catalog_runtime
+    manager = runtime.provider_manager
+    await finish_publication(manager)
+    entered = [threading.Event(), threading.Event()]
+    release = [threading.Event(), threading.Event()]
+    snapshots = []
+
+    class Publisher:
+        def publish(self, snapshot):
+            index = len(snapshots)
+            snapshots.append(snapshot)
+            entered[index].set()
+            assert release[index].wait(5)
+            if index == 1 and fail_next:
+                raise OSError("catalog write failed")
+
+    manager._model_catalog_publisher = Publisher()
+    manager.cache_model_infos("nvidia_nim", [ProviderModelInfo("first")])
+    waiting = asyncio.create_task(manager.wait_for_catalog_file(InitializationWait()))
+    try:
+        assert await asyncio.to_thread(entered[0].wait, 1)
+        assert manager._publication_task is not None
+        manager._publication_task.add_done_callback(
+            lambda _: manager.cache_model_infos(
+                "nvidia_nim", [ProviderModelInfo("later")]
+            )
+        )
+        release[0].set()
+        assert await asyncio.to_thread(entered[1].wait, 1)
+        assert not waiting.done()
+        release[1].set()
+        if fail_next:
+            with pytest.raises(ApplicationUnavailableError, match="Could not publish"):
+                await waiting
+            assert manager.catalog_status()["catalog_file"] == "failed"
+        else:
+            version = await waiting
+            assert version == (
+                manager.current_generation_id,
+                manager.catalog_status()["catalog_revision"],
+            )
+            assert snapshots[-1].cached_model_info("nvidia_nim", "later") is not None
+            assert manager.catalog_status()["catalog_file"] == "ready"
+        assert len(snapshots) == 2
+    finally:
+        for event in release:
+            event.set()
+        await asyncio.gather(waiting, return_exceptions=True)
+        await finish_publication(manager)
 
 
 @pytest.mark.asyncio

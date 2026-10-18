@@ -513,7 +513,7 @@ class ProviderRuntimeManager:
                     continue
             if generation is not self._current:
                 continue
-            if generation.file_state != "ready":
+            if generation.file_state == "failed":
                 raise ApplicationUnavailableError(
                     "Could not publish the Codex model catalog. Check file permissions and retry."
                 )
