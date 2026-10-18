@@ -650,30 +650,6 @@ class Settings(BaseModel):
         validation_alias="HTTP_CONNECT_TIMEOUT",
     )
 
-    # ==================== Fast Prefix Detection ====================
-    fast_prefix_detection: bool = Field(
-        default=True,
-        validation_alias="FAST_PREFIX_DETECTION",
-    )
-
-    # ==================== Optimizations ====================
-    enable_network_probe_mock: bool = Field(
-        default=True,
-        validation_alias="ENABLE_NETWORK_PROBE_MOCK",
-    )
-    enable_title_generation_skip: bool = Field(
-        default=True,
-        validation_alias="ENABLE_TITLE_GENERATION_SKIP",
-    )
-    enable_suggestion_mode_skip: bool = Field(
-        default=True,
-        validation_alias="ENABLE_SUGGESTION_MODE_SKIP",
-    )
-    enable_filepath_extraction_mock: bool = Field(
-        default=True,
-        validation_alias="ENABLE_FILEPATH_EXTRACTION_MOCK",
-    )
-
     # ==================== Local web server tools (web_search / web_fetch) ====================
     # On by default to match Claude Code's normal web-tool availability.
     enable_web_server_tools: bool = Field(

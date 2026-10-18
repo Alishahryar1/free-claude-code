@@ -367,19 +367,6 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         "tool-capable configured providers must emit or continue tool results",
     ),
     FeatureCoverage(
-        "request_optimization",
-        "Local request optimizations return product responses without providers",
-        (
-            "tests/api/test_optimization_handlers.py",
-            "tests/api/test_routes_optimizations.py",
-        ),
-        ("test_optimization_fast_paths_do_not_need_provider",),
-        ("test_api_request_optimizations_e2e",),
-        ("api",),
-        (),
-        "always runnable once the local smoke server starts",
-    ),
-    FeatureCoverage(
         "smart_rate_limiting",
         "Transient retries and disconnect cleanup preserve follow-up requests",
         (

@@ -1891,6 +1891,51 @@ def test_admin_apply_preserves_unrecognized_managed_assignments(monkeypatch, tmp
     assert "CLAUDE_CLI_BIN=claude-custom" in text
 
 
+@pytest.mark.parametrize("already_saved", [True, False])
+def test_admin_ignores_retired_request_settings_and_preserves_saved_values(
+    monkeypatch, tmp_path, already_saved
+):
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    retired = {
+        "FAST_PREFIX_DETECTION": "true",
+        "ENABLE_NETWORK_PROBE_MOCK": "false",
+        "ENABLE_TITLE_GENERATION_SKIP": "obsolete-invalid-boolean",
+        "ENABLE_SUGGESTION_MODE_SKIP": "true",
+        "ENABLE_FILEPATH_EXTRACTION_MOCK": "false",
+    }
+    saved = {"UNRELATED_CUSTOM_SETTING": "keep-me"}
+    if already_saved:
+        saved.update(retired)
+    env_file = tmp_path / ".fcc" / ".env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(
+        "\n".join(f"{key}={value}" for key, value in saved.items()) + "\n",
+        encoding="utf-8",
+    )
+    with _local_client(create_test_app()) as client:
+        response = client.get("/admin/api/config")
+        assert response.status_code == 200
+        fields = {field["key"] for field in response.json()["fields"]}
+        assert not fields.intersection(retired)
+
+        response = post_config(
+            client,
+            "/admin/api/config/apply",
+            json={"values": {**dict.fromkeys(retired, "false"), "LOG_LEVEL": "DEBUG"}},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["applied"] is True
+    values = dotenv_values_from_text(env_file.read_text(encoding="utf-8"))
+    assert values["LOG_LEVEL"] == "DEBUG"
+    if not already_saved:
+        assert not values.keys() & retired.keys()
+    for key, value in saved.items():
+        assert values[key] == value
+        assert f"{key}=********" in response.json()["env_preview"]
+
+
 def test_admin_apply_restart_required_reports_automatic_restart(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)

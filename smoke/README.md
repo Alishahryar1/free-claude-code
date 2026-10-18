@@ -62,7 +62,7 @@ Default targets do not send real bot messages or load voice backends:
 
 | Target | Product scenarios | Required environment |
 | --- | --- | --- |
-| `api` | messages, count_tokens full payload, errors, `/stop`, optimizations | configured provider only for streaming messages |
+| `api` | messages, count_tokens full payload, errors, `/stop` | configured provider for streaming and non-streaming messages |
 | `auth` | canonical bearer auth, conflicting legacy headers, invalid/missing auth | none; test sets an isolated token |
 | `cli` | server entrypoint, Claude CLI adaptive thinking, automatic WebSearch, Auto-mode classifier, session cleanup | Claude CLI binary and provider only for real CLI; connected OpenAI account for Auto mode; `FCC_SMOKE_RUN_WEB_TOOLS=1` for WebSearch |
 | `clients` | VS Code and JetBrains protocol payloads; Pi, OpenCode, Aider, Cline, Hermes, DeepSeek Harness, Grok Build, and Muse Code CLI prompts | configured provider; installed Pi/OpenCode/Aider/Cline binaries; Hermes, DSH, Grok, and Muse use a local fake upstream |
