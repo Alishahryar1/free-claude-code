@@ -86,10 +86,6 @@ def test_native_ingress_preserves_extensions_and_bypasses_local_processing():
     body["model"] = "claude-sonnet-client-alias"
     with (
         patch(
-            "free_claude_code.api.handlers.messages.try_optimizations",
-            side_effect=AssertionError("native optimization"),
-        ),
-        patch(
             "free_claude_code.runtime.provider_manager.ProviderGenerationLease.wait_for_token_estimation",
             side_effect=AssertionError("native token wait"),
         ),

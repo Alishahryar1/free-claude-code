@@ -19,7 +19,7 @@ class ProviderFieldOverride(TypedDict, total=False):
 
 _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
     "ANTHROPIC_API_KEY": {
-        "description": "Anthropic API access with separate usage billing. Messages requests use Anthropic tools and client thinking controls. Native fallback uses other Anthropic models. FCC local web and prompt optimizations apply to compatibility routes.",
+        "description": "Anthropic API access with separate usage billing. Messages requests use Anthropic tools and client thinking controls. Native fallback uses other Anthropic models. FCC local web tools apply to compatibility routes.",
     },
     "OPENAI_API_KEY": {
         "label": "OpenAI API Keys",

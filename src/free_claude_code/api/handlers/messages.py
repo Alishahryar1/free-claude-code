@@ -3,13 +3,11 @@
 import asyncio
 import sys
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from fastapi.responses import JSONResponse, Response
-from loguru import logger
 
 from free_claude_code.api.detection import detect_safety_classifier_stop_sequence
-from free_claude_code.api.optimization_handlers import try_optimizations
 from free_claude_code.api.request_errors import (
     http_status_for_unexpected_api_exception,
     log_unexpected_api_exception,
@@ -51,19 +49,6 @@ from free_claude_code.core.request_outcomes import record_request_route
 from free_claude_code.core.trace import close_stream_input, trace_event
 
 from .classifier_response import classifier_response
-
-
-@dataclass(frozen=True)
-class _MessagesStreamResult:
-    body: AsyncIterator[str]
-
-
-@dataclass(frozen=True)
-class _MessagesCompleteResult:
-    response: object
-
-
-_MessagesResult = _MessagesStreamResult | _MessagesCompleteResult
 
 
 class MessagesHandler:
@@ -140,25 +125,15 @@ class MessagesHandler:
                 routed.resolved.primary.provider_id,
                 routed.resolved.primary.provider_model,
             )
-            tool_body = self._web_tools.try_stream_messages(
-                routed, request_id=request_id
-            )
-            result = (
-                _MessagesStreamResult(tool_body)
-                if tool_body is not None
-                else self._intercept_local_optimization(routed)
-            )
-            if result is None:
-                logger.debug("No optimization matched, routing to provider")
-                result = _MessagesStreamResult(
-                    self._provider_executor.stream_messages(
-                        routed,
-                        raw_log_payload=routed.request.model_dump,
-                        request_id=request_id,
-                    )
+            body = self._web_tools.try_stream_messages(routed, request_id=request_id)
+            if body is None:
+                body = self._provider_executor.stream_messages(
+                    routed,
+                    raw_log_payload=routed.request.model_dump,
+                    request_id=request_id,
                 )
             return await self._to_public_response(
-                result,
+                body,
                 stream=request_data.stream,
                 request_id=request_id,
                 hide_reasoning=routed.reasoning.control is ReasoningControl.PREFER_OFF,
@@ -177,21 +152,19 @@ class MessagesHandler:
 
     async def _to_public_response(
         self,
-        result: _MessagesResult,
+        body: AsyncIterator[str],
         *,
         stream: bool,
         request_id: str,
         hide_reasoning: bool = False,
     ) -> object:
-        if isinstance(result, _MessagesCompleteResult):
-            return result.response
         if not stream:
             # Non-streaming clients (e.g. Claude Code utility calls) need a
             # complete JSON Message; the internal pipeline is always SSE, so
             # serving that raw here breaks the client SDK's response parse.
             try:
                 message, error, _complete = await aggregate_anthropic_sse_to_message(
-                    classifier_response(result.body) if hide_reasoning else result.body
+                    classifier_response(body) if hide_reasoning else body
                 )
             except GeneratorExit:
                 raise
@@ -237,7 +210,7 @@ class MessagesHandler:
                 )
             return JSONResponse(content=message)
         return await anthropic_sse_streaming_response(
-            result.body,
+            body,
             pre_start_error_response=lambda exc: self._pre_start_error_response(
                 exc, request_id=request_id
             ),
@@ -359,24 +332,6 @@ class MessagesHandler:
                 ReasoningPolicy.prefer_off() if reasoning_changed else routed.reasoning
             ),
         )
-
-    def _intercept_local_optimization(
-        self, routed: RoutedMessagesRequest
-    ) -> _MessagesResult | None:
-        optimized = try_optimizations(
-            routed.request,
-            self._settings,
-            response_model=routed.resolved.original_model,
-        )
-        if optimized is None:
-            return None
-        trace_event(
-            stage="routing",
-            event="free_claude_code.api.optimization.short_circuit",
-            source="api",
-            model=routed.resolved.original_model,
-        )
-        return _MessagesCompleteResult(optimized)
 
 
 def _stream_error_fields(error: dict[str, object]) -> tuple[str, str]:

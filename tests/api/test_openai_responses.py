@@ -351,15 +351,11 @@ def test_create_response_relays_provider_owned_post_start_failure() -> None:
     assert events[-1].data["response"]["error"]["message"] == "socket closed"
 
 
-def test_create_response_stream_bypasses_local_message_optimizations() -> None:
+def test_create_response_stream_forwards_quota_prompt() -> None:
     provider = FakeProvider(_responses_text_stream("Provider response"))
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
-        patch(
-            "free_claude_code.api.handlers.messages.try_optimizations",
-            side_effect=AssertionError("Responses must not use message optimizations"),
-        ),
         TestClient(app) as client,
     ):
         response = client.post(
