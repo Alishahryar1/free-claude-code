@@ -821,6 +821,36 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         model_listing=OpenAIModelListing(path="/models"),
     ),
+    # Measured against api.empiriolabs.ai/v1 across Qwen, DeepSeek, GLM, Kimi and
+    # MiniMax models: each accepts the documented ``none``, ``low``, ``medium``,
+    # ``high`` and ``max`` efforts, ``none`` turns thinking off on models that can
+    # answer without it, and reasoning streams as ``reasoning_content``. The
+    # public catalog also lists image, video, speech and embedding models, so
+    # only tool-capable Chat Completions models are listed.
+    "empiriolabs": OpenAIChatProfile(
+        _policy(
+            "EMPIRIOLABS",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(
+            _LOW_TO_MAX,
+            disabled_value="none",
+            enabled_value="medium",
+        ),
+        model_listing=OpenAIModelListing(
+            path="/models",
+            required_sequence_items=(
+                ("supported_endpoints", "POST /v1/chat/completions"),
+                ("features", "function_calling"),
+            ),
+            exclude_missing_sequence_fields=True,
+            thinking_boolean_path=("capabilities", "reasoning"),
+            input_modalities_path=("input_modalities",),
+            context_window_tokens_path=("context_window",),
+            max_output_tokens_path=("max_output_tokens",),
+        ),
+    ),
     "ollama_cloud": OpenAIChatProfile(
         _policy(
             "OLLAMA_CLOUD",
