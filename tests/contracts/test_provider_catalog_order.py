@@ -63,6 +63,7 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "atlascloud",
     "xkiro",
     "opper",
+    "empiriolabs",
     "ollama_cloud",
     "lmstudio",
     "llamacpp",
