@@ -254,6 +254,11 @@ class Settings(BaseModel):
     # ==================== Opper (OpenAI-compatible) ====================
     opper_api_keys: ApiKeyList = Field(default=(), validation_alias="OPPER_API_KEY")
 
+    # ==================== EmpirioLabs AI (OpenAI-compatible) ====================
+    empiriolabs_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="EMPIRIOLABS_API_KEY"
+    )
+
     # ==================== Fireworks AI Config ====================
     fireworks_api_keys: ApiKeyList = Field(
         default=(), validation_alias="FIREWORKS_API_KEY"
@@ -567,6 +572,9 @@ class Settings(BaseModel):
     )
     opper_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OPPER_PROXY"
+    )
+    empiriolabs_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="EMPIRIOLABS_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"
