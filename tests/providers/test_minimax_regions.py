@@ -6,6 +6,7 @@ import httpx2
 import pytest
 from openai import AsyncOpenAI
 
+from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.loader import ConfigSource, compose_settings_snapshot
 from free_claude_code.config.provider_catalog import (
     MINIMAX_DEFAULT_BASE,
@@ -45,7 +46,8 @@ def test_minimax_regional_settings_preserve_explicit_model_and_url(source, base_
 
 def test_minimax_default_endpoint():
     config = build_provider_config(
-        PROVIDER_CATALOG["minimax"], Settings(minimax_api_keys="test-key")
+        PROVIDER_CATALOG["minimax"],
+        Settings(minimax_api_keys=normalize_api_keys("test-key")),
     )
     assert config.base_url == MINIMAX_DEFAULT_BASE
 
@@ -81,7 +83,9 @@ async def test_minimax_sdk_wire_payload(base_url, model, control):
 
     config = build_provider_config(
         PROVIDER_CATALOG["minimax"],
-        Settings(minimax_base_url=base_url, minimax_api_keys="test-key"),
+        Settings(
+            minimax_base_url=base_url, minimax_api_keys=normalize_api_keys("test-key")
+        ),
     )
     content: list[dict[str, object]] = [{"type": "text", "text": "Hi"}]
     if model in {"MiniMax-M3.1-Flash", "MiniMax-M3"}:
