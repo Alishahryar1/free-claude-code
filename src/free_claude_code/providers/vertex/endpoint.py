@@ -22,7 +22,7 @@ def vertex_openai_base_url(project_id: str, location: str) -> str:
     project = project_id.strip()
     if not project:
         raise ApplicationUnavailableError(
-            "VERTEX_PROJECT_ID is not set. Add it to your .env file."
+            "VERTEX_PROJECT_ID is not set. Add it in the Admin UI."
         )
     normalized_location = _validated_location(location)
     service_endpoint = vertex_service_endpoint(normalized_location)

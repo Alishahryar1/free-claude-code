@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class _AnthropicBlockBase(BaseModel):
@@ -106,9 +106,12 @@ class Tool(_AnthropicBlockBase):
 
 
 class ThinkingConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     enabled: bool | None = True
     type: str | None = None
     budget_tokens: int | None = None
+    display: Literal["summarized", "omitted", "updates"] | None = None
 
 
 class MessagesRequest(BaseModel):
@@ -135,6 +138,13 @@ class MessagesRequest(BaseModel):
     extra_body: dict[str, Any] | None = None
     betas: list[str] | None = Field(default=None, exclude=True)
 
+    @field_validator("max_tokens", mode="before")
+    @classmethod
+    def _reject_boolean_output_limit(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("max_tokens must not be a boolean")
+        return value
+
 
 class TokenCountRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -155,6 +165,26 @@ class TokenCountRequest(BaseModel):
 
 class TokenCountResponse(BaseModel):
     input_tokens: int
+
+
+class NativeTokenCountMessage(BaseModel):
+    """The outer message shape needed by local estimation, with opaque blocks."""
+
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    role: str
+    content: str | list[dict[str, Any]]
+
+
+class NativeTokenCountRequest(BaseModel):
+    """Count native inputs without applying compatibility protocol validation."""
+
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    model: str = Field(min_length=1)
+    messages: list[NativeTokenCountMessage]
+    system: str | list[dict[str, Any]] | None = None
+    tools: list[dict[str, Any]] | None = None
 
 
 class Usage(BaseModel):

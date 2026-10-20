@@ -33,6 +33,8 @@ _THINKING_CONFIG_CONFLICT = (
 class GeminiReasoningEncoder:
     """Choose one Gemini API reasoning channel for each resolved policy."""
 
+    off_field = ("reasoning_effort",)
+
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         if _preserve_caller_thinking_config(body, policy):
             return
@@ -58,6 +60,8 @@ class GeminiReasoningEncoder:
 @dataclass(frozen=True, slots=True)
 class VertexReasoningEncoder:
     """Encode Vertex reasoning through one Google thinking-config object."""
+
+    off_field = ("extra_body", "extra_body", "google", "thinking_config")
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         if _preserve_caller_thinking_config(body, policy):

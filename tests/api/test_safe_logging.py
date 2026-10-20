@@ -1,6 +1,7 @@
 """Tests that API and SSE logging avoid raw sensitive payloads by default."""
 
-from unittest.mock import MagicMock, patch
+import logging
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -8,14 +9,14 @@ from fastapi.responses import JSONResponse
 
 from free_claude_code.api import request_errors
 from free_claude_code.api.handlers import MessagesHandler, TokenCountHandler
-from free_claude_code.application import execution
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import AnthropicStreamLedger
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
+from tests.web_tools_support import StubWebToolsClient
 
 
 @pytest.mark.asyncio
-async def test_create_message_skips_full_payload_debug_log_by_default():
+async def test_create_message_skips_full_payload_debug_log_by_default(caplog):
     settings = Settings()
     assert settings.log_raw_api_payloads is False
     mock_provider = MagicMock()
@@ -23,8 +24,14 @@ async def test_create_message_skips_full_payload_debug_log_by_default():
     async def fake_stream(*_a, **_kw):
         yield "event: ping\ndata: {}\n\n"
 
-    mock_provider.stream_response = fake_stream
-    service = MessagesHandler(settings, provider_resolver=lambda _: mock_provider)
+    mock_provider.stream_messages = fake_stream
+    service = MessagesHandler(
+        settings,
+        provider_resolver=AsyncMock(
+            side_effect=lambda _, _api_key_number: mock_provider
+        ),
+        web_tools=StubWebToolsClient(),
+    )
 
     request = MessagesRequest(
         model="claude-3-haiku-20240307",
@@ -32,19 +39,16 @@ async def test_create_message_skips_full_payload_debug_log_by_default():
         messages=[Message(role="user", content="secret-user-text")],
     )
 
-    with patch.object(execution.logger, "debug") as mock_debug:
+    with caplog.at_level(logging.DEBUG):
         await service.create(request)
 
-    full_payload_calls = [
-        c
-        for c in mock_debug.call_args_list
-        if c.args and str(c.args[0]) == "FULL_PAYLOAD [{}]: {}"
-    ]
-    assert not full_payload_calls
+    assert not any(
+        record.message.startswith("FULL_PAYLOAD [") for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
-async def test_create_message_logs_full_payload_when_opt_in():
+async def test_create_message_logs_full_payload_when_opt_in(caplog):
     settings = Settings()
     settings.log_raw_api_payloads = True
     mock_provider = MagicMock()
@@ -52,19 +56,30 @@ async def test_create_message_logs_full_payload_when_opt_in():
     async def fake_stream(*_a, **_kw):
         yield "event: ping\ndata: {}\n\n"
 
-    mock_provider.stream_response = fake_stream
-    service = MessagesHandler(settings, provider_resolver=lambda _: mock_provider)
+    mock_provider.stream_messages = fake_stream
+    service = MessagesHandler(
+        settings,
+        provider_resolver=AsyncMock(
+            side_effect=lambda _, _api_key_number: mock_provider
+        ),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="claude-3-haiku-20240307",
         max_tokens=10,
         messages=[Message(role="user", content="visible")],
     )
 
-    with patch.object(execution.logger, "debug") as mock_debug:
+    with caplog.at_level(logging.DEBUG):
         await service.create(request)
 
-    keys = [c.args[0] for c in mock_debug.call_args_list if c.args]
-    assert any(k == "FULL_PAYLOAD [{}]: {}" for k in keys)
+    payloads = [
+        record.message
+        for record in caplog.records
+        if record.message.startswith("FULL_PAYLOAD [")
+    ]
+    assert len(payloads) == 1
+    assert "visible" in payloads[0]
 
 
 def test_stream_ledger_default_debug_has_no_serialized_json_content():
@@ -109,8 +124,14 @@ async def test_create_message_unexpected_error_default_logs_exclude_exception_te
     def stream_boom(*_a, **_kw):
         raise RuntimeError(secret)
 
-    mock_provider.stream_response = stream_boom
-    service = MessagesHandler(settings, provider_resolver=lambda _: mock_provider)
+    mock_provider.stream_messages = stream_boom
+    service = MessagesHandler(
+        settings,
+        provider_resolver=AsyncMock(
+            side_effect=lambda _, _api_key_number: mock_provider
+        ),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="claude-3-haiku-20240307",
         max_tokens=10,
@@ -142,8 +163,14 @@ async def test_create_message_unexpected_error_terminal_json_ignores_status_code
     def stream_boom(*_a, **_kw):
         raise WeirdError("no")
 
-    mock_provider.stream_response = stream_boom
-    service = MessagesHandler(settings, provider_resolver=lambda _: mock_provider)
+    mock_provider.stream_messages = stream_boom
+    service = MessagesHandler(
+        settings,
+        provider_resolver=AsyncMock(
+            side_effect=lambda _, _api_key_number: mock_provider
+        ),
+        web_tools=StubWebToolsClient(),
+    )
     request = MessagesRequest(
         model="claude-3-haiku-20240307",
         max_tokens=10,

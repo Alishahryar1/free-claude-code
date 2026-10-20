@@ -11,6 +11,15 @@ def _manager() -> ManagedClaudeSessionManager:
     return ManagedClaudeSessionManager(
         workspace_path="/tmp",
         proxy_root_url="http://127.0.0.1:8082",
+        auth_token="freecc",
+    )
+
+
+def _session() -> ManagedClaudeSession:
+    return ManagedClaudeSession(
+        "/tmp",
+        "http://127.0.0.1:8082",
+        auth_token="freecc",
     )
 
 
@@ -33,7 +42,7 @@ def _completed_process(pid: int) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_stop_is_idempotent_without_a_live_process() -> None:
-    session = ManagedClaudeSession("/tmp", "http://127.0.0.1:8082")
+    session = _session()
 
     assert await session.stop() is True
 
@@ -58,7 +67,7 @@ async def test_stop_is_idempotent_without_a_live_process() -> None:
 
 @pytest.mark.asyncio
 async def test_stopped_session_reference_cannot_launch_a_new_process() -> None:
-    session = ManagedClaudeSession("/tmp", "http://127.0.0.1:8082")
+    session = _session()
 
     assert await session.stop() is True
 
@@ -80,7 +89,7 @@ async def test_stopped_session_reference_cannot_launch_a_new_process() -> None:
 
 @pytest.mark.asyncio
 async def test_launch_publication_wins_before_concurrent_stop() -> None:
-    session = ManagedClaudeSession("/tmp", "http://127.0.0.1:8082")
+    session = _session()
     launch_entered = asyncio.Event()
     release_launch = asyncio.Event()
     release_stream = asyncio.Event()
@@ -137,7 +146,7 @@ async def test_launch_publication_wins_before_concurrent_stop() -> None:
 
 @pytest.mark.asyncio
 async def test_concurrent_stop_wins_before_launch_publication() -> None:
-    session = ManagedClaudeSession("/tmp", "http://127.0.0.1:8082")
+    session = _session()
     stop_entered = asyncio.Event()
     release_stop = asyncio.Event()
     process = MagicMock()
@@ -179,7 +188,7 @@ async def test_concurrent_stop_wins_before_launch_publication() -> None:
 
 @pytest.mark.asyncio
 async def test_normal_sequential_starts_remain_allowed_before_stop() -> None:
-    session = ManagedClaudeSession("/tmp", "http://127.0.0.1:8082")
+    session = _session()
     processes = [_completed_process(104), _completed_process(105)]
 
     with (
@@ -207,7 +216,7 @@ async def _collect_session_events(
 
 @pytest.mark.asyncio
 async def test_failed_stop_keeps_pid_registered_until_retry_confirms_exit() -> None:
-    session = ManagedClaudeSession("/tmp", "http://127.0.0.1:8082")
+    session = _session()
     process = MagicMock()
     process.pid = 202
     process.returncode = None
@@ -228,7 +237,7 @@ async def test_failed_stop_keeps_pid_registered_until_retry_confirms_exit() -> N
 
 @pytest.mark.asyncio
 async def test_cancelled_stop_keeps_pid_registered_and_can_be_retried() -> None:
-    session = ManagedClaudeSession("/tmp", "http://127.0.0.1:8082")
+    session = _session()
     process = MagicMock()
     process.pid = 303
     process.returncode = None
@@ -261,7 +270,7 @@ async def test_cancelled_stop_keeps_pid_registered_and_can_be_retried() -> None:
 
 @pytest.mark.asyncio
 async def test_task_failure_keeps_unconfirmed_process_pid_registered() -> None:
-    session = ManagedClaudeSession("/tmp", "http://127.0.0.1:8082")
+    session = _session()
     process = MagicMock()
     process.pid = 404
     process.returncode = None
@@ -286,7 +295,7 @@ async def test_task_failure_keeps_unconfirmed_process_pid_registered() -> None:
 
 @pytest.mark.asyncio
 async def test_completed_task_wait_unregisters_confirmed_process_pid() -> None:
-    session = ManagedClaudeSession("/tmp", "http://127.0.0.1:8082")
+    session = _session()
     process = MagicMock()
     process.pid = 405
     process.returncode = None

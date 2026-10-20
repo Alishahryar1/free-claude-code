@@ -1,17 +1,60 @@
 """Explicit test composition for the API adapter."""
 
+import asyncio
 from collections.abc import Mapping, MutableMapping
 
 from fastapi import FastAPI
 
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
+from free_claude_code.application.code_sessions import CodeApplicationPort
 from free_claude_code.application.connected_accounts import ConnectedAccountPort
+from free_claude_code.application.model_metadata import ProviderModelRefreshResult
+from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime, RestartCallback
+from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.config.credential_support import credential_edit
+from tests.web_tools_support import StubWebToolsClient
+
+
+def post_config(client, path, *, json):
+    values = json.get("values", {})
+    credential_keys = {
+        d.credential_env for d in PROVIDER_CATALOG.values() if d.credential_env
+    }
+    if credential_keys.intersection(values):
+        config = client.get("/admin/api/config").json()
+        fields = {field["key"]: field for field in config["fields"]}
+        values = {
+            key: credential_edit(fields[key]["value"], value)
+            if key in credential_keys
+            else value
+            for key, value in values.items()
+        }
+    return client.post(path, json=json | {"values": values})
+
+
+class ApiTestRuntime(ProviderRuntimeManager):
+    """API-only tests supply metadata explicitly; startup/discovery has separate tests."""
+
+    def _catalog_task(self, generation, provider_id, *, refresh=False):
+        if refresh:
+            return super()._catalog_task(generation, provider_id, refresh=True)
+        task = generation.catalog_tasks.get(provider_id)
+        if task is None:
+
+            async def supplied_catalog():
+                generation.initialized.add(provider_id)
+                return ProviderModelRefreshResult()
+
+            task = asyncio.create_task(supplied_catalog())
+            generation.catalog_tasks[provider_id] = task
+        return task
 
 
 def create_test_app(
@@ -20,9 +63,12 @@ def create_test_app(
     providers: MutableMapping[str, BaseProvider] | None = None,
     restart_callback: RestartCallback | None = None,
     connected_accounts: Mapping[str, ConnectedAccountPort] | None = None,
+    code: CodeApplicationPort | None = None,
 ) -> FastAPI:
     """Build an API app with explicit in-memory runtime services."""
-    settings = settings or Settings()
+    store = ManagedConfigStore()
+    store.initialize()  # API-only tests do not run the production ASGI lifespan.
+    settings = settings or store.read().settings
     connected_accounts = dict(connected_accounts or {})
 
     def connected_provider_ids() -> tuple[str, ...]:
@@ -33,21 +79,26 @@ def create_test_app(
         )
 
     if providers is None:
-        manager = ProviderRuntimeManager(
+        manager = ApiTestRuntime(
             settings,
             connected_provider_ids=connected_provider_ids,
         )
     else:
-        manager = ProviderRuntimeManager(
+        manager = ApiTestRuntime(
             settings,
-            runtime_factory=lambda snapshot: ProviderRuntime(
+            runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
                 snapshot,
-                dict(providers),
+                admission_registry,
+                {
+                    (provider_id, 1): provider
+                    for provider_id, provider in providers.items()
+                },
             ),
             connected_provider_ids=connected_provider_ids,
         )
     runtime = ApplicationRuntime(
         manager,
+        configuration=ConfigurationService(store),
         transcriber=None,
         restart_callback=restart_callback,
         connected_accounts=connected_accounts,
@@ -57,6 +108,8 @@ def create_test_app(
             requests=manager,
             admin=runtime,
             tasks=runtime,
+            code=code,
+            web_tools=StubWebToolsClient(),
         )
     )
 

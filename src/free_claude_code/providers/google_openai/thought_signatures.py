@@ -3,6 +3,8 @@
 from copy import deepcopy
 from typing import Any
 
+from free_claude_code.core.history_replay import is_replay
+
 GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR = "skip_thought_signature_validator"
 
 
@@ -16,6 +18,7 @@ def apply_google_thought_signatures(
     messages = body.get("messages")
     if not isinstance(messages, list):
         return
+    _apply_message_thought_signatures(messages)
     _apply_cached_tool_call_signatures(messages, tool_call_extra_content_by_id or {})
     _apply_missing_current_turn_signatures(messages)
 
@@ -34,7 +37,7 @@ def _tool_call_thought_signature(tool_call: dict[str, Any]) -> str | None:
     return _thought_signature_from_extra_content(tool_call.get("extra_content"))
 
 
-def _set_tool_call_thought_signature(tool_call: dict[str, Any], signature: str) -> None:
+def _set_thought_signature(tool_call: dict[str, Any], signature: str) -> None:
     extra_content = tool_call.get("extra_content")
     if not isinstance(extra_content, dict):
         extra_content = {}
@@ -44,6 +47,35 @@ def _set_tool_call_thought_signature(tool_call: dict[str, Any], signature: str) 
         google = {}
         extra_content["google"] = google
     google["thought_signature"] = signature
+
+
+def _apply_message_thought_signatures(messages: list[Any]) -> None:
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        details = message.get("reasoning_details")
+        if not isinstance(details, list):
+            continue
+        opaque = [
+            detail
+            for detail in details
+            if isinstance(detail, dict)
+            and detail.get("type") == "reasoning.encrypted"
+            and isinstance(detail.get("data"), str)
+            and detail["data"]
+            and not is_replay(detail["data"])
+        ]
+        if not opaque:
+            continue
+        if len(opaque) == 1 and not _thought_signature_from_extra_content(
+            message.get("extra_content")
+        ):
+            _set_thought_signature(message, opaque[0]["data"])
+        retained = [detail for detail in details if detail not in opaque]
+        if retained:
+            message["reasoning_details"] = retained
+        else:
+            message.pop("reasoning_details", None)
 
 
 def _message_has_standard_user_content(message: dict[str, Any]) -> bool:
@@ -112,6 +144,4 @@ def _apply_missing_current_turn_signatures(messages: list[Any]) -> None:
             continue
         if _tool_call_thought_signature(first_tool_call):
             continue
-        _set_tool_call_thought_signature(
-            first_tool_call, GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR
-        )
+        _set_thought_signature(first_tool_call, GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR)

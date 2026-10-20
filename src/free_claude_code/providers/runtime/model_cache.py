@@ -1,6 +1,7 @@
 """Provider model-list metadata cache."""
 
 from collections.abc import Iterable
+from dataclasses import replace
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import SUPPORTED_PROVIDER_IDS
@@ -26,6 +27,16 @@ class ProviderModelCache:
             info.model_id: info for info in model_infos if info.model_id.strip()
         }
         self._model_infos_by_provider[provider_id] = clean_infos
+
+    def copy(self, available_provider_ids: Iterable[str]) -> ProviderModelCache:
+        """Seed a generation without sharing mutable dictionaries with its predecessor."""
+        result = ProviderModelCache(available_provider_ids)
+        for provider_id, infos in self._model_infos_by_provider.items():
+            result.cache_model_infos(provider_id, infos.values())
+        return result
+
+    def provider_infos(self, provider_id: str) -> tuple[ProviderModelInfo, ...]:
+        return tuple(self._model_infos_by_provider.get(provider_id, {}).values())
 
     def set_available_providers(self, provider_ids: Iterable[str]) -> None:
         """Replace the provider scope and discard entries outside it."""
@@ -58,25 +69,22 @@ class ProviderModelCache:
         """Return whether this provider has any cached model-list result."""
         return provider_id in self._model_infos_by_provider
 
-    def cached_model_supports_thinking(
+    def cached_model_info(
         self, provider_id: str, model_id: str
-    ) -> bool | None:
-        """Return cached thinking support when a provider exposes it."""
-        info = self._model_infos_by_provider.get(provider_id, {}).get(model_id)
-        if info is None:
-            return None
-        return info.supports_thinking
+    ) -> ProviderModelInfo | None:
+        """Return the complete cached record for one provider model."""
+        return self._model_infos_by_provider.get(provider_id, {}).get(model_id)
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         """Return cached provider models with user-selectable prefixed ids."""
         infos: list[ProviderModelInfo] = []
-        for provider_id in SUPPORTED_PROVIDER_IDS:
+        for provider_id in (
+            *SUPPORTED_PROVIDER_IDS,
+            *sorted(self._available_provider_ids.difference(SUPPORTED_PROVIDER_IDS)),
+        ):
             provider_infos = self._model_infos_by_provider.get(provider_id, {})
             infos.extend(
-                ProviderModelInfo(
-                    model_id=f"{provider_id}/{info.model_id}",
-                    supports_thinking=info.supports_thinking,
-                )
+                replace(info, model_id=f"{provider_id}/{info.model_id}")
                 for info in sorted(
                     provider_infos.values(), key=lambda item: item.model_id
                 )

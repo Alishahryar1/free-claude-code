@@ -1,6 +1,7 @@
 """Shared API request validation and safe error logging."""
 
-from typing import Any, Literal
+from collections.abc import Sequence
+from typing import Literal
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -20,11 +21,15 @@ from free_claude_code.core.openai_responses import (
     openai_error_payload,
     openai_error_type_for_failure,
 )
+from free_claude_code.core.request_outcomes import (
+    record_request_exception,
+    record_request_failure,
+)
 
 WireApi = Literal["messages", "responses"]
 
 
-def require_non_empty_messages(messages: list[Any]) -> None:
+def require_non_empty_messages(messages: Sequence[object]) -> None:
     if not messages:
         raise InvalidRequestError("messages cannot be empty")
 
@@ -36,6 +41,7 @@ def ordinary_application_error_response(
     request_id: str,
 ) -> JSONResponse:
     """Serialize a deterministic application error without terminal headers."""
+    record_request_failure(error.kind.value)
     if wire_api == "responses":
         return JSONResponse(
             status_code=error.status_code,
@@ -66,6 +72,7 @@ def log_unexpected_api_exception(
     request_id: str | None = None,
 ) -> None:
     """Log API failures without echoing exception text unless opted in."""
+    record_request_exception(exc)
     if settings.log_api_error_tracebacks:
         if request_id is not None:
             logger.error(

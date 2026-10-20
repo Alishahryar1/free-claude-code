@@ -4,20 +4,29 @@ from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 
 from .base_url import openai_v1_base_url
+from .behavior import OpenAIChatBehavior
+from .client import OpenAIAsyncCredentialProvider, create_chat_client
 from .extra_body import (
     validate_extra_body_does_not_override_canonical_fields,
     validate_extra_body_does_not_override_reasoning_fields,
 )
-from .profiles import OPENAI_CHAT_PROFILES, OpenAIChatProfile
-from .provider import OpenAIAsyncCredentialProvider, OpenAIChatProvider
+from .profiles import OPENAI_CHAT_PROFILES, OpenAIChatProfile, OpenAIModelListing
+from .provider import OpenAIChatProvider
 from .reasoning import (
     NO_REASONING,
     ChatTemplateReasoning,
     NamedEffortReasoning,
+    ReasoningEncoder,
     ReasoningObject,
+    ThinkingObjectReasoning,
 )
-from .reasoning_details import apply_reasoning_details_replay
-from .request_policy import OpenAIChatRequestPolicy, build_openai_chat_request_body
+from .request_policy import (
+    OpenAIChatRequestPolicy,
+    apply_openai_chat_body_policy,
+    build_openai_chat_request_body,
+)
+from .stream_output import ChatStreamOutput
+from .transport import OpenAIChatTransport
 from .usage import usage_int
 
 
@@ -43,15 +52,22 @@ def create_openai_chat_provider(
 __all__ = [
     "NO_REASONING",
     "OPENAI_CHAT_PROFILES",
+    "ChatStreamOutput",
     "ChatTemplateReasoning",
     "NamedEffortReasoning",
     "OpenAIAsyncCredentialProvider",
+    "OpenAIChatBehavior",
     "OpenAIChatProfile",
     "OpenAIChatProvider",
     "OpenAIChatRequestPolicy",
+    "OpenAIChatTransport",
+    "OpenAIModelListing",
+    "ReasoningEncoder",
     "ReasoningObject",
-    "apply_reasoning_details_replay",
+    "ThinkingObjectReasoning",
+    "apply_openai_chat_body_policy",
     "build_openai_chat_request_body",
+    "create_chat_client",
     "create_openai_chat_provider",
     "openai_v1_base_url",
     "usage_int",

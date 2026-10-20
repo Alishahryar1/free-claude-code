@@ -34,7 +34,7 @@ class GoogleAccessTokenProvider:
         self,
         credentials_loader: CredentialsLoader = load_application_default_credentials,
         *,
-        proxy: str = "",
+        proxy: str | None = None,
     ) -> None:
         self._credentials_loader = credentials_loader
         self._proxy = proxy

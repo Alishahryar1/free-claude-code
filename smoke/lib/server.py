@@ -4,15 +4,18 @@ import os
 import socket
 import subprocess
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
+from free_claude_code.cli.process_registry import kill_pid_tree_best_effort
+
 from .child_process import cmd_fcc_server
 from .config import SmokeConfig, redacted
+from .server_runtime import server_environment
 
 
 @dataclass(slots=True)
@@ -37,7 +40,7 @@ def start_server(
     env_unset: Iterable[str] = (),
     command: list[str] | None = None,
     name: str = "server",
-) -> Iterator[RunningServer]:
+) -> Generator[RunningServer]:
     port = find_free_port()
     config.results_dir.mkdir(parents=True, exist_ok=True)
     log_path = config.results_dir / f"{name}-{config.worker_id}-{port}.log"
@@ -60,11 +63,15 @@ def start_server(
 
     cmd = command or cmd_fcc_server()
 
-    with log_path.open("ab") as log_file:
+    caller_home = any(key in (env_overrides or {}) for key in ("HOME", "USERPROFILE"))
+    with (
+        server_environment(env, caller_home=caller_home) as child_env,
+        log_path.open("ab") as log_file,
+    ):
         process = subprocess.Popen(
             cmd,
             cwd=config.root,
-            env=env,
+            env=child_env,
             stdout=log_file,
             stderr=subprocess.STDOUT,
         )
@@ -110,7 +117,11 @@ def _wait_for_health(server: RunningServer, *, timeout_s: float) -> None:
 def _stop_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
-    process.terminate()
+    if os.name == "nt":
+        # The venv Python executable can wrap a second Python process.
+        kill_pid_tree_best_effort(process.pid)
+    else:
+        process.terminate()
     try:
         process.wait(timeout=8)
     except subprocess.TimeoutExpired:

@@ -17,10 +17,15 @@ class ReasoningEncoder(Protocol):
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None: ...
 
+    @property
+    def off_field(self) -> tuple[str, ...] | None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class NoReasoning:
     """Leave reasoning computation entirely to the upstream provider."""
+
+    off_field = None
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         return
@@ -36,6 +41,12 @@ class NamedEffortReasoning:
     field: str = "reasoning_effort"
     budget_field: str | None = None
     use_extra_body: bool = False
+
+    @property
+    def off_field(self) -> tuple[str, ...] | None:
+        if self.disabled_value is None:
+            return None
+        return ("extra_body", self.field) if self.use_extra_body else (self.field,)
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         target = _extra_body(body) if self.use_extra_body else body
@@ -64,6 +75,8 @@ class ReasoningObject:
     efforts: EffortValues
     supports_budget: bool = True
 
+    off_field = ("extra_body", "reasoning")
+
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         if policy.control is ReasoningControl.OFF:
             _extra_body(body)["reasoning"] = {"enabled": False}
@@ -88,6 +101,8 @@ class ThinkingObjectReasoning:
     enabled: dict[str, Any]
     disabled: dict[str, Any]
 
+    off_field = ("extra_body", "thinking")
+
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         if policy.control is ReasoningControl.OFF:
             _extra_body(body)["thinking"] = dict(self.disabled)
@@ -101,6 +116,10 @@ class ChatTemplateReasoning:
 
     field: str = "thinking"
 
+    @property
+    def off_field(self) -> tuple[str, ...]:
+        return ("extra_body", "chat_template_kwargs", self.field)
+
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         if not policy.requests_reasoning and policy.control is not ReasoningControl.OFF:
             return
@@ -112,6 +131,8 @@ class ChatTemplateReasoning:
 class LlamaCppReasoning:
     """Encode llama.cpp's per-request numeric thinking budget."""
 
+    off_field = ("extra_body", "thinking_budget_tokens")
+
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         if policy.control is ReasoningControl.OFF:
             _extra_body(body)["thinking_budget_tokens"] = 0
@@ -122,6 +143,8 @@ class LlamaCppReasoning:
 @dataclass(frozen=True, slots=True)
 class SplitReasoningOutput:
     """Request separate reasoning output where compute is not controllable."""
+
+    off_field = None
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         _extra_body(body)["reasoning_split"] = True

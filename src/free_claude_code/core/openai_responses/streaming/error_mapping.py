@@ -14,15 +14,3 @@ def openai_error_from_anthropic_error(data: Mapping[str, Any]) -> dict[str, Any]
         "param": None,
         "code": None,
     }
-
-
-def replay_unsafe_function_call_error() -> dict[str, Any]:
-    return {
-        "message": (
-            "Upstream function_call arguments were not a valid JSON object; "
-            "refusing to emit replay-unsafe Responses output."
-        ),
-        "type": "api_error",
-        "param": None,
-        "code": None,
-    }

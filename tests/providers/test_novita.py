@@ -9,12 +9,12 @@ from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKEN
 from free_claude_code.config.provider_catalog import NOVITA_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.support import (
     REASONING_OFF,
     REASONING_ON,
     immediate_admission,
+    make_provider_config,
     profiled_provider,
     reasoning_for,
 )
@@ -24,11 +24,9 @@ from tests.providers.support import (
 def novita_provider():
     return profiled_provider(
         "novita",
-        ProviderConfig(
+        make_provider_config(
             api_key="test_novita_key",
             base_url=NOVITA_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )
@@ -52,7 +50,7 @@ def test_build_request_body_openai_chat_shape(novita_provider):
         system="System prompt",
     )
 
-    body = novita_provider._build_request_body(
+    body = novita_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -70,7 +68,7 @@ def test_build_request_body_default_max_tokens(novita_provider):
         messages=[Message(role="user", content="x")],
     )
 
-    body = novita_provider._build_request_body(
+    body = novita_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -86,7 +84,7 @@ def test_build_request_body_preserves_validated_extra_body(novita_provider):
         }
     )
 
-    body = novita_provider._build_request_body(
+    body = novita_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -105,7 +103,9 @@ def test_build_request_body_rejects_reserved_reasoning_extra_body_keys(
     )
 
     with pytest.raises(InvalidRequestError, match="extra_body must not override"):
-        novita_provider._build_request_body(request, reasoning=reasoning_for(request))
+        novita_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
 
 
 def test_build_request_body_disables_thinking_when_reasoning_off(novita_provider):
@@ -114,7 +114,7 @@ def test_build_request_body_disables_thinking_when_reasoning_off(novita_provider
         messages=[Message(role="user", content="x")],
     )
 
-    body = novita_provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = novita_provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
     assert body["extra_body"]["enable_thinking"] is False
 
@@ -125,7 +125,7 @@ def test_build_request_body_enables_thinking_when_reasoning_on(novita_provider):
         messages=[Message(role="user", content="x")],
     )
 
-    body = novita_provider._build_request_body(request, reasoning=REASONING_ON)
+    body = novita_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
     assert body["extra_body"]["enable_thinking"] is True
 
@@ -136,7 +136,7 @@ def test_build_request_body_omits_thinking_field_by_default(novita_provider):
         messages=[Message(role="user", content="x")],
     )
 
-    body = novita_provider._build_request_body(
+    body = novita_provider._chat._build_request_body(
         request, reasoning=ReasoningPolicy.provider_default()
     )
 

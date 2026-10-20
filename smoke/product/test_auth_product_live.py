@@ -9,16 +9,24 @@ pytestmark = [pytest.mark.live, pytest.mark.smoke_target("auth")]
 
 def test_api_bearer_auth_contract_e2e(smoke_config: SmokeConfig, tmp_path) -> None:
     token = "product-smoke-token"
-    env_file = tmp_path / "auth-product.env"
-    env_file.write_text(f'ANTHROPIC_AUTH_TOKEN="{token}"\n', encoding="utf-8")
+    home = tmp_path / "home"
+    env_file = home / ".fcc" / ".env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(
+        "FCC_CONFIG_SCHEMA=1\n"
+        "PROXY_AUTH_ENABLED=true\n"
+        f'ANTHROPIC_AUTH_TOKEN="{token}"\n',
+        encoding="utf-8",
+    )
     with SmokeServerDriver(
         smoke_config,
         name="product-auth",
         env_overrides={
-            "ANTHROPIC_AUTH_TOKEN": token,
-            "FCC_ENV_FILE": str(env_file),
+            "HOME": str(home),
+            "USERPROFILE": str(home),
             "MESSAGING_PLATFORM": "none",
         },
+        env_unset={"ANTHROPIC_AUTH_TOKEN", "PROXY_AUTH_ENABLED", "FCC_ENV_FILE"},
     ).run() as server:
         unauth = httpx.get(
             f"{server.base_url}/v1/models", timeout=smoke_config.timeout_s

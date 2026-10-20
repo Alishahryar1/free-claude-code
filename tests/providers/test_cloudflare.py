@@ -17,7 +17,12 @@ from free_claude_code.providers.cloudflare import (
     CloudflareProvider,
     cloudflare_ai_base_url,
 )
-from tests.providers.support import immediate_admission, reasoning_for
+from tests.providers.support import (
+    SDKStreamDouble,
+    immediate_admission,
+    make_provider_config,
+    reasoning_for,
+)
 
 _ACCOUNT_ID = "account-123"
 _BASE_URL = f"{CLOUDFLARE_AI_REST_ROOT}/accounts/{_ACCOUNT_ID}/ai/v1"
@@ -26,11 +31,9 @@ _MODEL_SEARCH_URL = f"{CLOUDFLARE_AI_REST_ROOT}/accounts/{_ACCOUNT_ID}/ai/models
 
 @pytest.fixture
 def cloudflare_config() -> ProviderConfig:
-    return ProviderConfig(
+    return make_provider_config(
         api_key="test-cloudflare-token",
         base_url=CLOUDFLARE_AI_REST_ROOT,
-        rate_limit=10,
-        rate_window=60,
     )
 
 
@@ -83,7 +86,7 @@ def test_init_composes_account_scoped_openai_chat_base_url(
 ) -> None:
     with (
         patch(
-            "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+            "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
         ) as mock_openai,
         patch("httpx.AsyncClient") as mock_httpx_client,
     ):
@@ -122,7 +125,7 @@ def test_build_request_body_preserves_literal_cf_model_id_and_controls_thinking(
         }
     )
 
-    body = cloudflare_provider._build_request_body(
+    body = cloudflare_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -143,7 +146,7 @@ def test_build_request_body_disabled_thinking_sets_cloudflare_template_flag(
         }
     )
 
-    body = cloudflare_provider._build_request_body(
+    body = cloudflare_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -161,7 +164,7 @@ def test_build_request_body_preserves_user_extra_body_without_overriding_thinkin
         }
     )
 
-    body = cloudflare_provider._build_request_body(
+    body = cloudflare_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
@@ -218,10 +221,10 @@ async def test_stream_uses_openai_chat_completions(
         cloudflare_provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=_stream(_chunk(delta)),
+        return_value=SDKStreamDouble(_stream(_chunk(delta))),
     ) as mock_create:
         events = [
-            event async for event in cloudflare_provider.stream_response(_request())
+            event async for event in cloudflare_provider.stream_messages(_request())
         ]
 
     parsed = parse_sse_text("".join(events))
@@ -249,10 +252,10 @@ async def test_stream_maps_cloudflare_reasoning_delta_to_thinking(
         cloudflare_provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=_stream(_chunk(delta)),
+        return_value=SDKStreamDouble(_stream(_chunk(delta))),
     ):
         events = [
-            event async for event in cloudflare_provider.stream_response(_request())
+            event async for event in cloudflare_provider.stream_messages(_request())
         ]
 
     parsed = parse_sse_text("".join(events))
@@ -300,9 +303,11 @@ async def test_stream_maps_openai_tool_calls_to_tool_use(
         cloudflare_provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=_stream(_chunk(delta, finish_reason="tool_calls")),
+        return_value=SDKStreamDouble(
+            _stream(_chunk(delta, finish_reason="tool_calls"))
+        ),
     ):
-        events = [event async for event in cloudflare_provider.stream_response(request)]
+        events = [event async for event in cloudflare_provider.stream_messages(request)]
 
     parsed = parse_sse_text("".join(events))
     assert any(

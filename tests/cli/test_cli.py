@@ -158,6 +158,7 @@ class TestManagedClaudeSession:
             workspace_path="/tmp/test",
             proxy_root_url="http://localhost:8082",
             allowed_dirs=["/home/user/projects"],
+            auth_token="freecc",
         )
         assert session.workspace == os.path.normpath(os.path.abspath("/tmp/test"))
         assert session.proxy_root_url == "http://localhost:8082"
@@ -200,7 +201,9 @@ class TestManagedClaudeSession:
         """Test start_task running a basic command flow."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         # Mock subprocess
         mock_process = AsyncMock()
@@ -244,7 +247,9 @@ class TestManagedClaudeSession:
         """Test resuming an existing session."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [
@@ -271,7 +276,9 @@ class TestManagedClaudeSession:
         """Test resuming an existing session and forking."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b""]  # Immediate EOF
@@ -298,7 +305,9 @@ class TestManagedClaudeSession:
         """Test process exit with error code and stderr output."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b""]  # No stdout
@@ -326,7 +335,9 @@ class TestManagedClaudeSession:
         """Stderr is drained concurrently so stdout streaming is not blocked."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [
@@ -355,7 +366,9 @@ class TestManagedClaudeSession:
         """Known Claude diagnostics on stderr are not surfaced as task failures."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [
@@ -383,7 +396,9 @@ class TestManagedClaudeSession:
         """Benign stderr diagnostics are filtered without hiding real failures."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b""]
@@ -411,7 +426,9 @@ class TestManagedClaudeSession:
         """A benign stderr line is not duplicated as the process failure reason."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b""]
@@ -465,7 +482,9 @@ class TestManagedClaudeSession:
         """Test stopping the session process."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = MagicMock()
         mock_process.returncode = None  # Running
@@ -488,7 +507,9 @@ class TestManagedClaudeSession:
         """Test force kill if terminate times out."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = MagicMock()
         mock_process.returncode = None
@@ -518,7 +539,9 @@ class TestManagedClaudeSession:
         """Test handling of JSON split across chunks."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         # Split json: {"type": "mess... age"}
@@ -547,7 +570,9 @@ class TestManagedClaudeSession:
         """Test handling of buffer remnant at EOF (no newline at end)."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [
@@ -574,7 +599,9 @@ class TestManagedClaudeSession:
         """Test start_task passes the configured proxy root to Claude Code."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b""]
@@ -630,7 +657,11 @@ class TestManagedClaudeSession:
         """Test start_task does not leak inherited Claude auth into proxy calls."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082", auth_token="")
+        session = ManagedClaudeSession(
+            "/tmp",
+            "http://localhost:8082",
+            auth_token="freecc",
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b""]
@@ -648,7 +679,7 @@ class TestManagedClaudeSession:
                 pass
 
             env = mock_exec.call_args.kwargs["env"]
-            assert env["ANTHROPIC_AUTH_TOKEN"] == "fcc-no-auth"
+            assert env["ANTHROPIC_AUTH_TOKEN"] == "freecc"
 
     @pytest.mark.asyncio
     async def test_start_task_allowed_dirs(self):
@@ -656,7 +687,10 @@ class TestManagedClaudeSession:
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
         session = ManagedClaudeSession(
-            "/tmp", "http://localhost:8082", allowed_dirs=["/dir1", "/dir2"]
+            "/tmp",
+            "http://localhost:8082",
+            allowed_dirs=["/dir1", "/dir2"],
+            auth_token="freecc",
         )
 
         mock_process = AsyncMock()
@@ -681,7 +715,9 @@ class TestManagedClaudeSession:
         """Test handling of non-JSON output from free_claude_code.cli."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = AsyncMock()
         mock_process.stdout.read.side_effect = [b"Not valid json\n", b""]
@@ -703,7 +739,9 @@ class TestManagedClaudeSession:
         """Test exception handling during stop."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
-        session = ManagedClaudeSession("/tmp", "http://localhost:8082")
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
 
         mock_process = MagicMock()
         mock_process.returncode = None
@@ -729,6 +767,7 @@ class TestManagedClaudeSessionManager:
         manager = ManagedClaudeSessionManager(
             workspace_path="/tmp/test",
             proxy_root_url="http://localhost:8082",
+            auth_token="freecc",
         )
 
         session, sid, is_new = await manager.get_or_create_session()
@@ -744,6 +783,7 @@ class TestManagedClaudeSessionManager:
         manager = ManagedClaudeSessionManager(
             workspace_path="/tmp/test",
             proxy_root_url="http://localhost:8082",
+            auth_token="freecc",
         )
 
         # Create first session
@@ -763,6 +803,7 @@ class TestManagedClaudeSessionManager:
         manager = ManagedClaudeSessionManager(
             workspace_path="/tmp/test",
             proxy_root_url="http://localhost:8082",
+            auth_token="freecc",
         )
 
         stats = manager.get_stats()

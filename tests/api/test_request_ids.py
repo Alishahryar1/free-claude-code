@@ -1,7 +1,7 @@
 """Tests for the pure-ASGI ingress correlation owner."""
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import cast
 from unittest.mock import patch
@@ -16,6 +16,7 @@ from free_claude_code.api.request_ids import (
     RequestCorrelationMiddleware,
     get_request_id,
 )
+from free_claude_code.api.request_lifetime import ClientRequestLifetimeMiddleware
 from tests.api.support import create_test_app
 
 
@@ -40,9 +41,14 @@ def _http_scope(path: str) -> Scope:
 
 def test_application_uses_the_pure_asgi_correlation_owner() -> None:
     app = create_test_app()
-    middleware_classes = [middleware.cls for middleware in app.user_middleware]
+    middleware_classes = [
+        cast(type[object], middleware.cls) for middleware in app.user_middleware
+    ]
 
     assert sum(cls is RequestCorrelationMiddleware for cls in middleware_classes) == 1
+    assert middleware_classes.index(
+        RequestCorrelationMiddleware
+    ) < middleware_classes.index(ClientRequestLifetimeMiddleware)
     assert all(cls is not BaseHTTPMiddleware for cls in middleware_classes)
 
 
@@ -76,7 +82,7 @@ async def test_correlation_context_and_headers_span_the_complete_stream() -> Non
         )
 
     @contextmanager
-    def contextualize(**fields: object) -> Iterator[None]:
+    def contextualize(**fields: object) -> Generator[None]:
         context_entries.append(fields)
         try:
             yield

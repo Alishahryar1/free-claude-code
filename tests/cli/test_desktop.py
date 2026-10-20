@@ -4,6 +4,8 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from free_claude_code.cli.commands import ServerStatus, ServerSupervisor
 from free_claude_code.cli.desktop import DesktopController
 from free_claude_code.config.settings import Settings
@@ -93,7 +95,8 @@ def test_desktop_controller_owns_server_thread_and_graceful_quit() -> None:
             self.run_thread_id: int | None = None
             self.stop_count = 0
 
-        def run(self) -> None:
+        def run(self, setup) -> None:
+            setup()
             self.run_thread_id = threading.get_ident()
             assert supervisor.started.wait(2)
             self.controller.open_admin()
@@ -117,7 +120,7 @@ def test_desktop_controller_owns_server_thread_and_graceful_quit() -> None:
 
     assert tray is not None
     assert tray.run_thread_id == main_thread_id
-    assert supervisor.run_arguments == [False]
+    assert supervisor.run_arguments == [None]
     assert supervisor.schedule_count == 1
     assert supervisor.restart_count == 1
     assert supervisor.stop_count >= 1
@@ -142,7 +145,7 @@ def test_restart_during_server_startup_is_accepted_without_waiting() -> None:
             return True
 
         def run(self, *, open_admin_browser: bool | None = None) -> None:
-            assert open_admin_browser is False
+            assert open_admin_browser is None
             self.run_called.set()
             assert self.allow_run.wait(2)
             self.run_scheduled = False
@@ -165,7 +168,8 @@ def test_restart_during_server_startup_is_accepted_without_waiting() -> None:
             self.started = threading.Event()
             self.stopped = threading.Event()
 
-        def run(self) -> None:
+        def run(self, setup) -> None:
+            setup()
             self.started.set()
             assert self.stopped.wait(2)
 
@@ -213,41 +217,89 @@ def test_second_desktop_launch_opens_existing_admin_without_new_server() -> None
     instance_lock = MagicMock()
     instance_lock.acquire.return_value = False
 
+    controller = MagicMock()
     with (
         patch.object(desktop, "load_server_settings", return_value=settings),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
         patch.object(desktop, "open_admin_when_ready", return_value=True) as open_admin,
         patch.object(desktop, "ServerSupervisor") as supervisor,
+        patch.object(desktop, "DesktopController", return_value=controller) as shell,
     ):
+        controller.run.side_effect = lambda: shell.call_args.args[3]()
         desktop.launch_desktop(MagicMock())
 
-    open_admin.assert_called_once_with(settings)
-    supervisor.assert_not_called()
+    open_admin.assert_called_once_with(
+        settings, stop_event=supervisor.return_value.stop_event
+    )
+    supervisor.assert_called_once_with(console_logging=False)
+    supervisor.return_value.run.assert_not_called()
     instance_lock.release.assert_not_called()
 
 
-def test_desktop_attaches_to_terminal_server_instead_of_binding_twice() -> None:
+@pytest.mark.parametrize("loser", ["singleton", "existing_server"])
+def test_automatically_started_duplicate_does_not_open_admin(
+    loser: str,
+) -> None:
+    from free_claude_code.cli import desktop
+
+    settings = _settings()
+    instance_lock = MagicMock()
+    instance_lock.acquire.return_value = loser != "singleton"
+    controller = MagicMock()
+    with (
+        patch.object(desktop, "load_server_settings", return_value=settings),
+        patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
+        patch.object(desktop, "open_admin_when_ready") as open_admin,
+        patch.object(desktop, "ServerSupervisor") as supervisor,
+        patch.object(desktop, "DesktopController", return_value=controller) as shell,
+    ):
+        controller.run.side_effect = lambda: shell.call_args.args[3]()
+        if loser == "existing_server":
+            supervisor.return_value.run.side_effect = lambda **kwargs: kwargs[
+                "existing_server"
+            ](settings)
+        desktop.launch_desktop(MagicMock(), auto_started=True)
+
+    open_admin.assert_not_called()
+    controller.quit.assert_called_once_with()
+
+
+@pytest.mark.parametrize("endpoint_ready", [False, True])
+def test_desktop_attaches_to_terminal_server_instead_of_binding_twice(
+    endpoint_ready: bool,
+) -> None:
     from free_claude_code.cli import desktop
 
     settings = _settings()
     instance_lock = MagicMock()
     instance_lock.acquire.return_value = True
 
+    controller = MagicMock()
     with (
         patch.object(desktop, "load_server_settings", return_value=settings),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
-        patch.object(desktop, "preflight_proxy", return_value=None),
-        patch.object(desktop, "open_admin_when_ready", return_value=True) as open_admin,
+        patch.object(
+            desktop, "open_admin_when_ready", return_value=endpoint_ready
+        ) as open_admin,
         patch.object(desktop, "ServerSupervisor") as supervisor,
+        patch.object(desktop, "DesktopController", return_value=controller) as shell,
     ):
+        controller.run.side_effect = lambda: shell.call_args.args[3]()
+        supervisor.return_value.run.side_effect = lambda **kwargs: kwargs[
+            "existing_server"
+        ](settings)
         desktop.launch_desktop(MagicMock())
 
-    open_admin.assert_called_once_with(settings)
-    supervisor.assert_not_called()
+    open_admin.assert_called_once_with(
+        settings, stop_event=supervisor.return_value.stop_event
+    )
+    supervisor.assert_called_once_with(console_logging=False)
+    supervisor.return_value.run.assert_called_once()
     instance_lock.release.assert_called_once_with()
+    controller.quit.assert_called_once_with()
 
 
-def test_fresh_desktop_launch_disables_console_and_automatic_browser() -> None:
+def test_fresh_desktop_launch_uses_console_free_supervisor() -> None:
     from free_claude_code.cli import desktop
 
     settings = _settings()
@@ -259,14 +311,32 @@ def test_fresh_desktop_launch_disables_console_and_automatic_browser() -> None:
     with (
         patch.object(desktop, "load_server_settings", return_value=settings),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
-        patch.object(desktop, "preflight_proxy", return_value="connection refused"),
         patch.object(desktop, "ServerSupervisor", return_value=supervisor) as owner,
         patch.object(desktop, "DesktopController", return_value=controller) as shell,
     ):
         tray_factory = MagicMock()
+        controller.run.side_effect = lambda: shell.call_args.args[3]()
         desktop.launch_desktop(tray_factory)
 
     owner.assert_called_once_with(console_logging=False)
     assert shell.call_args.args[:2] == (supervisor, tray_factory)
     controller.run.assert_called_once_with()
     instance_lock.release.assert_called_once_with()
+
+
+def test_desktop_lock_failure_closes_tray_without_starting_server():
+    from free_claude_code.cli import desktop
+
+    instance_lock = MagicMock()
+    instance_lock.acquire.side_effect = PermissionError("locked directory")
+    controller = MagicMock()
+    with (
+        patch.object(desktop, "load_server_settings", return_value=_settings()),
+        patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
+        patch.object(desktop, "ServerSupervisor") as supervisor,
+        patch.object(desktop, "DesktopController", return_value=controller) as shell,
+    ):
+        controller.run.side_effect = lambda: shell.call_args.args[3]()
+        desktop.launch_desktop(MagicMock())
+    controller.quit.assert_called_once()
+    supervisor.return_value.run.assert_not_called()

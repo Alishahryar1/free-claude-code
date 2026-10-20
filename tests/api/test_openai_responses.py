@@ -1,31 +1,90 @@
-from typing import Any
+import json
+from collections.abc import AsyncIterator
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.constants import DEFAULT_MODEL
+from free_claude_code.config.settings import Settings
+from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningEffort,
     ReasoningPolicy,
 )
-from tests.api.support import create_test_app
+from free_claude_code.providers.openai_chat import (
+    NO_REASONING,
+    OpenAIChatProfile,
+    OpenAIChatProvider,
+    OpenAIChatRequestPolicy,
+)
+from tests.api.support import create_test_app, provider_manager_for_app
+from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.test_custom_provider import completion, definition
+from tests.providers.test_custom_provider import provider as custom_provider
+
+_PUBLIC_MODEL = "nvidia_nim/test-model"
+_UPSTREAM_MODEL = "test-model"
+_RESPONSE_ID = "resp_test"
+
+
+def test_responses_route_carries_generation_model_limit_to_messages_egress():
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=completion("anthropic_messages"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    config = definition(api_format="anthropic_messages")
+    instance = custom_provider(config, messages_handler=reply)
+    app = create_test_app(
+        Settings(custom_providers=(config,)), providers={config.provider_id: instance}
+    )
+    provider_manager_for_app(app).cache_model_infos(
+        config.provider_id, {ProviderModelInfo("m", max_output_tokens=4096)}
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": f"{config.provider_id}/m",
+                "input": "Hello",
+                "max_output_tokens": 8192,
+            },
+        )
+    assert response.status_code == 200
+    assert "response.completed" in response.text
+    assert bodies[0]["max_tokens"] == 4096
 
 
 class FakeProvider:
     def __init__(self, chunks: list[str]) -> None:
         self.chunks = chunks
-        self.preflight_stream = MagicMock()
-        self.requests: list[Any] = []
-        self.stream_kwargs: list[dict[str, Any]] = []
+        self.startup_error: InvalidRequestError | None = None
+        self.requests: list[OpenAIResponsesRequest] = []
+        self.stream_kwargs: list[dict[str, object]] = []
 
-    async def stream_response(self, request_data, **_kwargs):
+    async def stream_responses(
+        self,
+        request_data: OpenAIResponsesRequest,
+        **kwargs: object,
+    ) -> AsyncIterator[str]:
+        if self.startup_error is not None:
+            raise self.startup_error
         self.requests.append(request_data)
-        self.stream_kwargs.append(_kwargs)
+        self.stream_kwargs.append(kwargs)
         for chunk in self.chunks:
             yield chunk
 
@@ -34,9 +93,13 @@ class PreStartFailingProvider(FakeProvider):
     def __init__(self) -> None:
         super().__init__([])
 
-    async def stream_response(self, request_data, **_kwargs):
+    async def stream_responses(
+        self,
+        request_data: OpenAIResponsesRequest,
+        **kwargs: object,
+    ) -> AsyncIterator[str]:
         self.requests.append(request_data)
-        self.stream_kwargs.append(_kwargs)
+        self.stream_kwargs.append(kwargs)
         raise ExecutionFailure(
             kind=FailureKind.RATE_LIMIT,
             status_code=429,
@@ -46,22 +109,10 @@ class PreStartFailingProvider(FakeProvider):
         yield "unreachable"
 
 
-class PostStartFailingProvider(FakeProvider):
-    def __init__(self) -> None:
-        super().__init__([format_sse_event("message_start", {"type": "message_start"})])
-
-    async def stream_response(self, request_data, **_kwargs):
-        self.requests.append(request_data)
-        self.stream_kwargs.append(_kwargs)
-        for chunk in self.chunks:
-            yield chunk
-        raise RuntimeError("socket closed")
-
-
 @pytest.fixture
 def responses_client():
-    provider = FakeProvider(_anthropic_text_stream("Hello from provider"))
-    app = create_test_app()
+    provider = FakeProvider(_responses_text_stream("Hello from provider"))
+    app = create_test_app(Settings())
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
         TestClient(app) as client,
@@ -78,7 +129,20 @@ def test_responses_probe_endpoints_return_204(
     assert client.options("/v1/responses").status_code == 204
 
 
-def test_create_response_stream_routes_through_provider(
+@pytest.mark.parametrize("prefix", ["", "anthropic/", "claude-3-freecc-no-thinking/"])
+def test_retired_response_id_uses_default_provider(responses_client, prefix):
+    client, provider = responses_client
+    original = f"{prefix}github_models/vendor/opus"
+    response = client.post("/v1/responses", json={"model": original, "input": "hello"})
+    assert response.status_code == 200
+    assert "response.completed" in response.text
+    assert provider.requests[0].model == DEFAULT_MODEL.split("/", 1)[1]
+    assert provider.stream_kwargs[0]["response_model"] == original
+    if prefix == "claude-3-freecc-no-thinking/":
+        assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.off()
+
+
+def test_create_response_stream_routes_native_request_through_provider(
     responses_client: tuple[TestClient, FakeProvider],
 ) -> None:
     client, provider = responses_client
@@ -86,7 +150,7 @@ def test_create_response_stream_routes_through_provider(
     response = client.post(
         "/v1/responses",
         json={
-            "model": "nvidia_nim/test-model",
+            "model": _PUBLIC_MODEL,
             "input": "Hello",
             "max_output_tokens": 32,
         },
@@ -96,24 +160,24 @@ def test_create_response_stream_routes_through_provider(
     assert "text/event-stream" in response.headers["content-type"]
     assert response.headers["x-request-id"] == response.headers["request-id"]
     events = parse_sse_text(response.text)
-    assert events[0].event == "response.created"
-    assert events[-1].event == "response.completed"
+    assert [event.event for event in events] == [
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    ]
     assert events[-1].data["response"]["output"][0]["content"][0]["text"] == (
         "Hello from provider"
     )
-    assert provider.preflight_stream.called
+    assert len(provider.requests) == 1
     routed = provider.requests[0]
-    assert routed.model == "test-model"
-    assert routed.messages[0].role == "user"
-    assert routed.messages[0].content == "Hello"
-    assert routed.max_tokens == 32
+    assert routed.model == _UPSTREAM_MODEL
+    assert routed.input == "Hello"
+    assert routed.max_output_tokens == 32
     assert provider.stream_kwargs[0]["request_id"] == response.headers["request-id"]
 
 
 def test_create_response_stream_preserves_output_limit_as_incomplete() -> None:
-    provider = FakeProvider(
-        _anthropic_text_stream("partial output", stop_reason="max_tokens")
-    )
+    provider = FakeProvider(_responses_text_stream("partial output", incomplete=True))
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
@@ -122,7 +186,7 @@ def test_create_response_stream_preserves_output_limit_as_incomplete() -> None:
         response = client.post(
             "/v1/responses",
             json={
-                "model": "nvidia_nim/test-model",
+                "model": _PUBLIC_MODEL,
                 "input": "Keep working",
                 "max_output_tokens": 32,
             },
@@ -138,9 +202,9 @@ def test_create_response_stream_preserves_output_limit_as_incomplete() -> None:
     assert incomplete["output"][0]["content"][0]["text"] == "partial output"
 
 
-def test_create_response_preflight_rejection_stays_an_ordinary_http_error() -> None:
-    provider = FakeProvider(_anthropic_text_stream("unused"))
-    provider.preflight_stream.side_effect = InvalidRequestError("bad tool shape")
+def test_create_response_startup_rejection_stays_an_ordinary_http_error() -> None:
+    provider = FakeProvider(_responses_text_stream("unused"))
+    provider.startup_error = InvalidRequestError("bad tool shape")
     app = create_test_app()
 
     with (
@@ -149,7 +213,7 @@ def test_create_response_preflight_rejection_stays_an_ordinary_http_error() -> N
     ):
         response = client.post(
             "/v1/responses",
-            json={"model": "nvidia_nim/test-model", "input": "Hello"},
+            json={"model": _PUBLIC_MODEL, "input": "Hello"},
         )
 
     assert response.status_code == 400
@@ -163,7 +227,44 @@ def test_create_response_preflight_rejection_stays_an_ordinary_http_error() -> N
     assert provider.requests == []
 
 
-def test_create_response_accepts_unknown_top_level_extensions(
+def test_create_response_rejects_unportable_image_as_invalid_request() -> None:
+    with patch(
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
+        return_value=MagicMock(),
+    ):
+        provider = OpenAIChatProvider(
+            make_provider_config(
+                api_key="test-key",
+                base_url="https://provider.invalid/v1",
+            ),
+            profile=OpenAIChatProfile(
+                OpenAIChatRequestPolicy(
+                    provider_name="TEST_CHAT",
+                    reasoning_replay=ReasoningReplayMode.DISABLED,
+                ),
+                NO_REASONING,
+            ),
+            admission=immediate_admission(provider_name="TEST_CHAT"),
+        )
+    app = create_test_app()
+    with (
+        patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
+        TestClient(app) as client,
+    ):
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": _PUBLIC_MODEL,
+                "input": [{"type": "input_image", "file_id": "file_1"}],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert "file_id" in response.json()["error"]["message"]
+
+
+def test_create_response_preserves_unknown_top_level_extensions(
     responses_client: tuple[TestClient, FakeProvider],
 ) -> None:
     client, provider = responses_client
@@ -171,14 +272,14 @@ def test_create_response_accepts_unknown_top_level_extensions(
     response = client.post(
         "/v1/responses",
         json={
-            "model": "nvidia_nim/test-model",
+            "model": _PUBLIC_MODEL,
             "input": "Hello",
             "provider_extension": {"enabled": True},
         },
     )
 
     assert response.status_code == 200
-    assert provider.requests[0].messages[0].content == "Hello"
+    assert provider.requests[0].model_dump()["provider_extension"] == {"enabled": True}
 
 
 def test_create_response_pre_start_provider_error_returns_openai_error() -> None:
@@ -191,10 +292,7 @@ def test_create_response_pre_start_provider_error_returns_openai_error() -> None
     ):
         response = client.post(
             "/v1/responses",
-            json={
-                "model": "nvidia_nim/test-model",
-                "input": "Hello",
-            },
+            json={"model": _PUBLIC_MODEL, "input": "Hello"},
         )
 
     assert response.status_code == 429
@@ -220,8 +318,21 @@ def test_create_response_pre_start_provider_error_returns_openai_error() -> None
     assert terminal_trace["provider_retryable"] is True
 
 
-def test_create_response_post_start_failure_preserves_response_id() -> None:
-    provider = PostStartFailingProvider()
+def test_create_response_relays_provider_owned_post_start_failure() -> None:
+    provider = FakeProvider(
+        [
+            _created_event(),
+            _terminal_event(
+                "failed",
+                error={
+                    "message": "socket closed",
+                    "type": "api_error",
+                    "param": None,
+                    "code": None,
+                },
+            ),
+        ]
+    )
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
@@ -229,10 +340,7 @@ def test_create_response_post_start_failure_preserves_response_id() -> None:
     ):
         response = client.post(
             "/v1/responses",
-            json={
-                "model": "nvidia_nim/test-model",
-                "input": "Hello",
-            },
+            json={"model": _PUBLIC_MODEL, "input": "Hello"},
         )
 
     assert response.status_code == 200
@@ -243,29 +351,22 @@ def test_create_response_post_start_failure_preserves_response_id() -> None:
     assert events[-1].data["response"]["error"]["message"] == "socket closed"
 
 
-def test_create_response_stream_bypasses_local_message_optimizations() -> None:
-    provider = FakeProvider(_anthropic_text_stream("Provider response"))
+def test_create_response_stream_forwards_quota_prompt() -> None:
+    provider = FakeProvider(_responses_text_stream("Provider response"))
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
-        patch(
-            "free_claude_code.api.handlers.messages.try_optimizations",
-            side_effect=AssertionError("Responses must not use message optimizations"),
-        ),
         TestClient(app) as client,
     ):
         response = client.post(
             "/v1/responses",
-            json={
-                "model": "nvidia_nim/test-model",
-                "input": "quota check",
-            },
+            json={"model": _PUBLIC_MODEL, "input": "quota check"},
         )
 
     assert response.status_code == 200
     completed = parse_sse_text(response.text)[-1].data["response"]
     assert completed["output"][0]["content"][0]["text"] == "Provider response"
-    assert provider.requests[0].messages[0].content == "quota check"
+    assert provider.requests[0].input == "quota check"
 
 
 def test_create_response_stream_false_returns_openai_error(
@@ -275,11 +376,7 @@ def test_create_response_stream_false_returns_openai_error(
 
     response = client.post(
         "/v1/responses",
-        json={
-            "model": "nvidia_nim/test-model",
-            "input": "Hello",
-            "stream": False,
-        },
+        json={"model": _PUBLIC_MODEL, "input": "Hello", "stream": False},
     )
 
     assert response.status_code == 400
@@ -289,8 +386,50 @@ def test_create_response_stream_false_returns_openai_error(
     assert provider.requests == []
 
 
-def test_create_response_stream_preserves_interleaved_reasoning_order() -> None:
-    provider = FakeProvider(_anthropic_interleaved_reasoning_stream())
+def test_create_response_relays_interleaved_reasoning_order() -> None:
+    output: list[JsonObject] = [
+        {
+            "id": "rs_1",
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": "first thought"}],
+        },
+        _message_output("first answer", item_id="msg_1"),
+        {
+            "id": "fc_1",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_1",
+            "name": "echo",
+            "arguments": '{"value":"FCC"}',
+        },
+        {
+            "id": "rs_2",
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": "second thought"}],
+        },
+        _message_output("final answer", item_id="msg_2"),
+    ]
+    provider = FakeProvider(
+        [
+            _created_event(),
+            _event(
+                "response.reasoning_text.delta",
+                {
+                    "type": "response.reasoning_text.delta",
+                    "sequence_number": 1,
+                    "item_id": "rs_1",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "first thought",
+                },
+            ),
+            _terminal_event("completed", output=output),
+        ]
+    )
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
@@ -298,18 +437,7 @@ def test_create_response_stream_preserves_interleaved_reasoning_order() -> None:
     ):
         response = client.post(
             "/v1/responses",
-            json={
-                "model": "nvidia_nim/test-model",
-                "input": "Use reasoning and tools",
-                "stream": True,
-                "tools": [
-                    {
-                        "type": "function",
-                        "name": "echo",
-                        "parameters": {"type": "object", "properties": {}},
-                    }
-                ],
-            },
+            json={"model": _PUBLIC_MODEL, "input": "Use reasoning and tools"},
         )
 
     assert response.status_code == 200
@@ -323,15 +451,20 @@ def test_create_response_stream_preserves_interleaved_reasoning_order() -> None:
         "reasoning",
         "message",
     ]
-    assert completed["output"][0]["content"][0]["text"] == "first thought"
-    assert completed["output"][1]["content"][0]["text"] == "first answer"
-    assert completed["output"][2]["arguments"] == '{"value":"FCC"}'
-    assert completed["output"][3]["content"][0]["text"] == "second thought"
-    assert completed["output"][4]["content"][0]["text"] == "final answer"
 
 
-def test_create_response_tool_stream_emits_function_call() -> None:
-    provider = FakeProvider(_anthropic_tool_stream())
+def test_create_response_relays_function_call() -> None:
+    call: JsonObject = {
+        "id": "fc_1",
+        "type": "function_call",
+        "status": "completed",
+        "call_id": "toolu_1",
+        "name": "echo",
+        "arguments": '{"value":"FCC"}',
+    }
+    provider = FakeProvider(
+        [_created_event(), _terminal_event("completed", output=[call])]
+    )
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
@@ -340,9 +473,8 @@ def test_create_response_tool_stream_emits_function_call() -> None:
         response = client.post(
             "/v1/responses",
             json={
-                "model": "nvidia_nim/test-model",
+                "model": _PUBLIC_MODEL,
                 "input": "Use echo",
-                "stream": True,
                 "tools": [
                     {
                         "type": "function",
@@ -354,149 +486,107 @@ def test_create_response_tool_stream_emits_function_call() -> None:
         )
 
     assert response.status_code == 200
-    events = parse_sse_text(response.text)
-    completed = events[-1].data["response"]
-    call = completed["output"][0]
-    assert call["type"] == "function_call"
-    assert call["call_id"] == "toolu_1"
-    assert call["arguments"] == '{"value":"FCC"}'
+    completed_call = parse_sse_text(response.text)[-1].data["response"]["output"][0]
+    assert completed_call == call
 
 
-def test_create_response_malformed_provider_function_call_fails_stream() -> None:
-    provider = FakeProvider(
-        _anthropic_tool_stream(partial_json='{"value":"FCC" "bad"}')
-    )
-    app = create_test_app()
-    with (
-        patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
-        TestClient(app) as client,
-    ):
-        response = client.post(
-            "/v1/responses",
-            json={
-                "model": "nvidia_nim/test-model",
-                "input": "Use echo",
-                "stream": True,
-                "tools": [
-                    {
-                        "type": "function",
-                        "name": "echo",
-                        "parameters": {"type": "object", "properties": {}},
-                    }
-                ],
-            },
-        )
-
-    assert response.status_code == 200
-    events = parse_sse_text(response.text)
-    assert events[-1].event == "response.failed"
-    failed = events[-1].data["response"]
-    assert failed["status"] == "failed"
-    assert failed["output"] == []
-    assert "replay-unsafe Responses output" in failed["error"]["message"]
-
-
-def test_create_response_accepts_codex_namespace_tool_request() -> None:
-    provider = FakeProvider(_anthropic_tool_stream(tool_name="mcp__node_repl__js"))
-    app = create_test_app()
-    with (
-        patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
-        TestClient(app) as client,
-    ):
-        response = client.post(
-            "/v1/responses",
-            json={
-                "model": "nvidia_nim/test-model",
-                "input": "Use JS",
-                "stream": True,
-                "tools": [
-                    {"type": "web_search", "external_web_access": True},
-                    {"type": "image_generation", "output_format": "png"},
-                    {
-                        "type": "namespace",
-                        "name": "mcp__node_repl",
-                        "tools": [
-                            {
-                                "type": "function",
-                                "name": "js",
-                                "parameters": {
-                                    "type": "object",
-                                    "properties": {"code": {"type": "string"}},
-                                },
-                            }
-                        ],
-                    },
-                ],
-            },
-        )
-
-    assert response.status_code == 200
-    routed = provider.requests[0]
-    assert [tool.name for tool in routed.tools] == ["mcp__node_repl__js"]
-    completed = parse_sse_text(response.text)[-1].data["response"]
-    call = completed["output"][0]
-    assert call["namespace"] == "mcp__node_repl"
-    assert call["name"] == "js"
-
-
-def test_create_response_accepts_codex_custom_tool_request() -> None:
-    provider = FakeProvider(
-        _anthropic_tool_stream(
-            tool_name="apply_patch",
-            partial_json='{"input":"*** Begin Patch"}',
-        )
-    )
-    app = create_test_app()
-    with (
-        patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
-        TestClient(app) as client,
-    ):
-        response = client.post(
-            "/v1/responses",
-            json={
-                "model": "nvidia_nim/test-model",
-                "input": "Use apply_patch",
-                "stream": True,
-                "tools": [
-                    {
-                        "type": "custom",
-                        "name": "apply_patch",
-                        "description": "Apply repo patches",
-                        "format": {"type": "text"},
-                    }
-                ],
-                "tool_choice": {"type": "custom", "name": "apply_patch"},
-            },
-        )
-
-    assert response.status_code == 200
-    routed = provider.requests[0]
-    assert [tool.name for tool in routed.tools] == ["apply_patch"]
-    assert routed.tool_choice == {"type": "tool", "name": "apply_patch"}
-    events = parse_sse_text(response.text)
-    assert "response.custom_tool_call_input.delta" in [event.event for event in events]
-    completed = events[-1].data["response"]
-    call = completed["output"][0]
-    assert call["type"] == "custom_tool_call"
-    assert call["name"] == "apply_patch"
-    assert call["input"] == "*** Begin Patch"
-
-
-def test_create_response_stream_provider_error_returns_response_failed() -> None:
-    provider = FakeProvider(
-        [
-            format_sse_event(
-                "error",
+def test_create_response_preserves_namespace_and_passive_tools() -> None:
+    tools: list[JsonObject] = [
+        {"type": "web_search", "external_web_access": True},
+        {"type": "image_generation", "output_format": "png"},
+        {
+            "type": "namespace",
+            "name": "mcp__node_repl",
+            "tools": [
                 {
-                    "type": "error",
-                    "error": {
-                        "type": "api_error",
-                        "message": "provider failed",
+                    "type": "function",
+                    "name": "js",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"code": {"type": "string"}},
                     },
-                },
-            )
-        ]
+                }
+            ],
+        },
+    ]
+    provider = FakeProvider(_responses_text_stream("done"))
+    app = create_test_app()
+    with (
+        patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
+        TestClient(app) as client,
+    ):
+        response = client.post(
+            "/v1/responses",
+            json={"model": _PUBLIC_MODEL, "input": "Use JS", "tools": tools},
+        )
+
+    assert response.status_code == 200
+    assert provider.requests[0].tools == tools
+
+
+def test_create_response_preserves_muse_code_request_shape() -> None:
+    request = {
+        "model": _PUBLIC_MODEL,
+        "input": "Read the file",
+        "instructions": "Be concise.",
+        "max_output_tokens": 64,
+        "store": False,
+        "stream": True,
+        "reasoning": {"effort": "high", "summary": "auto"},
+        "include": ["reasoning.encrypted_content"],
+        "prompt_cache_key": "muse-session-1",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "muse",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "read_file",
+                        "description": "Read one file.",
+                        "strict": True,
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                            "additionalProperties": False,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    provider = FakeProvider(_responses_text_stream("done"))
+    app = create_test_app()
+    with (
+        patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
+        TestClient(app) as client,
+    ):
+        response = client.post("/v1/responses", json=request)
+
+    assert response.status_code == 200
+    routed = provider.requests[0]
+    assert routed.max_output_tokens == 64
+    assert routed.reasoning == {"effort": "high", "summary": "auto"}
+    assert routed.model_dump()["include"] == ["reasoning.encrypted_content"]
+    assert routed.model_dump()["prompt_cache_key"] == "muse-session-1"
+    expected_policy = ReasoningPolicy(
+        control=ReasoningControl.DEFAULT,
+        effort=ReasoningEffort.HIGH,
     )
+    assert provider.stream_kwargs[0]["reasoning"] == expected_policy
+    assert provider.stream_kwargs[0]["reasoning"] == expected_policy
+
+
+def test_create_response_preserves_custom_tool_request() -> None:
+    tool: JsonObject = {
+        "type": "custom",
+        "name": "apply_patch",
+        "description": "Apply repo patches",
+        "format": {"type": "text"},
+    }
+    choice: JsonObject = {"type": "custom", "name": "apply_patch"}
+    provider = FakeProvider(_responses_text_stream("done"))
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
@@ -505,10 +595,34 @@ def test_create_response_stream_provider_error_returns_response_failed() -> None
         response = client.post(
             "/v1/responses",
             json={
-                "model": "nvidia_nim/test-model",
-                "input": "Hello",
-                "stream": True,
+                "model": _PUBLIC_MODEL,
+                "input": "Use apply_patch",
+                "tools": [tool],
+                "tool_choice": choice,
             },
+        )
+
+    assert response.status_code == 200
+    assert provider.requests[0].tools == [tool]
+    assert provider.requests[0].tool_choice == choice
+
+
+def test_create_response_relays_provider_error_lifecycle() -> None:
+    error: JsonObject = {
+        "message": "provider failed",
+        "type": "api_error",
+        "param": None,
+        "code": None,
+    }
+    provider = FakeProvider([_created_event(), _terminal_event("failed", error=error)])
+    app = create_test_app()
+    with (
+        patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
+        TestClient(app) as client,
+    ):
+        response = client.post(
+            "/v1/responses",
+            json={"model": _PUBLIC_MODEL, "input": "Hello"},
         )
 
     assert response.status_code == 200
@@ -517,16 +631,31 @@ def test_create_response_stream_provider_error_returns_response_failed() -> None
     failed = events[-1].data["response"]
     assert failed["id"] == events[0].data["response"]["id"]
     assert failed["status"] == "failed"
-    assert failed["error"] == {
-        "message": "provider failed",
-        "type": "api_error",
-        "param": None,
-        "code": None,
-    }
+    assert failed["error"] == error
 
 
-def test_create_response_replays_prior_reasoning_as_reasoning_content() -> None:
-    provider = FakeProvider(_anthropic_text_stream("done"))
+def test_create_response_preserves_prior_reasoning_and_tool_history() -> None:
+    input_items: list[JsonObject] = [
+        {
+            "id": "rs_1",
+            "type": "reasoning",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": "Need the tool."}],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "echo",
+            "arguments": "{}",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "ok",
+        },
+        {"role": "user", "content": "continue"},
+    ]
+    provider = FakeProvider(_responses_text_stream("done"))
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
@@ -534,57 +663,29 @@ def test_create_response_replays_prior_reasoning_as_reasoning_content() -> None:
     ):
         response = client.post(
             "/v1/responses",
-            json={
-                "model": "nvidia_nim/test-model",
-                "input": [
-                    {
-                        "id": "rs_1",
-                        "type": "reasoning",
-                        "summary": [],
-                        "content": [
-                            {"type": "reasoning_text", "text": "Need the tool."}
-                        ],
-                    },
-                    {
-                        "type": "function_call",
-                        "call_id": "call_1",
-                        "name": "echo",
-                        "arguments": "{}",
-                    },
-                    {
-                        "type": "function_call_output",
-                        "call_id": "call_1",
-                        "output": "ok",
-                    },
-                    {
-                        "id": "rs_2",
-                        "type": "reasoning",
-                        "summary": [
-                            {"type": "summary_text", "text": "Use the result."}
-                        ],
-                    },
-                    {"role": "user", "content": "continue"},
-                ],
-                "stream": True,
-            },
+            json={"model": _PUBLIC_MODEL, "input": input_items},
         )
 
     assert response.status_code == 200
-    routed = provider.requests[0]
-    assert routed.messages[0].role == "assistant"
-    assert routed.messages[0].reasoning_content == "Need the tool."
-    assert routed.messages[0].content[0].type == "tool_use"
-    assert routed.messages[1].role == "user"
-    assert routed.messages[1].content[0].type == "tool_result"
-    assert routed.messages[2].role == "assistant"
-    assert routed.messages[2].content == ""
-    assert routed.messages[2].reasoning_content == "Use the result."
-    assert routed.messages[3].role == "user"
-    assert routed.messages[3].content == "continue"
+    assert provider.requests[0].input == input_items
 
 
-def test_create_response_quarantines_malformed_prior_function_call() -> None:
-    provider = FakeProvider(_anthropic_text_stream("done"))
+def test_create_response_preserves_malformed_prior_function_call() -> None:
+    input_items: list[JsonObject] = [
+        {"role": "user", "content": "hello"},
+        {
+            "type": "function_call",
+            "call_id": "call_bad",
+            "name": "echo",
+            "arguments": "{",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_bad",
+            "output": "stale output",
+        },
+    ]
+    provider = FakeProvider(_responses_text_stream("done"))
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
@@ -592,34 +693,11 @@ def test_create_response_quarantines_malformed_prior_function_call() -> None:
     ):
         response = client.post(
             "/v1/responses",
-            json={
-                "model": "nvidia_nim/test-model",
-                "input": [
-                    {"role": "user", "content": "hello"},
-                    {
-                        "type": "function_call",
-                        "call_id": "call_bad",
-                        "name": "echo",
-                        "arguments": "{",
-                    },
-                    {
-                        "type": "function_call_output",
-                        "call_id": "call_bad",
-                        "output": "stale output",
-                    },
-                    {"role": "user", "content": "continue"},
-                ],
-                "stream": True,
-            },
+            json={"model": _PUBLIC_MODEL, "input": input_items},
         )
 
     assert response.status_code == 200
-    routed = provider.requests[0]
-    assert [message.role for message in routed.messages] == ["user", "user"]
-    assert routed.messages[0].content == "hello"
-    assert routed.messages[1].content == "continue"
-    completed = parse_sse_text(response.text)[-1].data["response"]
-    assert completed["output"][0]["content"][0]["text"] == "done"
+    assert provider.requests[0].input == input_items
 
 
 @pytest.mark.parametrize(
@@ -636,10 +714,10 @@ def test_create_response_quarantines_malformed_prior_function_call() -> None:
     ],
 )
 def test_create_response_preserves_and_resolves_reasoning_effort(
-    reasoning: dict[str, str],
+    reasoning: JsonObject,
     expected_policy: ReasoningPolicy,
 ) -> None:
-    provider = FakeProvider(_anthropic_text_stream("done"))
+    provider = FakeProvider(_responses_text_stream("done"))
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
@@ -648,23 +726,29 @@ def test_create_response_preserves_and_resolves_reasoning_effort(
         response = client.post(
             "/v1/responses",
             json={
-                "model": "nvidia_nim/test-model",
+                "model": _PUBLIC_MODEL,
                 "input": "Hello",
-                "stream": True,
                 "reasoning": reasoning,
             },
         )
 
     assert response.status_code == 200
-    routed = provider.requests[0]
-    assert routed.thinking is None
-    assert routed.output_config == reasoning
+    assert provider.requests[0].reasoning == reasoning
     assert provider.stream_kwargs[0]["reasoning"] == expected_policy
-    assert provider.preflight_stream.call_args.kwargs["reasoning"] == expected_policy
+    assert provider.stream_kwargs[0]["reasoning"] == expected_policy
 
 
-def test_create_response_maps_redacted_thinking_to_encrypted_reasoning() -> None:
-    provider = FakeProvider(_anthropic_redacted_thinking_stream())
+def test_create_response_relays_encrypted_reasoning() -> None:
+    reasoning: JsonObject = {
+        "id": "rs_1",
+        "type": "reasoning",
+        "status": "completed",
+        "summary": [],
+        "encrypted_content": "opaque-redacted",
+    }
+    provider = FakeProvider(
+        [_created_event(), _terminal_event("completed", output=[reasoning])]
+    )
     app = create_test_app()
     with (
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
@@ -672,36 +756,25 @@ def test_create_response_maps_redacted_thinking_to_encrypted_reasoning() -> None
     ):
         response = client.post(
             "/v1/responses",
-            json={
-                "model": "nvidia_nim/test-model",
-                "input": "Continue",
-                "stream": True,
-            },
+            json={"model": _PUBLIC_MODEL, "input": "Continue"},
         )
 
     assert response.status_code == 200
-    completed = parse_sse_text(response.text)[-1].data["response"]
-    assert completed["output"] == [
-        {
-            "id": completed["output"][0]["id"],
-            "type": "reasoning",
-            "status": "completed",
-            "summary": [],
-            "encrypted_content": "opaque-redacted",
-        }
-    ]
-    assert "content" not in completed["output"][0]
+    assert parse_sse_text(response.text)[-1].data["response"]["output"] == [reasoning]
 
 
-def test_create_response_unsupported_tool_returns_openai_error(
+def test_create_response_provider_rejects_unsupported_tool(
     responses_client: tuple[TestClient, FakeProvider],
 ) -> None:
-    client, _provider = responses_client
+    client, provider = responses_client
+    provider.startup_error = InvalidRequestError(
+        "Unsupported Responses tool type: 'web_search_preview'"
+    )
 
     response = client.post(
         "/v1/responses",
         json={
-            "model": "nvidia_nim/test-model",
+            "model": _PUBLIC_MODEL,
             "input": "Hello",
             "tools": [{"type": "web_search_preview"}],
         },
@@ -713,292 +786,108 @@ def test_create_response_unsupported_tool_returns_openai_error(
     assert "Unsupported Responses tool type" in payload["error"]["message"]
 
 
-def _anthropic_text_stream(text: str, *, stop_reason: str = "end_turn") -> list[str]:
+def _event(event_type: str, payload: JsonObject) -> str:
+    return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
+
+
+def _response(
+    *,
+    status: str,
+    output: list[JsonObject] | None = None,
+    error: JsonObject | None = None,
+    incomplete_details: JsonObject | None = None,
+) -> JsonObject:
+    return {
+        "id": _RESPONSE_ID,
+        "object": "response",
+        "created_at": 1,
+        "model": _PUBLIC_MODEL,
+        "status": status,
+        "output": output or [],
+        "error": error,
+        "incomplete_details": incomplete_details,
+        "usage": (
+            None
+            if status == "in_progress"
+            else {
+                "input_tokens": 3,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 4,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 7,
+            }
+        ),
+    }
+
+
+def _created_event() -> str:
+    return _event(
+        "response.created",
+        {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": _response(status="in_progress"),
+        },
+    )
+
+
+def _terminal_event(
+    status: str,
+    *,
+    output: list[JsonObject] | None = None,
+    error: JsonObject | None = None,
+) -> str:
+    event_type = f"response.{status}"
+    incomplete_details: JsonObject | None = (
+        {"reason": "max_output_tokens"} if status == "incomplete" else None
+    )
+    return _event(
+        event_type,
+        {
+            "type": event_type,
+            "sequence_number": 2,
+            "response": _response(
+                status=status,
+                output=output,
+                error=error,
+                incomplete_details=incomplete_details,
+            ),
+        },
+    )
+
+
+def _message_output(text: str, *, item_id: str = "msg_1") -> JsonObject:
+    return {
+        "id": item_id,
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "output_text",
+                "text": text,
+                "annotations": [],
+                "logprobs": [],
+            }
+        ],
+    }
+
+
+def _responses_text_stream(text: str, *, incomplete: bool = False) -> list[str]:
+    status = "incomplete" if incomplete else "completed"
     return [
-        format_sse_event("message_start", {"type": "message_start", "message": {}}),
-        format_sse_event(
-            "content_block_start",
+        _created_event(),
+        _event(
+            "response.output_text.delta",
             {
-                "type": "content_block_start",
-                "index": 0,
-                "content_block": {"type": "text", "text": ""},
+                "type": "response.output_text.delta",
+                "sequence_number": 1,
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": text,
+                "logprobs": [],
             },
         ),
-        format_sse_event(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "text_delta", "text": text},
-            },
-        ),
-        format_sse_event(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": 0},
-        ),
-        format_sse_event(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-                "usage": {"input_tokens": 3, "output_tokens": 4},
-            },
-        ),
-        format_sse_event("message_stop", {"type": "message_stop"}),
-    ]
-
-
-def _anthropic_tool_stream(
-    tool_name: str = "echo", partial_json: str = '{"value":"FCC"}'
-) -> list[str]:
-    return [
-        format_sse_event("message_start", {"type": "message_start", "message": {}}),
-        format_sse_event(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 0,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": "toolu_1",
-                    "name": tool_name,
-                    "input": {},
-                },
-            },
-        ),
-        format_sse_event(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {
-                    "type": "input_json_delta",
-                    "partial_json": partial_json,
-                },
-            },
-        ),
-        format_sse_event(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": 0},
-        ),
-        format_sse_event(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
-                "usage": {"input_tokens": 3, "output_tokens": 4},
-            },
-        ),
-        format_sse_event("message_stop", {"type": "message_stop"}),
-    ]
-
-
-def _anthropic_reasoning_text_stream() -> list[str]:
-    return [
-        format_sse_event("message_start", {"type": "message_start", "message": {}}),
-        format_sse_event(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 0,
-                "content_block": {"type": "thinking", "thinking": ""},
-            },
-        ),
-        format_sse_event(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {
-                    "type": "thinking_delta",
-                    "thinking": "provider reasoning",
-                },
-            },
-        ),
-        format_sse_event(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": 0},
-        ),
-        format_sse_event(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 1,
-                "content_block": {"type": "text", "text": ""},
-            },
-        ),
-        format_sse_event(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 1,
-                "delta": {"type": "text_delta", "text": "provider answer"},
-            },
-        ),
-        format_sse_event(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": 1},
-        ),
-        format_sse_event(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                "usage": {"input_tokens": 3, "output_tokens": 4},
-            },
-        ),
-        format_sse_event("message_stop", {"type": "message_stop"}),
-    ]
-
-
-def _anthropic_interleaved_reasoning_stream() -> list[str]:
-    return [
-        format_sse_event("message_start", {"type": "message_start", "message": {}}),
-        format_sse_event(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 0,
-                "content_block": {"type": "thinking", "thinking": ""},
-            },
-        ),
-        format_sse_event(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "thinking_delta", "thinking": "first thought"},
-            },
-        ),
-        format_sse_event(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": 0},
-        ),
-        format_sse_event(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 1,
-                "content_block": {"type": "text", "text": ""},
-            },
-        ),
-        format_sse_event(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 1,
-                "delta": {"type": "text_delta", "text": "first answer"},
-            },
-        ),
-        format_sse_event(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": 1},
-        ),
-        format_sse_event(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 2,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": "toolu_1",
-                    "name": "echo",
-                    "input": {},
-                },
-            },
-        ),
-        format_sse_event(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 2,
-                "delta": {
-                    "type": "input_json_delta",
-                    "partial_json": '{"value":"FCC"}',
-                },
-            },
-        ),
-        format_sse_event(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": 2},
-        ),
-        format_sse_event(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 3,
-                "content_block": {"type": "thinking", "thinking": ""},
-            },
-        ),
-        format_sse_event(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 3,
-                "delta": {"type": "thinking_delta", "thinking": "second thought"},
-            },
-        ),
-        format_sse_event(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": 3},
-        ),
-        format_sse_event(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 4,
-                "content_block": {"type": "text", "text": ""},
-            },
-        ),
-        format_sse_event(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 4,
-                "delta": {"type": "text_delta", "text": "final answer"},
-            },
-        ),
-        format_sse_event(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": 4},
-        ),
-        format_sse_event(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                "usage": {"input_tokens": 3, "output_tokens": 4},
-            },
-        ),
-        format_sse_event("message_stop", {"type": "message_stop"}),
-    ]
-
-
-def _anthropic_redacted_thinking_stream() -> list[str]:
-    return [
-        format_sse_event("message_start", {"type": "message_start", "message": {}}),
-        format_sse_event(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 0,
-                "content_block": {
-                    "type": "redacted_thinking",
-                    "data": "opaque-redacted",
-                },
-            },
-        ),
-        format_sse_event(
-            "content_block_stop",
-            {"type": "content_block_stop", "index": 0},
-        ),
-        format_sse_event(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                "usage": {"input_tokens": 3, "output_tokens": 4},
-            },
-        ),
-        format_sse_event("message_stop", {"type": "message_stop"}),
+        _terminal_event(status, output=[_message_output(text)]),
     ]

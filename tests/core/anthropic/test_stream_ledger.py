@@ -101,26 +101,32 @@ def test_tool_blocks_drive_stop_reason_and_salvage() -> None:
     )
 
 
-def test_close_unclosed_blocks_closes_each_block_once() -> None:
+def test_failure_cleanup_closes_text_without_completing_unfinished_tool() -> None:
     ledger = AnthropicStreamLedger("msg_1", "model")
     ledger.start_text_block()
     ledger.start_tool_block(0, "toolu_1", "Read")
 
     events = list(ledger.close_unclosed_blocks())
 
-    assert len(events) == 2
-    assert all(_payload(event)["type"] == "content_block_stop" for event in events)
+    assert [_payload(event) for event in events] == [
+        {"type": "content_block_stop", "index": 0}
+    ]
     assert list(ledger.close_unclosed_blocks()) == []
 
 
-def test_output_token_estimate_uses_encoder_when_available() -> None:
+def test_output_token_estimate_combines_shared_estimates_and_block_overhead() -> None:
     ledger = AnthropicStreamLedger("msg_1", "model")
+    ledger.start_thinking_block()
+    ledger.emit_thinking_delta("why")
+    ledger.stop_thinking_block()
     ledger.start_text_block()
     ledger.emit_text_delta("abcd")
+    ledger.stop_text_block()
+    ledger.start_tool_block(0, "toolu_1", "Read")
+    ledger.emit_tool_delta(0, "{}")
 
-    class Encoder:
-        def encode(self, text: str) -> list[int]:
-            return list(range(len(text)))
-
-    with patch("free_claude_code.core.anthropic.streaming.ledger.ENCODER", Encoder()):
-        assert ledger.estimate_output_tokens() == 8
+    with patch(
+        "free_claude_code.core.anthropic.streaming.ledger.estimate_text_tokens",
+        side_effect=len,
+    ):
+        assert ledger.estimate_output_tokens() == 40

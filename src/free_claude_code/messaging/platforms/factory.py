@@ -15,7 +15,7 @@ class MessagingPlatformOptions:
 
     telegram_bot_token: str | None = None
     allowed_telegram_user_id: str | None = None
-    telegram_proxy_url: str = ""
+    telegram_proxy_url: str | None = None
     discord_bot_token: str | None = None
     allowed_discord_channels: str | None = None
     transcriber: Transcriber | None = None

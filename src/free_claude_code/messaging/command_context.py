@@ -76,7 +76,7 @@ class MessagingCommandContext(Protocol):
         """Clear one chat and return every tracked platform message ID."""
         ...
 
-    def forget_tracked_message_ids(
+    async def forget_tracked_message_ids(
         self,
         platform: str,
         chat_id: str,
@@ -85,7 +85,7 @@ class MessagingCommandContext(Protocol):
         """Forget platform message IDs removed from the managed conversation."""
         ...
 
-    def record_outgoing_message(
+    async def record_outgoing_message(
         self,
         platform: str,
         chat_id: str,

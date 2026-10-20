@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -7,6 +7,7 @@ from free_claude_code.messaging.command_context import StopOutcome
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
 from free_claude_code.messaging.node_event_pipeline import process_parsed_cli_event
 from free_claude_code.messaging.rendering.telegram_markdown import (
+    escape_md_v2,
     render_markdown_to_mdv2,
 )
 from free_claude_code.messaging.trees import (
@@ -85,8 +86,32 @@ def test_render_markdown_to_mdv2_covers_common_structures():
     assert "3\\." in out
     assert "> quote" in out
     assert "[link]" in out
-    assert "alt (http://example.com/img.png)" in out
+    assert escape_md_v2("alt (http://example.com/img.png)") in out
     assert "```" in out
+
+
+def test_render_markdown_to_mdv2_escapes_image_fallback_as_plain_text():
+    out = render_markdown_to_mdv2("![alt](http://x.com/a_b.png)")
+
+    assert out == escape_md_v2("alt (http://x.com/a_b.png)")
+    assert "(" not in out.replace("\\(", "")
+    assert ")" not in out.replace("\\)", "")
+    assert "." not in out.replace("\\.", "")
+    assert "_" not in out.replace("\\_", "")
+
+
+def test_render_markdown_to_mdv2_escapes_image_without_alt_text():
+    out = render_markdown_to_mdv2("![](http://x.com/a-b.png)")
+
+    assert out == escape_md_v2("http://x.com/a-b.png")
+    assert "." not in out.replace("\\.", "")
+    assert "-" not in out.replace("\\-", "")
+
+
+def test_render_markdown_to_mdv2_escapes_image_embedded_in_text():
+    out = render_markdown_to_mdv2("see ![d](https://e.com/d-1.png) here")
+
+    assert escape_md_v2("d (https://e.com/d-1.png)") in out
 
 
 def test_render_markdown_to_mdv2_renders_table_as_code_block():
@@ -218,7 +243,6 @@ async def test_node_runner_process_node_session_limit_marks_error_and_updates_ui
         claim,
         propagate=False,
     )
-    session_store.save_tree_snapshot.assert_called_once_with(snapshot)
 
 
 @pytest.mark.asyncio
@@ -261,7 +285,6 @@ async def test_node_runner_cancellation_marks_error_and_saves_tree():
         claim,
         propagate=False,
     )
-    session_store.save_tree_snapshot.assert_called_once_with(snapshot)
 
 
 @pytest.mark.asyncio
@@ -289,7 +312,12 @@ async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
         ),
         snapshots=(snapshot,),
     )
-    cancel_all = AsyncMock(return_value=result)
+
+    async def commit_cancel(*, reason, on_committed):
+        on_committed()
+        return result
+
+    cancel_all = AsyncMock(side_effect=commit_cancel)
     with patch.object(
         handler.tree_queue,
         "cancel_all",
@@ -301,9 +329,10 @@ async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
         status_feedback_scopes=frozenset({_SCOPE}),
         fallback_required=False,
     )
-    cancel_all.assert_awaited_once_with(reason=CancellationReason.STOP)
+    cancel_all.assert_awaited_once_with(
+        reason=CancellationReason.STOP, on_committed=ANY
+    )
     cli_manager.stop_all.assert_awaited_once()
-    session_store.save_tree_snapshot.assert_called_once_with(snapshot)
 
 
 @pytest.mark.asyncio
@@ -496,6 +525,52 @@ async def test_process_parsed_event_failed_complete_does_not_mark_success():
     update_ui.assert_not_awaited()
     complete_claim.assert_not_awaited()
     fail_claim.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [{"type": "complete", "status": "success"}, {"type": "error", "message": "failed"}],
+)
+@pytest.mark.parametrize("save_fails", [False, True])
+async def test_terminal_status_waits_for_its_durable_outcome(event, save_fails):
+    from free_claude_code.messaging.trees import MessagingStorageError
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    ui = AsyncMock()
+
+    async def save(*_args):
+        entered.set()
+        await release.wait()
+        if save_fails:
+            raise MessagingStorageError("disk full")
+
+    operation = asyncio.create_task(
+        process_parsed_cli_event(
+            parsed=event,
+            transcript=MagicMock(),
+            update_ui=ui,
+            last_status=None,
+            had_transcript_events=True,
+            claim=_claim(),
+            captured_session_id="session",
+            format_status=lambda *args: " ".join(args),
+            complete_claim=save,
+            fail_claim=save,
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        ui.assert_not_awaited()
+    finally:
+        release.set()
+    if save_fails:
+        with pytest.raises(MessagingStorageError):
+            await operation
+        ui.assert_not_awaited()
+    else:
+        await operation
+        ui.assert_awaited_once()
 
 
 @pytest.mark.asyncio

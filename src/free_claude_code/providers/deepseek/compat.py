@@ -10,7 +10,6 @@ from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKEN
 from free_claude_code.core.anthropic import (
     ReasoningReplayMode,
     dump_messages_request,
-    serialize_tool_result_content,
 )
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.reasoning import (
@@ -29,20 +28,10 @@ DEEPSEEK_REQUEST_POLICY = OpenAIChatRequestPolicy(
     include_extra_body=True,
 )
 
-_UNSUPPORTED_MESSAGE_BLOCK_TYPES = frozenset(
-    {
-        "image",
-        "document",
-        "server_tool_use",
-        "web_search_tool_result",
-        "web_fetch_tool_result",
-    }
+_OMITTED_DOCUMENT_TEXT = (
+    "[attachment omitted: DeepSeek does not support document inputs]"
 )
-_STRIPPABLE_MESSAGE_BLOCK_TYPES = frozenset({"image", "document"})
-_OMITTED_ATTACHMENT_TEXT = (
-    "[attachment omitted: DeepSeek does not support image or document inputs]"
-)
-_OMITTED_ATTACHMENT_BLOCK = {"type": "text", "text": _OMITTED_ATTACHMENT_TEXT}
+_OMITTED_DOCUMENT_BLOCK = {"type": "text", "text": _OMITTED_DOCUMENT_TEXT}
 
 
 def build_deepseek_request_body(
@@ -57,56 +46,20 @@ def build_deepseek_request_body(
 
     data = dump_messages_request(request_data)
     if "messages" in data:
-        data["messages"] = _strip_unsupported_attachment_blocks(data["messages"])
+        data["messages"] = _strip_document_blocks(data["messages"])
     _validate_deepseek_request_dict(data)
-    _downgrade_forced_tool_choice(data)
-
-    has_tool_history = _has_tool_history(data)
-    has_replayable_tool_thinking = _all_tool_calls_have_replayable_thinking(data)
-    unsafe_tool_followup = has_tool_history and not has_replayable_tool_thinking
-    effective_reasoning = reasoning
-    if reasoning.control is not ReasoningControl.OFF:
-        if unsafe_tool_followup:
-            logger.debug(
-                "DEEPSEEK_REQUEST: disabling thinking for tool follow-up without "
-                "replayable thinking model={} msgs={} tools={}",
-                data.get("model"),
-                len(data.get("messages", [])),
-                len(data.get("tools", [])),
-            )
-            _remove_deepseek_thinking_hints(data)
-            effective_reasoning = ReasoningPolicy.off()
-        elif has_tool_history:
-            logger.debug(
-                "DEEPSEEK_REQUEST: keeping thinking for tool follow-up with "
-                "replayable thinking model={} msgs={} tools={}",
-                data.get("model"),
-                len(data.get("messages", [])),
-                len(data.get("tools", [])),
-            )
-        elif data.get("tools") or data.get("tool_choice"):
-            logger.debug(
-                "DEEPSEEK_REQUEST: keeping thinking for initial tool request "
-                "model={} msgs={} tools={}",
-                data.get("model"),
-                len(data.get("messages", [])),
-                len(data.get("tools", [])),
-            )
-
-    if "messages" in data:
-        data["messages"] = _normalize_tool_result_content(
-            sanitize_deepseek_messages_for_openai(data["messages"])
-        )
 
     sanitized_request = MessagesRequest.model_validate(data)
     body = build_openai_chat_request_body(
         sanitized_request,
-        reasoning=effective_reasoning,
+        reasoning=reasoning,
         policy=DEEPSEEK_REQUEST_POLICY,
-        postprocessors=(_apply_deepseek_chat_extras,),
+        postprocessors=(
+            lambda body, _request, _policy: finalize_deepseek_chat_body(
+                body, reasoning
+            ),
+        ),
     )
-    if "max_tokens" not in body or body.get("max_tokens") is None:
-        body["max_tokens"] = ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
     logger.debug(
         "DEEPSEEK_REQUEST: build done model={} msgs={} tools={}",
@@ -117,45 +70,40 @@ def build_deepseek_request_body(
     return body
 
 
-def sanitize_deepseek_messages_for_openai(messages: Any) -> Any:
-    """Keep only DeepSeek-required reasoning history on assistant tool calls."""
-    if not isinstance(messages, list):
-        return messages
+def finalize_deepseek_chat_body(
+    body: dict[str, Any], reasoning: ReasoningPolicy
+) -> None:
+    """Apply source-independent DeepSeek policy to one Chat body."""
+    if body.get("tools") and reasoning.control is not ReasoningControl.OFF:
+        for message in body.get("messages", []):
+            if (
+                message.get("role") == "assistant"
+                and message.get("reasoning_content") is None
+            ):
+                message["reasoning_content"] = message.get("reasoning") or ""
 
-    sanitized: list[Any] = []
-    for message in messages:
-        if not isinstance(message, dict):
-            sanitized.append(message)
-            continue
-        if message.get("role") != "assistant":
-            sanitized.append(message)
-            continue
-        replay_tool_reasoning = _assistant_has_tool_use(message)
-        new_msg = dict(message)
-        if not replay_tool_reasoning:
-            new_msg.pop("reasoning_content", None)
-        content = message.get("content")
-        if not isinstance(content, list):
-            sanitized.append(new_msg)
-            continue
-
-        filtered = [
-            block
-            for block in content
-            if not (
-                isinstance(block, dict)
-                and (
-                    block.get("type") == "redacted_thinking"
-                    or (block.get("type") == "thinking" and not replay_tool_reasoning)
-                )
-            )
-        ]
-        new_msg["content"] = filtered or ""
-        sanitized.append(new_msg)
-    return sanitized
+    _downgrade_chat_forced_tool_choice(body)
+    _apply_deepseek_chat_extras(body, reasoning)
+    if body.get("max_tokens") is None:
+        body["max_tokens"] = ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
 
-def _strip_unsupported_attachment_blocks(messages: Any) -> Any:
+def _downgrade_chat_forced_tool_choice(body: dict[str, Any]) -> None:
+    tool_choice = body.get("tool_choice")
+    if not isinstance(tool_choice, dict) or tool_choice.get("type") != "function":
+        return
+    function = tool_choice.get("function")
+    if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+        return
+    logger.debug(
+        "DEEPSEEK_REQUEST: downgrading forced tool_choice to auto for unsupported "
+        "native request shape tool={}",
+        function["name"],
+    )
+    body["tool_choice"] = "auto"
+
+
+def _strip_document_blocks(messages: Any) -> Any:
     if not isinstance(messages, list):
         return messages
 
@@ -174,23 +122,20 @@ def _strip_unsupported_attachment_blocks(messages: Any) -> Any:
             continue
 
         new_content: list[Any] = []
-        message_dropped_attachment = False
+        message_dropped_document = False
         for block in content:
             if isinstance(block, dict):
                 btype = block.get("type")
-                if btype in _STRIPPABLE_MESSAGE_BLOCK_TYPES:
+                if btype == "document":
                     top_level_dropped[btype] = top_level_dropped.get(btype, 0) + 1
-                    message_dropped_attachment = True
+                    message_dropped_document = True
                     continue
                 if btype == "tool_result":
                     inner = block.get("content")
                     if isinstance(inner, list):
                         filtered_inner: list[Any] = []
                         for sub in inner:
-                            if (
-                                isinstance(sub, dict)
-                                and sub.get("type") in _STRIPPABLE_MESSAGE_BLOCK_TYPES
-                            ):
+                            if isinstance(sub, dict) and sub.get("type") == "document":
                                 sub_type = sub["type"]
                                 nested_dropped[sub_type] = (
                                     nested_dropped.get(sub_type, 0) + 1
@@ -198,15 +143,15 @@ def _strip_unsupported_attachment_blocks(messages: Any) -> Any:
                                 continue
                             filtered_inner.append(sub)
                         if not filtered_inner:
-                            filtered_inner = [_OMITTED_ATTACHMENT_BLOCK]
+                            filtered_inner = [_OMITTED_DOCUMENT_BLOCK]
                             placeholder_replacements += 1
                         new_block = dict(block)
                         new_block["content"] = filtered_inner
                         new_content.append(new_block)
                         continue
             new_content.append(block)
-        if not new_content and message_dropped_attachment:
-            new_content = [_OMITTED_ATTACHMENT_BLOCK]
+        if not new_content and message_dropped_document:
+            new_content = [_OMITTED_DOCUMENT_BLOCK]
             placeholder_replacements += 1
         new_msg = dict(message)
         new_msg["content"] = new_content
@@ -214,9 +159,9 @@ def _strip_unsupported_attachment_blocks(messages: Any) -> Any:
 
     if top_level_dropped or nested_dropped:
         logger.warning(
-            "DEEPSEEK_REQUEST: stripped unsupported attachment blocks "
+            "DEEPSEEK_REQUEST: stripped unsupported document blocks "
             "(top_level={} nested_in_tool_result={} placeholder_tool_results={}). "
-            "DeepSeek has no vision/document support; the model will not see this content.",
+            "The model will not see the omitted document content.",
             dict(top_level_dropped),
             dict(nested_dropped),
             placeholder_replacements,
@@ -241,13 +186,14 @@ def _walk_block_list_for_unsupported(blocks: Any, *, where: str) -> None:
         if not isinstance(block, dict):
             continue
         btype = block.get("type")
-        if btype in _UNSUPPORTED_MESSAGE_BLOCK_TYPES:
+        if btype == "document":
             raise InvalidRequestError(
                 f"DeepSeek native does not support {btype!r} blocks ({where})."
             )
         if btype == "tool_result" and "content" in block:
             _walk_block_list_for_unsupported(
-                block["content"], where=f"{where} (tool_result content)"
+                block["content"],
+                where=f"{where} (tool_result content)",
             )
 
 
@@ -270,172 +216,17 @@ def _validate_deepseek_request_dict(data: dict[str, Any]) -> None:
             continue
         content = message.get("content")
         if isinstance(content, list):
-            _walk_block_list_for_unsupported(content, where=f"messages[{i}].content")
+            _walk_block_list_for_unsupported(
+                content,
+                where=f"messages[{i}].content",
+            )
 
     system = data.get("system")
     if isinstance(system, list):
         _walk_block_list_for_unsupported(system, where="system")
 
 
-def _has_tool_history_blocks(message: Mapping[str, Any]) -> bool:
-    role = message.get("role")
-    content = message.get("content")
-    if not isinstance(content, list):
-        return False
-
-    for block in content:
-        if not isinstance(block, dict):
-            continue
-        btype = block.get("type")
-        if role == "assistant" and btype == "tool_use":
-            return True
-        if role == "user" and btype == "tool_result":
-            return True
-    return False
-
-
-def _has_replayable_thinking_before_tool_use(message: Mapping[str, Any]) -> bool:
-    if message.get("role") != "assistant":
-        return False
-    content = message.get("content")
-    if not isinstance(content, list):
-        return False
-
-    has_thinking = isinstance(message.get("reasoning_content"), str)
-    for block in content:
-        if not isinstance(block, dict):
-            continue
-        btype = block.get("type")
-        if btype == "thinking" and isinstance(block.get("thinking"), str):
-            has_thinking = True
-            continue
-        if btype == "tool_use":
-            return has_thinking
-    return False
-
-
-def _assistant_has_tool_use(message: Mapping[str, Any]) -> bool:
-    if message.get("role") != "assistant":
-        return False
-    content = message.get("content")
-    return isinstance(content, list) and any(
-        isinstance(block, dict) and block.get("type") == "tool_use" for block in content
-    )
-
-
-def _has_tool_history(data: dict[str, Any]) -> bool:
-    for message in data.get("messages") or ():
-        if isinstance(message, Mapping) and _has_tool_history_blocks(message):
-            return True
-    return False
-
-
-def _all_tool_calls_have_replayable_thinking(data: dict[str, Any]) -> bool:
-    found_tool_call = False
-    for message in data.get("messages") or ():
-        if not isinstance(message, Mapping) or not _assistant_has_tool_use(message):
-            continue
-        found_tool_call = True
-        if not _has_replayable_thinking_before_tool_use(message):
-            return False
-    return found_tool_call
-
-
-def _remove_deepseek_thinking_hints(data: dict[str, Any]) -> None:
-    output_config = data.get("output_config")
-    if isinstance(output_config, dict) and "effort" in output_config:
-        cleaned_output_config = dict(output_config)
-        cleaned_output_config.pop("effort", None)
-        if cleaned_output_config:
-            data["output_config"] = cleaned_output_config
-        else:
-            data.pop("output_config", None)
-
-    context_management = data.get("context_management")
-    if not isinstance(context_management, dict):
-        return
-    edits = context_management.get("edits")
-    if not isinstance(edits, list):
-        return
-    filtered_edits = [
-        edit
-        for edit in edits
-        if not (
-            isinstance(edit, dict)
-            and isinstance(edit.get("type"), str)
-            and edit["type"].startswith("clear_thinking_")
-        )
-    ]
-    if len(filtered_edits) == len(edits):
-        return
-    cleaned_context_management = dict(context_management)
-    if filtered_edits:
-        cleaned_context_management["edits"] = filtered_edits
-        data["context_management"] = cleaned_context_management
-    else:
-        cleaned_context_management.pop("edits", None)
-        if cleaned_context_management:
-            data["context_management"] = cleaned_context_management
-        else:
-            data.pop("context_management", None)
-
-
-def _normalize_tool_result_content(messages: Any) -> Any:
-    if not isinstance(messages, list):
-        return messages
-
-    normalized: list[Any] = []
-    for message in messages:
-        if not isinstance(message, dict):
-            normalized.append(message)
-            continue
-
-        content = message.get("content")
-        if not isinstance(content, list):
-            normalized.append(message)
-            continue
-
-        new_content: list[Any] = []
-        for block in content:
-            if not isinstance(block, dict):
-                new_content.append(block)
-                continue
-
-            if block.get("type") == "tool_result":
-                normalized_block = dict(block)
-                normalized_block["content"] = serialize_tool_result_content(
-                    block.get("content")
-                )
-                new_content.append(normalized_block)
-            else:
-                new_content.append(block)
-
-        new_msg = dict(message)
-        new_msg["content"] = new_content
-        normalized.append(new_msg)
-
-    return normalized
-
-
-def _downgrade_forced_tool_choice(data: dict[str, Any]) -> None:
-    tool_choice = data.get("tool_choice")
-    if not isinstance(tool_choice, dict):
-        return
-    if tool_choice.get("type") != "tool" or not isinstance(
-        tool_choice.get("name"), str
-    ):
-        return
-    logger.debug(
-        "DEEPSEEK_REQUEST: downgrading forced tool_choice to auto for unsupported "
-        "native request shape tool={}",
-        tool_choice["name"],
-    )
-    data["tool_choice"] = {"type": "auto"}
-
-
-def _apply_deepseek_chat_extras(
-    body: dict[str, Any], _request_data: MessagesRequest, policy: ReasoningPolicy
-) -> None:
+def _apply_deepseek_chat_extras(body: dict[str, Any], policy: ReasoningPolicy) -> None:
     extra_body = body.setdefault("extra_body", {})
     if not isinstance(extra_body, dict):
         return

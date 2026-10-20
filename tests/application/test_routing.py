@@ -4,6 +4,7 @@ import pytest
 
 from free_claude_code.application.errors import UnknownProviderError
 from free_claude_code.application.routing import ModelRouter
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
@@ -12,7 +13,58 @@ from free_claude_code.core.anthropic.models import (
     MessagesRequest,
     TokenCountRequest,
 )
+from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningEffort
+
+
+@pytest.mark.parametrize(
+    "prefix,off",
+    [("", False), ("anthropic/", False), ("claude-3-freecc-no-thinking/", True)],
+)
+@pytest.mark.parametrize(
+    "suffix", ["openai/gpt-4.1", "vendor/opus", "sonnet", "haiku", "fable"]
+)
+def test_retired_direct_ids_route_to_default_before_family_aliases(prefix, off, suffix):
+    settings = Settings(
+        MODEL="groq/default",
+        MODEL_OPUS="deepseek/opus",
+        MODEL_SONNET="deepseek/sonnet",
+        MODEL_HAIKU="deepseek/haiku",
+        MODEL_FABLE="deepseek/fable",
+        MODEL_FALLBACKS=(
+            ModelFallback(model="groq/default"),
+            ModelFallback(model="groq/backup"),
+        ),
+        REASONING_POLICY="high",
+        REASONING_OPUS="off",
+    )
+    original = f"{prefix}github_models/{suffix}"
+    router = ModelRouter(settings)
+    route = router.resolve(original)
+    assert route.original_model == original
+    assert route.primary.provider_model_ref == "groq/default"
+    assert [candidate.target.provider_model_ref for candidate in route.fallbacks] == [
+        "groq/backup"
+    ]
+    assert route.reasoning_preference is (
+        ReasoningPreference.OFF if off else ReasoningPreference.HIGH
+    )
+    messages = router.resolve_messages_request(
+        MessagesRequest(
+            model=original,
+            max_tokens=100,
+            messages=[Message(role="user", content="hi")],
+        )
+    )
+    responses = router.resolve_responses_request(
+        OpenAIResponsesRequest(model=original, input="hi")
+    )
+    count = router.resolve_token_count_request(
+        TokenCountRequest(model=original, messages=[Message(role="user", content="hi")])
+    )
+    for routed in (messages, responses, count):
+        assert routed.request.model == "default"
+        assert routed.resolved == route
 
 
 @pytest.fixture
@@ -35,9 +87,10 @@ def test_model_router_resolves_default_model(settings):
     resolved = ModelRouter(settings).resolve("claude-3-opus")
 
     assert resolved.original_model == "claude-3-opus"
-    assert resolved.provider_id == "nvidia_nim"
-    assert resolved.provider_model == "fallback-model"
-    assert resolved.provider_model_ref == "nvidia_nim/fallback-model"
+    assert resolved.primary.provider_id == "nvidia_nim"
+    assert resolved.primary.provider_model == "fallback-model"
+    assert resolved.primary.provider_model_ref == "nvidia_nim/fallback-model"
+    assert resolved.fallbacks == ()
     assert resolved.reasoning_preference is ReasoningPreference.CLIENT
 
 
@@ -52,7 +105,9 @@ def test_model_router_applies_opus_override(settings):
     routed = ModelRouter(settings).resolve_messages_request(request)
 
     assert routed.request.model == "deepseek/deepseek-r1"
-    assert routed.resolved.provider_model_ref == "open_router/deepseek/deepseek-r1"
+    assert (
+        routed.resolved.primary.provider_model_ref == "open_router/deepseek/deepseek-r1"
+    )
     assert routed.resolved.original_model == "claude-opus-4-20250514"
     assert routed.reasoning.control is ReasoningControl.DEFAULT
     assert request.model == "claude-opus-4-20250514"
@@ -70,7 +125,10 @@ def test_model_router_applies_fable_override(settings):
     )
 
     assert routed.request.model == "anthropic/claude-fable-5"
-    assert routed.resolved.provider_model_ref == "open_router/anthropic/claude-fable-5"
+    assert (
+        routed.resolved.primary.provider_model_ref
+        == "open_router/anthropic/claude-fable-5"
+    )
     assert routed.resolved.original_model == "claude-fable-5"
 
 
@@ -113,7 +171,7 @@ def test_model_router_applies_haiku_override(settings):
     )
 
     assert routed.request.model == "qwen2.5-7b"
-    assert routed.resolved.provider_model_ref == "lmstudio/qwen2.5-7b"
+    assert routed.resolved.primary.provider_model_ref == "lmstudio/qwen2.5-7b"
 
 
 def test_model_router_applies_sonnet_override(settings):
@@ -129,7 +187,8 @@ def test_model_router_applies_sonnet_override(settings):
 
     assert routed.request.model == "meta/llama-3.3-70b-instruct"
     assert (
-        routed.resolved.provider_model_ref == "nvidia_nim/meta/llama-3.3-70b-instruct"
+        routed.resolved.primary.provider_model_ref
+        == "nvidia_nim/meta/llama-3.3-70b-instruct"
     )
 
 
@@ -144,9 +203,9 @@ def test_model_router_routes_prefixed_provider_model_directly(settings):
 
     assert routed.request.model == "deepseek-chat"
     assert routed.resolved.original_model == "deepseek/deepseek-chat"
-    assert routed.resolved.provider_id == "deepseek"
-    assert routed.resolved.provider_model == "deepseek-chat"
-    assert routed.resolved.provider_model_ref == "deepseek/deepseek-chat"
+    assert routed.resolved.primary.provider_id == "deepseek"
+    assert routed.resolved.primary.provider_model == "deepseek-chat"
+    assert routed.resolved.primary.provider_model_ref == "deepseek/deepseek-chat"
 
 
 def test_model_router_routes_explicit_opencode_zen_prefix(settings):
@@ -159,8 +218,8 @@ def test_model_router_routes_explicit_opencode_zen_prefix(settings):
     )
 
     assert routed.request.model == "kimi-k2.6"
-    assert routed.resolved.provider_id == "opencode_zen"
-    assert routed.resolved.provider_model_ref == "opencode_zen/kimi-k2.6"
+    assert routed.resolved.primary.provider_id == "opencode_zen"
+    assert routed.resolved.primary.provider_model_ref == "opencode_zen/kimi-k2.6"
 
 
 def test_model_router_routes_wafer_provider_model_directly(settings):
@@ -173,9 +232,9 @@ def test_model_router_routes_wafer_provider_model_directly(settings):
     )
 
     assert routed.request.model == "DeepSeek-V4-Pro"
-    assert routed.resolved.provider_id == "wafer"
-    assert routed.resolved.provider_model == "DeepSeek-V4-Pro"
-    assert routed.resolved.provider_model_ref == "wafer/DeepSeek-V4-Pro"
+    assert routed.resolved.primary.provider_id == "wafer"
+    assert routed.resolved.primary.provider_model == "DeepSeek-V4-Pro"
+    assert routed.resolved.primary.provider_model_ref == "wafer/DeepSeek-V4-Pro"
 
 
 def test_model_router_routes_minimax_provider_model_directly(settings):
@@ -188,9 +247,9 @@ def test_model_router_routes_minimax_provider_model_directly(settings):
     )
 
     assert routed.request.model == "MiniMax-M3"
-    assert routed.resolved.provider_id == "minimax"
-    assert routed.resolved.provider_model == "MiniMax-M3"
-    assert routed.resolved.provider_model_ref == "minimax/MiniMax-M3"
+    assert routed.resolved.primary.provider_id == "minimax"
+    assert routed.resolved.primary.provider_model == "MiniMax-M3"
+    assert routed.resolved.primary.provider_model_ref == "minimax/MiniMax-M3"
 
 
 def test_model_router_routes_gateway_encoded_provider_model_directly(settings):
@@ -207,11 +266,11 @@ def test_model_router_routes_gateway_encoded_provider_model_directly(settings):
         routed.resolved.original_model
         == "anthropic/nvidia_nim/deepseek-ai/deepseek-v4-pro"
     )
-    assert routed.resolved.provider_id == "nvidia_nim"
-    assert routed.resolved.provider_model == "deepseek-ai/deepseek-v4-pro"
+    assert routed.resolved.primary.provider_id == "nvidia_nim"
+    assert routed.resolved.primary.provider_model == "deepseek-ai/deepseek-v4-pro"
     assert (
-        routed.resolved.provider_model_ref
-        == "anthropic/nvidia_nim/deepseek-ai/deepseek-v4-pro"
+        routed.resolved.primary.provider_model_ref
+        == "nvidia_nim/deepseek-ai/deepseek-v4-pro"
     )
 
 
@@ -229,8 +288,8 @@ def test_model_router_routes_no_thinking_gateway_model_directly(settings):
         routed.resolved.original_model
         == "claude-3-freecc-no-thinking/nvidia_nim/deepseek-ai/deepseek-v4-pro"
     )
-    assert routed.resolved.provider_id == "nvidia_nim"
-    assert routed.resolved.provider_model == "deepseek-ai/deepseek-v4-pro"
+    assert routed.resolved.primary.provider_id == "nvidia_nim"
+    assert routed.resolved.primary.provider_model == "deepseek-ai/deepseek-v4-pro"
     assert routed.reasoning.control is ReasoningControl.OFF
 
 
@@ -245,8 +304,8 @@ def test_direct_provider_model_uses_root_policy_without_model_name_guessing(sett
         )
     )
 
-    assert routed.resolved.provider_id == "open_router"
-    assert routed.resolved.provider_model == "anthropic/claude-opus-4"
+    assert routed.resolved.primary.provider_id == "open_router"
+    assert routed.resolved.primary.provider_model == "anthropic/claude-opus-4"
     assert routed.reasoning.effort is ReasoningEffort.LOW
 
 
@@ -261,6 +320,114 @@ def test_model_router_routes_token_count_request(settings):
 
     assert routed.request.model == "qwen2.5-7b"
     assert request.model == "claude-3-haiku-20240307"
+
+
+def test_model_router_routes_responses_request_without_protocol_conversion(settings):
+    settings.model_fallbacks = (ModelFallback(model="open_router/vendor/fallback"),)
+    request = OpenAIResponsesRequest(
+        model="opencode_zen/responses-model",
+        input=[{"role": "user", "content": "hello"}],
+        reasoning={"effort": "high"},
+        previous_response_id="resp_previous",
+    )
+
+    routed = ModelRouter(settings).resolve_responses_request(request)
+
+    assert routed.request.model == "responses-model"
+    assert routed.request.input == request.input
+    assert routed.request.previous_response_id == "resp_previous"
+    assert routed.resolved.original_model == "opencode_zen/responses-model"
+    assert routed.resolved.primary.provider_id == "opencode_zen"
+    assert routed.resolved.primary.provider_model == "responses-model"
+    assert [
+        candidate.target.provider_model_ref for candidate in routed.resolved.fallbacks
+    ] == ["open_router/vendor/fallback"]
+    assert routed.reasoning.control is ReasoningControl.DEFAULT
+    assert routed.reasoning.effort is ReasoningEffort.HIGH
+    assert request.model == "opencode_zen/responses-model"
+
+
+def test_model_router_appends_global_fallbacks_and_skips_only_primary(settings):
+    settings.model_fallbacks = (
+        ModelFallback(model="nvidia_nim/fallback-model"),
+        ModelFallback(model="nvidia_nim/alternate-model"),
+        ModelFallback(model="open_router/vendor/model-b"),
+    )
+
+    resolved = ModelRouter(settings).resolve("claude-2.1")
+
+    assert [
+        candidate.target.provider_model_ref for candidate in resolved.fallbacks
+    ] == [
+        "nvidia_nim/alternate-model",
+        "open_router/vendor/model-b",
+    ]
+
+
+@pytest.mark.parametrize(
+    "requested", ["claude-2.1", "nvidia_nim/primary", "claude-opus-4"]
+)
+def test_fallback_effort_does_not_change_primary_identity(requested):
+    settings = Settings(
+        MODEL="nvidia_nim/primary",
+        MODEL_OPUS="nvidia_nim/primary",
+        MODEL_FALLBACKS=[
+            {"model": "nvidia_nim/primary", "reasoning": "off"},
+            {"model": "groq/backup", "reasoning": "low"},
+        ],
+    )
+    route = ModelRouter(settings).resolve(requested)
+    assert [
+        (candidate.target.provider_model_ref, candidate.reasoning_preference)
+        for candidate in route.fallbacks
+    ] == [("groq/backup", ReasoningPreference.LOW)]
+
+
+@pytest.mark.parametrize("requested", ["claude-opus-4", "groq/primary"])
+def test_same_model_fallbacks_keep_alternate_keys_and_their_efforts(requested):
+    settings = Settings(
+        MODEL="groq/primary",
+        MODEL_OPUS="groq/primary",
+        GROQ_API_KEY=["synthetic-first", "synthetic-second", "synthetic-third"],
+        MODEL_FALLBACKS=[
+            {"model": "groq/primary", "reasoning": "off", "api_key_number": 1},
+            {"model": "groq/primary", "reasoning": "low", "api_key_number": 2},
+            {"model": "groq/primary", "reasoning": "high", "api_key_number": 3},
+        ],
+    )
+    route = ModelRouter(settings).resolve(requested)
+    assert route.primary.api_key_number == 1
+    assert [
+        (
+            candidate.target.provider_model_ref,
+            candidate.target.api_key_number,
+            candidate.reasoning_preference,
+        )
+        for candidate in route.fallbacks
+    ] == [
+        ("groq/primary", 2, ReasoningPreference.LOW),
+        ("groq/primary", 3, ReasoningPreference.HIGH),
+    ]
+
+
+def test_direct_gateway_route_preserves_original_and_deduplicates_canonical_target(
+    settings,
+):
+    settings.model_fallbacks = (
+        ModelFallback(model="nvidia_nim/deepseek-ai/deepseek-v4-pro"),
+        ModelFallback(model="groq/vendor/model-b"),
+    )
+    model = "anthropic/nvidia_nim/deepseek-ai/deepseek-v4-pro"
+
+    resolved = ModelRouter(settings).resolve(model)
+
+    assert resolved.original_model == model
+    assert (
+        resolved.primary.provider_model_ref == "nvidia_nim/deepseek-ai/deepseek-v4-pro"
+    )
+    assert [
+        candidate.target.provider_model_ref for candidate in resolved.fallbacks
+    ] == ["groq/vendor/model-b"]
 
 
 def test_model_router_logs_mapping(settings):

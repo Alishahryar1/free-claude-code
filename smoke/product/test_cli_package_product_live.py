@@ -35,7 +35,9 @@ def test_entrypoint_version_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_cli_session_resume_fork_e2e(tmp_path: Path) -> None:
-    session = ManagedClaudeSession(str(tmp_path), "http://127.0.0.1:8082")
+    session = ManagedClaudeSession(
+        str(tmp_path), "http://127.0.0.1:8082", auth_token="freecc"
+    )
     process = AsyncMock()
     process.stdout.read.side_effect = [b""]
     process.stderr.read.return_value = b""
@@ -63,6 +65,7 @@ async def test_cli_process_cleanup_e2e(tmp_path: Path) -> None:
     manager = ManagedClaudeSessionManager(
         workspace_path=str(tmp_path),
         proxy_root_url="http://127.0.0.1:8082",
+        auth_token="freecc",
     )
     session, pending_id, is_new = await manager.get_or_create_session()
     assert is_new is True
@@ -82,7 +85,9 @@ async def test_cli_process_cleanup_e2e(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_cli_session_stop_kills_child_e2e(tmp_path: Path) -> None:
-    session = ManagedClaudeSession(str(tmp_path), "http://127.0.0.1:8082")
+    session = ManagedClaudeSession(
+        str(tmp_path), "http://127.0.0.1:8082", auth_token="freecc"
+    )
     process = MagicMock()
     process.pid = 123456
     process.returncode = None

@@ -1,5 +1,6 @@
 """Provider streams raise canonical failures after closing committed blocks."""
 
+import asyncio
 from collections import deque
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,28 +11,33 @@ from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.http import close_provider_stream
+from free_claude_code.providers.admission import ProviderOperationKind
+from free_claude_code.providers.http import (
+    ProviderAttemptScope,
+    close_provider_stream,
+)
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from tests.providers.request_factory import make_messages_request
-from tests.providers.support import immediate_admission
+from tests.providers.support import (
+    SDKStreamDouble,
+    immediate_admission,
+    make_provider_config,
+)
 
 
-class _FailingStream:
+class _FailingStream(SDKStreamDouble[object]):
     def __init__(
         self,
         chunks: list[object],
         error: Exception | None,
         *,
-        close_error: Exception | None = None,
+        close_error: BaseException | None = None,
     ) -> None:
         self._chunks = chunks
         self._error = error
         self._close_error = close_error
         self.close_calls = 0
-
-    def __aiter__(self) -> AsyncIterator[object]:
-        return self._iterate()
+        super().__init__(self._iterate(), close=self.aclose)
 
     async def _iterate(self) -> AsyncIterator[object]:
         for chunk in self._chunks:
@@ -53,11 +59,9 @@ def _chunk(*, content: str | None = None, finish_reason: str | None = None) -> o
 
 def _provider() -> NvidiaNimProvider:
     return NvidiaNimProvider(
-        ProviderConfig(
+        make_provider_config(
             api_key="test_key",
             base_url="https://test.api.nvidia.com/v1",
-            rate_limit=10,
-            rate_window=60,
         ),
         nim_settings=NimSettings(),
         admission=immediate_admission(),
@@ -91,7 +95,7 @@ async def test_committed_provider_failure_closes_block_then_raises_canonical_val
         ),
         pytest.raises(ExecutionFailure) as exc_info,
     ):
-        async for event in provider.stream_response(
+        async for event in provider.stream_messages(
             request,
             request_id="req_committed_failure",
         ):
@@ -133,7 +137,7 @@ async def test_openai_stream_close_failure_cannot_mask_execution_failure() -> No
     ):
         [
             event
-            async for event in provider.stream_response(
+            async for event in provider.stream_messages(
                 request,
                 request_id="req_close_failure",
             )
@@ -187,7 +191,67 @@ async def test_stream_close_failure_without_active_error_is_observability_only()
 
 
 @pytest.mark.asyncio
-async def test_completed_stream_close_failure_preserves_success_lifecycle() -> None:
+@pytest.mark.parametrize(
+    "close_error",
+    [
+        pytest.param(RuntimeError("cleanup api_key=SECRET"), id="exception"),
+        pytest.param(
+            asyncio.CancelledError("cleanup api_key=SECRET"),
+            id="cleanup-cancellation",
+        ),
+    ],
+)
+async def test_attempt_scope_releases_attempt_when_resource_close_fails(
+    close_error: BaseException,
+) -> None:
+    controller = immediate_admission()
+    execution = controller.start_execution(request_id="req_scope_close")
+    attempt = await execution.open_attempt(ProviderOperationKind.CONTINUATION)
+    stream = _FailingStream(
+        [],
+        None,
+        close_error=close_error,
+    )
+    scope = ProviderAttemptScope(
+        attempt,
+        provider_name="TEST",
+        request_id="req_scope_close",
+    )
+    assert scope.retain(stream) is stream
+
+    with patch("free_claude_code.providers.http.trace_event") as trace_event:
+        await scope.aclose(active_error=ValueError("original"))
+        await scope.aclose(active_error=None)
+
+    replacement = await execution.open_attempt(ProviderOperationKind.CONTINUATION)
+    await replacement.aclose()
+    assert stream.close_calls == 1
+    trace_event.assert_called_once_with(
+        stage="provider",
+        event="provider.stream.close_failed",
+        source="provider",
+        provider="TEST",
+        request_id="req_scope_close",
+        close_exc_type=type(close_error).__name__,
+        preserved_exc_type="ValueError",
+    )
+    assert "SECRET" not in repr(trace_event.call_args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "close_error",
+    [
+        pytest.param(RuntimeError("cleanup api_key=SECRET"), id="exception"),
+        pytest.param(
+            asyncio.CancelledError("cleanup api_key=SECRET"),
+            id="cleanup-cancellation",
+        ),
+    ],
+)
+async def test_completed_stream_close_failure_preserves_success_lifecycle(
+    close_error: BaseException,
+) -> None:
     provider = _provider()
     request = make_messages_request(
         "test-model",
@@ -197,7 +261,7 @@ async def test_completed_stream_close_failure_preserves_success_lifecycle() -> N
     stream = _FailingStream(
         [_chunk(content="complete", finish_reason="stop")],
         None,
-        close_error=RuntimeError("cleanup api_key=SECRET"),
+        close_error=close_error,
     )
 
     with (
@@ -211,7 +275,7 @@ async def test_completed_stream_close_failure_preserves_success_lifecycle() -> N
     ):
         emitted = [
             event
-            async for event in provider.stream_response(
+            async for event in provider.stream_messages(
                 request,
                 request_id="req_successful_close_failure",
             )
@@ -228,10 +292,41 @@ async def test_completed_stream_close_failure_preserves_success_lifecycle() -> N
         source="provider",
         provider="NIM",
         request_id="req_successful_close_failure",
-        close_exc_type="RuntimeError",
+        close_exc_type=type(close_error).__name__,
         preserved_exc_type=None,
     )
     assert "SECRET" not in repr(trace_event.call_args)
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_during_stream_close_propagates() -> None:
+    class BlockingClose:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            self.started.set()
+            await asyncio.Event().wait()
+
+    stream = BlockingClose()
+    with patch("free_claude_code.providers.http.trace_event") as trace_event:
+        close_task = asyncio.create_task(
+            close_provider_stream(
+                stream,
+                active_error=None,
+                provider_name="TEST",
+                request_id="req_cancelled_close",
+            )
+        )
+        await asyncio.wait_for(stream.started.wait(), timeout=1)
+        close_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await close_task
+
+    assert stream.close_calls == 1
+    trace_event.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -256,7 +351,7 @@ async def test_closing_public_openai_stream_closes_raw_stream_once() -> None:
         new_callable=AsyncMock,
         return_value=raw_stream,
     ):
-        stream = provider.stream_response(request, request_id="req_early_close")
+        stream = provider.stream_messages(request, request_id="req_early_close")
         await anext(stream)
         assert isinstance(stream, AsyncCloseable)
         await stream.aclose()

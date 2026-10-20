@@ -1,98 +1,114 @@
 """Token estimation for Anthropic-compatible requests."""
 
 import json
+from collections.abc import Callable, Sequence
+from typing import Any
 
-import tiktoken
 from loguru import logger
 
-from .content import get_block_attr
-from .models import Message, SystemContent, Tool
+from free_claude_code.core.token_estimation import estimate_text_tokens
 
-ENCODER = tiktoken.get_encoding("cl100k_base")
+from .content import get_block_attr, get_block_type
+from .models import Message, NativeTokenCountMessage, SystemContent, Tool
 
-_DISALLOWED_SPECIAL: tuple[str, ...] = ()
+type CountMessages = Sequence[Message | NativeTokenCountMessage]
+type CountSystem = str | Sequence[SystemContent | dict[str, Any]] | None
+type CountTools = Sequence[Tool | dict[str, Any]] | None
+type TokenCounter = Callable[[CountMessages, CountSystem, CountTools], int]
 
 
-def _count_text_tokens(text: str) -> int:
-    return len(ENCODER.encode(text, disallowed_special=_DISALLOWED_SPECIAL))
+def _image_tokens(block: Any) -> int:
+    """Estimate one image block from its base64 size, or a flat cost without data.
+
+    Tool-result content is not validated, so ``data`` can be any JSON value there;
+    only a string has a meaningful size, anything else gets the flat cost.
+    """
+    source = get_block_attr(block, "source")
+    if isinstance(source, dict):
+        data = source.get("data") or source.get("base64") or ""
+        if isinstance(data, str) and data:
+            return max(85, len(data) // 3000)
+    return 765
 
 
 def get_token_count(
-    messages: list[Message],
-    system: str | list[SystemContent] | None = None,
-    tools: list[Tool] | None = None,
+    messages: CountMessages,
+    system: CountSystem = None,
+    tools: CountTools = None,
 ) -> int:
     """Estimate token count for a request."""
     total_tokens = 0
 
     if system:
         if isinstance(system, str):
-            total_tokens += _count_text_tokens(system)
-        elif isinstance(system, list):
+            total_tokens += estimate_text_tokens(system)
+        else:
             for block in system:
-                text = get_block_attr(block, "text", "")
-                if text:
-                    total_tokens += _count_text_tokens(str(text))
+                if isinstance(block, dict) and block.get("type") != "text":
+                    total_tokens += estimate_text_tokens(json.dumps(block))
+                else:
+                    text = get_block_attr(block, "text", "")
+                    if text:
+                        total_tokens += estimate_text_tokens(str(text))
         total_tokens += 4
 
     for msg in messages:
         if isinstance(msg.content, str):
-            total_tokens += _count_text_tokens(msg.content)
+            total_tokens += estimate_text_tokens(msg.content)
         elif isinstance(msg.content, list):
             for block in msg.content:
                 b_type = get_block_attr(block, "type") or None
 
                 if b_type == "text":
                     text = get_block_attr(block, "text", "")
-                    total_tokens += _count_text_tokens(str(text))
+                    total_tokens += estimate_text_tokens(str(text))
                 elif b_type == "thinking":
                     thinking = get_block_attr(block, "thinking", "")
-                    total_tokens += _count_text_tokens(str(thinking))
+                    total_tokens += estimate_text_tokens(str(thinking))
                 elif b_type == "tool_use":
                     name = get_block_attr(block, "name", "")
                     inp = get_block_attr(block, "input", {})
                     block_id = get_block_attr(block, "id", "")
-                    total_tokens += _count_text_tokens(str(name))
-                    total_tokens += _count_text_tokens(json.dumps(inp))
-                    total_tokens += _count_text_tokens(str(block_id))
+                    total_tokens += estimate_text_tokens(str(name))
+                    total_tokens += estimate_text_tokens(json.dumps(inp))
+                    total_tokens += estimate_text_tokens(str(block_id))
                     total_tokens += 15
                 elif b_type == "image":
-                    source = get_block_attr(block, "source")
-                    if isinstance(source, dict):
-                        data = source.get("data") or source.get("base64") or ""
-                        if data:
-                            total_tokens += max(85, len(data) // 3000)
-                        else:
-                            total_tokens += 765
-                    else:
-                        total_tokens += 765
+                    total_tokens += _image_tokens(block)
                 elif b_type == "tool_result":
                     content = get_block_attr(block, "content", "")
                     tool_use_id = get_block_attr(block, "tool_use_id", "")
                     if isinstance(content, str):
-                        total_tokens += _count_text_tokens(content)
+                        total_tokens += estimate_text_tokens(content)
+                    elif isinstance(content, list):
+                        # Images returned by a tool (Read on an image, MCP screenshots)
+                        # are priced like top-level images; serializing them would
+                        # count their base64 payload as text.
+                        images = [p for p in content if get_block_type(p) == "image"]
+                        others = [p for p in content if get_block_type(p) != "image"]
+                        total_tokens += sum(_image_tokens(image) for image in images)
+                        if others or not images:
+                            total_tokens += estimate_text_tokens(json.dumps(others))
                     else:
-                        total_tokens += _count_text_tokens(json.dumps(content))
-                    total_tokens += _count_text_tokens(str(tool_use_id))
+                        total_tokens += estimate_text_tokens(json.dumps(content))
+                    total_tokens += estimate_text_tokens(str(tool_use_id))
                     total_tokens += 8
                 elif b_type in (
                     "server_tool_use",
                     "web_search_tool_result",
                     "web_fetch_tool_result",
                 ):
-                    if hasattr(block, "model_dump"):
-                        blob: object = block.model_dump()
-                    else:
-                        blob = block
+                    dump = getattr(block, "model_dump", None)
+                    blob: object = dump() if callable(dump) else block
                     try:
-                        total_tokens += _count_text_tokens(
+                        total_tokens += estimate_text_tokens(
                             json.dumps(blob, default=str, ensure_ascii=False)
                         )
                     except (TypeError, ValueError, OverflowError) as e:
                         logger.debug(
                             "Block encode fallback b_type={} err={}", b_type, e
                         )
-                        total_tokens += _count_text_tokens(str(blob))
+                        total_tokens += estimate_text_tokens(str(blob))
                     total_tokens += 12
                 else:
                     logger.debug(
@@ -100,16 +116,20 @@ def get_token_count(
                         b_type,
                     )
                     try:
-                        total_tokens += _count_text_tokens(json.dumps(block))
+                        total_tokens += estimate_text_tokens(json.dumps(block))
                     except TypeError, ValueError:
-                        total_tokens += _count_text_tokens(str(block))
+                        total_tokens += estimate_text_tokens(str(block))
 
     if tools:
         for tool in tools:
             tool_str = (
-                tool.name + (tool.description or "") + json.dumps(tool.input_schema)
+                json.dumps(tool)
+                if isinstance(tool, dict)
+                else tool.name
+                + (tool.description or "")
+                + json.dumps(tool.input_schema)
             )
-            total_tokens += _count_text_tokens(tool_str)
+            total_tokens += estimate_text_tokens(tool_str)
 
     total_tokens += len(messages) * 4
     if tools:

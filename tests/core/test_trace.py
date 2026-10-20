@@ -54,13 +54,21 @@ def _json_log_rows(log_file: str) -> list[dict]:
     return [json.loads(line) for line in text.split("\n")]
 
 
-def test_trace_payload_merged_into_json_line(tmp_path) -> None:
+def _trace_payloads(log_file: str) -> list[dict]:
+    return [
+        row["record"]["extra"][TRACE_PAYLOAD_BINDING]
+        for row in _json_log_rows(log_file)
+        if TRACE_PAYLOAD_BINDING in row["record"]["extra"]
+    ]
+
+
+def test_trace_payload_preserved_in_native_json(tmp_path) -> None:
     log_file = str(tmp_path / "t.log")
     configure_logging(log_file, force=True, level="DEBUG")
     trace_event(stage="s", event="e.v1", source="unit", hello="world", n=42)
     row = _json_log_rows(log_file)[-1]
-    assert row["level"] == "DEBUG"
-    assert row["trace"] is True
+    assert row["record"]["level"]["name"] == "DEBUG"
+    row = row["record"]["extra"][TRACE_PAYLOAD_BINDING]
     assert row["stage"] == "s"
     assert row["event"] == "e.v1"
     assert row["source"] == "unit"
@@ -77,7 +85,7 @@ def test_trace_payload_excluded_from_default_info_logs(tmp_path) -> None:
     logger.info("visible lifecycle event")
 
     rows = _json_log_rows(log_file)
-    assert [row["message"] for row in rows] == ["visible lifecycle event"]
+    assert [row["record"]["message"] for row in rows] == ["visible lifecycle event"]
 
 
 def test_sanitize_masks_nested_api_key_strings() -> None:
@@ -89,6 +97,62 @@ def test_sanitize_masks_nested_api_key_strings() -> None:
     )
     assert out["outer"]["api_key"] == "<redacted>"
     assert out["outer"]["text"] == "visible"
+
+
+def test_trace_redacts_credential_lists_and_all_catalog_aliases():
+    from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+    from free_claude_code.core.trace import sanitize_trace_value
+
+    owners = {
+        name
+        for descriptor in PROVIDER_CATALOG.values()
+        for name in (descriptor.credential_env, descriptor.credential_attr)
+        if name
+    }
+    values = {
+        name: ["trace-first-sentinel", "trace-inactive-sentinel"] for name in owners
+    }
+    payload = {
+        "values": values,
+        "custom_provider": {
+            "values": {
+                "api_keys": {"entries": [{"value": "custom-trace-sentinel"}]},
+                "display_name": "Visible",
+            }
+        },
+    }
+    public = sanitize_trace_value(payload)
+    encoded = json.dumps(public)
+    for secret in (
+        "trace-first-sentinel",
+        "trace-inactive-sentinel",
+        "custom-trace-sentinel",
+    ):
+        assert secret not in encoded
+    assert public["custom_provider"]["values"]["display_name"] == "Visible"
+
+
+@pytest.mark.parametrize(
+    "header", ["x-goog-api-key", "X-Goog-Api-Key", "api-key", "Api-Key"]
+)
+def test_trace_redacts_provider_api_keys_in_json(tmp_path: Path, header: str) -> None:
+    log_file = str(tmp_path / "credentials.log")
+    configure_logging(log_file, force=True, level="DEBUG")
+    headers = {header: "dummy-provider-secret", "content-type": "application/json"}
+
+    trace_event(
+        stage="ingress",
+        event="request.received",
+        source="unit",
+        requests=[{"headers": headers}],
+    )
+
+    payload = _trace_payloads(log_file)[0]
+    assert payload["requests"] == [
+        {"headers": {header: "<redacted>", "content-type": "application/json"}}
+    ]
+    assert "dummy-provider-secret" not in Path(log_file).read_text(encoding="utf-8")
+    assert headers[header] == "dummy-provider-secret"
 
 
 @pytest.mark.asyncio
@@ -112,7 +176,7 @@ async def test_traced_async_stream_logs_completion(tmp_path) -> None:
 
     assert chunks == ["hello", " world"]
     assert source.close_calls == 1
-    rows = _json_log_rows(log_file)
+    rows = _trace_payloads(log_file)
     completed = [row for row in rows if row.get("event") == "stream.completed"]
     assert len(completed) == 1
     assert completed[0]["request_id"] == "req_complete"
@@ -144,7 +208,7 @@ async def test_traced_async_stream_logs_real_exception(tmp_path) -> None:
 
     assert source.close_calls == 1
 
-    rows = _json_log_rows(log_file)
+    rows = _trace_payloads(log_file)
     interrupted = [row for row in rows if row.get("event") == "stream.interrupted"]
     assert len(interrupted) == 1
     assert interrupted[0]["request_id"] == "req_error"
@@ -152,12 +216,16 @@ async def test_traced_async_stream_logs_real_exception(tmp_path) -> None:
     assert interrupted[0]["outcome"] == "error"
     assert interrupted[0]["exc_type"] == "RuntimeError"
     close_failed = [
-        row for row in rows if row.get("event") == "stream.input.close_failed"
+        row["record"]
+        for row in _json_log_rows(log_file)
+        if row["record"]["extra"].get("event") == "stream.input.close_failed"
     ]
     assert len(close_failed) == 1
-    assert close_failed[0]["owner"] == "traced_async_stream"
-    assert close_failed[0]["close_exc_type"] == "RuntimeError"
-    assert close_failed[0]["preserved_exc_type"] == "RuntimeError"
+    assert close_failed[0]["level"]["name"] == "WARNING"
+    assert close_failed[0]["exception"]["value"] == "close boom"
+    assert close_failed[0]["extra"]["owner"] == "traced_async_stream"
+    assert close_failed[0]["extra"]["close_exc_type"] == "RuntimeError"
+    assert close_failed[0]["extra"]["preserved_exc_type"] == "RuntimeError"
 
 
 @pytest.mark.asyncio
@@ -180,7 +248,7 @@ async def test_traced_async_stream_closes_quietly_on_generator_exit(tmp_path) ->
     await stream.aclose()
 
     assert source.close_calls == 1
-    rows = _json_log_rows(log_file)
+    rows = _trace_payloads(log_file)
     events = {row.get("event") for row in rows}
     assert "stream.completed" not in events
     assert "stream.interrupted" not in events

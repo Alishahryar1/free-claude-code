@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from free_claude_code.cli.claude_env import build_claude_proxy_env
+from free_claude_code.harnesses.claude import build_claude_proxy_env
 from smoke.lib.child_process import (
     cmd_fcc_server,
     run_captured_text,
@@ -43,7 +43,7 @@ def test_claude_cli_prompt_when_available(
     ) as server:
         env = build_claude_proxy_env(
             proxy_root_url=server.base_url,
-            auth_token=smoke_config.settings.anthropic_auth_token,
+            auth_token=smoke_config.settings.proxy_auth_token,
             base_env=os.environ,
         )
         result = run_captured_text(

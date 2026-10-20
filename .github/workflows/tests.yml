@@ -1,17 +1,22 @@
-# Branch protection: require every status check this workflow reports, for example:
+# Branch protection: require these stable checks, not individual shard jobs:
 #   Ban suppressions and legacy annotations
-#   ruff-format, ruff-check, ty, pytest
+#   ruff-format, ruff-check, ty
+#   Version policy
+#   pytest, playwright
 # GitHub may prefix with the workflow name (e.g. "CI / ruff-format"); use the names the branch protection UI offers after a run.
 
 name: CI
 
 env:
+  CI_UV_VERSION: "0.12.13"
+  CI_PYTEST_SHARDS: "2"
+  CI_PLAYWRIGHT_SHARDS: "3"
   UV_MALWARE_CHECK: "1"
   UV_PREVIEW_FEATURES: "malware-check"
 
+# Every checkout uses this event's fixed merge commit, including for fork PRs.
 on:
   pull_request:
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,9 +32,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          fetch-depth: 1
+          ref: ${{ github.sha }}
+          fetch-depth: 0
 
       - name: "Fail on type ignores and legacy future annotations"
         run: |
@@ -50,26 +54,212 @@ jobs:
       matrix:
         include:
           - id: ruff-format
-            run: uv run ruff format --check
+            run: uv run --locked ruff format --check
           - id: ruff-check
-            run: uv run ruff check
+            run: uv run --locked ruff check
           - id: ty
-            run: uv run ty check
-          - id: pytest
-            run: uv run pytest -v --tb=short
+            run: uv run --locked ty check
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          fetch-depth: 1
+          ref: ${{ github.sha }}
+          fetch-depth: 0
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+      - name: Set up CI environment
+        uses: ./.github/actions/ci-environment
         with:
-          version: "0.11.16"
-          enable-cache: true
-          cache-python: true
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ubuntu-latest
 
       - name: Run
         run: ${{ matrix.run }}
+
+  prepare-shards:
+    name: Prepare test shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      pytest_matrix: ${{ steps.matrix.outputs.pytest_matrix }}
+      playwright_matrix: ${{ steps.matrix.outputs.playwright_matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Generate test matrices
+        id: matrix
+        run: |
+          python scripts/ci_shards.py \
+            --pytest-shards "$CI_PYTEST_SHARDS" \
+            --playwright-shards "$CI_PLAYWRIGHT_SHARDS" >> "$GITHUB_OUTPUT"
+
+  pytest-shards:
+    name: pytest (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
+    needs: prepare-shards
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare-shards.outputs.pytest_matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up CI environment
+        uses: ./.github/actions/ci-environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ${{ matrix.runner }}
+          prepare-node: "true"
+
+      - name: Run pytest
+        run: >-
+          uv run --locked pytest -v --tb=short -o thread_dump_timeout=15 --durations=50
+          --splits ${{ matrix.shards }} --group ${{ matrix.shard }}
+          --splitting-algorithm=least_duration
+
+  playwright-shards:
+    name: playwright (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
+    needs: prepare-shards
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare-shards.outputs.playwright_matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up CI environment
+        uses: ./.github/actions/ci-environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ${{ matrix.runner }}
+
+      - name: Install Chromium
+        run: uv run --locked playwright install --only-shell ${{ matrix.os == 'Linux' && '--with-deps chromium' || 'chromium' }}
+
+      - name: Run Playwright
+        run: >-
+          uv run --locked pytest e2e -v --tb=short
+          -o thread_dump_timeout=10 --durations=20
+          --tracing=retain-on-failure --screenshot=only-on-failure
+          --full-page-screenshot --output=test-results
+          --splits ${{ matrix.shards }} --group ${{ matrix.shard }}
+          --splitting-algorithm=least_duration
+
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: playwright-results-${{ runner.os }}-${{ runner.arch }}-shard-${{ matrix.shard }}-of-${{ matrix.shards }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  macos-desktop:
+    name: macOS desktop (${{ matrix.runner }})
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-intel]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: ./.github/actions/ci-environment
+        id: environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ${{ matrix.runner }}
+      - name: Run native desktop checks
+        run: sh scripts/ci.sh --only macos-desktop
+      - name: Check installer and uninstaller boundaries
+        env:
+          FCC_LIVE_SMOKE: "1"
+        run: uv run --locked pytest smoke/installers -n 0 -q --output=test-results/installer -k 'macos or removes_and_verifies_only_fcc or pins_selected_fcc_release or preserves_compatible_uv'
+      - name: Upload observations
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-${{ matrix.runner }}-${{ github.run_attempt }}
+          path: test-results/native/
+          retention-days: 7
+
+  sdist-rebuild:
+    name: sdist rebuild (${{ matrix.runner }})
+    needs: macos-desktop
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: ./.github/actions/ci-environment
+        id: environment
+        with:
+          uv-version: ${{ env.CI_UV_VERSION }}
+          runner-label: ${{ matrix.runner }}
+          sync-dependencies: "false"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: native-macos-26-${{ github.run_attempt }}
+          path: test-results/native
+      - name: Rebuild the Mac-produced sdist without a native compiler
+        run: uv run --no-project --python ${{ steps.environment.outputs.python-version }} python smoke/desktop/rebuild_sdist.py test-results/native/dist
+
+  pytest-summary:
+    name: pytest
+    needs: [prepare-shards, pytest-shards, macos-desktop, sdist-rebuild]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Require successful preparation and every shard
+        env:
+          PREPARATION_RESULT: ${{ needs.prepare-shards.result }}
+          SHARDS_RESULT: ${{ needs.pytest-shards.result }}
+          NATIVE_RESULT: ${{ needs.macos-desktop.result }}
+          REBUILD_RESULT: ${{ needs.sdist-rebuild.result }}
+        run: |
+          test "$PREPARATION_RESULT" = success && test "$SHARDS_RESULT" = success && test "$NATIVE_RESULT" = success && test "$REBUILD_RESULT" = success
+
+  playwright-summary:
+    name: playwright
+    needs: [prepare-shards, playwright-shards]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Require successful preparation and every shard
+        env:
+          PREPARATION_RESULT: ${{ needs.prepare-shards.result }}
+          SHARDS_RESULT: ${{ needs.playwright-shards.result }}
+        run: |
+          test "$PREPARATION_RESULT" = success && test "$SHARDS_RESULT" = success

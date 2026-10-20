@@ -12,7 +12,10 @@ class NimSettings(BaseModel):
         1.0, ge=0.0, le=2.0, description="Sampling temperature, must be >=0 and <=2."
     )
     top_p: float = Field(
-        1.0, ge=0.0, le=1.0, description="Nucleus sampling probability. [0,1]"
+        0.95,
+        ge=0.95,
+        le=0.95,
+        description="FCC's fixed NVIDIA NIM nucleus sampling probability.",
     )
     top_k: int = -1
     max_tokens: int = Field(
@@ -61,7 +64,7 @@ class NimSettings(BaseModel):
     def validate_float_fields(cls, v, info: ValidationInfo):
         field_defaults = {
             "temperature": 1.0,
-            "top_p": 1.0,
+            "top_p": 0.95,
             "min_p": 0.0,
             "presence_penalty": 0.0,
             "frequency_penalty": 0.0,

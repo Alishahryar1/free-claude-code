@@ -1,21 +1,21 @@
 """Safe metadata summaries for HTTP 422 validation logging (no raw text content)."""
 
-from typing import Any
+from free_claude_code.core.json_types import JsonObject
 
 
 def summarize_request_validation_body(
-    body: Any,
-) -> tuple[list[dict[str, Any]], list[str]]:
+    body: object,
+) -> tuple[list[JsonObject], list[str]]:
     """Return message shape summary and tool name list for debug logs."""
     messages = body.get("messages") if isinstance(body, dict) else None
-    message_summary: list[dict[str, Any]] = []
+    message_summary: list[JsonObject] = []
     if isinstance(messages, list):
         for msg in messages:
             if not isinstance(msg, dict):
                 message_summary.append({"message_kind": type(msg).__name__})
                 continue
             content = msg.get("content")
-            item: dict[str, Any] = {
+            item: JsonObject = {
                 "role": msg.get("role"),
                 "content_kind": type(content).__name__,
             }

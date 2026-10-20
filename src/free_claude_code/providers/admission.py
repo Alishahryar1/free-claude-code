@@ -4,16 +4,26 @@ import asyncio
 import math
 import random
 import time
-from collections.abc import Awaitable, Callable
+import uuid
+from collections.abc import Awaitable, Callable, Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from enum import StrEnum
+from functools import partial
 from typing import TypeVar
 
 from loguru import logger
 
-from free_claude_code.core.rate_limit import StrictSlidingWindowLimiter
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    current_stream_delivery,
+)
 from free_claude_code.core.trace import trace_event
+from free_claude_code.providers.admission_capacity import ProviderCapacityLimiter
+from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.failure_policy import (
     ProviderFailureOverride,
     ProviderRecoveryExhausted,
@@ -28,17 +38,91 @@ DEFAULT_UPSTREAM_BASE_DELAY = 2.0
 DEFAULT_UPSTREAM_MAX_DELAY = 60.0
 DEFAULT_UPSTREAM_JITTER = 1.0
 
+_quiet_discovery = ContextVar("quiet_discovery_recovery_logs", default=False)
 
-class ProviderRetrySession:
-    """One non-multiplying upstream-attempt budget for a logical execution."""
 
-    def __init__(self, *, max_attempts: int, request_id: str | None = None) -> None:
-        if max_attempts <= 0:
-            raise ValueError("max_attempts must be > 0")
+@contextmanager
+def quiet_discovery_recovery_logs(enabled: bool) -> Generator[None]:
+    """Keep optional probe retries at debug level without silencing other tasks."""
+    token = _quiet_discovery.set(enabled)
+    try:
+        yield
+    finally:
+        _quiet_discovery.reset(token)
+
+
+def _log_recovery(message: str, *args: object) -> None:
+    log = logger.debug if _quiet_discovery.get() else logger.warning
+    log(message, *args)
+
+
+class ProviderOperationKind(StrEnum):
+    """Safe trace category for one physical provider call."""
+
+    MODEL_DISCOVERY = "model_discovery"
+    GENERATION = "generation"
+    CONTINUATION = "continuation"
+    TOOL_REPAIR = "tool_repair"
+
+
+class ProviderExecutionState(StrEnum):
+    """Terminal state of one logical provider operation."""
+
+    ACTIVE = "active"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    ABANDONED = "abandoned"
+
+
+class ProviderCorrectionAction(StrEnum):
+    """Whether one deterministic request correction may consume another attempt."""
+
+    RETRY = "retry"
+    FINAL = "final"
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderFailureDecision:
+    """Immutable provider qualification and execution-budget decision."""
+
+    retryable: bool
+    retry_allowed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _AttemptClaim:
+    execution_id: str
+    ordinal: int
+    operation_kind: ProviderOperationKind
+
+
+class ProviderExecution:
+    """Own one logical provider operation and its physical-attempt budget."""
+
+    def __init__(
+        self,
+        controller: ProviderAdmissionController,
+        *,
+        max_attempts: int,
+        request_id: str | None,
+    ) -> None:
+        self._controller = controller
+        self._execution_id = str(uuid.uuid4())
         self._max_attempts = max_attempts
         self._request_id = request_id
         self._attempts_started = 0
-        self._terminal_error: Exception | None = None
+        self._active_claim: _AttemptClaim | None = None
+        self._last_failure: Exception | None = None
+        self._state = ProviderExecutionState.ACTIVE
+        self._delivery = current_stream_delivery()
+
+    @property
+    def delivery(self) -> StreamDeliveryState | None:
+        return self._delivery
+
+    @property
+    def execution_id(self) -> str:
+        return self._execution_id
 
     @property
     def max_attempts(self) -> int:
@@ -54,23 +138,135 @@ class ProviderRetrySession:
 
     @property
     def can_attempt(self) -> bool:
-        return self._attempts_started < self._max_attempts
+        return (
+            self._state is ProviderExecutionState.ACTIVE
+            and self._attempts_started < self._max_attempts
+        )
 
     @property
     def attempts_remaining(self) -> int:
-        return self._max_attempts - self._attempts_started
+        if self._state is not ProviderExecutionState.ACTIVE:
+            return 0
+        return max(0, self._max_attempts - self._attempts_started)
 
-    def _claim_attempt(self) -> int:
+    @property
+    def state(self) -> ProviderExecutionState:
+        return self._state
+
+    @property
+    def last_failure(self) -> Exception | None:
+        return self._last_failure
+
+    async def open_attempt(
+        self,
+        operation_kind: ProviderOperationKind,
+    ) -> ProviderAttempt:
+        """Open the sole active physical call for this execution."""
+        attempt = await self._controller._open_attempt(self, operation_kind)
+        if self._delivery and operation_kind in {
+            ProviderOperationKind.GENERATION,
+            ProviderOperationKind.CONTINUATION,
+        }:
+            self._delivery.begin_attempt()
+        return attempt
+
+    async def run_call(
+        self,
+        fn: Callable[[], Awaitable[T]],
+        *,
+        operation_kind: ProviderOperationKind,
+        provider_failure_override: ProviderFailureOverride | None = None,
+    ) -> T:
+        """Run a callable that performs exactly one provider call per invocation."""
+        try:
+            while self.can_attempt:
+                attempt = await self.open_attempt(operation_kind)
+                try:
+                    result = await fn()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    decision = await attempt.fail(
+                        error,
+                        provider_failure_override=provider_failure_override,
+                    )
+                    if not decision.retry_allowed:
+                        raise
+                else:
+                    await attempt.accept()
+                    self.succeed()
+                    return result
+                finally:
+                    await attempt.aclose()
+        except asyncio.CancelledError as cancelled:
+            self.abandon()
+            # A discovery deadline can interrupt retry backoff. Retain the
+            # provider failure so diagnostics can distinguish absence from DNS,
+            # TLS or HTTP failures while cancellation still propagates.
+            if (
+                operation_kind is ProviderOperationKind.MODEL_DISCOVERY
+                and self._last_failure is not None
+            ):
+                raise cancelled from self._last_failure
+            raise
+        except Exception as error:
+            self.fail(error)
+            raise
+
+        if self._last_failure is not None:
+            self.fail(self._last_failure)
+            raise self._last_failure
+        self.abandon()
+        raise RuntimeError("provider execution ended without an attempt outcome")
+
+    def succeed(self) -> None:
+        """Mark the complete logical provider operation successful."""
+        if self._state is ProviderExecutionState.ACTIVE:
+            self._state = ProviderExecutionState.SUCCEEDED
+
+    def fail(self, error: Exception) -> None:
+        """Mark the complete logical provider operation failed."""
+        if self._state is ProviderExecutionState.ACTIVE:
+            self._last_failure = error
+            self._state = ProviderExecutionState.FAILED
+
+    def abandon(self) -> None:
+        """Mark an unfinished logical provider operation abandoned."""
+        if self._state is ProviderExecutionState.ACTIVE:
+            self._state = ProviderExecutionState.ABANDONED
+
+    def _claim_attempt(
+        self,
+        operation_kind: ProviderOperationKind,
+    ) -> _AttemptClaim:
         if not self.can_attempt:
-            raise RuntimeError("provider retry session is exhausted")
+            raise RuntimeError("provider execution is terminal or exhausted")
+        if self._active_claim is not None:
+            raise RuntimeError("provider execution already has an active attempt")
         self._attempts_started += 1
-        return self._attempts_started
+        claim = _AttemptClaim(
+            execution_id=self._execution_id,
+            ordinal=self._attempts_started,
+            operation_kind=operation_kind,
+        )
+        self._active_claim = claim
+        return claim
+
+    def _close_attempt(self, claim: _AttemptClaim) -> None:
+        if self._active_claim == claim:
+            self._active_claim = None
+
+    def _record_failure(self, error: Exception) -> None:
+        if self._state is ProviderExecutionState.ACTIVE:
+            self._last_failure = error
 
     def _fail_recovery(self, error: Exception) -> None:
-        self._terminal_error = error
+        self.fail(error)
 
     def _terminal_failure(self) -> Exception | None:
-        return self._terminal_error
+        if self._state is ProviderExecutionState.FAILED:
+            return self._last_failure
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,10 +278,10 @@ class _GatePermit:
 @dataclass(slots=True)
 class _RecoveryEpisode:
     generation: int
-    leader: ProviderRetrySession | None
+    leader: ProviderExecution | None
     ready_at: float
     last_error: Exception
-    waiters: set[ProviderRetrySession] = field(default_factory=set)
+    waiters: set[ProviderExecution] = field(default_factory=set)
     probe_active: bool = False
     terminal_until: float | None = None
 
@@ -96,15 +292,16 @@ class ProviderAttempt:
     def __init__(
         self,
         controller: ProviderAdmissionController,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         permit: _GatePermit,
+        claim: _AttemptClaim,
     ) -> None:
         self._controller = controller
-        self._session = session
+        self._execution = execution
         self._permit = permit
+        self._claim = claim
         self._resolved = False
         self._accepted = False
-        self._failure_retryable: bool | None = None
         self._closed = False
 
     @property
@@ -112,35 +309,49 @@ class ProviderAttempt:
         """Return whether upstream acceptance has resolved this attempt."""
         return self._accepted
 
-    @property
-    def failure_retryable(self) -> bool | None:
-        """Return the provider classification recorded for a failed attempt."""
-        return self._failure_retryable
+    async def __aenter__(self) -> ProviderAttempt:
+        return self
 
-    async def succeeded(self) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        del exc_type, exc, traceback
+        await self.aclose()
+
+    async def accept(self) -> None:
         """Record a valid upstream response and close a recovery episode if probing."""
-        if self._resolved:
+        if self._resolved or self._closed:
             return
-        await self._controller._attempt_succeeded(self._session, self._permit)
-        self._resolved = True
-        self._accepted = True
+        await self._controller._attempt_accepted(self._execution, self._permit)
+        self._resolve("accepted", accepted=True)
 
-    async def retry_immediately(self) -> None:
-        """Keep probe ownership for a bounded request-shape correction."""
-        if self._resolved:
-            return
-        await self._controller._attempt_corrected(self._session, self._permit)
-        self._resolved = True
+    async def correct(self, error: Exception) -> ProviderCorrectionAction:
+        """Resolve one deterministic request correction without provider backoff."""
+        if self._resolved or self._closed:
+            return ProviderCorrectionAction.FINAL
+        self._execution._record_failure(error)
+        status = _exception_status(error)
+        if self._execution.can_attempt:
+            await self._controller._attempt_corrected(self._execution, self._permit)
+            self._resolve("corrected", status=status, error=error)
+            return ProviderCorrectionAction.RETRY
+        await self._controller._attempt_rejected(self._execution, self._permit)
+        self._execution.fail(error)
+        self._resolve("rejected", status=status, error=error)
+        return ProviderCorrectionAction.FINAL
 
-    async def retry(
+    async def fail(
         self,
         error: Exception,
         *,
         provider_failure_override: ProviderFailureOverride | None = None,
-    ) -> bool:
-        """Record a retryable failure and return whether this execution may retry."""
-        if self._resolved:
-            return False
+    ) -> ProviderFailureDecision:
+        """Classify one failure and return its immutable retry decision."""
+        if self._resolved or self._closed:
+            return ProviderFailureDecision(retryable=False, retry_allowed=False)
         effective_error = (
             provider_failure_override(error)
             if provider_failure_override is not None
@@ -150,19 +361,31 @@ class ProviderAttempt:
             effective_error = error
         status = retryable_upstream_status(effective_error)
         retryable = is_retryable_provider_error(effective_error)
-        self._failure_retryable = retryable
+        self._execution._record_failure(error)
         if not retryable:
-            await self._controller._attempt_rejected(self._session, self._permit)
-            self._resolved = True
-            return False
-        should_retry = await self._controller._attempt_failed(
-            self._session,
+            await self._controller._attempt_rejected(self._execution, self._permit)
+            self._execution.fail(error)
+            self._resolve("rejected", status=status, error=effective_error)
+            return ProviderFailureDecision(retryable=False, retry_allowed=False)
+        await self._controller._attempt_failed(
+            self._execution,
             self._permit,
             error=error,
             status=status,
         )
-        self._resolved = True
-        return should_retry
+        retry_allowed = self._execution.can_attempt
+        if not retry_allowed:
+            self._execution.fail(error)
+        self._resolve(
+            "retryable_failure",
+            status=status,
+            error=effective_error,
+            retry_allowed=retry_allowed,
+        )
+        return ProviderFailureDecision(
+            retryable=True,
+            retry_allowed=retry_allowed,
+        )
 
     async def aclose(self) -> None:
         """Release attempt ownership and its concurrency slot exactly once."""
@@ -171,15 +394,53 @@ class ProviderAttempt:
         self._closed = True
         try:
             if not self._resolved:
-                await asyncio.shield(
-                    self._controller._attempt_abandoned(self._session, self._permit)
-                )
+                try:
+                    await asyncio.shield(
+                        self._controller._attempt_abandoned(
+                            self._execution,
+                            self._permit,
+                        )
+                    )
+                finally:
+                    self._resolve("abandoned")
         finally:
+            self._execution._close_attempt(self._claim)
             self._controller._release_concurrency()
+
+    def _resolve(
+        self,
+        outcome: str,
+        *,
+        accepted: bool = False,
+        status: int | None = None,
+        error: BaseException | None = None,
+        retry_allowed: bool | None = None,
+    ) -> None:
+        if self._resolved:
+            return
+        self._resolved = True
+        self._accepted = accepted
+        trace_event(
+            stage="provider",
+            event="provider.attempt.resolved",
+            source="provider",
+            provider=self._controller._provider_name,
+            request_id=self._execution.request_id,
+            execution_id=self._execution.execution_id,
+            operation_kind=self._claim.operation_kind.value,
+            attempt=self._claim.ordinal,
+            max_attempts=self._execution.max_attempts,
+            probe=self._permit.probe,
+            recovery_generation=self._permit.generation,
+            outcome=outcome,
+            status_code=status,
+            exc_type=(None if error is None else type(error).__name__),
+            retry_allowed=retry_allowed,
+        )
 
 
 class ProviderAdmissionController:
-    """Coordinate one provider's rate, concurrency, and recovery state.
+    """Coordinate one credential's recovery within a provider capacity budget.
 
     Normal attempts pass through a strict sliding window and concurrency bulkhead.
     The first shared transient failure opens one recovery episode. Exactly one
@@ -198,13 +459,9 @@ class ProviderAdmissionController:
         base_delay: float = DEFAULT_UPSTREAM_BASE_DELAY,
         max_delay: float = DEFAULT_UPSTREAM_MAX_DELAY,
         jitter: float = DEFAULT_UPSTREAM_JITTER,
+        capacity: ProviderCapacityLimiter | None = None,
     ) -> None:
-        if rate_limit <= 0:
-            raise ValueError("rate_limit must be > 0")
-        if rate_window <= 0:
-            raise ValueError("rate_window must be > 0")
-        if max_concurrency <= 0:
-            raise ValueError("max_concurrency must be > 0")
+        limits = ProviderAdmissionLimits(rate_limit, rate_window, max_concurrency)
         if max_attempts <= 0:
             raise ValueError("max_attempts must be > 0")
         if base_delay < 0:
@@ -219,10 +476,7 @@ class ProviderAdmissionController:
         self._base_delay = base_delay
         self._max_delay = max_delay
         self._jitter = jitter
-        self._proactive_limiter = StrictSlidingWindowLimiter(
-            rate_limit, float(rate_window)
-        )
-        self._concurrency_sem = asyncio.Semaphore(max_concurrency)
+        self._capacity = capacity or ProviderCapacityLimiter(limits)
         self._condition = asyncio.Condition()
         self._episode: _RecoveryEpisode | None = None
         self._next_generation = 1
@@ -236,78 +490,72 @@ class ProviderAdmissionController:
             max_attempts,
         )
 
-    def new_retry_session(
+    def start_execution(
         self,
         *,
         request_id: str | None = None,
-    ) -> ProviderRetrySession:
-        """Return a fresh logical-execution retry budget."""
-        return ProviderRetrySession(
+    ) -> ProviderExecution:
+        """Create the sole lifecycle owner for one logical provider operation."""
+        return ProviderExecution(
+            self,
             max_attempts=self._max_attempts,
             request_id=request_id,
         )
 
-    async def open_attempt(self, session: ProviderRetrySession) -> ProviderAttempt:
+    async def _open_attempt(
+        self,
+        execution: ProviderExecution,
+        operation_kind: ProviderOperationKind,
+    ) -> ProviderAttempt:
         """Wait for provider admission and hold one active-operation slot."""
-        if not session.can_attempt:
-            raise RuntimeError("provider retry session is exhausted")
+        if not isinstance(operation_kind, ProviderOperationKind):
+            raise TypeError("operation_kind must be a ProviderOperationKind")
+        if (terminal_error := execution._terminal_failure()) is not None:
+            raise ProviderRecoveryExhausted(terminal_error)
+        if not execution.can_attempt:
+            raise RuntimeError("provider execution is terminal or exhausted")
+        if execution._active_claim is not None:
+            raise RuntimeError("provider execution already has an active attempt")
 
         while True:
-            permit = await self._wait_for_gate(session)
+            permit = await self._wait_for_gate(execution)
             slot_acquired = False
+            claim: _AttemptClaim | None = None
             try:
-                admitted = await self._proactive_limiter.acquire_if(
-                    lambda permit=permit: self._permit_is_current(session, permit)
+                admitted = await self._capacity.acquire(
+                    partial(self._permit_is_current, execution, permit)
                 )
                 if not admitted:
-                    await self._abandon_probe_permit(session, permit)
+                    await self._abandon_probe_permit(execution, permit)
                     continue
-                await self._concurrency_sem.acquire()
                 slot_acquired = True
-                if not self._permit_is_current(session, permit):
-                    self._concurrency_sem.release()
-                    slot_acquired = False
-                    await self._abandon_probe_permit(session, permit)
-                    continue
-                session._claim_attempt()
-                return ProviderAttempt(self, session, permit)
-            except BaseException:
-                if slot_acquired:
-                    self._concurrency_sem.release()
-                await self._abandon_probe_permit(session, permit)
-                raise
-
-    async def run_with_retry(
-        self,
-        fn: Callable[[], Awaitable[T]],
-        *,
-        provider_failure_override: ProviderFailureOverride | None = None,
-        request_id: str | None = None,
-    ) -> T:
-        """Run one non-streaming provider operation through coordinated retries."""
-        session = self.new_retry_session(request_id=request_id)
-        while True:
-            attempt = await self.open_attempt(session)
-            try:
-                result = await fn()
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                should_retry = await attempt.retry(
-                    error,
-                    provider_failure_override=provider_failure_override,
+                claim = execution._claim_attempt(operation_kind)
+                attempt = ProviderAttempt(self, execution, permit, claim)
+                trace_event(
+                    stage="provider",
+                    event="provider.attempt.started",
+                    source="provider",
+                    provider=self._provider_name,
+                    request_id=execution.request_id,
+                    execution_id=execution.execution_id,
+                    operation_kind=operation_kind.value,
+                    attempt=claim.ordinal,
+                    max_attempts=execution.max_attempts,
+                    probe=permit.probe,
+                    recovery_generation=permit.generation,
                 )
-                if not should_retry:
-                    raise
-            else:
-                await attempt.succeeded()
-                return result
-            finally:
-                await attempt.aclose()
+                return attempt
+            except BaseException:
+                if claim is not None:
+                    execution._close_attempt(claim)
+                if slot_acquired:
+                    self._release_concurrency()
+                await self._abandon_probe_permit(execution, permit)
+                raise
 
-    async def _wait_for_gate(self, session: ProviderRetrySession) -> _GatePermit:
+    async def _wait_for_gate(self, execution: ProviderExecution) -> _GatePermit:
         while True:
-            if (terminal_error := session._terminal_failure()) is not None:
+            if (terminal_error := execution._terminal_failure()) is not None:
                 raise ProviderRecoveryExhausted(terminal_error)
             sleep_delay: float | None = None
             claimed_generation: int | None = None
@@ -321,15 +569,15 @@ class ProviderAdmissionController:
                     if now < episode.terminal_until:
                         raise ProviderRecoveryExhausted(episode.last_error)
                     episode = self._start_recovery_episode(
-                        leader=session,
+                        leader=execution,
                         ready_at=now,
                         last_error=episode.last_error,
                     )
 
                 if episode.leader is None:
-                    episode.leader = session
-                    episode.waiters.discard(session)
-                if episode.leader is session:
+                    episode.leader = execution
+                    episode.waiters.discard(execution)
+                if episode.leader is execution:
                     if episode.probe_active:
                         await self._condition.wait()
                         continue
@@ -337,9 +585,9 @@ class ProviderAdmissionController:
                     claimed_generation = episode.generation
                     if sleep_delay == 0:
                         episode.probe_active = True
-                        return self._probe_permit(session, episode)
+                        return self._probe_permit(execution, episode)
                 else:
-                    episode.waiters.add(session)
+                    episode.waiters.add(execution)
                     try:
                         await self._condition.wait()
                     except asyncio.CancelledError:
@@ -348,7 +596,7 @@ class ProviderAdmissionController:
                             current is not None
                             and current.generation == episode.generation
                         ):
-                            current.waiters.discard(session)
+                            current.waiters.discard(execution)
                         raise
                     continue
 
@@ -356,7 +604,7 @@ class ProviderAdmissionController:
                 continue
             try:
                 if sleep_delay > 0:
-                    logger.warning(
+                    _log_recovery(
                         "Provider {} recovery active, waiting {:.1f}s for one probe",
                         self._provider_name,
                         sleep_delay,
@@ -368,18 +616,18 @@ class ProviderAdmissionController:
                         episode is not None
                         and episode.generation == claimed_generation
                         and episode.terminal_until is None
-                        and episode.leader is session
+                        and episode.leader is execution
                         and not episode.probe_active
                     ):
                         episode.probe_active = True
-                        return self._probe_permit(session, episode)
+                        return self._probe_permit(execution, episode)
             except asyncio.CancelledError:
-                await self._abandon_waiting_leader(session, claimed_generation)
+                await self._abandon_waiting_leader(execution, claimed_generation)
                 raise
 
     def _probe_permit(
         self,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         episode: _RecoveryEpisode,
     ) -> _GatePermit:
         trace_event(
@@ -387,16 +635,16 @@ class ProviderAdmissionController:
             event="provider.recovery.probe",
             source="provider",
             provider=self._provider_name,
-            request_id=session.request_id,
+            request_id=execution.request_id,
             generation=episode.generation,
-            attempt=session.attempts_started + 1,
-            max_attempts=session.max_attempts,
+            attempt=execution.attempts_started + 1,
+            max_attempts=execution.max_attempts,
         )
         return _GatePermit(generation=episode.generation, probe=True)
 
     def _permit_is_current(
         self,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         permit: _GatePermit,
     ) -> bool:
         episode = self._episode
@@ -406,110 +654,110 @@ class ProviderAdmissionController:
             episode is not None
             and episode.generation == permit.generation
             and episode.terminal_until is None
-            and episode.leader is session
+            and episode.leader is execution
             and episode.probe_active
         )
 
-    async def _attempt_succeeded(
+    async def _attempt_accepted(
         self,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         permit: _GatePermit,
     ) -> None:
         if not permit.probe:
             return
         async with self._condition:
-            episode = self._matching_probe(session, permit)
+            episode = self._matching_probe(execution, permit)
             if episode is None:
                 return
             self._episode = None
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
         trace_event(
             stage="provider",
             event="provider.recovery.closed",
             source="provider",
             provider=self._provider_name,
-            request_id=session.request_id,
+            request_id=execution.request_id,
             generation=permit.generation,
-            attempt=session.attempts_started,
+            attempt=execution.attempts_started,
             outcome="success",
         )
 
     async def _attempt_corrected(
         self,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         permit: _GatePermit,
     ) -> None:
         if not permit.probe:
             return
         async with self._condition:
-            episode = self._matching_probe(session, permit)
+            episode = self._matching_probe(execution, permit)
             if episode is None:
                 return
             episode.probe_active = False
             episode.ready_at = time.monotonic()
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
 
     async def _attempt_rejected(
         self,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         permit: _GatePermit,
     ) -> None:
         """Close a probe episode when upstream responds with a final rejection."""
         if not permit.probe:
             return
         async with self._condition:
-            episode = self._matching_probe(session, permit)
+            episode = self._matching_probe(execution, permit)
             if episode is None:
                 return
             self._episode = None
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
         trace_event(
             stage="provider",
             event="provider.recovery.closed",
             source="provider",
             provider=self._provider_name,
-            request_id=session.request_id,
+            request_id=execution.request_id,
             generation=permit.generation,
-            attempt=session.attempts_started,
+            attempt=execution.attempts_started,
             outcome="rejected",
         )
 
     async def _attempt_abandoned(
         self,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         permit: _GatePermit,
     ) -> None:
         if not permit.probe:
             return
         async with self._condition:
-            episode = self._matching_probe(session, permit)
+            episode = self._matching_probe(execution, permit)
             if episode is None:
                 return
             episode.leader = None
             episode.probe_active = False
             episode.ready_at = time.monotonic()
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
 
     async def _attempt_failed(
         self,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         permit: _GatePermit,
         *,
         error: Exception,
         status: int | None,
-    ) -> bool:
-        can_retry = session.can_attempt
-        delay = self._retry_delay(error, session.attempts_started)
+    ) -> None:
+        can_retry = execution.can_attempt
+        delay = self._retry_delay(error, execution.attempts_started)
         became_leader = False
         exhausted_episode = False
 
         async with self._condition:
             episode = self._episode
-            matching_probe = self._matching_probe(session, permit)
+            matching_probe = self._matching_probe(execution, permit)
             if can_retry:
                 if episode is None:
                     episode = self._start_recovery_episode(
-                        leader=session,
+                        leader=execution,
                         ready_at=time.monotonic() + delay,
                         last_error=error,
                     )
@@ -520,21 +768,21 @@ class ProviderAdmissionController:
                     episode.ready_at = time.monotonic() + delay
                     became_leader = True
                 elif episode.terminal_until is not None:
-                    session._fail_recovery(episode.last_error)
+                    execution._fail_recovery(episode.last_error)
                 else:
-                    episode.waiters.add(session)
-                self._condition.notify_all()
+                    episode.waiters.add(execution)
+                self._notify_recovery_waiters()
             elif episode is None or matching_probe is not None:
                 terminal_delay = self._retry_delay(
                     error,
-                    session.attempts_started,
+                    execution.attempts_started,
                 )
                 if episode is None:
                     episode = self._start_recovery_episode(
                         leader=None,
                         ready_at=time.monotonic(),
                         last_error=error,
-                        request_id=session.request_id,
+                        request_id=execution.request_id,
                     )
                 episode.last_error = error
                 episode.leader = None
@@ -544,15 +792,15 @@ class ProviderAdmissionController:
                     waiter._fail_recovery(error)
                 episode.waiters.clear()
                 exhausted_episode = True
-                self._condition.notify_all()
+                self._notify_recovery_waiters()
 
         label = self._failure_label(status, error)
         if became_leader:
-            logger.warning(
+            _log_recovery(
                 "{}, attempt {}/{} failed; one provider recovery probe in {:.1f}s",
                 label,
-                session.attempts_started,
-                session.max_attempts,
+                execution.attempts_started,
+                execution.max_attempts,
                 delay,
             )
             trace_event(
@@ -560,11 +808,11 @@ class ProviderAdmissionController:
                 event="provider.retry.scheduled",
                 source="provider",
                 provider=self._provider_name,
-                request_id=session.request_id,
+                request_id=execution.request_id,
                 status_code=status,
                 exc_type=type(error).__name__,
-                attempt=session.attempts_started,
-                max_attempts=session.max_attempts,
+                attempt=execution.attempts_started,
+                max_attempts=execution.max_attempts,
                 delay_s=round(delay, 3),
                 coordinated=True,
             )
@@ -574,35 +822,34 @@ class ProviderAdmissionController:
                 event="provider.retry.coalesced",
                 source="provider",
                 provider=self._provider_name,
-                request_id=session.request_id,
+                request_id=execution.request_id,
                 status_code=status,
                 exc_type=type(error).__name__,
-                attempt=session.attempts_started,
-                max_attempts=session.max_attempts,
+                attempt=execution.attempts_started,
+                max_attempts=execution.max_attempts,
             )
         else:
-            logger.warning(
+            _log_recovery(
                 "{} retry exhausted (attempts={})",
                 label,
-                session.attempts_started,
+                execution.attempts_started,
             )
             trace_event(
                 stage="provider",
                 event="provider.retry.exhausted",
                 source="provider",
                 provider=self._provider_name,
-                request_id=session.request_id,
+                request_id=execution.request_id,
                 status_code=status,
                 exc_type=type(error).__name__,
-                attempts=session.attempts_started,
+                attempts=execution.attempts_started,
                 episode_exhausted=exhausted_episode,
             )
-        return can_retry
 
     def _start_recovery_episode(
         self,
         *,
-        leader: ProviderRetrySession | None,
+        leader: ProviderExecution | None,
         ready_at: float,
         last_error: Exception,
         request_id: str | None = None,
@@ -627,7 +874,7 @@ class ProviderAdmissionController:
 
     def _matching_probe(
         self,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         permit: _GatePermit,
     ) -> _RecoveryEpisode | None:
         episode = self._episode
@@ -635,7 +882,7 @@ class ProviderAdmissionController:
             not permit.probe
             or episode is None
             or episode.generation != permit.generation
-            or episode.leader is not session
+            or episode.leader is not execution
             or not episode.probe_active
         ):
             return None
@@ -643,23 +890,23 @@ class ProviderAdmissionController:
 
     async def _abandon_probe_permit(
         self,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         permit: _GatePermit,
     ) -> None:
         if not permit.probe:
             return
         async with self._condition:
-            episode = self._matching_probe(session, permit)
+            episode = self._matching_probe(execution, permit)
             if episode is None:
                 return
             episode.leader = None
             episode.probe_active = False
             episode.ready_at = time.monotonic()
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
 
     async def _abandon_waiting_leader(
         self,
-        session: ProviderRetrySession,
+        execution: ProviderExecution,
         generation: int,
     ) -> None:
         async with self._condition:
@@ -667,15 +914,23 @@ class ProviderAdmissionController:
             if (
                 episode is None
                 or episode.generation != generation
-                or episode.leader is not session
+                or episode.leader is not execution
                 or episode.probe_active
             ):
                 return
             episode.leader = None
-            self._condition.notify_all()
+            self._notify_recovery_waiters()
+
+    def reconfigure(self, limits: ProviderAdmissionLimits) -> None:
+        """Update capacity without resetting occupancy, history, or recovery."""
+        self._capacity.reconfigure(limits)
+
+    def _notify_recovery_waiters(self) -> None:
+        self._condition.notify_all()
+        self._capacity.wake_waiters()
 
     def _release_concurrency(self) -> None:
-        self._concurrency_sem.release()
+        self._capacity.release()
 
     def _retry_delay(self, error: Exception, attempt: int) -> float:
         exponent = max(0, attempt - 1)
@@ -715,3 +970,12 @@ def _retry_after_seconds(error: Exception) -> float | None:
     if not math.isfinite(seconds):
         return None
     return max(0.0, seconds)
+
+
+def _exception_status(error: BaseException) -> int | None:
+    status = getattr(error, "status_code", None)
+    if isinstance(status, int):
+        return status
+    response = getattr(error, "response", None)
+    response_status = getattr(response, "status_code", None)
+    return response_status if isinstance(response_status, int) else None

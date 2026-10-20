@@ -50,7 +50,7 @@ class TelegramRuntime:
         bot_token: str | None = None,
         allowed_user_id: str | None = None,
         *,
-        telegram_proxy_url: str = "",
+        telegram_proxy_url: str | None = None,
         limiter: MessagingRateLimiter,
         transcriber: Transcriber | None,
         log_raw_messaging_content: bool = False,
@@ -63,7 +63,7 @@ class TelegramRuntime:
 
         self.bot_token = bot_token
         self.allowed_user_id = allowed_user_id
-        self.telegram_proxy_url = telegram_proxy_url.strip()
+        self.telegram_proxy_url = telegram_proxy_url
         if not self.bot_token:
             logger.warning("TELEGRAM_BOT_TOKEN not set")
 

@@ -1,8 +1,10 @@
 """Safe application boundary for provider connected accounts."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Protocol
+
+from free_claude_code.core.json_types import JsonObject, JsonValue
 
 
 class ConnectedAccountLoginMode(StrEnum):
@@ -38,11 +40,42 @@ class ConnectedAccountStatus:
     expires_at: int | None = None
     model_count: int | None = None
     message: str | None = None
+    display_identity: str | None = None
+    supported_login_modes: tuple[ConnectedAccountLoginMode, ...] = (
+        ConnectedAccountLoginMode.BROWSER,
+        ConnectedAccountLoginMode.DEVICE,
+    )
+    default_login_mode: ConnectedAccountLoginMode = ConnectedAccountLoginMode.BROWSER
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self) -> JsonObject:
         """Serialize only the explicitly safe status contract."""
 
-        return {key: value for key, value in asdict(self).items() if value is not None}
+        payload: JsonObject = {
+            "provider_id": self.provider_id,
+            "state": self.state,
+            "connected": self.connected,
+            "revision": self.revision,
+            "supported_login_modes": [
+                mode.value for mode in self.supported_login_modes
+            ],
+            "default_login_mode": self.default_login_mode.value,
+        }
+        optional_fields: tuple[tuple[str, JsonValue], ...] = (
+            ("attempt_id", self.attempt_id),
+            ("email", self.email),
+            ("display_identity", self.display_identity),
+            ("mode", self.mode),
+            ("authorization_url", self.authorization_url),
+            ("verification_url", self.verification_url),
+            ("user_code", self.user_code),
+            ("expires_at", self.expires_at),
+            ("model_count", self.model_count),
+            ("message", self.message),
+        )
+        for key, value in optional_fields:
+            if value is not None:
+                payload[key] = value
+        return payload
 
 
 class ConnectedAccountPort(Protocol):

@@ -26,7 +26,7 @@ class TranscriptionService:
         *,
         model: str,
         device: str,
-        huggingface_api_key: str = "",
+        huggingface_api_key: str | None = None,
     ) -> None:
         if device not in {"cpu", "cuda"}:
             raise ValueError(
@@ -58,7 +58,7 @@ class TranscriptionService:
         self._closed = True
         async with self._lock:
             self._pipeline = None
-            self._huggingface_api_key = ""
+            self._huggingface_api_key = None
 
     def _transcribe_sync(self, file_path: Path) -> str:
         pipe = self._get_pipeline()
@@ -83,7 +83,7 @@ class TranscriptionService:
                 "Install with: uv sync --extra voice_local"
             ) from exc
 
-        token = self._huggingface_api_key or None
+        token = self._huggingface_api_key
         use_cuda = self._device == "cuda" and torch.cuda.is_available()
         pipeline_device = "cuda:0" if use_cuda else "cpu"
         model_dtype = torch.float16 if use_cuda else torch.float32

@@ -7,9 +7,11 @@ from free_claude_code.core.anthropic import (
     OpenAIConversionError,
     ReasoningReplayMode,
     build_base_request_body,
-    is_synthetic_openai_tool_turn_boundary,
 )
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.openai_chat import (
+    is_synthetic_chat_tool_turn_boundary,
+)
 
 # --- Mock Classes ---
 
@@ -26,6 +28,9 @@ class MockBlock:
         for k, v in kwargs.items():
             setattr(self, k, v)
         self._data = kwargs
+
+    def model_dump(self, **kwargs):
+        return dict(self._data)
 
     def get(self, key, default=None):
         return self._data.get(key, default)
@@ -280,16 +285,36 @@ def test_openai_build_rejects_non_text_inline_system_blocks() -> None:
         build_base_request_body(request)
 
 
-def test_openai_build_rejects_empty_inline_system_content() -> None:
+@pytest.mark.parametrize(
+    "content",
+    [[], "", [{"type": "text", "text": ""}]],
+    ids=["empty_list", "empty_string", "empty_text_block"],
+)
+@pytest.mark.parametrize("position", [0, 1, 2, 3])
+def test_openai_build_omits_empty_inline_system_content(content, position) -> None:
+    history = [
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+    ]
     request = MessagesRequest.model_validate(
         {
             "model": "model",
-            "messages": [{"role": "system", "content": []}],
+            "system": "Conversation-wide instructions",
+            "messages": [
+                *history[:position],
+                {"role": "system", "content": content},
+                *history[position:],
+            ],
         }
     )
 
-    with pytest.raises(OpenAIConversionError, match="contain text"):
-        build_base_request_body(request)
+    body = build_base_request_body(request)
+
+    assert body["messages"] == [
+        {"role": "system", "content": "Conversation-wide instructions"},
+        *history,
+    ]
 
 
 # --- Tool Conversion Tests ---
@@ -355,6 +380,44 @@ def test_convert_tool_without_input_schema_uses_empty_object_schema():
 def test_convert_tool_choice(tool_choice, expected):
     result = AnthropicToOpenAIConverter.convert_tool_choice(tool_choice)
     assert result == expected
+
+
+def test_openai_build_materializes_auto_tool_choice_when_tools_are_declared():
+    request = MessagesRequest.model_validate(
+        {
+            "model": "model",
+            "messages": [{"role": "user", "content": "Use the echo tool."}],
+            "tools": [
+                {
+                    "name": "echo",
+                    "description": "Echo a value.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                    },
+                }
+            ],
+        }
+    )
+
+    body = build_base_request_body(request)
+
+    assert body["tool_choice"] == "auto"
+
+
+def test_openai_build_omits_tool_choice_when_tools_are_absent():
+    request = MessagesRequest.model_validate(
+        {
+            "model": "model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+    )
+
+    body = build_base_request_body(request)
+
+    assert "tools" not in body
+    assert "tool_choice" not in body
 
 
 # --- Message Conversion Tests: User ---
@@ -703,7 +766,10 @@ def test_convert_redacted_thinking_tool_use_replays_empty_reasoning_without_data
     )
 
     assert result[0]["reasoning_content"] == ""
-    assert "opaque-secret" not in json.dumps(result)
+    assert result[0]["reasoning_details"] == [
+        {"type": "reasoning.encrypted", "data": "opaque-secret"}
+    ]
+    assert "opaque-secret" not in result[0]["reasoning_content"]
 
 
 def test_convert_text_only_assistant_without_thinking_omits_reasoning_content():
@@ -734,7 +800,7 @@ def test_convert_tool_use_without_thinking_does_not_change_other_replay_modes(
     assert "reasoning_content" not in result[0]
 
 
-def test_convert_assistant_message_thinking_removed_when_disabled():
+def test_convert_assistant_message_thinking_becomes_context_when_disabled():
     content = [
         MockBlock(type="thinking", thinking="I need to calculate this."),
         MockBlock(type="text", text="The answer is 4."),
@@ -748,10 +814,10 @@ def test_convert_assistant_message_thinking_removed_when_disabled():
     assert len(result) == 1
     assert "reasoning_content" not in result[0]
     assert "<think>" not in result[0]["content"]
-    assert result[0]["content"] == "The answer is 4."
+    assert result[0]["content"] == "I need to calculate this.\n\nThe answer is 4."
 
 
-def test_convert_assistant_top_level_reasoning_stripped_when_disabled():
+def test_convert_assistant_top_level_reasoning_becomes_context_when_disabled():
     messages = [
         MockMessage(
             "assistant",
@@ -763,7 +829,12 @@ def test_convert_assistant_top_level_reasoning_stripped_when_disabled():
         messages, reasoning_replay=ReasoningReplayMode.DISABLED
     )
 
-    assert result == [{"role": "assistant", "content": "The answer is 4."}]
+    assert result == [
+        {
+            "role": "assistant",
+            "content": "I need to calculate this.\n\nThe answer is 4.",
+        }
+    ]
 
 
 def test_convert_assistant_message_tool_use():
@@ -1094,6 +1165,263 @@ def test_convert_user_message_image_sources(source, expected_url):
     ]
 
 
+@pytest.mark.parametrize(
+    "data",
+    (
+        "data:IMAGE/PNG;BASE64,aGVs\r\nbG8=",
+        "  aG\tVs\r\nbG8=  ",
+    ),
+)
+def test_convert_user_message_canonicalizes_equivalent_base64(data):
+    messages = [
+        MockMessage(
+            "user",
+            [
+                MockBlock(
+                    type="image",
+                    source={
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": data,
+                    },
+                )
+            ],
+        )
+    ]
+
+    result = AnthropicToOpenAIConverter.convert_messages(messages)
+
+    assert result[0]["content"][0]["image_url"]["url"] == (
+        "data:image/png;base64,aGVsbG8="
+    )
+
+
+def test_convert_image_tool_result_to_schema_valid_chat_history():
+    image_url = "https://images.example.test/tool.png"
+    messages = [
+        MockMessage(
+            "assistant",
+            [MockBlock(type="tool_use", id="call_image", name="Read", input={})],
+        ),
+        MockMessage(
+            "user",
+            [
+                MockBlock(
+                    type="tool_result",
+                    tool_use_id="call_image",
+                    content=[
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": image_url},
+                        }
+                    ],
+                )
+            ],
+        ),
+    ]
+
+    result = AnthropicToOpenAIConverter.convert_messages(messages)
+
+    assert [message["role"] for message in result] == [
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    assert result[1] == {
+        "role": "tool",
+        "tool_call_id": "call_image",
+        "content": "[Image-bearing tool output follows in user content.]",
+    }
+    assert is_synthetic_chat_tool_turn_boundary(result[2])
+    assert result[3]["content"] == [
+        {
+            "type": "text",
+            "text": 'Image-bearing output for tool call "call_image":',
+        },
+        {"type": "image_url", "image_url": {"url": image_url}},
+    ]
+    assert image_url not in result[1]["content"]
+
+
+def test_convert_mixed_image_tool_result_preserves_part_order_once():
+    image_url = "data:image/png;base64,aGVsbG8="
+    messages = [
+        MockMessage(
+            "assistant",
+            [MockBlock(type="tool_use", id="call_mixed", name="Read", input={})],
+        ),
+        MockMessage(
+            "user",
+            [
+                MockBlock(
+                    type="tool_result",
+                    tool_use_id="call_mixed",
+                    content=[
+                        {"type": "text", "text": "before"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "aGVsbG8=",
+                            },
+                        },
+                        {"type": "text", "text": "after"},
+                    ],
+                )
+            ],
+        ),
+    ]
+
+    result = AnthropicToOpenAIConverter.convert_messages(messages)
+
+    assert result[3]["content"] == [
+        {
+            "type": "text",
+            "text": 'Image-bearing output for tool call "call_mixed":',
+        },
+        {"type": "text", "text": "before"},
+        {"type": "image_url", "image_url": {"url": image_url}},
+        {"type": "text", "text": "after"},
+    ]
+    assert (
+        sum(
+            part.get("text") == "before"
+            for message in result
+            if isinstance(message.get("content"), list)
+            for part in message["content"]
+        )
+        == 1
+    )
+
+
+def test_convert_parallel_image_tool_results_closes_all_tools_before_images():
+    messages = [
+        MockMessage(
+            "assistant",
+            [
+                MockBlock(type="tool_use", id="call_a", name="ReadA", input={}),
+                MockBlock(type="tool_use", id="call_b", name="ReadB", input={}),
+            ],
+        ),
+        MockMessage(
+            "user",
+            [
+                MockBlock(
+                    type="tool_result",
+                    tool_use_id="call_b",
+                    content=[
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://x/b.png"},
+                        }
+                    ],
+                ),
+                MockBlock(
+                    type="tool_result",
+                    tool_use_id="call_a",
+                    content=[
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://x/a.png"},
+                        }
+                    ],
+                ),
+            ],
+        ),
+    ]
+
+    result = AnthropicToOpenAIConverter.convert_messages(messages)
+
+    assert [message["role"] for message in result] == [
+        "assistant",
+        "tool",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    assert [message["tool_call_id"] for message in result[1:3]] == [
+        "call_a",
+        "call_b",
+    ]
+    assert result[4]["content"] == [
+        {
+            "type": "text",
+            "text": 'Image-bearing output for tool call "call_a":',
+        },
+        {"type": "image_url", "image_url": {"url": "https://x/a.png"}},
+        {
+            "type": "text",
+            "text": 'Image-bearing output for tool call "call_b":',
+        },
+        {"type": "image_url", "image_url": {"url": "https://x/b.png"}},
+    ]
+
+
+def test_convert_image_tool_result_precedes_following_user_text():
+    messages = [
+        MockMessage(
+            "assistant",
+            [MockBlock(type="tool_use", id="call_image", name="Read", input={})],
+        ),
+        MockMessage(
+            "user",
+            [
+                MockBlock(
+                    type="tool_result",
+                    tool_use_id="call_image",
+                    content=[
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://x/a.png"},
+                        }
+                    ],
+                ),
+                MockBlock(type="text", text="Now describe it."),
+            ],
+        ),
+    ]
+
+    result = AnthropicToOpenAIConverter.convert_messages(messages)
+
+    assert result[3]["content"][-1] == {
+        "type": "text",
+        "text": "Now describe it.",
+    }
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        {"type": "base64", "media_type": "image/png", "data": "SECRET_BAD"},
+        {"type": "file", "file_id": "file_1"},
+    ),
+)
+def test_convert_image_tool_result_rejects_unportable_source_safely(source):
+    messages = [
+        MockMessage(
+            "assistant",
+            [MockBlock(type="tool_use", id="call_image", name="Read", input={})],
+        ),
+        MockMessage(
+            "user",
+            [
+                MockBlock(
+                    type="tool_result",
+                    tool_use_id="call_image",
+                    content=[{"type": "image", "source": source}],
+                )
+            ],
+        ),
+    ]
+
+    with pytest.raises(OpenAIConversionError) as exc_info:
+        AnthropicToOpenAIConverter.convert_messages(messages)
+
+    assert "SECRET_BAD" not in str(exc_info.value)
+
+
 def test_convert_user_message_preserves_interleaved_image_text_order():
     messages = [
         MockMessage(
@@ -1104,7 +1432,7 @@ def test_convert_user_message_preserves_interleaved_image_text_order():
                     source={
                         "type": "base64",
                         "media_type": "image/jpeg",
-                        "data": "FIRST",
+                        "data": "RklSU1Q=",
                     },
                 ),
                 MockBlock(type="text", text="Compare the first image with this one."),
@@ -1125,7 +1453,7 @@ def test_convert_user_message_preserves_interleaved_image_text_order():
             "content": [
                 {
                     "type": "image_url",
-                    "image_url": {"url": "data:image/jpeg;base64,FIRST"},
+                    "image_url": {"url": "data:image/jpeg;base64,RklSU1Q="},
                 },
                 {
                     "type": "text",
@@ -1178,15 +1506,15 @@ def test_convert_user_image_before_tool_result_preserves_message_order():
     [
         (
             {"type": "base64", "media_type": "", "data": "AAAA"},
-            "non-empty media_type",
+            "media type",
         ),
         (
             {"type": "base64", "media_type": "image/png", "data": ""},
-            "non-empty data",
+            "data must be non-empty",
         ),
-        ({"type": "url", "url": ""}, "non-empty url"),
-        ({"type": "file", "file_id": "file_1"}, "Unsupported image source type"),
-        ({}, "Unsupported image source type"),
+        ({"type": "url", "url": ""}, "URL must be a non-empty"),
+        ({"type": "file", "file_id": "file_1"}, "cannot cross"),
+        ({}, "cannot cross"),
     ],
 )
 def test_convert_user_message_rejects_unconvertible_image_sources(source, error):
@@ -1302,7 +1630,7 @@ def test_user_after_completed_tool_result_gets_neutral_assistant_boundary():
         "user",
     ]
     assert result[3] == {"role": "assistant", "content": " "}
-    assert is_synthetic_openai_tool_turn_boundary(result[3])
+    assert is_synthetic_chat_tool_turn_boundary(result[3])
     assert json.loads(json.dumps(result[3])) == {
         "role": "assistant",
         "content": " ",
@@ -1703,7 +2031,13 @@ def test_openai_build_rejects_unknown_top_level_extras() -> None:
         ],
     ],
 )
-def test_convert_assistant_server_tool_blocks_raise(content) -> None:
+def test_convert_hosted_tool_history_preserves_results_and_rejects_active_calls(
+    content,
+) -> None:
     messages = [MockMessage("assistant", content)]
-    with pytest.raises(OpenAIConversionError, match="server tool"):
-        AnthropicToOpenAIConverter.convert_messages(messages)
+    if content[0].type == "server_tool_use":
+        with pytest.raises(OpenAIConversionError, match="active server tool"):
+            AnthropicToOpenAIConverter.convert_messages(messages)
+    else:
+        result = AnthropicToOpenAIConverter.convert_messages(messages)
+        assert "[Earlier tool record]" in result[0]["content"]

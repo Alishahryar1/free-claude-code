@@ -2,12 +2,7 @@ import json
 
 import pytest
 
-from free_claude_code.application.reasoning import client_reasoning_policy
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.openai_responses import (
-    OpenAIResponsesAdapter,
-    OpenAIResponsesRequest,
-)
 from free_claude_code.core.openai_responses.errors import ResponsesConversionError
 from free_claude_code.core.openai_responses.provider_input import (
     build_responses_provider_request,
@@ -18,6 +13,37 @@ _KEEP_ALL_THINKING_EDIT = {
     "type": "clear_thinking_20251015",
     "keep": "all",
 }
+
+
+def test_raw_signed_thinking_keeps_readable_context_outside_opaque_item():
+    request = MessagesRequest.model_validate(
+        {
+            "model": "m",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "Earlier summary",
+                            "signature": "old-cipher",
+                        },
+                        {"type": "text", "text": "Answer"},
+                    ],
+                }
+            ],
+        }
+    )
+    original = request.model_dump()
+    body = build_responses_provider_request(request, reasoning=ReasoningPolicy.on())
+    opaque, context = body["input"][:2]
+    assert opaque["encrypted_content"] == "old-cipher"
+    assert opaque["summary"] == []
+    assert "content" not in opaque
+    assert context["role"] == "assistant"
+    assert "Earlier summary" in json.dumps(context)
+    assert json.dumps(body).count("Earlier summary") == 1
+    assert request.model_dump() == original
 
 
 def test_build_responses_provider_request_preserves_multiturn_protocol() -> None:
@@ -88,13 +114,23 @@ def test_build_responses_provider_request_preserves_multiturn_protocol() -> None
     assert body["include"] == ["reasoning.encrypted_content"]
     assert body["reasoning"] == {"effort": "xhigh", "summary": "auto"}
     assert body["tool_choice"] == {"type": "function", "name": "lookup"}
+    assert body["input"][0]["id"].startswith("rs_")
+    assert body["input"][1]["id"].startswith("rs_")
+    assert body["input"][0]["id"] != body["input"][1]["id"]
     assert body["input"][0] == {
+        "id": body["input"][0]["id"],
         "type": "reasoning",
-        "summary": [{"type": "summary_text", "text": "summary"}],
+        "summary": [],
+        "content": [{"type": "reasoning_text", "text": "summary"}],
+    }
+    assert body["input"][1] == {
+        "id": body["input"][1]["id"],
+        "type": "reasoning",
+        "summary": [],
         "encrypted_content": "opaque",
     }
-    assert body["input"][1]["role"] == "assistant"
-    assert body["input"][2] == {
+    assert body["input"][2]["role"] == "assistant"
+    assert body["input"][3] == {
         "type": "function_call",
         "call_id": "call_1",
         "name": "lookup",
@@ -102,15 +138,146 @@ def test_build_responses_provider_request_preserves_multiturn_protocol() -> None
             {"q": "value"}, ensure_ascii=False, separators=(",", ":")
         ),
     }
-    assert body["input"][3] == {
+    assert body["input"][4] == {
         "type": "function_call_output",
         "call_id": "call_1",
         "output": '{"answer": 42}',
     }
-    assert body["input"][4]["content"][1] == {
+    assert body["input"][5]["content"][1] == {
         "type": "input_image",
         "image_url": "data:image/png;base64,aGVsbG8=",
     }
+
+
+def test_responses_provider_request_canonicalizes_direct_anthropic_image() -> None:
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-test",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "data:IMAGE/PNG;BASE64,aGVs\r\nbG8=",
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    body = build_responses_provider_request(
+        request,
+        reasoning=ReasoningPolicy.provider_default(),
+    )
+
+    assert body["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,aGVsbG8=",
+                }
+            ],
+        }
+    ]
+
+
+def test_responses_provider_request_preserves_rich_tool_output_order() -> None:
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-test",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_image",
+                            "content": [
+                                {"type": "text", "text": "before"},
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "url",
+                                        "url": "https://images.example.test/tool.png",
+                                    },
+                                },
+                                {"type": "document", "title": "reference"},
+                                {"type": "text", "text": "after"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    body = build_responses_provider_request(
+        request,
+        reasoning=ReasoningPolicy.provider_default(),
+    )
+
+    assert body["input"] == [
+        {
+            "type": "function_call_output",
+            "call_id": "call_image",
+            "output": [
+                {"type": "input_text", "text": "before"},
+                {
+                    "type": "input_image",
+                    "image_url": "https://images.example.test/tool.png",
+                },
+                {
+                    "type": "input_text",
+                    "text": '{"type": "document", "title": "reference"}',
+                },
+                {"type": "input_text", "text": "after"},
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        {"type": "base64", "media_type": "image/png", "data": "SECRET_BAD"},
+        {"type": "file", "file_id": "file_1"},
+    ),
+)
+def test_responses_provider_request_rejects_unportable_tool_image(source) -> None:
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-test",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_image",
+                            "content": [{"type": "image", "source": source}],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ResponsesConversionError) as exc_info:
+        build_responses_provider_request(
+            request,
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+
+    assert "SECRET_BAD" not in str(exc_info.value)
 
 
 def test_build_responses_provider_request_accepts_claude_client_controls() -> None:
@@ -134,6 +301,73 @@ def test_build_responses_provider_request_accepts_claude_client_controls() -> No
     assert "context_management" not in body
     assert "output_config" not in body
     assert request.model_dump() == snapshot
+
+
+def test_build_responses_provider_request_materializes_auto_tool_choice() -> None:
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "Use the echo tool."}],
+            "tools": [
+                {
+                    "name": "echo",
+                    "description": "Echo a value.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                    },
+                }
+            ],
+        }
+    )
+
+    body = build_responses_provider_request(
+        request,
+        reasoning=ReasoningPolicy.off(),
+    )
+
+    assert body["tool_choice"] == "auto"
+
+
+def test_build_responses_provider_request_omits_choice_without_tools() -> None:
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+    )
+
+    body = build_responses_provider_request(
+        request,
+        reasoning=ReasoningPolicy.off(),
+    )
+
+    assert "tools" not in body
+    assert "tool_choice" not in body
+
+
+@pytest.mark.parametrize("choice", ["auto", "any", "none"])
+def test_build_responses_provider_request_omits_explicit_choice_without_tools(
+    choice: str,
+) -> None:
+    # An explicit choice must not survive either: "any" would otherwise become
+    # "required", demanding a tool call when no tool exists.
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "tool_choice": {"type": choice},
+        }
+    )
+
+    body = build_responses_provider_request(
+        request,
+        reasoning=ReasoningPolicy.off(),
+    )
+
+    assert "tools" not in body
+    assert "tool_choice" not in body
 
 
 def test_build_responses_provider_request_uses_resolved_reasoning_policy() -> None:
@@ -347,78 +581,6 @@ def test_responses_provider_request_uses_one_portable_tool_alias() -> None:
     assert function_call["call_id"] == "call_1"
     assert function_call["arguments"] == '{"q":"value"}'
     assert request.model_dump() == snapshot
-
-
-def test_responses_round_trip_preserves_encrypted_reasoning_and_tool_ids() -> None:
-    adapter = OpenAIResponsesAdapter()
-    ingress = OpenAIResponsesRequest.model_validate(
-        {
-            "model": "openai/gpt-test",
-            "input": [
-                {
-                    "type": "reasoning",
-                    "summary": [{"type": "summary_text", "text": "Use a tool."}],
-                    "encrypted_content": "opaque-reasoning",
-                },
-                {
-                    "type": "function_call",
-                    "call_id": "call_stable",
-                    "name": "lookup",
-                    "arguments": '{"q":"value"}',
-                },
-                {
-                    "type": "function_call_output",
-                    "call_id": "call_stable",
-                    "output": "done",
-                },
-            ],
-        }
-    )
-    anthropic = MessagesRequest.model_validate(adapter.to_anthropic_payload(ingress))
-
-    body = build_responses_provider_request(
-        anthropic,
-        reasoning=ReasoningPolicy.provider_default(),
-    )
-
-    assert body["input"][:3] == [
-        {
-            "type": "reasoning",
-            "summary": [{"type": "summary_text", "text": "Use a tool."}],
-            "encrypted_content": "opaque-reasoning",
-        },
-        {
-            "type": "function_call",
-            "call_id": "call_stable",
-            "name": "lookup",
-            "arguments": '{"q":"value"}',
-        },
-        {
-            "type": "function_call_output",
-            "call_id": "call_stable",
-            "output": "done",
-        },
-    ]
-
-
-def test_responses_reasoning_round_trip_reaches_provider_request() -> None:
-    adapter = OpenAIResponsesAdapter()
-    ingress = OpenAIResponsesRequest.model_validate(
-        {
-            "model": "openai/gpt-test",
-            "input": "hello",
-            "reasoning": {"effort": "high"},
-        }
-    )
-    anthropic = MessagesRequest.model_validate(adapter.to_anthropic_payload(ingress))
-
-    body = build_responses_provider_request(
-        anthropic,
-        reasoning=client_reasoning_policy(anthropic),
-    )
-
-    assert body["reasoning"] == {"effort": "high", "summary": "auto"}
-    assert "output_config" not in body
 
 
 @pytest.mark.parametrize(

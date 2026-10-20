@@ -6,7 +6,6 @@ from .conversion import (
     OpenAIConversionError,
     ReasoningReplayMode,
     build_base_request_body,
-    is_synthetic_openai_tool_turn_boundary,
 )
 from .errors import (
     anthropic_error_payload,
@@ -28,6 +27,7 @@ from .models import (
     Message,
     MessagesRequest,
     MessagesResponse,
+    NativeTokenCountRequest,
     SystemContent,
     ThinkingConfig,
     TokenCountRequest,
@@ -35,7 +35,6 @@ from .models import (
     Tool,
     Usage,
 )
-from .openai_tool_names import OpenAIToolNameCodec
 from .request_serialization import dump_messages_request, serialize_tool_result_content
 from .request_snapshot import anthropic_request_snapshot
 from .sse_aggregation import aggregate_anthropic_sse_to_message
@@ -48,7 +47,6 @@ from .streaming import (
 )
 from .thinking import ContentChunk, ContentType, ThinkTagParser
 from .tokens import get_token_count
-from .tools import HeuristicToolParser
 from .utils import set_if_not_none
 
 __all__ = [
@@ -66,12 +64,11 @@ __all__ = [
     "ContentBlockWebSearchToolResult",
     "ContentChunk",
     "ContentType",
-    "HeuristicToolParser",
     "Message",
     "MessagesRequest",
     "MessagesResponse",
+    "NativeTokenCountRequest",
     "OpenAIConversionError",
-    "OpenAIToolNameCodec",
     "ReasoningReplayMode",
     "StreamBlockLedger",
     "SystemContent",
@@ -95,7 +92,6 @@ __all__ = [
     "get_block_attr",
     "get_block_type",
     "get_token_count",
-    "is_synthetic_openai_tool_turn_boundary",
     "map_stop_reason",
     "serialize_tool_result_content",
     "set_if_not_none",

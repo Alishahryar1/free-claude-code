@@ -128,10 +128,14 @@ def render_markdown_to_mdv2(text: str) -> str:
                             if key == "src":
                                 href = val
                                 break
+                # MarkdownV2 has no image entity, so an image degrades to plain
+                # text. Escape it as text: escape_md_v2_link_url only covers the
+                # link-destination set and would leave '(', ')', '.', '_' bare,
+                # which Telegram rejects with "can't parse entities".
                 if alt:
-                    out.append(f"{escape_md_v2(alt)} ({escape_md_v2_link_url(href)})")
+                    out.append(escape_md_v2(f"{alt} ({href})"))
                 else:
-                    out.append(escape_md_v2_link_url(href))
+                    out.append(escape_md_v2(href))
             else:
                 out.append(escape_md_v2(tok.content or ""))
             i += 1

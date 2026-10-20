@@ -7,18 +7,20 @@ from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.cloudflare import CloudflareProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
-from free_claude_code.providers.github_models import GitHubModelsProvider
+from free_claude_code.providers.github_copilot.provider import GitHubCopilotProvider
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.kilo import KiloProvider
 from free_claude_code.providers.lmstudio import LMStudioProvider
 from free_claude_code.providers.mistral import MistralProvider
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
+from free_claude_code.providers.openai_api import OpenAIAPIProvider
 from free_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
     OpenAIChatProvider,
 )
-from free_claude_code.providers.openai_codex import OpenAICodexProvider
+from free_claude_code.providers.openai_codex.provider import OpenAICodexProvider
+from free_claude_code.providers.opencode import OpenCodeProvider
 from free_claude_code.providers.vertex import VertexProvider
 from smoke.features import FEATURE_INVENTORY
 
@@ -63,8 +65,17 @@ def test_product_coverage_is_not_satisfied_by_prereq_probes() -> None:
 
 
 def test_provider_and_platform_registries_include_builtins() -> None:
+    from free_claude_code.providers.alibaba_cloud import AlibabaCloudProvider
+    from free_claude_code.providers.anthropic import AnthropicProvider
+
     specialized_provider_classes = {
+        "alibaba_cloud": AlibabaCloudProvider,
+        "anthropic": AnthropicProvider,
         "openai": OpenAICodexProvider,
+        "openai_api": OpenAIAPIProvider,
+        "github_copilot": GitHubCopilotProvider,
+        "opencode_zen": OpenCodeProvider,
+        "opencode_go": OpenCodeProvider,
         "nvidia_nim": NvidiaNimProvider,
         "open_router": OpenRouterProvider,
         "mistral": MistralProvider,
@@ -72,7 +83,6 @@ def test_provider_and_platform_registries_include_builtins() -> None:
         "kilo": KiloProvider,
         "cloudflare": CloudflareProvider,
         "lmstudio": LMStudioProvider,
-        "github_models": GitHubModelsProvider,
         "groq": GroqProvider,
         "gemini": GeminiProvider,
         "vertex": VertexProvider,

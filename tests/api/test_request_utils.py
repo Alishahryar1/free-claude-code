@@ -1,329 +1,15 @@
-"""Tests for API request detection and token counting helpers."""
+"""Tests for token counting helpers."""
 
-from unittest.mock import MagicMock
+import json
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from free_claude_code.api.command_utils import extract_command_prefix
-from free_claude_code.api.detection import (
-    is_prefix_detection_request,
-    is_quota_check_request,
-    is_title_generation_request,
-)
 from free_claude_code.core.anthropic import get_token_count
 from free_claude_code.core.anthropic.models import (
     Message,
-    MessagesRequest,
     SystemContent,
 )
-
-
-class TestQuotaCheckRequest:
-    """Tests for is_quota_check_request function."""
-
-    def test_quota_check_simple_string(self):
-        """Test quota check with simple string content."""
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = "Check my quota"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.max_tokens = 1
-        req.messages = [msg]
-
-        assert is_quota_check_request(req) is True
-
-    def test_quota_check_case_insensitive(self):
-        """Test quota check is case insensitive."""
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = "Check my QUOTA"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.max_tokens = 1
-        req.messages = [msg]
-
-        assert is_quota_check_request(req) is True
-
-    def test_quota_check_list_content(self):
-        """Test quota check with list content blocks."""
-        block = MagicMock()
-        block.text = "Check my quota"
-
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = [block]
-
-        req = MagicMock(spec=MessagesRequest)
-        req.max_tokens = 1
-        req.messages = [msg]
-
-        assert is_quota_check_request(req) is True
-
-    def test_not_quota_check_wrong_max_tokens(self):
-        """Test not quota check when max_tokens != 1."""
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = "Check my quota"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.max_tokens = 100
-        req.messages = [msg]
-
-        assert is_quota_check_request(req) is False
-
-    def test_not_quota_check_multiple_messages(self):
-        """Test not quota check when multiple messages."""
-        msg1 = MagicMock(spec=Message)
-        msg1.role = "user"
-        msg1.content = "Check my quota"
-
-        msg2 = MagicMock(spec=Message)
-        msg2.role = "assistant"
-        msg2.content = "Hello"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.max_tokens = 1
-        req.messages = [msg1, msg2]
-
-        assert is_quota_check_request(req) is False
-
-    def test_not_quota_check_wrong_role(self):
-        """Test not quota check when role is not user."""
-        msg = MagicMock(spec=Message)
-        msg.role = "assistant"
-        msg.content = "Check my quota"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.max_tokens = 1
-        req.messages = [msg]
-
-        assert is_quota_check_request(req) is False
-
-    def test_not_quota_check_no_quota_keyword(self):
-        """Test not quota check when content doesn't contain quota."""
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = "Hello world"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.max_tokens = 1
-        req.messages = [msg]
-
-        assert is_quota_check_request(req) is False
-
-
-class TestTitleGenerationRequest:
-    """Tests for is_title_generation_request function."""
-
-    def _title_gen_system(self) -> list[MagicMock]:
-        block = MagicMock()
-        block.text = (
-            "Generate a concise, sentence-case title (3-7 words) that captures the "
-            "main topic or goal of this coding session. Return JSON with a single "
-            '"title" field.'
-        )
-        return [block]
-
-    def test_title_generation_detected_via_system(self):
-        """Title gen detected by session title system prompt (sentence-case / JSON)."""
-        req = MagicMock(spec=MessagesRequest)
-        req.system = self._title_gen_system()
-        req.tools = None
-        req.messages = []
-
-        assert is_title_generation_request(req) is True
-
-    def test_title_generation_not_detected_with_tools(self):
-        """Not detected when tools are present (main conversation, not title gen)."""
-        req = MagicMock(spec=MessagesRequest)
-        req.system = self._title_gen_system()
-        req.tools = [MagicMock()]
-        req.messages = []
-
-        assert is_title_generation_request(req) is False
-
-    def test_title_generation_not_detected_no_system(self):
-        """Not detected when system is absent."""
-        req = MagicMock(spec=MessagesRequest)
-        req.system = None
-        req.tools = None
-        req.messages = []
-
-        assert is_title_generation_request(req) is False
-
-    def test_title_generation_not_detected_unrelated_system(self):
-        """Not detected when system prompt has no topic/title keywords."""
-        block = MagicMock()
-        block.text = "You are a helpful assistant."
-        req = MagicMock(spec=MessagesRequest)
-        req.system = [block]
-        req.tools = None
-        req.messages = []
-
-        assert is_title_generation_request(req) is False
-
-    def test_title_generation_return_json_coding_session_branch(self):
-        """JSON title field + session wording matches without sentence-case phrase."""
-        block = MagicMock()
-        block.text = 'Return JSON with a single "title" field for this coding session.'
-        req = MagicMock(spec=MessagesRequest)
-        req.system = [block]
-        req.tools = None
-        req.messages = []
-
-        assert is_title_generation_request(req) is True
-
-
-class TestExtractCommandPrefix:
-    """Tests for extract_command_prefix function."""
-
-    def test_simple_command(self):
-        """Test extraction of simple command."""
-        assert extract_command_prefix("git status") == "git status"
-        assert extract_command_prefix("ls -la") == "ls"
-
-    def test_two_word_commands(self):
-        """Test extraction of two-word commands."""
-        assert extract_command_prefix("git commit -m 'message'") == "git commit"
-        assert extract_command_prefix("npm install package") == "npm install"
-        assert extract_command_prefix("docker run image") == "docker run"
-        assert extract_command_prefix("kubectl get pods") == "kubectl get"
-
-    def test_two_word_command_with_options(self):
-        """Test two-word command with options only returns first word."""
-        assert extract_command_prefix("git -v") == "git"
-        assert extract_command_prefix("npm --version") == "npm"
-
-    def test_with_env_vars(self):
-        """Test command with environment variables."""
-        assert extract_command_prefix("DEBUG=1 python script.py") == "DEBUG=1 python"
-        assert (
-            extract_command_prefix("API_KEY=secret node app.js")
-            == "API_KEY=secret node"
-        )
-
-    def test_single_word_commands(self):
-        """Test single word commands."""
-        assert extract_command_prefix("ls") == "ls"
-        assert extract_command_prefix("python") == "python"
-        assert extract_command_prefix("make") == "make"
-
-    def test_command_injection_detected(self):
-        """Test detection of command injection attempts."""
-        assert extract_command_prefix("`whoami`") == "command_injection_detected"
-        assert extract_command_prefix("$(whoami)") == "command_injection_detected"
-        assert (
-            extract_command_prefix("echo $(cat /etc/passwd)")
-            == "command_injection_detected"
-        )
-
-    def test_empty_command(self):
-        """Test handling of empty commands."""
-        assert extract_command_prefix("") == "none"
-        assert extract_command_prefix("   ") == "none"
-
-    def test_complex_git_command(self):
-        """Test complex git command extraction."""
-        assert extract_command_prefix("git log --oneline --graph") == "git log"
-        assert (
-            extract_command_prefix("git checkout -b feature-branch") == "git checkout"
-        )
-
-    def test_cargo_command(self):
-        """Test cargo command extraction."""
-        assert extract_command_prefix("cargo build") == "cargo build"
-        assert extract_command_prefix("cargo test") == "cargo test"
-        assert extract_command_prefix("cargo --version") == "cargo"
-
-
-class TestPrefixDetectionRequest:
-    """Tests for is_prefix_detection_request function."""
-
-    def test_prefix_detection_with_policy_spec(self):
-        """Test prefix detection with policy spec and command."""
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = "<policy_spec>policy</policy_spec> Command: git status"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg]
-
-        is_prefix, command = is_prefix_detection_request(req)
-        assert is_prefix is True
-        assert command == "git status"
-
-    def test_prefix_detection_case_sensitive(self):
-        """Test prefix detection is case sensitive for Command:."""
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = "<policy_spec>policy</policy_spec> command: git status"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg]
-
-        is_prefix, command = is_prefix_detection_request(req)
-        assert is_prefix is False
-        assert command == ""
-
-    def test_not_prefix_detection_no_policy_spec(self):
-        """Test not prefix detection without policy_spec."""
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = "Command: git status"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg]
-
-        is_prefix, command = is_prefix_detection_request(req)
-        assert is_prefix is False
-        assert command == ""
-
-    def test_not_prefix_detection_multiple_messages(self):
-        """Test not prefix detection with multiple messages."""
-        msg1 = MagicMock(spec=Message)
-        msg1.role = "user"
-        msg1.content = "<policy_spec>policy</policy_spec> Command: git status"
-
-        msg2 = MagicMock(spec=Message)
-        msg2.role = "assistant"
-        msg2.content = "OK"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg1, msg2]
-
-        is_prefix, command = is_prefix_detection_request(req)
-        assert is_prefix is False
-        assert command == ""
-
-    def test_not_prefix_detection_wrong_role(self):
-        """Test not prefix detection when message is not from user."""
-        msg = MagicMock(spec=Message)
-        msg.role = "assistant"
-        msg.content = "<policy_spec>policy</policy_spec> Command: git status"
-
-        req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg]
-
-        is_prefix, command = is_prefix_detection_request(req)
-        assert is_prefix is False
-        assert command == ""
-
-    def test_prefix_detection_list_content(self):
-        """Test prefix detection with list content blocks."""
-        block = MagicMock()
-        block.text = "<policy_spec>policy</policy_spec> Command: ls -la"
-
-        msg = MagicMock(spec=Message)
-        msg.role = "user"
-        msg.content = [block]
-
-        req = MagicMock(spec=MessagesRequest)
-        req.messages = [msg]
-
-        is_prefix, command = is_prefix_detection_request(req)
-        assert is_prefix is True
-        assert command == "ls -la"
 
 
 class TestGetTokenCount:
@@ -549,108 +235,91 @@ class TestGetTokenCount:
         count = get_token_count([msg])
         assert count >= 85
 
-    def test_known_payload_estimate_range(self):
-        """Known payload produces estimate within expected range (validation harness)."""
-        import tiktoken
+    def test_image_in_tool_result_costs_the_same_as_a_top_level_image(self):
+        """A tool-returned image (Read on a PNG, an MCP screenshot) is priced as an image.
 
-        enc = tiktoken.get_encoding("cl100k_base")
+        Serializing it with the rest of the tool result counted its base64 payload as
+        text: a 300 KB screenshot came out near 215k tokens instead of about 100.
+        """
+        image = {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "A" * 300_000,
+            },
+        }
+        text = {"type": "text", "text": "Screenshot captured"}
+
+        def user_message(*blocks):
+            msg = MagicMock()
+            msg.content = list(blocks)
+            return msg
+
+        def tool_result(*parts):
+            return user_message(
+                {"type": "tool_result", "tool_use_id": "t1", "content": list(parts)}
+            )
+
+        def image_cost(wrap):
+            return get_token_count([wrap(text, image)]) - get_token_count([wrap(text)])
+
+        assert image_cost(tool_result) == image_cost(user_message)
+        assert image_cost(tool_result) < 1_000
+
+    @pytest.mark.parametrize("data", [12345, ["a"], {"x": 1}])
+    def test_tool_result_image_with_non_string_data_gets_the_flat_cost(self, data):
+        """Tool-result content is not validated, so image data can be any JSON value.
+
+        A number used to reach ``len()`` and turn count_tokens into an HTTP 500.
+        """
+        image = {"type": "image", "source": {"type": "base64", "data": data}}
+        msg = MagicMock()
+        msg.content = [{"type": "tool_result", "tool_use_id": "t1", "content": [image]}]
+        no_data = MagicMock()
+        no_data.content = [
+            {
+                "type": "tool_result",
+                "tool_use_id": "t1",
+                "content": [{"type": "image", "source": {"type": "base64"}}],
+            }
+        ]
+
+        assert get_token_count([msg]) == get_token_count([no_data])
+
+    @pytest.mark.parametrize(
+        "parts",
+        [
+            [{"type": "text", "text": "line one"}, {"type": "text", "text": "two"}],
+            [],
+        ],
+    )
+    def test_image_free_tool_result_list_is_counted_as_before(self, parts):
+        """Only images leave the serialized payload; image-free results are unchanged."""
+        msg = MagicMock()
+        msg.content = [{"type": "tool_result", "tool_use_id": "t1", "content": parts}]
+
+        with patch(
+            "free_claude_code.core.anthropic.tokens.estimate_text_tokens",
+            side_effect=len,
+        ):
+            count = get_token_count([msg])
+
+        assert count == len(json.dumps(parts)) + len("t1") + 8 + 4
+
+    def test_known_payload_structural_overhead(self):
+        """Protocol overhead remains separate from plain-text estimation."""
         system_text = "You are a helpful assistant."
         user_text = "Hello, how are you?"
-        sys_tokens = len(enc.encode(system_text))
-        user_tokens = len(enc.encode(user_text))
-        # Min: content tokens + system overhead (4) + per-msg overhead (4)
-        expected_min = sys_tokens + user_tokens + 4 + 4
         msg = MagicMock()
         msg.content = user_text
-        count = get_token_count([msg], system=system_text)
-        assert count >= expected_min, f"count={count} < expected_min={expected_min}"
+        with patch(
+            "free_claude_code.core.anthropic.tokens.estimate_text_tokens",
+            side_effect=len,
+        ):
+            count = get_token_count([msg], system=system_text)
+
+        assert count == len(system_text) + len(user_text) + 4 + 4
 
 
 # --- Parametrized Edge Case Tests ---
-
-
-@pytest.mark.parametrize(
-    "command,expected",
-    [
-        ("git status", "git status"),
-        ("ls -la", "ls"),
-        ("git commit -m 'msg'", "git commit"),
-        ("npm install pkg", "npm install"),
-        ("ls", "ls"),
-        ("python", "python"),
-        ("", "none"),
-        ("   ", "none"),
-        ("`whoami`", "command_injection_detected"),
-        ("$(whoami)", "command_injection_detected"),
-        ("echo $(cat /etc/passwd)", "command_injection_detected"),
-        ("git -v", "git"),
-        ("DEBUG=1 python script.py", "DEBUG=1 python"),
-        ("cargo build", "cargo build"),
-        ("cargo --version", "cargo"),
-    ],
-    ids=[
-        "git_status",
-        "ls_with_flag",
-        "git_commit",
-        "npm_install",
-        "bare_ls",
-        "bare_python",
-        "empty",
-        "whitespace",
-        "injection_backtick",
-        "injection_dollar",
-        "injection_echo",
-        "git_flag",
-        "env_var",
-        "cargo_build",
-        "cargo_flag",
-    ],
-)
-def test_extract_command_prefix_parametrized(command, expected):
-    """Parametrized command prefix extraction."""
-    assert extract_command_prefix(command) == expected
-
-
-def test_extract_command_prefix_unterminated_quote():
-    """Unterminated quote falls back to simple split (shlex.split ValueError)."""
-    result = extract_command_prefix("git commit -m 'unterminated")
-    # Should fall back to command.split()[0] = "git"
-    assert result == "git"
-
-
-def test_extract_command_prefix_pipe():
-    """Piped commands - shlex handles pipe character."""
-    result = extract_command_prefix("cat file.txt | grep pattern")
-    assert result in ("cat", "cat file.txt")
-
-
-@pytest.mark.parametrize(
-    "content,max_tokens,role,expected",
-    [
-        ("Check my quota", 1, "user", True),
-        ("Check my QUOTA", 1, "user", True),
-        ("Hello world", 1, "user", False),
-        ("Check my quota", 100, "user", False),
-        ("Check my quota", 1, "assistant", False),
-    ],
-    ids=["basic", "case_insensitive", "no_keyword", "wrong_max_tokens", "wrong_role"],
-)
-def test_quota_check_parametrized(content, max_tokens, role, expected):
-    """Parametrized quota check request detection."""
-    msg = MagicMock(spec=Message)
-    msg.role = role
-    msg.content = content
-
-    req = MagicMock(spec=MessagesRequest)
-    req.max_tokens = max_tokens
-    req.messages = [msg]
-
-    assert is_quota_check_request(req) is expected
-
-
-def test_quota_check_empty_messages():
-    """Quota check with empty message list should not crash."""
-    req = MagicMock(spec=MessagesRequest)
-    req.max_tokens = 1
-    req.messages = []
-    assert is_quota_check_request(req) is False

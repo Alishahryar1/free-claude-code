@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import sys
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -67,7 +68,7 @@ async def test_cancelled_finisher_cannot_erase_or_overlap_a_new_claim() -> None:
         finally:
             active -= 1
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("root"), "status-root")
     await root_started.wait()
 
@@ -113,6 +114,7 @@ async def test_cancelled_runner_exception_cannot_fail_or_skip_queued_claim() -> 
     manager = TreeQueueManager(
         process,
         unexpected_failure_callback=unexpected_failures.append,
+        store=AsyncMock(),
     )
     await manager.admit(_incoming("root"), "status-root")
     await root_started.wait()
@@ -163,7 +165,7 @@ async def test_terminal_operation_serializes_with_successor_task_publication(
         finally:
             child_exited.set()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     root = await manager.admit(_incoming("root"), "status-root")
     assert root.claim is not None
     await root_started.wait()
@@ -240,7 +242,7 @@ async def test_duplicate_admission_is_rejected_and_processed_once() -> None:
         started.set()
         await release.wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     first = await manager.admit(_incoming("root"), "status-root")
     duplicate = await manager.admit(_incoming("root"), "status-duplicate")
     await started.wait()
@@ -260,7 +262,7 @@ async def test_node_and_status_references_are_published_together() -> None:
     async def process(_claim: NodeClaim) -> None:
         await release.wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("root"), "status-root")
 
     assert await manager.resolve_node_id(_SCOPE, "root") == "root"
@@ -292,6 +294,7 @@ async def test_callback_failure_does_not_block_the_next_claim() -> None:
         process,
         queue_update_callback=broken_queue_callback,
         node_started_callback=broken_started_callback,
+        store=AsyncMock(),
     )
     await manager.admit(_incoming("root"), "status-root")
     await manager.admit(
@@ -315,7 +318,7 @@ async def test_branch_removal_cannot_leave_a_detached_running_descendant() -> No
             root_started.set()
             await release_root.wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("root"), "status-root")
     await root_started.wait()
     await manager.admit(
@@ -355,7 +358,7 @@ async def test_clear_all_drains_terminal_claim_task_before_returning() -> None:
         finally:
             cleanup_finished.set()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("root"), "status-root")
     await terminal.wait()
 
@@ -387,7 +390,7 @@ async def test_clear_all_returns_committed_result_after_caller_cancellation() ->
                 cleanup_finished.set()
             raise
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("root"), "status-root")
     checkpoint = asyncio.Event()
     asyncio.get_running_loop().call_soon(checkpoint.set)
@@ -429,7 +432,7 @@ async def test_eager_task_factory_cannot_run_claim_before_admission_returns() ->
         started.set()
         await release.wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     loop = asyncio.get_running_loop()
     original_factory = loop.get_task_factory()
     try:
@@ -467,7 +470,7 @@ async def test_claim_launch_uses_portable_event_loop_task_contract(
         return original_create_task(coro, name=name, context=context)
 
     monkeypatch.setattr(loop, "create_task", portable_create_task)
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
 
     decision = await manager.admit(_incoming("root"), "status-root")
     await asyncio.wait_for(manager.wait_idle(), timeout=1)
@@ -489,7 +492,7 @@ def test_claim_launch_runs_on_uvloop() -> None:
         async def process(_claim: NodeClaim) -> None:
             processed.set()
 
-        manager = TreeQueueManager(process)
+        manager = TreeQueueManager(process, store=AsyncMock())
         decision = await manager.admit(_incoming("root"), "status-root")
         await asyncio.wait_for(manager.wait_idle(), timeout=1)
 
@@ -523,7 +526,9 @@ async def test_absorbed_pre_run_cancellation_cannot_start_node_processor() -> No
         except asyncio.CancelledError:
             callback_absorbed_cancellation.set()
 
-    manager = TreeQueueManager(process, node_started_callback=announce_started)
+    manager = TreeQueueManager(
+        process, node_started_callback=announce_started, store=AsyncMock()
+    )
     await manager.admit(_incoming("root"), "status-root")
     await root_started.wait()
     child = await manager.admit(
@@ -576,7 +581,7 @@ async def test_same_scoped_root_can_be_readmitted_while_detached_claim_finishes(
         new_started.set()
         await release_new.wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     old = await manager.admit(_incoming("root"), "status-root")
     await old_started.wait()
 
@@ -628,7 +633,7 @@ async def test_active_error_claim_can_be_cancelled_again(
                 second_cancellation.set()
                 raise
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     await manager.admit(_incoming("root"), "status-root")
     await started.wait()
 

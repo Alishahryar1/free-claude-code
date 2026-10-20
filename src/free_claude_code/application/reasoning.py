@@ -1,10 +1,13 @@
 """Resolve client reasoning input and FCC configuration exactly once."""
 
 from collections.abc import Mapping
-from typing import Any
 
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.core.anthropic.models import MessagesRequest, ThinkingConfig
+from free_claude_code.core.openai_responses import (
+    OpenAIResponsesRequest,
+    responses_reasoning_policy,
+)
 from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningEffort,
@@ -18,13 +21,78 @@ def resolve_reasoning_policy(
 ) -> ReasoningPolicy:
     """Apply one resolved configuration preference to the client request."""
 
+    return _apply_reasoning_preference(
+        client_reasoning_policy(request),
+        preference,
+    )
+
+
+def resolve_responses_reasoning_policy(
+    request: OpenAIResponsesRequest,
+    preference: ReasoningPreference,
+) -> ReasoningPolicy:
+    """Apply one resolved configuration preference to a Responses request."""
+
+    return _apply_reasoning_preference(
+        client_responses_reasoning_policy(request),
+        preference,
+    )
+
+
+def resolve_fallback_reasoning(
+    original: ReasoningPolicy,
+    preference: ReasoningPreference,
+    *,
+    client: ReasoningPolicy,
+) -> ReasoningPolicy:
+    """Resolve a candidate from original intent, never a previous fallback."""
+
+    # Classifier requests keep the handler's tolerant policy on every candidate.
+    if original.control is ReasoningControl.PREFER_OFF:
+        return original
+    if preference is ReasoningPreference.INHERIT:
+        return original
+    if preference is ReasoningPreference.CLIENT:
+        return client
+    return _apply_reasoning_preference(original, preference)
+
+
+def prepare_fallback_request[T: MessagesRequest | OpenAIResponsesRequest](
+    original: T, *, model: str, preference: ReasoningPreference
+) -> T:
+    """Copy a candidate and remove computation controls replaced by its policy."""
+
+    request = original.model_copy(update={"model": model}, deep=True)
+    if preference in {ReasoningPreference.INHERIT, ReasoningPreference.CLIENT}:
+        return request
+    if isinstance(request, MessagesRequest):
+        if request.thinking is not None:
+            thinking = request.thinking.model_dump(exclude_unset=True)
+            for key in ("type", "enabled", "budget_tokens"):
+                thinking.pop(key, None)
+            request.thinking = (
+                ThinkingConfig.model_validate(thinking) if thinking else None
+            )
+        if request.output_config is not None:
+            request.output_config.pop("effort", None)
+    elif request.reasoning is not None:
+        request.reasoning.pop("effort", None)
+    return request
+
+
+def _apply_reasoning_preference(
+    client_policy: ReasoningPolicy,
+    preference: ReasoningPreference,
+) -> ReasoningPolicy:
+    """Apply FCC's route preference to already-parsed client intent."""
+
     if preference is ReasoningPreference.INHERIT:
         raise ValueError("Reasoning preference must be resolved before application.")
     if preference is ReasoningPreference.OFF:
         return ReasoningPolicy.off()
     if preference is not ReasoningPreference.CLIENT:
         return ReasoningPolicy.on(effort=ReasoningEffort(preference.value))
-    return client_reasoning_policy(request)
+    return client_policy
 
 
 def client_reasoning_policy(request: MessagesRequest) -> ReasoningPolicy:
@@ -55,6 +123,14 @@ def client_reasoning_policy(request: MessagesRequest) -> ReasoningPolicy:
     )
 
 
+def client_responses_reasoning_policy(
+    request: OpenAIResponsesRequest,
+) -> ReasoningPolicy:
+    """Return the supported reasoning intent from one Responses request."""
+
+    return responses_reasoning_policy(request.reasoning)
+
+
 def _thinking_control(
     thinking: ThinkingConfig | None,
     *,
@@ -75,7 +151,7 @@ def _thinking_control(
     return ReasoningControl.DEFAULT
 
 
-def _output_effort(value: Any) -> tuple[ReasoningEffort | None, bool]:
+def _output_effort(value: object) -> tuple[ReasoningEffort | None, bool]:
     if not isinstance(value, Mapping):
         return None, False
     raw = value.get("effort")

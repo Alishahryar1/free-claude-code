@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import subprocess
 from collections.abc import AsyncGenerator
 
 from loguru import logger
@@ -35,8 +36,8 @@ class ManagedClaudeSession:
         proxy_root_url: str,
         allowed_dirs: list[str] | None = None,
         claude_bin: str = "claude",
-        auth_token: str = "",
         *,
+        auth_token: str,
         log_raw_cli_diagnostics: bool = False,
     ):
         self.config = ManagedClaudeConfig(
@@ -136,6 +137,9 @@ class ManagedClaudeSession:
                         stderr=asyncio.subprocess.PIPE,
                         cwd=invocation.cwd,
                         env=invocation.env,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                        if os.name == "nt"
+                        else 0,
                     )
                     self.process = process
                     if process.pid:

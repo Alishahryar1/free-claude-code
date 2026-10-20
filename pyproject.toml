@@ -1,64 +1,90 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs>=0.5.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "free-claude-code"
-version = "4.20.0"
+dynamic = ["version"]
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
-requires-python = ">=3.14.0"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+requires-python = "==3.14.7"
 dependencies = [
+    "packaging>=26.3",
+    "anyio>=4.15.1",
     "fastapi[standard]>=0.141.1",
-    "uvicorn>=0.52.1",
+    "uvicorn>=0.54.0",
     "httpx[socks]>=0.28.1",
+    "httpx2[socks]>=2.7.0,<3",
     "markdown-it-py>=4.2.0",
-    "pydantic>=2.13.4",
-    "python-dotenv>=1.2.2",
+    "pydantic>=2.14.1",
+    "python-dotenv>=1.2.4",
     "tiktoken>=0.13.0",
     "python-telegram-bot>=22.8",
     "discord.py>=2.7.1",
-    "pydantic-settings>=2.14.2",
-    "openai>=2.53.0",
+    "openai>=3.29.0",
     "loguru>=0.7.0",
-    "aiohttp>=3.14.3",
+    "aiohttp>=3.14.5",
     "jsonschema>=4.25.0",
-    "google-auth[requests]>=2.56.2",
+    "json5>=0.17.3",
+    "tomlkit>=0.13.3",
+    "google-auth[requests]>=2.56.3",
     "requests[socks]>=2.34.2",
     "pystray>=0.19.5; sys_platform == 'win32' or sys_platform == 'darwin'",
     "Pillow>=12.0.0; sys_platform == 'win32' or sys_platform == 'darwin'",
+    "github-copilot-sdk>=1.0.21",
+    "simplejson>=4.2.0",
+    "grpcio>=1.84.0",
+    "grpcio-tools>=1.81.1",
+    "nvidia-riva-client>=2.26.0",
+    "pyperclip>=1.11.0",
+    "sqlalchemy>=2.1.4",
+    "ruamel-yaml>=0.19.1",
 ]
 
 [project.scripts]
+_fcc-update-check = "free_claude_code.updater.check:main"
 fcc-server = "free_claude_code.cli.entrypoints:serve"
+fcc-doctor = "free_claude_code.cli.entrypoints:doctor"
 fcc-claude = "free_claude_code.cli.launchers.claude:launch"
 fcc-codex = "free_claude_code.cli.launchers.codex:launch"
 fcc-pi = "free_claude_code.cli.launchers.pi:launch"
+fcc-opencode = "free_claude_code.cli.launchers.opencode:launch"
+fcc-cline = "free_claude_code.cli.launchers.cline:launch"
+fcc-hermes = "free_claude_code.cli.launchers.hermes:launch"
+fcc-dsh = "free_claude_code.cli.launchers.dsh:launch"
+fcc-grok = "free_claude_code.cli.launchers.grok:launch"
+fcc-muse = "free_claude_code.cli.launchers.muse:launch"
+fcc-aider = "free_claude_code.cli.launchers.aider:launch"
 
 [project.gui-scripts]
 fcc-desktop = "free_claude_code.cli.desktop_entrypoint:launch"
 
 [project.optional-dependencies]
-voice = [
-    "grpcio>=1.83.0",
-    "grpcio-tools>=1.81.1",
-    "nvidia-riva-client>=2.26.0",
-]
 voice_local = [
-    "torch>=2.13.0",
-    "transformers>=5.14.1",
-    "accelerate>=1.14.0",
-    "librosa>=0.10.0",
+    "torch>=2.14.1",
+    "transformers>=5.19.0",
+    "accelerate>=1.15.0",
+    "librosa>=1.0.0",
 ]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build]
+artifacts = ["src/free_claude_code/assets/macos/fcc-desktop-*"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/free_claude_code"]
 
-[tool.hatch.build.targets.wheel.force-include]
-".env.example" = "free_claude_code/config/env.example"
+[tool.hatch.build.targets.wheel.shared-scripts]
+"scripts/update/fcc-update" = "fcc-update"
+"scripts/update/fcc-update.cmd" = "fcc-update.cmd"
 
 [tool.uv]
-required-version = ">=0.11.16"
+required-version = ">=0.12.13"
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu130" }
@@ -73,9 +99,12 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ty>=0.0.66",
-    "ruff>=0.16.1",
+    "ty>=0.0.86",
+    "ruff>=0.17.0",
     "pytest-xdist>=3.8.0",
+    "pytest-playwright>=0.10.0",
+    "pyyaml>=6.0.3",
+    "pytest-split>=0.11.0",
 ]
 
 [tool.ruff]
@@ -111,8 +140,14 @@ line-ending = "auto"
 skip-magic-trailing-comma = false
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
-addopts = "-n auto"
+pythonpath = ["src", "."]
+addopts = "-p e2e.thread_diagnostics -n auto --dist=worksteal"
+tmp_path_retention_policy = "failed"
+filterwarnings = [
+    "error",
+    # Starlette's test client uses this deprecated alias, including in 1.6.0.
+    'ignore:^The anyio\.abc\.BlockingPortal alias is deprecated, use anyio\.from_thread\.BlockingPortal instead\.$:DeprecationWarning:^starlette\.testclient$',
+]
 testpaths = ["tests"]
 markers = [
     "live: opt-in local smoke tests that can touch real services",
@@ -132,12 +167,10 @@ python-version = "3.14"
 
 [tool.ty.analysis]
 # Optional voice_local extra: torch, transformers, librosa for local whisper transcription
-# Optional voice extra: nvidia-riva-client for nvidia_nim transcription provider
 allowed-unresolved-imports = [
     "torch",
     "transformers",
     "librosa",
-    "riva.client",
     "pystray",
     "PIL",
 ]

@@ -1,28 +1,7 @@
 import re
-import tomllib
+import subprocess
+import sys
 from pathlib import Path
-
-
-def test_root_env_example_is_the_single_template_source() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
-    root_example = repo_root / ".env.example"
-    duplicate_example = (
-        repo_root / "src" / "free_claude_code" / "config" / "env.example"
-    )
-
-    assert root_example.is_file()
-    assert not duplicate_example.exists()
-
-
-def test_root_env_example_is_packaged_for_config_template_loader() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
-    pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text("utf-8"))
-
-    force_include = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"][
-        "force-include"
-    ]
-
-    assert force_include[".env.example"] == "free_claude_code/config/env.example"
 
 
 def test_pyproject_first_party_packages_match_packaged_roots() -> None:
@@ -38,3 +17,18 @@ def test_pyproject_first_party_packages_match_packaged_roots() -> None:
     }
     expected = {"free_claude_code", "smoke"}
     assert configured == expected
+
+
+def test_standard_install_can_load_nim_transcription_client() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from riva.client import Auth, ASRService, RecognitionConfig; "
+            "RecognitionConfig(language_code='en-US', max_alternatives=1)",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

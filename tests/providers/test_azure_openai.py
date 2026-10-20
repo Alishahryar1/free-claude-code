@@ -6,10 +6,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
-from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.request_factory import make_messages_request
-from tests.providers.support import immediate_admission, profiled_provider
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    profiled_provider,
+)
 
 AZURE_OPENAI_BASE_URL = "https://example-resource.openai.azure.com/openai/v1/"
 AZURE_OPENAI_DEPLOYMENT = "gpt-5.1"
@@ -18,7 +21,7 @@ AZURE_OPENAI_DEPLOYMENT = "gpt-5.1"
 def _provider() -> OpenAIChatProvider:
     return profiled_provider(
         "azure_openai",
-        ProviderConfig(
+        make_provider_config(
             api_key="azure-key",
             base_url=AZURE_OPENAI_BASE_URL,
         ),
@@ -28,7 +31,7 @@ def _provider() -> OpenAIChatProvider:
 
 def test_init_uses_resource_v1_url_and_api_key() -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = _provider()
 
@@ -59,7 +62,7 @@ def test_request_uses_deployment_name_modern_token_field_tools_and_reasoning() -
         ],
     )
 
-    body = _provider()._build_request_body(
+    body = _provider()._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
     )
@@ -85,7 +88,7 @@ def test_reasoning_uses_azure_supported_provider_vocabulary(
     policy: ReasoningPolicy,
     expected: str,
 ) -> None:
-    body = _provider()._build_request_body(
+    body = _provider()._chat._build_request_body(
         make_messages_request(
             AZURE_OPENAI_DEPLOYMENT,
             temperature=None,
@@ -114,7 +117,7 @@ def test_reasoning_history_replays_as_portable_think_tags() -> None:
         ],
     )
 
-    body = _provider()._build_request_body(request)
+    body = _provider()._chat._build_request_body(request)
     assistant = next(
         message for message in body["messages"] if message["role"] == "assistant"
     )

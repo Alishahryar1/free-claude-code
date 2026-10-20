@@ -1,5 +1,6 @@
 """Shared Anthropic streaming engine."""
 
+from .decoder import AnthropicSSEDecoder
 from .emitter import (
     ANTHROPIC_SSE_RESPONSE_HEADERS,
     AnthropicSseEmitter,
@@ -22,6 +23,7 @@ from .recovery import (
 
 __all__ = [
     "ANTHROPIC_SSE_RESPONSE_HEADERS",
+    "AnthropicSSEDecoder",
     "AnthropicSseEmitter",
     "AnthropicStreamLedger",
     "StreamBlockLedger",

@@ -8,10 +8,14 @@ from enum import StrEnum
 from types import SimpleNamespace
 from typing import Any
 
-import jsonschema
-
 from free_claude_code.providers.failure_policy import RetryableToolProtocolError
 from free_claude_code.providers.http import maybe_await_aclose
+
+from .native_tool_schema import (
+    arguments_match_schema,
+    coerce_text_argument,
+    schema_type,
+)
 
 _NAMESPACE = "]<]minimax[>["
 _TOOL_BLOCK_START = f"{_NAMESPACE}<tool_call>"
@@ -598,9 +602,9 @@ def _elements_to_object(
 
 
 def _element_value(element: _Element, schema: Mapping[str, Any]) -> Any:
-    schema_type = _schema_type(schema)
+    declared_type = schema_type(schema)
     if element.children:
-        if schema_type == "array":
+        if declared_type == "array":
             item_schema = schema.get("items")
             if not isinstance(item_schema, Mapping):
                 item_schema = {}
@@ -614,82 +618,12 @@ def _element_value(element: _Element, schema: Mapping[str, Any]) -> Any:
             result[mixed_name] = element.text
         return result
 
-    return _coerce_leaf(element.text, schema_type, schema)
-
-
-def _coerce_leaf(
-    value: str,
-    schema_type: str | None,
-    schema: Mapping[str, Any],
-) -> Any:
-    enum_values = schema.get("enum")
-    if isinstance(enum_values, list):
-        for enum_value in enum_values:
-            if str(enum_value) == value:
-                return enum_value
-    if "const" in schema and str(schema["const"]) == value:
-        return schema["const"]
-
-    stripped = value.strip()
     try:
-        if schema_type == "integer":
-            return int(stripped)
-        if schema_type == "number":
-            number = json.loads(stripped)
-            if isinstance(number, int | float) and not isinstance(number, bool):
-                return number
-            raise ValueError
-        if schema_type == "boolean":
-            if stripped.lower() == "true":
-                return True
-            if stripped.lower() == "false":
-                return False
-            raise ValueError
-        if schema_type == "null":
-            if stripped.lower() == "null":
-                return None
-            raise ValueError
-        if schema_type == "array":
-            parsed = json.loads(stripped)
-            if isinstance(parsed, list):
-                return parsed
-            raise ValueError
-        if schema_type == "object":
-            parsed = json.loads(stripped)
-            if isinstance(parsed, dict):
-                return parsed
-            raise ValueError
-    except json.JSONDecodeError, ValueError:
+        return coerce_text_argument(element.text, schema)
+    except ValueError:
         raise NimNativeToolProtocolError(
             "NVIDIA NIM returned a native MiniMax argument with the wrong type."
         ) from None
-    return value
-
-
-def _schema_type(schema: Mapping[str, Any]) -> str | None:
-    declared = schema.get("type")
-    if isinstance(declared, str):
-        return declared
-    if isinstance(declared, list):
-        non_null = [
-            item for item in declared if isinstance(item, str) and item != "null"
-        ]
-        if len(non_null) == 1:
-            return non_null[0]
-
-    for keyword in ("oneOf", "anyOf"):
-        alternatives = schema.get(keyword)
-        if not isinstance(alternatives, list):
-            continue
-        types = {
-            nested_type
-            for alternative in alternatives
-            if isinstance(alternative, Mapping)
-            if (nested_type := _schema_type(alternative)) not in (None, "null")
-        }
-        if len(types) == 1:
-            return types.pop()
-    return None
 
 
 def _validate_arguments(
@@ -697,16 +631,10 @@ def _validate_arguments(
     arguments: dict[str, Any],
     schema: dict[str, Any],
 ) -> None:
-    try:
-        validator_type = jsonschema.validators.validator_for(schema)
-        validator_type.check_schema(schema)
-        validator_type(schema).validate(arguments)
-    except jsonschema.exceptions.SchemaError:
-        return
-    except jsonschema.exceptions.ValidationError:
+    if not arguments_match_schema(arguments, schema):
         raise NimNativeToolProtocolError(
             f"NVIDIA NIM returned schema-invalid arguments for tool {tool_name!r}."
-        ) from None
+        )
 
 
 def _openai_tool_schemas(body: Mapping[str, Any]) -> dict[str, dict[str, Any]]:

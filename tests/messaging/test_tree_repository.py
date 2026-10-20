@@ -1,6 +1,7 @@
 """Persistence and restored-manager contracts for messaging trees."""
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -95,7 +96,9 @@ async def test_restore_reconciles_interrupted_nodes_before_manager_exposure() ->
     async def process(claim: NodeClaim) -> None:
         processed.append(claim.node.node_id)
 
-    manager = TreeQueueManager.from_snapshot(_interrupted_conversation(), process)
+    manager = TreeQueueManager.from_snapshot(
+        _interrupted_conversation(), process, store=AsyncMock()
+    )
 
     assert len(manager.restored_stale_targets) == 2
     assert manager.restored_snapshot is not None
@@ -144,7 +147,9 @@ def test_restore_rejects_tree_that_violates_scoped_reference_invariants(
     else:
         tree.nodes["failed"]["status_message_id"] = "status-pending"
 
-    manager = TreeQueueManager.from_snapshot(snapshot, lambda _claim: asyncio.sleep(0))
+    manager = TreeQueueManager.from_snapshot(
+        snapshot, lambda _claim: asyncio.sleep(0), store=AsyncMock()
+    )
 
     assert manager.get_tree_count() == 0
     assert manager.restored_snapshot == ConversationSnapshot()
@@ -159,7 +164,7 @@ async def test_claim_state_and_session_updates_produce_detached_snapshots() -> N
         started.set()
         await release.wait()
 
-    manager = TreeQueueManager(process)
+    manager = TreeQueueManager(process, store=AsyncMock())
     decision = await manager.admit(_incoming("root"), "status-root")
     assert decision.claim is not None
     await started.wait()

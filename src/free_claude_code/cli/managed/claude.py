@@ -3,11 +3,11 @@
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
 
 from loguru import logger
 
-from free_claude_code.cli.claude_env import (
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.harnesses.claude import (
     CLAUDE_BINARY_NAME,
     build_claude_proxy_env,
 )
@@ -31,7 +31,7 @@ class ManagedClaudeInvocation:
     argv: tuple[str, ...]
     env: dict[str, str]
     cwd: str
-    trace_metadata: dict[str, Any] = field(default_factory=dict)
+    trace_metadata: JsonObject = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,9 +40,9 @@ class ManagedClaudeConfig:
 
     workspace_path: str
     proxy_root_url: str
+    auth_token: str
     allowed_dirs: list[str] = field(default_factory=list)
     claude_bin: str = CLAUDE_BINARY_NAME
-    auth_token: str = ""
 
 
 @dataclass(slots=True)
@@ -162,11 +162,11 @@ def build_managed_claude_command(
 
 def parse_managed_claude_stdout_line(
     line: str, state: ManagedClaudeParseState
-) -> Iterable[Any]:
+) -> Iterable[JsonObject]:
     """Parse one Claude Code stream-json stdout line."""
 
     try:
-        event = json.loads(line)
+        parsed: JsonValue = json.loads(line)
     except json.JSONDecodeError:
         if state.log_raw_cli_diagnostics:
             logger.debug("Non-JSON output: {}", line)
@@ -174,6 +174,15 @@ def parse_managed_claude_stdout_line(
             logger.debug("Non-JSON CLI line: char_len={}", len(line))
         yield {"type": "raw", "content": line}
         return
+
+    if not isinstance(parsed, dict):
+        if state.log_raw_cli_diagnostics:
+            logger.debug("Non-object JSON output: {}", line)
+        else:
+            logger.debug("Non-object JSON CLI line: char_len={}", len(line))
+        yield {"type": "raw", "content": line}
+        return
+    event = parsed
 
     if not state.session_id_extracted:
         extracted_id = extract_managed_claude_session_id(event)
@@ -185,7 +194,7 @@ def parse_managed_claude_stdout_line(
     yield event
 
 
-def extract_managed_claude_session_id(event: Any) -> str | None:
+def extract_managed_claude_session_id(event: object) -> str | None:
     """Extract a Claude Code session ID from supported stream-json event shapes."""
 
     if not isinstance(event, dict):
@@ -212,5 +221,5 @@ def extract_managed_claude_session_id(event: Any) -> str | None:
     return None
 
 
-def _string_value(value: Any) -> str | None:
+def _string_value(value: object) -> str | None:
     return value if isinstance(value, str) else None

@@ -4,10 +4,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import CODESTRAL_DEFAULT_BASE
-from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.core.model_capabilities import ModelInputModality
 from tests.providers.request_factory import make_messages_request
-from tests.providers.support import immediate_admission, profiled_provider
+from tests.providers.support import (
+    SDKStreamDouble,
+    immediate_admission,
+    make_provider_config,
+    profiled_provider,
+)
 
 
 def make_request(**overrides):
@@ -16,11 +22,9 @@ def make_request(**overrides):
 
 @pytest.fixture
 def codestral_config():
-    return ProviderConfig(
+    return make_provider_config(
         api_key="test_codestral_key",
         base_url=CODESTRAL_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 
@@ -34,7 +38,7 @@ def codestral_provider(codestral_config):
 def test_init(codestral_config):
     """Test provider initialization."""
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
         provider = profiled_provider(
             "mistral_codestral",
@@ -53,7 +57,7 @@ def test_default_base_url():
 def test_build_request_body_basic(codestral_provider):
     """Basic request body conversion works for Codestral."""
     req = make_request()
-    body = codestral_provider._build_request_body(req)
+    body = codestral_provider._chat._build_request_body(req)
 
     assert body["model"] == "devstral-small-latest"
     assert body["messages"][0]["role"] == "system"
@@ -63,23 +67,84 @@ def test_build_request_body_global_disable_blocks_reasoning_mapping():
     """Global disable disables reasoning replay in the converter."""
     provider = profiled_provider(
         "mistral_codestral",
-        ProviderConfig(
+        make_provider_config(
             api_key="test_codestral_key",
             base_url=CODESTRAL_DEFAULT_BASE,
-            rate_limit=10,
-            rate_window=60,
         ),
         admission=immediate_admission(),
     )
     req = make_request()
-    body = provider._build_request_body(req)
+    body = provider._chat._build_request_body(req)
 
     roles = [m.get("role") for m in body.get("messages", [])]
     assert "assistant_reasoning_content" not in roles
 
 
 @pytest.mark.asyncio
-async def test_stream_response_text(codestral_provider):
+async def test_model_catalog_extracts_exact_input_modalities(codestral_provider):
+    codestral_provider._client.models.list = AsyncMock(
+        return_value={
+            "data": [
+                {
+                    "id": "vision-model",
+                    "capabilities": {
+                        "completion_chat": True,
+                        "vision": True,
+                    },
+                },
+                {
+                    "id": "text-model",
+                    "capabilities": {
+                        "completion_chat": True,
+                        "vision": False,
+                    },
+                },
+            ]
+        }
+    )
+
+    assert await codestral_provider.list_model_infos() == frozenset(
+        {
+            ProviderModelInfo(
+                "vision-model",
+                input_modalities=frozenset(
+                    {ModelInputModality.TEXT, ModelInputModality.IMAGE}
+                ),
+            ),
+            ProviderModelInfo(
+                "text-model",
+                input_modalities=frozenset({ModelInputModality.TEXT}),
+            ),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        None,
+        {},
+        {"completion_chat": True},
+        {"completion_chat": True, "vision": "yes"},
+    ],
+)
+@pytest.mark.asyncio
+async def test_model_catalog_degrades_incomplete_capabilities_to_unknown(
+    codestral_provider,
+    capabilities,
+):
+    model = {"id": "model"}
+    if capabilities is not None:
+        model["capabilities"] = capabilities
+    codestral_provider._client.models.list = AsyncMock(return_value={"data": [model]})
+
+    assert await codestral_provider.list_model_infos() == frozenset(
+        {ProviderModelInfo("model")}
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_messages_text(codestral_provider):
     """Text content deltas are emitted as text blocks."""
     req = make_request()
 
@@ -102,9 +167,9 @@ async def test_stream_response_text(codestral_provider):
     with patch.object(
         codestral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in codestral_provider.stream_response(req)]
+        events = [event async for event in codestral_provider.stream_messages(req)]
 
         assert any(
             '"text_delta"' in event and "Hello back!" in event for event in events
@@ -112,7 +177,7 @@ async def test_stream_response_text(codestral_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_response_reasoning_content(codestral_provider):
+async def test_stream_messages_reasoning_content(codestral_provider):
     """reasoning_content deltas are emitted as thinking blocks."""
     req = make_request()
 
@@ -135,9 +200,9 @@ async def test_stream_response_reasoning_content(codestral_provider):
     with patch.object(
         codestral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
-        mock_create.return_value = mock_stream()
+        mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in codestral_provider.stream_response(req)]
+        events = [event async for event in codestral_provider.stream_messages(req)]
 
         assert any(
             '"thinking_delta"' in event and "Thinking..." in event for event in events

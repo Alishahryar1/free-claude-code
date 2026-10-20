@@ -1,5 +1,1 @@
-"""OpenAI Responses streaming assembly internals."""
-
-from .assembler import ResponsesStreamAssembler
-
-__all__ = ["ResponsesStreamAssembler"]
+"""OpenAI Responses streaming primitives."""

@@ -216,7 +216,7 @@ async def test_cancelled_transcription_keeps_ownership_until_thread_exits(
         await close_task
 
     assert service._pipeline is None
-    assert service._huggingface_api_key == ""
+    assert service._huggingface_api_key is None
     with pytest.raises(RuntimeError, match="closed"):
         await service.transcribe(audio_path)
 

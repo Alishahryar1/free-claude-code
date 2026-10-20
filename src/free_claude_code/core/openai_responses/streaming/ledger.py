@@ -3,7 +3,8 @@
 from collections.abc import Mapping
 from typing import Any
 
-from ..usage import estimate_text_tokens
+from free_claude_code.core.token_estimation import estimate_text_tokens
+
 from .blocks import BlockState
 
 _ANTHROPIC_INPUT_TOKEN_FIELDS = (
@@ -74,14 +75,17 @@ class ResponsesOutputLedger:
         output_tokens = self._output_tokens or 0
         usage: dict[str, Any] = {
             "input_tokens": input_tokens,
+            "input_tokens_details": {
+                "cached_tokens": self._input_token_counts.get(
+                    "cache_read_input_tokens", 0
+                )
+            },
             "output_tokens": output_tokens,
+            "output_tokens_details": {
+                "reasoning_tokens": min(self._reasoning_tokens_estimate, output_tokens)
+            },
             "total_tokens": input_tokens + output_tokens,
         }
-        capped_reasoning_tokens = min(self._reasoning_tokens_estimate, output_tokens)
-        if capped_reasoning_tokens:
-            usage["output_tokens_details"] = {
-                "reasoning_tokens": capped_reasoning_tokens
-            }
         return usage
 
     def safe_text_index(self, index: int | None) -> int:

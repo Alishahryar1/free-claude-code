@@ -13,6 +13,8 @@ def test_provider_descriptors_are_immutable_values() -> None:
     descriptor = ProviderDescriptor(
         provider_id="local",
         display_name="Local",
+        website_url="https://example.test/",
+        logo_filename="local.svg",
         local=True,
     )
 
@@ -47,11 +49,11 @@ def test_ollama_cloud_is_remote_and_distinct_from_local_ollama() -> None:
 
 def test_provider_configuration_attrs_cover_multi_field_and_adc_providers() -> None:
     assert PROVIDER_CATALOG["azure_openai"].configuration_attrs() == (
-        "azure_openai_api_key",
+        "azure_openai_api_keys",
         "azure_openai_base_url",
     )
     assert PROVIDER_CATALOG["cloudflare"].configuration_attrs() == (
-        "cloudflare_api_token",
+        "cloudflare_api_tokens",
         "cloudflare_account_id",
     )
     assert PROVIDER_CATALOG["vertex"].configuration_attrs() == ("vertex_project_id",)
@@ -73,3 +75,24 @@ def test_openai_is_a_connected_account_without_api_key_configuration() -> None:
     assert descriptor.credential_env is None
     assert descriptor.configuration_attrs() == ()
     assert descriptor.default_base_url == "https://chatgpt.com/backend-api/codex"
+
+
+def test_openai_api_is_a_separate_key_configured_provider() -> None:
+    api = PROVIDER_CATALOG["openai_api"]
+    subscription = PROVIDER_CATALOG["openai"]
+
+    assert api.auth_kind is ProviderAuthKind.CONFIGURATION
+    assert api.credential_env == "OPENAI_API_KEY"
+    assert api.configuration_attrs() == ("openai_api_keys",)
+    assert api.proxy_attr == "openai_api_proxy"
+    assert api.default_base_url == "https://api.openai.com/v1"
+    assert subscription.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT
+    assert subscription.credential_env is None
+
+
+def test_copilot_is_connected_without_credential_configuration() -> None:
+    descriptor = PROVIDER_CATALOG["github_copilot"]
+    assert descriptor.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT
+    assert descriptor.credential_env is None
+    assert descriptor.configuration_attrs() == ()
+    assert descriptor.default_base_url == "https://api.githubcopilot.com"

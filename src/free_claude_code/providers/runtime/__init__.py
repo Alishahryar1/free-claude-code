@@ -1,8 +1,7 @@
 """App-scoped provider runtime facade."""
 
 from .config import build_provider_config
-from .factory import create_provider
-from .runtime import ProviderRuntime
+from .runtime import ProviderRuntime, create_provider
 
 __all__ = [
     "ProviderRuntime",

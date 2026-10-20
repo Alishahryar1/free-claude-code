@@ -41,7 +41,7 @@ async def test_register_real_session_id_missing_temp_id_returns_false():
     from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
     manager = ManagedClaudeSessionManager(
-        workspace_path="/tmp", proxy_root_url="http://x"
+        workspace_path="/tmp", proxy_root_url="http://x", auth_token="freecc"
     )
     ok = await manager.register_real_session_id("missing", "real_1")
     assert ok is False
@@ -60,7 +60,7 @@ async def test_remove_session_pending_stops_and_returns_true():
         mock_session_cls.return_value = mock_session
 
         manager = ManagedClaudeSessionManager(
-            workspace_path="/tmp", proxy_root_url="http://x"
+            workspace_path="/tmp", proxy_root_url="http://x", auth_token="freecc"
         )
         _, temp_id, _ = await manager.get_or_create_session()
 
@@ -82,7 +82,7 @@ async def test_remove_session_active_removes_temp_mapping():
         mock_session_cls.return_value = mock_session
 
         manager = ManagedClaudeSessionManager(
-            workspace_path="/tmp", proxy_root_url="http://x"
+            workspace_path="/tmp", proxy_root_url="http://x", auth_token="freecc"
         )
         _, temp_id, _ = await manager.get_or_create_session()
         await manager.register_real_session_id(temp_id, "real_1")
@@ -101,7 +101,7 @@ async def test_stop_all_reports_and_retains_stop_exceptions():
     from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
     manager = ManagedClaudeSessionManager(
-        workspace_path="/tmp", proxy_root_url="http://x"
+        workspace_path="/tmp", proxy_root_url="http://x", auth_token="freecc"
     )
 
     s1 = MagicMock()

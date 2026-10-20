@@ -15,7 +15,9 @@ $CheckOrder = @(
     "ruff-format",
     "ruff-check",
     "ty",
-    "pytest"
+    "pytest",
+    "playwright",
+    "macos-desktop"
 )
 
 function Show-Usage {
@@ -23,7 +25,7 @@ function Show-Usage {
 Usage: ci.ps1 [options]
 
 Runs the local sequence for the same check IDs enforced by GitHub CI.
-Requires uv on PATH when running ruff, ty, or pytest checks.
+Requires uv on PATH when running ruff, ty, pytest, or Playwright checks.
 Local ruff checks repair formatting and autofixable lint before later checks.
 
 Checks (in order):
@@ -32,6 +34,8 @@ Checks (in order):
   ruff-check     uv run ruff check --fix
   ty             uv run ty check
   pytest         uv run pytest -v --tb=short
+  playwright     Install Chromium and run deterministic Admin browser tests
+  macos-desktop  Build and test the native app (macOS GUI required, -Only)
 
 Options:
   -Only ID              Run only the given check (repeatable)
@@ -92,6 +96,10 @@ function Assert-ValidCheckId {
 
 function Test-ShouldRunCheck {
     param([string] $CheckId)
+
+    if ($CheckId -eq "macos-desktop" -and $Only.Count -eq 0) {
+        return $false
+    }
 
     if ($Only.Count -gt 0 -and ($Only -notcontains $CheckId)) {
         return $false
@@ -165,6 +173,16 @@ function Invoke-PytestCheck {
     Invoke-CiCommand -FilePath "uv" -Arguments @("run", "pytest", "-v", "--tb=short")
 }
 
+function Invoke-PlaywrightCheck {
+    Write-Step "playwright"
+    Invoke-CiCommand -FilePath "uv" -Arguments @("run", "playwright", "install", "chromium")
+    Invoke-CiCommand -FilePath "uv" -Arguments @(
+        "run", "pytest", "e2e", "-v", "--tb=short",
+        "--tracing=retain-on-failure", "--screenshot=only-on-failure",
+        "--full-page-screenshot", "--output=test-results"
+    )
+}
+
 function Invoke-Check {
     param([string] $CheckId)
 
@@ -174,6 +192,12 @@ function Invoke-Check {
         "ruff-check" { Invoke-RuffLintCheck }
         "ty" { Invoke-TyCheck }
         "pytest" { Invoke-PytestCheck }
+        "playwright" { Invoke-PlaywrightCheck }
+        "macos-desktop" {
+            Write-Step "macOS desktop"
+            Invoke-CiCommand -FilePath "uv" -Arguments @("run", "--locked", "python", "scripts/build_macos_launcher.py")
+            Invoke-CiCommand -FilePath "uv" -Arguments @("run", "--locked", "pytest", "--confcutdir=smoke/desktop", "-n", "0", "-s", "-v", "smoke/desktop")
+        }
         default { throw "unknown check id: $CheckId" }
     }
 }

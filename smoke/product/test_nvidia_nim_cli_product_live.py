@@ -36,6 +36,7 @@ def test_nvidia_nim_cli_matrix_e2e(smoke_config: SmokeConfig, tmp_path: Path) ->
                 "MODEL": provider_model.full_model,
                 "MESSAGING_PLATFORM": "none",
                 "REASONING_POLICY": "high",
+                "LOG_LEVEL": "DEBUG",
                 "LOG_RAW_API_PAYLOADS": "true",
                 "LOG_RAW_SSE_EVENTS": "true",
             },

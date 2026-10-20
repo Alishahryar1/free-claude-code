@@ -73,6 +73,25 @@ def usage_int(usage_info: Any, key: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def nested_usage_int(usage_info: Any, parent: str, key: str) -> int | None:
+    """Extract one nested integer from SDK usage objects or plain mappings."""
+    if usage_info is None:
+        return None
+    if isinstance(usage_info, Mapping):
+        details = usage_info.get(parent)
+    else:
+        details = getattr(usage_info, parent, None)
+        if details is None:
+            extra = getattr(usage_info, "model_extra", None)
+            if isinstance(extra, Mapping):
+                details = extra.get(parent)
+    if isinstance(details, Mapping):
+        value = details.get(key)
+    else:
+        value = getattr(details, key, None)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def _is_bad_request_like(error: Exception) -> bool:
     if isinstance(error, openai.BadRequestError):
         return True

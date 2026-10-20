@@ -1,151 +1,186 @@
 """Local admin UI routes and APIs."""
 
-import ipaddress
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlsplit
+from time import perf_counter
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+)
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from free_claude_code.application.connected_accounts import (
     ConnectedAccountLoginMode,
 )
+from free_claude_code.application.errors import ApplicationError
+from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
+from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY
-from free_claude_code.config.admin.persistence import validate_updates
-from free_claude_code.config.admin.values import load_config_response
-from free_claude_code.config.model_refs import configured_chat_model_refs
+from free_claude_code.config.errors import ConfigConflictError
 from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     ProviderAuthKind,
 )
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.version import package_version
 
+from .admin_security import require_loopback_admin
 from .dependencies import get_services
 from .ports import ApiServices
 
 router = APIRouter()
 
 STATIC_DIR = Path(__file__).resolve().parent / "admin_static"
+PACKAGE_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+_ADMIN_ASSET_VERSION_PLACEHOLDER = "__FCC_VERSION__"
+_ADMIN_ASSET_MEDIA_TYPES = {
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+}
+_ADMIN_ASSET_FILENAMES = frozenset(
+    {
+        "admin.css",
+        "admin.js",
+        "form_controls.js",
+        "app-icon.svg",
+        "code_sessions.css",
+        "code_sessions.js",
+        "session_layout.css",
+        "session_ui.js",
+        "model_combobox.js",
+        "api_key_editor.js",
+        *(
+            f"providers/{provider.logo_filename}"
+            for provider in PROVIDER_CATALOG.values()
+        ),
+    }
+)
 LOCAL_PROVIDER_PATHS = {
     "lmstudio": "/models",
     "llamacpp": "/models",
     "ollama": "/api/tags",
 }
+_LOCAL_PROVIDER_CHECK_FAILURE_MESSAGE = (
+    "Could not connect. Verify the URL and that the local provider is running."
+)
 
 
 class AdminConfigPayload(BaseModel):
     """Partial config update submitted by the admin UI."""
 
-    values: dict[str, Any] = Field(default_factory=dict)
+    values: JsonObject = Field(default_factory=dict, repr=False)
+    custom_provider: CustomProviderMutation | None = None
 
 
 class ConnectedAccountLoginPayload(BaseModel):
     """Interactive connected-account login selection."""
 
-    mode: ConnectedAccountLoginMode = ConnectedAccountLoginMode.BROWSER
+    mode: ConnectedAccountLoginMode | None = None
 
 
-def _is_loopback_host(host: str | None) -> bool:
-    if host is None:
-        return False
-    normalized = host.strip().strip("[]").lower()
-    if normalized == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(normalized).is_loopback
-    except ValueError:
-        return False
-
-
-def _origin_is_local(origin: str | None) -> bool:
-    if not origin:
-        return True
-    parsed = urlsplit(origin)
-    return _is_loopback_host(parsed.hostname)
-
-
-def require_loopback_admin(request: Request) -> None:
-    """Allow admin access only from the local machine."""
-
-    client_host = request.client.host if request.client else None
-    if not _is_loopback_host(client_host):
-        raise HTTPException(status_code=403, detail="Admin UI is local-only")
-
-    origin = request.headers.get("origin")
-    if not _origin_is_local(origin):
-        raise HTTPException(status_code=403, detail="Admin UI is local-only")
+def _asset_path(filename: str) -> Path:
+    asset_dir = PACKAGE_ASSETS_DIR if filename == "app-icon.svg" else STATIC_DIR
+    path = asset_dir / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Admin asset not found")
+    return path
 
 
 def _asset_response(filename: str) -> FileResponse:
-    path = STATIC_DIR / filename
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Admin asset not found")
-    return FileResponse(path)
+    path = _asset_path(filename)
+    return FileResponse(path, media_type=_ADMIN_ASSET_MEDIA_TYPES[path.suffix])
+
+
+def admin_page_response() -> HTMLResponse:
+    template = _asset_path("index.html").read_text(encoding="utf-8")
+    return HTMLResponse(
+        template.replace(_ADMIN_ASSET_VERSION_PLACEHOLDER, package_version())
+    )
 
 
 @router.get("/admin", include_in_schema=False)
-async def admin_page(request: Request):
+@router.get("/admin/model_config", include_in_schema=False)
+@router.get("/admin/messaging", include_in_schema=False)
+@router.get("/admin/integrations", include_in_schema=False)
+def admin_page(request: Request):
     require_loopback_admin(request)
-    return _asset_response("index.html")
+    return admin_page_response()
 
 
-@router.get("/admin/assets/{filename}", include_in_schema=False)
-async def admin_asset(filename: str, request: Request):
+@router.get("/admin/assets/{version}/{filename:path}", include_in_schema=False)
+async def admin_asset(version: str, filename: str, request: Request):
     require_loopback_admin(request)
-    if filename not in {"admin.css", "admin.js"}:
+    if version != package_version() or filename not in _ADMIN_ASSET_FILENAMES:
         raise HTTPException(status_code=404, detail="Admin asset not found")
     return _asset_response(filename)
 
 
 @router.get("/admin/api/config")
-async def get_admin_config(request: Request):
+async def get_admin_config(
+    request: Request, services: ApiServices = Depends(get_services)
+):
     require_loopback_admin(request)
-    return load_config_response()
-
-
-@router.post("/admin/api/config/validate")
-async def validate_admin_config(payload: AdminConfigPayload, request: Request):
-    require_loopback_admin(request)
-    return validate_updates(_filtered_values(payload.values))
+    return await services.admin.admin_config()
 
 
 @router.post("/admin/api/config/apply")
 async def apply_admin_config(
     payload: AdminConfigPayload,
     request: Request,
-    background_tasks: BackgroundTasks,
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    result = await services.admin.apply_admin_config(_filtered_values(payload.values))
-    restart = result.get("restart")
-    if isinstance(restart, dict) and restart.get("automatic"):
-        background_tasks.add_task(services.admin.request_restart)
-    return result
+    try:
+        if payload.custom_provider is not None:
+            return await services.admin.apply_admin_config(
+                _filtered_values(payload.values), payload.custom_provider
+            )
+        return await services.admin.apply_admin_config(_filtered_values(payload.values))
+    except ConfigConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
 @router.get("/admin/api/status")
 async def admin_status(
     request: Request,
+    response: Response,
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return services.admin.admin_status()
+    # A local Admin page may reconnect after Apply changes the listening port.
+    # The existing security check admits only loopback callers and origins.
+    if origin := request.headers.get("origin"):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    return await services.admin.admin_status()
 
 
-@router.get("/admin/api/providers/local-status")
-async def local_provider_status(request: Request):
+@router.get("/admin/api/providers/{provider_id}/local-status")
+async def local_provider_status(
+    provider_id: str, request: Request, services: ApiServices = Depends(get_services)
+):
     require_loopback_admin(request)
-    config = load_config_response()
-    values = {field["key"]: field["value"] for field in config["fields"]}
-    checks = []
-    for provider_id, path in LOCAL_PROVIDER_PATHS.items():
-        base_url = _local_provider_url(provider_id, values)
-        checks.append(await _check_local_provider(provider_id, base_url, path))
-    return {"providers": checks}
+    if provider_id not in LOCAL_PROVIDER_PATHS:
+        raise HTTPException(status_code=404, detail="Local provider not found")
+    values = {
+        key: entry.value or ""
+        for key, entry in (await services.admin.admin_values()).items()
+    }
+    return await _check_local_provider(
+        provider_id,
+        _local_provider_url(provider_id, values),
+        LOCAL_PROVIDER_PATHS[provider_id],
+    )
 
 
 @router.post("/admin/api/providers/{provider_id}/test")
@@ -179,10 +214,15 @@ async def start_connected_account_login(
 ):
     require_loopback_admin(request)
     _require_connected_account_provider(provider_id)
-    try:
-        status = await services.admin.start_connected_account_login(
-            provider_id, payload.mode
+    account = await services.admin.connected_account_status(provider_id)
+    mode = payload.mode or account.default_login_mode
+    if mode not in account.supported_login_modes:
+        raise HTTPException(
+            status_code=422,
+            detail="Login mode is not supported by this provider.",
         )
+    try:
+        status = await services.admin.start_connected_account_login(provider_id, mode)
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -224,6 +264,241 @@ async def models(
     return _model_options(services)
 
 
+@router.get("/admin/api/integrations/claude-onboarding")
+async def claude_onboarding_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.claude_onboarding_status)
+
+
+@router.post("/admin/api/integrations/claude-onboarding/complete")
+async def complete_claude_onboarding(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.complete_claude_onboarding)
+
+
+@router.get("/admin/api/integrations/claude-vscode")
+async def claude_vscode_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.claude_vscode_status)
+
+
+@router.get("/admin/api/integrations/vscode-chat")
+async def vscode_chat_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.vscode_chat_status)
+
+
+@router.post("/admin/api/integrations/vscode-chat/connect")
+async def connect_vscode_chat(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_vscode_chat)
+
+
+@router.post("/admin/api/integrations/vscode-chat/disconnect")
+async def disconnect_vscode_chat(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_vscode_chat)
+
+
+@router.post("/admin/api/integrations/vscode-chat/refresh")
+async def refresh_vscode_chat(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_vscode_chat)
+
+
+@router.post("/admin/api/integrations/claude-vscode/connect")
+async def connect_claude_vscode(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_claude_vscode)
+
+
+@router.post("/admin/api/integrations/claude-vscode/refresh")
+async def refresh_claude_vscode(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_claude_vscode)
+
+
+@router.post("/admin/api/integrations/claude-vscode/disconnect")
+async def disconnect_claude_vscode(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_claude_vscode)
+
+
+@router.get("/admin/api/integrations/dsh-desktop")
+async def dsh_desktop_status(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.dsh_desktop_status)
+
+
+@router.post("/admin/api/integrations/dsh-desktop/connect")
+async def connect_dsh_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_dsh_desktop)
+
+
+@router.post("/admin/api/integrations/dsh-desktop/disconnect")
+async def disconnect_dsh_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_dsh_desktop)
+
+
+@router.post("/admin/api/integrations/dsh-desktop/refresh")
+async def refresh_dsh_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_dsh_desktop)
+
+
+@router.get("/admin/api/integrations/claude-desktop")
+async def claude_desktop_status(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.claude_desktop_status)
+
+
+@router.post("/admin/api/integrations/claude-desktop/connect")
+async def connect_claude_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_claude_desktop)
+
+
+@router.post("/admin/api/integrations/claude-desktop/disconnect")
+async def disconnect_claude_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_claude_desktop)
+
+
+@router.post("/admin/api/integrations/claude-desktop/refresh")
+async def refresh_claude_desktop(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_claude_desktop)
+
+
+@router.get("/admin/api/integrations/jetbrains-acp")
+async def jetbrains_acp_status(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.jetbrains_acp_status)
+
+
+@router.post("/admin/api/integrations/jetbrains-acp/connect")
+async def connect_jetbrains_acp(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_jetbrains_acp)
+
+
+@router.post("/admin/api/integrations/jetbrains-acp/disconnect")
+async def disconnect_jetbrains_acp(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_jetbrains_acp)
+
+
+@router.post("/admin/api/integrations/jetbrains-acp/refresh")
+async def refresh_jetbrains_acp(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_jetbrains_acp)
+
+
+@router.get("/admin/api/integrations/codex")
+async def codex_integration_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.codex_integration_status)
+
+
+@router.post("/admin/api/integrations/codex/connect")
+async def connect_codex(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_codex)
+
+
+@router.post("/admin/api/integrations/codex/refresh")
+async def refresh_codex_integration(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.refresh_codex_integration)
+
+
+@router.post("/admin/api/integrations/codex/disconnect")
+async def disconnect_codex(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_codex)
+
+
+async def _integration_response(
+    operation: Callable[[], Awaitable[JsonObject]],
+) -> JSONResponse:
+    try:
+        return _no_store(await operation())
+    except ApplicationError as exc:
+        return JSONResponse(
+            {"detail": exc.message},
+            status_code=exc.status_code,
+            headers={"Cache-Control": "no-store"},
+        )
+
+
 @router.post("/admin/api/models/refresh")
 async def refresh_models(
     request: Request,
@@ -238,24 +513,21 @@ def _model_options(
     services: ApiServices,
     *,
     refresh_result: ProviderModelRefreshResult | None = None,
-) -> dict[str, list[str]]:
-    configured = {
-        ref.model_ref
-        for ref in configured_chat_model_refs(services.requests.current_settings())
-    }
-    discovered = {
-        info.model_id for info in services.requests.cached_prefixed_model_infos()
-    }
+) -> JsonObject:
+    catalog = read_model_catalog(services.requests)
     failed_provider_ids = (
         refresh_result.failed_provider_ids if refresh_result is not None else ()
     )
     return {
-        "models": sorted(configured | discovered, key=str.casefold),
+        "models": [model.provider_model_ref for model in catalog.models],
+        "model_labels": {
+            model.provider_model_ref: model.display_name for model in catalog.models
+        },
         "failed_providers": list(failed_provider_ids),
     }
 
 
-def _filtered_values(values: dict[str, Any]) -> dict[str, Any]:
+def _filtered_values(values: Mapping[str, JsonValue]) -> JsonObject:
     return {key: value for key, value in values.items() if key in FIELD_BY_KEY}
 
 
@@ -271,7 +543,7 @@ def _local_provider_url(provider_id: str, values: dict[str, str]) -> str:
 
 async def _check_local_provider(
     provider_id: str, base_url: str, path: str
-) -> dict[str, Any]:
+) -> JsonObject:
     clean_url = base_url.strip().rstrip("/")
     if not clean_url:
         return {
@@ -279,9 +551,13 @@ async def _check_local_provider(
             "status": "missing_url",
             "label": "Missing URL",
             "base_url": base_url,
+            "probe_path": path,
+            "latency_ms": None,
+            "error_type": None,
         }
 
     url = f"{clean_url}{path}"
+    started = perf_counter()
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
             response = await client.get(url)
@@ -292,15 +568,48 @@ async def _check_local_provider(
             "label": "Reachable" if ok else "Offline",
             "base_url": base_url,
             "status_code": response.status_code,
+            "probe_path": path,
+            "latency_ms": round((perf_counter() - started) * 1000, 2),
+            "error_type": None if ok else "http_error",
         }
     except Exception as exc:
+        logger.debug(
+            "Admin local provider check failed: provider={} exc_type={}",
+            provider_id,
+            type(exc).__name__,
+        )
+        error_type, message = _local_provider_failure(exc)
         return {
             "provider_id": provider_id,
             "status": "offline",
             "label": "Offline",
             "base_url": base_url,
-            "error_type": type(exc).__name__,
+            "message": message,
+            "probe_path": path,
+            "latency_ms": round((perf_counter() - started) * 1000, 2),
+            "error_type": error_type,
         }
+
+
+def _local_provider_failure(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, httpx.TimeoutException):
+        return (
+            "timeout",
+            "The local provider availability check timed out. Check that its server is responsive and retry.",
+        )
+    if isinstance(exc, (httpx.ConnectError, httpx.ProxyError)):
+        return "connection_error", _LOCAL_PROVIDER_CHECK_FAILURE_MESSAGE
+    if isinstance(exc, (httpx.InvalidURL, httpx.UnsupportedProtocol)):
+        return (
+            "invalid_url",
+            "Check the local provider's HTTP or HTTPS base URL and port.",
+        )
+    if isinstance(exc, httpx.RequestError):
+        return (
+            "transport_error",
+            "The connection ended before the availability check completed. Retry and check the local server logs.",
+        )
+    return "unexpected_error", _LOCAL_PROVIDER_CHECK_FAILURE_MESSAGE
 
 
 def _require_connected_account_provider(provider_id: str) -> None:
@@ -315,5 +624,5 @@ def _require_connected_account_provider(provider_id: str) -> None:
         )
 
 
-def _no_store(payload: Any) -> JSONResponse:
+def _no_store(payload: JsonValue) -> JSONResponse:
     return JSONResponse(payload, headers={"Cache-Control": "no-store"})

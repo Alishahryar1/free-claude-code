@@ -1,27 +1,18 @@
 """Anthropic stream state ledger."""
 
-import hashlib
-import json
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
-from loguru import logger
+from free_claude_code.core.token_estimation import estimate_text_tokens
 
 from .emitter import AnthropicSseEmitter
 from .recovery import (
     ToolSchema,
     parse_complete_tool_input,
 )
-
-try:
-    import tiktoken
-
-    ENCODER = tiktoken.get_encoding("cl100k_base")
-except Exception:
-    ENCODER = None
 
 
 def _safe_usage_int(value: object) -> int:
@@ -37,8 +28,6 @@ class ToolBlockState:
     name: str
     extra_content: dict[str, Any] | None = None
     started: bool = False
-    task_arg_buffer: str = ""
-    task_args_emitted: bool = False
     pre_start_args: str = ""
 
 
@@ -85,11 +74,6 @@ class StreamBlockLedger:
             )
         return self.tool_states[index]
 
-    def set_stream_tool_id(self, index: int, tool_id: str | None) -> None:
-        if not tool_id:
-            return
-        self.ensure_tool_state(index).tool_id = str(tool_id)
-
     def set_tool_extra_content(
         self, index: int, extra_content: dict[str, Any] | None
     ) -> None:
@@ -108,53 +92,6 @@ class StreamBlockLedger:
             state.name = name
         elif not prev.startswith(name):
             state.name = prev + name
-
-    def buffer_task_args(self, index: int, args: str) -> dict[str, Any] | None:
-        state = self.tool_states.get(index)
-        if state is None or state.task_args_emitted:
-            return None
-
-        state.task_arg_buffer += args
-        try:
-            args_json = json.loads(state.task_arg_buffer)
-        except Exception:
-            return None
-        if not isinstance(args_json, dict):
-            return None
-
-        _normalize_task_run_in_background(args_json)
-        state.task_args_emitted = True
-        state.task_arg_buffer = ""
-        return args_json
-
-    def flush_task_arg_buffers(self) -> list[tuple[int, str]]:
-        results: list[tuple[int, str]] = []
-        for tool_index, state in list(self.tool_states.items()):
-            if not state.task_arg_buffer or state.task_args_emitted:
-                continue
-
-            out = "{}"
-            try:
-                args_json = json.loads(state.task_arg_buffer)
-                if isinstance(args_json, dict):
-                    _normalize_task_run_in_background(args_json)
-                    out = json.dumps(args_json)
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                digest = hashlib.sha256(
-                    state.task_arg_buffer.encode("utf-8", errors="replace")
-                ).hexdigest()[:16]
-                logger.warning(
-                    "Task args invalid JSON (id={} len={} buffer_sha256_prefix={}): {}",
-                    state.tool_id or "unknown",
-                    len(state.task_arg_buffer),
-                    digest,
-                    exc,
-                )
-
-            state.task_args_emitted = True
-            state.task_arg_buffer = ""
-            results.append((tool_index, out))
-        return results
 
 
 class AnthropicStreamLedger:
@@ -391,6 +328,8 @@ class AnthropicStreamLedger:
             if state is not None:
                 state.open = False
                 self._clear_active_content_block(state)
+                if state.block_type == "tool_use":
+                    continue
             yield self._emitter.event(
                 "content_block_stop",
                 {"type": "content_block_stop", "index": idx},
@@ -446,28 +385,22 @@ class AnthropicStreamLedger:
         return "".join(self._thinking_parts)
 
     def estimate_output_tokens(self) -> int:
-        if ENCODER:
-            text_tokens = len(ENCODER.encode(self.accumulated_text))
-            reasoning_tokens = len(ENCODER.encode(self.accumulated_reasoning))
-            tool_tokens = 0
-            tool_count = 0
-            for name, content in self._iter_tool_token_payloads():
-                tool_tokens += len(ENCODER.encode(name))
-                tool_tokens += len(ENCODER.encode(content))
-                tool_tokens += 15
-                tool_count += 1
+        text_tokens = estimate_text_tokens(self.accumulated_text)
+        reasoning_tokens = estimate_text_tokens(self.accumulated_reasoning)
+        tool_tokens = 0
+        tool_count = 0
+        for name, content in self._iter_tool_token_payloads():
+            tool_tokens += estimate_text_tokens(name)
+            tool_tokens += estimate_text_tokens(content)
+            tool_tokens += 15
+            tool_count += 1
 
-            block_count = (
-                (1 if self.accumulated_reasoning else 0)
-                + (1 if self.accumulated_text else 0)
-                + tool_count
-            )
-            return text_tokens + reasoning_tokens + tool_tokens + (block_count * 4)
-
-        text_tokens = len(self.accumulated_text) // 4
-        reasoning_tokens = len(self.accumulated_reasoning) // 4
-        tool_tokens = sum(1 for _ in self._iter_tool_token_payloads()) * 50
-        return text_tokens + reasoning_tokens + tool_tokens
+        block_count = (
+            (1 if self.accumulated_reasoning else 0)
+            + (1 if self.accumulated_text else 0)
+            + tool_count
+        )
+        return text_tokens + reasoning_tokens + tool_tokens + (block_count * 4)
 
     def _iter_tool_token_payloads(self) -> Iterator[tuple[str, str]]:
         for block in self.tool_blocks():
@@ -547,8 +480,3 @@ class AnthropicStreamLedger:
             state.block_type == "thinking" and self.blocks.thinking_index == state.index
         ):
             self.blocks.thinking_started = False
-
-
-def _normalize_task_run_in_background(args_json: dict[str, Any]) -> None:
-    if args_json.get("run_in_background") is not False:
-        args_json["run_in_background"] = False

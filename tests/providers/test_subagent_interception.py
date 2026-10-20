@@ -1,67 +1,124 @@
 import json
-from unittest.mock import MagicMock
 
 import pytest
 
-from free_claude_code.config.nim import NimSettings
-from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
-from free_claude_code.core.anthropic import StreamBlockLedger
-from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
+from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.openai_responses import (
+    OpenAIResponsesRequest,
+    build_responses_chat_request,
+)
+from free_claude_code.providers.openai_chat.stream_output import (
+    AnthropicChatStreamOutput,
+    ChatStreamOutput,
+    ChatStreamUsage,
+    ResponsesChatStreamOutput,
+)
 from free_claude_code.providers.openai_chat.tool_calls import (
     OpenAIToolCallAssembler,
 )
-from tests.providers.support import immediate_admission
 
 
-@pytest.mark.asyncio
-async def test_task_tool_interception():
-    # Setup provider
-    config = ProviderConfig(api_key="test", base_url=NVIDIA_NIM_DEFAULT_BASE)
-    provider = NvidiaNimProvider(
-        config,
-        nim_settings=NimSettings(),
-        admission=immediate_admission(),
+@pytest.fixture(params=["messages", "responses"])
+def output(request) -> ChatStreamOutput:
+    if request.param == "messages":
+        return AnthropicChatStreamOutput(
+            message_id="msg_test", model="test-model", input_tokens=1
+        )
+    prepared = build_responses_chat_request(
+        OpenAIResponsesRequest(model="test-model", input="hello"),
+        reasoning_replay=ReasoningReplayMode.DISABLED,
     )
+    return ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
 
-    # Mock request and stream ledger with real StreamBlockLedger
-    request = MagicMock()
-    request.model = "test-model"
 
-    sse = MagicMock()
-    sse.blocks = StreamBlockLedger()
+def _argument_deltas(frames: list[str]) -> list[str]:
+    parts = []
+    for event in parse_sse_text("".join(frames)):
+        if event.event == "response.function_call_arguments.delta":
+            parts.append(event.data["delta"])
+        elif event.data.get("delta", {}).get("type") == "input_json_delta":
+            parts.append(event.data["delta"]["partial_json"])
+    return parts
 
-    # Tool call data (Task tool)
-    tc = {
-        "index": 0,
-        "id": "tool_123",
-        "function": {
-            "name": "Task",
-            "arguments": json.dumps(
+
+@pytest.mark.parametrize("name", ["Task", "ordinary_tool"])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        '{"run_in_background":true,"prompt":"inspect"}',
+        "{}",
+        '{"run_in_background":null}',
+        "[]",
+        "not json",
+        '{"broken":',
+        "",
+    ],
+)
+def test_tool_arguments_stream_without_name_specific_rewrites(output, name, arguments):
+    assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
+    frames = output.start_events()
+    split = len(arguments) // 2
+    for part, tool_name in [(arguments[:split], name), (arguments[split:], None)]:
+        emitted = list(
+            assembler.process_tool_call(
                 {
-                    "description": "test task",
-                    "prompt": "do something",
-                    "run_in_background": True,
-                }
-            ),
-        },
-    }
-
-    tool_calls = OpenAIToolCallAssembler(
-        record_extra_content=provider._record_tool_call_extra_content
+                    "index": 0,
+                    "id": "call_task",
+                    "function": {"name": tool_name, "arguments": part},
+                },
+                output,
+            )
+        )
+        if isinstance(output, AnthropicChatStreamOutput):
+            assert _argument_deltas(emitted) == ([part] if part else [])
+        frames.extend(emitted)
+    frames.extend(
+        output.finish_success(
+            stop_reason="tool_use",
+            usage=ChatStreamUsage(input_tokens=1, output_tokens=1),
+        )
     )
+    assert output.tool_states[0].content == arguments
+    assert output.tool_states[0].tool_id == "call_task"
+    events = parse_sse_text("".join(frames))
+    assert events[-1].event == (
+        "response.completed"
+        if isinstance(output, ResponsesChatStreamOutput)
+        else "message_stop"
+    )
+    assert "".join(_argument_deltas(frames)) == arguments
 
-    # Call the assembler (consume generator to trigger side effects)
-    list(tool_calls.process_tool_call(tc, sse))
 
-    # Find the emit_tool_delta call and check args
-    calls = sse.emit_tool_delta.call_args_list
-    assert len(calls) > 0
-    args_passed = json.loads(calls[0][0][1])
-    assert args_passed["run_in_background"] is False
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(test_task_tool_interception())
+def test_task_argument_aliases_are_restored_recursively(output):
+    assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
+    buffers = {}
+    frames = []
+    for name, part in [
+        ("Task", '{"run_in_background":true,"wire_prompt":"inspect",'),
+        (None, '"nested":[{"wire_prompt":"child"}]}'),
+    ]:
+        frames.extend(
+            assembler.process_tool_call(
+                {
+                    "index": 0,
+                    "id": "call_task",
+                    "function": {"name": name, "arguments": part},
+                },
+                output,
+                tool_argument_aliases={"Task": {"wire_prompt": "prompt"}},
+                tool_argument_alias_buffers=buffers,
+            )
+        )
+    frames.extend(
+        assembler.flush_tool_argument_alias_buffers(
+            output, {"Task": {"wire_prompt": "prompt"}}, buffers
+        )
+    )
+    frames.extend(output.close_all_blocks())
+    assert json.loads("".join(_argument_deltas(frames))) == {
+        "run_in_background": True,
+        "prompt": "inspect",
+        "nested": [{"prompt": "child"}],
+    }
+    assert not buffers

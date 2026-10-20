@@ -6,12 +6,13 @@ import pytest
 
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
+    SDKStreamDouble,
     immediate_admission,
+    make_provider_config,
     profiled_provider,
     reasoning_for,
 )
@@ -23,7 +24,7 @@ LLAMACPP_MODEL = "llamacpp-community/qwen2.5-7b-instruct"
 def provider() -> OpenAIChatProvider:
     return profiled_provider(
         "llamacpp",
-        ProviderConfig(api_key="llamacpp", base_url="http://localhost:8080/v1"),
+        make_provider_config(api_key="llamacpp", base_url="http://localhost:8080/v1"),
         admission=immediate_admission(),
     )
 
@@ -39,11 +40,11 @@ def provider() -> OpenAIChatProvider:
 )
 def test_init_normalizes_openai_base_url(configured: str, expected: str) -> None:
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = profiled_provider(
             "llamacpp",
-            ProviderConfig(api_key="llamacpp", base_url=configured),
+            make_provider_config(api_key="llamacpp", base_url=configured),
             admission=immediate_admission(),
         )
 
@@ -52,7 +53,7 @@ def test_init_normalizes_openai_base_url(configured: str, expected: str) -> None
 
 
 def test_init_uses_openai_chat_client() -> None:
-    config = ProviderConfig(
+    config = make_provider_config(
         api_key="llamacpp",
         base_url="http://localhost:8080/v1/",
         http_read_timeout=600.0,
@@ -60,7 +61,7 @@ def test_init_uses_openai_chat_client() -> None:
         http_connect_timeout=5.0,
     )
     with patch(
-        "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as openai_client:
         provider = profiled_provider(
             "llamacpp", config, admission=immediate_admission()
@@ -78,7 +79,7 @@ def test_build_request_body_uses_openai_chat_shape(
 ) -> None:
     request = make_messages_request(LLAMACPP_MODEL, max_tokens=None)
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
     assert body["model"] == LLAMACPP_MODEL
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
@@ -104,14 +105,14 @@ def test_replay_is_independent_of_current_turn_reasoning_control(
         ],
     )
 
-    body = provider._build_request_body(request, reasoning=REASONING_OFF)
+    body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
     assert body["messages"][1]["content"] == ("<think>\nprivate\n</think>\n\nvisible")
     assert body["extra_body"]["thinking_budget_tokens"] == 0
 
 
 @pytest.mark.asyncio
-async def test_stream_response_uses_shared_openai_chat_provider(
+async def test_stream_messages_uses_shared_openai_chat_provider(
     provider: OpenAIChatProvider,
 ) -> None:
     chunk = MagicMock()
@@ -134,12 +135,12 @@ async def test_stream_response_uses_shared_openai_chat_provider(
         provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=stream(),
+        return_value=SDKStreamDouble(stream()),
     ) as create:
         output = "".join(
             [
                 event
-                async for event in provider.stream_response(
+                async for event in provider.stream_messages(
                     make_messages_request(LLAMACPP_MODEL)
                 )
             ]

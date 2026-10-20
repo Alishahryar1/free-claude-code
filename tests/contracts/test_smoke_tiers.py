@@ -4,9 +4,13 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent
+from smoke.lib.e2e import assert_native_thinking_stream
 from smoke.lib.outcomes import classify_outcome, is_upstream_unavailable_text
 from smoke.lib.report_summary import format_summary, summarize_reports
-from smoke.lib.skips import skip_if_upstream_unavailable_events
+from smoke.lib.skips import (
+    skip_if_upstream_unavailable_events,
+    skip_if_upstream_unavailable_exception,
+)
 
 
 def test_smoke_report_summary_counts_regression_classes(tmp_path: Path) -> None:
@@ -49,8 +53,8 @@ def test_explicit_missing_env_skip_wins_over_network_words() -> None:
     assert classification == "missing_env"
 
 
-def test_provider_error_text_stream_is_upstream_unavailable_skip() -> None:
-    events = [
+def _upstream_unavailable_events() -> list[SSEEvent]:
+    return [
         SSEEvent("message_start", {"message": {"content": []}}, ""),
         SSEEvent(
             "content_block_start",
@@ -63,7 +67,7 @@ def test_provider_error_text_stream_is_upstream_unavailable_skip() -> None:
                 "index": 0,
                 "delta": {
                     "type": "text_delta",
-                    "text": "Upstream provider OPENROUTER returned HTTP 429.",
+                    "text": "Upstream provider MISTRAL returned HTTP 429.",
                 },
             },
             "",
@@ -73,8 +77,46 @@ def test_provider_error_text_stream_is_upstream_unavailable_skip() -> None:
         SSEEvent("message_stop", {}, ""),
     ]
 
+
+def test_provider_error_text_stream_is_upstream_unavailable_skip() -> None:
     with pytest.raises(pytest.skip.Exception) as excinfo:
-        skip_if_upstream_unavailable_events(events)
+        skip_if_upstream_unavailable_events(_upstream_unavailable_events())
+
+    assert "upstream_unavailable" in str(excinfo.value)
+
+
+def test_native_thinking_probe_skips_upstream_unavailable_stream() -> None:
+    with pytest.raises(pytest.skip.Exception) as excinfo:
+        assert_native_thinking_stream(
+            _upstream_unavailable_events(), context="Mistral smoke"
+        )
+
+    assert "upstream_unavailable" in str(excinfo.value)
+
+
+def test_native_thinking_probe_skips_terminal_upstream_error() -> None:
+    events = [
+        SSEEvent("message_start", {"message": {"content": []}}, ""),
+        SSEEvent(
+            "error",
+            {"error": {"message": "Upstream provider MISTRAL returned HTTP 503."}},
+            "",
+        ),
+    ]
+
+    with pytest.raises(pytest.skip.Exception) as excinfo:
+        assert_native_thinking_stream(events, context="Mistral smoke")
+
+    assert "upstream_unavailable" in str(excinfo.value)
+
+
+def test_non_200_stream_transient_is_upstream_unavailable_skip() -> None:
+    exc = AssertionError(
+        "stream request failed: HTTP 429 Upstream provider MISTRAL returned HTTP 429."
+    )
+
+    with pytest.raises(pytest.skip.Exception) as excinfo:
+        skip_if_upstream_unavailable_exception(exc)
 
     assert "upstream_unavailable" in str(excinfo.value)
 

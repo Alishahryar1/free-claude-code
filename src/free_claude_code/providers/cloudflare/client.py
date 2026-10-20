@@ -11,7 +11,10 @@ from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import CLOUDFLARE_AI_REST_ROOT
 from free_claude_code.core.anthropic import ReasoningReplayMode
-from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.admission import (
+    ProviderAdmissionController,
+    ProviderOperationKind,
+)
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.http import maybe_await_aclose
 from free_claude_code.providers.model_listing import (
@@ -19,7 +22,9 @@ from free_claude_code.providers.model_listing import (
     extract_openai_model_infos,
 )
 from free_claude_code.providers.openai_chat import (
+    ChatStreamOutput,
     ChatTemplateReasoning,
+    OpenAIChatBehavior,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
@@ -54,11 +59,25 @@ def _cloudflare_account_api_url(api_root: str | None, account_id: str) -> str:
     stripped_account = account_id.strip()
     if not stripped_account:
         raise ApplicationUnavailableError(
-            "CLOUDFLARE_ACCOUNT_ID is not set. Add it to your .env file."
+            "CLOUDFLARE_ACCOUNT_ID is not set. Add it in the Admin UI."
         )
     root = (api_root or CLOUDFLARE_AI_REST_ROOT).rstrip("/")
     encoded_account = quote(stripped_account, safe="")
     return f"{root}/accounts/{encoded_account}"
+
+
+class CloudflareChatBehavior(OpenAIChatBehavior):
+    """Cloudflare Chat adaptation without HTTP ownership."""
+
+    def extra_reasoning_events(
+        self, delta: Any, output: ChatStreamOutput, *, output_reasoning: bool
+    ) -> Iterator[str]:
+        """Map Cloudflare's ``reasoning`` delta field to Anthropic thinking."""
+        reasoning = _cloudflare_reasoning(delta)
+        if not output_reasoning or not reasoning:
+            return
+        yield from output.ensure_reasoning_block()
+        yield output.emit_reasoning_delta(reasoning)
 
 
 class CloudflareProvider(OpenAIChatProvider):
@@ -76,7 +95,7 @@ class CloudflareProvider(OpenAIChatProvider):
             config.base_url, account_id
         )
         self._model_list_client = httpx.AsyncClient(
-            proxy=config.proxy or None,
+            proxy=config.proxy,
             timeout=httpx.Timeout(
                 config.http_read_timeout,
                 connect=config.http_connect_timeout,
@@ -86,7 +105,7 @@ class CloudflareProvider(OpenAIChatProvider):
         )
         super().__init__(
             replace(config, base_url=base_url),
-            profile=_PROFILE,
+            behavior=CloudflareChatBehavior(_PROFILE),
             admission=admission,
         )
 
@@ -111,7 +130,11 @@ class CloudflareProvider(OpenAIChatProvider):
                 raise
             return response
 
-        response = await self._admission.run_with_retry(request)
+        execution = self._admission.start_execution()
+        response = await execution.run_call(
+            request,
+            operation_kind=ProviderOperationKind.MODEL_DISCOVERY,
+        )
         try:
             try:
                 payload = response.json()
@@ -123,17 +146,9 @@ class CloudflareProvider(OpenAIChatProvider):
         finally:
             await maybe_await_aclose(response)
 
-    def _handle_extra_reasoning(
-        self, delta: Any, ledger: Any, *, output_reasoning: bool
-    ) -> Iterator[str]:
-        """Map Cloudflare's ``reasoning`` delta field to Anthropic thinking."""
-        reasoning = _cloudflare_reasoning(delta)
-        if not output_reasoning or not reasoning:
-            return
-        yield from ledger.ensure_thinking_block()
-        yield ledger.emit_thinking_delta(reasoning)
-
     def _model_list_headers(self) -> dict[str, str]:
+        if self._api_key is None:
+            raise AssertionError("Cloudflare requires a static API token")
         return {"Authorization": f"Bearer {self._api_key}"}
 
 

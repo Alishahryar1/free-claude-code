@@ -5,7 +5,7 @@ import uuid
 
 from loguru import logger
 
-from free_claude_code.cli.claude_env import CLAUDE_BINARY_NAME
+from free_claude_code.harnesses.claude import CLAUDE_BINARY_NAME
 
 from .session import ManagedClaudeSession
 
@@ -24,8 +24,8 @@ class ManagedClaudeSessionManager:
         proxy_root_url: str,
         allowed_dirs: list[str] | None = None,
         claude_bin: str = CLAUDE_BINARY_NAME,
-        auth_token: str = "",
         *,
+        auth_token: str,
         log_raw_cli_diagnostics: bool = False,
         log_messaging_error_details: bool = False,
     ):

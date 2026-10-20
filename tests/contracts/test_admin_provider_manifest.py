@@ -1,11 +1,17 @@
 """Ensure admin UI manifest exposes every catalog credential/proxy binding."""
 
-from free_claude_code.config.admin.manifest import FIELD_BY_KEY
+from free_claude_code.config.admin.manifest import FIELD_BY_KEY, FIELDS
+from free_claude_code.config.admin.state import ConfigValueState
 from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     ProviderAuthKind,
 )
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
+
+
+def _test_value(value: str) -> ConfigValueState:
+    return ConfigValueState(value=value, source="test")
 
 
 def test_provider_catalog_remote_credentials_in_admin_manifest() -> None:
@@ -98,13 +104,24 @@ def test_provider_catalog_proxy_attrs_in_admin_manifest() -> None:
     assert not missing_key and not wrong_attr, "\n".join(missing_key + wrong_attr)
 
 
+def test_openai_proxy_override_applies_to_catalog_proxy_field() -> None:
+    entry = FIELD_BY_KEY["OPENAI_PROXY"]
+
+    assert entry.settings_attr == "openai_proxy"
+    assert entry.restart_required is True
+    assert "restarts FCC" in entry.description
+
+
 def test_provider_catalog_display_names_are_admin_status_source() -> None:
     from free_claude_code.config.admin.status import provider_config_status
     from free_claude_code.config.admin.values import load_value_state
+    from free_claude_code.config.loader import ManagedConfigStore
 
+    store = ManagedConfigStore()
+    store.initialize()
     status_by_provider = {
         entry["provider_id"]: entry
-        for entry in provider_config_status(load_value_state())
+        for entry in provider_config_status(load_value_state(store.read()))
     }
 
     assert set(status_by_provider) == set(PROVIDER_CATALOG)
@@ -136,35 +153,95 @@ def test_vertex_project_and_location_are_admin_provider_fields() -> None:
     assert project.section_id == "providers"
     assert project.secret is False
     assert location.settings_attr == "vertex_location"
-    assert location.default == "global"
+    assert location.resolved_default() == "global"
+
+
+def test_qwencloud_coding_key_is_a_distinct_admin_provider_field() -> None:
+    entry = FIELD_BY_KEY["QWENCLOUD_CODING_API_KEY"]
+
+    assert entry.label == "QwenCloud Coding Plan API Keys"
+    assert entry.settings_attr == "qwencloud_coding_api_keys"
+    assert entry.section_id == "providers"
+    assert entry.secret is True
+    assert "separate endpoints" in entry.description
+
+
+def test_cline_pass_admin_fields_use_programmatic_key_and_fixed_endpoint() -> None:
+    from free_claude_code.config.admin.status import provider_config_status
+
+    key = FIELD_BY_KEY["CLINE_API_KEY"]
+    proxy = FIELD_BY_KEY["CLINE_PASS_PROXY"]
+    status = next(
+        item
+        for item in provider_config_status(
+            {"CLINE_API_KEY": _test_value("cline-programmatic-key")}
+        )
+        if item["provider_id"] == "cline_pass"
+    )
+
+    assert key.label == "Cline API Keys"
+    assert key.settings_attr == "cline_api_keys"
+    assert key.section_id == "providers"
+    assert key.secret is True
+    assert "Subscribe to ClinePass" in key.description
+    assert "Settings > API Keys" in key.description
+    assert "not the Cline CLI's managed account token" in key.description
+    assert proxy.settings_attr == "cline_pass_proxy"
+    assert proxy.secret is True
+    assert "CLINE_BASE_URL" not in FIELD_BY_KEY
+    assert status["display_name"] == "ClinePass"
+    assert status["status"] == "configured"
+
+
+def test_zai_shared_key_configures_both_distinct_provider_surfaces() -> None:
+    from free_claude_code.config.admin.status import provider_config_status
+
+    entry = FIELD_BY_KEY["ZAI_API_KEY"]
+    statuses = {
+        status["provider_id"]: status
+        for status in provider_config_status(
+            {"ZAI_API_KEY": _test_value("shared-zai-key")}
+        )
+    }
+
+    assert sum(field.key == "ZAI_API_KEY" for field in FIELDS) == 1
+    assert entry.settings_attr == "zai_api_keys"
+    assert "Coding Plan" in entry.description
+    assert "pay-as-you-go" in entry.description
+    assert statuses["zai"]["display_name"] == "Z.ai Coding Plan"
+    assert statuses["zai"]["status"] == "configured"
+    assert statuses["zai_api"]["display_name"] == "Z.ai API"
+    assert statuses["zai_api"]["status"] == "configured"
+    assert FIELD_BY_KEY["ZAI_API_PROXY"].settings_attr == "zai_api_proxy"
 
 
 def test_vertex_admin_status_uses_project_configuration_not_an_api_key() -> None:
     from free_claude_code.config.admin.status import provider_config_status
 
-    def vertex_status(project_id: str) -> dict[str, object]:
+    def vertex_status(project_id: str) -> JsonObject:
         statuses = provider_config_status(
             {
-                "VERTEX_PROJECT_ID": {"value": project_id},
-                "VERTEX_LOCATION": {"value": "global"},
+                "VERTEX_PROJECT_ID": _test_value(project_id),
+                "VERTEX_LOCATION": _test_value("global"),
             }
         )
         return next(status for status in statuses if status["provider_id"] == "vertex")
 
     assert vertex_status("")["status"] == "missing_config"
     assert vertex_status("")["label"] == "Missing configuration"
-    assert vertex_status("")["configuration"] == "VERTEX_PROJECT_ID"
+    assert vertex_status("")["configuration_keys"] == ["VERTEX_PROJECT_ID"]
+    assert vertex_status("")["missing_configuration_keys"] == ["VERTEX_PROJECT_ID"]
     assert vertex_status("vertex-project")["status"] == "configured"
 
 
 def test_azure_openai_admin_status_distinguishes_key_and_url() -> None:
     from free_claude_code.config.admin.status import provider_config_status
 
-    def azure_status(api_key: str, base_url: str) -> dict[str, object]:
+    def azure_status(api_key: str, base_url: str) -> JsonObject:
         statuses = provider_config_status(
             {
-                "AZURE_OPENAI_API_KEY": {"value": api_key},
-                "AZURE_OPENAI_BASE_URL": {"value": base_url},
+                "AZURE_OPENAI_API_KEY": _test_value(api_key),
+                "AZURE_OPENAI_BASE_URL": _test_value(base_url),
             }
         )
         return next(
@@ -181,9 +258,11 @@ def test_azure_openai_admin_status_distinguishes_key_and_url() -> None:
     missing_url = azure_status("azure-key", "")
     assert missing_url["status"] == "missing_config"
     assert missing_url["label"] == "Missing configuration"
-    assert missing_url["configuration"] == (
-        "AZURE_OPENAI_API_KEY + AZURE_OPENAI_BASE_URL"
-    )
+    assert missing_url["configuration_keys"] == [
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_BASE_URL",
+    ]
+    assert missing_url["missing_configuration_keys"] == ["AZURE_OPENAI_BASE_URL"]
 
     assert (
         azure_status(

@@ -9,7 +9,17 @@ class ReasoningControl(StrEnum):
 
     DEFAULT = "default"
     OFF = "off"
+    PREFER_OFF = "prefer_off"
     ON = "on"
+
+
+class ReasoningCapability(StrEnum):
+    """Explicit provider facts; absent computation controls remain unknown."""
+
+    UNKNOWN = "unknown"
+    NONE = "none"
+    OPTIONAL = "optional"
+    REQUIRED = "required"
 
 
 class ReasoningEffort(StrEnum):
@@ -75,6 +85,11 @@ class ReasoningPolicy:
         return cls(control=ReasoningControl.OFF)
 
     @classmethod
+    def prefer_off(cls) -> ReasoningPolicy:
+        """Prefer disabling computation, allowing provider defaults if necessary."""
+        return cls(control=ReasoningControl.PREFER_OFF)
+
+    @classmethod
     def on(
         cls,
         *,
@@ -91,7 +106,7 @@ class ReasoningPolicy:
 
     @property
     def output_enabled(self) -> bool:
-        """Return whether provider reasoning may be exposed to the client."""
+        """Allow normalized reasoning; classifier ingress owns its public filter."""
 
         return self.control is not ReasoningControl.OFF
 

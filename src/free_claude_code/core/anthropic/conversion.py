@@ -6,9 +6,32 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from free_claude_code.core.history_replay import (
+    HistoryReplayError,
+    has_readable_replay,
+    is_replay,
+    reasoning_detail,
+    tool_history_context,
+    validate_hosted_tool_history,
+)
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.openai_chat import (
+    IMAGE_TOOL_RESULT_MARKER,
+    ChatToolResultImages,
+    close_chat_tool_result_turns,
+    image_tool_result_label,
+)
+from free_claude_code.core.tool_schema_patterns import translate_tool_schema_patterns
+
 from .content import get_block_attr, get_block_type
+from .image_sources import AnthropicImageSourceError, portable_anthropic_image_url
 from .models import MessagesRequest
 from .request_serialization import serialize_tool_result_content
+from .tool_results import (
+    ToolResultImage,
+    ToolResultText,
+    decompose_tool_result_content,
+)
 from .utils import set_if_not_none
 
 
@@ -23,6 +46,23 @@ class ReasoningReplayMode(StrEnum):
     THINK_TAGS = "think_tags"
     REASONING_CONTENT = "reasoning_content"
     REASONING = "reasoning"
+
+
+def resolve_anthropic_tool_choice(
+    tools: list[Any] | None,
+    tool_choice: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Materialize Anthropic's automatic choice when tools are available.
+
+    A choice with no tools has nothing to act on, so it is dropped rather than
+    forwarded. Gemini rejects the whole request otherwise, with "Function calling
+    config is set without function_declarations".
+    """
+    if not tools:
+        return None
+    if tool_choice is not None:
+        return tool_choice
+    return {"type": "auto"}
 
 
 def _reasoning_replay_field(mode: ReasoningReplayMode) -> str | None:
@@ -153,15 +193,6 @@ def _assert_no_forbidden_assistant_block(block: Any) -> None:
         raise OpenAIConversionError(
             "Assistant image blocks are not supported for OpenAI chat conversion."
         )
-    if block_type in (
-        "server_tool_use",
-        "web_search_tool_result",
-        "web_fetch_tool_result",
-    ):
-        raise OpenAIConversionError(
-            "OpenAI chat conversion does not support Anthropic server tool blocks "
-            f"({block_type!r} in an assistant message). Remove the unsupported block."
-        )
 
 
 def _openai_system_text(
@@ -192,31 +223,57 @@ def _openai_system_text(
     return "\n\n".join(text_parts)
 
 
-def _openai_user_image_part(block: Any) -> dict[str, Any]:
+def _openai_user_image_part(block: Any) -> JsonObject:
     """Convert one Anthropic user image block without performing I/O."""
-    source = get_block_attr(block, "source", {})
-    source_type = get_block_attr(source, "type")
-
-    if source_type == "base64":
-        media_type = get_block_attr(source, "media_type")
-        if not isinstance(media_type, str) or not media_type.strip():
-            raise OpenAIConversionError(
-                "Base64 image source requires a non-empty media_type."
-            )
-        data = get_block_attr(source, "data")
-        if not isinstance(data, str) or not data.strip():
-            raise OpenAIConversionError("Base64 image source requires non-empty data.")
-        url = f"data:{media_type};base64,{data}"
-    elif source_type == "url":
-        url = get_block_attr(source, "url")
-        if not isinstance(url, str) or not url.strip():
-            raise OpenAIConversionError("URL image source requires a non-empty url.")
-    else:
-        raise OpenAIConversionError(
-            f"Unsupported image source type {source_type!r}; expected 'base64' or 'url'."
-        )
+    try:
+        url = portable_anthropic_image_url(get_block_attr(block, "source", {}))
+    except AnthropicImageSourceError as exc:
+        raise OpenAIConversionError(str(exc)) from exc
 
     return {"type": "image_url", "image_url": {"url": url}}
+
+
+@dataclass(frozen=True)
+class _OpenAIChatToolResult:
+    tool_message: JsonObject
+    rich_user_message: JsonObject | None = None
+
+
+def _openai_chat_tool_result(block: Any) -> _OpenAIChatToolResult:
+    tool_id = get_block_attr(block, "tool_use_id")
+    tool_content = get_block_attr(block, "content", "")
+    try:
+        decomposed = decompose_tool_result_content(tool_content)
+    except AnthropicImageSourceError as exc:
+        raise OpenAIConversionError(str(exc)) from exc
+
+    if not decomposed.has_images:
+        serialized = serialize_tool_result_content(tool_content)
+        return _OpenAIChatToolResult(
+            tool_message={
+                "role": "tool",
+                "tool_call_id": tool_id,
+                "content": serialized if serialized else "",
+            }
+        )
+
+    rich_parts: list[JsonObject] = [
+        {"type": "text", "text": image_tool_result_label(str(tool_id))}
+    ]
+    for part in decomposed.parts:
+        if isinstance(part, ToolResultText):
+            rich_parts.append({"type": "text", "text": part.text})
+        elif isinstance(part, ToolResultImage):
+            rich_parts.append({"type": "image_url", "image_url": {"url": part.url}})
+
+    return _OpenAIChatToolResult(
+        tool_message={
+            "role": "tool",
+            "tool_call_id": tool_id,
+            "content": IMAGE_TOOL_RESULT_MARKER,
+        },
+        rich_user_message=ChatToolResultImages(role="user", content=rich_parts),
+    )
 
 
 def _openai_user_content_parts(content: Any) -> list[dict[str, Any]]:
@@ -268,45 +325,13 @@ def _coalesce_openai_user_messages(
     return result
 
 
-class _SyntheticOpenAIToolTurnBoundary(dict[str, Any]):
-    """Identify an FCC-inserted assistant boundary until wire serialization."""
-
-    __slots__ = ()
-
-
-def is_synthetic_openai_tool_turn_boundary(message: object) -> bool:
-    """Return whether FCC inserted this message to close an OpenAI tool turn."""
-    return isinstance(message, _SyntheticOpenAIToolTurnBoundary)
-
-
-def _close_openai_tool_result_turns(
-    messages: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Close completed tool rounds before subsequent user input."""
-    result: list[dict[str, Any]] = []
-    for message in messages:
-        if (
-            message.get("role") == "user"
-            and result
-            and result[-1].get("role") == "tool"
-        ):
-            # Some OpenAI-compatible chat templates reject a user role directly
-            # after tool output. Non-empty whitespace closes the assistant turn
-            # without inventing model content.
-            result.append(
-                _SyntheticOpenAIToolTurnBoundary(role="assistant", content=" ")
-            )
-        result.append(message)
-    return result
-
-
 class _OpenAIChatHistoryLedger:
     """Assemble OpenAI chat history while respecting tool-result dependencies."""
 
     def __init__(self) -> None:
         self._output: list[dict[str, Any]] = []
         self._segments: list[_TranscriptSegment] = []
-        self._tool_results: dict[str, dict[str, Any]] = {}
+        self._tool_results: dict[str, _OpenAIChatToolResult] = {}
 
     def add_plain(self, messages: list[dict[str, Any]]) -> None:
         if messages:
@@ -357,17 +382,14 @@ class _OpenAIChatHistoryLedger:
         if not tuid_s:
             self.add_plain(AnthropicToOpenAIConverter._convert_user_message([block]))
             return
-        tool_content = get_block_attr(block, "content", "")
-        serialized = serialize_tool_result_content(tool_content)
-        tool_message = {
-            "role": "tool",
-            "tool_call_id": tuid,
-            "content": serialized if serialized else "",
-        }
+        converted = _openai_chat_tool_result(block)
         if self._has_pending_tool_id(tuid_s):
-            self._tool_results[tuid_s] = tool_message
+            self._tool_results[tuid_s] = converted
         else:
-            self.add_plain([tool_message])
+            messages = [converted.tool_message]
+            if converted.rich_user_message is not None:
+                messages.append(converted.rich_user_message)
+            self.add_plain(messages)
 
     def _drain_ready_segments(self) -> None:
         while self._segments:
@@ -390,8 +412,15 @@ class _OpenAIChatHistoryLedger:
                 break
 
             self._segments.pop(0)
-            for tool_id in segment.required_tool_ids:
-                self._output.append(self._tool_results.pop(tool_id))
+            results = [
+                self._tool_results.pop(tool_id) for tool_id in segment.required_tool_ids
+            ]
+            self._output.extend(result.tool_message for result in results)
+            self._output.extend(
+                result.rich_user_message
+                for result in results
+                if result.rich_user_message is not None
+            )
             deferred_messages = (
                 AnthropicToOpenAIConverter._deferred_post_tool_to_messages(segment)
             )
@@ -401,10 +430,17 @@ class _OpenAIChatHistoryLedger:
         if not segment.assistant_emitted:
             self._output.append(segment.assistant_message)
             segment.assistant_emitted = True
-        for tool_id in segment.required_tool_ids:
-            tool_result = self._tool_results.pop(tool_id, None)
-            if tool_result is not None:
-                self._output.append(tool_result)
+        results = [
+            tool_result
+            for tool_id in segment.required_tool_ids
+            if (tool_result := self._tool_results.pop(tool_id, None)) is not None
+        ]
+        self._output.extend(result.tool_message for result in results)
+        self._output.extend(
+            result.rich_user_message
+            for result in results
+            if result.rich_user_message is not None
+        )
         self._output.extend(
             AnthropicToOpenAIConverter._deferred_post_tool_to_messages(segment)
         )
@@ -437,6 +473,7 @@ class AnthropicToOpenAIConverter:
         messages: list[Any],
         *,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+        structured_reasoning_details: bool = False,
     ) -> list[dict[str, Any]]:
         ledger = _OpenAIChatHistoryLedger()
 
@@ -456,6 +493,7 @@ class AnthropicToOpenAIConverter:
                 content,
                 reasoning_content=reasoning_content,
                 reasoning_replay=reasoning_replay,
+                structured_reasoning_details=structured_reasoning_details,
             )
             for segment in segments:
                 if isinstance(segment, _PlainSegment):
@@ -464,7 +502,7 @@ class AnthropicToOpenAIConverter:
                     ledger.add_tool_turn(segment)
 
         ordered_messages = ledger.finish()
-        closed_messages = _close_openai_tool_result_turns(ordered_messages)
+        closed_messages = close_chat_tool_result_turns(ordered_messages)
         return _coalesce_openai_user_messages(closed_messages)
 
     @staticmethod
@@ -474,20 +512,31 @@ class AnthropicToOpenAIConverter:
         *,
         reasoning_content: str | None,
         reasoning_replay: ReasoningReplayMode,
+        structured_reasoning_details: bool = False,
     ) -> list[_TranscriptSegment]:
         if role == "system":
             system_text = _openai_system_text(
                 content,
                 context="an inline Anthropic system message",
             )
-            if system_text is None:
-                raise OpenAIConversionError(
-                    "OpenAI chat conversion requires an inline Anthropic system "
-                    "message to contain text."
-                )
+            if not system_text:
+                return []
             # Reserve the downstream system role for request.system at index zero.
             return [_PlainSegment([{"role": "user", "content": system_text}])]
         if role == "assistant" and isinstance(content, list):
+            try:
+                validate_hosted_tool_history(
+                    [
+                        {
+                            "type": get_block_type(block),
+                            "id": get_block_attr(block, "id", None),
+                            "tool_use_id": get_block_attr(block, "tool_use_id", None),
+                        }
+                        for block in content
+                    ]
+                )
+            except HistoryReplayError as error:
+                raise OpenAIConversionError(str(error)) from error
             if (first_i := _index_first_tool_use(content)) is not None:
                 for block in content:
                     if get_block_type(block) == "tool_use":
@@ -499,6 +548,7 @@ class AnthropicToOpenAIConverter:
                         first_tool_index=first_i,
                         reasoning_content=reasoning_content,
                         reasoning_replay=reasoning_replay,
+                        structured_reasoning_details=structured_reasoning_details,
                     )
                 ]
             for block in content:
@@ -509,6 +559,7 @@ class AnthropicToOpenAIConverter:
                         content,
                         reasoning_content=reasoning_content,
                         reasoning_replay=reasoning_replay,
+                        structured_reasoning_details=structured_reasoning_details,
                     )
                 )
             ]
@@ -524,10 +575,15 @@ class AnthropicToOpenAIConverter:
                         converted, reasoning_content, reasoning_replay
                     )
                 elif (
-                    reasoning_replay == ReasoningReplayMode.THINK_TAGS
+                    reasoning_replay
+                    in {ReasoningReplayMode.THINK_TAGS, ReasoningReplayMode.DISABLED}
                     and reasoning_content
                 ):
-                    content_parts = [_think_tag_content(reasoning_content)]
+                    content_parts = [
+                        _think_tag_content(reasoning_content)
+                        if reasoning_replay == ReasoningReplayMode.THINK_TAGS
+                        else reasoning_content
+                    ]
                     if content:
                         content_parts.append(content)
                     converted["content"] = "\n\n".join(content_parts)
@@ -543,8 +599,14 @@ class AnthropicToOpenAIConverter:
         first_tool_index: int,
         reasoning_content: str | None,
         reasoning_replay: ReasoningReplayMode,
+        structured_reasoning_details: bool = False,
     ) -> _ToolTurnSegment:
-        pre = content[:first_tool_index]
+        pre = [
+            block
+            for index, block in enumerate(content)
+            if index < first_tool_index
+            or get_block_type(block) in {"thinking", "redacted_thinking"}
+        ]
         tool_calls = _iter_tool_uses_in_order(content)
         if not tool_calls:
             return _ToolTurnSegment(
@@ -552,12 +614,18 @@ class AnthropicToOpenAIConverter:
                     content,
                     reasoning_content=reasoning_content,
                     reasoning_replay=reasoning_replay,
+                    structured_reasoning_details=structured_reasoning_details,
                 )[0],
                 required_tool_ids=[],
             )
         deferred_blocks = _deferred_post_tool_blocks(
             content, first_tool_index=first_tool_index
         )
+        deferred_blocks = [
+            block
+            for block in deferred_blocks
+            if get_block_type(block) not in {"thinking", "redacted_thinking"}
+        ]
 
         pre_msg: dict[str, Any]
         if not pre:
@@ -572,6 +640,7 @@ class AnthropicToOpenAIConverter:
                 pre,
                 reasoning_content=reasoning_content,
                 reasoning_replay=reasoning_replay,
+                structured_reasoning_details=structured_reasoning_details,
             )[0]
         pre_msg["tool_calls"] = tool_calls
         if reasoning_replay is ReasoningReplayMode.REASONING_CONTENT:
@@ -582,7 +651,6 @@ class AnthropicToOpenAIConverter:
             assistant_message=pre_msg,
             required_tool_ids=_tool_call_ids(tool_calls),
             deferred_blocks=deferred_blocks,
-            top_level_reasoning=reasoning_content,
             reasoning_replay=reasoning_replay,
         )
 
@@ -592,28 +660,59 @@ class AnthropicToOpenAIConverter:
         *,
         reasoning_content: str | None = None,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+        structured_reasoning_details: bool = False,
     ) -> list[dict[str, Any]]:
         content_parts: list[str] = []
         thinking_parts: list[str] = []
         thinking_seen = False
         tool_calls: list[dict[str, Any]] = []
+        details: list[Any] = []
         for block in content:
             block_type = get_block_type(block)
             if block_type == "text":
                 content_parts.append(get_block_attr(block, "text", ""))
             elif block_type == "thinking":
-                if reasoning_replay == ReasoningReplayMode.DISABLED:
-                    continue
+                signature = get_block_attr(block, "signature", None)
                 thinking = get_block_attr(block, "thinking", "")
+                if is_replay(signature):
+                    details.extend(reasoning_detail(signature))
+                    if has_readable_replay(signature):
+                        continue
+                elif isinstance(signature, str) and signature:
+                    if structured_reasoning_details:
+                        details.append(
+                            {
+                                "type": "reasoning.text",
+                                "text": thinking,
+                                "signature": signature,
+                            }
+                        )
+                        continue
+                    details.append({"type": "reasoning.encrypted", "data": signature})
+                if reasoning_replay == ReasoningReplayMode.DISABLED:
+                    if thinking:
+                        content_parts.append(thinking)
+                    continue
                 if reasoning_replay == ReasoningReplayMode.THINK_TAGS:
                     content_parts.append(_think_tag_content(thinking))
                 elif reasoning_content is None:
                     thinking_seen = True
                     thinking_parts.append(thinking)
             elif block_type == "redacted_thinking":
-                # Opaque provider continuation data; do not materialize as model-visible text
-                # or native reasoning fields for OpenAI chat upstreams.
-                continue
+                data = get_block_attr(block, "data", None)
+                if isinstance(data, str) and data:
+                    details.extend(reasoning_detail(data))
+            elif block_type in {
+                "server_tool_use",
+                "web_search_tool_result",
+                "web_fetch_tool_result",
+            }:
+                value = (
+                    block
+                    if isinstance(block, dict)
+                    else block.model_dump(mode="json", exclude_none=True)
+                )
+                content_parts.append(tool_history_context(value))
             elif block_type == "tool_use":
                 tool_calls.append(_tool_call_from_tool_use(block))
             else:
@@ -627,6 +726,8 @@ class AnthropicToOpenAIConverter:
             "role": "assistant",
             "content": content_str,
         }
+        if details:
+            msg["reasoning_details"] = details
         if tool_calls:
             msg["tool_calls"] = tool_calls
         if _reasoning_replay_field(reasoning_replay) is not None:
@@ -655,6 +756,7 @@ class AnthropicToOpenAIConverter:
     def _convert_user_message(content: list[Any]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         content_parts: list[dict[str, Any]] = []
+        tool_results: list[_OpenAIChatToolResult] = []
 
         def flush_content() -> None:
             if not content_parts:
@@ -668,27 +770,33 @@ class AnthropicToOpenAIConverter:
             result.append({"role": "user", "content": message_content})
             content_parts.clear()
 
+        def flush_tool_results() -> None:
+            if not tool_results:
+                return
+            result.extend(item.tool_message for item in tool_results)
+            result.extend(
+                item.rich_user_message
+                for item in tool_results
+                if item.rich_user_message is not None
+            )
+            tool_results.clear()
+
         for block in content:
             block_type = get_block_type(block)
 
             if block_type == "text":
+                flush_tool_results()
                 content_parts.append(
                     {"type": "text", "text": get_block_attr(block, "text", "")}
                 )
             elif block_type == "image":
+                flush_tool_results()
                 content_parts.append(_openai_user_image_part(block))
             elif block_type == "tool_result":
                 flush_content()
-                tool_content = get_block_attr(block, "content", "")
-                serialized = serialize_tool_result_content(tool_content)
-                result.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": get_block_attr(block, "tool_use_id"),
-                        "content": serialized if serialized else "",
-                    }
-                )
+                tool_results.append(_openai_chat_tool_result(block))
 
+        flush_tool_results()
         flush_content()
         return result
 
@@ -700,7 +808,9 @@ class AnthropicToOpenAIConverter:
                 "function": {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "parameters": _tool_input_schema(tool),
+                    "parameters": translate_tool_schema_patterns(
+                        _tool_input_schema(tool)
+                    ),
                 },
             }
             for tool in tools
@@ -745,12 +855,14 @@ def build_base_request_body(
     *,
     default_max_tokens: int | None = None,
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+    structured_reasoning_details: bool = False,
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body."""
     _openai_reject_native_only_top_level_fields(request_data)
     messages = AnthropicToOpenAIConverter.convert_messages(
         request_data.messages,
         reasoning_replay=reasoning_replay,
+        structured_reasoning_details=structured_reasoning_details,
     )
 
     system = request_data.system
@@ -773,7 +885,7 @@ def build_base_request_body(
     tools = request_data.tools
     if tools:
         body["tools"] = AnthropicToOpenAIConverter.convert_tools(tools)
-    tool_choice = request_data.tool_choice
+    tool_choice = resolve_anthropic_tool_choice(tools, request_data.tool_choice)
     if tool_choice:
         body["tool_choice"] = AnthropicToOpenAIConverter.convert_tool_choice(
             tool_choice

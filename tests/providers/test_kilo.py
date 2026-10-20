@@ -15,24 +15,24 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
+from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.kilo import KiloProvider
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.support import (
+    SDKStreamDouble,
     immediate_admission,
+    make_provider_config,
     reasoning_for,
 )
 
 
 @pytest.fixture
 def kilo_config():
-    return ProviderConfig(
+    return make_provider_config(
         api_key="test_kilo_key",
         base_url=KILO_DEFAULT_BASE,
-        rate_limit=10,
-        rate_window=60,
     )
 
 
@@ -44,13 +44,11 @@ def kilo_provider(kilo_config):
     )
 
 
-class AsyncStream:
+class AsyncStream(SDKStreamDouble):
     def __init__(self, chunks):
         self._chunks = chunks
         self.closed = False
-
-    def __aiter__(self):
-        return self._iter()
+        super().__init__(self._iter(), close=self.aclose)
 
     async def _iter(self):
         for chunk in self._chunks:
@@ -99,7 +97,9 @@ def test_build_request_body_openai_shape(kilo_provider):
         }
     )
 
-    body = kilo_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = kilo_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body["model"] == "anthropic/claude-sonnet-4.5"
     assert body["messages"][0] == {"role": "user", "content": "Hello"}
@@ -115,7 +115,9 @@ def test_build_request_body_forwards_caller_extra_body(kilo_provider):
         }
     )
 
-    body = kilo_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = kilo_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body.get("extra_body", {}).get("custom_field") == "value"
 
@@ -141,7 +143,9 @@ def test_extra_body_cannot_override_canonical_request_fields(kilo_provider, fiel
     )
 
     with pytest.raises(InvalidRequestError, match=field):
-        kilo_provider._build_request_body(request, reasoning=reasoning_for(request))
+        kilo_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
 
 
 def test_build_request_body_sends_reasoning_object(kilo_provider):
@@ -153,7 +157,9 @@ def test_build_request_body_sends_reasoning_object(kilo_provider):
         }
     )
 
-    body = kilo_provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = kilo_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
     assert body.get("extra_body", {}).get("reasoning") is not None
 
@@ -166,7 +172,7 @@ def test_build_request_body_sends_reasoning_disabled(kilo_provider):
         }
     )
 
-    body = kilo_provider._build_request_body(
+    body = kilo_provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.off(),
     )
@@ -214,7 +220,7 @@ def test_build_request_body_replays_opaque_reasoning_details_on_tool_turn(
         }
     )
 
-    body = kilo_provider._build_request_body(
+    body = kilo_provider._chat._build_request_body(
         request,
         reasoning=reasoning_for(request),
     )
@@ -265,20 +271,19 @@ async def test_stream_uses_reasoning_field_without_duplicating_plain_details(
         return_value=stream,
     ):
         event_text = "".join(
-            [event async for event in kilo_provider.stream_response(request)]
+            [event async for event in kilo_provider.stream_messages(request)]
         )
 
     events = parse_sse_text(event_text)
     assert thinking_content(events) == "plan "
     assert text_content(events) == "done"
-    redacted_blocks = [
-        event.data["content_block"]
+    records = [
+        event.data["content_block"]["data"]
         for event in events
         if event.event == "content_block_start"
-        and event.data.get("content_block", {}).get("type") == "redacted_thinking"
+        and event.data["content_block"]["type"] == "redacted_thinking"
     ]
-    assert len(redacted_blocks) == 1
-    assert json.loads(redacted_blocks[0]["data"]) == encrypted
+    assert records == [encrypted["data"]]
     assert stream.closed
 
 
@@ -306,7 +311,7 @@ async def test_stream_restarts_reasoning_reconciliation_after_early_retry(
         side_effect=[abandoned, recovered],
     ) as create:
         event_text = "".join(
-            [event async for event in kilo_provider.stream_response(request)]
+            [event async for event in kilo_provider.stream_messages(request)]
         )
 
     events = parse_sse_text(event_text)
@@ -318,7 +323,7 @@ async def test_stream_restarts_reasoning_reconciliation_after_early_retry(
 
 
 @pytest.mark.asyncio
-async def test_stream_omits_all_reasoning_representations_when_disabled(
+async def test_stream_hides_readable_reasoning_and_preserves_opaque_when_disabled(
     kilo_provider,
 ):
     stream = AsyncStream(
@@ -348,7 +353,7 @@ async def test_stream_omits_all_reasoning_representations_when_disabled(
         event_text = "".join(
             [
                 event
-                async for event in kilo_provider.stream_response(
+                async for event in kilo_provider.stream_messages(
                     request,
                     reasoning=ReasoningPolicy.off(),
                 )
@@ -358,11 +363,12 @@ async def test_stream_omits_all_reasoning_representations_when_disabled(
     events = parse_sse_text(event_text)
     assert thinking_content(events) == ""
     assert text_content(events) == "done"
-    assert all(
-        event.data.get("content_block", {}).get("type") != "redacted_thinking"
+    assert [
+        event.data["content_block"]["data"]
         for event in events
         if event.event == "content_block_start"
-    )
+        and event.data["content_block"]["type"] == "redacted_thinking"
+    ] == ["opaque"]
     assert stream.closed
 
 
@@ -374,8 +380,13 @@ async def test_model_list_filters_to_chat_tool_models_with_capabilities(kilo_pro
                 {
                     "id": "anthropic/tool-reasoning",
                     "supported_parameters": ["tools", "reasoning"],
-                    "architecture": {"output_modalities": ["text"]},
+                    "architecture": {
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                    },
                     "opencode": {"ai_sdk_provider": "anthropic"},
+                    "context_length": 200000,
+                    "top_provider": {"max_completion_tokens": 16000},
                 },
                 {
                     "id": "plain-tool",
@@ -386,6 +397,11 @@ async def test_model_list_filters_to_chat_tool_models_with_capabilities(kilo_pro
                 {
                     "id": "missing-optional-metadata",
                     "supported_parameters": ["tools"],
+                },
+                {
+                    "id": "malformed-optional-metadata",
+                    "supported_parameters": ["tools", 7],
+                    "architecture": {"input_modalities": ["text"]},
                 },
                 {
                     "id": "chat-only",
@@ -411,11 +427,23 @@ async def test_model_list_filters_to_chat_tool_models_with_capabilities(kilo_pro
 
     assert await kilo_provider.list_model_infos() == frozenset(
         {
-            ProviderModelInfo("anthropic/tool-reasoning", supports_thinking=True),
+            ProviderModelInfo(
+                "anthropic/tool-reasoning",
+                supports_thinking=True,
+                input_modalities=frozenset(
+                    {ModelInputModality.TEXT, ModelInputModality.IMAGE}
+                ),
+                context_window_tokens=200000,
+                max_output_tokens=16000,
+            ),
             ProviderModelInfo("plain-tool", supports_thinking=False),
             ProviderModelInfo(
                 "missing-optional-metadata",
                 supports_thinking=False,
+            ),
+            ProviderModelInfo(
+                "malformed-optional-metadata",
+                input_modalities=frozenset({ModelInputModality.TEXT}),
             ),
         }
     )

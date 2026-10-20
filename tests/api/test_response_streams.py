@@ -4,10 +4,11 @@ import asyncio
 import json
 from collections.abc import AsyncGenerator
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.responses import JSONResponse, StreamingResponse
+from loguru import logger
 from starlette.types import Message, Scope
 
 from free_claude_code.api.request_ids import RequestCorrelationMiddleware
@@ -573,7 +574,10 @@ async def test_cancellation_during_pre_start_error_cleanup_waits_for_close() -> 
 
 
 @pytest.mark.asyncio
-async def test_cleanup_failures_are_trace_only_and_do_not_replace_success() -> None:
+async def test_cleanup_failures_warn_once_and_do_not_replace_success(caplog) -> None:
+    close_error = RuntimeError("close detail")
+    release_error = RuntimeError("release detail")
+
     class CloseFails:
         def __init__(self) -> None:
             self._yielded = False
@@ -588,33 +592,31 @@ async def test_cleanup_failures_are_trace_only_and_do_not_replace_success() -> N
             return "ok"
 
         async def aclose(self) -> None:
-            raise RuntimeError("secret close detail")
+            raise close_error
 
-    release = AsyncMock(side_effect=RuntimeError("secret release detail"))
+    release = AsyncMock(side_effect=release_error)
     response = ManagedStreamingResponse(CloseFails())
     await bind_response_lifetime(response, release)
 
-    with (
-        patch("free_claude_code.core.trace.trace_event") as close_trace,
-        patch("free_claude_code.api.response_streams.trace_event") as release_trace,
-    ):
+    with logger.contextualize(request_id="req_cleanup"):
         messages = await _serve(response)
+        await response.aclose()
 
     assert b"".join(message.get("body", b"") for message in messages) == b"ok"
-    close_trace.assert_called_once()
-    assert close_trace.call_args.kwargs["owner"] == "ManagedStreamingResponse"
-    assert close_trace.call_args.kwargs["close_exc_type"] == "RuntimeError"
-    assert release_trace.call_args.kwargs["operation"] == "release_resource"
-    trace_blob = " ".join(
-        str(call)
-        for call in [*close_trace.call_args_list, *release_trace.call_args_list]
-    )
-    assert "secret close detail" not in trace_blob
-    assert "secret release detail" not in trace_blob
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 2
+    assert warnings[0].extra["event"] == "stream.input.close_failed"
+    assert warnings[0].extra["owner"] == "ManagedStreamingResponse"
+    assert warnings[0].exc_info[1] is close_error
+    assert warnings[1].extra["operation"] == "release_resource"
+    assert warnings[1].exc_info[1] is release_error
+    assert all(record.extra["request_id"] == "req_cleanup" for record in warnings)
+    assert "aclose" in caplog.text
+    release.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_body_close_cancellation_propagates_without_releasing() -> None:
+async def test_body_close_cancellation_propagates_without_releasing(caplog) -> None:
     class CloseIsCancelled:
         def __aiter__(self):
             return self
@@ -633,6 +635,7 @@ async def test_body_close_cancellation_propagates_without_releasing() -> None:
         await response.aclose()
 
     release.assert_not_awaited()
+    assert not [record for record in caplog.records if record.levelname == "WARNING"]
 
 
 @pytest.mark.asyncio

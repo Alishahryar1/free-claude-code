@@ -12,7 +12,9 @@ from free_claude_code.core.trace import extract_claude_session_id_from_headers
 REQUEST_ID_HEADER = "request-id"
 OPENAI_REQUEST_ID_HEADER = "x-request-id"
 _REQUEST_ID_STATE_ATTRIBUTE = "fcc_request_id"
-_OPENAI_REQUEST_ID_PATHS = frozenset({"/v1/responses", "/v1/models"})
+_OPENAI_REQUEST_ID_PATHS = frozenset(
+    {"/v1/responses", "/v1/models", "/muse-code/models"}
+)
 
 
 class RequestCorrelationMiddleware:

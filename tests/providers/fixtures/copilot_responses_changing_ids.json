@@ -1,0 +1,129 @@
+{
+  "source": "Authorized single HTTP capture 2026-09-05T04:30:23Z; IDs replaced by stable SHA256 labels.",
+  "sdk_correlation_equal": true,
+  "events": [
+    {
+      "type": "response.created",
+      "sequence_number": 0,
+      "response": {
+        "id": "id_c8f386bc86037e1afde70d019c73b6714fe8a1b7b01c76d9f85935456b7ca387",
+        "status": "in_progress",
+        "output": []
+      }
+    },
+    {
+      "type": "response.in_progress",
+      "sequence_number": 1,
+      "response": {
+        "id": "id_9ecb532eac9032646eb883aa898c56c969d256d476b0e32772057cd5ca5832e5",
+        "status": "in_progress",
+        "output": []
+      }
+    },
+    {
+      "type": "response.output_item.added",
+      "sequence_number": 2,
+      "output_index": 0,
+      "item": {
+        "type": "function_call",
+        "id": "id_9459fa53fc044d23942a2c1d47354f0c5c43fa20591b16df7ba9a8f0decaad9c",
+        "call_id": "id_71c0d69bf173aa38abde809d9a6a144a18dd72c38e926886862830643ba0b9cb",
+        "status": "in_progress",
+        "name": "fcc_echo",
+        "arguments": ""
+      }
+    },
+    {
+      "type": "response.function_call_arguments.delta",
+      "sequence_number": 3,
+      "output_index": 0,
+      "item_id": "id_05d30648f3c1c439349b4e34f72705b43094f1d7ed3ca8dc43f5160d8d3ccdad",
+      "delta": "{\""
+    },
+    {
+      "type": "response.function_call_arguments.delta",
+      "sequence_number": 4,
+      "output_index": 0,
+      "item_id": "id_5e26a41ba6bf446355a32fff01410c45192d9cff3b32301ae92a95ca240a16b3",
+      "delta": "value"
+    },
+    {
+      "type": "response.function_call_arguments.delta",
+      "sequence_number": 5,
+      "output_index": 0,
+      "item_id": "id_5ea6eae02feb670dc902ca4e86bc19ca474adb7b5c2d276991438a22631ef630",
+      "delta": "\":\""
+    },
+    {
+      "type": "response.function_call_arguments.delta",
+      "sequence_number": 6,
+      "output_index": 0,
+      "item_id": "id_fde5db27f4191b641d6c05b0226c57a0b3de856feec7df19f0002128347f41d4",
+      "delta": "FCC"
+    },
+    {
+      "type": "response.function_call_arguments.delta",
+      "sequence_number": 7,
+      "output_index": 0,
+      "item_id": "id_44c17f4af94e756e7843c9ebda857c1f53daff07b84f8eebd77c4515edf96adb",
+      "delta": "_TOOL"
+    },
+    {
+      "type": "response.function_call_arguments.delta",
+      "sequence_number": 8,
+      "output_index": 0,
+      "item_id": "id_a467fdb3b0b017e62e0d87cf280fcfa7a63d7cd7df7b8c209a3c3406b0435365",
+      "delta": "_OK"
+    },
+    {
+      "type": "response.function_call_arguments.delta",
+      "sequence_number": 9,
+      "output_index": 0,
+      "item_id": "id_e7add14b42bc53a74597cf75d44b71aaffd8885f89acea0ad3cbbe4f11fd3743",
+      "delta": "\"}"
+    },
+    {
+      "type": "response.function_call_arguments.done",
+      "sequence_number": 10,
+      "output_index": 0,
+      "item_id": "id_ff4ebb3c1a1315660697e657971baf4813946b674d951e6c8b3281d09dbca338",
+      "arguments": "{\"value\":\"FCC_TOOL_OK\"}"
+    },
+    {
+      "type": "response.output_item.done",
+      "sequence_number": 11,
+      "output_index": 0,
+      "item": {
+        "type": "function_call",
+        "id": "id_8533a45fc22302692561032244e6ddac18e0f441f1606c1e4069ee622b342d8a",
+        "call_id": "id_71c0d69bf173aa38abde809d9a6a144a18dd72c38e926886862830643ba0b9cb",
+        "status": "completed",
+        "name": "fcc_echo",
+        "arguments": "{\"value\":\"FCC_TOOL_OK\"}"
+      }
+    },
+    {
+      "type": "response.completed",
+      "sequence_number": 12,
+      "response": {
+        "id": "id_6705cd78e54695d5dc99961a6c095a2f738ecc8091e2102349bac94c2766871d",
+        "status": "completed",
+        "output": [
+          {
+            "type": "function_call",
+            "id": "id_c3951eb1f6206b11fa383bc25af0663d45dae5b75840ba815640d956025e48f0",
+            "call_id": "id_71c0d69bf173aa38abde809d9a6a144a18dd72c38e926886862830643ba0b9cb",
+            "status": "completed",
+            "name": "fcc_echo",
+            "arguments": "{\"value\":\"FCC_TOOL_OK\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 91,
+          "output_tokens": 21,
+          "total_tokens": 112
+        }
+      }
+    }
+  ]
+}

@@ -17,7 +17,6 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import VERTEX_AI_API_ROOT
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
-from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.vertex import VertexProvider
 from free_claude_code.providers.vertex.auth import GoogleAccessTokenProvider
@@ -28,7 +27,11 @@ from free_claude_code.providers.vertex.endpoint import (
 )
 from free_claude_code.providers.vertex.models import extract_vertex_model_page
 from tests.providers.request_factory import make_messages_request
-from tests.providers.support import immediate_admission, reasoning_for
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    reasoning_for,
+)
 
 _PROJECT_ID = "my-project"
 _GLOBAL_OPENAI_BASE = (
@@ -87,7 +90,7 @@ def _provider(
     token_provider: GoogleAccessTokenProvider | None = None,
 ) -> VertexProvider:
     return VertexProvider(
-        ProviderConfig(api_key="", base_url=VERTEX_AI_API_ROOT),
+        make_provider_config(api_key="", base_url=VERTEX_AI_API_ROOT),
         project_id=_PROJECT_ID,
         location=location,
         admission=immediate_admission(),
@@ -223,7 +226,7 @@ def test_vertex_provider_supplies_renewable_token_callback_to_openai() -> None:
     token_provider = _token_provider()
     with (
         patch(
-            "free_claude_code.providers.openai_chat.provider.AsyncOpenAI"
+            "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
         ) as openai_client,
         patch("free_claude_code.providers.vertex.client.httpx.AsyncClient"),
     ):
@@ -244,7 +247,7 @@ def test_vertex_request_uses_google_thinking_budget_without_named_effort() -> No
         thinking={"type": "enabled", "budget_tokens": 2048},
     )
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
     assert body["model"] == "google/gemini-3.5-flash"
     assert "reasoning_effort" not in body
@@ -261,7 +264,7 @@ def test_vertex_request_maps_reasoning_off_to_zero_budget() -> None:
         thinking={"type": "disabled"},
     )
 
-    body = provider._build_request_body(request, reasoning=reasoning_for(request))
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
     assert body["extra_body"]["extra_body"]["google"]["thinking_config"] == {
         "thinking_budget": 0,
@@ -298,7 +301,7 @@ def test_vertex_reasoning_has_one_google_wire_owner(
 ) -> None:
     provider = _provider()
 
-    body = provider._build_request_body(
+    body = provider._chat._build_request_body(
         make_messages_request("google/gemini", thinking=None),
         reasoning=reasoning,
     )
@@ -325,7 +328,7 @@ def test_vertex_preserves_caller_thinking_config_only_for_provider_default() -> 
         },
     )
 
-    body = provider._build_request_body(
+    body = provider._chat._build_request_body(
         request,
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -348,7 +351,7 @@ def test_vertex_rejects_caller_thinking_config_with_fcc_reasoning_control() -> N
     )
 
     with pytest.raises(InvalidRequestError, match="thinking_config"):
-        provider._build_request_body(
+        provider._chat._build_request_body(
             request,
             reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
         )

@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from free_claude_code.cli.claude_env import build_claude_proxy_env
+from free_claude_code.harnesses.claude import build_claude_proxy_env
 from smoke.lib.child_process import run_captured_text
 from smoke.lib.config import ProviderModel, SmokeConfig, redacted
 from smoke.lib.outcomes import is_upstream_unavailable_text
@@ -81,6 +81,7 @@ def run_claude_cli(
     session_id: str | None = None,
     resume_session_id: str | None = None,
     no_session_persistence: bool = True,
+    auto_mode: bool = False,
 ) -> ClaudeCliRun:
     """Run Claude Code CLI against the local smoke proxy."""
     cwd.mkdir(parents=True, exist_ok=True)
@@ -96,12 +97,13 @@ def run_claude_cli(
             session_id=session_id,
             resume_session_id=resume_session_id,
             no_session_persistence=no_session_persistence,
+            auto_mode=auto_mode,
         )
     )
 
     env = build_claude_proxy_env(
         proxy_root_url=server.base_url,
-        auth_token=config.settings.anthropic_auth_token,
+        auth_token=config.settings.proxy_auth_token,
         base_env=os.environ,
     )
     env["TERM"] = "dumb"
@@ -147,6 +149,7 @@ def _build_claude_cli_command(
     session_id: str | None = None,
     resume_session_id: str | None = None,
     no_session_persistence: bool = True,
+    auto_mode: bool = False,
 ) -> tuple[str, ...]:
     cmd: list[str] = [claude_bin]
     if bare:
@@ -162,8 +165,13 @@ def _build_claude_cli_command(
             "--include-partial-messages",
             "--verbose",
             "--permission-mode",
-            "bypassPermissions",
-            "--dangerously-skip-permissions",
+            "auto" if auto_mode else "bypassPermissions",
+        ]
+    )
+    if not auto_mode:
+        cmd.append("--dangerously-skip-permissions")
+    cmd.extend(
+        [
             "--model",
             "sonnet",
         ]
@@ -173,7 +181,7 @@ def _build_claude_cli_command(
     cmd.extend(pre_tool_args)
     if tools is not None:
         cmd.extend(["--tools", tools])
-        if tools:
+        if tools and not auto_mode:
             cmd.extend(["--allowedTools", tools])
     cmd.extend(extra_args)
     cmd.extend(["-p", prompt])
@@ -278,9 +286,6 @@ def classify_probe(
         return "skipped", "missing_env"
     if run.timed_out:
         return "failed", "probe_timeout"
-    if requires_agent and not _tool_catalog_has(log_delta, "Agent"):
-        return "failed", "harness_bug"
-
     marker_ok = not marker or marker in combined
     tool_ok = not requires_tool_result or '"tool_result"' in combined
     agent_ok = not requires_agent or (

@@ -11,7 +11,6 @@ from typing import Any
 import httpx
 import pytest
 
-from free_claude_code.config.env_template import load_env_template
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from smoke.lib.config import SmokeConfig
 from smoke.lib.server import RunningServer, start_server
@@ -173,32 +172,13 @@ def _message_payload(*, stream: bool) -> dict[str, Any]:
 def _write_initial_managed_config(home: Path, upstream: FakeOpenAIUpstream) -> None:
     config_path = home / ".fcc" / ".env"
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    template = "\n".join(
-        line
-        for line in load_env_template().splitlines()
-        if not line.startswith(
-            (
-                "REASONING_POLICY=",
-                "REASONING_FABLE=",
-                "REASONING_OPUS=",
-                "REASONING_SONNET=",
-                "REASONING_HAIKU=",
-            )
-        )
-    )
     config_path.write_text(
-        template
-        + "\n"
-        + "\n".join(
+        "\n".join(
             [
                 "MODEL=lmstudio/model-a",
-                "MODEL_FABLE=",
-                "MODEL_OPUS=",
-                "MODEL_SONNET=",
-                "MODEL_HAIKU=",
                 f"LM_STUDIO_BASE_URL={upstream.base_url}",
-                "ANTHROPIC_AUTH_TOKEN=",
                 "ENABLE_MODEL_THINKING=false",
+                "LOG_LEVEL=DEBUG",
                 "MESSAGING_PLATFORM=none",
                 "",
             ]
@@ -253,6 +233,7 @@ def test_provider_hot_swap_preserves_inflight_stream_e2e(
                     "ENABLE_MODEL_THINKING",
                     "FCC_ENV_FILE",
                     "LM_STUDIO_BASE_URL",
+                    "LOG_LEVEL",
                     "MODEL",
                     "MODEL_FABLE",
                     "MODEL_HAIKU",
@@ -292,7 +273,7 @@ def test_provider_hot_swap_preserves_inflight_stream_e2e(
         )
         old_thread.start()
         assert downstream_started.wait(timeout=10)
-        assert upstream_a.chat_started.is_set()
+        assert upstream_a.chat_started.wait(timeout=10)
         assert old_errors == []
 
         apply_response = httpx.post(

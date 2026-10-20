@@ -22,6 +22,8 @@ CANONICAL_OPENAI_CHAT_BODY_KEYS = frozenset(
         "reasoning_tokens",
         "thinking",
         "thinking_budget_tokens",
+        "enable_thinking",
+        "thinking_budget",
     }
 )
 
@@ -32,6 +34,8 @@ REASONING_OPENAI_CHAT_BODY_KEYS = frozenset(
         "reasoning_tokens",
         "thinking",
         "thinking_budget_tokens",
+        "enable_thinking",
+        "thinking_budget",
     }
 )
 

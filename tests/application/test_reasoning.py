@@ -2,10 +2,13 @@ import pytest
 
 from free_claude_code.application.reasoning import (
     client_reasoning_policy,
+    client_responses_reasoning_policy,
     resolve_reasoning_policy,
+    resolve_responses_reasoning_policy,
 )
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningEffort,
@@ -116,6 +119,47 @@ def test_client_preference_preserves_client_policy() -> None:
 def test_unresolved_inherit_is_rejected() -> None:
     with pytest.raises(ValueError, match="must be resolved"):
         resolve_reasoning_policy(_request(), ReasoningPreference.INHERIT)
+
+
+@pytest.mark.parametrize(
+    ("reasoning", "expected"),
+    (
+        (None, ReasoningPolicy.provider_default()),
+        ({"effort": "none"}, ReasoningPolicy.off()),
+        (
+            {"effort": "high"},
+            ReasoningPolicy(
+                control=ReasoningControl.DEFAULT,
+                effort=ReasoningEffort.HIGH,
+            ),
+        ),
+        ({"effort": "future-value"}, ReasoningPolicy.provider_default()),
+    ),
+)
+def test_responses_reasoning_policy_preserves_supported_client_intent(
+    reasoning: dict[str, str] | None,
+    expected: ReasoningPolicy,
+) -> None:
+    request = OpenAIResponsesRequest(
+        model="provider/model",
+        input="hello",
+        reasoning=reasoning,
+    )
+
+    assert client_responses_reasoning_policy(request) == expected
+
+
+def test_responses_route_preference_overrides_client_reasoning() -> None:
+    request = OpenAIResponsesRequest(
+        model="provider/model",
+        input="hello",
+        reasoning={"effort": "none"},
+    )
+
+    assert resolve_responses_reasoning_policy(
+        request,
+        ReasoningPreference.XHIGH,
+    ) == ReasoningPolicy.on(effort=ReasoningEffort.XHIGH)
 
 
 @pytest.mark.parametrize("budget", [0, -1, True])

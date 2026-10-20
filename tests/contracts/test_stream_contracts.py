@@ -8,7 +8,6 @@ from collections.abc import Iterable
 from free_claude_code.core.anthropic import (
     AnthropicStreamLedger,
     ContentType,
-    HeuristicToolParser,
     ThinkTagParser,
 )
 from free_claude_code.core.anthropic.stream_contracts import (
@@ -114,21 +113,6 @@ def test_enable_thinking_false_suppresses_reasoning_only() -> None:
     assert_anthropic_stream_contract(events)
     assert "secret" not in thinking_content(events)
     assert text_content(events) == "hello  world"
-
-
-def test_task_tool_arguments_force_foreground_execution() -> None:
-    parser = HeuristicToolParser()
-    filtered, detected = parser.feed(
-        "● <function=Task><parameter=description>Inspect</parameter>"
-        "<parameter=run_in_background>true</parameter> trailing"
-    )
-    detected.extend(parser.flush())
-    assert "trailing" in filtered
-    task = detected[0]
-    assert task["name"] == "Task"
-    if isinstance(task.get("input"), dict):
-        task["input"]["run_in_background"] = False
-    assert task["input"]["run_in_background"] is False
 
 
 def _interleaved_thinking_text_events(
