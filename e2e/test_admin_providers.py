@@ -24,7 +24,7 @@ def test_retired_provider_is_absent_and_default_setup_remains_available(
     close_provider(page)
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(page.locator("#field-MODEL")).to_have_value(
-        "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+        "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
     )
 
 

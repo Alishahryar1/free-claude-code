@@ -60,7 +60,17 @@ def test_count_tokens_endpoint(client):
 
 
 @pytest.mark.parametrize("prefix", ["", "anthropic/", "claude-3-freecc-no-thinking/"])
-def test_count_tokens_retired_model_uses_configured_default(prefix):
+@pytest.mark.parametrize(
+    "ref,target",
+    [
+        ("github_models/vendor/opus", "groq/default"),
+        (
+            "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+            "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
+        ),
+    ],
+)
+def test_count_tokens_retired_model_uses_replacement(prefix, ref, target):
     test_app = create_test_app(
         Settings(MODEL="groq/default", MODEL_OPUS="deepseek/opus")
     )
@@ -71,7 +81,7 @@ def test_count_tokens_retired_model_uses_configured_default(prefix):
         response = TestClient(test_app).post(
             "/v1/messages/count_tokens",
             json={
-                "model": f"{prefix}github_models/vendor/opus",
+                "model": f"{prefix}{ref}",
                 "messages": [{"role": "user", "content": "hi"}],
             },
         )
@@ -82,8 +92,8 @@ def test_count_tokens_retired_model_uses_configured_default(prefix):
         for call in trace.call_args_list
         if call.kwargs["stage"] == "routing"
     )
-    assert routed["provider_model_ref"] == "groq/default"
-    assert routed["gateway_model"] == f"{prefix}github_models/vendor/opus"
+    assert routed["provider_model_ref"] == target
+    assert routed["gateway_model"] == f"{prefix}{ref}"
 
 
 def test_count_tokens_error_returns_500(client):

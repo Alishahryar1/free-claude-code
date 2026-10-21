@@ -21,6 +21,13 @@ from .reasoning import ReasoningPreference
 RETIRED_PROVIDER_IDS = frozenset({"github_models"})
 
 
+def replace_retired_model_ref(model_ref: str) -> str:
+    """Replace the exact retired hosted endpoint, retaining independent providers."""
+    if model_ref.strip() == "nvidia_nim/nvidia/nemotron-3-super-120b-a12b":
+        return "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+    return model_ref
+
+
 class ModelFallback(BaseModel):
     """One ordered fallback's model, reasoning preference, and key number."""
 
@@ -97,6 +104,8 @@ def normalize_retired_model_settings(
                 normalized[key] = DEFAULT_MODEL if key == "MODEL" else ""
             else:
                 normalized.pop(key)
+        elif key in normalized:
+            normalized[key] = replace_retired_model_ref(normalized[key])
     try:
         fallbacks = decode_model_fallbacks(normalized.get("MODEL_FALLBACKS"))
     except ValueError:
@@ -105,6 +114,18 @@ def normalize_retired_model_settings(
         retained = tuple(
             entry for entry in fallbacks if not is_retired_model_ref(entry.model)
         )
+        original_pairs = [(entry.model, entry.api_key_number) for entry in retained]
+        if len(original_pairs) != len(set(original_pairs)):
+            return normalized  # Settings must still reject pre-existing duplicates.
+        migrated: list[ModelFallback] = []
+        seen: set[tuple[str, int]] = set()
+        for entry in retained:
+            model = replace_retired_model_ref(entry.model)
+            pair = (model, entry.api_key_number)
+            if pair not in seen:
+                seen.add(pair)
+                migrated.append(entry.model_copy(update={"model": model}))
+        retained = tuple(migrated)
         if retained:
             normalized["MODEL_FALLBACKS"] = encode_model_fallbacks(retained)
         elif preserve_empty_overrides:

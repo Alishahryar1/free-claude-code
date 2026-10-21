@@ -13,8 +13,75 @@ from free_claude_code.core.anthropic.models import (
     MessagesRequest,
     TokenCountRequest,
 )
+from free_claude_code.core.gateway_model_ids import desktop_model_id
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningEffort
+
+
+@pytest.mark.parametrize(
+    "encoding,off",
+    [
+        ("", False),
+        ("anthropic/", False),
+        ("claude-3-freecc-no-thinking/", True),
+        ("desktop", False),
+        ("desktop", True),
+    ],
+)
+def test_retired_super_direct_ids_route_to_ultra_not_configured_default(encoding, off):
+    old = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+    new = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+    original = (
+        desktop_model_id(old, no_thinking=off)
+        if encoding == "desktop"
+        else encoding + old
+    )
+    settings = Settings(
+        MODEL="groq/default",
+        REASONING_POLICY="high",
+        MODEL_FALLBACKS=(
+            ModelFallback(model=new),
+            ModelFallback(model="groq/backup"),
+        ),
+    )
+    router = ModelRouter(settings)
+    route = router.resolve(original)
+    assert route.original_model == original
+    assert route.primary.provider_model_ref == new
+    assert route.primary.api_key_number == 1
+    assert [entry.target.provider_model_ref for entry in route.fallbacks] == [
+        "groq/backup"
+    ]
+    assert route.reasoning_preference is (
+        ReasoningPreference.OFF if off else ReasoningPreference.HIGH
+    )
+    messages = MessagesRequest(
+        model=original, max_tokens=100, messages=[Message(role="user", content="hi")]
+    )
+    responses = OpenAIResponsesRequest(model=original, input="hi")
+    count = TokenCountRequest(
+        model=original, messages=[Message(role="user", content="hi")]
+    )
+    for routed in (
+        router.resolve_messages_request(messages),
+        router.resolve_responses_request(responses),
+        router.resolve_token_count_request(count),
+    ):
+        assert routed.request.model == "nvidia/nemotron-3-ultra-550b-a55b"
+        assert routed.resolved == route
+    assert messages.model == responses.model == count.model == original
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "open_router/nvidia/nemotron-3-super-120b-a12b",
+        "nvidia_nim/nvidia/nemotron-3-super-120b-a12b-successor",
+    ],
+)
+def test_super_replacement_does_not_redirect_other_endpoints(ref):
+    route = ModelRouter(Settings()).resolve("anthropic/" + ref)
+    assert route.primary.provider_model_ref == ref
 
 
 @pytest.mark.parametrize(

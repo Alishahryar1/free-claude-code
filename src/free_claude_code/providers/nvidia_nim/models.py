@@ -7,6 +7,8 @@ an exclusion when hosted chat is verified to work again. New IDs remain visible.
 
 HOSTED_MODEL_EXCLUSIONS = frozenset(
     {
+        # Hosted endpoint marked Deprecated by NVIDIA, checked 2026-10-21.
+        "nvidia/nemotron-3-super-120b-a12b",
         # Model-specific 404 on the tested hosted routes, checked 2026-10-13.
         "01-ai/yi-large",
         "adept/fuyu-8b",
