@@ -1,5 +1,6 @@
 """Contracts for pure Settings and canonical source composition."""
 
+import json
 from enum import Enum
 from pathlib import Path
 from unittest.mock import patch
@@ -24,6 +25,7 @@ from free_claude_code.config.loader import (
 from free_claude_code.config.model_refs import (
     ModelFallback,
     configured_chat_model_refs,
+    normalize_retired_model_settings,
     parse_model_name,
     parse_provider_type,
 )
@@ -35,6 +37,151 @@ from free_claude_code.config.paths import (
 )
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
+
+_SUPER_REF = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+_ULTRA_REF = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+
+
+def test_default_claude_aliases_use_hosted_ultra():
+    settings = compose_settings_snapshot({}, {}).settings
+    router = ModelRouter(settings)
+    for tier in ("fable", "opus", "sonnet", "haiku"):
+        assert (
+            router.resolve(f"claude-{tier}-test").primary.provider_model_ref
+            == _ULTRA_REF
+        )
+
+
+@pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
+@pytest.mark.parametrize(
+    "key", ["MODEL", "MODEL_FABLE", "MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"]
+)
+def test_super_migration_preserves_explicit_selection_and_source(source, key):
+    values = {
+        key: f" {_SUPER_REF} ",
+        "REASONING_POLICY": "high",
+        "REASONING_OPUS": "off",
+    }
+    managed = {"MODEL": "groq/default", key: "groq/managed"}
+    process = {}
+    if source is ConfigSource.MANAGED:
+        managed.update(values)
+    else:
+        process.update(values)
+    before = managed.copy(), process.copy()
+    snapshot = compose_settings_snapshot(managed, process)
+    assert getattr(snapshot.settings, key.lower()) == _ULTRA_REF
+    assert snapshot.sources[key.lower()] is source
+    assert snapshot.settings.reasoning_policy is ReasoningPreference.HIGH
+    assert snapshot.settings.reasoning_opus is ReasoningPreference.OFF
+    if key != "MODEL":
+        assert snapshot.settings.model == "groq/default"
+    assert (managed, process) == before
+
+
+@pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
+@pytest.mark.parametrize("super_first", [True, False])
+def test_super_fallback_migration_preserves_order_reasoning_and_distinct_keys(
+    source, super_first
+):
+    first, second = (
+        (_SUPER_REF, _ULTRA_REF) if super_first else (_ULTRA_REF, _SUPER_REF)
+    )
+    values = {
+        "MODEL": _SUPER_REF,
+        "NVIDIA_NIM_API_KEY": '["key-one", "key-two"]',
+        "MODEL_FALLBACKS": json.dumps(
+            [
+                {"model": first, "reasoning": "low"},
+                {"model": second, "reasoning": "high"},
+                {"model": _SUPER_REF, "reasoning": "off", "api_key_number": 2},
+                {"model": "groq/backup", "reasoning": "medium"},
+            ]
+        ),
+    }
+    snapshot = compose_settings_snapshot(
+        values if source is ConfigSource.MANAGED else {},
+        values if source is ConfigSource.PROCESS else {},
+    )
+    assert snapshot.settings.model_fallbacks == (
+        ModelFallback(model=_ULTRA_REF, reasoning=ReasoningPreference.LOW),
+        ModelFallback(
+            model=_ULTRA_REF, reasoning=ReasoningPreference.OFF, api_key_number=2
+        ),
+        ModelFallback(model="groq/backup", reasoning=ReasoningPreference.MEDIUM),
+    )
+    assert snapshot.sources["model_fallbacks"] is source
+    route = ModelRouter(snapshot.settings).resolve("claude-opus-test")
+    assert [
+        (entry.target.provider_model_ref, entry.target.api_key_number)
+        for entry in route.fallbacks
+    ] == [
+        (_ULTRA_REF, 2),
+        ("groq/backup", 1),
+    ]
+
+
+@pytest.mark.parametrize(
+    "refs",
+    [
+        [_SUPER_REF, _SUPER_REF, _ULTRA_REF],
+        [_SUPER_REF, _ULTRA_REF, _ULTRA_REF],
+        [_SUPER_REF, "groq/backup", "groq/backup"],
+    ],
+)
+def test_super_migration_does_not_hide_preexisting_fallback_duplicates(refs):
+    with pytest.raises(ValidationError, match="duplicate model/key pairs"):
+        compose_settings_snapshot({"MODEL_FALLBACKS": json.dumps(refs)}, {})
+
+
+@pytest.mark.parametrize(
+    "fallbacks",
+    [
+        f"{_SUPER_REF},",
+        "[invalid",
+        '[{"model":"groq/a","api_key_number":0}]',
+        '[{"model":"groq/a","reasoning":"invalid"}]',
+    ],
+)
+def test_super_migration_keeps_invalid_settings_invalid(fallbacks):
+    with pytest.raises(ValidationError):
+        compose_settings_snapshot(
+            {"MODEL": _SUPER_REF, "MODEL_FALLBACKS": fallbacks}, {}
+        )
+
+
+def test_model_repairs_leave_unaffected_fallback_text_unchanged():
+    values = {
+        "MODEL_FALLBACKS": '[{"model":"groq/backup","reasoning":"inherit","api_key_number":1}]',
+        "UNKNOWN": "keep",
+    }
+    assert (
+        normalize_retired_model_settings(values, preserve_empty_overrides=False)
+        == values
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "open_router/nvidia/nemotron-3-super-120b-a12b",
+        "custom_00000000000000000000000000000000/nvidia/nemotron-3-super-120b-a12b",
+        _SUPER_REF + "-successor",
+    ],
+)
+def test_super_migration_leaves_other_endpoints_unchanged(model):
+    values = {
+        "MODEL": model,
+        "MODEL_OPUS": model,
+        "MODEL_FALLBACKS": json.dumps(
+            [{"model": model, "reasoning": "inherit", "api_key_number": 1}],
+            separators=(",", ":"),
+        ),
+    }
+    assert (
+        normalize_retired_model_settings(values, preserve_empty_overrides=False)
+        == values
+    )
 
 
 def test_builtin_effort_is_from_client_with_inherited_tier_efforts():

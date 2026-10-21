@@ -21,8 +21,18 @@ from tests.providers.support import immediate_admission, make_provider_config
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("prefix", ["", "anthropic/", "claude-3-freecc-no-thinking/"])
-def test_retired_model_ingress_calls_default_provider(client, stream, prefix):
-    original = f"{prefix}github_models/vendor/opus"
+@pytest.mark.parametrize(
+    "ref,upstream",
+    [
+        ("github_models/vendor/opus", DEFAULT_MODEL.split("/", 1)[1]),
+        (
+            "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+            "nvidia/nemotron-3-ultra-550b-a55b",
+        ),
+    ],
+)
+def test_retired_model_ingress_calls_replacement(client, stream, prefix, ref, upstream):
+    original = f"{prefix}{ref}"
     _stream_messages_calls.clear()
     response = client.post(
         "/v1/messages",
@@ -36,7 +46,7 @@ def test_retired_model_ingress_calls_default_provider(client, stream, prefix):
     assert response.status_code == 200
     assert len(_stream_messages_calls) == 1
     args, kwargs = _stream_messages_calls[0]
-    assert args[0].model == DEFAULT_MODEL.split("/", 1)[1]
+    assert args[0].model == upstream
     assert kwargs["response_model"] == original
     if prefix == "claude-3-freecc-no-thinking/":
         assert kwargs["reasoning"] == ReasoningPolicy.off()

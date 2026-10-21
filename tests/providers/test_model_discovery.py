@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.api_keys import normalize_api_keys
+from free_claude_code.config.loader import compose_settings_snapshot
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
@@ -142,12 +144,13 @@ async def test_nim_exclusions_apply_only_to_hosted_nim_discovery(
         "01-ai/yi-large",  # Observed model-specific 404.
         "meta/muse-glimmer-30b",
         "nvidia/cosmos-reason2-8b",
+        "nvidia/nemotron-3-super-120b-a12b",  # Deprecated hosted endpoint.
         "nvidia/ising-calibration-1-35b-a3b",  # Explicit retirement 410.
         "nvidia/llama-nemotron-embed-vl-1b-v2",  # Working embedding service.
         "nvidia/ai-synthetic-video-detector",
     )
     retained = (
-        "nvidia/nemotron-3-super-120b-a12b",
+        "nvidia/nemotron-3-ultra-550b-a55b",
         "nvidia/future-chat-model",
         "01-ai/yi-large-successor",  # Exact IDs, not substring matching.
         "deepseek-ai/deepseek-v4.1-flash",  # Timeouts are not exclusions.
@@ -167,6 +170,34 @@ async def test_nim_exclusions_apply_only_to_hosted_nim_discovery(
             *(retained if filtered else ids)
         )
     mock_list.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_super_migration_and_hosted_discovery_publish_ultra_catalog():
+    old = "nvidia/nemotron-3-super-120b-a12b"
+    new = "nvidia/nemotron-3-ultra-550b-a55b"
+    config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = NvidiaNimProvider(
+            config, nim_settings=NimSettings(), admission=immediate_admission()
+        )
+    with patch.object(
+        provider._client.models,
+        "list",
+        new_callable=AsyncMock,
+        return_value=SimpleNamespace(
+            data=[SimpleNamespace(id=old), SimpleNamespace(id=new)]
+        ),
+    ):
+        infos = await provider.list_model_infos()
+    settings = compose_settings_snapshot({"MODEL": "nvidia_nim/" + old}, {}).settings
+    manager = _manager(settings)
+    manager.cache_model_infos("nvidia_nim", infos)
+    catalog = read_model_catalog(manager)
+    assert catalog.default_model_id == "nvidia_nim/" + new
+    assert [model.provider_model_ref for model in catalog.models] == [
+        "nvidia_nim/" + new
+    ]
 
 
 @pytest.mark.asyncio

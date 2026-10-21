@@ -112,7 +112,7 @@ uv run pytest smoke/product -n 0 -s --tb=short
 ```powershell
 $env:FCC_LIVE_SMOKE = "1"
 $env:FCC_SMOKE_TARGETS = "nvidia_nim_cli"
-$env:FCC_SMOKE_NIM_MODELS = "nvidia/nemotron-3.5-lightning-30b-a3b,moonshotai/kimi-k3,minimaxai/minimax-m3,nvidia/nemotron-3-super-120b-a12b"
+$env:FCC_SMOKE_NIM_MODELS = "nvidia/nemotron-3.5-lightning-30b-a3b,moonshotai/kimi-k3,minimaxai/minimax-m3,nvidia/nemotron-3-ultra-550b-a55b"
 uv run pytest smoke/product -n 0 -s --tb=short
 ```
 

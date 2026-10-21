@@ -130,13 +130,23 @@ def test_responses_probe_endpoints_return_204(
 
 
 @pytest.mark.parametrize("prefix", ["", "anthropic/", "claude-3-freecc-no-thinking/"])
-def test_retired_response_id_uses_default_provider(responses_client, prefix):
+@pytest.mark.parametrize(
+    "ref,upstream",
+    [
+        ("github_models/vendor/opus", DEFAULT_MODEL.split("/", 1)[1]),
+        (
+            "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+            "nvidia/nemotron-3-ultra-550b-a55b",
+        ),
+    ],
+)
+def test_retired_response_id_uses_replacement(responses_client, prefix, ref, upstream):
     client, provider = responses_client
-    original = f"{prefix}github_models/vendor/opus"
+    original = f"{prefix}{ref}"
     response = client.post("/v1/responses", json={"model": original, "input": "hello"})
     assert response.status_code == 200
     assert "response.completed" in response.text
-    assert provider.requests[0].model == DEFAULT_MODEL.split("/", 1)[1]
+    assert provider.requests[0].model == upstream
     assert provider.stream_kwargs[0]["response_model"] == original
     if prefix == "claude-3-freecc-no-thinking/":
         assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.off()

@@ -50,7 +50,7 @@ TARGET_ALIASES = {
 SECRET_KEY_PARTS = ("KEY", "TOKEN", "SECRET", "WEBHOOK", "AUTH")
 
 PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
-    "nvidia_nim": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+    "nvidia_nim": "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
     "azure_openai": "azure_openai/gpt-5.1",
     "open_router": "open_router/nvidia/nemotron-3-super-120b-a12b:free",
     "mistral": "mistral/devstral-small-latest",
@@ -113,7 +113,7 @@ NVIDIA_NIM_CLI_DEFAULT_MODELS: tuple[str, ...] = (
     "nvidia/nemotron-3.5-lightning-30b-a3b",
     "moonshotai/kimi-k3",
     "minimaxai/minimax-m3",
-    "nvidia/nemotron-3-super-120b-a12b",
+    "nvidia/nemotron-3-ultra-550b-a55b",
 )
 
 OPENROUTER_FREE_CLI_DEFAULT_MODELS: tuple[str, ...] = (

@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import os
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -114,6 +115,49 @@ def test_admin_retirement_preview_apply_and_runtime_agree(monkeypatch, tmp_path)
         ModelFallback(model="groq/a"),
         ModelFallback(model="deepseek/b"),
     )
+
+
+def test_admin_super_migration_preview_apply_and_runtime_agree(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    old = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+    new = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+    env_file = tmp_path / ".fcc" / ".env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(
+        "FCC_CONFIG_SCHEMA=2\nMODEL=groq/default\nMODEL_OPUS=groq/managed\nPRIVATE=hidden\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_OPUS", old)
+    app = create_test_app()
+    client = _local_client(app)
+    submission = {
+        "values": {
+            "MODEL": old,
+            "MODEL_SONNET": old,
+            "MODEL_OPUS": "deepseek/cannot-unlock",
+            "MODEL_FALLBACKS": f"{old},{new},groq/backup",
+            "REASONING_SONNET": "off",
+        }
+    }
+    response = post_config(client, "/admin/api/config/apply", json=submission)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["applied"]
+    assert old not in body["env_preview"]
+    assert "PRIVATE=********" in body["env_preview"]
+    values = dotenv_values_from_file(env_file)
+    assert values["MODEL"] == values["MODEL_SONNET"] == new
+    assert values["MODEL_OPUS"] == "groq/managed"
+    assert values["REASONING_SONNET"] == "off"
+    assert values["PRIVATE"] == "hidden"
+    effective = provider_manager_for_app(app).current_settings()
+    assert effective.model == effective.model_sonnet == effective.model_opus == new
+    assert effective.model_fallbacks == (
+        ModelFallback(model=new),
+        ModelFallback(model="groq/backup"),
+    )
+    assert os.environ["MODEL_OPUS"] == old
 
 
 @pytest.fixture(autouse=True)
@@ -2176,7 +2220,7 @@ def test_admin_never_reads_arbitrary_current_directory_env(monkeypatch, tmp_path
 
     config = _local_client(app).get("/admin/api/config").json()
     model_field = next(field for field in config["fields"] if field["key"] == "MODEL")
-    assert model_field["value"] == "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+    assert model_field["value"] == "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
     assert model_field["source"] == "default"
 
     response = post_config(

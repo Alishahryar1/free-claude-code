@@ -311,7 +311,7 @@ def _log_model_repairs(before: Mapping[str, str], after: Mapping[str, str]) -> N
     changed = sorted(key for key in before if before[key] != after.get(key))
     if changed:
         logger.info(
-            "Repaired retired provider selections in managed config: {}",
+            "Repaired retired model selections in managed config: {}",
             ", ".join(changed),
         )
 

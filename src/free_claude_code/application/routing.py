@@ -12,6 +12,7 @@ from free_claude_code.config.model_refs import (
     is_retired_model_ref,
     parse_model_name,
     parse_provider_type,
+    replace_retired_model_ref,
 )
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import ReasoningPreference
@@ -205,6 +206,13 @@ class ModelRouter:
             return (
                 parse_provider_type(self._settings.model),
                 parse_model_name(self._settings.model),
+                decoded.force_reasoning_off if decoded is not None else False,
+            )
+        replacement = replace_retired_model_ref(candidate)
+        if replacement != candidate:
+            return (
+                parse_provider_type(replacement),
+                parse_model_name(replacement),
                 decoded.force_reasoning_off if decoded is not None else False,
             )
         if decoded is not None:
