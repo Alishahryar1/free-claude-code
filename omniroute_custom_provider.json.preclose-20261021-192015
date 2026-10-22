@@ -1,0 +1,12 @@
+[
+  {
+    "provider_id": "custom_2678b3b3ac6c490d88d79231e02b0a71",
+    "display_name": "OmniRoute",
+    "base_url": "http://localhost:20128/v1",
+    "api_keys": [],
+    "api_format": "openai_chat",
+    "reasoning_format": "provider_default",
+    "reasoning_history_format": "disabled",
+    "model_ids": ["automodel"]
+  }
+]
