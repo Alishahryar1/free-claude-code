@@ -209,9 +209,11 @@ FCC routes Claude Code to the model selected in **Admin UI → Model Config**;
 the model name Claude Code displays does not mean the request uses an Anthropic
 Claude model. To avoid accidental charges, select only models currently marked
 free by their provider, and keep every **Fallback Model** on a free offering as
-well (or leave fallbacks empty). A paid fallback can be used after a free model
-fails. To change models, choose another model in **Model Config** and click
-**Apply**.
+well (or leave fallbacks empty). Also set **Model Fable**, **Model Opus**,
+**Model Sonnet**, and **Model Haiku** to **None** or to a currently free model;
+any tier override set to a paid model can still incur charges. A paid fallback
+can be used after a free model fails. To change models, choose another model in
+**Model Config** and click **Apply**.
 
 For a local option without hosted API usage or provider quotas, use Ollama; it
 requires local hardware and is covered in **Local provider setup** below.
