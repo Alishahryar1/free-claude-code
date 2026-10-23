@@ -90,13 +90,25 @@ terminal open.
 
 <a id="nvidia-nim-provider"></a>
 
-### 3. Configure NVIDIA NIM
+### 3. Configure a free-tier model
 
-1. Create an API key at [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys).
-2. Open the Admin UI URL from the server log.
-3. Open NVIDIA NIM in **Providers**, click **Add key**, paste the key, and click **Save**.
-4. Leave `MODEL` on the default `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, or search the model dropdown and select another model.
-5. Click **Apply** to save your model selection.
+Free-tier offers and quotas are set by each provider and can change. Create a
+provider account and key, then open the Admin UI URL from the server log.
+
+- **OpenRouter:** Create a key at [openrouter.ai/keys](https://openrouter.ai/keys).
+  In **Providers**, add it under OpenRouter and save. In **Model Config**, choose
+  `open_router/openrouter/free` to route to a currently available free model, or
+  select an individual model marked free in OpenRouter's current model catalog.
+- **NVIDIA NIM:** Create a key at
+  [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys).
+  Add it under NVIDIA NIM, then select a model that NVIDIA currently includes in
+  its free offering. A provider being listed in FCC does not mean every model it
+  offers is free.
+
+Click **Apply** to save your model selection. An API key may still be required
+for free-tier access. Check the provider's current pricing, eligibility, and
+rate limits before use; do not assume access is unlimited or that a trial or
+credit balance is a permanent free tier.
 
 To protect the local proxy with a bearer token, enable **Proxy Authentication**
 in Admin.
@@ -190,6 +202,19 @@ from more than one provider before succeeding.
 Provider modals support numbered API keys. Use **Add key**, remove rows, or drag their handles to reorder them. FCC uses key 1.
 
 For another API endpoint, open **Providers → Custom providers → Add provider**. Enter its API base URL, optional keys, and API format. Leave **Model IDs** empty to discover models automatically, or enter one upstream model ID per line. Save, then select a model in **Model Config**.
+
+### Keep Claude Code on free models
+
+FCC routes Claude Code to the model selected in **Admin UI → Model Config**;
+the model name Claude Code displays does not mean the request uses an Anthropic
+Claude model. To avoid accidental charges, select only models currently marked
+free by their provider, and keep every **Fallback Model** on a free offering as
+well (or leave fallbacks empty). A paid fallback can be used after a free model
+fails. To change models, choose another model in **Model Config** and click
+**Apply**.
+
+For a local option without hosted API usage or provider quotas, use Ollama; it
+requires local hardware and is covered in **Local provider setup** below.
 
 <details>
 <summary><strong>Provider catalog</strong></summary>
