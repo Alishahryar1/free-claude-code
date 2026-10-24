@@ -112,7 +112,7 @@ MISTRAL_CACHE_SMOKE_DEFAULT_MODEL = "mistral/mistral-large-latest"
 NVIDIA_NIM_CLI_DEFAULT_MODELS: tuple[str, ...] = (
     "nvidia/nemotron-3.5-lightning-30b-a3b",
     "moonshotai/kimi-k3",
-    "minimaxai/minimax-m3",
+    "minimaxai/minimax-m3.1-flash",
     "nvidia/nemotron-3-ultra-550b-a55b",
 )
 

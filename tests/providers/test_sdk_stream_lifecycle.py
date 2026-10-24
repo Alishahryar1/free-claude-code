@@ -21,13 +21,10 @@ from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
 )
+from free_claude_code.providers.failure_policy import RetryableToolProtocolError
 from free_claude_code.providers.mistral import MistralProvider
 from free_claude_code.providers.mistral.reasoning import normalize_mistral_stream
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
-from free_claude_code.providers.nvidia_nim.native_tool_stream import (
-    NimNativeToolProtocolError,
-    normalize_nim_native_tool_stream,
-)
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
 from free_claude_code.providers.request_recovery import RequestRecovery
@@ -317,17 +314,27 @@ async def test_mistral_cleanup_preserves_normalization_error():
         await client.close()
 
 
+class _RejectingNormalizedStream:
+    def __init__(self, source):
+        self.source = source
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        chunk = await anext(self.source)
+        if chunk.choices and chunk.choices[0].delta.content == "reject normalization":
+            raise RetryableToolProtocolError("invalid normalized chunk")
+        return chunk
+
+    async def aclose(self):
+        await self.source.aclose()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_nim_parser_failure_closes_response_before_retry(wire):
-    namespace = "]<]minimax[>["
-    malformed = (
-        f"{namespace}<tool_call>"
-        f'{namespace}<invoke name="">'
-        f"{namespace}</invoke>"
-        f"{namespace}</tool_call>"
-    )
-    body = ResponseBody(_chat_chunk(malformed, finish_reason="stop"))
+async def test_normalization_failure_closes_response_before_retry(wire):
+    body = ResponseBody(_chat_chunk("reject normalization"))
     requests = 0
 
     def handler(request):
@@ -344,10 +351,17 @@ async def test_nim_parser_failure_closes_response_before_retry(wire):
         )
 
     async with _harness("nim", handler) as (provider, client, admission):
-        async with asyncio.timeout(2):
-            output = "".join([event async for event in _public_stream(provider, wire)])
+        with patch.object(
+            provider._behavior,
+            "normalize_stream",
+            side_effect=lambda stream, body: _RejectingNormalizedStream(stream),
+        ):
+            async with asyncio.timeout(2):
+                output = "".join(
+                    [event async for event in _public_stream(provider, wire)]
+                )
         assert "recovered" in output
-        assert namespace not in output
+        assert "reject normalization" not in output
         assert requests == 2
         assert not client.is_closed()
         await _assert_admission_available(admission)
@@ -355,10 +369,10 @@ async def test_nim_parser_failure_closes_response_before_retry(wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_stopped_first_nim_chunk_returns_public_error_and_releases_admission(
+async def test_rejected_first_stopped_chunk_returns_error_and_releases_admission(
     wire,
 ):
-    body = ResponseBody(_chat_chunk("]<]minimax[>[<tool_call>", finish_reason="length"))
+    body = ResponseBody(_chat_chunk("reject normalization", finish_reason="length"))
     requests = 0
 
     def handler(request):
@@ -377,18 +391,25 @@ async def test_stopped_first_nim_chunk_returns_public_error_and_releases_admissi
     async with _harness("nim", handler) as (provider, client, admission):
         options = {"pre_start_error_response": _json_error, "request_id": "raw-stop"}
         source = _public_stream(provider, wire)
-        async with asyncio.timeout(2):
-            response = await (
-                anthropic_sse_streaming_response(
-                    source, pre_start_error_response=_json_error, request_id="raw-stop"
+        with patch.object(
+            provider._behavior,
+            "normalize_stream",
+            side_effect=lambda stream, body: _RejectingNormalizedStream(stream),
+        ):
+            async with asyncio.timeout(2):
+                response = await (
+                    anthropic_sse_streaming_response(
+                        source,
+                        pre_start_error_response=_json_error,
+                        request_id="raw-stop",
+                    )
+                    if wire == "messages"
+                    else openai_responses_sse_streaming_response(
+                        source, headers={}, **options
+                    )
                 )
-                if wire == "messages"
-                else openai_responses_sse_streaming_response(
-                    source, headers={}, **options
-                )
-            )
-            if isinstance(response, StreamingResponse):
-                await _serve(response)
+                if isinstance(response, StreamingResponse):
+                    await _serve(response)
         assert response.status_code >= 400
         assert requests == 1
         assert body.close_count == 1 and not client.is_closed()
@@ -400,7 +421,7 @@ async def test_stopped_first_nim_chunk_returns_public_error_and_releases_admissi
 async def test_sdk_observer_runs_before_normalization_without_owning_cleanup(
     reject_normalization,
 ):
-    text = "]<]minimax[>[<tool_call>" if reject_normalization else "hello"
+    text = "reject normalization" if reject_normalization else "hello"
     body = ResponseBody(_chat_chunk(text, finish_reason="stop"))
     seen = []
     async with _harness("nim", lambda _: _response(body)) as (_, client, admission):
@@ -409,13 +430,11 @@ async def test_sdk_observer_runs_before_normalization_without_owning_cleanup(
         )
         source = OpenAIStreamAdapter(sdk_stream, on_event=seen.append)
         normalized = (
-            normalize_nim_native_tool_stream(source, {})
-            if reject_normalization
-            else source
+            _RejectingNormalizedStream(source) if reject_normalization else source
         )
         try:
             if reject_normalization:
-                with pytest.raises(NimNativeToolProtocolError):
+                with pytest.raises(RetryableToolProtocolError):
                     await anext(normalized)
             else:
                 event = await anext(normalized)
@@ -456,7 +475,7 @@ async def test_normalizer_construction_failure_closes_response_before_retry(oper
             nonlocal calls
             calls += 1
             if calls == 1:
-                raise NimNativeToolProtocolError("invalid normalization")
+                raise RetryableToolProtocolError("invalid normalization")
             assert bodies[0].close_count == 1
             return normalize(stream, body)
 
