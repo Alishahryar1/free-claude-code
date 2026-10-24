@@ -329,6 +329,17 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             query_params=(("sub_type", "chat"),),
         ),
     ),
+    "modelscope": OpenAIChatProfile(
+        _policy(
+            "MODELSCOPE",
+            ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        ChatTemplateReasoning(field="enable_thinking"),
+        model_listing=OpenAIModelListing(path="/models"),
+    ),
     "nebius": OpenAIChatProfile(
         _policy(
             "NEBIUS",
