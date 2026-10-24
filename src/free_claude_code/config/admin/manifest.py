@@ -399,6 +399,18 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "WEB_SEARCH_PROVIDER",
+        "Web Search Provider",
+        "web_tools",
+        "select",
+        settings_attr="web_search_provider",
+        options=("duckduckgo", "parallel"),
+        description=(
+            "Choose duckduckgo (default) or parallel. Parallel sends user-provided "
+            "search objectives and queries to https://search.parallel.ai/mcp."
+        ),
+    ),
+    ConfigFieldSpec(
         "WEB_FETCH_ALLOWED_SCHEMES",
         "Allowed Web Fetch Schemes",
         "web_tools",
