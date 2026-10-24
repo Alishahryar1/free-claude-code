@@ -1230,7 +1230,7 @@ def test_nvidia_nim_cli_default_models_are_normalized() -> None:
     assert tuple(refs) == (
         "nvidia_nim/nvidia/nemotron-3.5-lightning-30b-a3b",
         "nvidia_nim/moonshotai/kimi-k3",
-        "nvidia_nim/minimaxai/minimax-m3",
+        "nvidia_nim/minimaxai/minimax-m3.1-flash",
         "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
     )
     assert set(refs.values()) == {"nvidia_nim_cli_default"}

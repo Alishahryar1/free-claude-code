@@ -9,6 +9,7 @@ from httpx2 import Request, Response
 
 from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
@@ -23,7 +24,6 @@ from free_claude_code.providers.nvidia_nim.client import _PROFILE as NIM_PROFILE
 from free_claude_code.providers.nvidia_nim.tool_schema import (
     NIM_TOOL_ARGUMENT_ALIASES_KEY,
 )
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
@@ -34,6 +34,7 @@ from tests.providers.support import (
     reasoning_for,
 )
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
+from tests.providers.test_native_tool_arguments import tool_events
 
 
 def message(role, content):
@@ -832,303 +833,178 @@ async def test_tool_call_stream(nim_provider):
         assert "search" in starts[0]
 
 
-@pytest.mark.asyncio
-async def test_native_minimax_tool_markup_becomes_anthropic_tool_use(nim_provider):
-    req = make_request(
-        tools=[
-            tool(
-                "Read",
-                "Read one file",
-                {
-                    "type": "object",
-                    "properties": {"file_path": {"type": "string"}},
-                    "required": ["file_path"],
-                },
-            )
-        ]
-    )
-    namespace = "]<]minimax[>["
-    raw = (
-        "I will read it."
-        f"{namespace}<tool_call>"
-        f'{namespace}<invoke name="Read">'
-        f"{namespace}<file_path>README.md{namespace}</file_path>"
-        f"{namespace}</invoke>"
-        f"{namespace}</tool_call>"
-    )
-
-    async def mock_stream():
-        yield _content_chunk(raw, finish_reason="stop")
-
-    with patch.object(
-        nim_provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = SDKStreamDouble(mock_stream())
-
-        events = [event async for event in nim_provider.stream_messages(req)]
-
-    event_text = "".join(events)
-    assert namespace not in event_text
-    assert "I will read it." in event_text
-    assert '"type": "tool_use"' in event_text
-    assert '"name": "Read"' in event_text
-    assert json.loads(_input_json_deltas(events)[0]) == {"file_path": "README.md"}
-
-
-@pytest.mark.asyncio
-async def test_native_minimax_reasoning_markup_becomes_anthropic_tool_use(
-    nim_provider,
-):
-    req = make_request(
-        tools=[
-            tool(
-                "Write",
-                "Write one file",
-                {
-                    "type": "object",
-                    "properties": {"file_path": {"type": "string"}},
-                    "required": ["file_path"],
-                },
-            )
-        ]
-    )
-    namespace = "]<]minimax[>["
-    raw = (
-        f"{namespace}<tool_call>"
-        f'{namespace}<invoke name="Write">'
-        f"{namespace}<file_path>output.md{namespace}</file_path>"
-        f"{namespace}</invoke>"
-        f"{namespace}</tool_call>"
-    )
-
-    async def mock_stream():
-        yield _content_chunk(
-            None,
-            reasoning_content=raw,
-            finish_reason="tool_calls",
-        )
-
-    with patch.object(
-        nim_provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = SDKStreamDouble(mock_stream())
-
-        events = [event async for event in nim_provider.stream_messages(req)]
-
-    event_text = "".join(events)
-    assert namespace not in event_text
-    assert '"type": "tool_use"' in event_text
-    assert '"name": "Write"' in event_text
-    assert json.loads(_input_json_deltas(events)[0]) == {"file_path": "output.md"}
-
-
-@pytest.mark.asyncio
-async def test_native_minimax_markup_without_tools_retries_without_leaking(
-    nim_provider,
-):
-    req = make_request(tools=None)
-    namespace = "]<]minimax[>["
-    raw = (
-        f"{namespace}<tool_call>"
-        f'{namespace}<invoke name="Write">'
-        f"{namespace}<file_path>output.md{namespace}</file_path>"
-        f"{namespace}</invoke>"
-        f"{namespace}</tool_call>"
-    )
-
-    async def native_stream():
-        yield _content_chunk(raw, finish_reason="tool_calls")
-
-    async def recovered_stream():
-        yield _content_chunk("Recovered safely.", finish_reason="stop")
-
-    attempts = [
-        SDKStreamDouble(native_stream())
-        for _ in range(UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS - 1)
-    ]
-    attempts.append(SDKStreamDouble(recovered_stream()))
-    with patch.object(
-        nim_provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.side_effect = attempts
-
-        events = [event async for event in nim_provider.stream_messages(req)]
-
-    event_text = "".join(events)
-    assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
-    assert namespace not in event_text
-    assert event_text.count("Recovered safely.") == 1
-    assert '"type": "tool_use"' not in event_text
-
-
-@pytest.mark.asyncio
-async def test_native_minimax_tool_markup_restores_nim_argument_aliases(nim_provider):
-    req = make_request(
-        tools=[
-            tool(
-                "Grep",
-                "Search file contents",
-                {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {"type": "string"},
-                        "type": {"type": "string"},
-                    },
-                    "required": ["pattern", "type"],
-                },
-            )
-        ]
-    )
-    namespace = "]<]minimax[>["
-    raw = (
-        f"{namespace}<tool_call>"
-        f'{namespace}<invoke name="Grep">'
-        f"{namespace}<pattern>needle{namespace}</pattern>"
-        f"{namespace}<_fcc_arg_type>py{namespace}</_fcc_arg_type>"
-        f"{namespace}</invoke>"
-        f"{namespace}</tool_call>"
-    )
-
-    async def mock_stream():
-        yield _content_chunk(raw, finish_reason="tool_calls")
-
-    with patch.object(
-        nim_provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = SDKStreamDouble(mock_stream())
-
-        events = [event async for event in nim_provider.stream_messages(req)]
-
-    assert json.loads(_input_json_deltas(events)[0]) == {
-        "pattern": "needle",
-        "type": "py",
+def _read_tools(wire):
+    schema = {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
     }
+    return (
+        [{"type": "function", "name": "read", "parameters": schema}]
+        if wire == "responses"
+        else [tool("read", "Read a file", schema)]
+    )
+
+
+_MINIMAX_MARKUP = (
+    ']<]minimax[>[<tool_call>]<]minimax[>[<invoke name="read">'
+    "]<]minimax[>[<path>README.md]<]minimax[>[</path>"
+    "]<]minimax[>[</invoke>]<]minimax[>[</tool_call>"
+)
 
 
 @pytest.mark.asyncio
-async def test_malformed_native_minimax_tool_call_retries_without_leaking(
-    nim_provider,
-):
-    req = make_request(
-        tools=[
-            tool(
-                "Read",
-                "Read one file",
-                {
-                    "type": "object",
-                    "properties": {"file_path": {"type": "string"}},
-                    "required": ["file_path"],
-                },
-            )
-        ]
-    )
-    namespace = "]<]minimax[>["
-    malformed = (
-        f"{namespace}<tool_call>"
-        f'{namespace}<invoke name="">'
-        f"{namespace}</invoke>"
-        f"{namespace}</tool_call>"
-    )
-    recovered = (
-        f"{namespace}<tool_call>"
-        f'{namespace}<invoke name="Read">'
-        f"{namespace}<file_path>README.md{namespace}</file_path>"
-        f"{namespace}</invoke>"
-        f"{namespace}</tool_call>"
-    )
-
-    async def malformed_stream():
-        yield _content_chunk(malformed, finish_reason="stop")
-
-    async def recovered_stream():
-        yield _content_chunk(recovered, finish_reason="tool_calls")
-
-    with patch.object(
-        nim_provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.side_effect = [
-            SDKStreamDouble(malformed_stream()),
-            SDKStreamDouble(recovered_stream()),
-        ]
-
-        events = [event async for event in nim_provider.stream_messages(req)]
-
-    assert mock_create.await_count == 2
-    event_text = "".join(events)
-    assert namespace not in event_text
-    assert '"name": "Read"' in event_text
-    assert json.loads(_input_json_deltas(events)[0]) == {"file_path": "README.md"}
-
-
-@pytest.mark.asyncio
-async def test_midstream_native_tool_suffix_failure_recovers_without_duplication(
-    nim_provider,
-):
-    req = make_request(
-        tools=[
-            tool(
-                "Read",
-                "Read one file",
-                {
-                    "type": "object",
-                    "properties": {"file_path": {"type": "string"}},
-                    "required": ["file_path"],
-                },
-            )
-        ]
-    )
-    namespace = "]<]minimax[>["
-    malformed = (
-        f"{namespace}<tool_call>"
-        f'{namespace}<invoke name="Read">'
-        f"{namespace}<file_path>IGNORED.md{namespace}</file_path>"
-        f"{namespace}</invoke>"
-        f"{namespace}</tool_call>"
-        "unexpected trailing content"
-    )
-    recovered = (
-        f"{namespace}<tool_call>"
-        f'{namespace}<invoke name="Read">'
-        f"{namespace}<file_path>README.md{namespace}</file_path>"
-        f"{namespace}</invoke>"
-        f"{namespace}</tool_call>"
-    )
-
-    async def malformed_stream():
-        yield _content_chunk("Starting the read. ")
-        yield _content_chunk(malformed, finish_reason="stop")
-
-    async def recovered_stream():
-        yield _content_chunk(recovered, finish_reason="tool_calls")
-
-    def immediate_holdback():
-        return RecoveryHoldbackBuffer(holdback_seconds=0.0)
-
-    with (
-        patch.object(
-            nim_provider._client.chat.completions,
-            "create",
-            new_callable=AsyncMock,
-        ) as mock_create,
-        patch(
-            "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-            side_effect=immediate_holdback,
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "model,parts,with_tools,field",
+    [
+        (
+            "minimaxai/minimax-m3.1-flash",
+            ["Example: " + _MINIMAX_MARKUP],
+            True,
+            "content",
         ),
-    ):
-        mock_create.side_effect = [
-            SDKStreamDouble(malformed_stream()),
-            SDKStreamDouble(recovered_stream()),
+        (
+            "nvidia/nemotron-3-ultra-550b-a55b",
+            [_MINIMAX_MARKUP[:6], _MINIMAX_MARKUP[6:92], _MINIMAX_MARKUP[92:]],
+            True,
+            "content",
+        ),
+        (
+            "minimaxai/minimax-m3.1-flash",
+            ["The namespace is ]<]minimax[>[."],
+            False,
+            "content",
+        ),
+        (
+            "nvidia/nemotron-3-ultra-550b-a55b",
+            ["]<]minimax[>[<tool_call>"],
+            False,
+            "content",
+        ),
+        ("minimaxai/minimax-m3.1-flash", [_MINIMAX_MARKUP], True, "reasoning_content"),
+    ],
+)
+async def test_minimax_markup_is_not_a_tool_call(wire, model, parts, with_tools, field):
+    template = _events_for("chat")[0]
+    upstream = [
+        {
+            **template,
+            "choices": [{"index": 0, "delta": {field: part}, "finish_reason": None}],
+        }
+        for part in parts
+    ]
+    upstream.append(
+        {
+            **template,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": "Visible answer." if field != "content" else ""
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    )
+    async with _harness(
+        "chat", lambda _: (200, upstream), chat_provider_factory=_alias_provider
+    ) as (send, bodies, _):
+        saved = await _saved_reply(
+            send(
+                wire,
+                [{"role": "user", "content": "Explain this syntax."}],
+                model=model,
+                tools=_read_tools(wire) if with_tools else None,
+            ),
+            wire,
+        )
+    assert len(bodies) == 1
+    if wire == "messages":
+        blocks = saved[0]["content"]
+        assert not any(block["type"] == "tool_use" for block in blocks)
+        reasoning = "".join(block.get("thinking", "") for block in blocks)
+    else:
+        assert not any(item["type"] == "function_call" for item in saved)
+        blocks = [
+            block
+            for item in saved
+            if item["type"] == "message"
+            for block in item["content"]
         ]
+        reasoning = "".join(
+            block["text"]
+            for item in saved
+            if item["type"] == "reasoning"
+            for block in item.get("content", [])
+        )
+    text = "".join(block.get("text", "") for block in blocks)
+    assert text == ("".join(parts) if field == "content" else "Visible answer.")
+    if field == "reasoning_content":
+        assert reasoning == "".join(parts)
 
-        events = [event async for event in nim_provider.stream_messages(req)]
 
-    assert mock_create.await_count == 2
-    event_text = "".join(events)
-    assert namespace not in event_text
-    assert event_text.count("Starting the read.") == 1
-    assert '"name": "Read"' in event_text
-    assert json.loads(_input_json_deltas(events)[0]) == {"file_path": "README.md"}
-    assert "event: error" not in event_text
+@pytest.mark.asyncio
+async def test_nim_normalization_preserves_reasoning_chunks(nim_provider):
+    chunks = [
+        _content_chunk(None, reasoning_content=_MINIMAX_MARKUP[:20]),
+        _content_chunk(
+            None, reasoning_content=_MINIMAX_MARKUP[20:], finish_reason="stop"
+        ),
+    ]
+
+    async def source():
+        for chunk in chunks:
+            yield chunk
+
+    normalized = [
+        chunk
+        async for chunk in nim_provider._behavior.normalize_stream(
+            source(), {"model": "minimaxai/minimax-m3.1-flash"}
+        )
+    ]
+    assert (
+        "".join(chunk.choices[0].delta.reasoning_content for chunk in normalized)
+        == _MINIMAX_MARKUP
+    )
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in normalized)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_nim_structured_tool_arguments_are_preserved(wire):
+    arguments = '{ "path": "README.md", "options": {"count": 2, "enabled": true}, "tags": ["a", "b"] }'
+    async with _harness(
+        "chat",
+        lambda _: (200, tool_events("chat", arguments)),
+        chat_provider_factory=_alias_provider,
+    ) as (send, bodies, _):
+        events = [
+            event
+            async for event in send(
+                wire,
+                [{"role": "user", "content": "Read the file."}],
+                model="minimaxai/minimax-m3.1-flash",
+                tools=_read_tools(wire),
+            )
+        ]
+    parsed = parse_sse_text("".join(events))
+    assert len(bodies) == 1
+    if wire == "messages":
+        assert parsed[-1].event == "message_stop"
+        assert "".join(_input_json_deltas(events)) == arguments
+        call = next(
+            event.data["content_block"]
+            for event in parsed
+            if event.data.get("content_block", {}).get("type") == "tool_use"
+        )
+        assert call["id"] == "call_probe" and call["name"] == "read"
+    else:
+        assert parsed[-1].event == "response.completed"
+        call = parsed[-1].data["response"]["output"][0]
+        assert call["call_id"] == "call_probe" and call["name"] == "read"
+        assert call["arguments"] == arguments
 
 
 @pytest.mark.asyncio

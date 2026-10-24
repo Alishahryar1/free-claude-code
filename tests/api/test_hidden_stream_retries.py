@@ -16,8 +16,12 @@ from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.failure_policy import RetryableProviderProtocolError
-from free_claude_code.providers.nvidia_nim import NvidiaNimProvider, native_tool_stream
+from free_claude_code.providers.failure_policy import (
+    RetryableProviderProtocolError,
+    RetryableToolProtocolError,
+)
+from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
+from free_claude_code.providers.nvidia_nim.client import NvidiaNimChatBehavior
 from free_claude_code.providers.openai_chat.transport import _OpenAIChatStreamAssembler
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_response_streams import _serve
@@ -210,12 +214,44 @@ def _nim_factory():
     )
 
 
-def _nim_partial_terminal(reason):
+class _FaultingNormalizedStream:
+    def __init__(self, source, *, suppress_terminal=False):
+        self.source = source
+        self.suppress_terminal = suppress_terminal
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        while True:
+            chunk = await anext(self.source)
+            if chunk.choices:
+                choice = chunk.choices[0]
+                if self.suppress_terminal and choice.finish_reason is not None:
+                    continue
+                if choice.delta.content == "reject normalization":
+                    raise RetryableToolProtocolError("invalid normalized chunk")
+            return chunk
+
+    async def aclose(self):
+        await self.source.aclose()
+
+
+@pytest.fixture
+def failing_normalizer(monkeypatch):
+    monkeypatch.setattr(
+        NvidiaNimChatBehavior,
+        "normalize_stream",
+        lambda self, stream, body: _FaultingNormalizedStream(stream),
+    )
+
+
+def _rejected_terminal(reason):
     first = deepcopy(_events_for("chat")[0])
     first["choices"][0]["delta"] = {"role": "assistant"}
     first["choices"][0]["finish_reason"] = None
     stopped = deepcopy(first)
-    stopped["choices"][0]["delta"] = {"content": "]<]minimax[>[<tool_call>"}
+    stopped["choices"][0]["delta"] = {"content": "reject normalization"}
     stopped["choices"][0]["finish_reason"] = reason
     return [first, stopped]
 
@@ -223,14 +259,14 @@ def _nim_partial_terminal(reason):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "content_filter"])
-async def test_normal_chat_stop_survives_nim_normalization_failure(
-    wire, reason, committed_holdback
+async def test_normal_chat_stop_survives_normalization_failure(
+    wire, reason, committed_holdback, failing_normalizer
 ):
     async with _harness(
         "chat",
         lambda bodies: (
             200,
-            _nim_partial_terminal(reason)
+            _rejected_terminal(reason)
             if len(bodies) == 1
             else tool_events("chat", '{"path":"winning"}'),
         ),
@@ -241,7 +277,7 @@ async def test_normal_chat_stop_survives_nim_normalization_failure(
             wire,
         )
     assert len(bodies) == 1
-    assert "]<]minimax" not in result and "winning" not in result
+    assert "reject normalization" not in result and "winning" not in result
     assert parse_sse_text(result)[-1].event == (
         "error" if wire == "messages" else "response.failed"
     )
@@ -249,12 +285,14 @@ async def test_normal_chat_stop_survives_nim_normalization_failure(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_nim_unstopped_normalization_failure_can_retry(wire, committed_holdback):
+async def test_unstopped_normalization_failure_can_retry(
+    wire, committed_holdback, failing_normalizer
+):
     async with _harness(
         "chat",
         lambda bodies: (
             200,
-            _nim_partial_terminal(None)
+            _rejected_terminal(None)
             if len(bodies) == 1
             else tool_events("chat", '{"path":"winning"}'),
         ),
@@ -270,12 +308,14 @@ async def test_nim_unstopped_normalization_failure_can_retry(wire, committed_hol
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_replacement_nim_stop_prevents_third_generation(wire, committed_holdback):
+async def test_replacement_stop_prevents_third_generation(
+    wire, committed_holdback, failing_normalizer
+):
     async with _harness(
         "chat",
         lambda bodies: (
             200,
-            _nim_partial_terminal(None if len(bodies) == 1 else "length")
+            _rejected_terminal(None if len(bodies) == 1 else "length")
             if len(bodies) <= 2
             else tool_events("chat", '{"path":"winning"}'),
         ),
@@ -293,8 +333,8 @@ async def test_replacement_nim_stop_prevents_third_generation(wire, committed_ho
 
 
 @pytest.mark.asyncio
-async def test_concurrent_nim_requests_keep_stop_evidence_independent(
-    committed_holdback,
+async def test_concurrent_normalized_requests_keep_stop_evidence_independent(
+    committed_holdback, failing_normalizer
 ):
     attempts = {"stopped": 0, "retry": 0}
 
@@ -303,7 +343,7 @@ async def test_concurrent_nim_requests_keep_stop_evidence_independent(
         attempts[label] += 1
         if label == "retry" and attempts[label] > 1:
             return 200, tool_events("chat", '{"path":"winning"}')
-        return 200, _nim_partial_terminal("stop" if label == "stopped" else None)
+        return 200, _rejected_terminal("stop" if label == "stopped" else None)
 
     async with _harness("chat", reply, chat_provider_factory=_nim_factory) as (
         send,
@@ -330,18 +370,17 @@ async def test_concurrent_nim_requests_keep_stop_evidence_independent(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_raw_nim_stop_survives_later_null_and_empty_choices(
+async def test_raw_stop_survives_normalization_and_later_null_and_empty_choices(
     wire, committed_holdback, monkeypatch
 ):
-    normalize = native_tool_stream._normalized_chunks
-
-    def suppress_terminal(chunk, choice, *args, **kwargs):
-        if choice.finish_reason is not None:
-            return []
-        return normalize(chunk, choice, *args, **kwargs)
-
-    monkeypatch.setattr(native_tool_stream, "_normalized_chunks", suppress_terminal)
-    first, terminal = _nim_partial_terminal("stop")
+    monkeypatch.setattr(
+        NvidiaNimChatBehavior,
+        "normalize_stream",
+        lambda self, stream, body: _FaultingNormalizedStream(
+            stream, suppress_terminal=True
+        ),
+    )
+    first, terminal = _rejected_terminal("stop")
     terminal["choices"][0]["delta"] = {"content": ""}
     usage = {**deepcopy(first), "choices": []}
     async with _harness(
