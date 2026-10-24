@@ -18,6 +18,12 @@ class ProviderFieldOverride(TypedDict, total=False):
 
 
 _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
+    "IFLYTEK_TOKEN_PLAN_API_KEY": {
+        "description": (
+            "Token Plan subscription key from maas.xfyun.cn/packageSubscription. "
+            "Pay-as-you-go and Coding Plan keys use separate endpoints."
+        ),
+    },
     "ANTHROPIC_API_KEY": {
         "description": "Anthropic API access with separate usage billing. Messages requests use Anthropic tools and client thinking controls. Native fallback uses other Anthropic models. FCC local web tools apply to compatibility routes.",
     },
