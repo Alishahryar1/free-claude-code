@@ -1779,6 +1779,32 @@ def test_admin_constructor_captured_setting_requires_restart(
     }
 
 
+def test_admin_minimax_endpoint_is_visible_and_persisted(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    app = create_test_app()
+    client = _local_client(app)
+    fields = {
+        field["key"]: field
+        for field in client.get("/admin/api/config").json()["fields"]
+    }
+    assert "MINIMAX_BASE_URL" in fields
+    endpoint = "https://api.minimaxi.com/v1"
+    response = post_config(
+        client,
+        "/admin/api/config/apply",
+        json={"values": {"MINIMAX_BASE_URL": endpoint}},
+    )
+    assert response.status_code == 200
+    assert response.json()["applied"] is True
+    assert f"MINIMAX_BASE_URL={endpoint}" in (tmp_path / ".fcc" / ".env").read_text()
+    fields = {
+        field["key"]: field
+        for field in client.get("/admin/api/config").json()["fields"]
+    }
+    assert fields["MINIMAX_BASE_URL"]["value"] == endpoint
+
+
 def test_admin_apply_writes_cohere_key_and_masks_preview(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)

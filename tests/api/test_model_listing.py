@@ -242,15 +242,17 @@ def test_models_list_includes_cached_wafer_models():
             model_haiku=None,
         )
     )
-    _cache_models(app, "wafer", "DeepSeek-V4-Pro", "MiniMax-M2.7")
+    _cache_models(app, "wafer", "DeepSeek-V4-Pro", "MiniMax-M3", "MiniMax-M2.7")
 
     response = TestClient(app).get("/v1/models")
 
     ids = [item["id"] for item in response.json()["data"]]
     assert "anthropic/wafer/DeepSeek-V4-Pro" in ids
     assert "claude-3-freecc-no-thinking/wafer/DeepSeek-V4-Pro" in ids
-    assert "anthropic/wafer/MiniMax-M2.7" in ids
-    assert "claude-3-freecc-no-thinking/wafer/MiniMax-M2.7" in ids
+    assert "anthropic/wafer/MiniMax-M3" in ids
+    assert "claude-3-freecc-no-thinking/wafer/MiniMax-M3" in ids
+    assert "anthropic/wafer/MiniMax-M2.7" not in ids
+    assert "claude-3-freecc-no-thinking/wafer/MiniMax-M2.7" not in ids
 
 
 def test_models_list_includes_fallback_refs_without_cached_discovery():
