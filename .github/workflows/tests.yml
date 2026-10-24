@@ -8,7 +8,6 @@
 name: CI
 
 env:
-  CI_UV_VERSION: "0.13.5"
   CI_PYTEST_SHARDS: "2"
   CI_PLAYWRIGHT_SHARDS: "3"
   UV_MALWARE_CHECK: "1"
@@ -68,7 +67,6 @@ jobs:
       - name: Set up CI environment
         uses: ./.github/actions/ci-environment
         with:
-          uv-version: ${{ env.CI_UV_VERSION }}
           runner-label: ubuntu-latest
 
       - name: Run
@@ -114,7 +112,6 @@ jobs:
       - name: Set up CI environment
         uses: ./.github/actions/ci-environment
         with:
-          uv-version: ${{ env.CI_UV_VERSION }}
           runner-label: ${{ matrix.runner }}
           prepare-node: "true"
 
@@ -143,7 +140,6 @@ jobs:
       - name: Set up CI environment
         uses: ./.github/actions/ci-environment
         with:
-          uv-version: ${{ env.CI_UV_VERSION }}
           runner-label: ${{ matrix.runner }}
 
       - name: Install Chromium

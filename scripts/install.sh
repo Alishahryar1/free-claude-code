@@ -1,8 +1,9 @@
 #!/bin/sh
 set -eu
 
-PYTHON_VERSION="3.14.9"
-MIN_UV_VERSION="0.13.5"
+# Filled from the selected release before installation; placeholders are for dry-run.
+PYTHON_VERSION="<release-python>"
+MIN_UV_VERSION="<release-uv-minimum>"
 CLAUDE_INSTALL_URL="https://claude.ai/install.sh"
 CODEX_INSTALL_URL="https://chatgpt.com/codex/install.sh"
 PI_INSTALL_URL="https://pi.dev/install.sh"
@@ -1517,7 +1518,11 @@ package_spec() {
     else
         printf '%s' 'free-claude-code'
     fi
-    [ -z "$fcc_install_version" ] || printf '==%s' "$fcc_install_version"
+    if [ -n "$fcc_install_version" ]; then
+        printf '==%s' "$fcc_install_version"
+    elif [ "$dry_run" -eq 1 ]; then
+        printf '%s' '==<selected-release>'
+    fi
 }
 
 install_free_claude_code() {
@@ -1611,8 +1616,87 @@ show_installer_next_steps() {
     fi
 }
 
+dispatch_release() {
+    release_base="https://github.com/Alishahryar1/free-claude-code/releases"
+    if [ -z "$fcc_install_version" ]; then
+        selected_url=$(curl -fsSL --max-time 10 --max-redirs 5 -o /dev/null -w '%{url_effective}' "$release_base/latest") ||
+            fail "Could not resolve the latest completed FCC release."
+        case "$selected_url" in
+            "$release_base/tag/v"[0-9]*) fcc_install_version=${selected_url#"$release_base/tag/v"} ;;
+            *) fail "GitHub returned an unexpected FCC release URL." ;;
+        esac
+        validate_args
+    fi
+    if ! selected_installer=$(curl -fsSL --max-time 10 --max-redirs 5 "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v$fcc_install_version/scripts/install.sh") ||
+        [ -z "$selected_installer" ] || ! sh -n -c "$selected_installer"; then
+        print_installer_retry >&2
+        fail "Could not load the installer for FCC $fcc_install_version."
+    fi
+    FCC_INSTALL_VERSION=$fcc_install_version _FCC_INSTALLER_RELEASE=$fcc_install_version exec sh -c "$selected_installer" sh "$@"
+}
+
+parse_toolchain_requirements() {
+    # Only the two supported scalar requirements in our own pyproject schema.
+    awk -v single_quote="'" '
+        BEGIN { number = "(0|[1-9][0-9]*)"; version = number "[.]" number "[.]" number }
+        {
+            line = $0
+            sub(/^[ \t]+/, "", line)
+            sub(/[ \t\r]+$/, "", line)
+            if (line ~ /^\[/) {
+                section = ""
+                if (line ~ /^\[project\][ \t]*(#.*)?$/) section = "project"
+                if (line ~ /^\[tool\.uv\][ \t]*(#.*)?$/) section = "uv"
+                if (section != "" && ++sections[section] != 1) invalid = 1
+                next
+            }
+            if ((section == "project" && line ~ /^requires-python[ \t]*=/) ||
+                (section == "uv" && line ~ /^required-version[ \t]*=/)) {
+                if (++keys[section] != 1) invalid = 1
+                sub(/^[^=]*=[ \t]*/, "", line)
+                quote = substr(line, 1, 1)
+                operator = section == "project" ? "==" : ">="
+                if ((quote != "\"" && quote != single_quote) ||
+                    line !~ ("^" quote operator version quote "[ \t]*(#.*)?$")) {
+                    invalid = 1
+                    next
+                }
+                value = substr(line, 4)
+                sub(quote ".*$", "", value)
+                values[section] = value
+            }
+        }
+        END {
+            if (invalid || keys["project"] != 1 || keys["uv"] != 1) exit 1
+            print values["project"], values["uv"]
+        }
+    '
+}
+
+load_toolchain() {
+    metadata_url="https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v$fcc_install_version/pyproject.toml"
+    if ! toolchain_text=$(curl -fsSL --max-time 10 --max-redirs 5 "$metadata_url"); then
+        print_installer_retry >&2
+        fail "Could not fetch toolchain requirements for FCC $fcc_install_version."
+    fi
+    if ! toolchain_versions=$(printf '%s\n' "$toolchain_text" | parse_toolchain_requirements); then
+        print_installer_retry >&2
+        fail "Invalid Python or uv requirement in FCC $fcc_install_version pyproject.toml."
+    fi
+    PYTHON_VERSION=${toolchain_versions%% *}
+    MIN_UV_VERSION=${toolchain_versions#* }
+}
+
 parse_args "$@"
 validate_args
+if [ "$dry_run" -eq 0 ]; then
+    # Consume this invocation's handoff before any prerequisite processes run.
+    installer_release=${_FCC_INSTALLER_RELEASE:-}
+    [ -z "$installer_release" ] || [ "$installer_release" = "$fcc_install_version" ] || fail "Invalid FCC release handoff."
+    unset _FCC_INSTALLER_RELEASE
+    [ -n "$installer_release" ] || dispatch_release "$@"
+    load_toolchain
+fi
 initialize_install_log
 if [ "$dry_run" -eq 0 ]; then install_report_started=1; fi
 start_install_step Preflight
