@@ -659,7 +659,7 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.15.1" },
     { name = "discord-py", specifier = ">=2.7.1" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.141.1" },
-    { name = "github-copilot-sdk", specifier = ">=1.0.21" },
+    { name = "github-copilot-sdk", specifier = ">=1.0.24" },
     { name = "google-auth", extras = ["requests"], specifier = ">=2.56.3" },
     { name = "grpcio", specifier = ">=1.84.0" },
     { name = "grpcio-tools", specifier = ">=1.81.1" },
@@ -671,9 +671,9 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "markdown-it-py", specifier = ">=4.2.0" },
     { name = "nvidia-riva-client", specifier = ">=2.26.0" },
-    { name = "openai", specifier = ">=3.29.0" },
+    { name = "openai", specifier = ">=3.35.1" },
     { name = "packaging", specifier = ">=26.3" },
-    { name = "pillow", marker = "sys_platform == 'darwin' or sys_platform == 'win32'", specifier = ">=12.0.0" },
+    { name = "pillow", marker = "sys_platform == 'darwin' or sys_platform == 'win32'", specifier = ">=13.0.0" },
     { name = "pydantic", specifier = ">=2.14.1" },
     { name = "pyperclip", specifier = ">=1.11.0" },
     { name = "pystray", marker = "sys_platform == 'darwin' or sys_platform == 'win32'", specifier = ">=0.19.5" },
@@ -682,11 +682,11 @@ requires-dist = [
     { name = "requests", extras = ["socks"], specifier = ">=2.34.2" },
     { name = "ruamel-yaml", specifier = ">=0.19.1" },
     { name = "simplejson", specifier = ">=4.2.0" },
-    { name = "sqlalchemy", specifier = ">=2.1.4" },
+    { name = "sqlalchemy", specifier = ">=2.1.5" },
     { name = "tiktoken", specifier = ">=0.13.0" },
-    { name = "tomlkit", specifier = ">=0.13.3" },
+    { name = "tomlkit", specifier = ">=0.15.2" },
     { name = "torch", marker = "extra == 'voice-local'", specifier = ">=2.14.1", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "transformers", marker = "extra == 'voice-local'", specifier = ">=5.19.0" },
+    { name = "transformers", marker = "extra == 'voice-local'", specifier = ">=5.20.2" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 provides-extras = ["voice-local"]
@@ -700,8 +700,8 @@ dev = [
     { name = "pytest-split", specifier = ">=0.11.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "ruff", specifier = ">=0.17.0" },
-    { name = "ty", specifier = ">=0.0.86" },
+    { name = "ruff", specifier = ">=0.17.1" },
+    { name = "ty", specifier = ">=0.0.90" },
 ]
 
 [[package]]
