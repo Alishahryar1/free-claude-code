@@ -3,6 +3,8 @@ updates:
   - package-ecosystem: "uv"
     directory: "/"
     versioning-strategy: increase
+    commit-message:
+      prefix: "patch"
     schedule:
       interval: "daily"
     groups:
