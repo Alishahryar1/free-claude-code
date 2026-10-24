@@ -1,5 +1,7 @@
 """Shared filesystem paths for Free Claude Code configuration."""
 
+import os
+import re
 from pathlib import Path
 
 FCC_CONFIG_DIRNAME = ".fcc"
@@ -25,10 +27,48 @@ CODE_DATABASE_FILENAME = "code.db"
 CODE_LOCK_FILENAME = "code.lock"
 
 
-def config_dir_path() -> Path:
-    """Return the default user config directory."""
+def _default_config_dir_path() -> Path:
+    """Return the stock global config directory (never slot-overridden)."""
 
     return Path.home() / FCC_CONFIG_DIRNAME
+
+
+def config_dir_path() -> Path:
+    """Return the config directory for this instance.
+
+    An explicit ``FCC_HOME`` relocates the entire home directory (managed
+    ``.env``, ``fcc.db``, logs, locks, housekeeping) for this process; unset,
+    the stock global default is used. ``fcc-server --project DIR`` sets it so
+    one machine can host isolated per-project instances, mirroring how Claude
+    Code namespaces its own state under ``~/.claude/projects/``.
+    """
+
+    override = os.environ.get("FCC_HOME")
+    if override:
+        return Path(override).expanduser()
+    return _default_config_dir_path()
+
+
+def _project_slot_name(project: Path) -> str:
+    """Return the global slot name for a project directory.
+
+    Mirrors Claude Code's project naming: every non-alphanumeric character of
+    the absolute path becomes a dash, e.g. ``C:\\AI_Agency\\You-Vid`` becomes
+    ``C--AI-Agency-You-Vid``.
+    """
+
+    return re.sub(r"[^A-Za-z0-9]", "-", str(project))
+
+
+def project_slot_path(project: Path) -> Path:
+    """Return the global per-project slot under the stock config directory.
+
+    Slots always live under the default global directory — never inside the
+    project itself — so FCC never writes config, credentials, or session
+    history into a folder the user may commit or share.
+    """
+
+    return _default_config_dir_path() / "projects" / _project_slot_name(project)
 
 
 def managed_env_path() -> Path:
