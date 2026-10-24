@@ -117,11 +117,11 @@ def test_invalid_toolchain_stops_before_installer_changes(release_harness, text)
     assert not (release_harness.root / "home/.fcc/logs").exists()
 
 
-def test_missing_selected_release_stops_before_download(release_harness):
+def test_missing_release_pin_rejects_handoff_before_download(release_harness):
     release_harness.env.pop("FCC_INSTALL_VERSION")
     result = release_harness.run()
     assert result.returncode != 0
-    assert "bootstrap" in result.stdout + result.stderr
+    assert "handoff" in result.stdout + result.stderr
     assert release_harness.calls() == []
 
 
@@ -968,6 +968,7 @@ printf '%s  %s\n' "$checksum" "$1"
             "CALL_LOG": str(log),
             "FAKE_FIXTURES": str(fixtures),
             "FCC_INSTALL_VERSION": RELEASE_VERSION,
+            "_FCC_INSTALLER_RELEASE": RELEASE_VERSION,
             "FAKE_TOOL_BIN": str(tool_bin),
             "FAKE_INFERRED_HOME": str(home),
             "FCC_PROCESS_MARKER": str(tmp_path / "fcc-process-ready"),
@@ -2935,6 +2936,7 @@ $installer = [scriptblock]::Create($installerSource)
             "CLAUDE_CONFIG_DIR": "",
             "FAKE_FIXTURES": str(fixtures),
             "FCC_INSTALL_VERSION": RELEASE_VERSION,
+            "_FCC_INSTALLER_RELEASE": RELEASE_VERSION,
             "FAKE_TOOL_BIN": str(tool_bin),
             "FAKE_NPM_PREFIX": str(npm_prefix),
             "FCC_INSTALLER": str(_repo_root() / "scripts" / "install.ps1"),
