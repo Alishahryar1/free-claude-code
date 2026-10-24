@@ -21,6 +21,7 @@ from free_claude_code.config.provider_catalog import (
     CLINE_DEFAULT_BASE,
     COHERE_DEFAULT_BASE,
     DEEPINFRA_DEFAULT_BASE,
+    EMPIRIOLABS_DEFAULT_BASE,
     EXPERIENTIAL_DEFAULT_BASE,
     FEATHERLESS_DEFAULT_BASE,
     HUGGINGFACE_DEFAULT_BASE,
@@ -135,6 +136,7 @@ def _make_settings(**overrides):
     mock.orcarouter_api_keys = "test_orcarouter_key"
     mock.atlascloud_api_keys = "test_atlascloud_key"
     mock.xkiro_api_keys = "test_xkiro_key"
+    mock.empiriolabs_api_keys = "test_empiriolabs_key"
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -187,6 +189,7 @@ def _make_settings(**overrides):
     mock.orcarouter_proxy = None
     mock.atlascloud_proxy = None
     mock.xkiro_proxy = None
+    mock.empiriolabs_proxy = None
     mock.kilo_api_keys = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
@@ -1212,6 +1215,7 @@ async def test_create_provider_instantiates_each_builtin():
         "orcarouter": OpenAIChatProvider,
         "atlascloud": OpenAIChatProvider,
         "xkiro": OpenAIChatProvider,
+        "empiriolabs": OpenAIChatProvider,
         "opencode_go": OpenCodeProvider,
         "vercel": OpenAIChatProvider,
         "bedrock": OpenAIChatProvider,
@@ -1741,4 +1745,47 @@ def test_xkiro_requires_key_despite_public_catalog():
     with pytest.raises(ApplicationUnavailableError, match="XKIRO_API_KEY is not set"):
         build_provider_config(
             PROVIDER_CATALOG["xkiro"], _make_settings(xkiro_api_keys=None)
+        )
+
+
+@pytest.mark.asyncio
+async def test_empiriolabs_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["empiriolabs"]
+    settings = _make_settings(
+        empiriolabs_api_keys="empiriolabs-token",
+        empiriolabs_base_url="https://unused.example/v1",
+        empiriolabs_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "empiriolabs",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "EmpirioLabs AI"
+    assert descriptor.credential_env == "EMPIRIOLABS_API_KEY"
+    assert descriptor.credential_attr == "empiriolabs_api_keys"
+    assert (
+        descriptor.credential_url
+        == "https://platform.empiriolabs.ai/dashboard/api-keys"
+    )
+    assert descriptor.default_base_url == EMPIRIOLABS_DEFAULT_BASE
+    assert descriptor.base_url_attr is None
+    assert descriptor.proxy_attr == "empiriolabs_proxy"
+    assert config.api_key == "empiriolabs-token"
+    assert config.base_url == EMPIRIOLABS_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+def test_empiriolabs_requires_key_despite_public_catalog():
+    with pytest.raises(
+        ApplicationUnavailableError, match="EMPIRIOLABS_API_KEY is not set"
+    ):
+        build_provider_config(
+            PROVIDER_CATALOG["empiriolabs"],
+            _make_settings(empiriolabs_api_keys=None),
         )
