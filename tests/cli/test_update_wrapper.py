@@ -25,9 +25,22 @@ def installer_server(body, status, outcome):
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             requests.append(self.path)
-            payload = body.encode("utf-8")
+            payload = body.replace(
+                RELEASE_URL, f"http://127.0.0.1:{server.server_port}"
+            ).encode("utf-8")
             response_status = status
-            if self.path == "/metadata":
+            if self.path == "/releases/latest":
+                version = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
+                    outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
+                )
+                self.send_response(503 if outcome == "check-error" else 302)
+                self.send_header("Location", f"/releases/tag/v{version}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if self.path == "/v2.0.0/pyproject.toml":
+                payload = b'[project]\nrequires-python = "==3.15.2"\n[tool.uv]\nrequired-version = ">=0.14.2"\n'
+            elif self.path.startswith("/metadata/"):
                 version = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
                     outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
                 )
@@ -35,6 +48,9 @@ def installer_server(body, status, outcome):
                     {"info": {"version": version}, "urls": [{"yanked": False}]}
                 ).encode()
                 response_status = 503 if outcome == "check-error" else 200
+            elif self.path.startswith("/releases/tag/"):
+                payload = b"release page"
+                response_status = 200
             self.send_response(response_status)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
@@ -72,6 +88,10 @@ def fixture_wheel(area, url, outcome):
         )
         for name in SCRIPTS:
             source = (ROOT / "scripts/update" / name).read_text(encoding="utf-8")
+            if outcome == "legacy-installer":
+                source = source.replace(
+                    "_FCC_INSTALLER_RELEASE=$release_version ", ""
+                ).replace("$env:_FCC_INSTALLER_RELEASE = $release; ", "")
             archive.writestr(
                 f"{dist}.data/scripts/{name}", source.replace(RELEASE_URL, url)
             )
@@ -99,8 +119,11 @@ def fixture_wheel(area, url, outcome):
             archive.writestr(
                 f"free_claude_code/{name}",
                 source.replace(
-                    "https://pypi.org/pypi/free-claude-code/json",
-                    url + "/metadata",
+                    "https://pypi.org/pypi/free-claude-code/{version}/json",
+                    url + "/metadata/{version}/json",
+                ).replace(
+                    "https://github.com/Alishahryar1/free-claude-code/releases/",
+                    url + "/releases/",
                 ),
             )
         archive.writestr(
@@ -115,6 +138,8 @@ def fixture_wheel(area, url, outcome):
     "outcome",
     [
         "success",
+        "real-installer",
+        "legacy-installer",
         "exit",
         "error",
         "download-error",
@@ -180,6 +205,18 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             "error": "exit 1",
             "download-error": "",
         }.get(outcome, "")
+    if outcome in {"real-installer", "legacy-installer"}:
+        suffix = "ps1" if os.name == "nt" else "sh"
+        source = (ROOT / f"scripts/install.{suffix}").read_text(encoding="utf-8")
+        if os.name == "nt":
+            body = body.split("\n", 1)[1]
+            body += 'Write-Output "marker:[$env:_FCC_INSTALLER_RELEASE]"\nreturn\n'
+            boundary = "\nInitialize-InstallLog\n"
+        else:
+            body += 'printf "marker:[%s]\\n" "${_FCC_INSTALLER_RELEASE-}"\nexit 0\n'
+            boundary = "\ninitialize_install_log\n"
+        assert source.count(boundary) == 1
+        body = source.replace(boundary, "\n" + body + boundary)
     with installer_server(
         body, 503 if outcome == "download-error" else 200, outcome
     ) as (
@@ -224,11 +261,27 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             "check-error",
             "invalid-release",
         } or outcome.startswith("checker-")
-        assert requests == ([] if outcome.startswith("checker-") else ["/metadata"]) + (
+        selected = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
+            outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
+        )
+        discovery = [] if outcome.startswith("checker-") else ["/releases/latest"]
+        if discovery and outcome != "check-error":
+            discovery.append(f"/releases/tag/v{selected}")
+            if outcome != "invalid-release":
+                discovery.append(f"/metadata/{selected}/json")
+        install_requests = (
             []
             if skipped
             else [f"/v2.0.0/scripts/install.{'ps1' if os.name == 'nt' else 'sh'}"]
-        ), result.stdout + result.stderr
+        )
+        if outcome == "legacy-installer":
+            install_requests *= 2
+        if outcome in {"real-installer", "legacy-installer"}:
+            install_requests.append("/v2.0.0/pyproject.toml")
+            assert "marker:[]" in result.stdout, result.stdout + result.stderr
+            assert result.stdout.count(expected) == 1
+            assert "Installer log:" not in result.stdout
+        assert requests == discovery + install_requests, result.stdout + result.stderr
         if skipped:
             expected_exit = 37 if outcome == "checker-exit" else 1
             if outcome in {"current", "newer-installed"}:
@@ -243,9 +296,9 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             assert "installer:" not in result.stdout
         else:
             assert expected in result.stdout, result.stdout + result.stderr
-            assert (
-                result.returncode == {"success": 0, "exit": 23, "error": 1}[outcome]
-            ), result.stderr
+            assert result.returncode == {"exit": 23, "error": 1}.get(outcome, 0), (
+                result.stderr
+            )
         result = subprocess.run(
             [uv, "tool", "uninstall", "free-claude-code"],
             env=env,

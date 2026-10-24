@@ -1,7 +1,6 @@
 name: Post merge
 
 env:
-  CI_UV_VERSION: "0.13.5"
   UV_MALWARE_CHECK: "1"
   UV_PREVIEW_FEATURES: "malware-check"
 
@@ -52,7 +51,6 @@ jobs:
         id: environment
         uses: ./.github/actions/ci-environment
         with:
-          uv-version: ${{ env.CI_UV_VERSION }}
           runner-label: ${{ matrix.runner }}
           lookup-only: "true"
           sync-dependencies: "false"
@@ -102,7 +100,6 @@ jobs:
         id: environment
         uses: ./.github/actions/ci-environment
         with:
-          uv-version: ${{ env.CI_UV_VERSION }}
           runner-label: macos-26
           lookup-only: "true"
           sync-dependencies: "false"
