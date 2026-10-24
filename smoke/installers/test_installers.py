@@ -49,7 +49,7 @@ CODING_AGENTS = (
 @pytest.mark.parametrize("voice", [False, True])
 def test_install_sh_pins_selected_fcc_release(posix_harness, voice):
     posix_harness.env["FCC_INSTALL_VERSION"] = "2.0.0"
-    posix_harness.add_uv("0.13.4")
+    posix_harness.add_uv("0.13.5")
     result = posix_harness.run_functions(
         f"voice_local={int(voice)}\nvalidate_args\ninstall_free_claude_code\ninstaller_path=''\nprint_installer_retry"
     )
@@ -65,7 +65,7 @@ def test_install_sh_pins_selected_fcc_release(posix_harness, voice):
 @pytest.mark.parametrize("voice", [False, True])
 def test_install_ps1_pins_selected_fcc_release(powershell_harness, voice):
     powershell_harness.env["FCC_INSTALL_VERSION"] = "2.0.0"
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     result = powershell_harness.run_functions(
         "Install-FreeClaudeCode\n$script:InstallerPath = ''\nWrite-Output (Get-InstallerRetryCommand)",
         *(["-VoiceLocal"] if voice else []),
@@ -145,7 +145,7 @@ def _assert_headroom_bundle_workflow(harness, failure, reuse):
     windows = isinstance(harness, PowerShellHarness)
     for agent in CODING_AGENTS:
         harness.add_client(agent)
-    harness.add_uv("0.13.4")
+    harness.add_uv("0.13.5")
     harness.add_rtk()
     if reuse:
         harness.add_client("headroom")
@@ -815,7 +815,7 @@ chmod +x "$uv_bin/uv"
         metadata.mode = 0o755
         metadata.size = len(rtk_command)
         archive.addfile(metadata, io.BytesIO(rtk_command))
-    _write_executable(fixtures / "uv-command.sh", _posix_uv_command("0.13.4"))
+    _write_executable(fixtures / "uv-command.sh", _posix_uv_command("0.13.5"))
     _write_executable(fixtures / "headroom-command.sh", _posix_command("headroom"))
     _write_executable(
         fixtures / "fcc-command.sh",
@@ -1628,7 +1628,7 @@ def test_install_sh_macos_python_selection_overrides_only_its_preference(
     posix_harness.env["UV_PYTHON_PREFERENCE"] = "system"
     _write_executable(
         posix_harness.bin_dir / "uv",
-        _posix_uv_command("0.13.4").replace(
+        _posix_uv_command("0.13.5").replace(
             "#!/bin/sh\n",
             f'#!/bin/sh\n[ "${{UV_PYTHON_PREFERENCE-unset}}" = "{preference}" ] || exit 83\n',
             1,
@@ -1676,7 +1676,7 @@ def test_install_sh_stops_if_macos_bundle_setup_fails(
     ).exists()
 
 
-@pytest.mark.parametrize("uv_version", ("0.13.4", "0.13.4+build.1", "0.13.5"))
+@pytest.mark.parametrize("uv_version", ("0.13.5", "0.13.5+build.1", "0.13.6"))
 def test_install_sh_preserves_compatible_uv(
     posix_harness: PosixHarness, uv_version: str
 ) -> None:
@@ -1701,7 +1701,7 @@ def test_install_sh_replaces_unrelated_pi_command(
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_unrelated_pi()
-    posix_harness.add_uv("0.13.4")
+    posix_harness.add_uv("0.13.5")
 
     result = (
         posix_harness.run_interactive("y\n" + "n\n" * 7)
@@ -1721,7 +1721,7 @@ def test_install_sh_discovers_custom_pi_npm_prefix(
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_npm_prefix(posix_harness.root / "custom-npm")
-    posix_harness.add_uv("0.13.4")
+    posix_harness.add_uv("0.13.5")
 
     result = posix_harness.run()
 
@@ -1786,7 +1786,8 @@ def test_install_sh_continues_when_pi_resolution_changes_to_unrelated_command(
 
 
 @pytest.mark.parametrize(
-    "uv_version", ("0.5.9", "0.11.16", "0.12.9", "0.12.12", "0.12.13", "0.13.3")
+    "uv_version",
+    ("0.5.9", "0.11.16", "0.12.9", "0.12.12", "0.12.13", "0.13.3", "0.13.4"),
 )
 def test_install_sh_replaces_obsolete_uv(
     posix_harness: PosixHarness,
@@ -1801,7 +1802,7 @@ def test_install_sh_replaces_obsolete_uv(
 
     assert result.returncode == 0, result.stderr
     assert "uv-install" in posix_harness.calls()
-    assert f"uv {uv_version} does not satisfy stable >=0.13.4" in result.stdout
+    assert f"uv {uv_version} does not satisfy stable >=0.13.5" in result.stdout
 
 
 def test_install_sh_prioritizes_replacement_uv_over_obsolete_cargo_uv(
@@ -1817,7 +1818,7 @@ def test_install_sh_prioritizes_replacement_uv_over_obsolete_cargo_uv(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.4." in result.stdout
+    assert "Verified uv 0.13.5." in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -1837,7 +1838,7 @@ def test_install_sh_prioritizes_forced_cargo_home_uv_install_layout(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.4." in result.stdout
+    assert "Verified uv 0.13.5." in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -1867,7 +1868,7 @@ def test_install_sh_prioritizes_replacement_uv_from_unmanaged_install_directory(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.4." in result.stdout
+    assert "Verified uv 0.13.5." in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -1887,10 +1888,10 @@ def test_install_sh_infers_home_for_replacement_uv(
     assert result.returncode == 0, result.stderr
     relative_uv = Path(".cargo/bin/uv") if cargo_layout else Path(".local/bin/uv")
     assert (inferred_home / relative_uv).is_file()
-    assert "Verified uv 0.13.4." in result.stdout
+    assert "Verified uv 0.13.5." in result.stdout
 
 
-@pytest.mark.parametrize("version", ("0.13.4-alpha.1", "0.14.0-rc.1"))
+@pytest.mark.parametrize("version", ("0.13.5-alpha.1", "0.14.0-rc.1"))
 def test_install_sh_replaces_prerelease_uv(
     posix_harness: PosixHarness,
     version: str,
@@ -1903,7 +1904,7 @@ def test_install_sh_replaces_prerelease_uv(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert f"uv {version} does not satisfy stable >=0.13.4" in result.stdout
+    assert f"uv {version} does not satisfy stable >=0.13.5" in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -2086,7 +2087,7 @@ def test_install_sh_rechecks_for_fcc_process_before_tool_replacement(
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_client("pi")
-    posix_harness.add_uv("0.13.4")
+    posix_harness.add_uv("0.13.5")
     posix_harness.env["FCC_RUNNING_COMMAND"] = "fcc-server"
     posix_harness.env["FCC_RUNNING_PHASE"] = "late"
 
@@ -2498,7 +2499,7 @@ def powershell_harness(
         _batch_client("aider"), encoding="utf-8"
     )
     (fixtures / "rtk-command.cmd").write_text(_batch_rtk(), encoding="utf-8")
-    (fixtures / "uv-command.cmd").write_text(_batch_uv("0.13.4"), encoding="utf-8")
+    (fixtures / "uv-command.cmd").write_text(_batch_uv("0.13.5"), encoding="utf-8")
     (fixtures / "headroom-command.cmd").write_text(
         _batch_client("headroom"), encoding="utf-8"
     )
@@ -2977,7 +2978,7 @@ def _prepare_discovery_collision(
     suffix = ".cmd" if windows else ""
     make_command = _batch_client if windows else _posix_command
     home = Path(harness.env["USERPROFILE" if windows else "HOME"])
-    harness.add_uv("0.13.4")
+    harness.add_uv("0.13.5")
     for name in ("claude", "codex"):
         _write_executable(
             home / ".local" / "bin" / f"{name}{suffix}", make_command(name)
@@ -3061,7 +3062,7 @@ def _assert_setup_preserves_other_commands(
         _write_executable(npm_bin / f"uv{suffix}", stale_uv)
         harness.env["PATH"] = str(npm_bin) + os.pathsep + harness.env["PATH"]
     else:
-        harness.add_uv("0.13.4")
+        harness.add_uv("0.13.5")
         harness.add_client(other)
         _write_executable(npm_bin / f"{other}{suffix}", make_command(f"stale-{other}"))
         harness.env["PATH"] += os.pathsep + str(npm_bin)
@@ -3119,7 +3120,7 @@ def test_install_ps1_setup_preserves_other_commands(
 def test_install_ps1_verifies_new_fcc_after_custom_tool_discovery(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     powershell_harness.env["UV_TOOL_BIN_DIR"] = str(powershell_harness.tool_bin)
     _write_executable(
         powershell_harness.bin_dir / "fcc-server.cmd", _batch_client("stale-fcc")
@@ -3448,7 +3449,7 @@ def test_install_ps1_fresh_install_is_verified(
 def test_install_ps1_discovers_grok_in_custom_bin_directory(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     custom_grok_bin = powershell_harness.root / "custom-grok-bin"
     powershell_harness.env["GROK_BIN_DIR"] = str(custom_grok_bin)
 
@@ -3482,7 +3483,7 @@ def test_install_ps1_preserves_upstream_managed_harness_without_parsing_version(
     client: str,
     install_call: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     _write_executable(
         powershell_harness.bin_dir / f"{client}.cmd",
         _batch_client(client, version_output="opaque upstream version output"),
@@ -3501,7 +3502,7 @@ def test_install_ps1_preserves_upstream_managed_harness_without_parsing_version(
 def test_install_ps1_delegates_compatible_external_muse_without_adopting_it(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     powershell_harness.add_client("muse")
 
     result = powershell_harness.run_functions(
@@ -3523,7 +3524,7 @@ def test_install_ps1_stops_when_muse_install_fails(
     powershell_harness: PowerShellHarness,
     failure: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Muse", fail_step=failure
     )
@@ -3538,7 +3539,7 @@ def test_install_ps1_stops_when_grok_install_fails(
     powershell_harness: PowerShellHarness,
     failure: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Grok", fail_step=failure
     )
@@ -3551,7 +3552,7 @@ def test_install_ps1_stops_when_grok_install_fails(
 def test_install_ps1_stops_when_aider_install_fails(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Aider", fail_step="aider-install"
     )
@@ -3626,7 +3627,7 @@ def test_install_ps1_checks_existing_aider_in_custom_uv_tool_bin_before_installi
 def test_install_ps1_rejects_broken_existing_aider_without_replacing_it(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     powershell_harness.add_client("aider")
 
     result = powershell_harness.run_functions(
@@ -3647,7 +3648,7 @@ def test_install_ps1_preserves_supported_dsh(
     powershell_harness: PowerShellHarness,
     version: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
         _batch_client("dsh").replace("0.2.0-rc.2", version), encoding="utf-8"
     )
@@ -3666,7 +3667,7 @@ def test_install_ps1_upgrades_older_dsh_to_latest(
     powershell_harness: PowerShellHarness,
     interactive: bool,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
         _batch_client("dsh").replace("0.2.0-rc.2", "0.1.0-rc.7"),
         encoding="utf-8",
@@ -3688,7 +3689,7 @@ def test_install_ps1_upgrades_older_dsh_to_latest(
 def test_install_ps1_rejects_exact_dsh_on_unsupported_node(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     powershell_harness.add_client("dsh")
     (powershell_harness.bin_dir / "node.cmd").write_text(
         _batch_client("node").replace("node 22.19.0", "node 23.9.0"),
@@ -3711,7 +3712,7 @@ def test_install_ps1_rejects_incompatible_node_for_selected_dsh(
     powershell_harness: PowerShellHarness,
     node_version: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
         _batch_client("dsh").replace("0.2.0-rc.2", "0.1.0-rc.7"),
         encoding="utf-8",
@@ -3734,7 +3735,7 @@ def test_install_ps1_noninteractive_skips_dsh_without_node(
     powershell_harness: PowerShellHarness,
 ) -> None:
     powershell_harness.add_installed_clients(except_for=("dsh",))
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     (powershell_harness.bin_dir / "node.cmd").unlink()
     (powershell_harness.bin_dir / "npm.cmd").unlink()
 
@@ -3748,7 +3749,7 @@ def test_install_ps1_noninteractive_skips_dsh_without_node(
 def test_install_ps1_stops_when_selected_dsh_install_fails(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Dsh", fail_step="dsh-install"
     )
@@ -3771,7 +3772,7 @@ def test_install_ps1_installs_hermes_noninteractively(
 def test_install_ps1_rejects_unsupported_hermes_architecture_before_download(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     powershell_harness.env["PROCESSOR_ARCHITECTURE"] = "MIPS"
     powershell_harness.env["PROCESSOR_ARCHITEW6432"] = "MIPS"
 
@@ -3844,7 +3845,7 @@ def test_install_ps1_preserves_existing_rtk_and_configures_selected_agents(
 def test_install_ps1_prepares_custom_claude_config_directory_for_rtk(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     powershell_harness.add_rtk()
     custom_config = powershell_harness.root / "custom-claude"
     powershell_harness.env["CLAUDE_CONFIG_DIR"] = str(custom_config)
@@ -3862,7 +3863,7 @@ def test_install_ps1_prepares_custom_claude_config_directory_for_rtk(
 def test_install_ps1_rejects_conflicting_rtk_command(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     powershell_harness.add_unrelated_rtk()
 
     result = powershell_harness.run_functions(
@@ -3933,7 +3934,7 @@ def test_install_ps1_stops_if_windows_icon_export_fails(
     powershell_harness: PowerShellHarness,
 ) -> None:
     powershell_harness.add_installed_clients()
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     result = powershell_harness.run(fail_step="desktop-icon-export")
 
     assert result.returncode != 0
@@ -3948,7 +3949,7 @@ def test_install_ps1_stops_if_windows_icon_export_fails(
 def test_install_ps1_preserves_unowned_desktop_shortcut(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     desktop_shortcut = (
         Path(powershell_harness.env["USERPROFILE"]) / "Desktop" / "Free Claude Code.lnk"
     )
@@ -3972,7 +3973,7 @@ def test_install_ps1_preserves_unowned_desktop_shortcut(
     assert "start the proxy with: fcc-server" in result.stdout
 
 
-@pytest.mark.parametrize("uv_version", ("0.13.4", "0.13.4+build.1", "0.13.5"))
+@pytest.mark.parametrize("uv_version", ("0.13.5", "0.13.5+build.1", "0.13.6"))
 def test_install_ps1_preserves_valid_existing_tools(
     powershell_harness: PowerShellHarness,
     uv_version: str,
@@ -4009,7 +4010,7 @@ def test_install_ps1_replaces_unrelated_pi_command(
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_unrelated_pi()
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
 
     result = (
         powershell_harness.run_interactive(["y"] + ["n"] * 7)
@@ -4031,7 +4032,7 @@ def test_install_ps1_discovers_custom_pi_npm_prefix(
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_npm_prefix(powershell_harness.root / "custom-npm")
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
 
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Pi"
@@ -4101,7 +4102,8 @@ def test_install_ps1_continues_when_pi_resolution_changes_to_unrelated_command(
 
 
 @pytest.mark.parametrize(
-    "uv_version", ("0.5.9", "0.11.16", "0.12.9", "0.12.12", "0.12.13", "0.13.3")
+    "uv_version",
+    ("0.5.9", "0.11.16", "0.12.9", "0.12.12", "0.12.13", "0.13.3", "0.13.4"),
 )
 def test_install_ps1_replaces_obsolete_uv(
     powershell_harness: PowerShellHarness,
@@ -4121,7 +4123,7 @@ def test_install_ps1_replaces_obsolete_uv(
         "uv-install",
         "uv:--version",
     ]
-    assert f"uv {uv_version} does not satisfy stable >=0.13.4" in result.stdout
+    assert f"uv {uv_version} does not satisfy stable >=0.13.5" in result.stdout
 
 
 def test_install_ps1_prioritizes_replacement_uv_from_custom_install_directory(
@@ -4134,7 +4136,7 @@ def test_install_ps1_prioritizes_replacement_uv_from_custom_install_directory(
     result = powershell_harness.run_functions("Add-KnownBinDirectories\nEnsure-Uv")
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.4." in result.stdout
+    assert "Verified uv 0.13.5." in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
@@ -4155,7 +4157,7 @@ def test_install_ps1_prioritizes_forced_cargo_home_uv_install_layout(
     result = powershell_harness.run_functions("Add-KnownBinDirectories\nEnsure-Uv")
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.4." in result.stdout
+    assert "Verified uv 0.13.5." in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
@@ -4185,11 +4187,11 @@ def test_install_ps1_prioritizes_replacement_uv_from_unmanaged_install_directory
     result = powershell_harness.run_functions("Add-KnownBinDirectories\nEnsure-Uv")
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.4." in result.stdout
+    assert "Verified uv 0.13.5." in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
-@pytest.mark.parametrize("version", ("0.13.4-alpha.1", "0.14.0-rc.1"))
+@pytest.mark.parametrize("version", ("0.13.5-alpha.1", "0.14.0-rc.1"))
 def test_install_ps1_replaces_prerelease_uv(
     powershell_harness: PowerShellHarness,
     version: str,
@@ -4202,7 +4204,7 @@ def test_install_ps1_replaces_prerelease_uv(
     result = powershell_harness.run_functions("Add-KnownBinDirectories\nEnsure-Uv")
 
     assert result.returncode == 0, result.stderr
-    assert f"uv {version} does not satisfy stable >=0.13.4" in result.stdout
+    assert f"uv {version} does not satisfy stable >=0.13.5" in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
@@ -4238,7 +4240,7 @@ def test_install_ps1_stops_without_success_on_each_failure(
 ) -> None:
     if failure in {"fcc-install", "path-update", "fcc-missing", "fcc-verify"}:
         powershell_harness.add_installed_clients()
-        powershell_harness.add_uv("0.13.4")
+        powershell_harness.add_uv("0.13.5")
     if failure in {"opencode-download", "opencode-archive"}:
         (powershell_harness.bin_dir / "opencode.cmd").unlink()
     # Full workflows cover each phase's abort; component cases cover its details.
@@ -4262,7 +4264,7 @@ def test_install_ps1_stops_without_success_on_each_failure(
         }[failure.split("-", 1)[0]]
         setup = '$script:OriginalOpenCode = Get-ApplicationCommand "opencode"\nAdd-KnownBinDirectories\n'
         if component != "Ensure-Uv":
-            powershell_harness.add_uv("0.13.4")
+            powershell_harness.add_uv("0.13.5")
             setup += "Ensure-Uv\n"
         result = powershell_harness.run_functions(setup + component, fail_step=failure)
         assert "Installer scenario completed." not in result.stdout
@@ -4313,7 +4315,7 @@ def test_install_ps1_dry_run_never_executes_commands(
 def test_install_ps1_rejects_broken_existing_client_without_replacing_it(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     powershell_harness.add_client("claude")
 
     result = powershell_harness.run_functions(
@@ -4357,7 +4359,7 @@ def test_install_ps1_voice_flags_only_change_fcc_spec(
     args: tuple[str, ...],
     package: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nInstall-FreeClaudeCode", *args
     )
@@ -4419,7 +4421,7 @@ def test_install_ps1_rechecks_for_fcc_process_before_tool_replacement(
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_client("pi")
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     powershell_harness.env["FCC_RUNNING_COMMAND"] = "fcc-server"
     powershell_harness.env["FCC_RUNNING_PHASE"] = "late"
 
@@ -4760,7 +4762,7 @@ def _assert_native_opencode_migration(
     original = binary.read_bytes()
     if isinstance(harness, PowerShellHarness):
         harness.add_installed_clients(except_for=("opencode",))
-        harness.add_uv("0.13.4")
+        harness.add_uv("0.13.5")
     result = harness.run()
     assert result.returncode == 0, result.stderr
     assert binary.read_bytes() != original
@@ -5334,7 +5336,7 @@ def _assert_installer_recovers_after_verification_failure(
     windows = isinstance(harness, PowerShellHarness)
     for command in CODING_AGENTS:
         harness.add_client(command)
-    harness.add_uv("0.13.4")
+    harness.add_uv("0.13.5")
     harness.add_rtk()
     home = Path(harness.env["USERPROFILE" if windows else "HOME"])
     options = (
@@ -5396,7 +5398,7 @@ def test_install_ps1_explains_child_policy_failure_without_doctor(
     powershell_harness: PowerShellHarness,
 ) -> None:
     powershell_harness.add_installed_clients()
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     fixture = powershell_harness.fixtures / "fcc-command.cmd"
     fixture.write_text(
         "@echo off\n"
@@ -5430,7 +5432,7 @@ def test_install_ps1_log_failure_preserves_installation_failure(
     powershell_harness: PowerShellHarness,
 ) -> None:
     powershell_harness.add_installed_clients()
-    powershell_harness.add_uv("0.13.4")
+    powershell_harness.add_uv("0.13.5")
     home = Path(powershell_harness.env["USERPROFILE"])
     (home / ".fcc").mkdir()
     (home / ".fcc" / "logs").write_text("not a directory", encoding="utf-8")
@@ -5482,7 +5484,7 @@ def test_install_sh_log_failure_preserves_installation_failure(
 ) -> None:
     for command in CODING_AGENTS:
         posix_harness.add_client(command)
-    posix_harness.add_uv("0.13.4")
+    posix_harness.add_uv("0.13.5")
     home = Path(posix_harness.env["HOME"])
     (home / ".fcc").mkdir()
     (home / ".fcc/logs").write_text("not a directory", encoding="utf-8")
@@ -5572,7 +5574,7 @@ def _assert_pi_supplies_selected_agent_toolchain(
 ) -> None:
     windows = isinstance(harness, PowerShellHarness)
     suffix = ".cmd" if windows else ""
-    harness.add_uv("0.13.4")
+    harness.add_uv("0.13.5")
     (harness.bin_dir / f"opencode{suffix}").unlink()
     for command in ("node", "npm"):
         source = harness.bin_dir / f"{command}{suffix}"
@@ -5637,7 +5639,7 @@ def test_install_sh_piped_failure_retries_downloaded_installer(
 ) -> None:
     for command in CODING_AGENTS:
         posix_harness.add_client(command)
-    posix_harness.add_uv("0.13.4")
+    posix_harness.add_uv("0.13.5")
     result = posix_harness.run_interactive("n\n", fail_step="fcc-install")
     assert result.returncode != 0
     retry = next(
@@ -5655,7 +5657,7 @@ def _assert_installer_shows_selected_plan_and_next_steps(
 ) -> None:
     windows = isinstance(harness, PowerShellHarness)
     harness.add_client("claude")
-    harness.add_uv("0.13.4")
+    harness.add_uv("0.13.5")
     (harness.bin_dir / ("opencode.cmd" if windows else "opencode")).unlink()
     answers = ["n"] * len(CODING_AGENTS)
     result = (
@@ -5696,7 +5698,7 @@ def _assert_installer_keeps_launch_instructions_after_rtk_failure(
     windows = isinstance(harness, PowerShellHarness)
     for command in CODING_AGENTS:
         harness.add_client(command)
-    harness.add_uv("0.13.4")
+    harness.add_uv("0.13.5")
     harness.add_rtk()
     result = harness.run(
         "-RtkHeadroom" if windows else "--rtk-headroom", fail_step="rtk-init-claude"
@@ -5725,7 +5727,7 @@ def test_install_sh_keeps_package_output_attached_to_terminal(
 ) -> None:
     for command in CODING_AGENTS:
         posix_harness.add_client(command)
-    posix_harness.add_uv("0.13.4")
+    posix_harness.add_uv("0.13.5")
     uv = posix_harness.bin_dir / "uv"
     source = uv.read_text(encoding="utf-8")
     uv.write_text(

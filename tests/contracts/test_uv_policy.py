@@ -11,7 +11,7 @@ import yaml
 
 from scripts.ci_shards import matrix
 
-UV_MINIMUM = "0.13.4"
+UV_MINIMUM = "0.13.5"
 CI_SETUP = Path(".github/actions/ci-environment/action.yml")
 UV_WORKFLOWS = (
     Path(".github/workflows/tests.yml"),
