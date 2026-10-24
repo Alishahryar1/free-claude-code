@@ -9,7 +9,7 @@ description = "Local proxy connecting coding agents to OpenAI-compatible AI prov
 readme = "README.md"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
-requires-python = "==3.14.7"
+requires-python = "==3.14.9"
 dependencies = [
     "packaging>=26.3",
     "anyio>=4.15.1",
@@ -83,7 +83,7 @@ packages = ["src/free_claude_code"]
 "scripts/update/fcc-update.cmd" = "fcc-update.cmd"
 
 [tool.uv]
-required-version = ">=0.13.4"
+required-version = ">=0.13.5"
 cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [tool.uv.sources]

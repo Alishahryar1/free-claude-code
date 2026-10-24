@@ -11,7 +11,7 @@ import yaml
 
 from scripts.ci_shards import matrix
 
-UV_MINIMUM = "0.13.4"
+UV_MINIMUM = "0.13.5"
 CI_SETUP = Path(".github/actions/ci-environment/action.yml")
 UV_WORKFLOWS = (
     Path(".github/workflows/tests.yml"),
@@ -187,12 +187,10 @@ def test_shared_setup_installs_dependencies_for_jobs_running_project_code() -> N
     assert sync["if"] == "inputs.sync-dependencies == 'true'"
     for path in UV_WORKFLOWS:
         jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
-        for name, job in jobs.items():
+        for job in jobs.values():
             for step in job["steps"]:
                 if step.get("uses") == "./.github/actions/ci-environment":
                     assert step["with"].get("sync-dependencies", "true") == (
-                        "false"
-                        if path.name == "post-merge.yml" or name == "sdist-rebuild"
-                        else "true"
+                        "false" if path.name == "post-merge.yml" else "true"
                     )
                 assert step.get("run") != "uv sync --locked --group dev"
