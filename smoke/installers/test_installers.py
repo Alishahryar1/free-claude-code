@@ -1084,7 +1084,7 @@ def test_install_sh_fresh_install_is_verified(posix_harness: PosixHarness) -> No
     assert any(
         call.startswith(
             "uv:tool install --force --refresh-package free-claude-code "
-            "--python 3.14.7 free-claude-code"
+            "--python 3.14.9 free-claude-code"
         )
         for call in calls
     )
@@ -3407,7 +3407,7 @@ def test_install_ps1_fresh_install_is_verified(
     assert any(
         call.startswith(
             "uv:tool install --force --refresh-package free-claude-code "
-            "--python cpython-3.14.7-windows-x86_64-none "
+            "--python cpython-3.14.9-windows-x86_64-none "
             "free-claude-code"
         )
         for call in calls
@@ -4478,7 +4478,7 @@ def test_installers_use_native_clients_and_single_python_selection() -> None:
 def test_install_ps1_uses_x64_python_for_windows_arm_compatibility() -> None:
     powershell = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
 
-    assert '$PythonRequest = "cpython-3.14.7-windows-x86_64-none"' in powershell
+    assert '$PythonRequest = "cpython-3.14.9-windows-x86_64-none"' in powershell
 
 
 def test_install_ps1_rejects_invalid_download_before_execution(
