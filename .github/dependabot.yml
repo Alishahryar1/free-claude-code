@@ -6,8 +6,8 @@ updates:
     schedule:
       interval: "daily"
     groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+      dependencies:
+        patterns: ["*"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
