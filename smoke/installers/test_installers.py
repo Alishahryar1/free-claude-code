@@ -7,11 +7,23 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+
+PROJECT = tomllib.loads(
+    (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8")
+)
+PYTHON_VERSION = PROJECT["project"]["requires-python"].removeprefix("==")
+UV_MINIMUM = PROJECT["tool"]["uv"]["required-version"].removeprefix(">=")
+UV_NEWER = ".".join(
+    [*UV_MINIMUM.split(".")[:2], str(int(UV_MINIMUM.split(".")[2]) + 1)]
+)
+RELEASE_VERSION = "2.0.0"
+METADATA_URL = f"https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v{RELEASE_VERSION}/pyproject.toml"
 
 FCC_COMMANDS = (
     "fcc-desktop",
@@ -46,10 +58,84 @@ CODING_AGENTS = (
 )
 
 
+if os.name == "nt":
+
+    @pytest.fixture
+    def release_harness(powershell_harness):
+        return powershell_harness
+else:
+
+    @pytest.fixture
+    def release_harness(posix_harness):
+        return posix_harness
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '[project]\nrequires-python = "==3.15.2"\n[tool.uv]\nrequired-version = ">=0.14.2"\n',
+        " [project] # package\r\n requires-python = '==3.15.2' # runtime\r\n [tool.uv]\r\n required-version = '>=0.14.2' # minimum\r\n[tool.other]\r\nrequires-python = 'bad'\r\n",
+    ],
+)
+def test_selected_release_toolchain_is_read_from_metadata(release_harness, text):
+    (release_harness.fixtures / "pyproject.toml").write_text(text, encoding="utf-8")
+    windows = isinstance(release_harness, PowerShellHarness)
+    body = (
+        '$requirements = Get-ReleaseToolchain\nWrite-Output "selected:$($requirements.Python)|$($requirements.Uv)"'
+        if windows
+        else 'load_toolchain\nprintf "selected:%s|%s\\n" "$PYTHON_VERSION" "$MIN_UV_VERSION"'
+    )
+    result = release_harness.run_functions(body)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "selected:3.15.2|0.14.2" in result.stdout
+    assert release_harness.calls() == [f"download:{METADATA_URL}"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        '[project]\nrequires-python = "==3.14.9"\n',
+        '[project]\nrequires-python = ">=3.14.9"\n[tool.uv]\nrequired-version = ">=0.13.5"',
+        '[project]\nrequires-python = "==03.14.9"\n[tool.uv]\nrequired-version = ">=0.13.5"',
+        '[project]\nrequires-python = "==3.14.9"\n[tool.uv]\nrequired-version = ">=0.13.5,<1"',
+        '[project]\nrequires-python = "==3.14.9"\nrequires-python = "==3.14.9"\n[tool.uv]\nrequired-version = ">=0.13.5"',
+        '[project]\nrequires-python = "==3.14.9"\n[project]\n[tool.uv]\nrequired-version = ">=0.13.5"',
+        '[project]\nrequires-python = "==3.14.9\'\n[tool.uv]\nrequired-version = ">=0.13.5"',
+        '[project]\nrequires-python = ["==3.14.9"]\n[tool.uv]\nrequired-version = ">=0.13.5"',
+        '[PROJECT]\nrequires-python = "==3.14.9"\n[tool.uv]\nrequired-version = ">=0.13.5"',
+        '[project]\nrequires-python = "==3.14.9"\n[tool.uv]\nrequired-version = ">=0.13.5"\nrequired-version = ">=0.13.5"',
+        '[project]\nrequires-python = "==3.14.9"\n[tool.uv]\nrequired-version = ">=0.13.5"\n[tool.uv]',
+        '[project]\nrequires-python = """==3.14.9"""\n[tool.uv]\nrequired-version = ">=0.13.5"',
+    ],
+)
+def test_invalid_toolchain_stops_before_installer_changes(release_harness, text):
+    (release_harness.fixtures / "pyproject.toml").write_text(text, encoding="utf-8")
+    result = release_harness.run()
+    assert result.returncode != 0
+    assert release_harness.calls() == [f"download:{METADATA_URL}"]
+    assert not (release_harness.root / "home/.fcc/logs").exists()
+
+
+def test_missing_selected_release_stops_before_download(release_harness):
+    release_harness.env.pop("FCC_INSTALL_VERSION")
+    result = release_harness.run()
+    assert result.returncode != 0
+    assert "bootstrap" in result.stdout + result.stderr
+    assert release_harness.calls() == []
+
+
+def test_toolchain_download_failure_stops_before_changes(release_harness):
+    result = release_harness.run(fail_step="toolchain-download")
+    assert result.returncode != 0
+    assert release_harness.calls() == [f"download:{METADATA_URL}"]
+    assert not (release_harness.root / "home/.fcc/logs").exists()
+
+
 @pytest.mark.parametrize("voice", [False, True])
 def test_install_sh_pins_selected_fcc_release(posix_harness, voice):
     posix_harness.env["FCC_INSTALL_VERSION"] = "2.0.0"
-    posix_harness.add_uv("0.13.5")
+    posix_harness.add_uv(UV_MINIMUM)
     result = posix_harness.run_functions(
         f"voice_local={int(voice)}\nvalidate_args\ninstall_free_claude_code\ninstaller_path=''\nprint_installer_retry"
     )
@@ -65,7 +151,7 @@ def test_install_sh_pins_selected_fcc_release(posix_harness, voice):
 @pytest.mark.parametrize("voice", [False, True])
 def test_install_ps1_pins_selected_fcc_release(powershell_harness, voice):
     powershell_harness.env["FCC_INSTALL_VERSION"] = "2.0.0"
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     result = powershell_harness.run_functions(
         "Install-FreeClaudeCode\n$script:InstallerPath = ''\nWrite-Output (Get-InstallerRetryCommand)",
         *(["-VoiceLocal"] if voice else []),
@@ -145,7 +231,7 @@ def _assert_headroom_bundle_workflow(harness, failure, reuse):
     windows = isinstance(harness, PowerShellHarness)
     for agent in CODING_AGENTS:
         harness.add_client(agent)
-    harness.add_uv("0.13.5")
+    harness.add_uv(UV_MINIMUM)
     harness.add_rtk()
     if reuse:
         harness.add_client("headroom")
@@ -578,7 +664,10 @@ printf '%s\n' "$FCC_PS_OUTPUT"
         source = (_repo_root() / "scripts/install.sh").read_text(encoding="utf-8")
         scenario = self.root / "function-scenario.sh"
         scenario.write_text(
-            source.split('\nparse_args "$@"\n', 1)[0] + "\n" + body + "\n",
+            source.split('\nparse_args "$@"\n', 1)[0]
+            + f"\nPYTHON_VERSION='{PYTHON_VERSION}'\nMIN_UV_VERSION='{UV_MINIMUM}'\n"
+            + body
+            + "\n",
             encoding="utf-8",
         )
         return scenario
@@ -611,6 +700,9 @@ def posix_harness(tmp_path: Path) -> PosixHarness:
     log = tmp_path / "calls.log"
     for path in (bin_dir, fixtures, tool_bin, home):
         path.mkdir(parents=True)
+    (fixtures / "pyproject.toml").write_text(
+        (_repo_root() / "pyproject.toml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
 
     _write_executable(
         bin_dir / "pgrep",
@@ -650,6 +742,11 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 echo "download:$url" >> "$CALL_LOG"
+if [ "$url" = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v${FCC_INSTALL_VERSION}/pyproject.toml" ]; then
+    [ "$FAIL_STEP" != "toolchain-download" ] || exit 41
+    cat "$FAKE_FIXTURES/pyproject.toml"
+    exit 0
+fi
 case "$url:$FAIL_STEP" in
     *claude.ai*:claude-download|*chatgpt.com*:codex-download|*pi.dev*:pi-download|*opencode.ai*:opencode-download|*hermes-agent.nousresearch.com*:hermes-download|*x.ai*:grok-download|*dev.meta.ai*:muse-download|*rtk-ai*:rtk-download|*astral.sh*:uv-download)
         exit 41
@@ -815,7 +912,7 @@ chmod +x "$uv_bin/uv"
         metadata.mode = 0o755
         metadata.size = len(rtk_command)
         archive.addfile(metadata, io.BytesIO(rtk_command))
-    _write_executable(fixtures / "uv-command.sh", _posix_uv_command("0.13.5"))
+    _write_executable(fixtures / "uv-command.sh", _posix_uv_command(UV_MINIMUM))
     _write_executable(fixtures / "headroom-command.sh", _posix_command("headroom"))
     _write_executable(
         fixtures / "fcc-command.sh",
@@ -870,6 +967,7 @@ printf '%s  %s\n' "$checksum" "$1"
             "HOME": str(home),
             "CALL_LOG": str(log),
             "FAKE_FIXTURES": str(fixtures),
+            "FCC_INSTALL_VERSION": RELEASE_VERSION,
             "FAKE_TOOL_BIN": str(tool_bin),
             "FAKE_INFERRED_HOME": str(home),
             "FCC_PROCESS_MARKER": str(tmp_path / "fcc-process-ready"),
@@ -1084,7 +1182,7 @@ def test_install_sh_fresh_install_is_verified(posix_harness: PosixHarness) -> No
     assert any(
         call.startswith(
             "uv:tool install --force --refresh-package free-claude-code "
-            "--python 3.14.9 free-claude-code"
+            f"--python {PYTHON_VERSION} free-claude-code=={RELEASE_VERSION}"
         )
         for call in calls
     )
@@ -1370,6 +1468,7 @@ def test_install_sh_rejects_exact_dsh_on_unsupported_node(
     assert "requires Node.js ^22.19.0 or >=24.0.0" in result.stderr
     assert not any(
         call.startswith(("uv:", "download:", "npm:install"))
+        and call != f"download:{METADATA_URL}"
         for call in posix_harness.calls()
     )
     assert re.search(r"failed.*Preflight", result.stdout, re.IGNORECASE)
@@ -1392,6 +1491,7 @@ def test_install_sh_rejects_incompatible_node_for_selected_dsh(
     assert "Free Claude Code is installed and verified." not in result.stdout
     assert not any(
         call.startswith(("uv:", "download:", "npm:install"))
+        and call != f"download:{METADATA_URL}"
         for call in posix_harness.calls()
     )
     assert re.search(r"failed.*Preflight", result.stdout, re.IGNORECASE)
@@ -1585,7 +1685,9 @@ def test_install_sh_installs_then_updates_only_selected_agent(
     assert "for fcc-codex?" not in update.stdout
     update_calls = posix_harness.calls()[len(calls) :]
     assert "codex:--version" in update_calls
-    assert not any(call.startswith("download:") for call in update_calls)
+    assert [call for call in update_calls if call.startswith("download:")] == [
+        f"download:{METADATA_URL}"
+    ]
     assert any("--refresh-package free-claude-code" in call for call in update_calls)
 
 
@@ -1628,7 +1730,7 @@ def test_install_sh_macos_python_selection_overrides_only_its_preference(
     posix_harness.env["UV_PYTHON_PREFERENCE"] = "system"
     _write_executable(
         posix_harness.bin_dir / "uv",
-        _posix_uv_command("0.13.5").replace(
+        _posix_uv_command(UV_MINIMUM).replace(
             "#!/bin/sh\n",
             f'#!/bin/sh\n[ "${{UV_PYTHON_PREFERENCE-unset}}" = "{preference}" ] || exit 83\n',
             1,
@@ -1676,7 +1778,7 @@ def test_install_sh_stops_if_macos_bundle_setup_fails(
     ).exists()
 
 
-@pytest.mark.parametrize("uv_version", ("0.13.5", "0.13.5+build.1", "0.13.6"))
+@pytest.mark.parametrize("uv_version", (UV_MINIMUM, f"{UV_MINIMUM}+build.1", UV_NEWER))
 def test_install_sh_preserves_compatible_uv(
     posix_harness: PosixHarness, uv_version: str
 ) -> None:
@@ -1701,7 +1803,7 @@ def test_install_sh_replaces_unrelated_pi_command(
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_unrelated_pi()
-    posix_harness.add_uv("0.13.5")
+    posix_harness.add_uv(UV_MINIMUM)
 
     result = (
         posix_harness.run_interactive("y\n" + "n\n" * 7)
@@ -1721,7 +1823,7 @@ def test_install_sh_discovers_custom_pi_npm_prefix(
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_npm_prefix(posix_harness.root / "custom-npm")
-    posix_harness.add_uv("0.13.5")
+    posix_harness.add_uv(UV_MINIMUM)
 
     result = posix_harness.run()
 
@@ -1802,7 +1904,7 @@ def test_install_sh_replaces_obsolete_uv(
 
     assert result.returncode == 0, result.stderr
     assert "uv-install" in posix_harness.calls()
-    assert f"uv {uv_version} does not satisfy stable >=0.13.5" in result.stdout
+    assert f"uv {uv_version} does not satisfy stable >={UV_MINIMUM}" in result.stdout
 
 
 def test_install_sh_prioritizes_replacement_uv_over_obsolete_cargo_uv(
@@ -1818,7 +1920,7 @@ def test_install_sh_prioritizes_replacement_uv_over_obsolete_cargo_uv(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.5." in result.stdout
+    assert f"Verified uv {UV_MINIMUM}." in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -1838,7 +1940,7 @@ def test_install_sh_prioritizes_forced_cargo_home_uv_install_layout(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.5." in result.stdout
+    assert f"Verified uv {UV_MINIMUM}." in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -1868,7 +1970,7 @@ def test_install_sh_prioritizes_replacement_uv_from_unmanaged_install_directory(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.5." in result.stdout
+    assert f"Verified uv {UV_MINIMUM}." in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -1888,10 +1990,10 @@ def test_install_sh_infers_home_for_replacement_uv(
     assert result.returncode == 0, result.stderr
     relative_uv = Path(".cargo/bin/uv") if cargo_layout else Path(".local/bin/uv")
     assert (inferred_home / relative_uv).is_file()
-    assert "Verified uv 0.13.5." in result.stdout
+    assert f"Verified uv {UV_MINIMUM}." in result.stdout
 
 
-@pytest.mark.parametrize("version", ("0.13.5-alpha.1", "0.14.0-rc.1"))
+@pytest.mark.parametrize("version", (f"{UV_MINIMUM}-alpha.1", f"{UV_NEWER}-rc.1"))
 def test_install_sh_replaces_prerelease_uv(
     posix_harness: PosixHarness,
     version: str,
@@ -1904,7 +2006,7 @@ def test_install_sh_replaces_prerelease_uv(
     result = posix_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert f"uv {version} does not satisfy stable >=0.13.5" in result.stdout
+    assert f"uv {version} does not satisfy stable >={UV_MINIMUM}" in result.stdout
     assert "uv-install" in posix_harness.calls()
 
 
@@ -2043,7 +2145,7 @@ def test_install_sh_voice_flags_only_change_fcc_spec(
         if "tool install" in call and "--refresh-package free-claude-code" in call
     ]
     assert len(install_calls) == 1
-    assert package in install_calls[0]
+    assert install_calls[0].endswith(f"{package}=={RELEASE_VERSION}")
     assert ("--torch-backend cu130" in install_calls[0]) == ("cu130" in args)
 
 
@@ -2077,7 +2179,7 @@ def test_install_sh_rejects_running_fcc_before_mutation(
     result = posix_harness.run()
 
     assert result.returncode != 0
-    assert posix_harness.calls() == []
+    assert posix_harness.calls() == [f"download:{METADATA_URL}"]
     assert f"{command_name} (PID 4242)" in result.stderr
 
 
@@ -2087,7 +2189,7 @@ def test_install_sh_rechecks_for_fcc_process_before_tool_replacement(
     posix_harness.add_client("claude")
     posix_harness.add_client("codex")
     posix_harness.add_client("pi")
-    posix_harness.add_uv("0.13.5")
+    posix_harness.add_uv(UV_MINIMUM)
     posix_harness.env["FCC_RUNNING_COMMAND"] = "fcc-server"
     posix_harness.env["FCC_RUNNING_PHASE"] = "late"
 
@@ -2124,7 +2226,7 @@ def test_install_sh_process_fallback_reads_full_command_line(
 ) -> None:
     posix_harness.use_process_list_fallback(f"4242 {process_args}")
 
-    result = posix_harness.run()
+    result = posix_harness.run_functions("assert_no_fcc_processes_running")
 
     assert result.returncode != 0
     assert posix_harness.calls() == []
@@ -2433,7 +2535,11 @@ exit /b 76
         """Exercise real installer functions without running the full workflow."""
         scenario = self.root / "scenario.ps1"
         scenario.write_text(
-            body + '\nWrite-Output "Installer scenario completed."\n', encoding="utf-8"
+            f'$PythonRequest = "cpython-{PYTHON_VERSION}-windows-x86_64-none"\n'
+            f'$MinUvVersion = "{UV_MINIMUM}"\n'
+            + body
+            + '\nWrite-Output "Installer scenario completed."\n',
+            encoding="utf-8",
         )
         self.env["FCC_INSTALLER_SCENARIO"] = str(scenario)
         try:
@@ -2475,6 +2581,9 @@ def powershell_harness(
     log = tmp_path / "calls.log"
     for path in (bin_dir, fixtures, tool_bin, home, local_app_data, app_data):
         path.mkdir(parents=True)
+    (fixtures / "pyproject.toml").write_text(
+        (_repo_root() / "pyproject.toml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
 
     (fixtures / "claude-command.cmd").write_text(
         _batch_client("claude"), encoding="utf-8"
@@ -2499,7 +2608,7 @@ def powershell_harness(
         _batch_client("aider"), encoding="utf-8"
     )
     (fixtures / "rtk-command.cmd").write_text(_batch_rtk(), encoding="utf-8")
-    (fixtures / "uv-command.cmd").write_text(_batch_uv("0.13.5"), encoding="utf-8")
+    (fixtures / "uv-command.cmd").write_text(_batch_uv(UV_MINIMUM), encoding="utf-8")
     (fixtures / "headroom-command.cmd").write_text(
         _batch_client("headroom"), encoding="utf-8"
     )
@@ -2650,9 +2759,13 @@ Add-Content -LiteralPath $env:CALL_LOG -Value "uv-install"
 $ErrorActionPreference = "Stop"
 function Invoke-RestMethod {
     [CmdletBinding()]
-    param([string] $Uri, [string] $OutFile, [int] $TimeoutSec)
+    param([string] $Uri, [string] $OutFile, [int] $TimeoutSec, [int] $MaximumRedirection)
 
     Add-Content -LiteralPath $env:CALL_LOG -Value "download:$Uri"
+    if ($Uri -eq "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v$env:FCC_INSTALL_VERSION/pyproject.toml") {
+        if ($env:FAIL_STEP -eq "toolchain-download") { throw "simulated metadata failure" }
+        return [IO.File]::ReadAllText((Join-Path $env:FAKE_FIXTURES "pyproject.toml"))
+    }
     if (
         ($env:FAIL_STEP -eq "claude-download" -and $Uri.Contains("claude.ai")) -or
         ($env:FAIL_STEP -eq "codex-download" -and $Uri.Contains("chatgpt.com")) -or
@@ -2821,6 +2934,7 @@ $installer = [scriptblock]::Create($installerSource)
             "CALL_LOG": str(log),
             "CLAUDE_CONFIG_DIR": "",
             "FAKE_FIXTURES": str(fixtures),
+            "FCC_INSTALL_VERSION": RELEASE_VERSION,
             "FAKE_TOOL_BIN": str(tool_bin),
             "FAKE_NPM_PREFIX": str(npm_prefix),
             "FCC_INSTALLER": str(_repo_root() / "scripts" / "install.ps1"),
@@ -2978,7 +3092,7 @@ def _prepare_discovery_collision(
     suffix = ".cmd" if windows else ""
     make_command = _batch_client if windows else _posix_command
     home = Path(harness.env["USERPROFILE" if windows else "HOME"])
-    harness.add_uv("0.13.5")
+    harness.add_uv(UV_MINIMUM)
     for name in ("claude", "codex"):
         _write_executable(
             home / ".local" / "bin" / f"{name}{suffix}", make_command(name)
@@ -3062,7 +3176,7 @@ def _assert_setup_preserves_other_commands(
         _write_executable(npm_bin / f"uv{suffix}", stale_uv)
         harness.env["PATH"] = str(npm_bin) + os.pathsep + harness.env["PATH"]
     else:
-        harness.add_uv("0.13.5")
+        harness.add_uv(UV_MINIMUM)
         harness.add_client(other)
         _write_executable(npm_bin / f"{other}{suffix}", make_command(f"stale-{other}"))
         harness.env["PATH"] += os.pathsep + str(npm_bin)
@@ -3120,7 +3234,7 @@ def test_install_ps1_setup_preserves_other_commands(
 def test_install_ps1_verifies_new_fcc_after_custom_tool_discovery(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     powershell_harness.env["UV_TOOL_BIN_DIR"] = str(powershell_harness.tool_bin)
     _write_executable(
         powershell_harness.bin_dir / "fcc-server.cmd", _batch_client("stale-fcc")
@@ -3408,7 +3522,7 @@ def test_install_ps1_fresh_install_is_verified(
     assert any(
         call.startswith(
             "uv:tool install --force --refresh-package free-claude-code "
-            "--python cpython-3.14.9-windows-x86_64-none "
+            f"--python cpython-{PYTHON_VERSION}-windows-x86_64-none "
             "free-claude-code"
         )
         for call in calls
@@ -3449,7 +3563,7 @@ def test_install_ps1_fresh_install_is_verified(
 def test_install_ps1_discovers_grok_in_custom_bin_directory(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     custom_grok_bin = powershell_harness.root / "custom-grok-bin"
     powershell_harness.env["GROK_BIN_DIR"] = str(custom_grok_bin)
 
@@ -3483,7 +3597,7 @@ def test_install_ps1_preserves_upstream_managed_harness_without_parsing_version(
     client: str,
     install_call: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     _write_executable(
         powershell_harness.bin_dir / f"{client}.cmd",
         _batch_client(client, version_output="opaque upstream version output"),
@@ -3502,7 +3616,7 @@ def test_install_ps1_preserves_upstream_managed_harness_without_parsing_version(
 def test_install_ps1_delegates_compatible_external_muse_without_adopting_it(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     powershell_harness.add_client("muse")
 
     result = powershell_harness.run_functions(
@@ -3524,7 +3638,7 @@ def test_install_ps1_stops_when_muse_install_fails(
     powershell_harness: PowerShellHarness,
     failure: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Muse", fail_step=failure
     )
@@ -3539,7 +3653,7 @@ def test_install_ps1_stops_when_grok_install_fails(
     powershell_harness: PowerShellHarness,
     failure: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Grok", fail_step=failure
     )
@@ -3552,7 +3666,7 @@ def test_install_ps1_stops_when_grok_install_fails(
 def test_install_ps1_stops_when_aider_install_fails(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Aider", fail_step="aider-install"
     )
@@ -3627,7 +3741,7 @@ def test_install_ps1_checks_existing_aider_in_custom_uv_tool_bin_before_installi
 def test_install_ps1_rejects_broken_existing_aider_without_replacing_it(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     powershell_harness.add_client("aider")
 
     result = powershell_harness.run_functions(
@@ -3648,7 +3762,7 @@ def test_install_ps1_preserves_supported_dsh(
     powershell_harness: PowerShellHarness,
     version: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
         _batch_client("dsh").replace("0.2.0-rc.2", version), encoding="utf-8"
     )
@@ -3667,7 +3781,7 @@ def test_install_ps1_upgrades_older_dsh_to_latest(
     powershell_harness: PowerShellHarness,
     interactive: bool,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
         _batch_client("dsh").replace("0.2.0-rc.2", "0.1.0-rc.7"),
         encoding="utf-8",
@@ -3689,7 +3803,7 @@ def test_install_ps1_upgrades_older_dsh_to_latest(
 def test_install_ps1_rejects_exact_dsh_on_unsupported_node(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     powershell_harness.add_client("dsh")
     (powershell_harness.bin_dir / "node.cmd").write_text(
         _batch_client("node").replace("node 22.19.0", "node 23.9.0"),
@@ -3712,7 +3826,7 @@ def test_install_ps1_rejects_incompatible_node_for_selected_dsh(
     powershell_harness: PowerShellHarness,
     node_version: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     (powershell_harness.bin_dir / "dsh.cmd").write_text(
         _batch_client("dsh").replace("0.2.0-rc.2", "0.1.0-rc.7"),
         encoding="utf-8",
@@ -3735,7 +3849,7 @@ def test_install_ps1_noninteractive_skips_dsh_without_node(
     powershell_harness: PowerShellHarness,
 ) -> None:
     powershell_harness.add_installed_clients(except_for=("dsh",))
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     (powershell_harness.bin_dir / "node.cmd").unlink()
     (powershell_harness.bin_dir / "npm.cmd").unlink()
 
@@ -3749,7 +3863,7 @@ def test_install_ps1_noninteractive_skips_dsh_without_node(
 def test_install_ps1_stops_when_selected_dsh_install_fails(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Dsh", fail_step="dsh-install"
     )
@@ -3772,7 +3886,7 @@ def test_install_ps1_installs_hermes_noninteractively(
 def test_install_ps1_rejects_unsupported_hermes_architecture_before_download(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     powershell_harness.env["PROCESSOR_ARCHITECTURE"] = "MIPS"
     powershell_harness.env["PROCESSOR_ARCHITEW6432"] = "MIPS"
 
@@ -3845,7 +3959,7 @@ def test_install_ps1_preserves_existing_rtk_and_configures_selected_agents(
 def test_install_ps1_prepares_custom_claude_config_directory_for_rtk(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     powershell_harness.add_rtk()
     custom_config = powershell_harness.root / "custom-claude"
     powershell_harness.env["CLAUDE_CONFIG_DIR"] = str(custom_config)
@@ -3863,7 +3977,7 @@ def test_install_ps1_prepares_custom_claude_config_directory_for_rtk(
 def test_install_ps1_rejects_conflicting_rtk_command(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     powershell_harness.add_unrelated_rtk()
 
     result = powershell_harness.run_functions(
@@ -3911,7 +4025,7 @@ $RtkWindowsAssetName = "{asset_name}"
 $RtkWindowsAssetSha256 = "{checksum}"
 function Invoke-RestMethod {{
     [CmdletBinding()]
-    param([string] $Uri, [string] $OutFile, [int] $TimeoutSec)
+    param([string] $Uri, [string] $OutFile, [int] $TimeoutSec, [int] $MaximumRedirection)
     Copy-Item -LiteralPath $env:RTK_TEST_ARCHIVE -Destination $OutFile
 }}
 Install-Rtk
@@ -3934,7 +4048,7 @@ def test_install_ps1_stops_if_windows_icon_export_fails(
     powershell_harness: PowerShellHarness,
 ) -> None:
     powershell_harness.add_installed_clients()
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     result = powershell_harness.run(fail_step="desktop-icon-export")
 
     assert result.returncode != 0
@@ -3949,7 +4063,7 @@ def test_install_ps1_stops_if_windows_icon_export_fails(
 def test_install_ps1_preserves_unowned_desktop_shortcut(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     desktop_shortcut = (
         Path(powershell_harness.env["USERPROFILE"]) / "Desktop" / "Free Claude Code.lnk"
     )
@@ -3973,7 +4087,7 @@ def test_install_ps1_preserves_unowned_desktop_shortcut(
     assert "start the proxy with: fcc-server" in result.stdout
 
 
-@pytest.mark.parametrize("uv_version", ("0.13.5", "0.13.5+build.1", "0.13.6"))
+@pytest.mark.parametrize("uv_version", (UV_MINIMUM, f"{UV_MINIMUM}+build.1", UV_NEWER))
 def test_install_ps1_preserves_valid_existing_tools(
     powershell_harness: PowerShellHarness,
     uv_version: str,
@@ -3995,8 +4109,9 @@ def test_install_ps1_preserves_valid_existing_tools(
         call for call in powershell_harness.calls() if call.startswith("download:")
     ]
     assert download_calls == [
+        f"download:{METADATA_URL}",
         "download:https://raw.githubusercontent.com/Alishahryar1/"
-        "free-claude-code/main/scripts/install-muse.ps1"
+        "free-claude-code/main/scripts/install-muse.ps1",
     ]
     assert "muse-install:external" in powershell_harness.calls()
     assert "leaving it unchanged" in result.stdout
@@ -4010,7 +4125,7 @@ def test_install_ps1_replaces_unrelated_pi_command(
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_unrelated_pi()
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
 
     result = (
         powershell_harness.run_interactive(["y"] + ["n"] * 7)
@@ -4032,7 +4147,7 @@ def test_install_ps1_discovers_custom_pi_npm_prefix(
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_npm_prefix(powershell_harness.root / "custom-npm")
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
 
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Pi"
@@ -4123,7 +4238,7 @@ def test_install_ps1_replaces_obsolete_uv(
         "uv-install",
         "uv:--version",
     ]
-    assert f"uv {uv_version} does not satisfy stable >=0.13.5" in result.stdout
+    assert f"uv {uv_version} does not satisfy stable >={UV_MINIMUM}" in result.stdout
 
 
 def test_install_ps1_prioritizes_replacement_uv_from_custom_install_directory(
@@ -4136,7 +4251,7 @@ def test_install_ps1_prioritizes_replacement_uv_from_custom_install_directory(
     result = powershell_harness.run_functions("Add-KnownBinDirectories\nEnsure-Uv")
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.5." in result.stdout
+    assert f"Verified uv {UV_MINIMUM}." in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
@@ -4157,7 +4272,7 @@ def test_install_ps1_prioritizes_forced_cargo_home_uv_install_layout(
     result = powershell_harness.run_functions("Add-KnownBinDirectories\nEnsure-Uv")
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.5." in result.stdout
+    assert f"Verified uv {UV_MINIMUM}." in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
@@ -4187,11 +4302,11 @@ def test_install_ps1_prioritizes_replacement_uv_from_unmanaged_install_directory
     result = powershell_harness.run_functions("Add-KnownBinDirectories\nEnsure-Uv")
 
     assert result.returncode == 0, result.stderr
-    assert "Verified uv 0.13.5." in result.stdout
+    assert f"Verified uv {UV_MINIMUM}." in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
-@pytest.mark.parametrize("version", ("0.13.5-alpha.1", "0.14.0-rc.1"))
+@pytest.mark.parametrize("version", (f"{UV_MINIMUM}-alpha.1", f"{UV_NEWER}-rc.1"))
 def test_install_ps1_replaces_prerelease_uv(
     powershell_harness: PowerShellHarness,
     version: str,
@@ -4204,7 +4319,7 @@ def test_install_ps1_replaces_prerelease_uv(
     result = powershell_harness.run_functions("Add-KnownBinDirectories\nEnsure-Uv")
 
     assert result.returncode == 0, result.stderr
-    assert f"uv {version} does not satisfy stable >=0.13.5" in result.stdout
+    assert f"uv {version} does not satisfy stable >={UV_MINIMUM}" in result.stdout
     assert "uv-install" in powershell_harness.calls()
 
 
@@ -4240,7 +4355,7 @@ def test_install_ps1_stops_without_success_on_each_failure(
 ) -> None:
     if failure in {"fcc-install", "path-update", "fcc-missing", "fcc-verify"}:
         powershell_harness.add_installed_clients()
-        powershell_harness.add_uv("0.13.5")
+        powershell_harness.add_uv(UV_MINIMUM)
     if failure in {"opencode-download", "opencode-archive"}:
         (powershell_harness.bin_dir / "opencode.cmd").unlink()
     # Full workflows cover each phase's abort; component cases cover its details.
@@ -4264,7 +4379,7 @@ def test_install_ps1_stops_without_success_on_each_failure(
         }[failure.split("-", 1)[0]]
         setup = '$script:OriginalOpenCode = Get-ApplicationCommand "opencode"\nAdd-KnownBinDirectories\n'
         if component != "Ensure-Uv":
-            powershell_harness.add_uv("0.13.5")
+            powershell_harness.add_uv(UV_MINIMUM)
             setup += "Ensure-Uv\n"
         result = powershell_harness.run_functions(setup + component, fail_step=failure)
         assert "Installer scenario completed." not in result.stdout
@@ -4315,7 +4430,7 @@ def test_install_ps1_dry_run_never_executes_commands(
 def test_install_ps1_rejects_broken_existing_client_without_replacing_it(
     powershell_harness: PowerShellHarness,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     powershell_harness.add_client("claude")
 
     result = powershell_harness.run_functions(
@@ -4359,7 +4474,7 @@ def test_install_ps1_voice_flags_only_change_fcc_spec(
     args: tuple[str, ...],
     package: str,
 ) -> None:
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     result = powershell_harness.run_functions(
         "Add-KnownBinDirectories\nEnsure-Uv\nInstall-FreeClaudeCode", *args
     )
@@ -4371,7 +4486,7 @@ def test_install_ps1_voice_flags_only_change_fcc_spec(
         if "tool install" in call and "--refresh-package free-claude-code" in call
     ]
     assert len(install_calls) == 1
-    assert package in install_calls[0]
+    assert install_calls[0].endswith(f"{package}=={RELEASE_VERSION}")
     assert ("--torch-backend cu130" in install_calls[0]) == ("cu130" in args)
 
 
@@ -4411,7 +4526,9 @@ def test_install_ps1_rejects_running_fcc_before_mutation(
     )
 
     assert result.returncode != 0
-    assert powershell_harness.calls() == []
+    assert powershell_harness.calls() == (
+        [f"download:{METADATA_URL}"] if command_name == "fcc-server" else []
+    )
     assert f"{command_name} (PID 4242)" in result.stderr
 
 
@@ -4421,7 +4538,7 @@ def test_install_ps1_rechecks_for_fcc_process_before_tool_replacement(
     powershell_harness.add_client("claude")
     powershell_harness.add_client("codex")
     powershell_harness.add_client("pi")
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     powershell_harness.env["FCC_RUNNING_COMMAND"] = "fcc-server"
     powershell_harness.env["FCC_RUNNING_PHASE"] = "late"
 
@@ -4480,7 +4597,10 @@ def test_installers_use_native_clients_and_single_python_selection() -> None:
 def test_install_ps1_uses_x64_python_for_windows_arm_compatibility() -> None:
     powershell = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
 
-    assert '$PythonRequest = "cpython-3.14.9-windows-x86_64-none"' in powershell
+    assert (
+        '$PythonRequest = "cpython-$($requirements.Python)-windows-x86_64-none"'
+        in powershell
+    )
 
 
 def test_install_ps1_rejects_invalid_download_before_execution(
@@ -4524,7 +4644,9 @@ def test_install_ps1_installs_then_updates_only_selected_agent(
     assert "for fcc-codex?" not in update.stdout
     update_calls = powershell_harness.calls()[len(calls) :]
     assert "codex:--version" in update_calls
-    assert not any(call.startswith("download:") for call in update_calls)
+    assert [call for call in update_calls if call.startswith("download:")] == [
+        f"download:{METADATA_URL}"
+    ]
     assert any("--refresh-package free-claude-code" in call for call in update_calls)
 
 
@@ -4762,7 +4884,7 @@ def _assert_native_opencode_migration(
     original = binary.read_bytes()
     if isinstance(harness, PowerShellHarness):
         harness.add_installed_clients(except_for=("opencode",))
-        harness.add_uv("0.13.5")
+        harness.add_uv(UV_MINIMUM)
     result = harness.run()
     assert result.returncode == 0, result.stderr
     assert binary.read_bytes() != original
@@ -5336,7 +5458,7 @@ def _assert_installer_recovers_after_verification_failure(
     windows = isinstance(harness, PowerShellHarness)
     for command in CODING_AGENTS:
         harness.add_client(command)
-    harness.add_uv("0.13.5")
+    harness.add_uv(UV_MINIMUM)
     harness.add_rtk()
     home = Path(harness.env["USERPROFILE" if windows else "HOME"])
     options = (
@@ -5398,7 +5520,7 @@ def test_install_ps1_explains_child_policy_failure_without_doctor(
     powershell_harness: PowerShellHarness,
 ) -> None:
     powershell_harness.add_installed_clients()
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     fixture = powershell_harness.fixtures / "fcc-command.cmd"
     fixture.write_text(
         "@echo off\n"
@@ -5432,7 +5554,7 @@ def test_install_ps1_log_failure_preserves_installation_failure(
     powershell_harness: PowerShellHarness,
 ) -> None:
     powershell_harness.add_installed_clients()
-    powershell_harness.add_uv("0.13.5")
+    powershell_harness.add_uv(UV_MINIMUM)
     home = Path(powershell_harness.env["USERPROFILE"])
     (home / ".fcc").mkdir()
     (home / ".fcc" / "logs").write_text("not a directory", encoding="utf-8")
@@ -5475,7 +5597,9 @@ def test_install_ps1_checks_selected_prerequisites_before_installing_uv(
 
     assert result.returncode != 0
     assert "requires Node.js" in result.stdout + result.stderr
-    assert not any(call.startswith("download:") for call in powershell_harness.calls())
+    assert [
+        call for call in powershell_harness.calls() if call.startswith("download:")
+    ] == [f"download:{METADATA_URL}"]
     assert re.search(r"failed.*Preflight", result.stdout, re.IGNORECASE)
 
 
@@ -5484,7 +5608,7 @@ def test_install_sh_log_failure_preserves_installation_failure(
 ) -> None:
     for command in CODING_AGENTS:
         posix_harness.add_client(command)
-    posix_harness.add_uv("0.13.5")
+    posix_harness.add_uv(UV_MINIMUM)
     home = Path(posix_harness.env["HOME"])
     (home / ".fcc").mkdir()
     (home / ".fcc/logs").write_text("not a directory", encoding="utf-8")
@@ -5552,10 +5676,13 @@ def test_install_ps1_preview_creates_no_log_or_probe(
     powershell_harness: PowerShellHarness,
     option: str,
 ) -> None:
+    powershell_harness.env.pop("FCC_INSTALL_VERSION")
     result = powershell_harness.run(option)
     assert result.returncode == 0, result.stderr
     assert powershell_harness.calls() == []
     assert not (Path(powershell_harness.env["USERPROFILE"]) / ".fcc/logs").exists()
+    if option == "-DryRun":
+        assert "free-claude-code==<selected-release>" in result.stdout
 
 
 @pytest.mark.parametrize("option", ["--help", "--dry-run"])
@@ -5563,10 +5690,13 @@ def test_install_sh_preview_creates_no_log_or_probe(
     posix_harness: PosixHarness,
     option: str,
 ) -> None:
+    posix_harness.env.pop("FCC_INSTALL_VERSION")
     result = posix_harness.run(option)
     assert result.returncode == 0, result.stderr
     assert posix_harness.calls() == []
     assert not (Path(posix_harness.env["HOME"]) / ".fcc/logs").exists()
+    if option == "--dry-run":
+        assert "free-claude-code==<selected-release>" in result.stdout
 
 
 def _assert_pi_supplies_selected_agent_toolchain(
@@ -5574,7 +5704,7 @@ def _assert_pi_supplies_selected_agent_toolchain(
 ) -> None:
     windows = isinstance(harness, PowerShellHarness)
     suffix = ".cmd" if windows else ""
-    harness.add_uv("0.13.5")
+    harness.add_uv(UV_MINIMUM)
     (harness.bin_dir / f"opencode{suffix}").unlink()
     for command in ("node", "npm"):
         source = harness.bin_dir / f"{command}{suffix}"
@@ -5639,17 +5769,17 @@ def test_install_sh_piped_failure_retries_downloaded_installer(
 ) -> None:
     for command in CODING_AGENTS:
         posix_harness.add_client(command)
-    posix_harness.add_uv("0.13.5")
+    posix_harness.add_uv(UV_MINIMUM)
     result = posix_harness.run_interactive("n\n", fail_step="fcc-install")
     assert result.returncode != 0
     retry = next(
         line for line in result.stdout.splitlines() if line.startswith("Retry:")
     )
     assert (
-        "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.sh"
+        f"https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v{RELEASE_VERSION}/scripts/install.sh"
         in retry
     )
-    assert "| sh -s --" in retry
+    assert f"| FCC_INSTALL_VERSION='{RELEASE_VERSION}' sh -s --" in retry
 
 
 def _assert_installer_shows_selected_plan_and_next_steps(
@@ -5657,7 +5787,7 @@ def _assert_installer_shows_selected_plan_and_next_steps(
 ) -> None:
     windows = isinstance(harness, PowerShellHarness)
     harness.add_client("claude")
-    harness.add_uv("0.13.5")
+    harness.add_uv(UV_MINIMUM)
     (harness.bin_dir / ("opencode.cmd" if windows else "opencode")).unlink()
     answers = ["n"] * len(CODING_AGENTS)
     result = (
@@ -5698,7 +5828,7 @@ def _assert_installer_keeps_launch_instructions_after_rtk_failure(
     windows = isinstance(harness, PowerShellHarness)
     for command in CODING_AGENTS:
         harness.add_client(command)
-    harness.add_uv("0.13.5")
+    harness.add_uv(UV_MINIMUM)
     harness.add_rtk()
     result = harness.run(
         "-RtkHeadroom" if windows else "--rtk-headroom", fail_step="rtk-init-claude"
@@ -5727,7 +5857,7 @@ def test_install_sh_keeps_package_output_attached_to_terminal(
 ) -> None:
     for command in CODING_AGENTS:
         posix_harness.add_client(command)
-    posix_harness.add_uv("0.13.5")
+    posix_harness.add_uv(UV_MINIMUM)
     uv = posix_harness.bin_dir / "uv"
     source = uv.read_text(encoding="utf-8")
     uv.write_text(

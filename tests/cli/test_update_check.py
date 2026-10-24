@@ -23,13 +23,20 @@ def check(monkeypatch):
         error=None,
         body=None,
         print_version=False,
+        release_url="https://github.com/Alishahryar1/free-claude-code/releases/tag/v1.10.0",
     ):
         monkeypatch.setattr(update_check, "version", lambda name: installed)
 
         def respond(request):
-            assert str(request.url) == update_check.PYPI_URL
             if error is not None:
                 raise error
+            if str(request.url).endswith("/releases/latest"):
+                return httpx.Response(302, headers={"Location": release_url})
+            if str(request.url) == release_url:
+                return httpx.Response(status, text="release")
+            assert (
+                str(request.url) == "https://pypi.org/pypi/free-claude-code/1.10.0/json"
+            )
             if body is not None:
                 return httpx.Response(status, content=body)
             return httpx.Response(status, json=payload)
@@ -132,3 +139,32 @@ def test_failed_preflight_prints_no_release(check, capsys):
     output = capsys.readouterr()
     assert output.out == ""
     assert output.err
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["v1.10.0rc1", "v01.10.0", "v1.10.0?query=1", "v1.10.0#fragment", "v1.10.0/extra"],
+)
+def test_invalid_github_release_does_not_authorize_installation(check, suffix):
+    assert (
+        check(
+            payload=release(),
+            release_url="https://github.com/Alishahryar1/free-claude-code/releases/tag/"
+            + suffix,
+        )
+        == 1
+    )
+
+
+def test_release_from_another_repository_is_rejected(check):
+    assert (
+        check(
+            payload=release(),
+            release_url="https://github.com/other/repo/releases/tag/v1.10.0",
+        )
+        == 1
+    )
+
+
+def test_pypi_metadata_must_match_selected_github_release(check):
+    assert check(payload=release("1.11.0")) == 1

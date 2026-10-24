@@ -12,9 +12,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-# Windows on ARM emulates x64, whose Python package ecosystem has broader wheel support.
-$PythonRequest = "cpython-3.14.9-windows-x86_64-none"
-$MinUvVersion = "0.13.5"
+# Filled from the selected release before installation; placeholders are for dry-run.
+$PythonRequest = "<release-python>"
+$MinUvVersion = "<release-uv-minimum>"
 $ClaudeInstallUrl = "https://claude.ai/install.ps1"
 $CodexInstallUrl = "https://chatgpt.com/codex/install.ps1"
 $PiInstallUrl = "https://pi.dev/install.ps1"
@@ -1665,6 +1665,7 @@ function Ensure-Uv {
 function Get-PackageSpec {
     $spec = if ($VoiceLocal) { "free-claude-code[voice_local]" } else { "free-claude-code" }
     if ($FccInstallVersion) { $spec += "==$FccInstallVersion" }
+    elseif ($DryRun) { $spec += "==<selected-release>" }
     return $spec
 }
 
@@ -1889,6 +1890,53 @@ function Show-InstallerNextSteps {
 
 }
 
+function Read-ToolchainRequirements {
+    param([string] $Text)
+
+    $section = ""
+    $sections = @{}
+    $values = @{}
+    $number = '(0|[1-9][0-9]*)'
+    $version = "$number\.$number\.$number"
+    foreach ($rawLine in ($Text -split "`n")) {
+        $line = $rawLine.Trim()
+        if ($line.StartsWith('[')) {
+            $section = ""
+            if ($line -cmatch '^\[project\]\s*(#.*)?$') { $section = "project" }
+            if ($line -cmatch '^\[tool\.uv\]\s*(#.*)?$') { $section = "uv" }
+            if ($section) {
+                if ($sections.ContainsKey($section)) { throw "Duplicate toolchain table." }
+                $sections[$section] = $true
+            }
+            continue
+        }
+        if (($section -eq "project" -and $line -cmatch '^requires-python\s*=') -or
+            ($section -eq "uv" -and $line -cmatch '^required-version\s*=')) {
+            if ($values.ContainsKey($section)) { throw "Duplicate toolchain requirement." }
+            $value = ($line -split '=', 2)[1].TrimStart()
+            $operator = if ($section -eq "project") { "==" } else { ">=" }
+            if ($value -cnotmatch ('^(?<quote>["''])' + $operator + '(?<version>' + $version + ')\k<quote>\s*(#.*)?$')) {
+                throw "Invalid $section toolchain requirement."
+            }
+            $values[$section] = $Matches.version
+        }
+    }
+    if (-not $values.ContainsKey("project") -or -not $values.ContainsKey("uv")) {
+        throw "Missing Python or uv requirement in pyproject.toml."
+    }
+    return @{ Python = $values.project; Uv = $values.uv }
+}
+
+function Get-ReleaseToolchain {
+    if (-not $FccInstallVersion) {
+        throw "Use scripts/bootstrap.ps1 to select a release, or set FCC_INSTALL_VERSION for a tagged installer."
+    }
+    $metadataUrl = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v$FccInstallVersion/pyproject.toml"
+    $text = Invoke-RestMethod -Uri $metadataUrl -TimeoutSec 10 -MaximumRedirection 5 -ErrorAction Stop
+    if ($text -isnot [string]) { throw "Invalid pyproject.toml response for FCC $FccInstallVersion." }
+    return Read-ToolchainRequirements -Text $text
+}
+
 if ($Help) {
     Show-Usage
     return
@@ -1907,6 +1955,20 @@ if ((-not [string]::IsNullOrWhiteSpace($TorchBackend)) -and (-not $VoiceLocal)) 
     throw "-TorchBackend requires -VoiceLocal."
 }
 
+if (-not $DryRun) {
+    try {
+        $requirements = Get-ReleaseToolchain
+    } catch {
+        if ($FccInstallVersion) {
+            Write-Host "Could not load toolchain requirements for FCC $FccInstallVersion."
+            Write-Host "Retry: $(Get-InstallerRetryCommand)"
+        }
+        throw
+    }
+    # Windows on ARM emulates x64 for broader Python wheel support.
+    $PythonRequest = "cpython-$($requirements.Python)-windows-x86_64-none"
+    $MinUvVersion = $requirements.Uv
+}
 Initialize-InstallLog
 $script:InstallSteps["Preflight"] = "Not attempted"
 $installSucceeded = $false

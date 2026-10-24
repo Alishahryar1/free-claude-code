@@ -1,7 +1,6 @@
 name: Release intent
 
 env:
-  CI_UV_VERSION: "0.13.5"
   UV_MALWARE_CHECK: "1"
   UV_PREVIEW_FEATURES: "malware-check"
 
@@ -42,7 +41,6 @@ jobs:
       - name: Set up CI environment
         uses: ./.github/actions/ci-environment
         with:
-          uv-version: ${{ env.CI_UV_VERSION }}
           runner-label: ubuntu-latest
 
       - name: Check version policy

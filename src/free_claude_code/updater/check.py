@@ -8,7 +8,8 @@ from importlib.metadata import PackageNotFoundError, version
 import httpx
 from packaging.version import Version
 
-PYPI_URL = "https://pypi.org/pypi/free-claude-code/json"
+RELEASE_URL = "https://github.com/Alishahryar1/free-claude-code/releases/"
+PYPI_URL = "https://pypi.org/pypi/free-claude-code/{version}/json"
 UPDATE_AVAILABLE = 10
 
 
@@ -21,19 +22,24 @@ def main(argv: list[str] | None = None) -> int:
         installed = Version(version("free-claude-code"))
         if str(installed) == "0+unknown":
             raise ValueError("installed FCC version is unknown")
-        with httpx.Client(timeout=10.0) as client:
-            response = client.get(PYPI_URL)
+        with httpx.Client(
+            timeout=10.0, follow_redirects=True, max_redirects=5
+        ) as client:
+            response = client.get(RELEASE_URL + "latest")
+            response.raise_for_status()
+            selected = re.fullmatch(
+                re.escape(RELEASE_URL)
+                + r"tag/v((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))",
+                str(response.url),
+            )
+            if selected is None:
+                raise ValueError("GitHub did not return a canonical FCC release URL")
+            published = selected[1]
+            response = client.get(PYPI_URL.format(version=published))
             response.raise_for_status()
             metadata = response.json()
-        published = metadata["info"]["version"]
-        if (
-            not isinstance(published, str)
-            or re.fullmatch(
-                r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", published
-            )
-            is None
-        ):
-            raise ValueError("PyPI did not return a canonical FCC release version")
+        if metadata["info"]["version"] != published:
+            raise ValueError("PyPI metadata does not match the selected FCC release")
         latest = Version(published)
         files = metadata["urls"]
         if not isinstance(files, list) or not any(

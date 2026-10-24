@@ -27,7 +27,16 @@ def installer_server(body, status, outcome):
             requests.append(self.path)
             payload = body.encode("utf-8")
             response_status = status
-            if self.path == "/metadata":
+            if self.path == "/releases/latest":
+                version = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
+                    outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
+                )
+                self.send_response(503 if outcome == "check-error" else 302)
+                self.send_header("Location", f"/releases/tag/v{version}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if self.path.startswith("/metadata/"):
                 version = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
                     outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
                 )
@@ -35,6 +44,9 @@ def installer_server(body, status, outcome):
                     {"info": {"version": version}, "urls": [{"yanked": False}]}
                 ).encode()
                 response_status = 503 if outcome == "check-error" else 200
+            elif self.path.startswith("/releases/tag/"):
+                payload = b"release page"
+                response_status = 200
             self.send_response(response_status)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
@@ -99,8 +111,11 @@ def fixture_wheel(area, url, outcome):
             archive.writestr(
                 f"free_claude_code/{name}",
                 source.replace(
-                    "https://pypi.org/pypi/free-claude-code/json",
-                    url + "/metadata",
+                    "https://pypi.org/pypi/free-claude-code/{version}/json",
+                    url + "/metadata/{version}/json",
+                ).replace(
+                    "https://github.com/Alishahryar1/free-claude-code/releases/",
+                    url + "/releases/",
                 ),
             )
         archive.writestr(
@@ -224,7 +239,15 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             "check-error",
             "invalid-release",
         } or outcome.startswith("checker-")
-        assert requests == ([] if outcome.startswith("checker-") else ["/metadata"]) + (
+        selected = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
+            outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
+        )
+        discovery = [] if outcome.startswith("checker-") else ["/releases/latest"]
+        if discovery and outcome != "check-error":
+            discovery.append(f"/releases/tag/v{selected}")
+            if outcome != "invalid-release":
+                discovery.append(f"/metadata/{selected}/json")
+        assert requests == discovery + (
             []
             if skipped
             else [f"/v2.0.0/scripts/install.{'ps1' if os.name == 'nt' else 'sh'}"]
