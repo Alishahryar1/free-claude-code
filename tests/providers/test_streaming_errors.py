@@ -1601,12 +1601,14 @@ class TestStreamingExceptionHandling:
         assert sum(event.event == "message_stop" for event in parsed) == 1
 
     @pytest.mark.asyncio
-    async def test_primary_replay_and_continuation_share_five_attempts(self):
-        """Four replays plus continuation emit one unduplicated response."""
+    async def test_primary_replay_and_continuation_share_attempt_budget(self):
+        """Replays reserve the last attempt for one unduplicated continuation."""
         provider = _make_provider()
         request = _make_request()
+        primary_attempts = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS - 1
         primary_streams = [
-            AsyncStreamMock([_make_chunk(content="hello")]) for _ in range(4)
+            AsyncStreamMock([_make_chunk(content="hello")])
+            for _ in range(primary_attempts)
         ]
         continuation = AsyncStreamMock(
             [
@@ -1629,10 +1631,10 @@ class TestStreamingExceptionHandling:
         assert create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
         assert all(
             call.kwargs["messages"] == create.await_args_list[0].kwargs["messages"]
-            for call in create.await_args_list[:4]
+            for call in create.await_args_list[:primary_attempts]
         )
         assert (
-            create.await_args_list[4].kwargs["messages"]
+            create.await_args_list[primary_attempts].kwargs["messages"]
             != (create.await_args_list[0].kwargs["messages"])
         )
         parsed = parse_sse_text("".join(events))
@@ -1650,13 +1652,10 @@ class TestStreamingExceptionHandling:
             for call in attempt_trace.call_args_list
             if call.kwargs.get("event") == "provider.attempt.started"
         ]
-        assert [row["operation_kind"] for row in starts] == [
-            ProviderOperationKind.GENERATION.value,
-            ProviderOperationKind.GENERATION.value,
-            ProviderOperationKind.GENERATION.value,
-            ProviderOperationKind.GENERATION.value,
-            ProviderOperationKind.CONTINUATION.value,
-        ]
+        assert [row["operation_kind"] for row in starts] == (
+            [ProviderOperationKind.GENERATION.value] * primary_attempts
+            + [ProviderOperationKind.CONTINUATION.value]
+        )
         assert len({row["execution_id"] for row in starts}) == 1
 
     @pytest.mark.asyncio
