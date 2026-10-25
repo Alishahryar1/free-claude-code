@@ -1,8 +1,11 @@
 """Installed Antigravity CLI launcher with an explicit native FCC connection."""
 
 import re
+import sys
 from collections.abc import Sequence
 
+from free_claude_code.config.loader import get_settings
+from free_claude_code.config.server_urls import local_admin_url
 from free_claude_code.harnesses import antigravity_integration
 from free_claude_code.harnesses.environment import client_environment
 from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
@@ -29,11 +32,6 @@ def _configure(
     ctx: LaunchContext, args: list[str], _files: LaunchResources
 ) -> PreparedLaunch:
     admin_url = ctx.proxy_root_url.rstrip("/") + "/admin/integrations"
-    if args in (["--connect"], ["--disconnect"]):
-        raise LaunchError(
-            "Manage the Antigravity CLI connection on the Integrations page:\n"
-            + admin_url
-        )
     path = antigravity_integration.config_path()
     state = antigravity_integration.state_path()
     try:
@@ -77,4 +75,20 @@ SPEC = HarnessSpec(
 
 
 def launch(argv: Sequence[str] | None = None) -> None:
-    launch_harness(SPEC, argv)
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args in (["--connect"], ["--disconnect"]):
+        try:
+            url = local_admin_url(get_settings()) + "/integrations"
+        except OSError, ValueError:
+            print(
+                "Could not load FCC settings. Run fcc-server to check the configuration.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Manage the Antigravity CLI connection on the Integrations page:\n"
+                f"{url}\nStart FCC with fcc-server if it is not running.",
+                file=sys.stderr,
+            )
+        raise SystemExit(1)
+    launch_harness(SPEC, args)

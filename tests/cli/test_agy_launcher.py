@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from free_claude_code.cli.launchers import agy
+from free_claude_code.cli.launchers import agy, common
 from free_claude_code.harnesses import antigravity_integration as integration
 from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
@@ -62,19 +62,25 @@ def test_native_subcommands_and_session_arguments_keep_native_scope(
 
 
 @pytest.mark.parametrize("args", [["--connect"], ["--disconnect"]])
+@pytest.mark.parametrize("native", ["missing", "old", "supported"])
 def test_old_connection_commands_point_to_admin_without_mutation(
-    args, launch_capture, capsys
+    args, launch_capture, capsys, monkeypatch, native
 ):
+    monkeypatch.setenv("PORT", "4567")
+    if native == "missing":
+        monkeypatch.setattr(common.shutil, "which", lambda name: None)
+    elif native == "old":
+        launch_capture.versions["agy"] = "1.4.6"
     before = (
         integration.config_path().read_bytes(),
         integration.state_path().read_bytes(),
     )
     launch("agy", args, exit_code=1)
     assert not launch_capture.commands
-    assert [request.full_url for request in launch_capture.requests] == [
-        "http://127.0.0.1:8182/health"
-    ]
-    assert "http://127.0.0.1:8182/admin/integrations" in capsys.readouterr().err
+    assert not launch_capture.requests and not launch_capture.probes
+    error = capsys.readouterr().err
+    assert "http://127.0.0.1:4567/admin/integrations" in error
+    assert "fcc-server" in error
     assert (
         integration.config_path().read_bytes(),
         integration.state_path().read_bytes(),
@@ -116,6 +122,14 @@ def test_disconnect_during_catalog_refresh_stops_launch(launch_capture, capsys):
     assert not integration.state_path().exists()
     assert "modelProvider" not in json.loads(integration.config_path().read_text())
     assert "http://127.0.0.1:8182/admin/integrations" in capsys.readouterr().err
+
+
+def test_old_connection_guidance_does_not_leak_settings_errors(launch_capture, capsys):
+    with patch.object(agy, "get_settings", side_effect=ValueError("sensitive-value")):
+        launch("agy", ["--disconnect"], exit_code=1)
+    error = capsys.readouterr().err
+    assert "fcc-server" in error and "sensitive-value" not in error
+    assert not launch_capture.commands and not launch_capture.probes
 
 
 @pytest.mark.parametrize("output", ["1.4.6", "1.4.7-beta.1", "unknown"])

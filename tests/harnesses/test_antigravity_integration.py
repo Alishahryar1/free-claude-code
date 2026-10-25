@@ -124,11 +124,13 @@ def test_status_recognizes_existing_connection_and_external_provider_changes(
     path, state = native_files
     before = path.read_bytes()
     assert integration.status(path, state)["connected"] is False
+    assert integration.status(path, state)["can_disconnect"] is False
     assert path.read_bytes() == before and not state.exists()
     integration.configure(path, state, catalog("provider/model"), connect=True)
     before = path.read_bytes(), state.read_bytes()
     result = integration.status(path, state)
     assert result["connected"] is True
+    assert result["can_disconnect"] is True
     assert result["paths"] == {
         "settings": str(path.resolve()),
         "connection": str(state.resolve()),
@@ -136,6 +138,7 @@ def test_status_recognizes_existing_connection_and_external_provider_changes(
     assert (path.read_bytes(), state.read_bytes()) == before
     write(path, {**read(path), "modelProvider": "personal"})
     assert integration.status(path, state)["connected"] is False
+    assert integration.status(path, state)["can_disconnect"] is True
     assert state.exists()
 
 

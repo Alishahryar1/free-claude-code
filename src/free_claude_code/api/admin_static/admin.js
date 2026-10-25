@@ -2103,21 +2103,25 @@ claudeIntegrationDialog.addEventListener("click", (event) => {
 });
 
 const antigravityIntegrationDialog = byId("antigravityIntegrationDialog");
-const antigravityIntegration = { connected: null, busy: false, paths: null };
+const antigravityIntegration = { connected: null, canDisconnect: false, disconnecting: false, busy: false, paths: null };
 const antigravityIntegrationPath = "/admin/api/integrations/antigravity";
 
 function renderAntigravityIntegration() {
-  const { connected, busy, paths } = antigravityIntegration;
+  const { connected, canDisconnect, disconnecting, busy, paths } = antigravityIntegration;
   const action = connected ? "Disconnect" : "Connect";
   byId("openAntigravityIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
   byId("openAntigravityIntegration").disabled = busy;
   byId("openAntigravityIntegration").setAttribute("aria-busy", String(busy));
   byId("openAntigravityIntegration").className = connected && !busy ? "danger-button" : "primary-button";
-  byId("confirmAntigravityIntegration").textContent = busy ? "Saving…" : action;
+  byId("disconnectAntigravityIntegration").hidden = connected !== false || !canDisconnect;
+  byId("disconnectAntigravityIntegration").disabled = busy;
+  byId("confirmAntigravityIntegration").textContent = busy ? "Saving…" : disconnecting ? "Disconnect" : "Connect";
   byId("confirmAntigravityIntegration").disabled = busy || connected === null;
-  byId("confirmAntigravityIntegration").className = connected ? "danger-button" : "primary-button";
-  byId("antigravityIntegrationDescription").textContent = connected
-    ? "Restore Antigravity CLI's previous provider and remove FCC's models. Running sessions can continue. Connect again before your next fcc-agy launch."
+  byId("confirmAntigravityIntegration").className = disconnecting ? "danger-button" : "primary-button";
+  byId("antigravityIntegrationDescription").textContent = disconnecting
+    ? connected
+      ? "Restore Antigravity CLI's previous provider and remove FCC's models. Running sessions can continue. Connect again before your next fcc-agy launch."
+      : "Remove FCC's saved connection and models. Keep your current Antigravity CLI provider."
     : "Switch Antigravity CLI to the Gemini API provider and add FCC's models. Then launch with fcc-agy.";
   const files = byId("antigravityIntegrationFiles");
   files.replaceChildren();
@@ -2139,6 +2143,7 @@ async function refreshAntigravityIntegration() {
     const result = await api(antigravityIntegrationPath);
     if (!currentIntegrationCheck(antigravityIntegration, request)) return;
     antigravityIntegration.connected = result.connected;
+    antigravityIntegration.canDisconnect = result.can_disconnect;
     antigravityIntegration.paths = result.paths;
   } catch (error) {
     if (!currentIntegrationCheck(antigravityIntegration, request)) return;
@@ -2149,18 +2154,26 @@ async function refreshAntigravityIntegration() {
   }
 }
 
+function openAntigravityIntegration(disconnect) {
+  antigravityIntegration.disconnecting = disconnect;
+  renderAntigravityIntegration();
+  integrationMessage("antigravityIntegrationDialogMessage", "");
+  antigravityIntegrationDialog.showModal();
+}
+
 byId("openAntigravityIntegration").addEventListener("click", () => {
   if (antigravityIntegration.connected === null) {
     void refreshAntigravityIntegration();
     return;
   }
-  integrationMessage("antigravityIntegrationDialogMessage", "");
-  antigravityIntegrationDialog.showModal();
+  openAntigravityIntegration(antigravityIntegration.connected);
 });
+byId("disconnectAntigravityIntegration").addEventListener("click", () => openAntigravityIntegration(true));
 byId("confirmAntigravityIntegration").addEventListener("click", async () => {
   if (byId("confirmAntigravityIntegration").disabled) return;
-  const disconnect = antigravityIntegration.connected;
+  const disconnect = antigravityIntegration.disconnecting;
   const config = state.config;
+  let failed = false;
   antigravityIntegration.busy = true;
   renderAntigravityIntegration();
   integrationMessage("antigravityIntegrationDialogMessage", "");
@@ -2169,19 +2182,21 @@ byId("confirmAntigravityIntegration").addEventListener("click", async () => {
     const result = await api(`${antigravityIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
     if (config !== state.config) return;
     antigravityIntegration.connected = result.connected;
+    antigravityIntegration.canDisconnect = result.can_disconnect;
     antigravityIntegration.paths = result.paths;
     antigravityIntegrationDialog.close();
     integrationMessage("antigravityIntegrationMessage", disconnect
-      ? "Disconnected. Previous provider settings restored."
+      ? "Disconnected. FCC's connection removed."
       : "Connected. Launch Antigravity CLI with fcc-agy.");
   } catch (error) {
     if (config !== state.config) return;
+    failed = true;
     integrationMessage("antigravityIntegrationDialogMessage", error.message, true);
     integrationMessage("antigravityIntegrationMessage", error.message, true);
   } finally {
     antigravityIntegration.busy = false;
     renderAntigravityIntegration();
-    if (config !== state.config) void refreshAntigravityIntegration();
+    if (failed || config !== state.config) void refreshAntigravityIntegration();
   }
 });
 byId("closeAntigravityIntegration").addEventListener("click", () => antigravityIntegrationDialog.close());

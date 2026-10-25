@@ -73,7 +73,10 @@
                 </div>
               </div>
               <p id="antigravityIntegrationMessage" class="message-area" role="status" hidden></p>
-              <button id="openAntigravityIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+              <div class="integration-actions">
+                <button id="openAntigravityIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+                <button id="disconnectAntigravityIntegration" class="danger-button" type="button" hidden>Disconnect</button>
+              </div>
             </article>
             <dialog id="antigravityIntegrationDialog" class="integration-dialog" aria-labelledby="antigravityIntegrationTitle" aria-describedby="antigravityIntegrationDescription">
               <div class="section-heading">

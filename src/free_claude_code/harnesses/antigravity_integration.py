@@ -217,7 +217,7 @@ def configure(
 def status(path: Path, state: Path) -> JsonObject:
     """Recognize existing connections without a catalog or native settings writes."""
     path, state = path.resolve(), state.resolve()
-    connected = False
+    connected = can_disconnect = False
     try:
         state.stat()
     except FileNotFoundError:
@@ -225,6 +225,7 @@ def status(path: Path, state: Path) -> JsonObject:
     else:
         with _locked(state):
             connection = _connection(state, path)
+            can_disconnect = connection is not None
             document = _read(path)
             _models(document)
             connected = (
@@ -233,6 +234,7 @@ def status(path: Path, state: Path) -> JsonObject:
             )
     return {
         "connected": connected,
+        "can_disconnect": can_disconnect,
         "paths": {"settings": str(path), "connection": str(state)},
     }
 

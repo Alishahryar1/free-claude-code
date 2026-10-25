@@ -1,8 +1,55 @@
 import json
 
+import pytest
 from playwright.sync_api import expect
 
 from free_claude_code.harnesses import antigravity_integration as native
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_cleanup_remains_reachable_without_reconnecting(
+    page, admin_base_url, monkeypatch, interrupted
+):
+    endpoint = f"{admin_base_url}/admin/api/integrations/antigravity"
+    path, state = native.config_path(), native.state_path()
+    original = {"modelProvider": "personal", "unrelated": True}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(original))
+    if interrupted:
+        page.goto(f"{admin_base_url}/admin/integrations")
+        page.locator("#openAntigravityIntegration").click()
+
+        def fail(*args):
+            raise PermissionError("write interrupted")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(native, "_write_native", fail)
+            page.locator("#confirmAntigravityIntegration").click()
+            expect(
+                page.locator("#antigravityIntegrationDialogMessage")
+            ).to_contain_text("Could not access")
+        page.keyboard.press("Escape")
+    else:
+        assert page.request.post(endpoint + "/connect").status == 200
+        document = json.loads(path.read_text())
+        document["modelProvider"] = "personal"
+        path.write_text(json.dumps(document))
+        page.goto(f"{admin_base_url}/admin/integrations")
+    card = page.locator("article").filter(
+        has=page.get_by_role("heading", name="Antigravity CLI", exact=True)
+    )
+    expect(card.get_by_role("button", name="Connect", exact=True)).to_be_enabled()
+    cleanup = card.get_by_role("button", name="Disconnect", exact=True)
+    expect(cleanup).to_be_enabled()
+    assert state.exists()
+    cleanup.click()
+    confirm = page.locator("#confirmAntigravityIntegration")
+    expect(confirm).to_have_text("Disconnect")
+    confirm.click()
+    expect(page.locator("#antigravityIntegrationDialog")).not_to_be_visible()
+    expect(cleanup).to_have_count(0)
+    assert not state.exists()
+    assert json.loads(path.read_text()) == original
 
 
 def test_connect_disconnect_and_existing_connection(page, admin_base_url):
