@@ -24,13 +24,17 @@ def normalized_history(request: GeminiRequest) -> tuple[GeminiTurn, ...]:
         for part_index, part in enumerate(original.parts):
             if part.thought_signature is not None:
                 bundle = decode_bundle(part.thought_signature)
-                if bundle is not None:
-                    previous = bundles.get(bundle.response_id)
-                    if previous is not None and previous != bundle:
-                        raise GeminiConversionError("Conflicting echoed replay bundles")
-                    if previous is None:
-                        bundles[bundle.response_id] = bundle
-                        replay.append(bundle)
+                if bundle is None:
+                    raise GeminiConversionError(
+                        "Caller-native Gemini signatures cannot be replayed through this gateway. "
+                        "Only FCC-issued thoughtSignature replay is supported."
+                    )
+                previous = bundles.get(bundle.response_id)
+                if previous is not None and previous != bundle:
+                    raise GeminiConversionError("Conflicting echoed replay bundles")
+                if previous is None:
+                    bundles[bundle.response_id] = bundle
+                    replay.append(bundle)
             call, response = part.function_call, part.function_response
             if call is not None:
                 call_id = call.id or f"call_gemini_{index}_{part_index}"

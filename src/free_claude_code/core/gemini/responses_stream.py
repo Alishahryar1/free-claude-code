@@ -47,10 +47,12 @@ class GeminiResponsesStream:
         return []
 
     def handoff(self) -> list[str]:
-        self._output.records = [
-            ReplayRecord(self._origin, record)
-            for _, record in sorted(self._reasoning.items())
-        ]
+        self._output.replace_records(
+            [
+                ReplayRecord(self._origin, record)
+                for _, record in sorted(self._reasoning.items())
+            ]
+        )
         return self._output.handoff()
 
     def feed(self, event_type: str, payload: JsonObject) -> list[str]:
@@ -167,10 +169,6 @@ class GeminiResponsesStream:
                         f"Gemini cannot represent Responses incomplete reason {incomplete}"
                     )
                 reason = "MAX_TOKENS" if incomplete == "max_output_tokens" else "SAFETY"
-            self._output.records.extend(
-                ReplayRecord(self._origin, record)
-                for _, record in sorted(self._reasoning.items())
-            )
             events.extend(
                 self._output.finish(
                     reason,
@@ -235,6 +233,12 @@ class GeminiResponsesStream:
                     events.extend(self._part(index, field, position, part))
             if complete and kind == "reasoning":
                 self._reasoning[index] = deepcopy(item)
+                self._output.replace_records(
+                    [
+                        ReplayRecord(self._origin, record)
+                        for _, record in sorted(self._reasoning.items())
+                    ]
+                )
             return events
         if kind != "function_call":
             raise conversion_failure(f"Gemini cannot represent Responses output {kind}")

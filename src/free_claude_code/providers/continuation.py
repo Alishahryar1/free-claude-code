@@ -9,6 +9,11 @@ from free_claude_code.core.delivered_response import (
     is_structured_text_format,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.history_replay import (
+    ReplayRecord,
+    encode_replay,
+    readable_reasoning,
+)
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_recovery import (
     ContinuationSeed,
@@ -197,7 +202,14 @@ class ContinuationRequest:
         self.protocol = protocol
         self._injected_rows = 0
 
-    def build(self, body: dict[str, Any], text: str, thinking: str) -> dict[str, Any]:
+    def build(
+        self,
+        body: dict[str, Any],
+        text: str,
+        thinking: str,
+        *,
+        replay_records: tuple[ReplayRecord, ...] = (),
+    ) -> dict[str, Any]:
         result = deepcopy(body)
         responses = self.protocol == "responses"
         field = "input" if responses else "messages"
@@ -207,6 +219,12 @@ class ContinuationRequest:
         if self._injected_rows:
             # Request corrections preserve these trailing plain-text turns.
             history = history[: -self._injected_rows]
+        if replay_records and thinking == "".join(
+            text
+            for record in replay_records
+            for text, _ in readable_reasoning(record.native)
+        ):
+            thinking = ""
         tail = continuation_tail(
             ContinuationSeed(text, thinking), tools=bool(result.get("tools"))
         )
@@ -225,6 +243,29 @@ class ContinuationRequest:
                 }
                 for row in tail
             ]
+        if replay_records:
+            carriers = [encode_replay(record) for record in replay_records]
+            if responses:
+                tail = [
+                    {"type": "reasoning", "encrypted_content": carrier}
+                    for carrier in carriers
+                ] + tail
+            else:
+                if tail[0]["role"] != "assistant":
+                    tail.insert(0, {"role": "assistant", "content": ""})
+                if self.protocol == "chat":
+                    tail[0]["reasoning_details"] = [
+                        {"type": "reasoning.encrypted", "data": carrier}
+                        for carrier in carriers
+                    ]
+                else:
+                    tail[0]["content"] = [
+                        *(
+                            {"type": "redacted_thinking", "data": carrier}
+                            for carrier in carriers
+                        ),
+                        {"type": "text", "text": tail[0]["content"]},
+                    ]
         result[field] = [*history, *tail]
         self._injected_rows = len(tail)
         return result
@@ -329,7 +370,9 @@ def public_recovery(
     seed = assessment.seed
     if seed is None:
         return None
-    replacement = request.build(body, seed.text, seed.thinking)
+    replacement = request.build(
+        body, seed.text, seed.thinking, replay_records=seed.replay_records
+    )
     delivery.begin_continuation()
     trace_event(
         stage="provider",

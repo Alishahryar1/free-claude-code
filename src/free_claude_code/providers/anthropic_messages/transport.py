@@ -346,7 +346,10 @@ class AnthropicMessagesTransport:
         operation_kind = ProviderOperationKind.GENERATION
         if continuation is not None:
             body = continuation_request.build(
-                body, continuation.text, continuation.thinking
+                body,
+                continuation.text,
+                continuation.thinking,
+                replay_records=continuation.replay_records,
             )
             operation_kind = ProviderOperationKind.CONTINUATION
         source: SourceRecoveryState | None = None

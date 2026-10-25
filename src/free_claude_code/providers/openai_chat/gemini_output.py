@@ -35,7 +35,7 @@ class GeminiChatStreamOutput(ChatStreamOutput):
 
     def capture_reasoning_record(self, native: JsonObject) -> bool:
         assert self.replay_origin is not None
-        self._gemini.records.append(ReplayRecord(self.replay_origin, deepcopy(native)))
+        self._gemini.capture(ReplayRecord(self.replay_origin, deepcopy(native)))
         return True
 
     def _start_events(self) -> list[str]:
@@ -51,7 +51,7 @@ class GeminiChatStreamOutput(ChatStreamOutput):
 
     def _emit_opaque_reasoning(self, data: str) -> list[str]:
         if is_replay(data):
-            self._gemini.records.append(decode_replay(data))
+            self._gemini.capture(decode_replay(data))
         else:
             raise conversion_failure(
                 "Upstream standalone Chat signature lacks a replayable native reasoning record"

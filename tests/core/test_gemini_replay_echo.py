@@ -7,6 +7,7 @@ import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.gemini.replay import (
+    CallReplay,
     ReplayBundle,
     decode_bundle,
     encode_bundle,
@@ -172,3 +173,76 @@ def test_native_aggregate_alias_does_not_duplicate_structured_full_text():
         ("second", False),
         ("brief", True),
     ]
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_echo_digest_requires_replay_coverage_of_all_thought_text(native):
+    output = GeminiOutput("response", "model", include_thoughts=True)
+    output.calls.append(
+        CallReplay(ORIGIN, "call", {"google": {"thought_signature": "opaque"}})
+    )
+    frames = []
+    if native:
+        output.records.append(ReplayRecord(ORIGIN, {"reasoning_content": "native"}))
+        frames.extend(output.part({"text": "native", "thought": True}))
+    frames.extend(output.part({"text": "parsed thought", "thought": True}))
+    frames.extend(
+        output.part({"functionCall": {"id": "call", "name": "read", "args": {}}})
+    )
+    frames.extend(output.finish("STOP"))
+    aggregate = GeminiResponseAccumulator()
+    for event in parse_sse_text("".join(frames)):
+        aggregate.feed(event.data)
+    content = aggregate.result()["candidates"][0]["content"]
+    bundle = decode_bundle(content["parts"][-1]["thoughtSignature"])
+    assert bundle is not None and bundle.thought_echo_sha256 is None
+    value = request(
+        contents=[
+            content,
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "id": "call",
+                            "name": "read",
+                            "response": {"ok": True},
+                        }
+                    }
+                ],
+            },
+        ]
+    )
+    assert "parsed thought" in json.dumps(build(value, "chat").body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+@pytest.mark.parametrize("placement", ["text", "standalone", "call"])
+def test_foreign_native_gemini_signature_fails_explicitly(protocol, placement):
+    from free_claude_code.core.gemini import GeminiConversionError
+
+    part = {"thoughtSignature": "AP8="}
+    if placement == "text":
+        part["text"] = "signed text"
+    elif placement == "call":
+        part["functionCall"] = {"id": "call", "name": "read", "args": {}}
+    contents = [{"role": "model", "parts": [part]}]
+    if placement == "call":
+        contents.append(
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "id": "call",
+                            "name": "read",
+                            "response": {"ok": True},
+                        }
+                    }
+                ],
+            }
+        )
+    with pytest.raises(
+        GeminiConversionError, match=r"native.*signature|signature.*native"
+    ):
+        build(request(contents=contents), protocol)

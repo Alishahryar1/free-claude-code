@@ -4,7 +4,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 
+from .history_replay import ReplayRecord
 from .json_types import JsonObject
+
+RECOVERY_RETENTION_BYTES = 1_048_576
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,12 +18,15 @@ class DeliveredPrefix:
     eligible: bool
     can_handoff: bool
     unsafe_reason: str | None
+    replay_records: tuple[ReplayRecord, ...] = ()
+    retained_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class ContinuationSeed:
     text: str
     thinking: str
+    replay_records: tuple[ReplayRecord, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +107,6 @@ def assess_recovery(
         return RecoveryAssessment(RecoveryAction.STOP, reason="empty_prefix")
     return RecoveryAssessment(
         RecoveryAction.CONTINUE,
-        ContinuationSeed(prefix.text, prefix.thinking),
+        ContinuationSeed(prefix.text, prefix.thinking, prefix.replay_records),
         reason="portable_prefix",
     )

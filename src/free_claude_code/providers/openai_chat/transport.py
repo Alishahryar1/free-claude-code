@@ -1050,7 +1050,10 @@ class _OpenAIChatStreamRunner:
         operation_kind = ProviderOperationKind.GENERATION
         if self._continuation is not None:
             body = continuation_request.build(
-                body, self._continuation.text, self._continuation.thinking
+                body,
+                self._continuation.text,
+                self._continuation.thinking,
+                replay_records=self._continuation.replay_records,
             )
             operation_kind = ProviderOperationKind.CONTINUATION
         request_stream_usage(body)

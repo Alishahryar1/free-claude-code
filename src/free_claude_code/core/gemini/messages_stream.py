@@ -76,9 +76,7 @@ class GeminiMessagesStream:
         if block is not None:
             if block.body.get("type") in {"thinking", "redacted_thinking"}:
                 self._has_reasoning = True
-                self._output.records.append(
-                    ReplayRecord(self._origin, deepcopy(block.body))
-                )
+                self._output.capture(ReplayRecord(self._origin, deepcopy(block.body)))
             elif block.body.get("type") == "tool_use":
                 name = self._names.decode(str(block.body["name"]))
                 if name not in self._declared:

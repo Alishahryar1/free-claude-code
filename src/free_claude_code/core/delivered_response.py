@@ -11,10 +11,8 @@ from .history_replay import (
     unencrypted_responses_replay,
 )
 from .openai_responses import is_client_search
-from .stream_recovery import DeliveredPrefix
+from .stream_recovery import RECOVERY_RETENTION_BYTES, DeliveredPrefix
 from .token_estimation import estimate_text_tokens
-
-RECOVERY_RETENTION_BYTES = 1_048_576
 
 CLIENT_CALL_TYPES = frozenset(
     {
@@ -468,6 +466,7 @@ class DeliveredResponse:
             unsafe_reason is None,
             self.can_handoff,
             unsafe_reason,
+            retained_bytes=self._bytes,
         )
 
     def output_tokens(self, output: list[dict[str, Any]] | None = None) -> int:
