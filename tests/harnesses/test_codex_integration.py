@@ -30,6 +30,7 @@ def test_connect_disconnect_preserve_model_comments_and_other_providers(tmp_path
         "name": "Free Claude Code",
         "base_url": URL + "/v1",
         "wire_api": "responses",
+        "stream_idle_timeout_ms": 2147483647,
         "auth": {"command": "fcc-codex", "args": ["--print-proxy-auth-token"]},
     }
     assert not (tmp_path / "catalog.json").exists()
@@ -73,6 +74,38 @@ def test_inline_tables_merge_without_losing_extra_values(tmp_path):
     assert tomllib.loads(path.read_text())["model_providers"] == {
         "other": {"name": "Other"}
     }
+
+
+@pytest.mark.parametrize("previous_timeout", [None, 300000])
+def test_refresh_extends_fcc_waiting_and_preserves_retry_and_other_provider_settings(
+    tmp_path, previous_timeout
+):
+    path = tmp_path / "config.toml"
+    timeout = (
+        f"stream_idle_timeout_ms = {previous_timeout}\n"
+        if previous_timeout is not None
+        else ""
+    )
+    path.write_text(
+        'model = "my-choice"\nmodel_provider = "fcc"\n'
+        f'[model_providers.fcc]\nbase_url = "{URL}/v1"\n'
+        f"{timeout}request_max_retries = 3\nstream_max_retries = 2\n"
+        '[model_providers.other]\nname = "Other"\nstream_idle_timeout_ms = 1000\n'
+        "request_max_retries = 7\nstream_max_retries = 4\n"
+    )
+    original = tomllib.loads(path.read_text())
+    catalog_path = tmp_path / "catalog.json"
+
+    assert codex_integration.refresh_connected(path, catalog_path, URL)
+
+    saved = tomllib.loads(path.read_text())
+    provider = saved["model_providers"]["fcc"]
+    assert provider["stream_idle_timeout_ms"] == 2147483647
+    assert provider["request_max_retries"] == 3
+    assert provider["stream_max_retries"] == 2
+    assert saved["model"] == "my-choice"
+    assert saved["model_providers"]["other"] == original["model_providers"]["other"]
+    assert not codex_integration.refresh_connected(path, catalog_path, URL)
 
 
 def test_manual_connection_ignores_model_and_display_name(tmp_path):
