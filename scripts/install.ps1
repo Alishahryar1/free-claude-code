@@ -24,6 +24,8 @@ $DshMinimumVersion = "0.2.0-rc.2"
 $DshPackage = "@deepseek-ai/dsh@latest"
 $GrokInstallUrl = "https://x.ai/cli/install.ps1"
 $MuseInstallUrl = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1"
+$AgyInstallUrl = "https://antigravity.google/cli/install.ps1"
+$AgyMinimumVersion = "1.4.7"
 $RtkVersion = "0.44.2"
 $HeadroomPackage = "headroom-ai[mcp]==0.40.0"
 $RtkReleaseBaseUrl = "https://github.com/rtk-ai/rtk/releases/download/v$RtkVersion"
@@ -40,6 +42,7 @@ $script:InstallDsh = $true
 $script:InstallGrok = $true
 $script:InstallMuse = $true
 $script:InstallAider = $true
+$script:InstallAgy = $true
 $script:PiAvailable = $false
 $script:MuseAvailable = $false
 $script:EnableRtkHeadroom = $RtkHeadroom.IsPresent
@@ -70,6 +73,7 @@ $FccCommands = @(
     "fcc-grok",
     "fcc-muse",
     "fcc-aider",
+    "fcc-agy",
     "fcc-doctor",
     "fcc-update",
     "fcc-init",
@@ -320,8 +324,9 @@ function Select-CodingAgents {
         $script:InstallGrok = Read-CodingAgentSelection grok "Grok Build" fcc-grok
         $script:InstallMuse = Read-CodingAgentSelection muse "Muse Code" fcc-muse
         $script:InstallAider = Read-CodingAgentSelection aider Aider fcc-aider
+        $script:InstallAgy = Read-CodingAgentSelection agy "Antigravity CLI" fcc-agy
 
-        if ($script:InstallClaudeCode -or $script:InstallCodex -or $script:InstallPi -or $script:InstallOpenCode -or $script:InstallCline -or $script:InstallHermes -or $script:InstallDsh -or $script:InstallGrok -or $script:InstallMuse -or $script:InstallAider) {
+        if ($script:InstallClaudeCode -or $script:InstallCodex -or $script:InstallPi -or $script:InstallOpenCode -or $script:InstallCline -or $script:InstallHermes -or $script:InstallDsh -or $script:InstallGrok -or $script:InstallMuse -or $script:InstallAider -or $script:InstallAgy) {
             break
         }
         Write-Host "Select at least one coding agent."
@@ -499,6 +504,7 @@ function Add-KnownBinDirectories {
         Add-PathEntry (Join-Path $env:LOCALAPPDATA "Programs\OpenAI\Codex\bin")
         Add-PathEntry (Join-Path $env:LOCALAPPDATA "pi-node\current")
         Add-PathEntry (Join-Path $env:LOCALAPPDATA "Programs\Muse Code\bin")
+        Add-PathEntry (Join-Path $env:LOCALAPPDATA "agy\bin")
     }
     if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
         Add-PathEntry (Join-Path $env:APPDATA "npm")
@@ -1255,6 +1261,59 @@ function Ensure-Grok {
     Confirm-Application -CommandName "grok" -DisplayName "Grok Build"
 }
 
+function Get-AgyVersion {
+    param([string] $AgyPath)
+
+    $output = Invoke-Utf8NativeCapture -FilePath $AgyPath -Arguments @("--version")
+    if ($output -notmatch '^\s*(?<version>\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?)\s*$') {
+        throw "Antigravity CLI is present, but 'agy --version' did not return a stable semantic version."
+    }
+    return $Matches['version']
+}
+
+function Ensure-Agy {
+    Add-KnownBinDirectories
+    $command = Get-ApplicationCommand "agy"
+    if ($DryRun) {
+        if ($command) {
+            Write-Host "+ agy --version"
+            Write-Host "Antigravity CLI >=$AgyMinimumVersion will be preserved; an older version will be upgraded with agy update."
+        }
+        else {
+            Invoke-DownloadedPowerShellInstaller -Url $AgyInstallUrl -Name "Antigravity CLI"
+            Write-Host "+ agy --version"
+        }
+        return
+    }
+    if ($command) {
+        $version = Get-AgyVersion $command.Source
+        if (Test-SupportedStableVersion $version $AgyMinimumVersion) {
+            $script:InstallStepOutcome = "Reused"
+            Write-Host "Antigravity CLI $version already satisfies >=$AgyMinimumVersion; leaving it unchanged."
+            return
+        }
+    }
+    if (@(Get-Process -Name agy -ErrorAction SilentlyContinue).Count -gt 0) {
+        throw "Close Antigravity CLI before replacing its executable, then rerun the installer."
+    }
+    if ($command) {
+        Invoke-NativeCommand -FilePath $command.Source -Arguments @("update")
+    }
+    else {
+        Invoke-DownloadedPowerShellInstaller -Url $AgyInstallUrl -Name "Antigravity CLI"
+        Add-KnownBinDirectories
+    }
+    $command = Get-ApplicationCommand "agy"
+    if (-not $command) {
+        throw "Antigravity CLI was installed, but 'agy' is not available on PATH."
+    }
+    $version = Get-AgyVersion $command.Source
+    if (-not (Test-SupportedStableVersion $version $AgyMinimumVersion)) {
+        throw "Antigravity CLI requires >=$AgyMinimumVersion; found $version after installation."
+    }
+    Write-Host "Verified Antigravity CLI $version."
+}
+
 function Install-Aider {
     $uvPath = "uv"
     if (-not $DryRun) {
@@ -1556,7 +1615,12 @@ function Ensure-SelectedCodingAgents {
         Ensure-Aider
     }
 
-    if ((-not $script:InstallClaudeCode) -and (-not $script:InstallCodex) -and (-not $script:PiAvailable) -and (-not $script:InstallOpenCode) -and (-not $script:InstallCline) -and (-not $script:InstallHermes) -and (-not $script:InstallDsh) -and (-not $script:InstallGrok) -and (-not $script:MuseAvailable) -and (-not $script:InstallAider)) {
+    if ($script:InstallAgy) {
+        Start-InstallStep "Antigravity CLI" "Ensuring Antigravity CLI is installed"
+        Ensure-Agy
+    }
+
+    if ((-not $script:InstallClaudeCode) -and (-not $script:InstallCodex) -and (-not $script:PiAvailable) -and (-not $script:InstallOpenCode) -and (-not $script:InstallCline) -and (-not $script:InstallHermes) -and (-not $script:InstallDsh) -and (-not $script:InstallGrok) -and (-not $script:MuseAvailable) -and (-not $script:InstallAider) -and (-not $script:InstallAgy)) {
         throw "No selected coding agent was installed. Re-run the installer and choose at least one."
     }
 }
@@ -1738,7 +1802,7 @@ function Configure-AndConfirmFreeClaudeCode {
     if ($DryRun) {
         Write-Host "+ uv tool update-shell"
         Write-Host "+ uv tool dir --bin"
-        Write-Host "+ verify fcc-desktop, fcc-server, fcc-claude, fcc-codex, fcc-pi, fcc-opencode, fcc-cline, fcc-hermes, fcc-dsh, fcc-grok, fcc-muse, and fcc-aider in the uv tool bin directory"
+        Write-Host "+ verify fcc-desktop, fcc-server, fcc-claude, fcc-codex, fcc-pi, fcc-opencode, fcc-cline, fcc-hermes, fcc-dsh, fcc-grok, fcc-muse, fcc-aider, and fcc-agy in the uv tool bin directory"
         Write-Host "+ fcc-server --version"
         Export-FccDesktopIcon `
             -DesktopCommand "<uv-tool-bin>\fcc-desktop.exe" `
@@ -1761,7 +1825,7 @@ function Configure-AndConfirmFreeClaudeCode {
         [IO.Path]::AltDirectorySeparatorChar
     )
     $installedCommands = @{}
-    foreach ($commandName in @("fcc-desktop", "fcc-server", "fcc-claude", "fcc-codex", "fcc-pi", "fcc-opencode", "fcc-cline", "fcc-hermes", "fcc-dsh", "fcc-grok", "fcc-muse", "fcc-aider", "fcc-doctor", "fcc-update.cmd")) {
+    foreach ($commandName in @("fcc-desktop", "fcc-server", "fcc-claude", "fcc-codex", "fcc-pi", "fcc-opencode", "fcc-cline", "fcc-hermes", "fcc-dsh", "fcc-grok", "fcc-muse", "fcc-aider", "fcc-agy", "fcc-doctor", "fcc-update.cmd")) {
         $command = Get-ApplicationCommand $commandName
         if (-not $command) {
             throw "Free Claude Code installation did not create '$commandName'."
@@ -1887,6 +1951,10 @@ function Show-InstallerNextSteps {
     }
     if ($script:InstallAider) {
         Write-Host "Run Aider with: fcc-aider"
+    }
+    if ($script:InstallAgy) {
+        Write-Host "Connect Antigravity CLI once with: fcc-agy --connect"
+        Write-Host "Run Antigravity CLI with: fcc-agy"
     }
 
 }
@@ -2049,7 +2117,8 @@ try {
         @("Pi", $script:InstallPi), @("OpenCode", $script:InstallOpenCode),
         @("Cline", $script:InstallCline), @("Hermes", $script:InstallHermes),
         @("DeepSeek Harness", $script:InstallDsh), @("Grok", $script:InstallGrok),
-        @("Muse", $script:InstallMuse), @("Aider", $script:InstallAider)
+        @("Muse", $script:InstallMuse), @("Aider", $script:InstallAider),
+        @("Antigravity CLI", $script:InstallAgy)
     )) {
         if ($choice[1]) {
             $script:InstallSteps[$choice[0]] = "Not attempted"

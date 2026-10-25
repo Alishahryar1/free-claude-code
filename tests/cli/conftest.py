@@ -11,8 +11,10 @@ from urllib.request import Request
 import pytest
 
 from free_claude_code.cli import local_http
+from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.harnesses import antigravity_integration
 
 
 class JsonResponse(io.BytesIO):
@@ -53,6 +55,7 @@ class LaunchCapture:
             "dsh": "0.2.0-rc.2",
             "grok": '{"currentVersion":"1.0.5"}',
             "muse": "Muse Code 1.0.3 (1.0.3-R2198.1)",
+            "agy": "1.4.7",
         }
     )
 
@@ -104,6 +107,12 @@ def launch_capture(monkeypatch: pytest.MonkeyPatch) -> LaunchCapture:
     from free_claude_code.cli.launchers import common
 
     capture = LaunchCapture()
+    antigravity_integration.configure(
+        antigravity_integration.config_path(),
+        antigravity_integration.state_path(),
+        model_catalog_from_response(capture.catalog),
+        connect=True,
+    )
     store = ManagedConfigStore()
     store.initialize({})
     store.commit(
