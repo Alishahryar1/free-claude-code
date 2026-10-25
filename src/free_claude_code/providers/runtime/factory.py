@@ -135,6 +135,19 @@ def _load_alibaba_cloud() -> ProviderFactory:
     return construct
 
 
+def _load_iflytek_token_plan() -> ProviderFactory:
+    from free_claude_code.providers.iflytek_token_plan import IFlytekTokenPlanProvider
+
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+    ) -> BaseProvider:
+        return IFlytekTokenPlanProvider(config, admission=admission)
+
+    return construct
+
+
 def _load_lmstudio() -> ProviderFactory:
     from free_claude_code.providers.lmstudio import LMStudioProvider
 
@@ -244,6 +257,7 @@ _SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
     "mistral": _load_mistral,
     "kilo": _load_kilo,
     "deepseek": _load_deepseek,
+    "iflytek_token_plan": _load_iflytek_token_plan,
     "lmstudio": _load_lmstudio,
     "cloudflare": _load_cloudflare,
     "gemini": _load_gemini,

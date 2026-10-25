@@ -25,7 +25,7 @@
 
 ## What You Get
 
-- **61 ToS-friendly providers. 1.3B+ free tokens every month.** Use free, paid, subscription, and local models from one searchable UI without putting your account at risk. FCC follows provider terms and removes integrations if they stop being allowed.
+- **62 ToS-friendly providers. 1.3B+ free tokens every month.** Use free, paid, subscription, and local models from one searchable UI without putting your account at risk. FCC follows provider terms and removes integrations if they stop being allowed.
 - **11 coding agents. One model catalog.** Run [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [OpenCode](https://github.com/anomalyco/opencode), [Cline](https://github.com/cline/cline), [Hermes](https://github.com/NousResearch/hermes-agent), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Grok Build](https://github.com/xai-org/grok-build), [Muse Code](https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2/), [Aider](https://aider.chat/), or [VS Code Chat](https://code.visualstudio.com/) with your FCC models.
 - **Keep coding through provider outages.** After retries are exhausted, FCC automatically tries your next configured model without making you restart the turn. This works across every client.
 - **Up to 90% lower token usage.** Optional [RTK](https://github.com/rtk-ai/rtk) filters common command output, and [Headroom](https://github.com/headroomlabs-ai/headroom) compresses tool results.
@@ -253,6 +253,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 | [Atlas Cloud](https://console.atlascloud.ai/api-keys) | `ATLASCLOUD_API_KEY` | `atlascloud/deepseek-ai/deepseek-v4-flash` |
 | [xKiro](https://xkiro.com/) | `XKIRO_API_KEY` | `xkiro/qwen/qwen3.7-flash:free` |
 | [Opper](https://platform.opper.ai/) | `OPPER_API_KEY` | `opper/claude-sonnet-4-6` |
+| [iFlytek Astron Token Plan](https://maas.xfyun.cn/packageSubscription) | `IFLYTEK_TOKEN_PLAN_API_KEY` | `iflytek_token_plan/spark-x2.5` |
 | [Ollama Cloud](https://ollama.com/settings/keys) | `OLLAMA_API_KEY` | `ollama_cloud/qwen3-coder:480b` |
 | [LM Studio](https://lmstudio.ai/) | `LM_STUDIO_BASE_URL` | `lmstudio/<model-id>` |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) | `LLAMACPP_BASE_URL` | `llamacpp/<model-id>` |
@@ -262,6 +263,15 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 
 <details>
 <summary><strong>Provider-specific setup</strong></summary>
+
+- For iFlytek Astron Token Plan, configure a Token Plan subscription key from
+  [the MaaS subscription page](https://maas.xfyun.cn/packageSubscription) for
+  coding clients through the local proxy. Configure other plans using the
+  endpoints recommended in their own documentation. The model list includes
+  `spark-x2.5` and
+  `xsparkx2flash` from the [Token Plan documentation](https://www.xfyun.cn/doc/spark/TokenPlan.html),
+  since the endpoint does not offer model discovery. Client thinking controls
+  map to `thinking.type`; a disabled setting disables reasoning computation.
 
 - OpenAI / ChatGPT uses your ChatGPT subscription rather than an API key. Connect from
   **Providers → OAuth providers → OpenAI / ChatGPT → Connect** in the Admin UI
