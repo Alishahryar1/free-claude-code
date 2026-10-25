@@ -390,22 +390,6 @@ in VS Code also completes onboarding.
 Run FCC on the same computer and in the same user environment as the client you
 are configuring.
 
-### Gemini API clients
-
-Set your client's Gemini API base URL to `http://localhost:8082` and use your
-FCC proxy token as its API key when proxy authentication is enabled. FCC accepts
-`X-Goog-Api-Key`, a single `key` query parameter, or Bearer authentication.
-
-Use `POST /v1beta/models/{model}:generateContent` for JSON or
-`POST /v1beta/models/{model}:streamGenerateContent?alt=sse` for streaming.
-An FCC `provider/model` reference selects that backend. Other names use the
-configured model mapping and fallback settings.
-
-Text, inline images, function tools and results, thoughts, and structured JSON
-output are supported for one candidate. Available generation controls depend on
-the selected provider. Unsupported features return an error. Model listing,
-file uploads, Google hosted tools, and audio/video generation are not supported.
-
 <a id="optional-integrations"></a>
 
 ## Optional Integrations
