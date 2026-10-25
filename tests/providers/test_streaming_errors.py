@@ -77,7 +77,15 @@ def _recovery_output(
     thinking: str = "",
     tool_calls: tuple[dict, ...] = (),
 ) -> SimpleNamespace:
-    return SimpleNamespace(text=text, thinking=thinking, tool_calls=tool_calls)
+    from free_claude_code.core.history_replay import ReplayOrigin
+
+    return SimpleNamespace(
+        text=text,
+        thinking=thinking,
+        tool_calls=tool_calls,
+        origin=ReplayOrigin("TEST", "chat", "", "", "test-model"),
+        native_reasoning={},
+    )
 
 
 class ClosableAsyncStreamMock(AsyncStreamMock):
@@ -138,7 +146,6 @@ def _make_tool_assembler(
     concrete_request = request or _make_request()
     return OpenAIToolCallAssembler(
         reserved_tool_ids=_reserved_anthropic_tool_ids(concrete_request),
-        record_extra_content=provider._behavior.record_tool_call_extra_content,
     )
 
 

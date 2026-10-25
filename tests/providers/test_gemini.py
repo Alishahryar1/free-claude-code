@@ -12,6 +12,7 @@ from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.google_openai import (
     GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
 )
+from free_claude_code.providers.history_replay import replay_origin
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
@@ -362,9 +363,17 @@ def test_build_request_body_preserves_tool_call_extra_content(gemini_provider):
     }
 
 
+def cache_origin(provider):
+    return replay_origin(
+        "GEMINI", "chat", make_request().model, client=provider._client
+    )
+
+
 def test_build_request_body_uses_cached_tool_call_signature(gemini_provider):
     gemini_provider._behavior.record_tool_call_extra_content(
-        "function-call-1", {"google": {"thought_signature": "sig-from-cache"}}
+        "function-call-1",
+        {"google": {"thought_signature": "sig-from-cache"}},
+        origin=cache_origin(gemini_provider),
     )
     req = make_request(
         system=None,
@@ -395,6 +404,10 @@ def test_build_request_body_uses_cached_tool_call_signature(gemini_provider):
     )
 
     body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
+
+    body = gemini_provider._behavior.prepare_history_body(
+        body, cache_origin(gemini_provider)
+    )
 
     tool_call = body["messages"][1]["tool_calls"][0]
     assert tool_call["extra_content"] == {
@@ -445,6 +458,10 @@ def test_build_request_body_adds_current_turn_fallback_signature(
     )
 
     body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
+
+    body = gemini_provider._behavior.prepare_history_body(
+        body, cache_origin(gemini_provider)
+    )
 
     tool_calls = body["messages"][1]["tool_calls"]
     assert tool_calls[0]["extra_content"] == {
@@ -545,7 +562,7 @@ async def test_stream_messages_preserves_tool_call_extra_content(gemini_provider
         '"extra_content"' in event and "sig-stream" in event for event in tool_starts
     )
     assert gemini_provider._behavior._tool_call_extra_content_by_id[
-        "function-call-1"
+        (cache_origin(gemini_provider), "function-call-1")
     ] == {"google": {"thought_signature": "sig-stream"}}
 
 
@@ -622,9 +639,9 @@ async def test_colliding_stream_tool_id_rekeys_cached_thought_signature(
     [start] = starts
     public_id = start["id"]
     assert public_id != "function-call-1"
-    assert gemini_provider._behavior._tool_call_extra_content_by_id[public_id] == {
-        "google": {"thought_signature": "sig-stream"}
-    }
+    assert gemini_provider._behavior._tool_call_extra_content_by_id[
+        (cache_origin(gemini_provider), public_id)
+    ] == {"google": {"thought_signature": "sig-stream"}}
 
     replay = make_request(
         system=None,
@@ -656,6 +673,9 @@ async def test_colliding_stream_tool_id_rekeys_cached_thought_signature(
     body = gemini_provider._chat._build_request_body(
         replay,
         reasoning=reasoning_for(replay),
+    )
+    body = gemini_provider._behavior.prepare_history_body(
+        body, cache_origin(gemini_provider)
     )
     replayed_call = body["messages"][-2]["tool_calls"][0]
     assert replayed_call["id"] == public_id

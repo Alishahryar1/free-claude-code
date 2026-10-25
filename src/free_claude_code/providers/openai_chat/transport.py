@@ -37,7 +37,10 @@ from free_claude_code.core.diagnostics import (
     redacted_exception_traceback,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.history_replay import prepare_history
+from free_claude_code.core.gemini import GeminiConversionError, GeminiRequest
+from free_claude_code.core.gemini.replay import CallReplay, apply_call_replay
+from free_claude_code.core.gemini.request import build_gemini_chat_request
+from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -106,6 +109,7 @@ from free_claude_code.providers.stream_recovery import (
 )
 
 from .behavior import OpenAIChatBehavior
+from .gemini_output import GeminiChatStreamOutput
 from .output_cap import clamp_output_tokens, parse_output_token_cap
 from .profiles import OpenAIChatProfile
 from .reasoning_details import StructuredReasoningStream
@@ -134,6 +138,7 @@ from .usage import (
 )
 
 OpenAIAsyncCredentialProvider = Callable[[], Awaitable[str]]
+PreparedBodyValidator = Callable[[Mapping[str, Any]], Awaitable[None]]
 _ExtraReasoningEvents = Callable[[Any, ChatStreamOutput], Iterator[str]]
 _ChatOutputFactory = Callable[[], ChatStreamOutput]
 
@@ -144,6 +149,8 @@ class _CollectedRecoveryOutput:
     thinking: str
     tool_calls: tuple[CompletedOpenAIToolCall, ...]
     request_body: JsonObject
+    origin: ReplayOrigin | None
+    native_reasoning: JsonObject
 
 
 def _iter_visible_text_events(
@@ -210,13 +217,10 @@ class _OpenAIChatStreamAssembler:
         self._tool_calls = tool_calls
         self._extra_reasoning_events = extra_reasoning_events
         self._think_parser = ThinkTagParser()
-        self._structured_reasoning = (
-            StructuredReasoningStream()
-            if profile.structured_reasoning_details
-            else None
+        self._structured_reasoning = StructuredReasoningStream(
+            structured_details=profile.structured_reasoning_details
         )
-        if self._structured_reasoning is not None:
-            self._output.reasoning_replay = self._structured_reasoning
+        self._output.reasoning_replay = self._structured_reasoning
         self._finish_reason: Any = None
         self._raw_stop_seen = False
         self._usage_info: Any = None
@@ -315,17 +319,14 @@ class _OpenAIChatStreamAssembler:
                 self._finish_reason,
             )
 
-        reasoning = self._profile.reasoning_delta(delta)
-        if self._structured_reasoning is not None:
-            yield from self._structured_reasoning.events(
-                delta,
-                self._output,
-                native_reasoning=reasoning if self._output_reasoning else None,
-                output_reasoning=self._output_reasoning,
-            )
-        elif self._output_reasoning and reasoning:
-            yield from self._output.ensure_reasoning_block()
-            yield self._output.emit_reasoning_delta(reasoning)
+        field, reasoning = self._profile.native_reasoning_delta(delta)
+        yield from self._structured_reasoning.events(
+            delta,
+            self._output,
+            native_reasoning=reasoning if self._output_reasoning else None,
+            native_field=field,
+            output_reasoning=self._output_reasoning,
+        )
 
         yield from self._extra_reasoning_events(delta, self._output)
 
@@ -465,6 +466,8 @@ class OpenAIChatTransport:
         log_raw_sse_events: bool,
         log_api_error_tracebacks: bool,
         endpoint_transport: httpx2.AsyncBaseTransport | None = None,
+        api_key_provider: OpenAIAsyncCredentialProvider | None = None,
+        validate_prepared_body: PreparedBodyValidator | None = None,
     ) -> None:
         self._client = client
         self._admission = admission
@@ -475,6 +478,8 @@ class OpenAIChatTransport:
         self._log_raw_sse_events = log_raw_sse_events
         self._log_api_error_tracebacks = log_api_error_tracebacks
         self._endpoint_transport = endpoint_transport
+        self._api_key_provider = api_key_provider
+        self._validate_prepared_body = validate_prepared_body
         self._model_output_caps: dict[str, int] = {}
 
     def _log_stream_transport_error(
@@ -589,6 +594,8 @@ class OpenAIChatTransport:
         request_client: OpenAIRequestClient | None = None,
         extra_headers: Mapping[str, str] | None = None,
         on_event: Callable[[Any], None] | None = None,
+        on_origin: Callable[[ReplayOrigin], None] | None = None,
+        call_replay: tuple[CallReplay, ...] = (),
     ) -> tuple[Any, dict, ProviderAttempt, dict]:
         """Create a streaming chat completion with bounded request fallbacks."""
         execution = request_recovery.execution
@@ -601,6 +608,7 @@ class OpenAIChatTransport:
             stream: Any | None = None
             retain_attempt = False
             create_body = body
+            validating = False
             try:
                 create_body = self._behavior.prepare_create_body(body)
                 client = self._client
@@ -608,6 +616,12 @@ class OpenAIChatTransport:
                     assert request_client is not None
                     client = request_client.for_endpoint(
                         self._client, await endpoint.resolve()
+                    )
+                elif self._api_key_provider is not None:
+                    # A borrowed view pins the same credential for provenance and
+                    # inference, without owning or closing the provider's HTTP pool.
+                    client = self._client.with_options(
+                        api_key=await self._api_key_provider()
                     )
                 if extra_headers or endpoint is not None:
                     create_body = create_body.copy()
@@ -627,6 +641,8 @@ class OpenAIChatTransport:
                     client=client,
                     endpoint=endpoint.snapshot if endpoint is not None else None,
                 )
+                if on_origin is not None:
+                    on_origin(origin)
                 create_body = cast(
                     dict[str, Any],
                     prepare_history(
@@ -637,6 +653,16 @@ class OpenAIChatTransport:
                         structured_details=self._profile.structured_reasoning_details,
                     ),
                 )
+                if call_replay:
+                    create_body = cast(
+                        dict[str, Any],
+                        apply_call_replay(create_body, origin, call_replay),
+                    )
+                create_body = self._behavior.prepare_history_body(create_body, origin)
+                if self._validate_prepared_body is not None:
+                    validating = True
+                    await self._validate_prepared_body(create_body)
+                    validating = False
                 stream = OpenAIStreamAdapter(
                     await client.chat.completions.create(
                         **create_body,
@@ -650,6 +676,10 @@ class OpenAIChatTransport:
             except asyncio.CancelledError:
                 raise
             except Exception as error:
+                if validating:
+                    # No upstream response occurred. Abandon the permit without
+                    # teaching correction or recovery state about a rejection.
+                    raise
                 retry_body = await request_recovery.retry_request(
                     error,
                     provider_authentication_status(error),
@@ -821,6 +851,65 @@ class OpenAIChatTransport:
         )
         return runner.run()
 
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        model_info: ProviderModelInfo | None = None,
+        endpoint_context: EndpointContext | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        try:
+            prepared = build_gemini_chat_request(request)
+        except GeminiConversionError as error:
+            raise InvalidRequestError(str(error)) from error
+        body = prepared.body
+        body.pop("stream", None)
+        policy = self._profile.request_policy
+        for key in policy.unsupported_body_keys:
+            if key in body:
+                raise InvalidRequestError(
+                    f"{self._provider_name} cannot represent Gemini control {key}"
+                )
+        if "max_tokens" not in body and policy.default_max_tokens is not None:
+            body["max_tokens"] = policy.default_max_tokens
+        apply_openai_chat_body_policy(body, policy)
+        self._profile.apply_reasoning_to_body(body, reasoning)
+        body = self._behavior.finalize_chat_body(body, reasoning=reasoning)
+        public_model = request.model if response_model is None else response_model
+        response_id = f"fcc_{uuid.uuid4().hex}"
+        runner = _OpenAIChatStreamRunner(
+            self,
+            body=body,
+            tool_names=prepared.tool_names,
+            tool_schemas={
+                name: ToolSchema(name=name, input_schema=schema)
+                for name, schema in prepared.tool_schemas.items()
+            },
+            reserved_tool_ids=prepared.reserved_tool_ids,
+            output_factory=lambda: GeminiChatStreamOutput(
+                response_id=response_id,
+                model=public_model,
+                include_thoughts=request.include_thoughts,
+                tool_names=frozenset(prepared.tool_schemas),
+                input_tokens=input_tokens,
+            ),
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=public_model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            extra_headers=extra_headers,
+            continuation=continuation,
+            call_replay=prepared.call_replay,
+        )
+        return runner.run()
+
     def stream_responses(
         self,
         request: OpenAIResponsesRequest,
@@ -882,10 +971,12 @@ class _OpenAIChatStreamRunner:
         extra_headers: Mapping[str, str] | None = None,
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
+        call_replay: tuple[CallReplay, ...] = (),
     ) -> None:
         self._transport = transport
         self._body = body
         self._continuation = continuation
+        self._call_replay = call_replay
         self._tool_argument_aliases = transport._behavior.tool_argument_aliases(body)
         self._tool_names = tool_names
         self._tool_schemas = tool_schemas
@@ -951,14 +1042,18 @@ class _OpenAIChatStreamRunner:
         execution = request_recovery.execution
 
         def hold_event(event: str) -> Iterator[str]:
-            yield from recovery.push(event)
+            if event:
+                yield from recovery.push(event)
 
         body = self._body
         continuation_request = ContinuationRequest("chat")
         operation_kind = ProviderOperationKind.GENERATION
         if self._continuation is not None:
             body = continuation_request.build(
-                body, self._continuation.text, self._continuation.thinking
+                body,
+                self._continuation.text,
+                self._continuation.thinking,
+                replay_records=self._continuation.replay_records,
             )
             operation_kind = ProviderOperationKind.CONTINUATION
         request_stream_usage(body)
@@ -1033,6 +1128,8 @@ class _OpenAIChatStreamRunner:
                     request_client=self._request_client,
                     extra_headers=self._extra_headers,
                     on_event=observe_chunk,
+                    on_origin=partial(setattr, assembler.output, "replay_origin"),
+                    call_replay=self._call_replay,
                 )
                 scope = ProviderAttemptScope(
                     attempt,
@@ -1137,6 +1234,7 @@ class _OpenAIChatStreamRunner:
 
         for event in assembler.prepare_completion(
             pad_empty=operation_kind is ProviderOperationKind.GENERATION
+            and assembler.output.pad_empty
         ):
             for out_event in hold_event(event):
                 yield out_event
@@ -1164,6 +1262,35 @@ class _OpenAIChatStreamRunner:
             prompt_tokens_estimate=self._input_tokens,
         )
         usage = ChatStreamUsage(
+            finish_reason=str(completion.finish_reason)
+            if completion.finish_reason is not None
+            else None,
+            reported={
+                key: value
+                for key, value in (
+                    ("prompt_tokens", usage_int(assembler.usage_info, "prompt_tokens")),
+                    (
+                        "completion_tokens",
+                        usage_int(assembler.usage_info, "completion_tokens"),
+                    ),
+                    ("total_tokens", usage_int(assembler.usage_info, "total_tokens")),
+                    (
+                        "cached_tokens",
+                        self._transport._behavior.cached_input_tokens(
+                            assembler.usage_info
+                        ),
+                    ),
+                    (
+                        "reasoning_tokens",
+                        nested_usage_int(
+                            assembler.usage_info,
+                            "completion_tokens_details",
+                            "reasoning_tokens",
+                        ),
+                    ),
+                )
+                if value is not None
+            },
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
             cached_tokens=self._transport._behavior.cached_input_tokens(
@@ -1402,6 +1529,12 @@ class _OpenAIChatStreamRunner:
         if corrections is None:
             corrections = RequestCorrections("chat")
         last_error: Exception | None = None
+        origin: ReplayOrigin | None = None
+
+        def bind_origin(value: ReplayOrigin) -> None:
+            nonlocal origin
+            origin = value
+
         while execution.can_attempt:
             scope: ProviderAttemptScope | None = None
             terminal_seen = False
@@ -1419,6 +1552,7 @@ class _OpenAIChatStreamRunner:
                     endpoint=self._endpoint,
                     request_client=self._request_client,
                     extra_headers=self._extra_headers,
+                    on_origin=bind_origin,
                 )
                 scope = ProviderAttemptScope(
                     attempt,
@@ -1428,6 +1562,7 @@ class _OpenAIChatStreamRunner:
                 stream = scope.retain(stream)
                 text_parts: list[str] = []
                 thinking_parts: list[str] = []
+                native_parts: dict[str, list[str]] = {}
                 tool_calls = OpenAIToolCallCollector()
                 async for chunk in stream:
                     if not scope.attempt.accepted:
@@ -1444,9 +1579,12 @@ class _OpenAIChatStreamRunner:
                     if delta is None:
                         continue
                     if include_reasoning:
-                        reasoning = self._transport._profile.reasoning_delta(delta)
+                        field, reasoning = (
+                            self._transport._profile.native_reasoning_delta(delta)
+                        )
                         if reasoning:
                             thinking_parts.append(reasoning)
+                            native_parts.setdefault(field, []).append(reasoning)
                     content = getattr(delta, "content", None)
                     if isinstance(content, str) and content:
                         text_parts.append(content)
@@ -1473,6 +1611,12 @@ class _OpenAIChatStreamRunner:
                     thinking="".join(thinking_parts),
                     tool_calls=completed_tool_calls or (),
                     request_body=body,
+                    origin=origin,
+                    native_reasoning={
+                        field: "".join(parts) for field, parts in native_parts.items()
+                    }
+                    if terminal_seen
+                    else {},
                 )
             except Exception as error:
                 last_error = error
@@ -1514,6 +1658,8 @@ class _OpenAIChatStreamRunner:
             thinking="",
             tool_calls=(),
             request_body=body,
+            origin=None,
+            native_reasoning={},
         )
 
     async def _recovery_events(
@@ -1587,6 +1733,11 @@ class _OpenAIChatStreamRunner:
         if not (thinking_suffix or text_suffix or recovered.tool_calls):
             return None
         events = output.flush_reasoning_replay(completed=False)
+        # Completed records retain their own original provenance. Only newly
+        # collected native state and recovered calls belong to this connection.
+        output.replay_origin = recovered.origin
+        if recovered.native_reasoning:
+            output.capture_reasoning_record(recovered.native_reasoning)
         if thinking_suffix:
             events.extend(output.ensure_reasoning_block())
             events.append(output.emit_reasoning_delta(thinking_suffix))
@@ -1701,8 +1852,18 @@ class _OpenAIChatStreamRunner:
                 output_reasoning=output_reasoning,
             )
 
+        output = self._output_factory()
+
+        def record_extra_content(
+            tool_call_id: str, extra_content: dict[str, Any]
+        ) -> None:
+            assert output.replay_origin is not None
+            self._transport._behavior.record_tool_call_extra_content(
+                tool_call_id, extra_content, origin=output.replay_origin
+            )
+
         return _OpenAIChatStreamAssembler(
-            output=self._output_factory(),
+            output=output,
             profile=self._transport._profile,
             provider_name=self._transport._provider_name,
             output_reasoning=output_reasoning,
@@ -1710,7 +1871,7 @@ class _OpenAIChatStreamRunner:
             tool_schemas=self._tool_schemas,
             tool_calls=OpenAIToolCallAssembler(
                 reserved_tool_ids=self._reserved_tool_ids,
-                record_extra_content=self._transport._behavior.record_tool_call_extra_content,
+                record_extra_content=record_extra_content,
             ),
             extra_reasoning_events=extra_reasoning_events,
         )

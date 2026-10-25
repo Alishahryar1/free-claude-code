@@ -1,9 +1,18 @@
 """Continuation tails are replaceable without rolling back accepted corrections."""
 
+import json
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
+from free_claude_code.core.history_replay import (
+    HistoryScope,
+    ReplayOrigin,
+    ReplayRecord,
+    encode_replay,
+    prepare_history,
+)
 from free_claude_code.providers.continuation import ContinuationRequest
 
 
@@ -67,3 +76,25 @@ def test_responses_string_input_is_preserved_across_continuations():
     first = request.build({"input": "Original prompt"}, "", "A thought.")
     second = request.build(first, "Answer", "A thought.")
     assert second["input"][:-2] == [{"role": "user", "content": "Original prompt"}]
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+def test_native_continuation_carriers_project_and_replace_as_one_suffix(protocol):
+    field = "input" if protocol == "responses" else "messages"
+    source = ReplayOrigin("source", "chat", "endpoint", "account", "model")
+    record = ReplayRecord(source, {"reasoning_content": "retained native thought"})
+    original = {field: [{"role": "user", "content": "hello"}]}
+    request = ContinuationRequest(protocol)
+    first = request.build(
+        original, "First", "retained native thought", replay_records=(record,)
+    )
+    second = request.build(
+        first, "First second", "retained native thought", replay_records=(record,)
+    )
+    assert json.dumps(second).count(encode_replay(record)) == 1
+    projected = prepare_history(
+        second, replace(source, protocol=protocol), scope=HistoryScope.ALL
+    )
+    assert json.dumps(projected).count("retained native thought") == 1
+    assert "First second" in json.dumps(projected)
+    assert original == {field: [{"role": "user", "content": "hello"}]}

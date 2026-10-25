@@ -11,6 +11,7 @@ from .delivered_response import (
     responses_text_constraint,
 )
 from .failures import ExecutionFailure, FailureKind
+from .gemini.response import gemini_finished
 
 
 class ContinuationStream:
@@ -89,6 +90,11 @@ class ContinuationStream:
         return [self._map(event) for event in events]
 
     def _map(self, data: dict[str, Any]) -> dict[str, Any]:
+        if self.delivered.wire_api == "gemini":
+            for key in ("responseId", "modelVersion"):
+                if key in self.delivered.header:
+                    data[key] = self.delivered.header[key]
+            return data
         if not self.handoff:
             if isinstance(data.get("index"), int):
                 data["index"] += self._offset
@@ -115,6 +121,17 @@ class ContinuationStream:
     def finalize(self, data: dict[str, Any]) -> dict[str, Any]:
         """Finish the response only after preceding frames have been published."""
         if not self.active:
+            return data
+        if self.delivered.wire_api == "gemini":
+            if gemini_finished(data) and not self.handoff and not self.made_progress:
+                raise ExecutionFailure(
+                    kind=FailureKind.UPSTREAM,
+                    status_code=502,
+                    message="The provider continuation completed without adding output.",
+                    retryable=False,
+                )
+            # Per-attempt usage cannot describe a synthesized multi-attempt answer.
+            data.pop("usageMetadata", None)
             return data
         kind = data.get("type")
         response = data.get("response")

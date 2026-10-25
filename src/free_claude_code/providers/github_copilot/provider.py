@@ -14,6 +14,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.core.stream_recovery import ContinuationSeed
@@ -155,6 +156,28 @@ class GitHubCopilotProvider(BaseProvider):
             continuation=continuation,
         )
 
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        self._check_model(request.model)
+        return self._dispatch(
+            request,
+            input_tokens,
+            request_id,
+            response_model or request.model,
+            reasoning,
+            continuation=continuation,
+        )
+
     def stream_responses(
         self,
         request: OpenAIResponsesRequest,
@@ -195,7 +218,7 @@ class GitHubCopilotProvider(BaseProvider):
 
     async def _dispatch(
         self,
-        request: MessagesRequest | OpenAIResponsesRequest,
+        request: MessagesRequest | OpenAIResponsesRequest | GeminiRequest,
         input_tokens: int,
         request_id: str | None,
         response_model: str,
@@ -229,7 +252,17 @@ class GitHubCopilotProvider(BaseProvider):
                             capabilities=lease.model.messages,
                         )
                         endpoint = _MessagesEndpoint(lease, http)
-                        if isinstance(request, MessagesRequest):
+                        if isinstance(request, GeminiRequest):
+                            selected = native.stream_gemini(
+                                request,
+                                endpoint_context=endpoint,
+                                request_id=request_id,
+                                response_model=response_model,
+                                reasoning=reasoning,
+                                model_info=lease.model.info,
+                                continuation=continuation,
+                            )
+                        elif isinstance(request, MessagesRequest):
                             selected = native.stream_messages(
                                 request,
                                 endpoint_context=endpoint,
@@ -257,7 +290,17 @@ class GitHubCopilotProvider(BaseProvider):
                             if lease.egress is CopilotEgress.RESPONSES
                             else self._chat(lease.model)
                         )
-                        if isinstance(request, MessagesRequest):
+                        if isinstance(request, GeminiRequest):
+                            selected = transport.stream_gemini(
+                                request,
+                                input_tokens=input_tokens,
+                                request_id=request_id,
+                                response_model=response_model,
+                                reasoning=resolved,
+                                endpoint_context=lease,
+                                continuation=continuation,
+                            )
+                        elif isinstance(request, MessagesRequest):
                             if lease.egress is CopilotEgress.RESPONSES:
                                 selected = self._responses.stream_messages(
                                     request,

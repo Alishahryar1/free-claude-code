@@ -9,6 +9,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.core.anthropic import MessagesRequest, ReasoningReplayMode
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     responses_reasoning_policy,
@@ -259,6 +260,41 @@ class CustomProvider(BaseProvider):
             response_model=response_model or request.model,
             reasoning=reasoning,
             model_info=model_info,
+            continuation=continuation,
+        )
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        reasoning = self._reasoning(reasoning)
+        if self._messages is not None:
+            return self._messages.stream_gemini(
+                request,
+                endpoint_context=self,
+                request_id=request_id,
+                response_model=response_model,
+                reasoning=reasoning,
+                model_info=model_info,
+                continuation=continuation,
+            )
+        transport = self._chat if self._chat is not None else self._responses
+        assert transport is not None
+        return transport.stream_gemini(
+            request,
+            input_tokens=input_tokens,
+            endpoint_context=self,
+            request_id=request_id,
+            response_model=response_model or request.model,
+            reasoning=reasoning,
             continuation=continuation,
         )
 

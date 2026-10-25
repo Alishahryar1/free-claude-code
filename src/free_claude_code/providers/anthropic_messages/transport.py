@@ -2,9 +2,11 @@
 
 import asyncio
 import sys
-from collections.abc import AsyncIterator, Callable
+import uuid
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from dataclasses import replace
 from functools import partial
+from typing import Protocol
 
 import httpx
 
@@ -18,8 +20,11 @@ from free_claude_code.core.anthropic.native import (
 )
 from free_claude_code.core.anthropic.native_stream import NativeMessagesRelay
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.gemini.messages_stream import GeminiMessagesStream
+from free_claude_code.core.gemini.request import build_gemini_messages_request
 from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
     AnthropicToResponsesStream,
     OpenAIResponsesRequest,
@@ -84,7 +89,14 @@ from .wire import (
     messages_status_error,
 )
 
-type _Presenter = NativeMessagesRelay | AnthropicToResponsesStream
+
+class _Presenter(Protocol):
+    @property
+    def completed(self) -> bool: ...
+
+    def feed(
+        self, event_type: str, payload: Mapping[str, JsonValue]
+    ) -> str | Iterable[str]: ...
 
 
 class AnthropicMessagesTransport:
@@ -210,6 +222,45 @@ class AnthropicMessagesTransport:
             continuation=continuation,
         )
 
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        *,
+        endpoint_context: EndpointContext,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        try:
+            options = resolve_messages_options(
+                model=request.model,
+                max_tokens=request.generation_config.max_output_tokens,
+                reasoning=reasoning,
+                capabilities=self._effective_capabilities(model_info),
+            )
+            prepared = build_gemini_messages_request(request, options)
+        except ValueError as error:
+            raise InvalidRequestError(str(error)) from error
+        response_id = f"fcc_{uuid.uuid4().hex}"
+        return self._stream(
+            prepared.body,
+            betas=(),
+            endpoint_context=endpoint_context,
+            request_id=request_id,
+            continuation=continuation,
+            presenter_factory=lambda origin: GeminiMessagesStream(
+                response_id=response_id,
+                model=response_model or request.model,
+                include_thoughts=request.include_thoughts,
+                origin=origin,
+                tool_names=prepared.tool_names,
+                declared_names=frozenset(prepared.tool_schemas),
+                reserved_tool_ids=prepared.reserved_tool_ids,
+            ),
+        )
+
     def stream_responses(
         self,
         request: OpenAIResponsesRequest,
@@ -295,7 +346,10 @@ class AnthropicMessagesTransport:
         operation_kind = ProviderOperationKind.GENERATION
         if continuation is not None:
             body = continuation_request.build(
-                body, continuation.text, continuation.thinking
+                body,
+                continuation.text,
+                continuation.thinking,
+                replay_records=continuation.replay_records,
             )
             operation_kind = ProviderOperationKind.CONTINUATION
         source: SourceRecoveryState | None = None
@@ -469,6 +523,9 @@ class AnthropicMessagesTransport:
                 if recovered is not None:
                     recovery.discard()
                     if recovered.body is None:
+                        if isinstance(presenter, GeminiMessagesStream):
+                            for event in presenter.handoff():
+                                yield event
                         return
                     body = recovered.body
                     operation_kind = ProviderOperationKind.CONTINUATION

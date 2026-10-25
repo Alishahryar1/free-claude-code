@@ -17,6 +17,7 @@ from free_claude_code.core.anthropic import (
 )
 from free_claude_code.core.anthropic.tokens import TokenCounter
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.gemini.tokens import estimate_gemini_input_tokens
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     estimate_responses_input_tokens,
@@ -46,13 +47,14 @@ from .routing import (
     ProviderModelCandidate,
     ProviderModelTarget,
     ResolvedModelRoute,
+    RoutedGeminiRequest,
     RoutedMessagesRequest,
     RoutedNativeMessagesRequest,
     RoutedResponsesRequest,
 )
 
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
-WireApi = Literal["messages", "responses"]
+WireApi = Literal["messages", "responses", "gemini"]
 CandidateStreamOpener = Callable[
     [int, ProviderModelCandidate, ContinuationSeed | None],
     Awaitable[AsyncIterator[str]],
@@ -370,6 +372,63 @@ class ProviderExecutor:
             open_candidate=open_candidate,
         )
 
+    def stream_gemini(
+        self,
+        routed: RoutedGeminiRequest,
+        *,
+        raw_log_payload: Callable[[], object],
+        request_id: str,
+    ) -> AsyncIterator[str]:
+        client_reasoning = routed.request.reasoning_policy()
+        input_tokens = estimate_gemini_input_tokens(routed.request)
+
+        async def open_candidate(
+            index: int,
+            candidate: ProviderModelCandidate,
+            continuation: ContinuationSeed | None,
+        ) -> AsyncIterator[str]:
+            target = candidate.target
+            provider = await self._provider_resolver(
+                target.provider_id, target.api_key_number
+            )
+            request = prepare_fallback_request(
+                routed.request,
+                model=target.provider_model,
+                preference=candidate.reasoning_preference,
+            )
+            return provider.stream_gemini(
+                request,
+                input_tokens=input_tokens,
+                request_id=request_id,
+                response_model=routed.resolved.original_model,
+                reasoning=resolve_fallback_reasoning(
+                    routed.reasoning,
+                    candidate.reasoning_preference,
+                    client=client_reasoning,
+                ),
+                request_headers=self._request_headers,
+                continuation=continuation,
+                model_info=self._model_info_lookup(
+                    target.provider_id, target.provider_model
+                ),
+            )
+
+        return self._stream_candidates(
+            resolved=routed.resolved,
+            reasoning=routed.reasoning,
+            wire_api="gemini",
+            raw_log_label="FULL_GEMINI_PAYLOAD",
+            raw_log_payload=raw_log_payload,
+            request_snapshot=lambda: {
+                "model": routed.request.model,
+                "content_count": len(routed.request.contents),
+            },
+            ingress_count_name="content_count",
+            ingress_count=len(routed.request.contents),
+            request_id=request_id,
+            open_candidate=open_candidate,
+        )
+
     def _stream_candidates(
         self,
         *,
@@ -405,8 +464,8 @@ class ProviderExecutor:
             ),
             "reasoning_budget_tokens": reasoning.budget_tokens,
         }
-        if wire_api == "responses":
-            route_trace["wire_api"] = "responses"
+        if wire_api != "messages":
+            route_trace["wire_api"] = wire_api
         if self._generation_id is not None:
             route_trace["generation_id"] = self._generation_id
         trace_event(**route_trace)
