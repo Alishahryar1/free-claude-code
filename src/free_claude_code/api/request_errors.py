@@ -17,6 +17,7 @@ from free_claude_code.core.diagnostics import (
     redacted_exception_traceback,
     safe_exception_message,
 )
+from free_claude_code.core.gemini import gemini_error_payload
 from free_claude_code.core.openai_responses import (
     openai_error_payload,
     openai_error_type_for_failure,
@@ -26,7 +27,7 @@ from free_claude_code.core.request_outcomes import (
     record_request_failure,
 )
 
-WireApi = Literal["messages", "responses"]
+WireApi = Literal["messages", "responses", "gemini"]
 
 
 def require_non_empty_messages(messages: Sequence[object]) -> None:
@@ -42,6 +43,11 @@ def ordinary_application_error_response(
 ) -> JSONResponse:
     """Serialize a deterministic application error without terminal headers."""
     record_request_failure(error.kind.value)
+    if wire_api == "gemini":
+        return JSONResponse(
+            status_code=error.status_code,
+            content=gemini_error_payload(error.status_code, error.message),
+        )
     if wire_api == "responses":
         return JSONResponse(
             status_code=error.status_code,

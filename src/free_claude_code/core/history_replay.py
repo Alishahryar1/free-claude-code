@@ -501,6 +501,16 @@ def prepare_history(
             isinstance(message, dict)
             and message.get("role") == "assistant"
             and message.get("content") == []
+            and not any(
+                message.get(key)
+                for key in (
+                    "tool_calls",
+                    "reasoning_details",
+                    "reasoning_content",
+                    "reasoning",
+                    "extra_content",
+                )
+            )
         )
     ]
     return result
@@ -579,6 +589,10 @@ def _prepare_chat_content(
             if not isinstance(detail, dict):
                 continue
             record = _record(detail, "data", "signature")
+            if record is not None and destination.accepts(record.origin):
+                extra = record.native.get("extra_content")
+                if isinstance(extra, dict):
+                    message["extra_content"] = deepcopy(extra)
             if record is None and structured_details:
                 restored.append(detail)
                 continue

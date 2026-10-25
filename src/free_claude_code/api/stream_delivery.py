@@ -12,6 +12,7 @@ from free_claude_code.core.async_iterators import try_close_async_iterator
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.delivered_response import DeliveredResponse
 from free_claude_code.core.failures import find_execution_failure
+from free_claude_code.core.gemini.response import gemini_finished, gemini_parts
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
@@ -51,7 +52,7 @@ class PublicResponseStream(AsyncIterator[str]):
         body: AsyncIterator[str],
         state: StreamDeliveryState,
         *,
-        wire_api: Literal["messages", "responses"],
+        wire_api: Literal["messages", "responses", "gemini"],
         first_chunk: str,
         terminal_frame: Callable[[str, str, BaseException], str] | None,
         terminal_failure_observer: Callable[[BaseException], None] | None,
@@ -225,6 +226,8 @@ class PublicResponseStream(AsyncIterator[str]):
 
     @staticmethod
     def _format(payload: dict[str, Any]) -> str:
+        if "type" not in payload:
+            return f"data: {simplejson.dumps(payload, use_decimal=True)}\n\n"
         return f"event: {payload['type']}\ndata: {simplejson.dumps(payload, use_decimal=True)}\n\n"
 
     async def aclose(self) -> None:
@@ -275,6 +278,13 @@ class PublicResponseStream(AsyncIterator[str]):
             return frame
 
         raw_kind = payload.get("type")
+        if self._wire_api == "gemini":
+            if self._public_id is None and isinstance(payload.get("responseId"), str):
+                self._public_id = payload["responseId"]
+                self.start_frame = frame
+            elif self._public_id is not None and "responseId" in payload:
+                payload["responseId"] = self._public_id
+                frame = replace_frame_data(frame, payload)
         kind = raw_kind if isinstance(raw_kind, str) else ""
         metadata = self._metadata(kind, payload)
         if self._wire_api == "messages":
@@ -344,6 +354,12 @@ class PublicResponseStream(AsyncIterator[str]):
         return self._release_content(frame, synthetic=synthetic)
 
     def _metadata(self, kind: str, payload: dict[str, Any]) -> bool:
+        if self._wire_api == "gemini":
+            return (
+                not gemini_parts(payload)
+                and not gemini_finished(payload)
+                and "error" not in payload
+            )
         if kind == "ping":
             return True
         if self._wire_api == "messages" and kind == "message_start":

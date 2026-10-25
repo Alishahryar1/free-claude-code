@@ -60,7 +60,14 @@ class GoogleChatBehavior(OpenAIChatBehavior):
         signature = (
             google.get("thought_signature") if isinstance(google, Mapping) else None
         )
-        if isinstance(signature, str) and signature:
+        if (
+            isinstance(signature, str)
+            and signature
+            and isinstance(extra, Mapping)
+            and not output.capture_reasoning_record(
+                {"reasoning_details": [], "extra_content": deepcopy(dict(extra))}
+            )
+        ):
             output.defer_opaque_reasoning(signature)
         return iter(())
 

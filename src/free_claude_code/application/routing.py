@@ -28,11 +28,16 @@ from free_claude_code.core.gateway_model_ids import (
     DESKTOP_NO_THINKING_PREFIX,
     decode_gateway_model_id,
 )
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.trace import trace_event
 
-from .reasoning import resolve_reasoning_policy, resolve_responses_reasoning_policy
+from .reasoning import (
+    resolve_gemini_reasoning_policy,
+    resolve_reasoning_policy,
+    resolve_responses_reasoning_policy,
+)
 
 _ROUTE_SETTINGS = (
     ("fable", "model_fable", "reasoning_fable"),
@@ -91,6 +96,13 @@ def supports_native_messages(provider_id: str) -> bool:
 @dataclass(frozen=True, slots=True)
 class RoutedResponsesRequest:
     request: OpenAIResponsesRequest
+    resolved: ResolvedModelRoute
+    reasoning: ReasoningPolicy
+
+
+@dataclass(frozen=True, slots=True)
+class RoutedGeminiRequest:
+    request: GeminiRequest
     resolved: ResolvedModelRoute
     reasoning: ReasoningPolicy
 
@@ -364,5 +376,17 @@ class ModelRouter:
             reasoning=resolve_responses_reasoning_policy(
                 routed,
                 resolved.reasoning_preference,
+            ),
+        )
+
+    def resolve_gemini_request(self, request: GeminiRequest) -> RoutedGeminiRequest:
+        resolved = self.resolve(request.model)
+        return RoutedGeminiRequest(
+            request=request.model_copy(
+                update={"model": resolved.primary.provider_model}, deep=True
+            ),
+            resolved=resolved,
+            reasoning=resolve_gemini_reasoning_policy(
+                request, resolved.reasoning_preference
             ),
         )

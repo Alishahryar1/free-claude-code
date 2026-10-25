@@ -22,6 +22,8 @@ from openai import Omit
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode, get_token_count
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.gemini.tokens import estimate_gemini_input_tokens
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     estimate_responses_input_tokens,
@@ -32,6 +34,7 @@ from free_claude_code.core.reasoning import (
     ReasoningPolicy,
 )
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.core.token_estimation import estimate_text_tokens
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.continuation import ContinuationRequest
@@ -130,6 +133,37 @@ class LMStudioProvider(OpenAIChatProvider):
                 estimate_request.tools,
             ),
             request_id=request_id,
+        )
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        endpoint_context: EndpointContext | None = None,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        stream = super().stream_gemini(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            request_headers=request_headers,
+            model_info=model_info,
+            continuation=continuation,
+        )
+        estimate = estimate_gemini_input_tokens(request)
+        if continuation is not None:
+            estimate += estimate_text_tokens(continuation.text + continuation.thinking)
+        return self._stream_with_context_budget(
+            stream, estimate=estimate, request_id=request_id
         )
 
     def stream_responses(

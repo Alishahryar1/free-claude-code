@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
 )
@@ -224,6 +225,29 @@ class OpenAIChatProvider(BaseProvider):
             reasoning=reasoning,
             endpoint_context=endpoint_context,
             model_info=model_info,
+            continuation=continuation,
+        )
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        endpoint_context: EndpointContext | None = None,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        return self._chat.stream_gemini(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
             continuation=continuation,
         )
 

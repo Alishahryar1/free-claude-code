@@ -186,12 +186,23 @@ class StructuredReasoningStream:
         group, self._group = self._group, None
         if group is not None:
             yield from self._remaining_readable(output, group)
+            captured = (
+                completed
+                and bool(group.details)
+                and output.capture_reasoning_record(
+                    {"reasoning_details": group.details}
+                )
+            )
             for slot, detail in enumerate(group.details):
                 if detail.get("type") != "reasoning.text":
                     continue
                 key = ("detail", slot)
                 source = group.output_sources.get(key, slot + 1)
-                opaque = _reasoning_detail_opaque(detail) if completed else []
+                opaque = (
+                    _reasoning_detail_opaque(detail)
+                    if completed and not captured
+                    else []
+                )
                 if (
                     group.output_reasoning
                     and detail.get("text") == ""
@@ -208,7 +219,7 @@ class StructuredReasoningStream:
                     if detail.get("type") != "reasoning.text"
                     for value in _reasoning_detail_opaque(detail)
                 ]
-                if completed
+                if completed and not captured
                 else []
             )
 

@@ -13,6 +13,7 @@ from packaging.version import Version
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.core.stream_recovery import ContinuationSeed
@@ -181,6 +182,28 @@ class OpenAICodexProvider(BaseProvider):
             reasoning=reasoning,
             endpoint_context=self._endpoint(session_id=str(uuid.uuid4())),
             model_info=model_info,
+            continuation=continuation,
+        )
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        return self._responses.stream_gemini(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model or request.model,
+            reasoning=reasoning,
+            endpoint_context=self._endpoint(session_id=str(uuid.uuid4())),
             continuation=continuation,
         )
 

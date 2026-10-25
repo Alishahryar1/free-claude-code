@@ -24,6 +24,8 @@ from free_claude_code.core.anthropic.streaming import (
 from free_claude_code.core.async_iterators import try_close_async_iterator
 from free_claude_code.core.diagnostics import safe_exception_message
 from free_claude_code.core.failures import find_execution_failure
+from free_claude_code.core.gemini import gemini_error_payload
+from free_claude_code.core.gemini.response import gemini_frame
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     committed_response_failure_frame,
@@ -44,7 +46,7 @@ PreStartErrorResponse = Callable[[BaseException], Response]
 TerminalFrameEmitter = Callable[[str, str, BaseException], str]
 TerminalFailureObserver = Callable[[BaseException], None]
 ReleaseResponseResource = Callable[[], Awaitable[None]]
-WireApi = Literal["messages", "responses"]
+WireApi = Literal["messages", "responses", "gemini"]
 
 
 class EmptyStreamError(RuntimeError):
@@ -390,6 +392,41 @@ async def openai_responses_sse_streaming_response(
             exc,
             request_id=request_id,
         ),
+    )
+
+
+async def gemini_sse_streaming_response(
+    body: AsyncIterator[str],
+    *,
+    pre_start_error_response: PreStartErrorResponse,
+    request_id: str,
+) -> Response:
+    def terminal_frame(_first: str, _latest: str, error: BaseException) -> str:
+        failure = find_execution_failure(error)
+        return gemini_frame(
+            gemini_error_payload(
+                failure.status_code if failure else 500,
+                safe_exception_message(failure or error),
+            )
+        )
+
+    def terminal_observer(error: BaseException) -> None:
+        failure = find_execution_failure(error)
+        trace_terminal_execution_error(
+            wire_api="gemini",
+            request_id=request_id,
+            status_code=failure.status_code if failure else 500,
+            error_type=failure.kind.value if failure else "api_error",
+            error=error,
+        )
+
+    return await _first_chunk_streaming_response(
+        body,
+        wire_api="gemini",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        pre_start_error_response=pre_start_error_response,
+        terminal_frame=terminal_frame,
+        terminal_failure_observer=terminal_observer,
     )
 
 
