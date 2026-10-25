@@ -145,12 +145,23 @@ class ConfiguredChatModelRef:
 
 
 class ChatModelConfig(Protocol):
-    model: str
-    model_fable: str | None
-    model_opus: str | None
-    model_sonnet: str | None
-    model_haiku: str | None
-    model_fallbacks: tuple[ModelFallback, ...] | None
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def model_fable(self) -> str | None: ...
+
+    @property
+    def model_opus(self) -> str | None: ...
+
+    @property
+    def model_sonnet(self) -> str | None: ...
+
+    @property
+    def model_haiku(self) -> str | None: ...
+
+    @property
+    def model_fallbacks(self) -> tuple[ModelFallback, ...] | None: ...
 
 
 def split_provider_model_ref(model_ref: str) -> tuple[str, str]:

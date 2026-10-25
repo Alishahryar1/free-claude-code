@@ -897,10 +897,11 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
 
 
 def test_admin_models_include_configured_and_cached_canonical_slugs():
-    settings = Settings()
-    settings.model = "nvidia_nim/configured-model"
-    settings.model_opus = "open_router/anthropic/configured-opus"
-    settings.open_router_api_keys = normalize_api_keys("open-router-key")
+    settings = Settings(
+        model="nvidia_nim/configured-model",
+        model_opus="open_router/anthropic/configured-opus",
+        open_router_api_keys=normalize_api_keys("open-router-key"),
+    )
     app = create_test_app(settings)
     provider_manager_for_app(app).cache_model_infos(
         "open_router",
@@ -926,9 +927,10 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
 
 
 def test_admin_model_refresh_returns_the_updated_canonical_catalog():
-    settings = Settings()
-    settings.model = "deepseek/deepseek-chat"
-    settings.deepseek_api_keys = normalize_api_keys("deepseek-key")
+    settings = Settings(
+        model="deepseek/deepseek-chat",
+        deepseek_api_keys=normalize_api_keys("deepseek-key"),
+    )
     app = create_test_app(settings)
     runtime = app.state.services.admin
 
@@ -954,8 +956,7 @@ def test_admin_model_refresh_returns_the_updated_canonical_catalog():
 
 
 def test_admin_model_refresh_reports_partial_provider_failures():
-    settings = Settings()
-    settings.model = "deepseek/deepseek-chat"
+    settings = Settings(model="deepseek/deepseek-chat")
     app = create_test_app(settings)
     runtime = app.state.services.admin
     runtime.refresh_models = AsyncMock(

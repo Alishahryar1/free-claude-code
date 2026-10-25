@@ -10,7 +10,6 @@ import httpx2
 import openai
 import pytest
 
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
@@ -129,7 +128,6 @@ def _make_provider():
     )
     return NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
 
@@ -3162,6 +3160,7 @@ async def test_openai_compat_stream_ends_with_contract_when_tool_name_never_arri
 @pytest.mark.parametrize("collector", [False, True])
 async def test_tool_argument_mapping_survives_correction_then_stream_reopen(collector):
     request = _alias_request()
+    request.extra_body = {"chat_template": "custom_template"}
 
     def responder(bodies):
         if len(bodies) == 1:

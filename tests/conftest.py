@@ -99,12 +99,10 @@ def provider_config():
 
 @pytest.fixture
 def nim_provider(provider_config):
-    from free_claude_code.config.nim import NimSettings
     from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 
     return NvidiaNimProvider(
         provider_config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
 

@@ -7,7 +7,6 @@ import openai
 import pytest
 from httpx2 import Request, Response
 
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.providers.admission import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
@@ -47,7 +46,6 @@ async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -92,7 +90,6 @@ async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -134,7 +131,6 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -187,7 +183,6 @@ async def test_nim_stream_openai_5xx_exhausted_emits_user_message(
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()

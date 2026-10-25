@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -63,7 +62,6 @@ def _provider() -> NvidiaNimProvider:
             api_key="test_key",
             base_url="https://test.api.nvidia.com/v1",
         ),
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
 

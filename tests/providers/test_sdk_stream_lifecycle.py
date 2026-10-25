@@ -13,7 +13,6 @@ from free_claude_code.api.response_streams import (
     anthropic_sse_streaming_response,
     openai_responses_sse_streaming_response,
 )
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
@@ -142,9 +141,7 @@ async def _harness(kind, handler):
             elif kind == "mistral":
                 provider = MistralProvider(config, admission=admission)
             elif kind == "nim":
-                provider = NvidiaNimProvider(
-                    config, nim_settings=NimSettings(), admission=admission
-                )
+                provider = NvidiaNimProvider(config, admission=admission)
             else:
                 provider = profiled_provider("cerebras", config, admission=admission)
             yield provider, client, admission
