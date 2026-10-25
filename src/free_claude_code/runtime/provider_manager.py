@@ -44,6 +44,9 @@ ConnectedProviderIds = Callable[[], tuple[str, ...]]
 CommitConfig = Callable[[], Awaitable[None]]
 
 LOCAL_DISCOVERY_TIMEOUT_SECONDS = 5.0
+# A laptop boot often beats Wi-Fi/VPN; a failed remote discovery heals itself
+# (~14 min of tries) instead of leaving the catalog empty until the next restart.
+DISCOVERY_RETRY_DELAYS_SECONDS = (15.0, 30.0, 60.0, 120.0, 300.0, 300.0)
 
 
 class ModelCatalogPublisher(Protocol):
@@ -67,6 +70,7 @@ class _ProviderGeneration:
     catalog_tasks: dict[str, asyncio.Task[ProviderModelRefreshResult]] = field(
         default_factory=dict
     )
+    retry_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     initialized: set[str] = field(default_factory=set)
     initial_ids: tuple[str, ...] = ()
     catalog_started: bool = False
@@ -316,16 +320,20 @@ class ProviderRuntimeManager:
             raise
         except Exception as exc:
             message = _provider_query_failure_reason(exc)
-            log = (
-                logger.debug
-                if is_optional_local_failure(generation.settings, provider_id, message)
-                else logger.warning
+            optional = is_optional_local_failure(
+                generation.settings, provider_id, message
             )
+            log = logger.debug if optional else logger.warning
             log(
                 "Provider model discovery skipped: provider={} reason={}",
                 provider_id,
                 message,
             )
+            retry = generation.retry_tasks.get(provider_id)
+            if not optional and not self._closing and (retry is None or retry.done()):
+                generation.retry_tasks[provider_id] = asyncio.create_task(
+                    self._retry_discovery(generation, provider_id)
+                )
             result = ProviderModelRefreshResult(
                 failed_provider_ids=(provider_id,),
                 failure_messages={provider_id: message},
@@ -340,6 +348,17 @@ class ProviderRuntimeManager:
             result = ProviderModelRefreshResult(refreshed_provider_ids=(provider_id,))
         generation.initialized.add(provider_id)
         return result
+
+    async def _retry_discovery(
+        self, generation: _ProviderGeneration, provider_id: str
+    ) -> None:
+        for delay in DISCOVERY_RETRY_DELAYS_SECONDS:
+            await asyncio.sleep(delay)
+            if self._closing or generation is not self._current:
+                return
+            result = await self._catalog_task(generation, provider_id, refresh=True)
+            if not result.failed_provider_ids:
+                return
 
     def _start_pass(
         self, generation: _ProviderGeneration, *, refresh: bool = False
@@ -563,6 +582,9 @@ class ProviderRuntimeManager:
             generation.initial_ids = tuple(
                 p for p in generation.initial_ids if p != provider_id
             )
+            retry = generation.retry_tasks.pop(provider_id, None)
+            if retry is not None:
+                retry.cancel()
             task = generation.catalog_tasks.pop(provider_id, None)
             if task is not None and not task.done():
                 task.cancel()
@@ -706,11 +728,14 @@ class ProviderRuntimeManager:
         for generation in (self._current, *self._retired.values()):
             if generation.refresh_task is not None:
                 generation.refresh_task.cancel()
-            for task in generation.catalog_tasks.values():
+            for task in (
+                *generation.catalog_tasks.values(),
+                *generation.retry_tasks.values(),
+            ):
                 task.cancel()
 
     async def _cancel_generation_work(self, generation: _ProviderGeneration) -> None:
-        tasks = [*generation.catalog_tasks.values()]
+        tasks = [*generation.catalog_tasks.values(), *generation.retry_tasks.values()]
         if generation.refresh_task is not None:
             tasks.append(generation.refresh_task)
         for task in tasks:
