@@ -8,8 +8,12 @@
 name: CI
 
 env:
-  CI_PYTEST_SHARDS: "2"
-  CI_PLAYWRIGHT_SHARDS: "3"
+  CI_PYTEST_LINUX_SHARDS: "3"
+  CI_PYTEST_WINDOWS_SHARDS: "3"
+  CI_PYTEST_MACOS_SHARDS: "2"
+  CI_PLAYWRIGHT_LINUX_SHARDS: "3"
+  CI_PLAYWRIGHT_WINDOWS_SHARDS: "3"
+  CI_PLAYWRIGHT_MACOS_SHARDS: "3"
   UV_MALWARE_CHECK: "1"
   UV_PREVIEW_FEATURES: "malware-check"
 
@@ -90,8 +94,12 @@ jobs:
         id: matrix
         run: |
           python scripts/ci_shards.py \
-            --pytest-shards "$CI_PYTEST_SHARDS" \
-            --playwright-shards "$CI_PLAYWRIGHT_SHARDS" >> "$GITHUB_OUTPUT"
+            --pytest-linux-shards "$CI_PYTEST_LINUX_SHARDS" \
+            --pytest-windows-shards "$CI_PYTEST_WINDOWS_SHARDS" \
+            --pytest-macos-shards "$CI_PYTEST_MACOS_SHARDS" \
+            --playwright-linux-shards "$CI_PLAYWRIGHT_LINUX_SHARDS" \
+            --playwright-windows-shards "$CI_PLAYWRIGHT_WINDOWS_SHARDS" \
+            --playwright-macos-shards "$CI_PLAYWRIGHT_MACOS_SHARDS" >> "$GITHUB_OUTPUT"
 
   pytest-shards:
     name: pytest (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})

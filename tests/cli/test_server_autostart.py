@@ -619,21 +619,28 @@ def test_two_launchers_share_one_start_attempt(monkeypatch) -> None:
     assert not child.terminated
 
 
-def test_startup_budget_starts_after_the_lock_is_acquired(monkeypatch, spawned) -> None:
-    monkeypatch.setattr(common, "SERVER_STARTUP_TIMEOUT_SECONDS", 0.05)
-    monkeypatch.setattr(common, "SERVER_STARTUP_LOCK_TIMEOUT_SECONDS", 5.0)
-    holder = InterprocessFileLock(server_startup_lock_path())
-    assert holder.acquire()
-    # The previous launcher gave up without a server, well after this
-    # launcher's own startup budget would have expired.
-    releaser = threading.Timer(0.2, holder.release)
-    releaser.start()
-    try:
-        _responses(monkeypatch, _refused(), _refused(), _refused(), _healthy())
-        assert common.ensure_proxy_available(URL, env={}) is None
-    finally:
-        releaser.cancel()
-        holder.release()
+def test_startup_budget_starts_after_the_lock_is_acquired(
+    monkeypatch, spawned, clock
+) -> None:
+    lock = MagicMock(spec=InterprocessFileLock)
+
+    def acquire(**_kwargs):
+        # Waiting for the previous launcher exceeds our one-second startup budget.
+        clock.now += 2.0
+        return True
+
+    lock.acquire.side_effect = acquire
+
+    def lock_for_path(path):
+        return (
+            lock if path == server_startup_lock_path() else InterprocessFileLock(path)
+        )
+
+    monkeypatch.setattr(common, "InterprocessFileLock", lock_for_path)
+    _responses(monkeypatch, _refused(), _refused(), _refused(), _healthy())
+    assert common.ensure_proxy_available(URL, env={}) is None
+    assert clock.now == 2.25
+    lock.release.assert_called_once_with()
     assert len(spawned) == 1
 
 
