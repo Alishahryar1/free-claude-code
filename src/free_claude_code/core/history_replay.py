@@ -141,8 +141,13 @@ def _validate_record(payload: JsonObject, *, associated: bool = False) -> Replay
             raise HistoryReplayError(
                 "Messages replay requires signed thinking or redacted data."
             )
-    if protocol == "chat" and not isinstance(native.get("reasoning_details"), list):
-        raise HistoryReplayError("Chat replay requires structured reasoning details.")
+    if protocol == "chat":
+        fields = {"reasoning_details": list, "reasoning_content": str, "reasoning": str}
+        if not any(key in native for key in fields) or any(
+            key in native and not isinstance(native[key], kind)
+            for key, kind in fields.items()
+        ):
+            raise HistoryReplayError("Chat replay requires native reasoning fields.")
     record = ReplayRecord(
         ReplayOrigin(
             str(origin["provider"]),
@@ -298,8 +303,13 @@ def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
     # The native string and structured details can be alternate copies. Preserve
     # the typed version in that case, especially when the text is a summary.
     represented = {text for text, _ in parts}
-    represented.add("".join(text for text, _ in parts))
-    represented.add("\n\n".join(text for text, _ in parts))
+    for summary in (None, False, True):
+        texts = [
+            text
+            for text, is_summary in parts
+            if summary is None or summary == is_summary
+        ]
+        represented.update(("".join(texts), "\n\n".join(texts)))
     native_parts: list[tuple[str, bool]] = []
     for key in ("reasoning_content", "reasoning"):
         text = item.get(key)

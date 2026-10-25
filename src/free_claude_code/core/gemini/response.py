@@ -3,6 +3,7 @@
 import json
 from collections.abc import Mapping
 from copy import deepcopy
+from hashlib import sha256
 from typing import Any
 
 from ..failures import ExecutionFailure, FailureKind
@@ -59,6 +60,8 @@ class GeminiOutput:
         self.records: list[ReplayRecord] = []
         self.calls: list[CallReplay] = []
         self.completed = False
+        self._thought_digest = sha256()
+        self._has_thoughts = False
 
     def payload(self, candidate: JsonObject) -> JsonObject:
         return {
@@ -72,6 +75,9 @@ class GeminiOutput:
             part.get("thought") is True and not self.include_thoughts
         ):
             return []
+        if part.get("thought") is True and isinstance(text := part.get("text"), str):
+            self._thought_digest.update(text.encode("utf-8"))
+            self._has_thoughts = True
         return [
             gemini_frame(self.payload({"content": {"role": "model", "parts": [part]}}))
         ]
@@ -81,9 +87,7 @@ class GeminiOutput:
             return []
         candidate: JsonObject = {"finishReason": reason}
         if self.records or self.calls:
-            bundle = ReplayBundle(
-                self.response_id, tuple(self.records), tuple(self.calls)
-            )
+            bundle = self._bundle()
             candidate["content"] = {
                 "role": "model",
                 "parts": [{"thoughtSignature": encode_bundle(bundle)}],
@@ -98,8 +102,16 @@ class GeminiOutput:
         """Release completed source metadata before the public owner's tool handoff."""
         if not (self.records or self.calls) or self.completed:
             return []
-        bundle = ReplayBundle(self.response_id, tuple(self.records), tuple(self.calls))
+        bundle = self._bundle()
         return self.part({"thoughtSignature": encode_bundle(bundle)})
+
+    def _bundle(self) -> ReplayBundle:
+        return ReplayBundle(
+            self.response_id,
+            tuple(self.records),
+            tuple(self.calls),
+            self._thought_digest.hexdigest() if self._has_thoughts else None,
+        )
 
     def failure(self, status_code: int, message: str) -> list[str]:
         if self.completed:

@@ -19,6 +19,19 @@ def body():
     return {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("model", ["model:free", "model%3Afree", "model:region:free"])
+def test_routed_model_preserves_colons(streaming, model):
+    provider, calls = fixture_provider()
+    app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
+    action = "streamGenerateContent?alt=sse" if streaming else "generateContent"
+    with TestClient(app) as client:
+        response = client.post(f"/v1beta/models/groq/{model}:{action}", json=body())
+    assert response.status_code == 200, response.text
+    assert calls[0][0].model == model.replace("%3A", ":")
+    assert calls[0][1]["response_model"] == "groq/" + model.replace("%3A", ":")
+
+
 def fixture_provider():
     provider = Mock()
     provider.cleanup = AsyncMock()

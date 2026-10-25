@@ -138,7 +138,6 @@ def _make_tool_assembler(
     concrete_request = request or _make_request()
     return OpenAIToolCallAssembler(
         reserved_tool_ids=_reserved_anthropic_tool_ids(concrete_request),
-        record_extra_content=provider._behavior.record_tool_call_extra_content,
     )
 
 

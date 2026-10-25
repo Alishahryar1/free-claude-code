@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from free_claude_code.core.history_replay import readable_reasoning
+from free_claude_code.core.json_types import JsonObject
 
 from .stream_output import ChatStreamOutput
 
@@ -15,6 +16,7 @@ class _ReasoningGroup:
     details: list[dict[str, Any]] = field(default_factory=list)
     slots: dict[tuple[object, object], int] = field(default_factory=dict)
     native_parts: list[str] = field(default_factory=list)
+    native_fields: dict[str, list[str]] = field(default_factory=dict)
     visible_parts: dict[tuple[str, int], str] = field(default_factory=dict)
     output_sources: dict[tuple[str, int], int] = field(default_factory=dict)
     output_reasoning: bool = True
@@ -26,8 +28,9 @@ class _ReasoningGroup:
 class StructuredReasoningStream:
     """Collect replay groups independently of their visible wire blocks."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, structured_details: bool = True) -> None:
         self._group: _ReasoningGroup | None = None
+        self._structured_details = structured_details
 
     @property
     def active(self) -> bool:
@@ -38,6 +41,8 @@ class StructuredReasoningStream:
             yield from self.finish(output)
 
     def before_content(self, output: ChatStreamOutput) -> Iterator[str]:
+        if not self._structured_details:
+            return self.finish(output)
         if self._group is not None and not self._group.after_content:
             self._group.after_content = True
         return iter(())
@@ -48,9 +53,10 @@ class StructuredReasoningStream:
         output: ChatStreamOutput,
         *,
         native_reasoning: str | None,
+        native_field: str = "reasoning_content",
         output_reasoning: bool = True,
     ) -> Iterator[str]:
-        details = _reasoning_details(delta)
+        details = _reasoning_details(delta) if self._structured_details else ()
         if (
             native_reasoning
             and self._group is not None
@@ -85,6 +91,14 @@ class StructuredReasoningStream:
         if native_reasoning is not None:
             # This may be an aggregate alias of signed details arriving later.
             group.native_parts.append(native_reasoning)
+            group.native_fields.setdefault(native_field, []).append(native_reasoning)
+            if not self._structured_details and output_reasoning and native_reasoning:
+                yield from output.ensure_reasoning_block()
+                yield output.emit_reasoning_delta(native_reasoning)
+                key = ("native", 0)
+                group.visible_parts[key] = (
+                    group.visible_parts.get(key, "") + native_reasoning
+                )
         visible_parts: list[tuple[tuple[str, int], str, bool]] = []
         for detail in details:
             if isinstance(detail, Mapping):
@@ -186,12 +200,13 @@ class StructuredReasoningStream:
         group, self._group = self._group, None
         if group is not None:
             yield from self._remaining_readable(output, group)
+            native: JsonObject = {
+                key: "".join(parts) for key, parts in group.native_fields.items()
+            }
+            if group.details:
+                native["reasoning_details"] = group.details
             captured = (
-                completed
-                and bool(group.details)
-                and output.capture_reasoning_record(
-                    {"reasoning_details": group.details}
-                )
+                completed and bool(native) and output.capture_reasoning_record(native)
             )
             for slot, detail in enumerate(group.details):
                 if detail.get("type") != "reasoning.text":

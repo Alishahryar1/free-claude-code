@@ -34,7 +34,7 @@ from free_claude_code.providers.model_listing import (
 from .behavior import OpenAIChatBehavior
 from .client import OpenAIAsyncCredentialProvider, create_chat_client
 from .profiles import OpenAIChatProfile
-from .transport import OpenAIChatTransport
+from .transport import OpenAIChatTransport, PreparedBodyValidator
 
 
 class OpenAIChatProvider(BaseProvider):
@@ -51,6 +51,7 @@ class OpenAIChatProvider(BaseProvider):
         api_key_provider: OpenAIAsyncCredentialProvider | None = None,
         client: AsyncOpenAI | None = None,
         endpoint_transport: httpx2.AsyncBaseTransport | None = None,
+        validate_prepared_body: PreparedBodyValidator | None = None,
     ) -> None:
         super().__init__(config)
         if behavior is None:
@@ -81,6 +82,8 @@ class OpenAIChatProvider(BaseProvider):
             log_raw_sse_events=config.log_raw_sse_events,
             log_api_error_tracebacks=config.log_api_error_tracebacks,
             endpoint_transport=endpoint_transport,
+            api_key_provider=api_key_provider,
+            validate_prepared_body=validate_prepared_body,
         )
 
     async def cleanup(self) -> None:

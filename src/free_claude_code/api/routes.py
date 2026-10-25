@@ -78,15 +78,9 @@ async def create_gemini_response(
     model, separator, action = resource.rpartition(":")
     if not separator or action not in {"generateContent", "streamGenerateContent"}:
         raise HTTPException(status_code=404, detail="Unknown Gemini generation method")
-    if (
-        not model.strip()
-        or any(
-            not segment
-            or segment in {".", ".."}
-            or any(char.isspace() for char in segment)
-            for segment in model.split("/")
-        )
-        or ":" in model
+    if not model.strip() or any(
+        not segment or segment in {".", ".."} or any(char.isspace() for char in segment)
+        for segment in model.split("/")
     ):
         raise HTTPException(status_code=400, detail="Invalid model resource")
     streaming = action == "streamGenerateContent"

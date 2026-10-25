@@ -138,6 +138,7 @@ from .usage import (
 )
 
 OpenAIAsyncCredentialProvider = Callable[[], Awaitable[str]]
+PreparedBodyValidator = Callable[[Mapping[str, Any]], Awaitable[None]]
 _ExtraReasoningEvents = Callable[[Any, ChatStreamOutput], Iterator[str]]
 _ChatOutputFactory = Callable[[], ChatStreamOutput]
 
@@ -214,13 +215,10 @@ class _OpenAIChatStreamAssembler:
         self._tool_calls = tool_calls
         self._extra_reasoning_events = extra_reasoning_events
         self._think_parser = ThinkTagParser()
-        self._structured_reasoning = (
-            StructuredReasoningStream()
-            if profile.structured_reasoning_details
-            else None
+        self._structured_reasoning = StructuredReasoningStream(
+            structured_details=profile.structured_reasoning_details
         )
-        if self._structured_reasoning is not None:
-            self._output.reasoning_replay = self._structured_reasoning
+        self._output.reasoning_replay = self._structured_reasoning
         self._finish_reason: Any = None
         self._raw_stop_seen = False
         self._usage_info: Any = None
@@ -319,17 +317,14 @@ class _OpenAIChatStreamAssembler:
                 self._finish_reason,
             )
 
-        reasoning = self._profile.reasoning_delta(delta)
-        if self._structured_reasoning is not None:
-            yield from self._structured_reasoning.events(
-                delta,
-                self._output,
-                native_reasoning=reasoning if self._output_reasoning else None,
-                output_reasoning=self._output_reasoning,
-            )
-        elif self._output_reasoning and reasoning:
-            yield from self._output.ensure_reasoning_block()
-            yield self._output.emit_reasoning_delta(reasoning)
+        field, reasoning = self._profile.native_reasoning_delta(delta)
+        yield from self._structured_reasoning.events(
+            delta,
+            self._output,
+            native_reasoning=reasoning if self._output_reasoning else None,
+            native_field=field,
+            output_reasoning=self._output_reasoning,
+        )
 
         yield from self._extra_reasoning_events(delta, self._output)
 
@@ -469,6 +464,8 @@ class OpenAIChatTransport:
         log_raw_sse_events: bool,
         log_api_error_tracebacks: bool,
         endpoint_transport: httpx2.AsyncBaseTransport | None = None,
+        api_key_provider: OpenAIAsyncCredentialProvider | None = None,
+        validate_prepared_body: PreparedBodyValidator | None = None,
     ) -> None:
         self._client = client
         self._admission = admission
@@ -479,6 +476,8 @@ class OpenAIChatTransport:
         self._log_raw_sse_events = log_raw_sse_events
         self._log_api_error_tracebacks = log_api_error_tracebacks
         self._endpoint_transport = endpoint_transport
+        self._api_key_provider = api_key_provider
+        self._validate_prepared_body = validate_prepared_body
         self._model_output_caps: dict[str, int] = {}
 
     def _log_stream_transport_error(
@@ -607,6 +606,7 @@ class OpenAIChatTransport:
             stream: Any | None = None
             retain_attempt = False
             create_body = body
+            validating = False
             try:
                 create_body = self._behavior.prepare_create_body(body)
                 client = self._client
@@ -614,6 +614,12 @@ class OpenAIChatTransport:
                     assert request_client is not None
                     client = request_client.for_endpoint(
                         self._client, await endpoint.resolve()
+                    )
+                elif self._api_key_provider is not None:
+                    # A borrowed view pins the same credential for provenance and
+                    # inference, without owning or closing the provider's HTTP pool.
+                    client = self._client.with_options(
+                        api_key=await self._api_key_provider()
                     )
                 if extra_headers or endpoint is not None:
                     create_body = create_body.copy()
@@ -650,6 +656,11 @@ class OpenAIChatTransport:
                         dict[str, Any],
                         apply_call_replay(create_body, origin, call_replay),
                     )
+                create_body = self._behavior.prepare_history_body(create_body, origin)
+                if self._validate_prepared_body is not None:
+                    validating = True
+                    await self._validate_prepared_body(create_body)
+                    validating = False
                 stream = OpenAIStreamAdapter(
                     await client.chat.completions.create(
                         **create_body,
@@ -663,6 +674,10 @@ class OpenAIChatTransport:
             except asyncio.CancelledError:
                 raise
             except Exception as error:
+                if validating:
+                    # No upstream response occurred. Abandon the permit without
+                    # teaching correction or recovery state about a rejection.
+                    raise
                 retry_body = await request_recovery.retry_request(
                     error,
                     provider_authentication_status(error),
@@ -1808,8 +1823,18 @@ class _OpenAIChatStreamRunner:
                 output_reasoning=output_reasoning,
             )
 
+        output = self._output_factory()
+
+        def record_extra_content(
+            tool_call_id: str, extra_content: dict[str, Any]
+        ) -> None:
+            assert output.replay_origin is not None
+            self._transport._behavior.record_tool_call_extra_content(
+                tool_call_id, extra_content, origin=output.replay_origin
+            )
+
         return _OpenAIChatStreamAssembler(
-            output=self._output_factory(),
+            output=output,
             profile=self._transport._profile,
             provider_name=self._transport._provider_name,
             output_reasoning=output_reasoning,
@@ -1817,7 +1842,7 @@ class _OpenAIChatStreamRunner:
             tool_schemas=self._tool_schemas,
             tool_calls=OpenAIToolCallAssembler(
                 reserved_tool_ids=self._reserved_tool_ids,
-                record_extra_content=self._transport._behavior.record_tool_call_extra_content,
+                record_extra_content=record_extra_content,
             ),
             extra_reasoning_events=extra_reasoning_events,
         )

@@ -9,6 +9,11 @@ from loguru import logger
 _DISALLOWED_SPECIAL: tuple[str, ...] = ()
 
 
+def estimate_image_tokens(base64_length: int | None = None) -> int:
+    """Shared image-size heuristic, with a flat cost for unknown/empty data."""
+    return max(85, base64_length // 3000) if base64_length else 765
+
+
 class _TokenEncoder(Protocol):
     def encode(
         self, text: str, *, disallowed_special: tuple[str, ...]

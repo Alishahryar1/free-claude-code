@@ -3,6 +3,7 @@
 import json
 from copy import deepcopy
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Literal, cast
 
 from ..anthropic.native import NativeMessagesOptions
@@ -116,6 +117,13 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
             else "user"
         )
         records = [record for bundle in turn.replay for record in bundle.records]
+        suppress_echo = False
+        if len(turn.replay) == 1 and (digest := turn.replay[0].thought_echo_sha256):
+            echoed = sha256()
+            for part in content.parts:
+                if part.thought and part.text is not None:
+                    echoed.update(part.text.encode("utf-8"))
+            suppress_echo = echoed.hexdigest() == digest.lower()
         call_replay.extend(record for bundle in turn.replay for record in bundle.calls)
         if records:
             if role != "assistant":
@@ -218,8 +226,8 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
                     )
                 _append(items, role, _image(part.inline_data, destination))
             elif part.text is not None:
-                if part.thought and records:
-                    continue  # The record contains the signed/native readable copy.
+                if part.thought and suppress_echo:
+                    continue
                 kind = "output_text" if role == "assistant" else "input_text"
                 _append(
                     items,

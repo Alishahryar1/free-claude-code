@@ -11,44 +11,29 @@ OpenAI provider layers its own native tool-call assembly and think-tag parsing o
 """
 
 import asyncio
-import sys
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import httpx2
 from loguru import logger
 from openai import Omit
 
-from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.core.anthropic import ReasoningReplayMode, get_token_count
-from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.gemini import GeminiRequest
-from free_claude_code.core.gemini.tokens import estimate_gemini_input_tokens
-from free_claude_code.core.openai_responses import (
-    OpenAIResponsesRequest,
-    estimate_responses_input_tokens,
-)
-from free_claude_code.core.reasoning import (
-    DEFAULT_REASONING_POLICY,
-    ReasoningEffort,
-    ReasoningPolicy,
-)
-from free_claude_code.core.stream_recovery import ContinuationSeed
-from free_claude_code.core.token_estimation import estimate_text_tokens
+from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.reasoning import ReasoningEffort
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.continuation import ContinuationRequest
-from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
     context_window_exceeded_provider_failure,
 )
-from free_claude_code.providers.http import close_provider_stream
 from free_claude_code.providers.openai_chat import (
     NamedEffortReasoning,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
 )
+
+from .tokens import estimate_prepared_input_tokens
 
 _PROFILE = OpenAIChatProfile(
     OpenAIChatRequestPolicy(
@@ -88,143 +73,12 @@ class LMStudioProvider(OpenAIChatProvider):
             config,
             profile=_PROFILE,
             admission=admission,
+            validate_prepared_body=self._validate_context_budget,
         )
         self._loaded_context_cache: tuple[float, int | None] | None = None
         self._loaded_context_lock = asyncio.Lock()
 
-    def stream_messages(
-        self,
-        request: MessagesRequest,
-        input_tokens: int = 0,
-        *,
-        request_id: str | None = None,
-        response_model: str | None = None,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        model_info: ProviderModelInfo | None = None,
-        endpoint_context: EndpointContext | None = None,
-        request_headers: Mapping[str, str] | None = None,
-        continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
-        stream = super().stream_messages(
-            request,
-            input_tokens=input_tokens,
-            request_id=request_id,
-            response_model=response_model,
-            reasoning=reasoning,
-            model_info=model_info,
-            endpoint_context=endpoint_context,
-            request_headers=request_headers,
-            continuation=continuation,
-        )
-        estimate_request = request
-        if continuation is not None:
-            estimate_request = MessagesRequest.model_validate(
-                ContinuationRequest("messages").build(
-                    request.model_dump(mode="json"),
-                    continuation.text,
-                    continuation.thinking,
-                )
-            )
-        return self._stream_with_context_budget(
-            stream,
-            estimate=get_token_count(
-                estimate_request.messages,
-                estimate_request.system,
-                estimate_request.tools,
-            ),
-            request_id=request_id,
-        )
-
-    def stream_gemini(
-        self,
-        request: GeminiRequest,
-        input_tokens: int = 0,
-        *,
-        request_id: str | None = None,
-        response_model: str | None = None,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        endpoint_context: EndpointContext | None = None,
-        request_headers: Mapping[str, str] | None = None,
-        model_info: ProviderModelInfo | None = None,
-        continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
-        stream = super().stream_gemini(
-            request,
-            input_tokens=input_tokens,
-            request_id=request_id,
-            response_model=response_model,
-            reasoning=reasoning,
-            endpoint_context=endpoint_context,
-            request_headers=request_headers,
-            model_info=model_info,
-            continuation=continuation,
-        )
-        estimate = estimate_gemini_input_tokens(request)
-        if continuation is not None:
-            estimate += estimate_text_tokens(continuation.text + continuation.thinking)
-        return self._stream_with_context_budget(
-            stream, estimate=estimate, request_id=request_id
-        )
-
-    def stream_responses(
-        self,
-        request: OpenAIResponsesRequest,
-        input_tokens: int = 0,
-        *,
-        request_id: str | None = None,
-        response_model: str | None = None,
-        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-        endpoint_context: EndpointContext | None = None,
-        request_headers: Mapping[str, str] | None = None,
-        model_info: ProviderModelInfo | None = None,
-        continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
-        stream = super().stream_responses(
-            request,
-            input_tokens=input_tokens,
-            request_id=request_id,
-            response_model=response_model,
-            reasoning=reasoning,
-            endpoint_context=endpoint_context,
-            request_headers=request_headers,
-            model_info=model_info,
-            continuation=continuation,
-        )
-        estimate_request = request
-        if continuation is not None:
-            estimate_request = OpenAIResponsesRequest.model_validate(
-                ContinuationRequest("responses").build(
-                    request.model_dump(mode="json"),
-                    continuation.text,
-                    continuation.thinking,
-                )
-            )
-        return self._stream_with_context_budget(
-            stream,
-            estimate=estimate_responses_input_tokens(estimate_request),
-            request_id=request_id,
-        )
-
-    async def _stream_with_context_budget(
-        self,
-        stream: AsyncIterator[str],
-        *,
-        estimate: int,
-        request_id: str | None,
-    ) -> AsyncIterator[str]:
-        try:
-            await self._validate_context_budget(estimate)
-            async for event in stream:
-                yield event
-        finally:
-            await close_provider_stream(
-                stream,
-                active_error=sys.exception(),
-                provider_name=self._provider_name,
-                request_id=request_id,
-            )
-
-    async def _validate_context_budget(self, estimate: int) -> None:
+    async def _validate_context_budget(self, body: Mapping[str, Any]) -> None:
         loaded_context = await self._loaded_context_length()
         if loaded_context is None:
             return
@@ -233,6 +87,7 @@ class LMStudioProvider(OpenAIChatProvider):
         # context is already past where client-side compaction should have
         # fired, and letting it through risks a silent LM Studio truncation.
         budget = int(loaded_context * 0.9)
+        estimate = estimate_prepared_input_tokens(body, budget=budget)
         if estimate > budget:
             raise context_window_exceeded_provider_failure(
                 f"Estimated provider input ({estimate} tokens) exceeds the safe "

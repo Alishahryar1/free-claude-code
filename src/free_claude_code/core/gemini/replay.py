@@ -3,6 +3,7 @@
 import base64
 import binascii
 import json
+import re
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -33,6 +34,7 @@ class ReplayBundle:
     response_id: str
     records: tuple[ReplayRecord, ...] = ()
     calls: tuple[CallReplay, ...] = ()
+    thought_echo_sha256: str | None = None
 
 
 def encode_bundle(bundle: ReplayBundle) -> str:
@@ -41,6 +43,8 @@ def encode_bundle(bundle: ReplayBundle) -> str:
         "records": [encode_replay(record) for record in bundle.records],
         "calls": [asdict(call) for call in bundle.calls],
     }
+    if bundle.thought_echo_sha256 is not None:
+        payload["thought_echo_sha256"] = bundle.thought_echo_sha256
     raw = json.dumps(
         payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
     )
@@ -55,12 +59,18 @@ def decode_bundle(signature: str) -> ReplayBundle | None:
         if not raw.startswith(_PREFIX):
             return None
         value = json.loads(raw[len(_PREFIX) :])
-        if not isinstance(value, dict) or set(value) != {
+        if not isinstance(value, dict) or set(value) - {"thought_echo_sha256"} != {
             "response_id",
             "records",
             "calls",
         }:
             raise ValueError("Invalid bundle fields")
+        digest = value.get("thought_echo_sha256")
+        if "thought_echo_sha256" in value and (
+            not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-fA-F]{64}", digest) is None
+        ):
+            raise ValueError("Invalid thought echo digest")
         if not isinstance(value["response_id"], str) or not value["response_id"]:
             raise ValueError("Missing response identity")
         if not isinstance(value["records"], list) or not isinstance(
@@ -73,7 +83,7 @@ def decode_bundle(signature: str) -> ReplayBundle | None:
         calls = tuple(_call_record(item) for item in value["calls"])
         if len({call.call_id for call in calls}) != len(calls):
             raise ValueError("Duplicate call metadata")
-        return ReplayBundle(value["response_id"], records, calls)
+        return ReplayBundle(value["response_id"], records, calls, digest)
     except (
         ValueError,
         TypeError,
