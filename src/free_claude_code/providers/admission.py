@@ -7,7 +7,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import Context, ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -229,17 +229,20 @@ class ProviderExecution:
         """Mark the complete logical provider operation successful."""
         if self._state is ProviderExecutionState.ACTIVE:
             self._state = ProviderExecutionState.SUCCEEDED
+            self._controller._execution_terminated(self)
 
     def fail(self, error: Exception) -> None:
         """Mark the complete logical provider operation failed."""
         if self._state is ProviderExecutionState.ACTIVE:
             self._last_failure = error
             self._state = ProviderExecutionState.FAILED
+            self._controller._execution_terminated(self)
 
     def abandon(self) -> None:
         """Mark an unfinished logical provider operation abandoned."""
         if self._state is ProviderExecutionState.ACTIVE:
             self._state = ProviderExecutionState.ABANDONED
+            self._controller._execution_terminated(self)
 
     def _claim_attempt(
         self,
@@ -261,6 +264,8 @@ class ProviderExecution:
     def _close_attempt(self, claim: _AttemptClaim) -> None:
         if self._active_claim == claim:
             self._active_claim = None
+            if self._state is not ProviderExecutionState.ACTIVE:
+                self._controller._execution_terminated(self)
 
     def _record_failure(self, error: Exception) -> None:
         if self._state is ProviderExecutionState.ACTIVE:
@@ -484,7 +489,10 @@ class ProviderAdmissionController:
         self._max_delay = max_delay
         self._jitter = jitter
         self._capacity = capacity or ProviderCapacityLimiter(limits)
-        self._condition = asyncio.Condition()
+        self._changed = asyncio.Event()
+        self._expiry_timer: asyncio.TimerHandle | None = None
+        self._expiry_deadline: float | None = None
+        self._closed = False
         self._episodes: dict[str | None, _RecoveryEpisode] = {}
         self._next_generation = 1
         logger.info(
@@ -565,75 +573,65 @@ class ProviderAdmissionController:
 
     async def _wait_for_gate(self, execution: ProviderExecution) -> _GatePermit:
         while True:
+            self._maintain_idle_episodes()
+            if self._closed:
+                raise RuntimeError("provider admission controller is closed")
             if (terminal_error := execution._terminal_failure()) is not None:
                 raise ProviderRecoveryExhausted(terminal_error)
-            sleep_delay: float | None = None
-            claimed_generation: int | None = None
-            async with self._condition:
-                episode = self._episodes.get(execution.model)
-                if episode is None:
-                    return _GatePermit(generation=None, probe=False)
+            if not execution.can_attempt:
+                raise RuntimeError("provider execution is terminal or exhausted")
+            changed = self._changed
+            episode = self._episodes.get(execution.model)
+            if episode is None:
+                return _GatePermit(generation=None, probe=False)
+            if episode.terminal_until is not None:
+                raise ProviderRecoveryExhausted(episode.last_error)
 
-                now = time.monotonic()
-                if episode.terminal_until is not None:
-                    if now < episode.terminal_until:
-                        raise ProviderRecoveryExhausted(episode.last_error)
-                    episode = self._start_recovery_episode(
-                        model=execution.model,
-                        leader=execution,
-                        ready_at=now,
-                        last_error=episode.last_error,
-                    )
-
-                if episode.leader is None:
-                    episode.leader = execution
-                    episode.waiters.discard(execution)
-                if episode.leader is execution:
-                    if episode.probe_active:
-                        await self._condition.wait()
-                        continue
-                    sleep_delay = max(0.0, episode.ready_at - now)
-                    claimed_generation = episode.generation
-                    if sleep_delay == 0:
-                        episode.probe_active = True
-                        return self._probe_permit(execution, episode)
-                else:
-                    episode.waiters.add(execution)
-                    try:
-                        await self._condition.wait()
-                    except asyncio.CancelledError:
-                        current = self._episodes.get(execution.model)
-                        if (
-                            current is not None
-                            and current.generation == episode.generation
-                        ):
-                            current.waiters.discard(execution)
-                        raise
-                    continue
-
-            if sleep_delay is None or claimed_generation is None:
-                continue
-            try:
-                if sleep_delay > 0:
+            if episode.leader is None:
+                episode.leader = execution
+                episode.waiters.discard(execution)
+                self._maintain_idle_episodes()
+            if episode.leader is execution and not episode.probe_active:
+                delay = max(0.0, episode.ready_at - time.monotonic())
+                if delay > 0:
                     _log_recovery(
                         "Provider {} recovery active, waiting {:.1f}s for one probe",
                         self._provider_name,
-                        sleep_delay,
+                        delay,
                     )
-                    await asyncio.sleep(sleep_delay)
-                async with self._condition:
-                    episode = self._episodes.get(execution.model)
+                try:
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                except asyncio.CancelledError:
                     if (
-                        episode is not None
-                        and episode.generation == claimed_generation
-                        and episode.terminal_until is None
+                        self._episodes.get(execution.model) is episode
                         and episode.leader is execution
                         and not episode.probe_active
                     ):
-                        episode.probe_active = True
-                        return self._probe_permit(execution, episode)
+                        episode.leader = None
+                        self._notify_recovery_waiters()
+                    raise
+                # Backoff yields. Revalidate ownership and the execution before
+                # reserving a probe, including termination during the sleep.
+                if (
+                    self._episodes.get(execution.model) is episode
+                    and episode.leader is execution
+                    and episode.terminal_until is None
+                    and not episode.probe_active
+                    and execution.can_attempt
+                ):
+                    episode.probe_active = True
+                    return self._probe_permit(execution, episode)
+                continue
+
+            if episode.leader is not execution:
+                episode.waiters.add(execution)
+            try:
+                await changed.wait()
             except asyncio.CancelledError:
-                await self._abandon_waiting_leader(execution, claimed_generation)
+                if self._episodes.get(execution.model) is episode:
+                    episode.waiters.discard(execution)
+                    self._notify_recovery_waiters()
                 raise
 
     def _probe_permit(
@@ -659,6 +657,8 @@ class ProviderAdmissionController:
         execution: ProviderExecution,
         permit: _GatePermit,
     ) -> bool:
+        if self._closed or not execution.can_attempt:
+            return False
         episode = self._episodes.get(execution.model)
         if not permit.probe:
             return episode is None
@@ -677,12 +677,11 @@ class ProviderAdmissionController:
     ) -> None:
         if not permit.probe:
             return
-        async with self._condition:
-            episode = self._matching_probe(execution, permit)
-            if episode is None:
-                return
-            del self._episodes[execution.model]
-            self._notify_recovery_waiters()
+        episode = self._matching_probe(execution, permit)
+        if episode is None:
+            return
+        del self._episodes[execution.model]
+        self._notify_recovery_waiters()
         trace_event(
             stage="provider",
             event="provider.recovery.closed",
@@ -702,13 +701,12 @@ class ProviderAdmissionController:
     ) -> None:
         if not permit.probe:
             return
-        async with self._condition:
-            episode = self._matching_probe(execution, permit)
-            if episode is None:
-                return
-            episode.probe_active = False
-            episode.ready_at = time.monotonic()
-            self._notify_recovery_waiters()
+        episode = self._matching_probe(execution, permit)
+        if episode is None:
+            return
+        episode.probe_active = False
+        episode.ready_at = time.monotonic()
+        self._notify_recovery_waiters()
 
     async def _attempt_rejected(
         self,
@@ -718,12 +716,11 @@ class ProviderAdmissionController:
         """Close a probe episode when upstream responds with a final rejection."""
         if not permit.probe:
             return
-        async with self._condition:
-            episode = self._matching_probe(execution, permit)
-            if episode is None:
-                return
-            del self._episodes[execution.model]
-            self._notify_recovery_waiters()
+        episode = self._matching_probe(execution, permit)
+        if episode is None:
+            return
+        del self._episodes[execution.model]
+        self._notify_recovery_waiters()
         trace_event(
             stage="provider",
             event="provider.recovery.closed",
@@ -743,14 +740,13 @@ class ProviderAdmissionController:
     ) -> None:
         if not permit.probe:
             return
-        async with self._condition:
-            episode = self._matching_probe(execution, permit)
-            if episode is None:
-                return
-            episode.leader = None
-            episode.probe_active = False
-            episode.ready_at = time.monotonic()
-            self._notify_recovery_waiters()
+        episode = self._matching_probe(execution, permit)
+        if episode is None:
+            return
+        episode.leader = None
+        episode.probe_active = False
+        episode.ready_at = time.monotonic()
+        self._notify_recovery_waiters()
 
     async def _attempt_failed(
         self,
@@ -765,50 +761,51 @@ class ProviderAdmissionController:
         became_leader = False
         exhausted_episode = False
 
-        async with self._condition:
-            episode = self._episodes.get(execution.model)
-            matching_probe = self._matching_probe(execution, permit)
-            if can_retry:
-                if episode is None:
-                    episode = self._start_recovery_episode(
-                        model=execution.model,
-                        leader=execution,
-                        ready_at=time.monotonic() + delay,
-                        last_error=error,
-                    )
-                    became_leader = True
-                elif matching_probe is not None:
-                    episode.last_error = error
-                    episode.probe_active = False
-                    episode.ready_at = time.monotonic() + delay
-                    became_leader = True
-                elif episode.terminal_until is not None:
-                    execution._fail_recovery(episode.last_error)
-                else:
-                    episode.waiters.add(execution)
-                self._notify_recovery_waiters()
-            elif episode is None or matching_probe is not None:
-                terminal_delay = self._retry_delay(
-                    error,
-                    execution.attempts_started,
+        self._maintain_idle_episodes()
+        episode = self._episodes.get(execution.model)
+        matching_probe = self._matching_probe(execution, permit)
+        if can_retry:
+            if episode is None:
+                episode = self._start_recovery_episode(
+                    model=execution.model,
+                    leader=execution,
+                    ready_at=time.monotonic() + delay,
+                    last_error=error,
                 )
-                if episode is None:
-                    episode = self._start_recovery_episode(
-                        model=execution.model,
-                        leader=None,
-                        ready_at=time.monotonic(),
-                        last_error=error,
-                        request_id=execution.request_id,
-                    )
+                became_leader = True
+            elif matching_probe is not None:
                 episode.last_error = error
-                episode.leader = None
                 episode.probe_active = False
-                episode.terminal_until = time.monotonic() + terminal_delay
-                for waiter in episode.waiters:
-                    waiter._fail_recovery(error)
-                episode.waiters.clear()
-                exhausted_episode = True
-                self._notify_recovery_waiters()
+                episode.ready_at = time.monotonic() + delay
+                became_leader = True
+            elif episode.terminal_until is not None:
+                execution._fail_recovery(episode.last_error)
+            else:
+                episode.waiters.add(execution)
+            self._notify_recovery_waiters()
+        elif episode is None or matching_probe is not None:
+            terminal_delay = self._retry_delay(
+                error,
+                execution.attempts_started,
+            )
+            if episode is None:
+                episode = self._start_recovery_episode(
+                    model=execution.model,
+                    leader=None,
+                    ready_at=time.monotonic(),
+                    last_error=error,
+                    request_id=execution.request_id,
+                )
+            episode.last_error = error
+            episode.leader = None
+            episode.probe_active = False
+            episode.terminal_until = time.monotonic() + terminal_delay
+            waiters = tuple(episode.waiters)
+            episode.waiters.clear()
+            for waiter in waiters:
+                waiter._fail_recovery(error)
+            exhausted_episode = True
+            self._notify_recovery_waiters()
 
         label = self._failure_label(status, error)
         if became_leader:
@@ -916,38 +913,88 @@ class ProviderAdmissionController:
     ) -> None:
         if not permit.probe:
             return
-        async with self._condition:
-            episode = self._matching_probe(execution, permit)
-            if episode is None:
-                return
-            episode.leader = None
-            episode.probe_active = False
-            episode.ready_at = time.monotonic()
-            self._notify_recovery_waiters()
+        episode = self._matching_probe(execution, permit)
+        if episode is None:
+            return
+        episode.leader = None
+        episode.probe_active = False
+        episode.ready_at = time.monotonic()
+        self._notify_recovery_waiters()
 
-    async def _abandon_waiting_leader(
-        self,
-        execution: ProviderExecution,
-        generation: int,
-    ) -> None:
-        async with self._condition:
-            episode = self._episodes.get(execution.model)
-            if (
-                episode is None
-                or episode.generation != generation
-                or episode.leader is not execution
-                or episode.probe_active
+    def _execution_terminated(self, execution: ProviderExecution) -> None:
+        episode = self._episodes.get(execution.model)
+        if episode is not None:
+            episode.waiters.discard(execution)
+            if episode.leader is execution and (
+                not episode.probe_active or execution._active_claim is None
             ):
-                return
-            episode.leader = None
-            self._notify_recovery_waiters()
+                episode.leader = None
+                episode.probe_active = False
+        self._notify_recovery_waiters()
+
+    def _maintain_idle_episodes(self) -> None:
+        """Expire idle state and schedule one context-free maintenance callback."""
+        if self._closed:
+            return
+        now = time.monotonic()
+        deadline = None
+        removed = False
+        for model, episode in tuple(self._episodes.items()):
+            if episode.leader is not None or episode.waiters or episode.probe_active:
+                continue
+            expires_at = (
+                episode.terminal_until
+                if episode.terminal_until is not None
+                else episode.ready_at
+            )
+            if expires_at <= now:
+                del self._episodes[model]
+                removed = True
+            elif deadline is None or expires_at < deadline:
+                deadline = expires_at
+        if deadline != self._expiry_deadline:
+            if self._expiry_timer is not None:
+                self._expiry_timer.cancel()
+            self._expiry_timer = None
+            self._expiry_deadline = deadline
+            if deadline is not None:
+                self._expiry_timer = asyncio.get_running_loop().call_later(
+                    max(0.0, deadline - time.monotonic()),
+                    self._expire_idle_episodes,
+                    context=Context(),
+                )
+        if removed:
+            self._wake_recovery_waiters()
+
+    def _expire_idle_episodes(self) -> None:
+        if self._expiry_timer is not None:
+            self._expiry_timer.cancel()
+        self._expiry_timer = None
+        self._expiry_deadline = None
+        self._maintain_idle_episodes()
+
+    def close(self) -> None:
+        """Release recovery state after the controller's runtimes have drained."""
+        self._closed = True
+        if self._expiry_timer is not None:
+            self._expiry_timer.cancel()
+        self._expiry_timer = None
+        self._expiry_deadline = None
+        self._episodes.clear()
+        self._wake_recovery_waiters()
 
     def reconfigure(self, limits: ProviderAdmissionLimits) -> None:
         """Update capacity without resetting occupancy, history, or recovery."""
         self._capacity.reconfigure(limits)
 
     def _notify_recovery_waiters(self) -> None:
-        self._condition.notify_all()
+        self._maintain_idle_episodes()
+        self._wake_recovery_waiters()
+
+    def _wake_recovery_waiters(self) -> None:
+        changed = self._changed
+        self._changed = asyncio.Event()
+        changed.set()
         self._capacity.wake_waiters()
 
     def _release_concurrency(self) -> None:

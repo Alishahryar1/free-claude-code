@@ -268,6 +268,48 @@ async def test_cancelled_normalizer_construction_cleanup_releases_admission():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_cancelled_retry_cleanup_releases_recovery_ownership(wire):
+    failed_body = ResponseBody(block_close=True)
+    healthy_body = ResponseBody(*_chunks("chat", "recovered"))
+    healthy_body.read_release.set()
+    bodies = iter((failed_body, healthy_body))
+    async with _harness("chat", lambda request: _response(next(bodies))) as (
+        provider,
+        client,
+        admission,
+    ):
+
+        async def consume():
+            return "".join([event async for event in _public_stream(provider, wire)])
+
+        task = None
+        try:
+            with patch.object(
+                provider._behavior,
+                "normalize_stream",
+                side_effect=TimeoutError("retryable stream setup failure"),
+            ):
+                task = asyncio.create_task(consume())
+                await asyncio.wait_for(failed_body.close_started.wait(), 2)
+                assert admission._episodes["model"].leader is not None
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            assert not admission._episodes
+            assert admission._capacity._active_attempts == 0
+            async with asyncio.timeout(2):
+                assert "recovered" in await consume()
+            assert not client.is_closed()
+            assert failed_body.close_count == 1
+        finally:
+            failed_body.close_release.set()
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_mistral_cleanup_preserves_normalization_error():
     body = ResponseBody(
         _chat_chunk("hello"), close_error=RuntimeError("cleanup secret-token")

@@ -92,9 +92,8 @@ async def test_recovery_follows_credentials_across_key_reorder_and_replacement(
         assert isinstance(old_first, GroqProvider)
         assert isinstance(healthy, GroqProvider)
         assert isinstance(same_credential, GroqProvider)
-        old_attempt = await old_first._admission.start_execution(
-            model="model"
-        ).open_attempt(ProviderOperationKind.GENERATION)
+        execution = old_first._admission.start_execution(model="model")
+        old_attempt = await execution.open_attempt(ProviderOperationKind.GENERATION)
         response = httpx.Response(
             503,
             headers={"retry-after": "60"},
@@ -106,6 +105,13 @@ async def test_recovery_follows_credentials_across_key_reorder_and_replacement(
             )
         )
         await old_attempt.aclose()
+        execution.abandon()
+        timer = old_first._admission._expiry_timer
+        assert timer is not None
+        await old_runtime.cleanup()
+        assert same_credential._admission is old_first._admission
+        assert same_credential._admission._expiry_timer is timer
+        assert not timer.cancelled()
         pending = asyncio.create_task(
             same_credential._admission.start_execution(model="model").open_attempt(
                 ProviderOperationKind.GENERATION
