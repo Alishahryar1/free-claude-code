@@ -154,7 +154,9 @@ def fixture_wheel(area, url, outcome):
         "checker-missing",
     ],
 )
-def test_installed_update_delegates_and_survives_replacement(tmp_path, outcome):
+def test_installed_update_delegates_and_survives_replacement(
+    tmp_path, outcome, powershell_module_paths
+):
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("uv is required for native script lifecycle coverage")
@@ -164,6 +166,7 @@ def test_installed_update_delegates_and_survives_replacement(tmp_path, outcome):
     env.update(
         UV_TOOL_DIR=str(area / "tools"),
         UV_TOOL_BIN_DIR=str(area / "bin"),
+        UV_CACHE_DIR=str(area / "cache"),
         UV_NO_CONFIG="1",
         UV_PYTHON_DOWNLOADS="never",
         FCC_INSTALL_VERSION="9.9.9",
@@ -177,6 +180,10 @@ def test_installed_update_delegates_and_survives_replacement(tmp_path, outcome):
         ),
     )
     if os.name == "nt":
+        powershell = shutil.which("powershell")
+        if powershell is None:
+            pytest.skip("Windows PowerShell is required for the native update wrapper")
+        env["PSMODULEPATH"] = powershell_module_paths[powershell]
         body = """param([switch] $VoiceLocal, [string] $TorchBackend)
 $answer = Read-Host 'Continue'
 Write-Output "installer:$VoiceLocal|$TorchBackend|$answer|$env:FCC_INSTALL_VERSION"
