@@ -3,10 +3,11 @@
 from dataclasses import replace
 from typing import TypedDict
 
+from free_claude_code.config.open_router_preferences import QUANTIZATION_VALUES
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 
-from .specs import ConfigFieldSpec
+from .specs import ConfigFieldSpec, ConfigOptionSpec
 
 
 class ProviderFieldOverride(TypedDict, total=False):
@@ -359,6 +360,7 @@ def provider_field_specs() -> tuple[ConfigFieldSpec, ...]:
 
     return (
         *_credential_field_specs(),
+        *_open_router_field_specs(),
         ConfigFieldSpec(
             key="ANTHROPIC_WORKSPACE_ID",
             label="Anthropic Workspace ID",
@@ -371,6 +373,59 @@ def provider_field_specs() -> tuple[ConfigFieldSpec, ...]:
         *_vertex_field_specs(),
         *_base_url_field_specs(),
         *_proxy_field_specs(),
+    )
+
+
+def _open_router_field_specs() -> tuple[ConfigFieldSpec, ...]:
+    return (
+        ConfigFieldSpec(
+            key="OPENROUTER_PROVIDER_PREFERENCES",
+            label="OpenRouter Provider Preferences",
+            section_id="providers",
+            field_type="textarea",
+            settings_attr="open_router_provider_preferences",
+            provider_ids=("open_router",),
+            restart_required=True,
+            description=(
+                "Optional JSON object sent as OpenRouter's 'provider' routing "
+                "field on every request, overriding account defaults and slug "
+                "variants like ':floor'. Example: "
+                '{"only": ["DeepInfra"], "quantizations": ["fp8"], '
+                '"allow_fallbacks": false}. Changing it restarts FCC.'
+            ),
+        ),
+        ConfigFieldSpec(
+            key="OPENROUTER_USE_CHEAPEST_PROVIDER",
+            label="Use Cheapest OpenRouter Provider",
+            section_id="providers",
+            field_type="boolean",
+            settings_attr="open_router_use_cheapest_provider",
+            provider_ids=("open_router",),
+            restart_required=True,
+            description=(
+                "Fetch each requested model's provider pricing from OpenRouter "
+                "and pin the request to the cheapest blended-rate provider "
+                "(average of input and output per-token prices). Changing it "
+                "restarts FCC."
+            ),
+        ),
+        ConfigFieldSpec(
+            key="OPENROUTER_QUANTIZATIONS",
+            label="OpenRouter Quantizations",
+            section_id="providers",
+            field_type="multiselect",
+            settings_attr="open_router_quantizations",
+            provider_ids=("open_router",),
+            options=tuple(
+                ConfigOptionSpec(value, value.upper()) for value in QUANTIZATION_VALUES
+            ),
+            restart_required=True,
+            description=(
+                "Quantization levels considered when finding the cheapest "
+                "provider. Leave all unselected to allow any quantization. "
+                "Changing it restarts FCC."
+            ),
+        ),
     )
 
 

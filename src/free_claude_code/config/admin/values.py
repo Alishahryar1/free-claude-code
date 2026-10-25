@@ -7,6 +7,9 @@ from free_claude_code.config.api_keys import encode_api_keys, normalize_api_keys
 from free_claude_code.config.custom_providers import REASONING_FORMATS
 from free_claude_code.config.loader import ConfigSource, ManagedConfigSnapshot
 from free_claude_code.config.model_refs import ModelFallback
+from free_claude_code.config.open_router_preferences import (
+    OpenRouterProviderPreferences,
+)
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.core.json_types import JsonObject
 
@@ -52,6 +55,12 @@ def normalize_for_env(value: object, *, key: str | None = None) -> str | None:
         return str(value.value)
     if isinstance(value, tuple) and all(isinstance(item, str) for item in value):
         return ",".join(value)
+    if key == "OPENROUTER_PROVIDER_PREFERENCES" and isinstance(
+        value, OpenRouterProviderPreferences
+    ):
+        return json.dumps(
+            value.to_request_field(), ensure_ascii=False, separators=(",", ":")
+        )
     return str(value).strip()
 
 

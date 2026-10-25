@@ -487,3 +487,45 @@ def test_disconnect_mode_reports_failure_and_nonzero_exit(monkeypatch, capsys):
         doctor.main(["--disconnect-integrations"])
     assert error.value.code == 1
     assert capsys.readouterr() == ("", "Could not disconnect Codex.\n")
+
+
+def test_openrouter_provider_preferences_are_reported():
+    settings = Settings.model_validate(
+        {
+            "OPENROUTER_API_KEY": "key",
+            "OPENROUTER_PROVIDER_PREFERENCES": json.dumps(
+                {"only": ["DeepInfra"], "allow_fallbacks": False}
+            ),
+        }
+    )
+    report = json.loads(json.dumps(diagnostics.settings_report(settings, {})))
+    assert report["providers"]["open_router"]["provider_preferences"] == {
+        "only": ["DeepInfra"],
+        "allow_fallbacks": False,
+    }
+
+
+def test_openrouter_provider_preferences_report_absent_when_unset():
+    report = json.loads(json.dumps(diagnostics.settings_report(Settings(), {})))
+    assert "provider_preferences" not in report["providers"]["open_router"]
+
+
+def test_openrouter_cheapest_provider_settings_are_reported():
+    settings = Settings.model_validate(
+        {
+            "OPENROUTER_API_KEY": "key",
+            "OPENROUTER_USE_CHEAPEST_PROVIDER": "true",
+            "OPENROUTER_QUANTIZATIONS": "fp8,bf16",
+        }
+    )
+    report = json.loads(json.dumps(diagnostics.settings_report(settings, {})))
+    row = report["providers"]["open_router"]
+    assert row["use_cheapest_provider"] is True
+    assert row["quantizations"] == ["fp8", "bf16"]
+
+
+def test_openrouter_cheapest_provider_settings_report_defaults():
+    report = json.loads(json.dumps(diagnostics.settings_report(Settings(), {})))
+    row = report["providers"]["open_router"]
+    assert row["use_cheapest_provider"] is False
+    assert "quantizations" not in row
