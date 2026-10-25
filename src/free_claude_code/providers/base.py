@@ -17,8 +17,7 @@ from free_claude_code.core.stream_recovery import ContinuationSeed
 class ProviderConfig:
     """Resolved immutable configuration for one provider instance.
 
-    Base fields apply to all providers. Provider-specific parameters
-    (e.g. NIM temperature, top_p) are passed by the provider constructor.
+    Base fields apply to all providers.
     """
 
     api_key: str | None

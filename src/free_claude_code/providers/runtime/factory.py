@@ -50,7 +50,6 @@ def _load_nvidia_nim() -> ProviderFactory:
     ) -> BaseProvider:
         return NvidiaNimProvider(
             config,
-            nim_settings=settings.nim,
             admission=admission,
         )
 

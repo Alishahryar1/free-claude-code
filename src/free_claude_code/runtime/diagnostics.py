@@ -84,20 +84,6 @@ WEB_FIELDS = (
     "web_fetch_allowed_schemes",
     "web_fetch_allow_private_networks",
 )
-NIM_FIELDS = (
-    "temperature",
-    "top_p",
-    "top_k",
-    "max_tokens",
-    "presence_penalty",
-    "frequency_penalty",
-    "min_p",
-    "repetition_penalty",
-    "seed",
-    "parallel_tool_calls",
-    "ignore_eos",
-    "min_tokens",
-)
 EXCLUDED_FIELDS = {
     "proxy_auth_token",
     "telegram_bot_token",
@@ -137,7 +123,7 @@ def classified_settings() -> set[str]:
         set(RUNTIME_FIELDS + ROUTING_FIELDS + REASONING_FIELDS + WEB_FIELDS)
         | EXCLUDED_FIELDS
         | URL_FIELDS
-        | {"nim", "vertex_location", "custom_providers"}
+        | {"vertex_location", "custom_providers"}
     )
 
 
@@ -195,7 +181,6 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
         }
     runtime = {name: getattr(settings, name) for name in RUNTIME_FIELDS}
     runtime["telegram_proxy"] = _url_summary(settings.telegram_proxy_url)
-    runtime["nim"] = {name: getattr(settings.nim, name) for name in NIM_FIELDS}
     return {
         "providers": providers,
         "runtime": runtime,

@@ -11,7 +11,6 @@ from pydantic import SecretStr, ValidationError
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config import loader
 from free_claude_code.config.constants import (
-    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MODEL,
 )
 from free_claude_code.config.env_files import dotenv_values_from_file
@@ -29,7 +28,6 @@ from free_claude_code.config.model_refs import (
     parse_model_name,
     parse_provider_type,
 )
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.paths import (
     managed_env_path,
     messaging_state_dir_path,
@@ -317,14 +315,9 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
 
 
 def test_every_external_setting_has_one_explicit_alias() -> None:
-    aliases = [
-        field.validation_alias
-        for name, field in Settings.model_fields.items()
-        if name != "nim"
-    ]
+    aliases = [field.validation_alias for field in Settings.model_fields.values()]
     assert all(isinstance(alias, str) for alias in aliases)
     assert len(aliases) == len(set(aliases))
-    assert Settings.model_fields["nim"].validation_alias is None
 
 
 def test_direct_settings_construction_performs_no_environment_io(
@@ -749,25 +742,30 @@ def test_paths_are_owned_by_fcc_home(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     assert server_log_path() == tmp_path / ".fcc" / "logs" / "server.log"
 
 
-def test_nim_settings_keep_request_local_validation() -> None:
-    settings = NimSettings.model_validate(
-        {
-            "max_tokens": "1024",
-            "temperature": "0.5",
-            "seed": "7",
-            "stop": "",
-        }
+@pytest.mark.parametrize("operation", ("assign", "delete"))
+def test_settings_reject_normal_mutation(operation: str) -> None:
+    settings = Settings()
+    original = settings.model
+
+    with pytest.raises(ValidationError, match="frozen_instance"):
+        if operation == "assign":
+            settings.__setattr__("model", "nvidia_nim/changed")
+        else:
+            delattr(settings, "model")
+
+    assert settings.model == original
+
+
+def test_settings_validated_replacement_preserves_original() -> None:
+    original = Settings()
+    replacement = Settings.model_validate(
+        original.model_dump() | {"model": "nvidia_nim/changed"}
     )
 
-    assert settings.max_tokens == 1024
-    assert settings.temperature == 0.5
-    assert settings.seed == 7
-    assert settings.stop is None
-    assert NimSettings().max_tokens == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert NimSettings().top_p == 0.95
-    for unsupported_top_p in (0.0, 0.9, 1.0):
-        with pytest.raises(ValidationError):
-            NimSettings(top_p=unsupported_top_p)
+    assert replacement.model == "nvidia_nim/changed"
+    assert original.model == DEFAULT_MODEL
+    with pytest.raises(ValidationError):
+        Settings.model_validate(original.model_dump() | {"model": "unknown/model"})
 
 
 def test_settings_defaults_do_not_contain_empty_enum_strings() -> None:

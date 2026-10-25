@@ -140,8 +140,6 @@ def settings_env_keys() -> frozenset[str]:
 
     keys: set[str] = set()
     for name, field in Settings.model_fields.items():
-        if name == "nim":
-            continue
         alias = field.validation_alias
         if not isinstance(alias, str):
             raise AssertionError(f"Settings field {name!r} needs one string alias")

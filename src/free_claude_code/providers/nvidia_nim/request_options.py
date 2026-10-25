@@ -1,9 +1,9 @@
-"""NVIDIA NIM request option injection."""
+"""NVIDIA NIM request adaptation."""
 
 from copy import deepcopy
 from typing import Any
 
-from free_claude_code.config.nim import NimSettings
+from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic import ReasoningReplayMode, set_if_not_none
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
@@ -24,25 +24,19 @@ NIM_REASONING = NamedEffortReasoning(
 NIM_REQUEST_POLICY = OpenAIChatRequestPolicy(
     provider_name="NIM",
     reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
+    default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
 )
 
 
 def build_nim_request_body(
-    request_data: MessagesRequest, nim: NimSettings, *, reasoning: ReasoningPolicy
+    request_data: MessagesRequest, *, reasoning: ReasoningPolicy
 ) -> dict[str, Any]:
-    """Build OpenAI-format request body from Anthropic request plus NIM settings."""
+    """Build an OpenAI-format request with NIM protocol adaptation."""
     return build_openai_chat_request_body(
         request_data,
         reasoning=reasoning,
         policy=NIM_REQUEST_POLICY,
-        postprocessors=(
-            lambda body, request, policy: _apply_nim_messages_request_options(
-                body,
-                request,
-                policy,
-                nim=nim,
-            ),
-        ),
+        postprocessors=(_apply_nim_messages_request_options,),
     )
 
 
@@ -50,48 +44,29 @@ def _apply_nim_messages_request_options(
     body: dict[str, Any],
     request_data: MessagesRequest,
     reasoning: ReasoningPolicy,
-    *,
-    nim: NimSettings,
 ) -> None:
     """Copy Messages-only fields, then apply the common NIM finalizer."""
     extra_body = deepcopy(request_data.extra_body or {})
     _set_extra(extra_body, "top_k", request_data.top_k, ignore_value=-1)
     if extra_body:
         body["extra_body"] = extra_body
-    apply_nim_request_options(body, reasoning, nim=nim)
+    apply_nim_request_options(body, reasoning)
 
 
 def apply_nim_request_options(
     body: dict[str, Any],
     reasoning: ReasoningPolicy,
-    *,
-    nim: NimSettings,
 ) -> None:
     """Apply source-independent NIM policy to one Chat body."""
     sanitize_nim_tool_schemas(body)
 
     max_tokens = body.get("max_tokens")
+    default_max_tokens = NIM_REQUEST_POLICY.default_max_tokens
     if max_tokens is None:
-        max_tokens = nim.max_tokens
-    elif nim.max_tokens:
-        max_tokens = min(max_tokens, nim.max_tokens)
+        max_tokens = default_max_tokens
+    elif default_max_tokens is not None:
+        max_tokens = min(max_tokens, default_max_tokens)
     set_if_not_none(body, "max_tokens", max_tokens)
-
-    if body.get("temperature") is None and nim.temperature is not None:
-        body["temperature"] = nim.temperature
-    body["top_p"] = nim.top_p
-
-    if "stop" not in body and nim.stop:
-        body["stop"] = nim.stop
-
-    if nim.presence_penalty != 0.0:
-        body["presence_penalty"] = nim.presence_penalty
-    if nim.frequency_penalty != 0.0:
-        body["frequency_penalty"] = nim.frequency_penalty
-    if nim.seed is not None:
-        body["seed"] = nim.seed
-
-    body["parallel_tool_calls"] = nim.parallel_tool_calls
 
     request_extra = body.get("extra_body")
     extra_body: dict[str, Any] = (
@@ -115,18 +90,10 @@ def apply_nim_request_options(
 
     NIM_REASONING.encode(body, reasoning)
 
-    _set_extra(extra_body, "top_k", nim.top_k, ignore_value=-1)
-    _set_extra(extra_body, "min_p", nim.min_p, ignore_value=0.0)
-    _set_extra(
-        extra_body, "repetition_penalty", nim.repetition_penalty, ignore_value=1.0
-    )
-    _set_extra(extra_body, "min_tokens", nim.min_tokens, ignore_value=0)
-    _set_extra(extra_body, "chat_template", nim.chat_template)
-    _set_extra(extra_body, "request_id", nim.request_id)
-    _set_extra(extra_body, "ignore_eos", nim.ignore_eos)
-
     if extra_body:
         body["extra_body"] = extra_body
+    else:
+        body.pop("extra_body", None)
 
 
 def _set_extra(
