@@ -23,26 +23,30 @@ def shard_count(value: str) -> int:
     return count
 
 
-def matrix(count: int) -> dict[str, list[dict[str, str | int]]]:
+def matrix(counts: dict[str, int]) -> dict[str, list[dict[str, str | int]]]:
     return {
         "include": [
-            {"os": os_name, "runner": runner, "shard": shard, "shards": count}
+            {"os": os_name, "runner": runner, "shard": shard, "shards": counts[os_name]}
             for os_name, runner in RUNNERS.items()
-            for shard in range(1, count + 1)
+            for shard in range(1, counts[os_name] + 1)
         ]
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pytest-shards", required=True, type=shard_count)
-    parser.add_argument("--playwright-shards", required=True, type=shard_count)
+    for suite in ("pytest", "playwright"):
+        for os_name in RUNNERS:
+            parser.add_argument(
+                f"--{suite}-{os_name.lower()}-shards", required=True, type=shard_count
+            )
     args = parser.parse_args()
-    for suite, count in (
-        ("pytest", args.pytest_shards),
-        ("playwright", args.playwright_shards),
-    ):
-        print(f"{suite}_matrix={json.dumps(matrix(count), separators=(',', ':'))}")
+    for suite in ("pytest", "playwright"):
+        counts = {
+            os_name: getattr(args, f"{suite}_{os_name.lower()}_shards")
+            for os_name in RUNNERS
+        }
+        print(f"{suite}_matrix={json.dumps(matrix(counts), separators=(',', ':'))}")
 
 
 if __name__ == "__main__":
