@@ -113,6 +113,7 @@ async def test_factory_open_preserves_setup_and_catalog_until_process_exit(
             "base_url": "http://127.0.0.1:8182/v1",
             "auth": {"command": "fcc-codex", "args": ["--print-proxy-auth-token"]},
             "wire_api": "responses",
+            "stream_idle_timeout_ms": 2147483647,
         }
         assert factory_peer.command[-5:] == (
             "-c",
