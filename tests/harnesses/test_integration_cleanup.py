@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.harnesses import (
+    antigravity_integration,
     claude_desktop_integration,
     claude_integration,
     codex_integration,
@@ -18,6 +19,7 @@ from free_claude_code.harnesses.integration_cleanup import (
     IntegrationPaths,
     disconnect_integrations,
 )
+from tests.harnesses.test_antigravity_integration import catalog
 
 URL = "http://127.0.0.1:8082"
 TOKEN = "cleanup-test-token"
@@ -34,6 +36,8 @@ def paths_at(root: Path) -> IntegrationPaths:
         root / "desktop",
         root / "fcc/desktop-disconnect.json",
         root / "dsh",
+        root / "antigravity/settings.json",
+        root / "fcc/antigravity-integration.json",
     )
 
 
@@ -49,6 +53,14 @@ def paths(tmp_path, monkeypatch):
 
 
 def test_cleanup_disconnects_native_connections_and_preserves_unrelated_settings(paths):
+    paths.antigravity.parent.mkdir()
+    paths.antigravity.write_text('{"modelProvider":"", "keep": true}')
+    antigravity_integration.configure(
+        paths.antigravity,
+        paths.antigravity_state,
+        catalog("provider/model"),
+        connect=True,
+    )
     paths.claude_vscode.parent.mkdir()
     paths.claude_vscode.write_text('{"editor.fontSize": 17}')
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
@@ -87,6 +99,11 @@ def test_cleanup_disconnects_native_connections_and_preserves_unrelated_settings
 
     disconnect_integrations(paths)
 
+    assert json.loads(paths.antigravity.read_text()) == {
+        "modelProvider": "",
+        "keep": True,
+    }
+    assert not paths.antigravity_state.exists()
     assert json.loads(paths.claude_vscode.read_text()) == {"editor.fontSize": 17}
     assert tomllib.loads(paths.codex.read_text()) == {
         "model": "my-model",
