@@ -106,7 +106,7 @@ class OpenAICodexProvider(BaseProvider):
 
     async def _list_models_payload(self) -> Any:
         """Admit each catalog GET while borrowing request-scoped SDK credentials."""
-        execution = self._admission.start_execution()
+        execution = self._admission.start_execution(model=None)
         endpoint = RequestEndpoint(self._endpoint())
         request_client = OpenAIRequestClient(self._pool)
         recovery = RequestRecovery(execution, endpoint=endpoint)

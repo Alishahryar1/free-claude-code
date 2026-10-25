@@ -55,11 +55,16 @@ class ProviderAdmissionRegistry:
         retained = set(provider_ids)
         for provider_id in tuple(self._controllers):
             if provider_id.startswith("custom_") and provider_id not in retained:
+                for controller in self._controllers[provider_id].values():
+                    controller.close()
                 del self._controllers[provider_id]
                 del self._capacities[provider_id]
 
     def close(self) -> None:
         """Forget state only after client generations have drained and closed."""
         self._closed = True
+        for controllers in self._controllers.values():
+            for controller in controllers.values():
+                controller.close()
         self._controllers.clear()
         self._capacities.clear()

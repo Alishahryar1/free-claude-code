@@ -22,6 +22,46 @@ from tests.providers.test_anthropic_messages_transport import Wire, _events, _ss
 from tests.providers.test_anthropic_provider import native_body, provider
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_native_fallback_tries_other_model_during_primary_cooldown(stream):
+    calls = []
+
+    def handle(request):
+        model = json.loads(request.content)["model"]
+        calls.append(model)
+        if model == "primary":
+            return httpx.Response(
+                529,
+                headers={"retry-after": "60"},
+                json={"error": {"type": "overloaded_error", "message": "busy"}},
+            )
+        if stream:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=_sse(*_events()),
+            )
+        return httpx.Response(
+            200, json={"type": "message", "model": model, "content": []}
+        )
+
+    app = create_test_app(
+        Settings(
+            MODEL="anthropic/primary",
+            MODEL_FALLBACKS=[ModelFallback(model="anthropic/backup")],
+        ),
+        providers={"anthropic": provider(handle, max_attempts=1)},
+    )
+    with TestClient(app) as client:
+        for _ in range(2):
+            response = client.post("/v1/messages", json=native_body(stream))
+            assert response.status_code == 200, response.text
+            if stream:
+                assert "message_stop" in response.text
+                assert "event: error" not in response.text
+    assert calls == ["primary", "backup", "backup"]
+
+
 def test_only_leading_pings_then_all_candidates_fail_returns_json_error():
     calls = []
     wires = []

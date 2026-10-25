@@ -322,7 +322,7 @@ class CustomProvider(BaseProvider):
             binding = OpenAIRequestClient(self._openai_transport)
             try:
                 client = binding.for_endpoint(self._sdk, self._snapshot)
-                payload = await self._admission.start_execution().run_call(
+                payload = await self._admission.start_execution(model=None).run_call(
                     lambda: client.models.list(extra_headers=binding.openai_headers()),
                     operation_kind=ProviderOperationKind.MODEL_DISCOVERY,
                 )

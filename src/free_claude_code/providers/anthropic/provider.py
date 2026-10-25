@@ -168,7 +168,7 @@ class AnthropicProvider(BaseProvider):
                 return response.json()
 
             try:
-                item = await self._admission.start_execution().run_call(
+                item = await self._admission.start_execution(model=None).run_call(
                     fetch, operation_kind=ProviderOperationKind.MODEL_DISCOVERY
                 )
                 if not isinstance(item, dict):

@@ -129,7 +129,11 @@ async def test_zero_call_final_candidate_keeps_published_response_identity(proto
     ):
         transport = provider._chat if protocol == "chat" else provider
         transport._admission = admission
-        warmup = last("responses", [{"role": "user", "content": "earlier request"}])
+        warmup = last(
+            "responses",
+            [{"role": "user", "content": "earlier request"}],
+            model="model-1",
+        )
         try:
             with pytest.raises(ExecutionFailure):
                 await anext(warmup)
