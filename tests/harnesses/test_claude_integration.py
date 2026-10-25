@@ -93,6 +93,8 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
         {"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "value": "0"},
         {"name": "CLAUDE_CODE_AUTO_MODE_SERVER", "value": "1"},
         {"name": "CLAUDE_CODE_MAX_RETRIES", "value": "10"},
+        {"name": "CLAUDE_CODE_RETRY_WATCHDOG", "value": "1"},
+        {"name": "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES", "value": "2"},
         {"name": "API_TIMEOUT_MS", "value": "1000"},
       ],
     }""",
@@ -133,17 +135,22 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
         "CLAUDE_ENABLE_STREAM_WATCHDOG",
         "CLAUDE_ENABLE_BYTE_WATCHDOG",
         "API_FORCE_IDLE_TIMEOUT",
-        "CLAUDE_CODE_MAX_RETRIES",
-        "CLAUDE_CODE_RETRY_WATCHDOG",
-        "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES",
     ):
         assert entries[name]["value"] == "0"
+    assert entries["CLAUDE_CODE_MAX_RETRIES"]["value"] == "10"
+    assert entries["CLAUDE_CODE_RETRY_WATCHDOG"]["value"] == "1"
+    assert entries["CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES"]["value"] == "2"
     assert entries["API_TIMEOUT_MS"]["value"] == "2147483647"
     assert "//" not in path.read_text().replace("http://", "")
     assert operate(path, False) == {"connected": False}
     assert json.loads(path.read_text()) == {
         "editor.fontSize": 16,
-        ENV: [{"name": "KEEP", "value": "yes"}],
+        ENV: [
+            {"name": "KEEP", "value": "yes"},
+            {"name": "CLAUDE_CODE_MAX_RETRIES", "value": "10"},
+            {"name": "CLAUDE_CODE_RETRY_WATCHDOG", "value": "1"},
+            {"name": "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES", "value": "2"},
+        ],
     }
 
 
@@ -229,7 +236,7 @@ def test_manual_setup_only_requires_connection_fields(tmp_path, url):
     assert entries["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
 
 
-def test_refresh_connected_applies_request_policy_to_existing_connection(tmp_path):
+def test_refresh_connected_extends_waiting_without_changing_retries(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text(
         json.dumps(
@@ -254,7 +261,7 @@ def test_refresh_connected_applies_request_policy_to_existing_connection(tmp_pat
     entries = {
         entry["name"]: entry["value"] for entry in json.loads(path.read_text())[ENV]
     }
-    assert entries["CLAUDE_CODE_MAX_RETRIES"] == "0"
+    assert entries["CLAUDE_CODE_MAX_RETRIES"] == "10"
     assert entries["API_TIMEOUT_MS"] == "2147483647"
     assert entries["CLAUDE_ENABLE_STREAM_WATCHDOG"] == "0"
     assert entries["CLAUDE_ENABLE_BYTE_WATCHDOG"] == "0"

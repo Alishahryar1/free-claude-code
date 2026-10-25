@@ -115,7 +115,7 @@ def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(files):
     assert refreshed["args"][0] == str(updated)
     assert refreshed["env"]["ANTHROPIC_AUTH_TOKEN"] == "rotated"
     assert refreshed["env"]["KEEP"] == "yes"
-    assert refreshed["env"]["CLAUDE_CODE_MAX_RETRIES"] == "0"
+    assert refreshed["env"]["CLAUDE_CODE_MAX_RETRIES"] == "10"
     assert refreshed["env"]["API_TIMEOUT_MS"] == "2147483647"
     assert refreshed["env"]["CLAUDE_ENABLE_STREAM_WATCHDOG"] == "0"
     assert refreshed["env"]["CLAUDE_ENABLE_BYTE_WATCHDOG"] == "0"

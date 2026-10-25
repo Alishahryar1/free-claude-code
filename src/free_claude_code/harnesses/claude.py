@@ -18,13 +18,10 @@ def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
         "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
         "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": CLAUDE_CODE_AUTO_COMPACT_WINDOW,
-        # Let FCC finish provider recovery before Claude abandons or repeats a call.
+        # Keep Claude waiting while FCC handles provider recovery.
         "CLAUDE_ENABLE_STREAM_WATCHDOG": "0",
         "CLAUDE_ENABLE_BYTE_WATCHDOG": "0",
         "API_FORCE_IDLE_TIMEOUT": "0",
-        "CLAUDE_CODE_MAX_RETRIES": "0",
-        "CLAUDE_CODE_RETRY_WATCHDOG": "0",
-        "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES": "0",
         # Zero retains Claude's 5-minute non-streaming timeout. Use its timer cap.
         "API_TIMEOUT_MS": "2147483647",
         "DISABLE_AUTOUPDATER": "1",
