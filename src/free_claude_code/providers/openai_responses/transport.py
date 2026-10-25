@@ -273,7 +273,9 @@ class OpenAIResponsesTransport:
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
-        execution = self._admission.start_execution(request_id=request_id)
+        execution = self._admission.start_execution(
+            request_id=request_id, model=str(body["model"])
+        )
         outcome = ResponsesExecutionOutcome()
         endpoint = (
             RequestEndpoint(endpoint_context) if endpoint_context is not None else None

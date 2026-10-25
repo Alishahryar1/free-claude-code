@@ -141,7 +141,7 @@ class OpenAIChatProvider(BaseProvider):
         listing = self._profile.model_listing
         if listing.path is not None and listing.pagination is not None:
             return await self._fetch_paginated_models_payload(listing.path)
-        execution = self._admission.start_execution()
+        execution = self._admission.start_execution(model=None)
         return await execution.run_call(
             self._fetch_models_payload_once,
             operation_kind=ProviderOperationKind.MODEL_DISCOVERY,
@@ -175,7 +175,7 @@ class OpenAIChatProvider(BaseProvider):
         while total_pages is None or page < pagination.first_page + total_pages:
             params = dict(listing.query_params)
             params[pagination.page_param] = str(page)
-            execution = self._admission.start_execution()
+            execution = self._admission.start_execution(model=None)
             payload = await execution.run_call(
                 lambda params=params: self._client.get(
                     path,

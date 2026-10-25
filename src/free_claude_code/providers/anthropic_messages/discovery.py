@@ -52,7 +52,7 @@ async def list_messages_models(
             response.raise_for_status()
             return response.json()
 
-        page = await admission.start_execution().run_call(
+        page = await admission.start_execution(model=None).run_call(
             fetch, operation_kind=ProviderOperationKind.MODEL_DISCOVERY
         )
         if (

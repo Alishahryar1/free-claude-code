@@ -115,7 +115,7 @@ async def test_stopped_first_messages_event_releases_admission(
         assert failed.status_code == 502
         assert len(bodies) == 1 + probe
         assert all(item.close_calls == 1 for item in wires)
-        assert admission._episode is None
+        assert not admission._episodes
         recovered = await asyncio.wait_for(_response(source(), wire), timeout=1)
         assert isinstance(recovered, StreamingResponse)
         await _serve(recovered)
@@ -141,7 +141,7 @@ async def test_unstopped_first_messages_event_still_retries(route):
         await _serve(result)
         assert len(bodies) == 2 and bodies[0] == bodies[1]
         assert all(item.close_calls == 1 for item in wires)
-        assert admission._episode is None
+        assert not admission._episodes
 
 
 @pytest.mark.asyncio
@@ -192,13 +192,13 @@ async def test_stopped_messages_cannot_close_another_executions_recovery(route):
     async with _messages_path(
         route, lambda _: (200, ConcurrentWire(_sse({"type": "message_stop"})))
     ) as (source, _bodies, _wires, admission):
-        other = admission.start_execution()
+        other = admission.start_execution(model="native")
         leader = await _open(other)
         result = await _response(
             source(), "responses" if route == "responses" else "messages"
         )
         assert result.status_code == 502
-        assert admission._episode is not None and admission._episode.leader is other
+        assert admission._episodes["native"].leader is other
         probe = await asyncio.wait_for(_open(other), timeout=1)
         await probe.accept()
         await probe.aclose()

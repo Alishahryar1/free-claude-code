@@ -105,11 +105,13 @@ class ProviderExecution:
         *,
         max_attempts: int,
         request_id: str | None,
+        model: str | None,
     ) -> None:
         self._controller = controller
         self._execution_id = str(uuid.uuid4())
         self._max_attempts = max_attempts
         self._request_id = request_id
+        self._model = model
         self._attempts_started = 0
         self._active_claim: _AttemptClaim | None = None
         self._last_failure: Exception | None = None
@@ -131,6 +133,10 @@ class ProviderExecution:
     @property
     def request_id(self) -> str | None:
         return self._request_id
+
+    @property
+    def model(self) -> str | None:
+        return self._model
 
     @property
     def attempts_started(self) -> int:
@@ -426,6 +432,7 @@ class ProviderAttempt:
             source="provider",
             provider=self._controller._provider_name,
             request_id=self._execution.request_id,
+            model=self._execution.model,
             execution_id=self._execution.execution_id,
             operation_kind=self._claim.operation_kind.value,
             attempt=self._claim.ordinal,
@@ -440,10 +447,10 @@ class ProviderAttempt:
 
 
 class ProviderAdmissionController:
-    """Coordinate one credential's recovery within a provider capacity budget.
+    """Coordinate per-model recovery for one credential within provider capacity.
 
     Normal attempts pass through a strict sliding window and concurrency bulkhead.
-    The first shared transient failure opens one recovery episode. Exactly one
+    The first shared transient failure opens a recovery episode for its model. One
     logical execution owns its half-open probes; concurrent callers wait for that
     episode instead of starting independent retry loops.
     """
@@ -478,7 +485,7 @@ class ProviderAdmissionController:
         self._jitter = jitter
         self._capacity = capacity or ProviderCapacityLimiter(limits)
         self._condition = asyncio.Condition()
-        self._episode: _RecoveryEpisode | None = None
+        self._episodes: dict[str | None, _RecoveryEpisode] = {}
         self._next_generation = 1
         logger.info(
             "Provider admission initialized for {} ({} req / {}s, "
@@ -494,12 +501,14 @@ class ProviderAdmissionController:
         self,
         *,
         request_id: str | None = None,
+        model: str | None = None,
     ) -> ProviderExecution:
-        """Create the sole lifecycle owner for one logical provider operation."""
+        """Own one operation, with None reserved for model discovery recovery."""
         return ProviderExecution(
             self,
             max_attempts=self._max_attempts,
             request_id=request_id,
+            model=model,
         )
 
     async def _open_attempt(
@@ -537,6 +546,7 @@ class ProviderAdmissionController:
                     source="provider",
                     provider=self._provider_name,
                     request_id=execution.request_id,
+                    model=execution.model,
                     execution_id=execution.execution_id,
                     operation_kind=operation_kind.value,
                     attempt=claim.ordinal,
@@ -560,7 +570,7 @@ class ProviderAdmissionController:
             sleep_delay: float | None = None
             claimed_generation: int | None = None
             async with self._condition:
-                episode = self._episode
+                episode = self._episodes.get(execution.model)
                 if episode is None:
                     return _GatePermit(generation=None, probe=False)
 
@@ -569,6 +579,7 @@ class ProviderAdmissionController:
                     if now < episode.terminal_until:
                         raise ProviderRecoveryExhausted(episode.last_error)
                     episode = self._start_recovery_episode(
+                        model=execution.model,
                         leader=execution,
                         ready_at=now,
                         last_error=episode.last_error,
@@ -591,7 +602,7 @@ class ProviderAdmissionController:
                     try:
                         await self._condition.wait()
                     except asyncio.CancelledError:
-                        current = self._episode
+                        current = self._episodes.get(execution.model)
                         if (
                             current is not None
                             and current.generation == episode.generation
@@ -611,7 +622,7 @@ class ProviderAdmissionController:
                     )
                     await asyncio.sleep(sleep_delay)
                 async with self._condition:
-                    episode = self._episode
+                    episode = self._episodes.get(execution.model)
                     if (
                         episode is not None
                         and episode.generation == claimed_generation
@@ -636,6 +647,7 @@ class ProviderAdmissionController:
             source="provider",
             provider=self._provider_name,
             request_id=execution.request_id,
+            model=execution.model,
             generation=episode.generation,
             attempt=execution.attempts_started + 1,
             max_attempts=execution.max_attempts,
@@ -647,7 +659,7 @@ class ProviderAdmissionController:
         execution: ProviderExecution,
         permit: _GatePermit,
     ) -> bool:
-        episode = self._episode
+        episode = self._episodes.get(execution.model)
         if not permit.probe:
             return episode is None
         return (
@@ -669,7 +681,7 @@ class ProviderAdmissionController:
             episode = self._matching_probe(execution, permit)
             if episode is None:
                 return
-            self._episode = None
+            del self._episodes[execution.model]
             self._notify_recovery_waiters()
         trace_event(
             stage="provider",
@@ -677,6 +689,7 @@ class ProviderAdmissionController:
             source="provider",
             provider=self._provider_name,
             request_id=execution.request_id,
+            model=execution.model,
             generation=permit.generation,
             attempt=execution.attempts_started,
             outcome="success",
@@ -709,7 +722,7 @@ class ProviderAdmissionController:
             episode = self._matching_probe(execution, permit)
             if episode is None:
                 return
-            self._episode = None
+            del self._episodes[execution.model]
             self._notify_recovery_waiters()
         trace_event(
             stage="provider",
@@ -717,6 +730,7 @@ class ProviderAdmissionController:
             source="provider",
             provider=self._provider_name,
             request_id=execution.request_id,
+            model=execution.model,
             generation=permit.generation,
             attempt=execution.attempts_started,
             outcome="rejected",
@@ -752,11 +766,12 @@ class ProviderAdmissionController:
         exhausted_episode = False
 
         async with self._condition:
-            episode = self._episode
+            episode = self._episodes.get(execution.model)
             matching_probe = self._matching_probe(execution, permit)
             if can_retry:
                 if episode is None:
                     episode = self._start_recovery_episode(
+                        model=execution.model,
                         leader=execution,
                         ready_at=time.monotonic() + delay,
                         last_error=error,
@@ -779,6 +794,7 @@ class ProviderAdmissionController:
                 )
                 if episode is None:
                     episode = self._start_recovery_episode(
+                        model=execution.model,
                         leader=None,
                         ready_at=time.monotonic(),
                         last_error=error,
@@ -809,6 +825,7 @@ class ProviderAdmissionController:
                 source="provider",
                 provider=self._provider_name,
                 request_id=execution.request_id,
+                model=execution.model,
                 status_code=status,
                 exc_type=type(error).__name__,
                 attempt=execution.attempts_started,
@@ -823,6 +840,7 @@ class ProviderAdmissionController:
                 source="provider",
                 provider=self._provider_name,
                 request_id=execution.request_id,
+                model=execution.model,
                 status_code=status,
                 exc_type=type(error).__name__,
                 attempt=execution.attempts_started,
@@ -840,6 +858,7 @@ class ProviderAdmissionController:
                 source="provider",
                 provider=self._provider_name,
                 request_id=execution.request_id,
+                model=execution.model,
                 status_code=status,
                 exc_type=type(error).__name__,
                 attempts=execution.attempts_started,
@@ -849,6 +868,7 @@ class ProviderAdmissionController:
     def _start_recovery_episode(
         self,
         *,
+        model: str | None,
         leader: ProviderExecution | None,
         ready_at: float,
         last_error: Exception,
@@ -861,13 +881,14 @@ class ProviderAdmissionController:
             last_error=last_error,
         )
         self._next_generation += 1
-        self._episode = episode
+        self._episodes[model] = episode
         trace_event(
             stage="provider",
             event="provider.recovery.opened",
             source="provider",
             provider=self._provider_name,
             request_id=(leader.request_id if leader is not None else request_id),
+            model=model,
             generation=episode.generation,
         )
         return episode
@@ -877,7 +898,7 @@ class ProviderAdmissionController:
         execution: ProviderExecution,
         permit: _GatePermit,
     ) -> _RecoveryEpisode | None:
-        episode = self._episode
+        episode = self._episodes.get(execution.model)
         if (
             not permit.probe
             or episode is None
@@ -910,7 +931,7 @@ class ProviderAdmissionController:
         generation: int,
     ) -> None:
         async with self._condition:
-            episode = self._episode
+            episode = self._episodes.get(execution.model)
             if (
                 episode is None
                 or episode.generation != generation

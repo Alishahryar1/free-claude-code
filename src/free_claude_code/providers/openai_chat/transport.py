@@ -905,8 +905,13 @@ class _OpenAIChatStreamRunner:
 
     async def run(self) -> AsyncIterator[str]:
         """Convert the upstream OpenAI-chat stream into Anthropic SSE."""
+        model = self._body["model"]
+        extra_body = self._body.get("extra_body")
+        # The SDK merges allowed extra_body fields over the top-level request.
+        if isinstance(extra_body, dict) and isinstance(extra_body.get("model"), str):
+            model = extra_body["model"]
         execution = self._transport._admission.start_execution(
-            request_id=self._request_id
+            request_id=self._request_id, model=str(model)
         )
         recovery = RecoveryController(execution.delivery)
         request_recovery = RequestRecovery(

@@ -130,7 +130,7 @@ class CloudflareProvider(OpenAIChatProvider):
                 raise
             return response
 
-        execution = self._admission.start_execution()
+        execution = self._admission.start_execution(model=None)
         response = await execution.run_call(
             request,
             operation_kind=ProviderOperationKind.MODEL_DISCOVERY,

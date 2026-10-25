@@ -309,7 +309,7 @@ async def test_hidden_normal_stop_prevents_request_corrections(
         calls = 1 if public and stopped else 2
         assert len(bodies) == calls
         assert all(item.close_calls == 1 for item in wires)
-        assert admission._episode is None
+        assert not admission._episodes
         assert endpoint.calls == (
             [False, True]
             if calls == 2 and failure_kind == "authentication"

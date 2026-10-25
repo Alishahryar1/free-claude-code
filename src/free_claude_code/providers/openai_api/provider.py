@@ -106,7 +106,7 @@ class OpenAIAPIProvider(BaseProvider):
         await self._client.close()
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
-        payload = await self._admission.start_execution().run_call(
+        payload = await self._admission.start_execution(model=None).run_call(
             self._client.models.list,
             operation_kind=ProviderOperationKind.MODEL_DISCOVERY,
         )

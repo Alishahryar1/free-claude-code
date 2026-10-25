@@ -248,7 +248,9 @@ class AnthropicMessagesTransport:
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
-        execution = self._admission.start_execution(request_id=request_id)
+        execution = self._admission.start_execution(
+            request_id=request_id, model=str(body["model"])
+        )
         run = self._run(
             body,
             reasoning_correction=reasoning_correction,

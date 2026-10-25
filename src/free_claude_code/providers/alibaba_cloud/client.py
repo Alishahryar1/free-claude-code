@@ -66,7 +66,7 @@ class AlibabaCloudProvider(OpenAIChatProvider):
                 "features": "function-calling",
                 "supports": "inference",
             }
-            payload = await self._admission.start_execution().run_call(
+            payload = await self._admission.start_execution(model=None).run_call(
                 lambda params=params: self._client.get(
                     url, cast_to=object, options={"params": params}
                 ),

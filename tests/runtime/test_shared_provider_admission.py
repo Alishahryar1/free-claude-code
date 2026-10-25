@@ -34,7 +34,7 @@ async def test_replacement_cannot_bypass_existing_protection(protection: str) ->
             NvidiaNimProvider,
             await manager._current.runtime.resolve_provider("nvidia_nim"),
         )
-        old_attempt = await old._admission.start_execution().open_attempt(
+        old_attempt = await old._admission.start_execution(model="model").open_attempt(
             ProviderOperationKind.GENERATION
         )
         if protection == "recovery":
@@ -65,7 +65,7 @@ async def test_replacement_cannot_bypass_existing_protection(protection: str) ->
                 await manager._current.runtime.resolve_provider("nvidia_nim"),
             )
             pending = asyncio.create_task(
-                new._admission.start_execution().open_attempt(
+                new._admission.start_execution(model="model").open_attempt(
                     ProviderOperationKind.GENERATION
                 )
             )
@@ -180,17 +180,17 @@ async def test_old_lazy_construction_uses_current_limits_and_survives_retirement
             NvidiaNimProvider,
             await manager._current.runtime.resolve_provider("nvidia_nim"),
         )
-        first = await old._admission.start_execution().open_attempt(
+        first = await old._admission.start_execution(model="model").open_attempt(
             ProviderOperationKind.GENERATION
         )
         second = await asyncio.wait_for(
-            new._admission.start_execution().open_attempt(
+            new._admission.start_execution(model="model").open_attempt(
                 ProviderOperationKind.GENERATION
             ),
             1,
         )
         blocked = asyncio.create_task(
-            new._admission.start_execution().open_attempt(
+            new._admission.start_execution(model="model").open_attempt(
                 ProviderOperationKind.GENERATION
             )
         )
@@ -202,7 +202,7 @@ async def test_old_lazy_construction_uses_current_limits_and_survives_retirement
         await second.aclose()
         await old_lease.release()
         await asyncio.wait_for(
-            new._admission.start_execution().run_call(
+            new._admission.start_execution(model="model").run_call(
                 AsyncMock(return_value="ok"),
                 operation_kind=ProviderOperationKind.GENERATION,
             ),

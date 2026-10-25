@@ -566,9 +566,9 @@ async def test_provider_override_can_classify_retryable_semantics() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discovery_and_generation_share_provider_recovery_health() -> None:
+async def test_discovery_requests_share_recovery_health() -> None:
     controller = _controller()
-    discovery = controller.start_execution()
+    discovery = controller.start_execution(model=None)
     discovery_attempt = await discovery.open_attempt(
         ProviderOperationKind.MODEL_DISCOVERY
     )
@@ -576,20 +576,20 @@ async def test_discovery_and_generation_share_provider_recovery_health() -> None
     assert (await discovery_attempt.fail(_status_error(503))).retry_allowed
     await discovery_attempt.aclose()
 
-    generation = controller.start_execution()
-    generation_wait = asyncio.create_task(
-        generation.open_attempt(ProviderOperationKind.GENERATION)
+    follower = controller.start_execution(model=None)
+    discovery_wait = asyncio.create_task(
+        follower.open_attempt(ProviderOperationKind.MODEL_DISCOVERY)
     )
     await asyncio.sleep(0)
-    assert not generation_wait.done()
+    assert not discovery_wait.done()
 
     probe = await discovery.open_attempt(ProviderOperationKind.MODEL_DISCOVERY)
     await probe.accept()
     await probe.aclose()
 
-    generation_attempt = await asyncio.wait_for(generation_wait, timeout=1)
-    await generation_attempt.accept()
-    await generation_attempt.aclose()
+    follower_attempt = await asyncio.wait_for(discovery_wait, timeout=1)
+    await follower_attempt.accept()
+    await follower_attempt.aclose()
 
 
 @pytest.mark.asyncio
@@ -657,7 +657,7 @@ async def test_cancelled_follower_leaves_recovery_episode() -> None:
 
     follower_wait = asyncio.create_task(_open(follower_execution))
     await asyncio.sleep(0)
-    episode = controller._episode
+    episode = controller._episodes.get(None)
     assert episode is not None
     assert follower_execution in episode.waiters
 
