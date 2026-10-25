@@ -300,6 +300,33 @@ async def vscode_chat_status(
     return await _integration_response(services.admin.vscode_chat_status)
 
 
+@router.get("/admin/api/integrations/antigravity")
+async def antigravity_status(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.antigravity_status)
+
+
+@router.post("/admin/api/integrations/antigravity/connect")
+async def connect_antigravity(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.connect_antigravity)
+
+
+@router.post("/admin/api/integrations/antigravity/disconnect")
+async def disconnect_antigravity(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    require_loopback_admin(request)
+    return await _integration_response(services.admin.disconnect_antigravity)
+
+
 @router.post("/admin/api/integrations/vscode-chat/connect")
 async def connect_vscode_chat(
     request: Request,

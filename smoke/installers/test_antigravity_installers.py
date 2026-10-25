@@ -168,7 +168,10 @@ def test_agy_selection_preserves_native_settings_and_verifies_fcc(
     assert settings.read_text() == original
     assert not (home / ".fcc/antigravity-integration.json").exists()
     if selected:
-        assert "fcc-agy --connect" in result.stdout
+        assert (
+            "Connect Antigravity CLI on FCC's Integrations page first." in result.stdout
+        )
+        assert "fcc-agy --connect" not in result.stdout
         assert not any(
             f"{command}:--version" in calls
             for command in CODING_AGENTS

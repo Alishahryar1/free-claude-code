@@ -1953,7 +1953,7 @@ function Show-InstallerNextSteps {
         Write-Host "Run Aider with: fcc-aider"
     }
     if ($script:InstallAgy) {
-        Write-Host "Connect Antigravity CLI once with: fcc-agy --connect"
+        Write-Host "Connect Antigravity CLI on FCC's Integrations page first."
         Write-Host "Run Antigravity CLI with: fcc-agy"
     }
 

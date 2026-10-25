@@ -142,6 +142,7 @@ function renderStartup() {
     renderProviderCheckResult(provider.provider_id);
   });
   renderClaudeIntegration();
+  renderAntigravityIntegration();
   renderVSCodeChatIntegration();
   renderJetBrainsIntegration();
   renderCodexIntegration();
@@ -296,6 +297,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   if (activeView.id === "code") window.CodeSessions.activate(window.location.pathname);
   else window.CodeSessions.deactivate();
   if (activeView.id === "integrations") {
+    refreshAntigravityIntegration();
     refreshClaudeIntegration();
     refreshClaudeOnboarding();
     refreshVSCodeChatIntegration();
@@ -2097,6 +2099,97 @@ claudeIntegrationDialog.addEventListener("click", (event) => {
   const bounds = claudeIntegrationDialog.getBoundingClientRect();
   if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
     claudeIntegrationDialog.close();
+  }
+});
+
+const antigravityIntegrationDialog = byId("antigravityIntegrationDialog");
+const antigravityIntegration = { connected: null, busy: false, paths: null };
+const antigravityIntegrationPath = "/admin/api/integrations/antigravity";
+
+function renderAntigravityIntegration() {
+  const { connected, busy, paths } = antigravityIntegration;
+  const action = connected ? "Disconnect" : "Connect";
+  byId("openAntigravityIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
+  byId("openAntigravityIntegration").disabled = busy;
+  byId("openAntigravityIntegration").setAttribute("aria-busy", String(busy));
+  byId("openAntigravityIntegration").className = connected && !busy ? "danger-button" : "primary-button";
+  byId("confirmAntigravityIntegration").textContent = busy ? "Saving…" : action;
+  byId("confirmAntigravityIntegration").disabled = busy || connected === null;
+  byId("confirmAntigravityIntegration").className = connected ? "danger-button" : "primary-button";
+  byId("antigravityIntegrationDescription").textContent = connected
+    ? "Restore Antigravity CLI's previous provider and remove FCC's models. Running sessions can continue. Connect again before your next fcc-agy launch."
+    : "Switch Antigravity CLI to the Gemini API provider and add FCC's models. Then launch with fcc-agy.";
+  const files = byId("antigravityIntegrationFiles");
+  files.replaceChildren();
+  for (const path of Object.values(paths || {})) {
+    const item = document.createElement("li");
+    const code = document.createElement("code");
+    code.textContent = path;
+    item.appendChild(code);
+    files.appendChild(item);
+  }
+}
+
+async function refreshAntigravityIntegration() {
+  const request = beginIntegrationCheck(antigravityIntegration);
+  if (!request) return;
+  integrationMessage("antigravityIntegrationMessage", "");
+  renderAntigravityIntegration();
+  try {
+    const result = await api(antigravityIntegrationPath);
+    if (!currentIntegrationCheck(antigravityIntegration, request)) return;
+    antigravityIntegration.connected = result.connected;
+    antigravityIntegration.paths = result.paths;
+  } catch (error) {
+    if (!currentIntegrationCheck(antigravityIntegration, request)) return;
+    antigravityIntegration.connected = null;
+    integrationMessage("antigravityIntegrationMessage", error.message, true);
+  } finally {
+    finishIntegrationCheck(antigravityIntegration, request, renderAntigravityIntegration);
+  }
+}
+
+byId("openAntigravityIntegration").addEventListener("click", () => {
+  if (antigravityIntegration.connected === null) {
+    void refreshAntigravityIntegration();
+    return;
+  }
+  integrationMessage("antigravityIntegrationDialogMessage", "");
+  antigravityIntegrationDialog.showModal();
+});
+byId("confirmAntigravityIntegration").addEventListener("click", async () => {
+  if (byId("confirmAntigravityIntegration").disabled) return;
+  const disconnect = antigravityIntegration.connected;
+  const config = state.config;
+  antigravityIntegration.busy = true;
+  renderAntigravityIntegration();
+  integrationMessage("antigravityIntegrationDialogMessage", "");
+  integrationMessage("antigravityIntegrationMessage", "");
+  try {
+    const result = await api(`${antigravityIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    if (config !== state.config) return;
+    antigravityIntegration.connected = result.connected;
+    antigravityIntegration.paths = result.paths;
+    antigravityIntegrationDialog.close();
+    integrationMessage("antigravityIntegrationMessage", disconnect
+      ? "Disconnected. Previous provider settings restored."
+      : "Connected. Launch Antigravity CLI with fcc-agy.");
+  } catch (error) {
+    if (config !== state.config) return;
+    integrationMessage("antigravityIntegrationDialogMessage", error.message, true);
+    integrationMessage("antigravityIntegrationMessage", error.message, true);
+  } finally {
+    antigravityIntegration.busy = false;
+    renderAntigravityIntegration();
+    if (config !== state.config) void refreshAntigravityIntegration();
+  }
+});
+byId("closeAntigravityIntegration").addEventListener("click", () => antigravityIntegrationDialog.close());
+antigravityIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== antigravityIntegrationDialog) return;
+  const bounds = antigravityIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    antigravityIntegrationDialog.close();
   }
 });
 

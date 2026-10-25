@@ -167,19 +167,10 @@ Aider:
 fcc-aider
 ```
 
-Antigravity CLI:
-
-Connect once, then use `fcc-agy` while connected:
+Antigravity CLI (connect on the Integrations page first):
 
 ```bash
-fcc-agy --connect
 fcc-agy
-```
-
-Restore Antigravity's previous provider settings:
-
-```bash
-fcc-agy --disconnect
 ```
 
 <a id="model-picker"></a>

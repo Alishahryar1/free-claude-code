@@ -1672,7 +1672,7 @@ show_installer_next_steps() {
         printf 'Run Aider with: fcc-aider\n'
     fi
     if [ "$install_agy" -eq 1 ]; then
-        printf 'Connect Antigravity CLI once with: fcc-agy --connect\n'
+        printf "Connect Antigravity CLI on FCC's Integrations page first.\n"
         printf 'Run Antigravity CLI with: fcc-agy\n'
     fi
 }
