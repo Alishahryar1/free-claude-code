@@ -292,8 +292,10 @@ async def test_attempt_cancellation_releases_concurrency() -> None:
     [_status_error(503), ssl.SSLWantReadError("read would block")],
     ids=["http_503", "tls_want_read"],
 )
-async def test_run_call_uses_one_five_attempt_budget(error: Exception) -> None:
-    controller = _controller()
+async def test_run_call_uses_one_ten_attempt_budget(error: Exception) -> None:
+    controller = ProviderAdmissionController(
+        provider_name="TEST", base_delay=0.0, max_delay=0.0, jitter=0.0
+    )
     attempts = 0
 
     async def fail() -> None:
@@ -307,7 +309,7 @@ async def test_run_call_uses_one_five_attempt_budget(error: Exception) -> None:
             operation_kind=ProviderOperationKind.GENERATION,
         )
 
-    assert attempts == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert attempts == 10
     assert exc_info.value is error
 
 
@@ -324,7 +326,7 @@ async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) 
     async def recover() -> str:
         nonlocal attempts
         attempts += 1
-        if attempts < 3:
+        if attempts < 10:
             raise error
         return "recovered"
 
@@ -338,7 +340,7 @@ async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) 
         )
         == "recovered"
     )
-    assert attempts == 3
+    assert attempts == 10
 
 
 @pytest.mark.asyncio
