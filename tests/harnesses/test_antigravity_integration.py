@@ -1,6 +1,7 @@
 """Antigravity connection ownership preserves native configuration and history."""
 
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -112,9 +113,80 @@ def test_disconnect_restores_provider_field_presence_and_existing_key_mode(
 def test_unconnected_launch_requires_explicit_connect_without_mutation(native_files):
     path, state = native_files
     before = path.read_bytes()
-    with pytest.raises(ValueError, match="--connect"):
+    with pytest.raises(ValueError, match="disconnected"):
         integration.configure(path, state, catalog("provider/model"))
     assert path.read_bytes() == before and not state.exists()
+
+
+def test_status_recognizes_existing_connection_and_external_provider_changes(
+    native_files,
+):
+    path, state = native_files
+    before = path.read_bytes()
+    assert integration.status(path, state)["connected"] is False
+    assert integration.status(path, state)["can_disconnect"] is False
+    assert path.read_bytes() == before and not state.exists()
+    integration.configure(path, state, catalog("provider/model"), connect=True)
+    before = path.read_bytes(), state.read_bytes()
+    result = integration.status(path, state)
+    assert result["connected"] is True
+    assert result["can_disconnect"] is True
+    assert result["paths"] == {
+        "settings": str(path.resolve()),
+        "connection": str(state.resolve()),
+    }
+    assert (path.read_bytes(), state.read_bytes()) == before
+    write(path, {**read(path), "modelProvider": "personal"})
+    assert integration.status(path, state)["connected"] is False
+    assert integration.status(path, state)["can_disconnect"] is True
+    assert state.exists()
+
+
+def test_status_waits_for_native_write_before_reporting_connection(
+    native_files, monkeypatch
+):
+    path, state = native_files
+    entered, reading, release = threading.Event(), threading.Event(), threading.Event()
+    write_native = integration._write_native
+
+    def held(*args):
+        entered.set()
+        assert release.wait(5)
+        return write_native(*args)
+
+    def inspect():
+        reading.set()
+        return integration.status(path, state)
+
+    monkeypatch.setattr(integration, "_write_native", held)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writer = pool.submit(
+            integration.configure, path, state, catalog("provider/model"), connect=True
+        )
+        try:
+            assert entered.wait(5)
+            assert state.exists()
+            reader = pool.submit(inspect)
+            assert reading.wait(5)
+            assert not reader.done()
+        finally:
+            release.set()
+        writer.result(timeout=5)
+        assert reader.result(timeout=5)["connected"] is True
+
+
+def test_status_does_not_hide_record_access_errors(native_files, monkeypatch):
+    path, state = native_files
+    original_stat = Path.stat
+
+    def denied(self, *args, **kwargs):
+        if self == state:
+            raise PermissionError("blocked")
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", denied)
+    with pytest.raises(PermissionError):
+        integration.status(path, state)
 
 
 def test_preexisting_custom_model_collision_is_not_claimed(native_files):
@@ -134,7 +206,7 @@ def test_disconnect_preserves_externally_changed_provider_and_model(native_files
         "user-choice"
     )
     write(path, changed)
-    with pytest.raises(ValueError, match="--connect"):
+    with pytest.raises(ValueError, match="disconnected"):
         integration.configure(path, state, catalog("provider/model"))
     assert read(path) == changed
     integration.disconnect(path, state)

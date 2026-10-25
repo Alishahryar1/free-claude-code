@@ -21,6 +21,7 @@ from free_claude_code.cli.process_registry import kill_pid_tree_best_effort
 from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.harnesses import antigravity_integration
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.test_custom_provider import definition, event, provider
 from tests.providers.test_gemini_transport import chat_response
@@ -196,7 +197,8 @@ def test_native_launcher_connect_tools_resume_disconnect(
     native_settings.parent.mkdir(parents=True)
     original = {"modelProvider": "", "fccSmokeUnrelated": {"keep": True}}
     native_settings.write_text(json.dumps(original))
-    monkeypatch.setattr(paths, "config_dir_path", lambda: tmp_path / "server-config")
+    monkeypatch.setattr(paths, "config_dir_path", lambda: home / ".fcc")
+    monkeypatch.setattr(antigravity_integration, "config_path", lambda: native_settings)
     monkeypatch.setattr(env_migrations, "legacy_env_paths", lambda: ())
     monkeypatch.setattr(env_migrations, "verified_checkout_env_path", lambda: None)
     sent, ingress = [], []
@@ -319,7 +321,12 @@ def test_native_launcher_connect_tools_resume_disconnect(
         while not server.started and time.monotonic() < deadline:
             time.sleep(0.05)
         assert server.started
-        assert "FCC:" in run("connect", "--connect")
+        admin = f"http://127.0.0.1:{sock.getsockname()[1]}/admin/api/integrations/antigravity"
+        with httpx.Client(trust_env=False) as client:
+            response = client.post(admin + "/connect")
+            assert response.status_code == 200, response.text
+            assert response.json()["connected"] is True
+        assert "FCC:" in run("models", "models")
         assert json.loads(native_settings.read_text())["modelProvider"] == "gemini"
         assert token not in native_settings.read_text()
         args = [
@@ -353,7 +360,10 @@ def test_native_launcher_connect_tools_resume_disconnect(
         assert all(body["model"] == "agy-backend:variant" for body in sent)
         assert f"/v1beta/models/{selected}:streamGenerateContent" in ingress
         assert provider_manager_for_app(app)._current.active_leases == 0
-        run("disconnect", "--disconnect")
+        with httpx.Client(trust_env=False) as client:
+            response = client.post(admin + "/disconnect")
+            assert response.status_code == 200, response.text
+            assert response.json()["connected"] is False
         assert json.loads(native_settings.read_text()) == original
         assert not (home / ".fcc/antigravity-integration.json").exists()
         assert list((home / ".gemini/antigravity-cli").rglob("*.db")), (

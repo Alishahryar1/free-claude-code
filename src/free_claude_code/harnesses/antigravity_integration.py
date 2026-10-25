@@ -18,6 +18,11 @@ _MODEL_PREFIX = "gemini-api://models/"
 _NATIVE_TOOLS = "TOOL_FORMATTER_TYPE_NONE"
 
 
+class DisconnectedError(ValueError):
+    def __init__(self) -> None:
+        super().__init__("Antigravity CLI is disconnected from FCC.")
+
+
 def config_path() -> Path:
     return Path.home() / ".gemini/antigravity-cli/settings.json"
 
@@ -176,7 +181,7 @@ def configure(
         if not connect and (
             connection is None or provider.get("modelProvider") != "gemini"
         ):
-            raise ValueError("Connect Antigravity first with: fcc-agy --connect")
+            raise DisconnectedError()
         owned_keys = connection.model_keys if connection is not None else frozenset()
         generated = _catalog_models(catalog)
         for key in generated.keys() & models.keys():
@@ -207,6 +212,31 @@ def configure(
         _write_state(state, path, _Connection(previous, owned_keys | desired_keys))
         _write_native(path, document, updated)
         _write_state(state, path, _Connection(previous, desired_keys))
+
+
+def status(path: Path, state: Path) -> JsonObject:
+    """Recognize existing connections without a catalog or native settings writes."""
+    path, state = path.resolve(), state.resolve()
+    connected = can_disconnect = False
+    try:
+        state.stat()
+    except FileNotFoundError:
+        pass
+    else:
+        with _locked(state):
+            connection = _connection(state, path)
+            can_disconnect = connection is not None
+            document = _read(path)
+            _models(document)
+            connected = (
+                connection is not None
+                and _provider(document).get("modelProvider") == "gemini"
+            )
+    return {
+        "connected": connected,
+        "can_disconnect": can_disconnect,
+        "paths": {"settings": str(path), "connection": str(state)},
+    }
 
 
 def disconnect(path: Path, state: Path) -> bool:

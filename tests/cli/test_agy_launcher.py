@@ -61,33 +61,75 @@ def test_native_subcommands_and_session_arguments_keep_native_scope(
     assert "--dangerously-skip-permissions" not in expected
 
 
-def test_connect_is_explicit_and_runs_native_catalog_verification(launch_capture):
-    integration.disconnect(integration.config_path(), integration.state_path())
-    launch("agy", ["--connect"])
-    assert launch_capture.commands == [["agy", "models"]]
-    assert (
-        json.loads(integration.config_path().read_text())["modelProvider"] == "gemini"
+@pytest.mark.parametrize("args", [["--connect"], ["--disconnect"]])
+@pytest.mark.parametrize("native", ["missing", "old", "supported"])
+def test_old_connection_commands_point_to_admin_without_mutation(
+    args, launch_capture, capsys, monkeypatch, native
+):
+    monkeypatch.setenv("PORT", "4567")
+    if native == "missing":
+        monkeypatch.setattr(common.shutil, "which", lambda name: None)
+    elif native == "old":
+        launch_capture.versions["agy"] = "1.4.6"
+    before = (
+        integration.config_path().read_bytes(),
+        integration.state_path().read_bytes(),
     )
+    launch("agy", args, exit_code=1)
+    assert not launch_capture.commands
+    assert not launch_capture.requests and not launch_capture.probes
+    error = capsys.readouterr().err
+    assert "http://127.0.0.1:4567/admin/integrations" in error
+    assert "fcc-server" in error
+    assert (
+        integration.config_path().read_bytes(),
+        integration.state_path().read_bytes(),
+    ) == before
 
 
-def test_unconnected_launch_does_not_silently_change_provider(launch_capture, capsys):
+@pytest.mark.parametrize("host, expected", [("0.0.0.0", "127.0.0.1"), ("::1", "[::1]")])
+def test_unconnected_launch_precedes_catalog_and_links_actual_admin(
+    launch_capture, capsys, monkeypatch, host, expected
+):
+    monkeypatch.setenv("HOST", host)
+    monkeypatch.setenv("PORT", "4567")
+    launch_capture.catalog_error = ValueError("catalog unavailable")
     integration.disconnect(integration.config_path(), integration.state_path())
     before = integration.config_path().read_bytes()
     launch("agy", [], exit_code=1)
     assert not launch_capture.commands
     assert integration.config_path().read_bytes() == before
-    assert "fcc-agy --connect" in capsys.readouterr().err
+    assert [request.full_url for request in launch_capture.requests] == [
+        f"http://{expected}:4567/health"
+    ]
+    error = capsys.readouterr().err
+    assert "disconnected" in error.lower()
+    assert f"http://{expected}:4567/admin/integrations" in error
+    assert "catalog unavailable" not in error
 
 
-def test_disconnect_works_without_binary_settings_server_or_catalog(launch_capture):
-    with patch.object(
-        common.shutil, "which", side_effect=AssertionError("no binary needed")
-    ):
-        agy.launch(["--disconnect"])
-    assert not launch_capture.requests and not launch_capture.probes
+def test_disconnect_during_catalog_refresh_stops_launch(launch_capture, capsys):
+    fetch = agy.fetch_proxy_model_catalog
+
+    def disconnect(*args, **kwargs):
+        result = fetch(*args, **kwargs)
+        integration.disconnect(integration.config_path(), integration.state_path())
+        return result
+
+    with patch.object(agy, "fetch_proxy_model_catalog", disconnect):
+        launch("agy", [], exit_code=1)
     assert not launch_capture.commands
     assert not integration.state_path().exists()
     assert "modelProvider" not in json.loads(integration.config_path().read_text())
+    assert "http://127.0.0.1:8182/admin/integrations" in capsys.readouterr().err
+
+
+def test_old_connection_guidance_does_not_leak_settings_errors(launch_capture, capsys):
+    with patch.object(agy, "get_settings", side_effect=ValueError("sensitive-value")):
+        launch("agy", ["--disconnect"], exit_code=1)
+    error = capsys.readouterr().err
+    assert "fcc-server" in error and "sensitive-value" not in error
+    assert not launch_capture.commands and not launch_capture.probes
 
 
 @pytest.mark.parametrize("output", ["1.4.6", "1.4.7-beta.1", "unknown"])

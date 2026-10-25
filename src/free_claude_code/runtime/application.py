@@ -379,6 +379,15 @@ class ApplicationRuntime:
     async def admin_values(self) -> ValueState:
         return await self._configuration.admin_values()
 
+    async def antigravity_status(self) -> JsonObject:
+        return await self._integrations.antigravity_status()
+
+    async def connect_antigravity(self) -> JsonObject:
+        return await self._integrations.connect_antigravity()
+
+    async def disconnect_antigravity(self) -> JsonObject:
+        return await self._integrations.disconnect_antigravity()
+
     async def vscode_chat_status(self) -> JsonObject:
         return await self._integrations.vscode_chat_status()
 
