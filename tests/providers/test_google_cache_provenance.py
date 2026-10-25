@@ -210,8 +210,9 @@ async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenan
         max_retries=0,
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)),
     ) as client:
-        adapter = transport(client, GoogleChatBehavior(GOOGLE_PROFILE))
-        adapter._api_key_provider = credential
+        adapter = transport(
+            client, GoogleChatBehavior(GOOGLE_PROFILE), api_key_provider=credential
+        )
         for index in range(1, 3):
             value, _ = await collect(adapter.stream_gemini(gemini_request(tools=TOOLS)))
             bundle = decode_bundle(
@@ -253,9 +254,12 @@ async def test_endpoint_snapshot_precedes_renewable_callback():
         base_url="https://base.invalid/v1",
         http_client=httpx2.AsyncClient(transport=wire),
     ) as client:
-        adapter = transport(client, GoogleChatBehavior(GOOGLE_PROFILE))
-        adapter._api_key_provider = unexpected_callback
-        adapter._endpoint_transport = wire
+        adapter = transport(
+            client,
+            GoogleChatBehavior(GOOGLE_PROFILE),
+            api_key_provider=unexpected_callback,
+            endpoint_transport=wire,
+        )
         await collect(
             adapter.stream_gemini(gemini_request(), endpoint_context=Endpoint())
         )
@@ -337,3 +341,75 @@ async def test_concurrent_attempts_record_their_own_origin():
                 ]
                 == identity
             )
+
+
+@pytest.mark.asyncio
+async def test_buffered_recovery_metadata_uses_replacement_credentials():
+    resolutions = 0
+    requests = []
+
+    async def credential():
+        nonlocal resolutions
+        resolutions += 1
+        return f"key-{resolutions}"
+
+    def reply(request):
+        requests.append(request.headers["authorization"])
+        if len(requests) == 1:
+            return chat_response(
+                [
+                    {"reasoning_content": "original thought"},
+                    {"content": "visible " * 10000},
+                ],
+                finish=None,
+            )
+        return chat_response(
+            [
+                {"reasoning_content": "replacement thought"},
+                {
+                    "tool_calls": [
+                        {
+                            **CALL,
+                            "extra_content": {
+                                "google": {"thought_signature": "recovered-signature"}
+                            },
+                        }
+                    ]
+                },
+            ],
+            finish="tool_calls",
+        )
+
+    async with AsyncOpenAI(
+        api_key=credential,
+        base_url="https://source.invalid/v1",
+        max_retries=0,
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)),
+    ) as client:
+        behavior = GoogleChatBehavior(GOOGLE_PROFILE)
+        adapter = transport(client, behavior, api_key_provider=credential)
+        value, _ = await collect(adapter.stream_gemini(gemini_request(tools=TOOLS)))
+        bundle = decode_bundle(
+            value["candidates"][0]["content"]["parts"][-1]["thoughtSignature"]
+        )
+        assert bundle is not None
+        source = replay_origin(
+            "GEMINI", "chat", "model", client=client.with_options(api_key="key-1")
+        )
+        replacement = replay_origin(
+            "GEMINI", "chat", "model", client=client.with_options(api_key="key-2")
+        )
+        assert requests == ["Bearer key-1", "Bearer key-2"]
+        assert bundle.records[0].origin == source
+        assert bundle.records[0].native == {"reasoning_content": "original thought"}
+        assert bundle.records[1].origin == replacement
+        assert bundle.records[1].native == {"reasoning_content": "replacement thought"}
+        assert bundle.calls[0].origin == replacement
+        assert (
+            replacement,
+            bundle.calls[0].call_id,
+        ) in behavior._tool_call_extra_content_by_id
+        assert (
+            source,
+            bundle.calls[0].call_id,
+        ) not in behavior._tool_call_extra_content_by_id

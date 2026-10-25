@@ -149,6 +149,8 @@ class _CollectedRecoveryOutput:
     thinking: str
     tool_calls: tuple[CompletedOpenAIToolCall, ...]
     request_body: JsonObject
+    origin: ReplayOrigin | None
+    native_reasoning: JsonObject
 
 
 def _iter_visible_text_events(
@@ -1524,6 +1526,12 @@ class _OpenAIChatStreamRunner:
         if corrections is None:
             corrections = RequestCorrections("chat")
         last_error: Exception | None = None
+        origin: ReplayOrigin | None = None
+
+        def bind_origin(value: ReplayOrigin) -> None:
+            nonlocal origin
+            origin = value
+
         while execution.can_attempt:
             scope: ProviderAttemptScope | None = None
             terminal_seen = False
@@ -1541,6 +1549,7 @@ class _OpenAIChatStreamRunner:
                     endpoint=self._endpoint,
                     request_client=self._request_client,
                     extra_headers=self._extra_headers,
+                    on_origin=bind_origin,
                 )
                 scope = ProviderAttemptScope(
                     attempt,
@@ -1550,6 +1559,7 @@ class _OpenAIChatStreamRunner:
                 stream = scope.retain(stream)
                 text_parts: list[str] = []
                 thinking_parts: list[str] = []
+                native_parts: dict[str, list[str]] = {}
                 tool_calls = OpenAIToolCallCollector()
                 async for chunk in stream:
                     if not scope.attempt.accepted:
@@ -1566,9 +1576,12 @@ class _OpenAIChatStreamRunner:
                     if delta is None:
                         continue
                     if include_reasoning:
-                        reasoning = self._transport._profile.reasoning_delta(delta)
+                        field, reasoning = (
+                            self._transport._profile.native_reasoning_delta(delta)
+                        )
                         if reasoning:
                             thinking_parts.append(reasoning)
+                            native_parts.setdefault(field, []).append(reasoning)
                     content = getattr(delta, "content", None)
                     if isinstance(content, str) and content:
                         text_parts.append(content)
@@ -1595,6 +1608,12 @@ class _OpenAIChatStreamRunner:
                     thinking="".join(thinking_parts),
                     tool_calls=completed_tool_calls or (),
                     request_body=body,
+                    origin=origin,
+                    native_reasoning={
+                        field: "".join(parts) for field, parts in native_parts.items()
+                    }
+                    if terminal_seen
+                    else {},
                 )
             except Exception as error:
                 last_error = error
@@ -1636,6 +1655,8 @@ class _OpenAIChatStreamRunner:
             thinking="",
             tool_calls=(),
             request_body=body,
+            origin=None,
+            native_reasoning={},
         )
 
     async def _recovery_events(
@@ -1709,6 +1730,11 @@ class _OpenAIChatStreamRunner:
         if not (thinking_suffix or text_suffix or recovered.tool_calls):
             return None
         events = output.flush_reasoning_replay(completed=False)
+        # Completed records retain their own original provenance. Only newly
+        # collected native state and recovered calls belong to this connection.
+        output.replay_origin = recovered.origin
+        if recovered.native_reasoning:
+            output.capture_reasoning_record(recovered.native_reasoning)
         if thinking_suffix:
             events.extend(output.ensure_reasoning_block())
             events.append(output.emit_reasoning_delta(thinking_suffix))

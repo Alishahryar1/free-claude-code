@@ -192,3 +192,44 @@ async def test_parsed_think_tags_do_not_become_native_reasoning_fields():
     parts = value["candidates"][0]["content"]["parts"]
     assert any(part.get("text") == "parsed thought" for part in parts)
     assert not any("thoughtSignature" in part for part in parts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("visible", [False, True])
+async def test_abandoned_invisible_attempt_does_not_publish_its_reasoning(visible):
+    calls = 0
+
+    def reply(request):
+        nonlocal calls
+        calls += 1
+        prefix = "discarded" if calls == 1 else "winning"
+        return chat_response(
+            [
+                {"reasoning_content": prefix + " thought"},
+                {"content": prefix + " answer"},
+            ],
+            finish=None if calls == 1 else "stop",
+        )
+
+    async with AsyncOpenAI(
+        api_key="test",
+        base_url="https://provider.invalid/v1",
+        max_retries=0,
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)),
+    ) as client:
+        value, chunks = await collect(
+            transport(client, DeepSeekChatBehavior(_PROFILE)).stream_gemini(
+                gemini_request(
+                    generationConfig={"thinkingConfig": {"includeThoughts": visible}}
+                )
+            )
+        )
+    assert calls == 2
+    assert "discarded" not in "".join(chunks)
+    bundle = decode_bundle(
+        value["candidates"][0]["content"]["parts"][-1]["thoughtSignature"]
+    )
+    assert bundle is not None
+    assert [record.native for record in bundle.records] == [
+        {"reasoning_content": "winning thought"}
+    ]

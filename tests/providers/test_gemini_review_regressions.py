@@ -27,7 +27,7 @@ from tests.providers.test_lmstudio import (
 )
 
 
-def transport(client, behavior):
+def transport(client, behavior, **kwargs):
     return OpenAIChatTransport(
         client=client,
         behavior=behavior,
@@ -35,6 +35,7 @@ def transport(client, behavior):
         read_timeout_s=2,
         log_raw_sse_events=False,
         log_api_error_tracebacks=False,
+        **kwargs,
     )
 
 

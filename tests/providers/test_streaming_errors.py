@@ -77,7 +77,15 @@ def _recovery_output(
     thinking: str = "",
     tool_calls: tuple[dict, ...] = (),
 ) -> SimpleNamespace:
-    return SimpleNamespace(text=text, thinking=thinking, tool_calls=tool_calls)
+    from free_claude_code.core.history_replay import ReplayOrigin
+
+    return SimpleNamespace(
+        text=text,
+        thinking=thinking,
+        tool_calls=tool_calls,
+        origin=ReplayOrigin("TEST", "chat", "", "", "test-model"),
+        native_reasoning={},
+    )
 
 
 class ClosableAsyncStreamMock(AsyncStreamMock):
