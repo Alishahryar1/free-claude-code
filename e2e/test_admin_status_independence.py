@@ -131,6 +131,7 @@ def test_refresh_all_finishes_without_waiting_for_code(page, admin_base_url):
     "held_id,held_button",
     [
         ("claude-vscode", "openClaudeIntegration"),
+        ("antigravity", "openAntigravityIntegration"),
         ("vscode-chat", "openVSCodeChatIntegration"),
         ("codex", "openCodexIntegration"),
         ("claude-desktop", "openClaudeDesktopIntegration"),

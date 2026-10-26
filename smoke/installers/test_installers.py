@@ -38,6 +38,7 @@ FCC_COMMANDS = (
     "fcc-grok",
     "fcc-muse",
     "fcc-aider",
+    "fcc-agy",
     "fcc-doctor",
     "fcc-update",
     "fcc-init",
@@ -55,6 +56,7 @@ CODING_AGENTS = (
     "grok",
     "muse",
     "aider",
+    "agy",
 )
 
 
@@ -386,10 +388,13 @@ def _posix_command(name: str, *, version_output: str | None = None) -> str:
         "dsh": "0.2.0-rc.2",
         "grok": "1.0.5",
         "muse": "0.2.1",
+        "agy": "1.4.7",
         "node": "22.19.0",
     }.get(name, "1.0.0")
     if version_output is None:
-        if name == "hermes":
+        if name == "agy":
+            version_output = version
+        elif name == "hermes":
             version_output = f"Hermes Agent v{version} (test build)"
         elif name == "grok":
             version_output = f"grok {version} (5115b46bc9) [stable]"
@@ -506,6 +511,7 @@ if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-grok"
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-muse"
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-aider"
+    cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-agy"
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-doctor"
     cp "$FAKE_FIXTURES/fcc-command.sh" "$tool_bin/fcc-update"
     if [ "$FAIL_STEP" != "fcc-missing" ]; then
@@ -748,7 +754,7 @@ if [ "$url" = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v
     exit 0
 fi
 case "$url:$FAIL_STEP" in
-    *claude.ai*:claude-download|*chatgpt.com*:codex-download|*pi.dev*:pi-download|*opencode.ai*:opencode-download|*hermes-agent.nousresearch.com*:hermes-download|*x.ai*:grok-download|*dev.meta.ai*:muse-download|*rtk-ai*:rtk-download|*astral.sh*:uv-download)
+    *claude.ai*:claude-download|*chatgpt.com*:codex-download|*pi.dev*:pi-download|*opencode.ai*:opencode-download|*hermes-agent.nousresearch.com*:hermes-download|*x.ai*:grok-download|*dev.meta.ai*:muse-download|*antigravity.google*:agy-download|*rtk-ai*:rtk-download|*astral.sh*:uv-download)
         exit 41
         ;;
 esac
@@ -765,6 +771,7 @@ case "$url" in
     *hermes-agent.nousresearch.com*) source="$FAKE_FIXTURES/hermes-installer.sh" ;;
     *x.ai*) source="$FAKE_FIXTURES/grok-installer.sh" ;;
     *dev.meta.ai*) source="$FAKE_FIXTURES/muse-installer.sh" ;;
+    *antigravity.google*) source="$FAKE_FIXTURES/agy-installer.sh" ;;
     *rtk-ai*)
         if [ "$FAIL_STEP" = "rtk-install" ]; then
             printf 'invalid archive\n' > "$output"
@@ -859,6 +866,16 @@ chmod +x "$HOME/.local/bin/muse"
 """,
     )
     _write_executable(
+        fixtures / "agy-installer.sh",
+        """#!/bin/sh
+echo "agy-install" >> "$CALL_LOG"
+[ "$FAIL_STEP" = "agy-install" ] && exit 28
+mkdir -p "$HOME/.local/bin"
+cp "$FAKE_FIXTURES/agy-command.sh" "$HOME/.local/bin/agy"
+chmod +x "$HOME/.local/bin/agy"
+""",
+    )
+    _write_executable(
         fixtures / "uv-installer.sh",
         """#!/bin/sh
 echo "uv-install" >> "$CALL_LOG"
@@ -904,6 +921,7 @@ chmod +x "$uv_bin/uv"
     _write_executable(fixtures / "grok-command.sh", _posix_command("grok"))
     _write_executable(fixtures / "muse-command.sh", _posix_command("muse"))
     _write_executable(fixtures / "aider-command.sh", _posix_command("aider"))
+    _write_executable(fixtures / "agy-command.sh", _posix_command("agy"))
     rtk_command = _posix_rtk_command().encode()
     with tarfile.open(
         fixtures / "rtk-x86_64-unknown-linux-musl.tar.gz", "w:gz"
@@ -1028,7 +1046,7 @@ def test_install_sh_asks_only_about_missing_harnesses(
         posix_harness.add_rtk()
 
     result = posix_harness.run_interactive(
-        ("y\n" if install_codex else "\n") + "\n" * 8
+        ("y\n" if install_codex else "\n") + "\n" * 9
     )
 
     assert result.returncode == 0, result.stdout
@@ -1041,6 +1059,7 @@ def test_install_sh_asks_only_about_missing_harnesses(
         "grok",
         "muse",
         "aider",
+        "agy",
     ]
     calls = posix_harness.calls()
     assert "claude:--version" in calls
@@ -1059,7 +1078,7 @@ def test_install_sh_discovers_installed_npm_harnesses_before_questions(
     for command in ("pi", "cline", "dsh"):
         _write_executable(prefix / "bin" / command, _posix_command(command))
 
-    result = posix_harness.run_interactive("n\n" * 7)
+    result = posix_harness.run_interactive("n\n" * 8)
 
     assert result.returncode == 0, result.stdout
     assert re.findall(r"for fcc-(\w+)\?", result.stdout) == [
@@ -1069,6 +1088,7 @@ def test_install_sh_discovers_installed_npm_harnesses_before_questions(
         "grok",
         "muse",
         "aider",
+        "agy",
     ]
     calls = posix_harness.calls()
     assert "pi-install" not in calls
@@ -1088,7 +1108,7 @@ def test_install_sh_discovers_installed_aider_without_uv(
     )
     _write_executable(tool_bin / "aider", _posix_command("aider"))
 
-    result = posix_harness.run_interactive("n\n" * 9)
+    result = posix_harness.run_interactive("n\n" * 10)
 
     assert result.returncode == 0, result.stdout
     assert "for fcc-aider?" not in result.stdout
@@ -1101,7 +1121,7 @@ def test_install_sh_discovers_installed_aider_without_uv(
 def test_install_sh_asks_about_unrelated_pi(posix_harness: PosixHarness) -> None:
     posix_harness.add_unrelated_pi()
 
-    result = posix_harness.run_interactive("n\n" * 10)
+    result = posix_harness.run_interactive("n\n" * 11)
 
     assert result.returncode == 0, result.stdout
     assert "Install Pi for fcc-pi?" in result.stdout
@@ -1132,7 +1152,7 @@ def test_install_sh_failed_npm_discovery_does_not_block_selection(
         '#!/bin/sh\necho "npm:$*" >> "$CALL_LOG"\nexit 72\n',
     )
 
-    result = posix_harness.run_interactive("n\n" * 10)
+    result = posix_harness.run_interactive("n\n" * 11)
 
     assert result.returncode == 0, result.stdout
     assert "opencode:--version" in posix_harness.calls()
@@ -1147,7 +1167,7 @@ def test_install_sh_does_not_use_uv_install_directory_for_aider(
     posix_harness.env[variable] = str(uv_bin)
     _write_executable(uv_bin / "aider", _posix_command("aider"))
 
-    result = posix_harness.run_interactive("n\n" * 10)
+    result = posix_harness.run_interactive("n\n" * 11)
 
     assert result.returncode == 0, result.stdout
     assert "Install Aider for fcc-aider?" in result.stdout
@@ -1218,7 +1238,7 @@ def test_install_sh_installs_selected_hermes_without_setup(
     posix_harness: PosixHarness,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
-    result = posix_harness.run_interactive("n\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\n")
+    result = posix_harness.run_interactive("n\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\nn\n")
 
     assert result.returncode == 0, result.stdout
     calls = posix_harness.calls()
@@ -1239,7 +1259,7 @@ def test_install_sh_stops_when_selected_hermes_install_fails(
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
     result = posix_harness.run_interactive(
-        "n\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\n", fail_step=failure
+        "n\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\nn\n", fail_step=failure
     )
 
     assert result.returncode != 0
@@ -1254,7 +1274,7 @@ def test_install_sh_rejects_unsupported_hermes_platform_before_download(
     posix_harness.env["FAKE_UNAME"] = "Darwin"
     posix_harness.env["FAKE_UNAME_MACHINE"] = "x86_64"
 
-    result = posix_harness.run_interactive("n\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\n")
+    result = posix_harness.run_interactive("n\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\nn\n")
 
     assert result.returncode != 0
     assert "does not provide a supported release for Darwin x86_64" in result.stdout
@@ -1301,7 +1321,7 @@ def test_install_sh_stops_when_grok_install_fails(
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
     result = posix_harness.run_interactive(
-        "n\nn\nn\nn\nn\nn\nn\ny\nn\nn\nn\n", fail_step=failure
+        "n\nn\nn\nn\nn\nn\nn\ny\nn\nn\nn\nn\n", fail_step=failure
     )
 
     assert result.returncode != 0
@@ -1316,7 +1336,7 @@ def test_install_sh_stops_when_muse_install_fails(
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
     result = posix_harness.run_interactive(
-        "n\nn\nn\nn\nn\nn\nn\nn\ny\nn\nn\n", fail_step=failure
+        "n\nn\nn\nn\nn\nn\nn\nn\ny\nn\nn\nn\n", fail_step=failure
     )
 
     assert result.returncode != 0
@@ -1329,7 +1349,7 @@ def test_install_sh_stops_when_aider_install_fails(
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
     result = posix_harness.run_interactive(
-        "n\nn\nn\nn\nn\nn\nn\nn\nn\ny\nn\n", fail_step="aider-install"
+        "n\nn\nn\nn\nn\nn\nn\nn\nn\ny\nn\nn\n", fail_step="aider-install"
     )
 
     assert result.returncode != 0
@@ -1347,7 +1367,7 @@ def test_install_sh_accepts_aider_as_the_only_selected_agent(
     posix_harness: PosixHarness,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
-    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\nn\nn\nn\ny\nn\n")
+    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\nn\nn\nn\ny\nn\nn\n")
 
     assert result.returncode == 0, result.stdout
     calls = posix_harness.calls()
@@ -1368,7 +1388,7 @@ def test_install_sh_discovers_aider_in_custom_uv_tool_bin(
     custom_tool_bin = posix_harness.root / "custom-tool-bin"
     posix_harness.env["UV_TOOL_BIN_DIR"] = str(custom_tool_bin)
 
-    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\nn\nn\nn\ny\nn\n")
+    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\nn\nn\nn\ny\nn\nn\n")
 
     assert result.returncode == 0, result.stderr
     assert (custom_tool_bin / "aider").is_file()
@@ -1391,7 +1411,7 @@ def test_install_sh_checks_existing_aider_in_custom_uv_tool_bin_before_installin
     )
     original = existing_aider.read_bytes()
 
-    result = posix_harness.run_interactive("n\n" * 9, fail_step=fail_step)
+    result = posix_harness.run_interactive("n\n" * 10, fail_step=fail_step)
 
     if fail_step:
         assert result.returncode != 0
@@ -1422,7 +1442,7 @@ def test_install_sh_installs_latest_selected_dsh(
     posix_harness: PosixHarness,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
-    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\ny\nn\nn\nn\nn\n")
+    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\n")
 
     assert result.returncode == 0, result.stdout
     calls = posix_harness.calls()
@@ -1445,7 +1465,9 @@ def test_install_sh_upgrades_older_dsh_to_latest(
     )
 
     result = (
-        posix_harness.run_interactive("n\n" * 9) if interactive else posix_harness.run()
+        posix_harness.run_interactive("n\n" * 10)
+        if interactive
+        else posix_harness.run()
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1486,7 +1508,7 @@ def test_install_sh_rejects_incompatible_node_for_selected_dsh(
         _posix_command("node").replace("node 22.19.0", f"node {node_version}"),
     )
 
-    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\ny\nn\nn\nn\nn\n")
+    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\n")
 
     assert result.returncode != 0
     assert "Free Claude Code is installed and verified." not in result.stdout
@@ -1516,7 +1538,7 @@ def test_install_sh_stops_when_selected_dsh_install_fails(
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
     result = posix_harness.run_interactive(
-        "n\nn\nn\nn\nn\nn\ny\nn\nn\nn\nn\n", fail_step="dsh-install"
+        "n\nn\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\n", fail_step="dsh-install"
     )
 
     assert result.returncode != 0
@@ -1611,7 +1633,7 @@ def test_install_sh_preserves_existing_rtk_and_configures_only_selected_agent(
     (posix_harness.bin_dir / "opencode").unlink()
     posix_harness.add_rtk()
 
-    result = posix_harness.run_interactive("n\ny\nn\nn\nn\nn\nn\nn\nn\nn\ny\n")
+    result = posix_harness.run_interactive("n\ny\nn\nn\nn\nn\nn\nn\nn\nn\nn\ny\n")
 
     assert result.returncode == 0, result.stdout
     assert "verifying it without updating it" in result.stdout
@@ -1661,7 +1683,7 @@ def test_install_sh_installs_then_updates_only_selected_agent(
     posix_harness: PosixHarness,
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
-    result = posix_harness.run_interactive("\n" * 11 + "y\n" + "\n" * 9)
+    result = posix_harness.run_interactive("\n" * 12 + "y\n" + "\n" * 10)
 
     assert result.returncode == 0, result.stdout
     assert "Select at least one coding agent." in result.stdout
@@ -1680,7 +1702,7 @@ def test_install_sh_installs_then_updates_only_selected_agent(
     assert not any("rtk-ai/rtk" in call for call in calls)
     assert "[Y/n]" not in result.stdout
 
-    update = posix_harness.run_interactive("\n" * 10)
+    update = posix_harness.run_interactive("\n" * 11)
 
     assert update.returncode == 0, update.stdout
     assert "for fcc-codex?" not in update.stdout
@@ -1697,7 +1719,7 @@ def test_install_sh_rejects_uninstalled_only_selection(
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
     result = posix_harness.run_interactive(
-        "n\nn\ny\nn\nn\nn\nn\nn\nn\nn\nn\n", fail_step="pi-skip"
+        "n\nn\ny\nn\nn\nn\nn\nn\nn\nn\nn\nn\n", fail_step="pi-skip"
     )
 
     assert result.returncode != 0
@@ -1807,7 +1829,7 @@ def test_install_sh_replaces_unrelated_pi_command(
     posix_harness.add_uv(UV_MINIMUM)
 
     result = (
-        posix_harness.run_interactive("y\n" + "n\n" * 7)
+        posix_harness.run_interactive("y\n" + "n\n" * 8)
         if interactive
         else posix_harness.run()
     )
@@ -1986,7 +2008,7 @@ def test_install_sh_infers_home_for_replacement_uv(
     if cargo_layout:
         posix_harness.env["UV_INSTALL_DIR"] = str(inferred_home / ".cargo")
 
-    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\nn\nn\nn\ny\nn\n")
+    result = posix_harness.run_interactive("n\nn\nn\nn\nn\nn\nn\nn\nn\ny\nn\nn\n")
 
     assert result.returncode == 0, result.stderr
     relative_uv = Path(".cargo/bin/uv") if cargo_layout else Path(".local/bin/uv")
@@ -2324,10 +2346,13 @@ def _batch_client(name: str, *, version_output: str | None = None) -> str:
         "dsh": "0.2.0-rc.2",
         "grok": "1.0.5",
         "muse": "0.2.1",
+        "agy": "1.4.7",
         "node": "22.19.0",
     }.get(name, "1.0.0")
     if version_output is not None:
         version_command = f'if "%1"=="--version" echo {version_output}'
+    elif name == "agy":
+        version_command = f'if "%1"=="--version" echo {version}'
     elif name == "hermes":
         version_command = (
             f'if "%1"=="--version" echo Hermes Agent v{version} '
@@ -2427,6 +2452,7 @@ copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-dsh.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-grok.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-muse.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-aider.cmd" >nul
+copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-agy.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-doctor.cmd" >nul
 copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-update.cmd" >nul
 if not "%FAIL_STEP%"=="fcc-missing" copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-codex.cmd" >nul
@@ -2608,6 +2634,7 @@ def powershell_harness(
     (fixtures / "aider-command.cmd").write_text(
         _batch_client("aider"), encoding="utf-8"
     )
+    (fixtures / "agy-command.cmd").write_text(_batch_client("agy"), encoding="utf-8")
     (fixtures / "rtk-command.cmd").write_text(_batch_rtk(), encoding="utf-8")
     (fixtures / "uv-command.cmd").write_text(_batch_uv(UV_MINIMUM), encoding="utf-8")
     (fixtures / "headroom-command.cmd").write_text(
@@ -2734,6 +2761,15 @@ Add-Content -LiteralPath $env:CALL_LOG -Value "uv-install"
 """,
         encoding="utf-8",
     )
+    (fixtures / "agy-installer.ps1").write_text(
+        r"""if ($env:FAIL_STEP -eq "agy-install") { exit 69 }
+$bin = Join-Path $env:LOCALAPPDATA "agy\bin"
+New-Item -ItemType Directory -Force -Path $bin | Out-Null
+Copy-Item (Join-Path $env:FAKE_FIXTURES "agy-command.cmd") (Join-Path $bin "agy.cmd") -Force
+Add-Content -LiteralPath $env:CALL_LOG -Value "agy-install"
+""",
+        encoding="utf-8",
+    )
     rtk_archive = fixtures / "rtk-x86_64-pc-windows-msvc.zip"
     with zipfile.ZipFile(rtk_archive, "w") as archive:
         archive.writestr("rtk.exe", b"fake RTK executable")
@@ -2775,6 +2811,7 @@ function Invoke-RestMethod {
         ($env:FAIL_STEP -eq "hermes-download" -and $Uri.Contains("hermes-agent.nousresearch.com")) -or
         ($env:FAIL_STEP -eq "grok-download" -and $Uri.Contains("x.ai/cli")) -or
         ($env:FAIL_STEP -eq "muse-download" -and $Uri.Contains("scripts/install-muse.ps1")) -or
+        ($env:FAIL_STEP -eq "agy-download" -and $Uri.Contains("antigravity.google/cli")) -or
         ($env:FAIL_STEP -eq "rtk-download" -and $Uri.Contains("rtk-ai/rtk")) -or
         ($env:FAIL_STEP -eq "uv-download" -and $Uri.Contains("astral.sh"))
     ) {
@@ -2800,6 +2837,9 @@ function Invoke-RestMethod {
     }
     elseif ($Uri.Contains("scripts/install-muse.ps1")) {
         $source = Join-Path $env:FAKE_FIXTURES "muse-installer.ps1"
+    }
+    elseif ($Uri.Contains("antigravity.google/cli")) {
+        $source = Join-Path $env:FAKE_FIXTURES "agy-installer.ps1"
     }
     elseif ($Uri.Contains("opencode-windows-")) {
         if ($env:FAIL_STEP -eq "opencode-archive") {
@@ -3038,7 +3078,7 @@ def test_install_ps1_asks_only_about_missing_harnesses(
         powershell_harness.add_rtk()
 
     result = powershell_harness.run_interactive(
-        ["y" if install_codex else ""] + [""] * 8
+        ["y" if install_codex else ""] + [""] * 9
     )
 
     assert result.returncode == 0, result.stderr
@@ -3051,6 +3091,7 @@ def test_install_ps1_asks_only_about_missing_harnesses(
         "grok",
         "muse",
         "aider",
+        "agy",
     ]
     calls = powershell_harness.calls()
     assert "claude:--version" in calls
@@ -3069,7 +3110,7 @@ def test_install_ps1_discovers_installed_npm_harnesses_before_questions(
     for command in ("pi", "cline", "dsh"):
         _write_executable(prefix / f"{command}.cmd", _batch_client(command))
 
-    result = powershell_harness.run_interactive(["n"] * 7)
+    result = powershell_harness.run_interactive(["n"] * 8)
 
     assert result.returncode == 0, result.stderr
     assert re.findall(r"for fcc-(\w+)\?", result.stdout) == [
@@ -3079,6 +3120,7 @@ def test_install_ps1_discovers_installed_npm_harnesses_before_questions(
         "grok",
         "muse",
         "aider",
+        "agy",
     ]
     calls = powershell_harness.calls()
     assert "pi-install" not in calls
@@ -3123,7 +3165,7 @@ def test_install_sh_discovery_preserves_existing_command_priority(
     candidate = _prepare_discovery_collision(posix_harness, discovery, command)
 
     result = posix_harness.run_interactive(
-        "n\n" * 7, fail_step=f"stale-{command}-verify"
+        "n\n" * 8, fail_step=f"stale-{command}-verify"
     )
 
     assert result.returncode == 0, result.stdout
@@ -3144,7 +3186,7 @@ def test_install_ps1_discovery_preserves_existing_command_priority(
     candidate = _prepare_discovery_collision(powershell_harness, discovery, command)
 
     result = powershell_harness.run_interactive(
-        ["n"] * 7, fail_step=f"stale-{command}-verify"
+        ["n"] * 8, fail_step=f"stale-{command}-verify"
     )
 
     assert result.returncode == 0, result.stderr
@@ -3242,7 +3284,7 @@ def test_install_ps1_verifies_new_fcc_after_custom_tool_discovery(
         powershell_harness.bin_dir / "fcc-server.cmd", _batch_client("stale-fcc")
     )
 
-    result = powershell_harness.run_interactive(["n"] * 10)
+    result = powershell_harness.run_interactive(["n"] * 11)
 
     assert result.returncode == 0, result.stdout + result.stderr
     calls = powershell_harness.calls()
@@ -3402,7 +3444,7 @@ def test_install_ps1_discovers_installed_aider_without_uv(
     )
     _write_executable(tool_bin / "aider.cmd", _batch_client("aider"))
 
-    result = powershell_harness.run_interactive(["n"] * 9)
+    result = powershell_harness.run_interactive(["n"] * 10)
 
     assert result.returncode == 0, result.stderr
     assert "for fcc-aider?" not in result.stdout
@@ -3417,7 +3459,7 @@ def test_install_ps1_asks_about_unrelated_pi(
 ) -> None:
     powershell_harness.add_unrelated_pi()
 
-    result = powershell_harness.run_interactive(["n"] * 10)
+    result = powershell_harness.run_interactive(["n"] * 11)
 
     assert result.returncode == 0, result.stderr
     assert "Install Pi for fcc-pi?" in result.stdout
@@ -3436,7 +3478,7 @@ def test_install_ps1_discovers_muse_from_user_path(
     _write_executable(user_bin / "codex.cmd", _batch_client("wrong-codex"))
     powershell_harness.env["FCC_TEST_USER_PATH"] = str(user_bin)
 
-    result = powershell_harness.run_interactive(["n"] * 8)
+    result = powershell_harness.run_interactive(["n"] * 9)
 
     assert result.returncode == 0, result.stderr
     assert "for fcc-muse?" not in result.stdout
@@ -3468,7 +3510,7 @@ def test_install_ps1_failed_npm_discovery_does_not_block_selection(
         '@echo off\necho npm:%*>>"%CALL_LOG%"\nexit /b 72\n',
     )
 
-    result = powershell_harness.run_interactive(["n"] * 10)
+    result = powershell_harness.run_interactive(["n"] * 11)
 
     assert result.returncode == 0, result.stderr
     assert "opencode:--version" in powershell_harness.calls()
@@ -3483,7 +3525,7 @@ def test_install_ps1_does_not_use_uv_install_directory_for_aider(
     powershell_harness.env[variable] = str(uv_bin)
     _write_executable(uv_bin / "aider.cmd", _batch_client("aider"))
 
-    result = powershell_harness.run_interactive(["n"] * 10)
+    result = powershell_harness.run_interactive(["n"] * 11)
 
     assert result.returncode == 0, result.stderr
     assert "Install Aider for fcc-aider?" in result.stdout
@@ -3719,7 +3761,7 @@ def test_install_ps1_checks_existing_aider_in_custom_uv_tool_bin_before_installi
     original = existing_aider.read_bytes()
 
     result = (
-        powershell_harness.run_interactive(["n"] * 9, fail_step=fail_step)
+        powershell_harness.run_interactive(["n"] * 10, fail_step=fail_step)
         if interactive
         else powershell_harness.run_functions(
             "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Aider", fail_step=fail_step
@@ -3790,7 +3832,7 @@ def test_install_ps1_upgrades_older_dsh_to_latest(
     )
 
     result = (
-        powershell_harness.run_interactive(["n"] * 9)
+        powershell_harness.run_interactive(["n"] * 10)
         if interactive
         else powershell_harness.run_functions(
             "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Dsh"
@@ -4102,6 +4144,7 @@ def test_install_ps1_preserves_valid_existing_tools(
     powershell_harness.add_client("grok")
     powershell_harness.add_client("muse")
     powershell_harness.add_client("aider")
+    powershell_harness.add_client("agy")
     powershell_harness.add_uv(uv_version)
 
     result = powershell_harness.run()
@@ -4130,7 +4173,7 @@ def test_install_ps1_replaces_unrelated_pi_command(
     powershell_harness.add_uv(UV_MINIMUM)
 
     result = (
-        powershell_harness.run_interactive(["y"] + ["n"] * 7)
+        powershell_harness.run_interactive(["y"] + ["n"] * 8)
         if interactive
         else powershell_harness.run_functions(
             "Add-KnownBinDirectories\nEnsure-Uv\nEnsure-Pi"
@@ -4625,7 +4668,7 @@ def test_install_ps1_installs_then_updates_only_selected_agent(
 ) -> None:
     (powershell_harness.bin_dir / "opencode.cmd").unlink()
 
-    result = powershell_harness.run_interactive([""] * 11 + ["y"] + [""] * 9)
+    result = powershell_harness.run_interactive([""] * 12 + ["y"] + [""] * 10)
 
     assert result.returncode == 0, result.stderr
     assert "Select at least one coding agent." in result.stdout
@@ -4640,7 +4683,7 @@ def test_install_ps1_installs_then_updates_only_selected_agent(
     assert not any("rtk-ai/rtk" in call for call in calls)
     assert "[Y/n]" not in result.stdout
 
-    update = powershell_harness.run_interactive([""] * 10)
+    update = powershell_harness.run_interactive([""] * 11)
 
     assert update.returncode == 0, update.stderr
     assert "for fcc-codex?" not in update.stdout
@@ -4657,36 +4700,13 @@ def test_install_ps1_installs_then_updates_only_selected_agent(
     ("answers", "expected", "expected_messages"),
     [
         (
-            ("",) * 11 + ("y",) + ("",) * 9,
-            "False,True,False,False,False,False,False,False,False,False,False",
+            ("",) * 12 + ("y",) + ("",) * 10,
+            "False,True,False,False,False,False,False,False,False,False,False,False",
             ("Select at least one coding agent.",),
         ),
         (
-            (
-                "maybe",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "y",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "n",
-                "y",
-            ),
-            "False,True,False,False,False,False,False,False,False,False,True",
+            ("maybe",) + ("n",) * 12 + ("y",) + ("n",) * 9 + ("y",),
+            "False,True,False,False,False,False,False,False,False,False,False,True",
             ("Please answer Y or N.", "Select at least one coding agent."),
         ),
     ],
@@ -4720,6 +4740,7 @@ $script:InstallDsh = $true
 $script:InstallGrok = $true
 $script:InstallMuse = $true
 $script:InstallAider = $true
+$script:InstallAgy = $true
 $script:EnableRtkHeadroom = $false
 function Read-Host {{
     param([string] $Prompt)
@@ -4731,7 +4752,7 @@ function Read-YesNo {{{read_yes_no}}}
 function Read-CodingAgentSelection {{{read_selection}}}
 function Select-CodingAgents {{{select_agents}}}
 Select-CodingAgents
-Write-Output "selection:$($script:InstallClaudeCode),$($script:InstallCodex),$($script:InstallPi),$($script:InstallOpenCode),$($script:InstallCline),$($script:InstallHermes),$($script:InstallDsh),$($script:InstallGrok),$($script:InstallMuse),$($script:InstallAider),$($script:EnableRtkHeadroom)"
+Write-Output "selection:$($script:InstallClaudeCode),$($script:InstallCodex),$($script:InstallPi),$($script:InstallOpenCode),$($script:InstallCline),$($script:InstallHermes),$($script:InstallDsh),$($script:InstallGrok),$($script:InstallMuse),$($script:InstallAider),$($script:InstallAgy),$($script:EnableRtkHeadroom)"
 """
 
     result = subprocess.run(
@@ -4762,6 +4783,7 @@ $script:InstallDsh = $false
 $script:InstallGrok = $false
 $script:InstallMuse = $false
 $script:InstallAider = $false
+$script:InstallAgy = $false
 $script:PiAvailable = $false
 $script:MuseAvailable = $false
 $script:Calls = @()
@@ -4804,6 +4826,7 @@ $script:InstallDsh = $false
 $script:InstallGrok = $false
 $script:InstallMuse = $false
 $script:InstallAider = $false
+$script:InstallAgy = $false
 $script:PiAvailable = $false
 $script:MuseAvailable = $false
 $script:Calls = @()
@@ -4844,6 +4867,7 @@ $script:InstallDsh = $false
 $script:InstallGrok = $false
 $script:InstallMuse = $false
 $script:InstallAider = $false
+$script:InstallAgy = $false
 $script:PiAvailable = $false
 $script:MuseAvailable = $false
 function Write-Step { param([string] $Message) }
@@ -5188,9 +5212,9 @@ def _assert_external_opencode_is_not_shadowed(
     original = native.read_bytes()
     if interactive:
         result = (
-            harness.run_interactive(["n"] * 10)
+            harness.run_interactive(["n"] * 11)
             if isinstance(harness, PowerShellHarness)
-            else harness.run_interactive("n\n" * 10)
+            else harness.run_interactive("n\n" * 11)
         )
         assert "for fcc-opencode?" not in result.stdout
     else:

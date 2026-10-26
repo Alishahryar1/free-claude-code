@@ -11,7 +11,6 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.loader import compose_settings_snapshot
 from free_claude_code.config.model_refs import ModelFallback
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
     DEEPSEEK_DEFAULT_BASE,
     NVIDIA_NIM_DEFAULT_BASE,
@@ -105,9 +104,7 @@ def test_provider_catalog_contract_is_metadata_only() -> None:
 async def test_nim_lists_openai_compatible_model_infos() -> None:
     config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = NvidiaNimProvider(
-            config, nim_settings=NimSettings(), admission=immediate_admission()
-        )
+        provider = NvidiaNimProvider(config, admission=immediate_admission())
 
     with patch.object(
         provider._client.models,
@@ -134,9 +131,7 @@ async def test_nim_exclusions_apply_only_to_hosted_nim_discovery(
     config = make_provider_config(api_key="test-key", base_url=provider_base_url)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = (
-            NvidiaNimProvider(
-                config, nim_settings=NimSettings(), admission=immediate_admission()
-            )
+            NvidiaNimProvider(config, admission=immediate_admission())
             if provider_id == "nvidia_nim"
             else DeepSeekProvider(config, admission=immediate_admission())
         )
@@ -178,9 +173,7 @@ async def test_super_migration_and_hosted_discovery_publish_ultra_catalog():
     new = "nvidia/nemotron-3-ultra-550b-a55b"
     config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = NvidiaNimProvider(
-            config, nim_settings=NimSettings(), admission=immediate_admission()
-        )
+        provider = NvidiaNimProvider(config, admission=immediate_admission())
     with patch.object(
         provider._client.models,
         "list",
@@ -204,9 +197,7 @@ async def test_super_migration_and_hosted_discovery_publish_ultra_catalog():
 async def test_nim_exclusions_preserve_retained_metadata() -> None:
     config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = NvidiaNimProvider(
-            config, nim_settings=NimSettings(), admission=immediate_admission()
-        )
+        provider = NvidiaNimProvider(config, admission=immediate_admission())
     retained = ProviderModelInfo(
         "nvidia/future-chat-model",
         supports_thinking=True,
@@ -227,9 +218,7 @@ async def test_nim_exclusions_preserve_retained_metadata() -> None:
 async def test_nim_exclusions_preserve_discovery_errors() -> None:
     config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = NvidiaNimProvider(
-            config, nim_settings=NimSettings(), admission=immediate_admission()
-        )
+        provider = NvidiaNimProvider(config, admission=immediate_admission())
     with (
         patch.object(
             provider._client.models,

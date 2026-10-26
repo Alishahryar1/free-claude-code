@@ -9,6 +9,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from free_claude_code.core.trace import extract_claude_session_id_from_headers
 
+from .generation_paths import generation_api
+
 REQUEST_ID_HEADER = "request-id"
 OPENAI_REQUEST_ID_HEADER = "x-request-id"
 _REQUEST_ID_STATE_ATTRIBUTE = "fcc_request_id"
@@ -96,5 +98,5 @@ def _set_request_id_headers(
     path: str,
 ) -> None:
     headers[REQUEST_ID_HEADER] = request_id
-    if path in _OPENAI_REQUEST_ID_PATHS:
+    if path in _OPENAI_REQUEST_ID_PATHS or generation_api(path) == "gemini":
         headers[OPENAI_REQUEST_ID_HEADER] = request_id

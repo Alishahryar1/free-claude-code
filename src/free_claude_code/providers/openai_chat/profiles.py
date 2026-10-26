@@ -140,16 +140,20 @@ class OpenAIChatProfile:
         return openai_v1_base_url(configured) if self.normalize_base_url else configured
 
     def reasoning_delta(self, delta: Any) -> str | None:
+        return self.native_reasoning_delta(delta)[1]
+
+    def native_reasoning_delta(self, delta: Any) -> tuple[str, str | None]:
+        """Return the selected value together with its actual upstream field."""
         value = getattr(delta, self.reasoning_delta_field, None)
         if isinstance(value, str) and value:
-            return value
+            return self.reasoning_delta_field, value
         fallback = self.reasoning_delta_fallback_field
         if fallback is None:
-            return value if isinstance(value, str) else None
+            return self.reasoning_delta_field, value if isinstance(value, str) else None
         fallback_value = getattr(delta, fallback, None)
         if isinstance(fallback_value, str):
-            return fallback_value
-        return value if isinstance(value, str) else None
+            return fallback, fallback_value
+        return self.reasoning_delta_field, value if isinstance(value, str) else None
 
     def apply_reasoning(
         self,

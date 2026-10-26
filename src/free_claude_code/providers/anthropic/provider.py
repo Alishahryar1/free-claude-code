@@ -16,6 +16,7 @@ from free_claude_code.core.anthropic.passthrough import (
     NativeMessagesRequest,
     restore_native_history,
 )
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.history_replay import HistoryReplayError
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -168,7 +169,7 @@ class AnthropicProvider(BaseProvider):
                 return response.json()
 
             try:
-                item = await self._admission.start_execution().run_call(
+                item = await self._admission.start_execution(model=None).run_call(
                     fetch, operation_kind=ProviderOperationKind.MODEL_DISCOVERY
                 )
                 if not isinstance(item, dict):
@@ -268,6 +269,34 @@ class AnthropicProvider(BaseProvider):
     ) -> AsyncIterator[str]:
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_messages(
+            request,
+            endpoint_context=self,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            model_info=record.info,
+            continuation=continuation,
+        )
+        try:
+            async for event in stream:
+                yield event
+        finally:
+            await maybe_await_aclose(stream)
+
+    async def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        record = await self.model_record(request.model)
+        stream = self._transport(record).stream_gemini(
             request,
             endpoint_context=self,
             request_id=request_id,

@@ -47,7 +47,7 @@ def _client_call(item: Mapping[str, object]) -> bool:
 class ToolCallBuffer:
     """Select complete groups in source order, without owning public delivery."""
 
-    def __init__(self, wire_api: Literal["messages", "responses"]) -> None:
+    def __init__(self, wire_api: Literal["messages", "responses", "gemini"]) -> None:
         self._wire_api = wire_api
         self._frames: list[str] = []
         self._calls: set[CallKey] = set()
@@ -58,6 +58,9 @@ class ToolCallBuffer:
         self._indices: dict[int, CallKey] = {}
 
     def feed(self, frame: str) -> list[str]:
+        if self._wire_api == "gemini":
+            # Gemini presenters release only complete, object-valued calls.
+            return [frame]
         events = parse_sse_text(frame)
         if not events:
             return self._publish(frame)

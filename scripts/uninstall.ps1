@@ -25,6 +25,7 @@ $FccCommands = @(
     "fcc-grok",
     "fcc-muse",
     "fcc-aider",
+    "fcc-agy",
     "fcc-doctor",
     "fcc-update",
     "fcc-init",
@@ -38,7 +39,7 @@ function Show-Usage {
 Usage: uninstall.ps1 [options]
 
 Removes the Free Claude Code uv tool and deletes ~/.fcc/ after removal is verified.
-Does not remove uv, Claude Code, Codex, Pi, OpenCode, Cline, Hermes Agent, DeepSeek Harness, Grok Build, Muse Code, Aider, the uv-managed Python runtime, or shared PATH entries.
+Does not remove uv, Claude Code, Codex, Pi, OpenCode, Cline, Hermes Agent, DeepSeek Harness, Grok Build, Muse Code, Aider, Antigravity CLI, the uv-managed Python runtime, or shared PATH entries.
 
 Options:
   -DryRun                Print commands without running them.

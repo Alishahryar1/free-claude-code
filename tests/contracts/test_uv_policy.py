@@ -92,14 +92,20 @@ def test_python_lock_matches_package_requirement() -> None:
     assert lock["requires-python"] == requirement
 
 
+def _shard_counts(workflow: dict, suite: str) -> dict[str, int]:
+    return {
+        os_name: int(workflow["env"][f"CI_{suite.upper()}_{os_name.upper()}_SHARDS"])
+        for os_name in REQUIRED_TEST_RUNNERS
+    }
+
+
 def _assert_required_test_matrix(workflow: dict, suite: str, entries: list) -> None:
     job = workflow["jobs"][f"{suite}-shards"]
     assert job["runs-on"] == "${{ matrix.runner }}"
     assert job["strategy"]["matrix"] == (
         "${{ fromJSON(needs.prepare-shards.outputs." + suite + "_matrix) }}"
     )
-    count = int(workflow["env"][f"CI_{suite.upper()}_SHARDS"])
-    assert len(entries) == len(REQUIRED_TEST_RUNNERS) * count
+    assert len(entries) == sum(_shard_counts(workflow, suite).values())
     assert {(entry["os"], entry["runner"]) for entry in entries} == set(
         REQUIRED_TEST_RUNNERS.items()
     )
@@ -108,8 +114,8 @@ def _assert_required_test_matrix(workflow: dict, suite: str, entries: list) -> N
 @pytest.mark.parametrize("suite", ("pytest", "playwright"))
 def test_required_test_matrix_covers_supported_platforms(suite: str) -> None:
     workflow = yaml.safe_load(UV_WORKFLOWS[0].read_text(encoding="utf-8"))
-    count = int(workflow["env"][f"CI_{suite.upper()}_SHARDS"])
-    _assert_required_test_matrix(workflow, suite, matrix(count)["include"])
+    counts = _shard_counts(workflow, suite)
+    _assert_required_test_matrix(workflow, suite, matrix(counts)["include"])
 
 
 @pytest.mark.parametrize("suite", ("pytest", "playwright"))
@@ -118,8 +124,8 @@ def test_required_test_matrix_rejects_missing_platform(
     suite: str, os_name: str
 ) -> None:
     workflow = yaml.safe_load(UV_WORKFLOWS[0].read_text(encoding="utf-8"))
-    count = int(workflow["env"][f"CI_{suite.upper()}_SHARDS"])
-    entries = matrix(count)["include"]
+    counts = _shard_counts(workflow, suite)
+    entries = matrix(counts)["include"]
     entries[:] = [entry for entry in entries if entry["os"] != os_name]
     with pytest.raises(AssertionError):
         _assert_required_test_matrix(workflow, suite, entries)

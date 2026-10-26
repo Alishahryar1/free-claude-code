@@ -16,7 +16,6 @@ from .api_keys import ApiKeyList
 from .constants import DEFAULT_MODEL, HTTP_CONNECT_TIMEOUT_DEFAULT
 from .custom_providers import CustomProviderDefinition, decode_custom_providers
 from .model_refs import ModelFallback, ModelFallbacks
-from .nim import NimSettings
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
     PROVIDER_CATALOG,
@@ -58,6 +57,7 @@ class Settings(BaseModel):
     """Validated application settings with no file or process I/O."""
 
     model_config = ConfigDict(
+        frozen=True,
         validate_default=True,
         populate_by_name=True,
         extra="ignore",
@@ -704,9 +704,6 @@ class Settings(BaseModel):
     debug_subagent_stack: bool = Field(
         default=False, validation_alias="DEBUG_SUBAGENT_STACK"
     )
-
-    # ==================== NIM Settings ====================
-    nim: NimSettings = Field(default_factory=NimSettings)
 
     # ==================== Voice Note Transcription ====================
     voice_note_enabled: bool = Field(

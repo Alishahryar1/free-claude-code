@@ -58,6 +58,7 @@ async def test_queued_integration_writer_does_not_block_another(runtime):
 @pytest.mark.parametrize(
     "other",
     [
+        "antigravity_status",
         "claude_vscode_status",
         "codex_integration_status",
         "claude_desktop_status",

@@ -20,11 +20,13 @@ def workflow():
 @pytest.mark.parametrize("suite", ["pytest", "playwright"])
 def test_shard_jobs_use_generated_matrices_and_existing_parallelism(suite):
     config = workflow()
-    shard_count(config["env"][f"CI_{suite.upper()}_SHARDS"])
     prepare = config["jobs"]["prepare-shards"]
     assert f"{suite}_matrix" in prepare["outputs"]
     generate = prepare["steps"][-1]
-    assert f'--{suite}-shards "$CI_{suite.upper()}_SHARDS"' in generate["run"]
+    for os_name in ("linux", "windows", "macos"):
+        variable = f"CI_{suite.upper()}_{os_name.upper()}_SHARDS"
+        shard_count(config["env"][variable])
+        assert f'--{suite}-{os_name}-shards "${variable}"' in generate["run"]
     job = config["jobs"][f"{suite}-shards"]
     assert job["needs"] == "prepare-shards"
     assert job["strategy"]["matrix"] == (
@@ -47,6 +49,20 @@ def test_shard_jobs_use_generated_matrices_and_existing_parallelism(suite):
     assert "--dist=" not in command
     assert ("pytest e2e " in command) == (suite == "playwright")
     assert "||" not in command
+
+
+def test_workflow_uses_three_shards_except_two_for_macos_pytest():
+    config = workflow()
+    assert {
+        key: value for key, value in config["env"].items() if key.endswith("_SHARDS")
+    } == {
+        "CI_PYTEST_LINUX_SHARDS": "3",
+        "CI_PYTEST_WINDOWS_SHARDS": "3",
+        "CI_PYTEST_MACOS_SHARDS": "2",
+        "CI_PLAYWRIGHT_LINUX_SHARDS": "3",
+        "CI_PLAYWRIGHT_WINDOWS_SHARDS": "3",
+        "CI_PLAYWRIGHT_MACOS_SHARDS": "3",
+    }
 
 
 def test_browser_artifacts_identify_each_shard_and_run_attempt():

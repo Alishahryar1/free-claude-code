@@ -59,7 +59,9 @@ async def stream_native_messages(
     request_id: str | None,
     continuation: ContinuationSeed | None = None,
 ) -> AsyncIterator[str]:
-    execution = admission.start_execution(request_id=request_id)
+    execution = admission.start_execution(
+        request_id=request_id, model=str(body["model"])
+    )
     streaming = body.get("stream", False) is True
     source = SourceRecoveryState(execution)
     normal_stop_seen = False

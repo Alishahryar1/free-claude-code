@@ -7,7 +7,7 @@ import openai
 import pytest
 from httpx2 import Request, Response
 
-from free_claude_code.config.nim import NimSettings
+from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
@@ -58,7 +58,6 @@ def make_request(**overrides):
 def _alias_provider():
     return NvidiaNimProvider(
         make_provider_config(api_key="a", base_url="https://provider.invalid/v1"),
-        nim_settings=NimSettings(chat_template="custom_template"),
         admission=immediate_admission(max_attempts=4),
     )
 
@@ -165,12 +164,13 @@ def _alias_events():
         ("messages", None),
         ("responses", None),
         ("messages", "chat_template"),
-        ("responses", "chat_template"),
         ("messages", "reasoning_content"),
     ],
 )
 async def test_argument_aliases_survive_request_corrections(wire, correction):
     request = _alias_request(wire, reasoning_history=correction == "reasoning_content")
+    if correction == "chat_template":
+        request.extra_body = {"chat_template": "custom_template"}
     original = deepcopy(request.model_dump())
 
     def responder(bodies):
@@ -348,7 +348,6 @@ async def test_init(provider_config):
     ) as mock_openai:
         provider = NvidiaNimProvider(
             provider_config,
-            nim_settings=NimSettings(),
             admission=immediate_admission(),
         )
         assert provider._api_key == "test_key"
@@ -370,9 +369,7 @@ async def test_init_uses_configurable_timeouts():
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
-        NvidiaNimProvider(
-            config, nim_settings=NimSettings(), admission=immediate_admission()
-        )
+        NvidiaNimProvider(config, admission=immediate_admission())
         call_kwargs = mock_openai.call_args[1]
         timeout = call_kwargs["timeout"]
         assert timeout.read == 600.0
@@ -385,7 +382,6 @@ async def test_build_request_body(provider_config):
     """Test request body construction."""
     provider = NvidiaNimProvider(
         provider_config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_request()
@@ -397,24 +393,23 @@ async def test_build_request_body(provider_config):
     assert body["messages"][0]["role"] == "system"
     assert body["messages"][0]["content"] == "System prompt"
 
-    assert "extra_body" in body
+    assert "extra_body" not in body
     assert body["reasoning_effort"] == "high"
-    assert "chat_template_kwargs" not in body["extra_body"]
-    assert "reasoning_budget" not in body["extra_body"]
 
 
 def test_responses_request_uses_nim_chat_policy(provider_config):
     original_name = "mcp__responses__" + "x" * 80
     provider = NvidiaNimProvider(
         provider_config,
-        nim_settings=NimSettings(max_tokens=64, parallel_tool_calls=False),
         admission=immediate_admission(),
     )
     request = OpenAIResponsesRequest.model_validate(
         {
             "model": "test-model",
             "input": "Hello",
-            "max_output_tokens": 128,
+            "max_output_tokens": ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS + 1,
+            "top_p": 1.0,
+            "parallel_tool_calls": False,
             "tools": [
                 {
                     "type": "function",
@@ -441,8 +436,8 @@ def test_responses_request_uses_nim_chat_policy(provider_config):
     wire_name = function["name"]
     assert wire_name == translated.tool_names.encode(original_name)
     assert wire_name != original_name
-    assert body["max_tokens"] == 64
-    assert body["top_p"] == 0.95
+    assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+    assert body["top_p"] == 1.0
     assert body["parallel_tool_calls"] is False
     assert body[NIM_TOOL_ARGUMENT_ALIASES_KEY] == {
         original_name: {"_fcc_arg_type": "type"}
@@ -450,10 +445,66 @@ def test_responses_request_uses_nim_chat_policy(provider_config):
     parameters = function["parameters"]
     assert isinstance(parameters, dict)
     assert parameters["properties"] == {"_fcc_arg_type": {"type": "string"}}
-    extra_body = body["extra_body"]
-    assert isinstance(extra_body, dict)
+    assert "extra_body" not in body
     assert body["reasoning_effort"] == "high"
-    assert "chat_template_kwargs" not in extra_body
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [(None, ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS), (128, 128)],
+)
+def test_responses_request_omits_sampling_defaults(
+    provider_config, requested, expected
+):
+    provider = NvidiaNimProvider(provider_config, admission=immediate_admission())
+    request = OpenAIResponsesRequest(
+        model="test-model",
+        input="Hello",
+        max_output_tokens=requested,
+        tools=[
+            {"type": "function", "name": "lookup", "parameters": {"type": "object"}}
+        ],
+    )
+
+    body = provider._chat._build_responses_request_body(
+        request, reasoning=ReasoningPolicy.provider_default()
+    ).body
+
+    assert body["max_tokens"] == expected
+    assert "temperature" not in body
+    assert "top_p" not in body
+    assert "parallel_tool_calls" not in body
+    assert "extra_body" not in body
+
+
+@pytest.mark.asyncio
+async def test_reasoning_rejection_preserves_normal_output_allowance():
+    request = _alias_request()
+    request.max_tokens = 64
+    original = deepcopy(request.model_dump())
+
+    def responder(bodies):
+        if len(bodies) == 1:
+            return 400, {"message": "Reasoning is mandatory and cannot be disabled."}
+        return 200, _alias_events()
+
+    async with _harness("chat", responder, chat_provider_factory=_alias_provider) as (
+        _,
+        bodies,
+        provider,
+    ):
+        await _saved_reply(
+            provider.stream_messages(request, reasoning=ReasoningPolicy.prefer_off()),
+            "messages",
+        )
+
+    assert len(bodies) == 2
+    assert bodies[0]["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in bodies[1]
+    assert all(
+        body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS for body in bodies
+    )
+    assert request.model_dump() == original
 
 
 @pytest.mark.asyncio
@@ -462,7 +513,6 @@ async def test_build_request_body_encodes_explicit_reasoning_off(
 ):
     provider = NvidiaNimProvider(
         provider_config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_request()
@@ -480,7 +530,6 @@ async def test_build_request_body_omits_reasoning_when_request_disables_thinking
 ):
     provider = NvidiaNimProvider(
         provider_config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_request()
@@ -626,7 +675,6 @@ async def test_stream_messages_thinking_reasoning_content(nim_provider):
 async def test_stream_messages_suppresses_thinking_when_disabled(provider_config):
     provider = NvidiaNimProvider(
         provider_config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_request()
@@ -671,10 +719,12 @@ def _make_bad_request_error(message: str) -> openai.BadRequestError:
 async def test_stream_messages_retries_without_chat_template(provider_config):
     provider = NvidiaNimProvider(
         provider_config,
-        nim_settings=NimSettings(chat_template="custom_template"),
         admission=immediate_admission(),
     )
-    req = make_request(model="mistralai/mixtral-8x7b-instruct-v0.1")
+    req = make_request(
+        model="mistralai/mixtral-8x7b-instruct-v0.1",
+        extra_body={"chat_template": "custom_template"},
+    )
 
     mock_chunk = MagicMock()
     mock_chunk.choices = [
@@ -704,7 +754,7 @@ async def test_stream_messages_retries_without_chat_template(provider_config):
     assert mock_create.await_count == 2
 
     first_extra = mock_create.call_args_list[0].kwargs["extra_body"]
-    second_extra = mock_create.call_args_list[1].kwargs["extra_body"]
+    second_extra = mock_create.call_args_list[1].kwargs.get("extra_body", {})
 
     assert first_extra["chat_template"] == "custom_template"
     assert "chat_template_kwargs" not in first_extra
@@ -725,7 +775,6 @@ async def test_stream_messages_retries_without_chat_template_kwargs_issue_993(
 ):
     provider = NvidiaNimProvider(
         provider_config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_request(
@@ -778,7 +827,6 @@ async def test_stream_messages_retries_without_chat_template_kwargs_issue_993(
 async def test_stream_messages_does_not_retry_unrelated_bad_request(provider_config):
     provider = NvidiaNimProvider(
         provider_config,
-        nim_settings=NimSettings(chat_template="custom_template"),
         admission=immediate_admission(),
     )
     req = make_request(model="mistralai/mixtral-8x7b-instruct-v0.1")

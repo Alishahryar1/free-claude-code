@@ -6,7 +6,7 @@ from typing import Any
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.usage import anthropic_input_usage_fields
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.history_replay import HistoryScope
+from free_claude_code.core.history_replay import HistoryScope, ReplayOrigin
 from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningPolicy,
@@ -68,6 +68,12 @@ class OpenAIChatBehavior:
     def history_scope(self, body: Mapping[str, Any]) -> HistoryScope:
         return self.profile.history_scope
 
+    def prepare_history_body(
+        self, body: dict[str, Any], origin: ReplayOrigin
+    ) -> dict[str, Any]:
+        """Apply provider metadata after connection-scoped history projection."""
+        return body
+
     def extra_reasoning_events(
         self, delta: Any, output: ChatStreamOutput, *, output_reasoning: bool
     ) -> Iterator[str]:
@@ -95,7 +101,7 @@ class OpenAIChatBehavior:
         return stream
 
     def record_tool_call_extra_content(
-        self, tool_call_id: str, extra_content: dict[str, Any]
+        self, tool_call_id: str, extra_content: dict[str, Any], *, origin: ReplayOrigin
     ) -> None:
         """Hook for providers that must replay OpenAI tool-call metadata later."""
 

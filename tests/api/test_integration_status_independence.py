@@ -33,6 +33,7 @@ async def test_integration_endpoints_finish_while_one_worker_is_held(monkeypatch
                     *(
                         client.get(f"/admin/api/integrations/{integration}")
                         for integration in [
+                            "antigravity",
                             "claude-vscode",
                             "claude-desktop",
                             "codex",

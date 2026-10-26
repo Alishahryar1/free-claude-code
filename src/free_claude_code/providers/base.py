@@ -8,6 +8,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.core.stream_recovery import ContinuationSeed
@@ -17,8 +18,7 @@ from free_claude_code.core.stream_recovery import ContinuationSeed
 class ProviderConfig:
     """Resolved immutable configuration for one provider instance.
 
-    Base fields apply to all providers. Provider-specific parameters
-    (e.g. NIM temperature, top_p) are passed by the provider constructor.
+    Base fields apply to all providers.
     """
 
     api_key: str | None
@@ -58,6 +58,20 @@ class BaseProvider(ABC):
         raise InvalidRequestError(
             "This provider does not support native Messages execution."
         )
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        raise InvalidRequestError("This provider does not support Gemini execution.")
 
     @abstractmethod
     def stream_messages(

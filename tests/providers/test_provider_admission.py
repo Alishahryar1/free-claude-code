@@ -25,6 +25,7 @@ from free_claude_code.providers.admission import (
     _retry_after_seconds,
 )
 from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
+from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.stream_recovery import TruncatedProviderStreamError
 
 
@@ -292,8 +293,10 @@ async def test_attempt_cancellation_releases_concurrency() -> None:
     [_status_error(503), ssl.SSLWantReadError("read would block")],
     ids=["http_503", "tls_want_read"],
 )
-async def test_run_call_uses_one_five_attempt_budget(error: Exception) -> None:
-    controller = _controller()
+async def test_run_call_uses_one_ten_attempt_budget(error: Exception) -> None:
+    controller = ProviderAdmissionController(
+        provider_name="TEST", base_delay=0.0, max_delay=0.0, jitter=0.0
+    )
     attempts = 0
 
     async def fail() -> None:
@@ -307,7 +310,7 @@ async def test_run_call_uses_one_five_attempt_budget(error: Exception) -> None:
             operation_kind=ProviderOperationKind.GENERATION,
         )
 
-    assert attempts == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert attempts == 10
     assert exc_info.value is error
 
 
@@ -324,7 +327,7 @@ async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) 
     async def recover() -> str:
         nonlocal attempts
         attempts += 1
-        if attempts < 3:
+        if attempts < 10:
             raise error
         return "recovered"
 
@@ -338,7 +341,7 @@ async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) 
         )
         == "recovered"
     )
-    assert attempts == 3
+    assert attempts == 10
 
 
 @pytest.mark.asyncio
@@ -564,9 +567,9 @@ async def test_provider_override_can_classify_retryable_semantics() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discovery_and_generation_share_provider_recovery_health() -> None:
+async def test_discovery_requests_share_recovery_health() -> None:
     controller = _controller()
-    discovery = controller.start_execution()
+    discovery = controller.start_execution(model=None)
     discovery_attempt = await discovery.open_attempt(
         ProviderOperationKind.MODEL_DISCOVERY
     )
@@ -574,20 +577,20 @@ async def test_discovery_and_generation_share_provider_recovery_health() -> None
     assert (await discovery_attempt.fail(_status_error(503))).retry_allowed
     await discovery_attempt.aclose()
 
-    generation = controller.start_execution()
-    generation_wait = asyncio.create_task(
-        generation.open_attempt(ProviderOperationKind.GENERATION)
+    follower = controller.start_execution(model=None)
+    discovery_wait = asyncio.create_task(
+        follower.open_attempt(ProviderOperationKind.MODEL_DISCOVERY)
     )
     await asyncio.sleep(0)
-    assert not generation_wait.done()
+    assert not discovery_wait.done()
 
     probe = await discovery.open_attempt(ProviderOperationKind.MODEL_DISCOVERY)
     await probe.accept()
     await probe.aclose()
 
-    generation_attempt = await asyncio.wait_for(generation_wait, timeout=1)
-    await generation_attempt.accept()
-    await generation_attempt.aclose()
+    follower_attempt = await asyncio.wait_for(discovery_wait, timeout=1)
+    await follower_attempt.accept()
+    await follower_attempt.aclose()
 
 
 @pytest.mark.asyncio
@@ -655,7 +658,7 @@ async def test_cancelled_follower_leaves_recovery_episode() -> None:
 
     follower_wait = asyncio.create_task(_open(follower_execution))
     await asyncio.sleep(0)
-    episode = controller._episode
+    episode = controller._episodes.get(None)
     assert episode is not None
     assert follower_execution in episode.waiters
 
@@ -766,56 +769,56 @@ async def test_abandoned_probe_transfers_leadership() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelled_probe_resolution_remains_abandonable() -> None:
+async def test_cancelled_probe_capacity_wait_remains_abandonable() -> None:
     controller = _controller(max_concurrency=1)
     leader_execution = controller.start_execution()
-    follower_execution = controller.start_execution()
     leader = await _open(leader_execution)
-
     assert (await leader.fail(_status_error(503))).retry_allowed
     await leader.aclose()
 
-    probe = await _open(leader_execution)
-    await controller._condition.acquire()
-    resolution = asyncio.create_task(probe.accept())
+    blocker = await _open(controller.start_execution(model="other"))
+    queued = asyncio.create_task(_open(leader_execution))
     await asyncio.sleep(0)
-    resolution.cancel()
-    controller._condition.release()
+    assert controller._episodes[None].probe_active
+    queued.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await resolution
+        await queued
+    await blocker.aclose()
 
-    follower = asyncio.create_task(_open(follower_execution))
-    await probe.aclose()
-    replacement = await asyncio.wait_for(follower, timeout=1)
+    replacement = await asyncio.wait_for(_open(controller.start_execution()), 1)
     await replacement.accept()
     await replacement.aclose()
+    assert controller._capacity._active_attempts == 0
 
 
 @pytest.mark.asyncio
 async def test_cancelled_probe_close_releases_slot_and_transfers_leadership() -> None:
     controller = _controller(max_concurrency=1)
     leader_execution = controller.start_execution()
-    follower_execution = controller.start_execution()
     leader = await _open(leader_execution)
-
     assert (await leader.fail(_status_error(503))).retry_allowed
     await leader.aclose()
+    closing = asyncio.Event()
+
+    class Resource:
+        async def aclose(self):
+            closing.set()
+            await asyncio.Event().wait()
 
     probe = await _open(leader_execution)
-    await controller._condition.acquire()
-    close = asyncio.create_task(probe.aclose())
-    await asyncio.sleep(0)
+    scope = ProviderAttemptScope(probe, provider_name="TEST", request_id=None)
+    scope.retain(Resource())
+    follower = asyncio.create_task(_open(controller.start_execution()))
+    close = asyncio.create_task(scope.aclose(active_error=None))
+    await asyncio.wait_for(closing.wait(), 1)
     close.cancel()
-    controller._condition.release()
     with pytest.raises(asyncio.CancelledError):
         await close
-
-    replacement = await asyncio.wait_for(
-        _open(follower_execution),
-        timeout=1,
-    )
+    await probe.aclose()
+    replacement = await asyncio.wait_for(follower, 1)
     await replacement.accept()
     await replacement.aclose()
+    assert controller._capacity._active_attempts == 0
 
 
 @pytest.mark.asyncio

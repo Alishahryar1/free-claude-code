@@ -68,6 +68,32 @@
             <article class="provider-strip integration-card">
               <div class="section-heading">
                 <div>
+                  <h3>Antigravity CLI</h3>
+                  <p>Connect Antigravity CLI to use FCC's models with fcc-agy.</p>
+                </div>
+              </div>
+              <p id="antigravityIntegrationMessage" class="message-area" role="status" hidden></p>
+              <div class="integration-actions">
+                <button id="openAntigravityIntegration" class="primary-button" type="button" aria-busy="true" disabled>Loading…</button>
+                <button id="disconnectAntigravityIntegration" class="danger-button" type="button" hidden>Disconnect</button>
+              </div>
+            </article>
+            <dialog id="antigravityIntegrationDialog" class="integration-dialog" aria-labelledby="antigravityIntegrationTitle" aria-describedby="antigravityIntegrationDescription">
+              <div class="section-heading">
+                <h3 id="antigravityIntegrationTitle">Antigravity CLI</h3>
+                <button id="closeAntigravityIntegration" class="ghost-button" type="button" aria-label="Close" autofocus>×</button>
+              </div>
+              <p id="antigravityIntegrationDescription">Switch Antigravity CLI to the Gemini API provider and add FCC's models. Then launch with fcc-agy.</p>
+              <div class="integration-files">
+                <strong>Files to modify</strong>
+                <ul id="antigravityIntegrationFiles"></ul>
+              </div>
+              <button id="confirmAntigravityIntegration" class="primary-button" type="button">Connect</button>
+              <p id="antigravityIntegrationDialogMessage" class="message-area error" role="alert" hidden></p>
+            </dialog>
+            <article class="provider-strip integration-card">
+              <div class="section-heading">
+                <div>
                   <h3>VS Code Chat</h3>
                   <p>Use FCC models in VS Code's built-in chat and agent mode.</p>
                 </div>

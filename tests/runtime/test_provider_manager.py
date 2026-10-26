@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx2
 import pytest
+from pydantic import ValidationError
 
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -387,6 +388,14 @@ async def test_replacement_keeps_leased_generation_open_until_final_release() ->
     second_settings = _settings("nvidia_nim/two")
     manager = ProviderRuntimeManager(first_settings, runtime_factory=factory)
     old_lease = await manager.acquire()
+    old_catalog = manager.catalog_snapshot()
+    for settings in (
+        manager.current_settings(),
+        old_lease.settings,
+        old_catalog.settings,
+    ):
+        with pytest.raises(ValidationError, match="frozen_instance"):
+            settings.__setattr__("model", "nvidia_nim/mutated")
     committed: list[str] = []
 
     generation_id = await manager.replace(
@@ -399,6 +408,9 @@ async def test_replacement_keeps_leased_generation_open_until_final_release() ->
     assert committed == ["persisted"]
     assert new_lease.generation_id == 2
     assert new_lease.settings is second_settings
+    assert old_lease.settings.model == "nvidia_nim/one"
+    assert old_catalog.settings.model == "nvidia_nim/one"
+    assert manager.catalog_snapshot().settings is second_settings
     assert factory.runtimes[0].cleanup_calls == 0
     await new_lease.release()
     await old_lease.release()

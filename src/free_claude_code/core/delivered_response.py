@@ -5,15 +5,14 @@ from typing import Any, Literal
 
 import simplejson
 
+from .gemini.response import gemini_parts
 from .history_replay import (
     readable_reasoning,
     unencrypted_responses_replay,
 )
 from .openai_responses import is_client_search
-from .stream_recovery import DeliveredPrefix
+from .stream_recovery import RECOVERY_RETENTION_BYTES, DeliveredPrefix
 from .token_estimation import estimate_text_tokens
-
-RECOVERY_RETENTION_BYTES = 1_048_576
 
 CLIENT_CALL_TYPES = frozenset(
     {
@@ -68,7 +67,7 @@ def responses_text_constraint(data: dict[str, Any]) -> str | None:
 class DeliveredResponse:
     """Track this response only; the harness continues to own conversation history."""
 
-    def __init__(self, wire_api: Literal["messages", "responses"]) -> None:
+    def __init__(self, wire_api: Literal["messages", "responses", "gemini"]) -> None:
         self.wire_api = wire_api
         self.items: dict[int, dict[str, Any]] = {}
         self.closed: set[int] = set()
@@ -107,6 +106,9 @@ class DeliveredResponse:
         return self._limited
 
     def observe(self, data: dict[str, Any], *, count_progress: bool = True) -> None:
+        if self.wire_api == "gemini":
+            self._gemini(data, count_progress=count_progress)
+            return
         kind = data.get("type", "")
         if not isinstance(kind, str):
             self.unsafe_reason = "unknown_event"
@@ -154,6 +156,44 @@ class DeliveredResponse:
                 self._responses(kind, data)
         if self._limited:
             self._limited_output_tokens += estimate_text_tokens(text)
+
+    def _gemini(self, data: dict[str, Any], *, count_progress: bool) -> None:
+        if not self.header:
+            self.header = {
+                key: data[key] for key in ("responseId", "modelVersion") if key in data
+            }
+        parts = gemini_parts(data)
+        if count_progress and any(
+            part.get("text") or part.get("functionCall") for part in parts
+        ):
+            self.progress += 1
+        for part in parts:
+            if not self._retain(part):
+                self._limited_output_tokens += estimate_text_tokens(
+                    part.get("text", "")
+                )
+                continue
+            if part.get("thoughtSignature"):
+                self.unsafe_reason = "opaque_reasoning"
+            if any(
+                key not in {"text", "thought", "thoughtSignature", "functionCall"}
+                for key in part
+            ):
+                self.unsafe_reason = "unsupported_output"
+            index = max(self.items, default=-1) + 1
+            previous = self.items.get(index - 1)
+            if (
+                previous is not None
+                and "text" in part
+                and "text" in previous
+                and set(part) <= {"text", "thought"}
+                and set(previous) <= {"text", "thought"}
+                and part.get("thought", False) == previous.get("thought", False)
+            ):
+                previous["text"] += part["text"]
+            else:
+                self.items[index] = deepcopy(part)
+                self.closed.add(index)
 
     def _new_snapshot_text(self, data: dict[str, Any]) -> bool:
         """Cumulative text is progress only when it adds published characters."""
@@ -387,7 +427,12 @@ class DeliveredResponse:
         has_calls = False
         for index, item in sorted(self.items.items()):
             kind = item.get("type")
-            if self.wire_api == "messages":
+            if self.wire_api == "gemini":
+                if "text" in item:
+                    (thinking if item.get("thought") else text).append(item["text"])
+                if "functionCall" in item:
+                    has_calls = True
+            elif self.wire_api == "messages":
                 if kind == "text":
                     text.append(item.get("text", ""))
                 elif kind == "thinking":
@@ -421,6 +466,7 @@ class DeliveredResponse:
             unsafe_reason is None,
             self.can_handoff,
             unsafe_reason,
+            retained_bytes=self._bytes,
         )
 
     def output_tokens(self, output: list[dict[str, Any]] | None = None) -> int:
@@ -449,6 +495,8 @@ class DeliveredResponse:
         )
 
     def closing_events(self) -> list[dict[str, Any]]:
+        if self.wire_api == "gemini":
+            return []
         events: list[dict[str, Any]] = []
         for index, item in sorted(self.items.items()):
             if index in self.closed:
@@ -504,6 +552,13 @@ class DeliveredResponse:
 
     def handoff_events(self) -> list[dict[str, Any]]:
         """Signal handoff; the public writer fills output and usage after closure."""
+        if self.wire_api == "gemini":
+            return [
+                {
+                    **deepcopy(self.header),
+                    "candidates": [{"index": 0, "finishReason": "STOP"}],
+                }
+            ]
         if self.wire_api == "messages":
             return [
                 {

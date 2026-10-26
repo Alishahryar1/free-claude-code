@@ -21,6 +21,7 @@ from free_claude_code.core.anthropic.models import Message, MessagesRequest
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningCapability, ReasoningPolicy
 from free_claude_code.core.stream_recovery import ContinuationSeed
@@ -30,6 +31,20 @@ class FakeProvider:
     def __init__(self) -> None:
         self.stream_calls: list[dict[str, object]] = []
         self.stream_close_calls = 0
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        *,
+        input_tokens: int,
+        request_id: str,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        raise AssertionError("Messages test provider received a Gemini request")
 
     def stream_native_messages(
         self,

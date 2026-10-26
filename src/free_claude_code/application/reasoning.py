@@ -4,6 +4,7 @@ from collections.abc import Mapping
 
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.core.anthropic.models import MessagesRequest, ThinkingConfig
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     responses_reasoning_policy,
@@ -57,9 +58,16 @@ def resolve_fallback_reasoning(
     return _apply_reasoning_preference(original, preference)
 
 
-def prepare_fallback_request[T: MessagesRequest | OpenAIResponsesRequest](
-    original: T, *, model: str, preference: ReasoningPreference
-) -> T:
+def resolve_gemini_reasoning_policy(
+    request: GeminiRequest,
+    preference: ReasoningPreference,
+) -> ReasoningPolicy:
+    return _apply_reasoning_preference(request.reasoning_policy(), preference)
+
+
+def prepare_fallback_request[
+    T: MessagesRequest | OpenAIResponsesRequest | GeminiRequest
+](original: T, *, model: str, preference: ReasoningPreference) -> T:
     """Copy a candidate and remove computation controls replaced by its policy."""
 
     request = original.model_copy(update={"model": model}, deep=True)
@@ -75,6 +83,10 @@ def prepare_fallback_request[T: MessagesRequest | OpenAIResponsesRequest](
             )
         if request.output_config is not None:
             request.output_config.pop("effort", None)
+    elif isinstance(request, GeminiRequest):
+        thinking = request.generation_config.thinking_config
+        thinking.thinking_budget = None
+        thinking.thinking_level = None
     elif request.reasoning is not None:
         request.reasoning.pop("effort", None)
     return request

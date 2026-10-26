@@ -479,6 +479,35 @@ async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+@pytest.mark.parametrize("partial", [False, True])
+async def test_exhausted_model_allows_another_model_on_same_client(
+    protocol, wire, partial
+):
+    def reply(bodies):
+        if bodies[-1]["model"] == "model-1":
+            return 200, text_events(protocol, "world.")
+        if partial and len(bodies) == 1:
+            return 200, text_events(protocol, "Hello ", complete=False)
+        return 503, {"type": "server_error", "message": "Unavailable"}
+
+    async with _harness(protocol, reply, max_attempts=2 if partial else 1) as (
+        send,
+        bodies,
+        provider,
+    ):
+        provider._admission._base_delay = 60
+        provider._admission._max_delay = 60
+        raw = await delivered_candidates([send, send], wire)
+    expected_models = ["provider-model"] * (2 if partial else 1) + ["model-1"]
+    assert [body["model"] for body in bodies] == expected_models
+    events = parse_sse_text(raw)
+    assert_completed(events, wire)
+    assert public_text(events, wire) == ("Hello world." if partial else "world.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
     monkeypatch, wire
 ):
@@ -520,7 +549,11 @@ async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
             _,
         ),
     ):
-        raw = await delivered_candidates([first, first, third], wire)
+
+        def same_model(*args, **kwargs):
+            return first(*args, **{**kwargs, "model": "provider-model"})
+
+        raw = await delivered_candidates([first, same_model, third], wire)
     assert [execution.attempts_started for execution in executions] == [2, 0]
     assert len(shared_bodies) == 2 and len(third_bodies) == 1
     assert "Hello " in str(third_bodies[0]["messages"][-2])

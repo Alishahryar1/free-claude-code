@@ -8,6 +8,7 @@ import simplejson
 
 from .delivered_response import RECOVERY_RETENTION_BYTES
 from .failures import ExecutionFailure, FailureKind
+from .gemini.response import gemini_finished, gemini_parts
 
 type PartKey = tuple[int | str, int]
 
@@ -74,7 +75,7 @@ class ContinuationOverlap:
 
     def _feed(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         kind = data.get("type", "")
-        if kind in {"error", "response.error", "response.failed"}:
+        if kind in {"error", "response.error", "response.failed"} or "error" in data:
             self._frames.clear()
             self._frame_bytes = 0
             return [data]
@@ -82,13 +83,18 @@ class ContinuationOverlap:
             return self._render(_Frame(data, self._texts(data)))
         texts = self._texts(data)
         frame = _Frame(data, texts)
-        terminal = kind in {
-            "response.completed",
-            "response.incomplete",
-            "message_stop",
-        } or (
-            kind == "message_delta"
-            and data.get("delta", {}).get("stop_reason") is not None
+        terminal = (
+            gemini_finished(data)
+            or kind
+            in {
+                "response.completed",
+                "response.incomplete",
+                "message_stop",
+            }
+            or (
+                kind == "message_delta"
+                and data.get("delta", {}).get("stop_reason") is not None
+            )
         )
         if not self._pending:
             if kind in {"response.completed", "response.incomplete"}:
@@ -154,6 +160,12 @@ class ContinuationOverlap:
         return identity
 
     def _texts(self, data: dict[str, Any]) -> list[_Text]:
+        if "candidates" in data:
+            return [
+                _Text(("gemini", 0), (0, 0), part, "text", delta=True)
+                for part in gemini_parts(data)
+                if "text" in part and not part.get("thought")
+            ]
         kind = data.get("type", "")
         index = data.get("index", 0)
         if kind == "content_block_start":
@@ -300,6 +312,17 @@ class ContinuationOverlap:
             and all(text.delta for text in frame.texts)
             and not any(text.value.get(text.field) for text in frame.texts)
         ):
+            if "candidates" in frame.data:
+                for candidate in frame.data["candidates"]:
+                    content = candidate.get("content", {})
+                    content["parts"] = [
+                        part
+                        for part in content.get("parts", [])
+                        if part.get("text")
+                        or any(key not in {"text", "thought"} for key in part)
+                    ]
+                if gemini_finished(frame.data) or gemini_parts(frame.data):
+                    return [frame.data]
             return []
         return [frame.data]
 

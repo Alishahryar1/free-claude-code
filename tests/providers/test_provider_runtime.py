@@ -11,7 +11,6 @@ from free_claude_code.application.errors import (
     UnknownProviderError,
 )
 from free_claude_code.config.api_keys import normalize_api_keys
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
     AGNES_DEFAULT_BASE,
     ATLASCLOUD_DEFAULT_BASE,
@@ -214,7 +213,6 @@ def _make_settings(**overrides):
     mock.http_connect_timeout = 10.0
     mock.log_raw_sse_events = False
     mock.log_api_error_tracebacks = False
-    mock.nim = NimSettings()
     for key, value in overrides.items():
         setattr(mock, key, value)
     for attr in {

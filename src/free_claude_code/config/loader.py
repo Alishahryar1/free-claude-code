@@ -207,8 +207,6 @@ def clear_settings_cache() -> None:
 def _settings_aliases() -> dict[str, str]:
     aliases: dict[str, str] = {}
     for name, field in Settings.model_fields.items():
-        if name == "nim":
-            continue
         alias = field.validation_alias
         if not isinstance(alias, str):
             raise AssertionError(f"Settings field {name!r} needs one string alias")

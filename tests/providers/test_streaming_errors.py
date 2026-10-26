@@ -10,7 +10,6 @@ import httpx2
 import openai
 import pytest
 
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
@@ -78,7 +77,15 @@ def _recovery_output(
     thinking: str = "",
     tool_calls: tuple[dict, ...] = (),
 ) -> SimpleNamespace:
-    return SimpleNamespace(text=text, thinking=thinking, tool_calls=tool_calls)
+    from free_claude_code.core.history_replay import ReplayOrigin
+
+    return SimpleNamespace(
+        text=text,
+        thinking=thinking,
+        tool_calls=tool_calls,
+        origin=ReplayOrigin("TEST", "chat", "", "", "test-model"),
+        native_reasoning={},
+    )
 
 
 class ClosableAsyncStreamMock(AsyncStreamMock):
@@ -129,7 +136,6 @@ def _make_provider():
     )
     return NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
 
@@ -140,7 +146,6 @@ def _make_tool_assembler(
     concrete_request = request or _make_request()
     return OpenAIToolCallAssembler(
         reserved_tool_ids=_reserved_anthropic_tool_ids(concrete_request),
-        record_extra_content=provider._behavior.record_tool_call_extra_content,
     )
 
 
@@ -1601,12 +1606,14 @@ class TestStreamingExceptionHandling:
         assert sum(event.event == "message_stop" for event in parsed) == 1
 
     @pytest.mark.asyncio
-    async def test_primary_replay_and_continuation_share_five_attempts(self):
-        """Four replays plus continuation emit one unduplicated response."""
+    async def test_primary_replay_and_continuation_share_attempt_budget(self):
+        """Replays reserve the last attempt for one unduplicated continuation."""
         provider = _make_provider()
         request = _make_request()
+        primary_attempts = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS - 1
         primary_streams = [
-            AsyncStreamMock([_make_chunk(content="hello")]) for _ in range(4)
+            AsyncStreamMock([_make_chunk(content="hello")])
+            for _ in range(primary_attempts)
         ]
         continuation = AsyncStreamMock(
             [
@@ -1629,10 +1636,10 @@ class TestStreamingExceptionHandling:
         assert create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
         assert all(
             call.kwargs["messages"] == create.await_args_list[0].kwargs["messages"]
-            for call in create.await_args_list[:4]
+            for call in create.await_args_list[:primary_attempts]
         )
         assert (
-            create.await_args_list[4].kwargs["messages"]
+            create.await_args_list[primary_attempts].kwargs["messages"]
             != (create.await_args_list[0].kwargs["messages"])
         )
         parsed = parse_sse_text("".join(events))
@@ -1650,13 +1657,10 @@ class TestStreamingExceptionHandling:
             for call in attempt_trace.call_args_list
             if call.kwargs.get("event") == "provider.attempt.started"
         ]
-        assert [row["operation_kind"] for row in starts] == [
-            ProviderOperationKind.GENERATION.value,
-            ProviderOperationKind.GENERATION.value,
-            ProviderOperationKind.GENERATION.value,
-            ProviderOperationKind.GENERATION.value,
-            ProviderOperationKind.CONTINUATION.value,
-        ]
+        assert [row["operation_kind"] for row in starts] == (
+            [ProviderOperationKind.GENERATION.value] * primary_attempts
+            + [ProviderOperationKind.CONTINUATION.value]
+        )
         assert len({row["execution_id"] for row in starts}) == 1
 
     @pytest.mark.asyncio
@@ -3163,6 +3167,7 @@ async def test_openai_compat_stream_ends_with_contract_when_tool_name_never_arri
 @pytest.mark.parametrize("collector", [False, True])
 async def test_tool_argument_mapping_survives_correction_then_stream_reopen(collector):
     request = _alias_request()
+    request.extra_body = {"chat_template": "custom_template"}
 
     def responder(bodies):
         if len(bodies) == 1:

@@ -1,10 +1,14 @@
 """Pure FastAPI application factory."""
 
 from fastapi import FastAPI, Request
-from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
+from starlette.exceptions import HTTPException
 
 from free_claude_code.application.code_sessions import (
     CodeConflictError,
@@ -19,6 +23,7 @@ from free_claude_code.core.diagnostics import (
     redacted_exception_traceback,
     safe_exception_message,
 )
+from free_claude_code.core.gemini import gemini_error_payload
 from free_claude_code.core.openai_responses import openai_error_payload
 from free_claude_code.core.trace import (
     extract_claude_session_id_from_headers,
@@ -29,6 +34,7 @@ from free_claude_code.core.version import package_version
 from .admin_cache import AdminNoStoreMiddleware, attach_admin_no_store
 from .admin_routes import router as admin_router
 from .code_sessions_routes import router as code_router
+from .generation_paths import generation_api
 from .ports import ApiServices
 from .request_errors import ordinary_application_error_response
 from .request_ids import (
@@ -54,6 +60,16 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(admin_router)
     app.include_router(code_router)
     app.include_router(router)
+
+    @app.exception_handler(HTTPException)
+    async def public_http_error_handler(request: Request, exc: HTTPException):
+        if generation_api(request.url.path) == "gemini":
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=gemini_error_payload(exc.status_code, str(exc.detail)),
+                headers=exc.headers,
+            )
+        return await http_exception_handler(request, exc)
 
     @app.exception_handler(CodeError)
     async def code_error_handler(request: Request, exc: CodeError):
@@ -89,12 +105,23 @@ def create_app(services: ApiServices) -> FastAPI:
             event="server.request.validation_failed",
             source="api",
             path=request.url.path,
-            query=dict(request.query_params),
+            query={
+                key: "[REDACTED]" if key == "key" else value
+                for key, value in request.query_params.items()
+            },
             error_locs=[list(error.get("loc", ())) for error in exc.errors()],
             error_types=[str(error.get("type", "")) for error in exc.errors()],
             message_summary=message_summary,
             tool_names=tool_names,
         )
+        if generation_api(request.url.path) == "gemini":
+            message = "; ".join(
+                f"{'.'.join(map(str, error['loc']))}: {error['msg']}"
+                for error in exc.errors()
+            )
+            return JSONResponse(
+                status_code=400, content=gemini_error_payload(400, message)
+            )
         if request.url.path == "/admin/api/config/apply":
             return JSONResponse(
                 status_code=422,
@@ -112,9 +139,7 @@ def create_app(services: ApiServices) -> FastAPI:
         """Serialize defensive application failures in the selected wire protocol."""
         return ordinary_application_error_response(
             exc,
-            wire_api=(
-                "responses" if request.url.path == "/v1/responses" else "messages"
-            ),
+            wire_api=generation_api(request.url.path) or "messages",
             request_id=get_request_id(request),
         )
 
@@ -141,7 +166,9 @@ def create_app(services: ApiServices) -> FastAPI:
                     type(exc).__name__,
                 )
             message = safe_exception_message(exc)
-            if request.url.path == "/v1/responses":
+            if generation_api(request.url.path) == "gemini":
+                content = gemini_error_payload(500, message)
+            elif request.url.path == "/v1/responses":
                 content = openai_error_payload(message=message, error_type="api_error")
             else:
                 content = anthropic_error_payload(

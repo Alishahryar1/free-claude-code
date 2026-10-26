@@ -11,7 +11,6 @@ import pytest
 
 from free_claude_code.api.response_streams import bind_response_lifetime
 from free_claude_code.application.execution import ProviderExecutor
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -209,7 +208,6 @@ async def test_raw_native_unicode_metadata_keeps_hidden_retry_eligible(separator
 def _nim_factory():
     return NvidiaNimProvider(
         make_provider_config("test", "https://provider.invalid/v1"),
-        nim_settings=NimSettings(),
         admission=immediate_admission(max_attempts=3),
     )
 

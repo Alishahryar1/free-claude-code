@@ -417,7 +417,9 @@ def _run_browser_shutdown_probe(mode, outcome, directory, setup_delay="0"):
         from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
         with ServerSockets.reserve("127.0.0.1", 0) as owner:
-            settings.port = owner.sockets[0].getsockname()[1]
+            settings = Settings.model_validate(
+                settings.model_dump() | {"port": owner.sockets[0].getsockname()[1]}
+            )
 
             def reuse_browser(url):
                 assert url == f"http://127.0.0.1:{settings.port}/admin"

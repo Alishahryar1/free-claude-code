@@ -13,12 +13,14 @@ MIN_DSH_VERSION="0.2.0-rc.2"
 DSH_PACKAGE="@deepseek-ai/dsh@latest"
 GROK_INSTALL_URL="https://x.ai/cli/install.sh"
 MUSE_INSTALL_URL="https://dev.meta.ai/install.sh"
+AGY_INSTALL_URL="https://antigravity.google/cli/install.sh"
+MIN_AGY_VERSION="1.4.7"
 RTK_VERSION="0.44.2"
 HEADROOM_PACKAGE="headroom-ai[mcp]==0.40.0"
 RTK_RELEASE_BASE_URL="https://github.com/rtk-ai/rtk/releases/download/v$RTK_VERSION"
 UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 # Include retired entry points so updates reject older FCC processes before replacement.
-FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-doctor fcc-update fcc-init free-claude-code"
+FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-agy fcc-doctor fcc-update fcc-init free-claude-code"
 
 dry_run=0
 voice_local=0
@@ -33,6 +35,7 @@ install_dsh=1
 install_grok=1
 install_muse=1
 install_aider=1
+install_agy=1
 enable_rtk_headroom=0
 torch_backend=""
 temporary_file=""
@@ -337,7 +340,13 @@ choose_coding_agents() {
             install_aider=0
         fi
 
-        if [ "$install_claude" -eq 1 ] || [ "$install_codex" -eq 1 ] || [ "$install_pi" -eq 1 ] || [ "$install_opencode" -eq 1 ] || [ "$install_cline" -eq 1 ] || [ "$install_hermes" -eq 1 ] || [ "$install_dsh" -eq 1 ] || [ "$install_grok" -eq 1 ] || [ "$install_muse" -eq 1 ] || [ "$install_aider" -eq 1 ]; then
+        if select_coding_agent agy "Antigravity CLI" fcc-agy; then
+            install_agy=1
+        else
+            install_agy=0
+        fi
+
+        if [ "$install_claude" -eq 1 ] || [ "$install_codex" -eq 1 ] || [ "$install_pi" -eq 1 ] || [ "$install_opencode" -eq 1 ] || [ "$install_cline" -eq 1 ] || [ "$install_hermes" -eq 1 ] || [ "$install_dsh" -eq 1 ] || [ "$install_grok" -eq 1 ] || [ "$install_muse" -eq 1 ] || [ "$install_aider" -eq 1 ] || [ "$install_agy" -eq 1 ]; then
             break
         fi
         printf 'Select at least one coding agent.\n\n' >&4
@@ -1270,6 +1279,49 @@ ensure_aider() {
     verify_command aider "Aider"
 }
 
+current_agy_version() {
+    output=$(agy --version) || return 1
+    version=$(printf '%s\n' "$output" | awk '
+        { sub(/^[[:space:]]*/, ""); sub(/[[:space:]]*$/, "") }
+        /^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9A-Za-z.-]+)?$/ { print; exit }
+    ')
+    [ -n "$version" ] || return 1
+    printf '%s\n' "$version"
+}
+
+ensure_agy() {
+    add_known_bin_directories
+    if [ "$dry_run" -eq 1 ]; then
+        if command -v agy >/dev/null 2>&1; then
+            print_command agy --version
+            printf 'Antigravity CLI >=%s will be preserved; an older version will be upgraded with agy update.\n' "$MIN_AGY_VERSION"
+        else
+            download_and_run "$AGY_INSTALL_URL" bash "Antigravity CLI"
+            print_command agy --version
+        fi
+        return 0
+    fi
+    if command -v agy >/dev/null 2>&1; then
+        version=$(current_agy_version) || fail "Antigravity CLI is present, but 'agy --version' did not return a stable semantic version."
+        if stable_version_is_supported "$version" "$MIN_AGY_VERSION"; then
+            install_step_outcome=Reused
+            printf 'Antigravity CLI %s already satisfies >=%s; leaving it unchanged.\n' "$version" "$MIN_AGY_VERSION"
+            return 0
+        fi
+    fi
+    [ -z "$(fcc_process_ids agy)" ] || fail "Close Antigravity CLI before replacing its executable, then rerun the installer."
+    if command -v agy >/dev/null 2>&1; then
+        run agy update
+    else
+        download_and_run "$AGY_INSTALL_URL" bash "Antigravity CLI"
+        add_known_bin_directories
+    fi
+    command -v agy >/dev/null 2>&1 || fail "Antigravity CLI was installed, but 'agy' is not available on PATH."
+    version=$(current_agy_version) || fail "Antigravity CLI did not return a stable semantic version after installation."
+    stable_version_is_supported "$version" "$MIN_AGY_VERSION" || fail "Antigravity CLI requires >=$MIN_AGY_VERSION; found $version after installation."
+    printf 'Verified Antigravity CLI %s.\n' "$version"
+}
+
 ensure_selected_coding_agents() {
     if [ "$install_claude" -eq 1 ]; then
         start_install_step "Claude Code" "Ensuring Claude Code is installed"
@@ -1321,7 +1373,12 @@ ensure_selected_coding_agents() {
         ensure_aider
     fi
 
-    if [ "$install_claude" -eq 0 ] && [ "$install_codex" -eq 0 ] && [ "$pi_available" -eq 0 ] && [ "$install_opencode" -eq 0 ] && [ "$install_cline" -eq 0 ] && [ "$install_hermes" -eq 0 ] && [ "$install_dsh" -eq 0 ] && [ "$install_grok" -eq 0 ] && [ "$install_muse" -eq 0 ] && [ "$install_aider" -eq 0 ]; then
+    if [ "$install_agy" -eq 1 ]; then
+        start_install_step "Antigravity CLI" "Ensuring Antigravity CLI is installed"
+        ensure_agy
+    fi
+
+    if [ "$install_claude" -eq 0 ] && [ "$install_codex" -eq 0 ] && [ "$pi_available" -eq 0 ] && [ "$install_opencode" -eq 0 ] && [ "$install_cline" -eq 0 ] && [ "$install_hermes" -eq 0 ] && [ "$install_dsh" -eq 0 ] && [ "$install_grok" -eq 0 ] && [ "$install_muse" -eq 0 ] && [ "$install_aider" -eq 0 ] && [ "$install_agy" -eq 0 ]; then
         fail "No selected coding agent was installed. Re-run the installer and choose at least one."
     fi
 }
@@ -1547,7 +1604,7 @@ configure_and_verify_free_claude_code() {
 
     if [ "$dry_run" -eq 1 ]; then
         print_command uv tool dir --bin
-        printf '+ verify fcc-desktop, fcc-server, fcc-claude, fcc-codex, fcc-pi, fcc-opencode, fcc-cline, fcc-hermes, fcc-dsh, fcc-grok, fcc-muse, and fcc-aider in the uv tool bin directory\n'
+        printf '+ verify fcc-desktop, fcc-server, fcc-claude, fcc-codex, fcc-pi, fcc-opencode, fcc-cline, fcc-hermes, fcc-dsh, fcc-grok, fcc-muse, fcc-aider, and fcc-agy in the uv tool bin directory\n'
         print_command fcc-server --version
         return 0
     fi
@@ -1555,7 +1612,7 @@ configure_and_verify_free_claude_code() {
     add_uv_tool_bin_directory
     start_install_step "FCC verification"
 
-    for command_name in fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-doctor fcc-update; do
+    for command_name in fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-agy fcc-doctor fcc-update; do
         [ -x "$tool_bin/$command_name" ] || fail "Free Claude Code installation did not create $tool_bin/$command_name."
     done
 
@@ -1613,6 +1670,10 @@ show_installer_next_steps() {
     fi
     if [ "$install_aider" -eq 1 ]; then
         printf 'Run Aider with: fcc-aider\n'
+    fi
+    if [ "$install_agy" -eq 1 ]; then
+        printf "Connect Antigravity CLI on FCC's Integrations page first.\n"
+        printf 'Run Antigravity CLI with: fcc-agy\n'
     fi
 }
 
@@ -1736,6 +1797,7 @@ pending_steps=$(
     [ "$install_grok" -eq 0 ] || printf 'Grok\n'
     [ "$install_muse" -eq 0 ] || printf 'Muse\n'
     [ "$install_aider" -eq 0 ] || printf 'Aider\n'
+    [ "$install_agy" -eq 0 ] || printf 'Antigravity CLI\n'
 )
 printf '\nInstallation plan:\n  Install or update Free Claude Code.\n  Verify or install: '
 printf '%s\n' "$pending_steps" | while IFS= read -r agent; do
@@ -1755,7 +1817,7 @@ install_stage_count=$(printf '%s\n' "$pending_steps" | wc -l)
 
 step "Checking installation prerequisites"
 require_command curl
-if [ "$install_claude" -eq 1 ] || [ "$install_opencode" -eq 1 ] || [ "$install_hermes" -eq 1 ] || [ "$install_grok" -eq 1 ] || [ "$install_muse" -eq 1 ]; then
+if [ "$install_claude" -eq 1 ] || [ "$install_opencode" -eq 1 ] || [ "$install_hermes" -eq 1 ] || [ "$install_grok" -eq 1 ] || [ "$install_muse" -eq 1 ] || [ "$install_agy" -eq 1 ]; then
     require_command bash
 fi
 require_command sh

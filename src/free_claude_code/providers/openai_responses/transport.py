@@ -17,6 +17,9 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.gemini import GeminiConversionError, GeminiRequest
+from free_claude_code.core.gemini.request import build_gemini_responses_request
+from free_claude_code.core.gemini.responses_stream import GeminiResponsesStream
 from free_claude_code.core.history_replay import (
     prepare_history,
 )
@@ -177,6 +180,46 @@ class OpenAIResponsesTransport:
             continuation=continuation,
         )
 
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        *,
+        input_tokens: int,
+        request_id: str | None,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        endpoint_context: EndpointContext | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        try:
+            prepared = build_gemini_responses_request(request, reasoning)
+        except GeminiConversionError as error:
+            raise InvalidRequestError(str(error)) from error
+        for field in self._omitted_request_fields - {"store", "include"}:
+            if field in prepared.body:
+                raise InvalidRequestError(
+                    f"{self._provider_name} cannot represent Gemini control {field}"
+                )
+        response_id = f"fcc_{uuid.uuid4().hex}"
+        return self._run_stream(
+            self._prepare_body(prepared.body),
+            request_id=request_id,
+            response_model=response_model,
+            endpoint_context=endpoint_context,
+            extra_headers=extra_headers,
+            continuation=continuation,
+            presenter_factory=lambda _pad_empty, origin: GeminiResponsesStream(
+                response_id=response_id,
+                model=response_model,
+                include_thoughts=request.include_thoughts,
+                origin=origin,
+                tool_names=prepared.tool_names,
+                declared_names=frozenset(prepared.tool_schemas),
+                reserved_tool_ids=prepared.reserved_tool_ids,
+            ),
+        )
+
     def stream_responses(
         self,
         request: OpenAIResponsesRequest,
@@ -273,7 +316,9 @@ class OpenAIResponsesTransport:
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
-        execution = self._admission.start_execution(request_id=request_id)
+        execution = self._admission.start_execution(
+            request_id=request_id, model=str(body["model"])
+        )
         outcome = ResponsesExecutionOutcome()
         endpoint = (
             RequestEndpoint(endpoint_context) if endpoint_context is not None else None
@@ -338,7 +383,10 @@ class OpenAIResponsesTransport:
         operation_kind = ProviderOperationKind.GENERATION
         if continuation is not None:
             body = continuation_request.build(
-                body, continuation.text, continuation.thinking
+                body,
+                continuation.text,
+                continuation.thinking,
+                replay_records=continuation.replay_records,
             )
             operation_kind = ProviderOperationKind.CONTINUATION
         trace_event(
@@ -552,6 +600,9 @@ class OpenAIResponsesTransport:
                 if recovered is not None:
                     recovery.discard()
                     if recovered.body is None:
+                        if isinstance(presenter, GeminiResponsesStream):
+                            for event in presenter.handoff():
+                                yield event
                         return
                     body = recovered.body
                     operation_kind = ProviderOperationKind.CONTINUATION

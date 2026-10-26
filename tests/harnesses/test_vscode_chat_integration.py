@@ -249,9 +249,7 @@ def test_native_effort_uses_shared_routing_and_provider_encoders(
         }
     )
     routed = ModelRouter(settings).resolve_messages_request(request)
-    body = build_nim_request_body(
-        routed.request, settings.nim, reasoning=routed.reasoning
-    )
+    body = build_nim_request_body(routed.request, reasoning=routed.reasoning)
     assert body.get("reasoning_effort") == expected
     assert body["max_tokens"] == entry["maxOutputTokens"]
     native = resolve_messages_options(

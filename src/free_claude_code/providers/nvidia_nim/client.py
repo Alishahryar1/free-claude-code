@@ -9,7 +9,6 @@ import openai
 from loguru import logger
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
@@ -56,17 +55,12 @@ _PROFILE = OpenAIChatProfile(
 class NvidiaNimChatBehavior(OpenAIChatBehavior):
     """NVIDIA NIM Chat adaptation without HTTP ownership."""
 
-    def __init__(self, nim_settings: NimSettings) -> None:
+    def __init__(self) -> None:
         super().__init__(_PROFILE)
-        self._nim_settings = nim_settings
 
     @property
     def reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:
         return (("reasoning_effort",),)
-
-    @property
-    def normal_max_tokens(self) -> int | None:
-        return self._nim_settings.max_tokens
 
     def build_messages_body(
         self,
@@ -77,7 +71,6 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         """Internal helper for tests and shared building."""
         return build_nim_request_body(
             request,
-            self._nim_settings,
             reasoning=reasoning,
         )
 
@@ -88,7 +81,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         reasoning: ReasoningPolicy,
     ) -> dict[str, Any]:
         """Apply NIM policy after either client-protocol translation."""
-        apply_nim_request_options(body, reasoning, nim=self._nim_settings)
+        apply_nim_request_options(body, reasoning)
         return body
 
     def prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -157,12 +150,11 @@ class NvidiaNimProvider(OpenAIChatProvider):
         self,
         config: ProviderConfig,
         *,
-        nim_settings: NimSettings,
         admission: ProviderAdmissionController,
     ):
         super().__init__(
             config,
-            behavior=NvidiaNimChatBehavior(nim_settings),
+            behavior=NvidiaNimChatBehavior(),
             admission=admission,
         )
 

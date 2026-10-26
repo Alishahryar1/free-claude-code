@@ -13,6 +13,7 @@ from free_claude_code.core.anthropic.streaming import (
     parse_complete_tool_input,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     ReasoningBlockState,
@@ -57,6 +58,8 @@ class ChatStreamUsage:
     cache_write_tokens: int | None = None
     reasoning_tokens: int = 0
     anthropic_fields: Mapping[str, int] = field(default_factory=dict)
+    reported: Mapping[str, int] = field(default_factory=dict)
+    finish_reason: str | None = None
 
 
 @dataclass(slots=True)
@@ -80,9 +83,11 @@ class ChatStreamOutput(ABC):
     """Source-specific semantic output boundary for one Chat stream epoch."""
 
     consumes_terminal_failure = False
+    pad_empty = True
 
     def __init__(self, *, input_tokens: int) -> None:
         self.input_tokens = input_tokens
+        self.replay_origin: ReplayOrigin | None = None
         self.reasoning_replay: ReasoningReplayLifecycle | None = None
         self.tool_states: dict[int, ChatToolState] = {}
         self._text_parts: list[str] = []
@@ -92,6 +97,10 @@ class ChatStreamOutput(ABC):
         self._open_reasoning_sources: set[int] = set()
         self._content_started = False
         self._terminal = False
+
+    def capture_reasoning_record(self, native: JsonObject) -> bool:
+        """Allow a native carrier to retain a complete source reasoning record."""
+        return False
 
     @property
     def committed_output(self) -> bool:

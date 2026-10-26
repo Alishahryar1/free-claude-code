@@ -13,6 +13,7 @@ from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.providers.test_provider_admission import _open, _status_error
 from tests.runtime.test_provider_manager import RuntimeFactory
 
 
@@ -34,7 +35,7 @@ async def test_replacement_cannot_bypass_existing_protection(protection: str) ->
             NvidiaNimProvider,
             await manager._current.runtime.resolve_provider("nvidia_nim"),
         )
-        old_attempt = await old._admission.start_execution().open_attempt(
+        old_attempt = await old._admission.start_execution(model="model").open_attempt(
             ProviderOperationKind.GENERATION
         )
         if protection == "recovery":
@@ -65,7 +66,7 @@ async def test_replacement_cannot_bypass_existing_protection(protection: str) ->
                 await manager._current.runtime.resolve_provider("nvidia_nim"),
             )
             pending = asyncio.create_task(
-                new._admission.start_execution().open_attempt(
+                new._admission.start_execution(model="model").open_attempt(
                     ProviderOperationKind.GENERATION
                 )
             )
@@ -180,17 +181,17 @@ async def test_old_lazy_construction_uses_current_limits_and_survives_retirement
             NvidiaNimProvider,
             await manager._current.runtime.resolve_provider("nvidia_nim"),
         )
-        first = await old._admission.start_execution().open_attempt(
+        first = await old._admission.start_execution(model="model").open_attempt(
             ProviderOperationKind.GENERATION
         )
         second = await asyncio.wait_for(
-            new._admission.start_execution().open_attempt(
+            new._admission.start_execution(model="model").open_attempt(
                 ProviderOperationKind.GENERATION
             ),
             1,
         )
         blocked = asyncio.create_task(
-            new._admission.start_execution().open_attempt(
+            new._admission.start_execution(model="model").open_attempt(
                 ProviderOperationKind.GENERATION
             )
         )
@@ -202,7 +203,7 @@ async def test_old_lazy_construction_uses_current_limits_and_survives_retirement
         await second.aclose()
         await old_lease.release()
         await asyncio.wait_for(
-            new._admission.start_execution().run_call(
+            new._admission.start_execution(model="model").run_call(
                 AsyncMock(return_value="ok"),
                 operation_kind=ProviderOperationKind.GENERATION,
             ),
@@ -251,6 +252,13 @@ async def test_custom_registry_entry_lives_until_retired_generation_cleanup_succ
     manager = ProviderRuntimeManager(settings, runtime_factory=factory)
     lease = await manager.acquire()
     controller = manager._admission_registry.get(custom_id)
+    execution = controller.start_execution(model="model")
+    attempt = await _open(execution)
+    await attempt.fail(_status_error(503, retry_after="60"))
+    await attempt.aclose()
+    execution.abandon()
+    timer = controller._expiry_timer
+    assert timer is not None
     await manager.replace(
         settings.model_copy(update={"custom_providers": ()}), commit=AsyncMock()
     )
@@ -258,9 +266,12 @@ async def test_custom_registry_entry_lives_until_retired_generation_cleanup_succ
     factory.runtimes[0].cleanup_error = OSError("not closed yet")
     await lease.release()
     assert manager._admission_registry.get(custom_id) is controller
+    assert controller._expiry_timer is timer and not timer.cancelled()
     factory.runtimes[0].cleanup_error = None
     await manager._close_generation(manager._retired[1], forced=False)
     assert custom_id not in manager._admission_registry._controllers
+    assert timer.cancelled()
+    assert not controller._episodes
     await manager.close()
     with pytest.raises(RuntimeError, match="closed"):
         manager._admission_registry.get("nvidia_nim")

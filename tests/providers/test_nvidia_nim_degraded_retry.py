@@ -6,7 +6,6 @@ import httpx2
 import openai
 import pytest
 
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.providers.admission import (
     UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
@@ -115,7 +114,6 @@ def _successful_stream(text: str = "Recovered"):
 def _nim(admission: ProviderAdmissionController) -> NvidiaNimProvider:
     return NvidiaNimProvider(
         _config("https://integrate.api.nvidia.com/v1"),
-        nim_settings=NimSettings(),
         admission=admission,
     )
 

@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
 )
@@ -33,7 +34,7 @@ from free_claude_code.providers.model_listing import (
 from .behavior import OpenAIChatBehavior
 from .client import OpenAIAsyncCredentialProvider, create_chat_client
 from .profiles import OpenAIChatProfile
-from .transport import OpenAIChatTransport
+from .transport import OpenAIChatTransport, PreparedBodyValidator
 
 
 class OpenAIChatProvider(BaseProvider):
@@ -50,6 +51,7 @@ class OpenAIChatProvider(BaseProvider):
         api_key_provider: OpenAIAsyncCredentialProvider | None = None,
         client: AsyncOpenAI | None = None,
         endpoint_transport: httpx2.AsyncBaseTransport | None = None,
+        validate_prepared_body: PreparedBodyValidator | None = None,
     ) -> None:
         super().__init__(config)
         if behavior is None:
@@ -80,6 +82,8 @@ class OpenAIChatProvider(BaseProvider):
             log_raw_sse_events=config.log_raw_sse_events,
             log_api_error_tracebacks=config.log_api_error_tracebacks,
             endpoint_transport=endpoint_transport,
+            api_key_provider=api_key_provider,
+            validate_prepared_body=validate_prepared_body,
         )
 
     async def cleanup(self) -> None:
@@ -141,7 +145,7 @@ class OpenAIChatProvider(BaseProvider):
         listing = self._profile.model_listing
         if listing.path is not None and listing.pagination is not None:
             return await self._fetch_paginated_models_payload(listing.path)
-        execution = self._admission.start_execution()
+        execution = self._admission.start_execution(model=None)
         return await execution.run_call(
             self._fetch_models_payload_once,
             operation_kind=ProviderOperationKind.MODEL_DISCOVERY,
@@ -175,7 +179,7 @@ class OpenAIChatProvider(BaseProvider):
         while total_pages is None or page < pagination.first_page + total_pages:
             params = dict(listing.query_params)
             params[pagination.page_param] = str(page)
-            execution = self._admission.start_execution()
+            execution = self._admission.start_execution(model=None)
             payload = await execution.run_call(
                 lambda params=params: self._client.get(
                     path,
@@ -224,6 +228,29 @@ class OpenAIChatProvider(BaseProvider):
             reasoning=reasoning,
             endpoint_context=endpoint_context,
             model_info=model_info,
+            continuation=continuation,
+        )
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        endpoint_context: EndpointContext | None = None,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        return self._chat.stream_gemini(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
             continuation=continuation,
         )
 

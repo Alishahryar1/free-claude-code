@@ -13,7 +13,6 @@ from free_claude_code.api.response_streams import (
     anthropic_sse_streaming_response,
     openai_responses_sse_streaming_response,
 )
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
@@ -142,9 +141,7 @@ async def _harness(kind, handler):
             elif kind == "mistral":
                 provider = MistralProvider(config, admission=admission)
             elif kind == "nim":
-                provider = NvidiaNimProvider(
-                    config, nim_settings=NimSettings(), admission=admission
-                )
+                provider = NvidiaNimProvider(config, admission=admission)
             else:
                 provider = profiled_provider("cerebras", config, admission=admission)
             yield provider, client, admission
@@ -268,6 +265,48 @@ async def test_cancelled_normalizer_construction_cleanup_releases_admission():
                     if not task.done():
                         task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_cancelled_retry_cleanup_releases_recovery_ownership(wire):
+    failed_body = ResponseBody(block_close=True)
+    healthy_body = ResponseBody(*_chunks("chat", "recovered"))
+    healthy_body.read_release.set()
+    bodies = iter((failed_body, healthy_body))
+    async with _harness("chat", lambda request: _response(next(bodies))) as (
+        provider,
+        client,
+        admission,
+    ):
+
+        async def consume():
+            return "".join([event async for event in _public_stream(provider, wire)])
+
+        task = None
+        try:
+            with patch.object(
+                provider._behavior,
+                "normalize_stream",
+                side_effect=TimeoutError("retryable stream setup failure"),
+            ):
+                task = asyncio.create_task(consume())
+                await asyncio.wait_for(failed_body.close_started.wait(), 2)
+                assert admission._episodes["model"].leader is not None
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            assert not admission._episodes
+            assert admission._capacity._active_attempts == 0
+            async with asyncio.timeout(2):
+                assert "recovered" in await consume()
+            assert not client.is_closed()
+            assert failed_body.close_count == 1
+        finally:
+            failed_body.close_release.set()
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

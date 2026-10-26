@@ -43,6 +43,9 @@ def test_codex_selects_the_advertised_slug_from_opaque_catalog_data(
     )
     assert config["model"] == "arbitrary-wire-id"
     assert config["model_providers"]["fcc"]["wire_api"] == "responses"
+    assert config["model_providers"]["fcc"]["stream_idle_timeout_ms"] == 2147483647
+    assert "request_max_retries" not in config["model_providers"]["fcc"]
+    assert "stream_max_retries" not in config["model_providers"]["fcc"]
     assert config["model_providers"]["fcc"]["base_url"] == "http://127.0.0.1:8182/v1"
     assert config["model_providers"]["fcc"]["auth"] == {
         "command": "fcc-codex",

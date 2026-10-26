@@ -7,8 +7,8 @@ import openai
 import pytest
 from httpx2 import Request, Response
 
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.providers.admission import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
@@ -46,7 +46,6 @@ async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -91,7 +90,6 @@ async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -133,7 +131,6 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -151,7 +148,7 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
     ):
         [e async for e in provider.stream_messages(req, request_id="req_conn")]
 
-    assert mock_create.await_count == 5
+    assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
     error_traces = [
         call.kwargs
         for call in trace.call_args_list
@@ -186,7 +183,6 @@ async def test_nim_stream_openai_5xx_exhausted_emits_user_message(
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -202,5 +198,5 @@ async def test_nim_stream_openai_5xx_exhausted_emits_user_message(
         with pytest.raises(ExecutionFailure) as exc_info:
             [e async for e in provider.stream_messages(req)]
 
-    assert mock_create.await_count == 5
+    assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
     assert expect_substr in exc_info.value.message.lower()
