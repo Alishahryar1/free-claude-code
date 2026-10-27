@@ -1731,7 +1731,7 @@ function Ensure-Uv {
 
 function Get-PackageSpec {
     $package = if ($VoiceLocal) { "free-claude-code[voice_local]" } else { "free-claude-code" }
-    return "$package @ git+https://github.com/$FccSourceRepository.git@$FccSourceRef"
+    return "$package @ git+https://github.com/${FccSourceRepository}.git@${FccSourceRef}"
 }
 
 function Install-FreeClaudeCode {
