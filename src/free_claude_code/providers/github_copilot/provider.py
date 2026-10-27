@@ -120,7 +120,13 @@ class GitHubCopilotProvider(BaseProvider):
             raise ExecutionFailure(
                 FailureKind.UNAVAILABLE, 503, "Copilot provider is closing.", False
             )
-        if not model.strip() or model.strip().casefold() == "auto":
+        cleaned = model.strip()
+        if not cleaned:
+            raise InvalidRequestError(
+                "Choose a concrete model from the connected Copilot account."
+            )
+        normalized = cleaned.removeprefix("github_copilot/").strip()
+        if normalized.casefold() == "auto" and "auto" not in self._auth.current_models:
             raise InvalidRequestError(
                 "Choose a concrete model from the connected Copilot account."
             )
