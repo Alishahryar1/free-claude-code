@@ -7,50 +7,50 @@
   </picture>
 </h1>
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-2e7d32.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/blob/main/LICENSE)
+[![Lisensi: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-2e7d32.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/blob/main/LICENSE)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Package Manager: uv](assets/package-manager-uv.svg)](https://github.com/astral-sh/uv)
-[![Testing: Pytest](https://img.shields.io/badge/Testing-Pytest-ad1457.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/actions/workflows/tests.yml)
-[![Type Checker: Ty](https://img.shields.io/badge/Type%20Checker-ty-fdd835.svg?style=for-the-badge)](https://pypi.org/project/ty/)
-[![Formatter: Ruff](https://img.shields.io/badge/Formatter-ruff-bf4b00.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
-[![Logging: Loguru](https://img.shields.io/badge/logging-loguru-00695c.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
+[![Pengujian: Pytest](https://img.shields.io/badge/Testing-Pytest-ad1457.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/actions/workflows/tests.yml)
+[![Pemeriksa Tipe: Ty](https://img.shields.io/badge/Type%20Checker-ty-fdd835.svg?style=for-the-badge)](https://pypi.org/project/ty/)
+[![Pemformat Kode: Ruff](https://img.shields.io/badge/Formatter-ruff-bf4b00.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
+[![Pencatatan: Loguru](https://img.shields.io/badge/logging-loguru-00695c.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
 
-[Quick Start](#quick-start) · [Providers](#choose-a-provider) · [Clients](#connect-your-client) · [Integrations](#optional-integrations) · [Manage](#manage-your-installation)
+[Mulai Cepat](#mulai-cepat) · [Penyedia](#pilih-penyedia) · [Hubungkan Klien](#connect-your-client) · [Integrasi Opsional](#optional-integrations) · [Kelola Instalasi](#kelola-instalasi)
 
 </div>
 
 <p align="center">
-  <em>Independent open-source project. Not affiliated with or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.</em>
+  <em>Proyek sumber terbuka independen. Tidak berafiliasi dengan atau didukung oleh Anthropic. Claude dan Claude Code adalah merek dagang Anthropic.</em>
 </p>
 
-## What You Get
+## Fitur
 
-- **61 ToS-friendly providers. 1.3B+ free tokens every month.** Use free, paid, subscription, and local models from one searchable UI without putting your account at risk. FCC follows provider terms and removes integrations if they stop being allowed.
-- **12 coding agents. One model catalog.** Run [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [OpenCode](https://github.com/anomalyco/opencode), [Cline](https://github.com/cline/cline), [Hermes](https://github.com/NousResearch/hermes-agent), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Grok Build](https://github.com/xai-org/grok-build), [Muse Code](https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2/), [Aider](https://aider.chat/), [Antigravity CLI](https://antigravity.google/docs/getting-started/), or [VS Code Chat](https://code.visualstudio.com/) with your FCC models.
-- **Keep coding through provider outages.** After retries are exhausted, FCC automatically tries your next configured model without making you restart the turn. This works across every client.
-- **Up to 90% lower token usage.** Optional [RTK](https://github.com/rtk-ai/rtk) filters common command output, and [Headroom](https://github.com/headroomlabs-ai/headroom) compresses tool results.
-- **Native Code sessions in your browser.** Choose a folder and run Codex in the browser with real-time and background support. Freely switch providers/models in the same session. Support for switching harnesses in the same session coming soon!
-- **Terminal, desktop, IDE, or phone.** Work through native launchers, [VS Code](https://code.visualstudio.com/), [Codex App](https://learn.chatgpt.com/docs/app), [JetBrains](https://www.jetbrains.com/), [Discord](https://discord.com/), or [Telegram](https://telegram.org/).
-- **Voice notes in. Code out.** Talk to your agent using local [Whisper](https://github.com/openai/whisper) or [NVIDIA NIM](https://docs.nvidia.com/nim/speech/latest/asr/deploy-asr-models/whisper.html) transcription.
-- **Agent capabilities stay intact.** Stream responses, use tools, preserve native interleaved thinking for maximum performance, send images, and route [Fable](https://www.anthropic.com/claude/fable), [Opus](https://www.anthropic.com/claude/opus), [Sonnet](https://www.anthropic.com/claude/sonnet), and [Haiku](https://www.anthropic.com/claude/haiku) independently with compatible models.
+- **61 penyedia yang mematuhi ketentuan layanan. Lebih dari 1,3 miliar token gratis setiap bulan.** Gunakan model gratis, berbayar, berlangganan, dan lokal dari satu antarmuka yang dapat ditelusuri tanpa membahayakan akun Anda. FCC mematuhi ketentuan penyedia dan menghapus integrasi jika penggunaannya tidak lagi diizinkan.
+- **12 agen pemrograman. Satu katalog model.** Gunakan model FCC dengan [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [OpenCode](https://github.com/anomalyco/opencode), [Cline](https://github.com/cline/cline), [Hermes](https://github.com/NousResearch/hermes-agent), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Grok Build](https://github.com/xai-org/grok-build), [Muse Code](https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2/), [Aider](https://aider.chat/), [Antigravity CLI](https://antigravity.google/docs/getting-started/), atau [VS Code Chat](https://code.visualstudio.com/).
+- **Tetap lanjutkan pekerjaan saat penyedia mengalami gangguan.** Setelah semua percobaan ulang gagal, FCC otomatis mencoba model berikutnya yang telah dikonfigurasi tanpa mengharuskan Anda memulai ulang giliran. Fitur ini tersedia untuk semua klien.
+- **Hemat penggunaan token hingga 90%.** [RTK](https://github.com/rtk-ai/rtk) opsional menyaring keluaran perintah yang umum, sedangkan [Headroom](https://github.com/headroomlabs-ai/headroom) memadatkan hasil alat.
+- **Sesi Code langsung di peramban.** Pilih folder dan jalankan Codex di peramban dengan dukungan waktu nyata maupun proses latar belakang. Beralihlah dengan mudah di antara penyedia dan model dalam sesi yang sama. Dukungan untuk beralih harness dalam sesi yang sama akan segera tersedia.
+- **Terminal, komputer, IDE, atau ponsel.** Bekerjalah melalui peluncur bawaan, [VS Code](https://code.visualstudio.com/), [Codex App](https://learn.chatgpt.com/docs/app), [JetBrains](https://www.jetbrains.com/), [Discord](https://discord.com/), atau [Telegram](https://telegram.org/).
+- **Kirim catatan suara, dapatkan kode.** Sampaikan instruksi kepada agen melalui transkripsi lokal [Whisper](https://github.com/openai/whisper) atau [NVIDIA NIM](https://docs.nvidia.com/nim/speech/latest/asr/deploy-asr-models/whisper.html).
+- **Kemampuan agen tetap utuh.** Alirkan respons, gunakan alat, pertahankan pemikiran berselang-seling bawaan demi kinerja maksimal, kirim gambar, dan arahkan [Fable](https://www.anthropic.com/claude/fable), [Opus](https://www.anthropic.com/claude/opus), [Sonnet](https://www.anthropic.com/claude/sonnet), dan [Haiku](https://www.anthropic.com/claude/haiku) secara terpisah dengan model yang kompatibel.
 
-Free-tier availability and limits are controlled by each provider and may change.
+Ketersediaan dan batas paket gratis ditentukan oleh masing-masing penyedia dan dapat berubah.
 
 <div align="center">
-  <img src="assets/pic.png" alt="Claude Code running with Free Claude Code" width="700">
-  <p><em>Claude Code running with FCC.</em></p>
+  <img src="assets/pic.png" alt="Claude Code berjalan dengan Free Claude Code" width="700">
+  <p><em>Claude Code berjalan dengan FCC.</em></p>
 </div>
 
 <div align="center">
-  <img src="assets/browser-code-session.png" alt="Native Codex browser session in FCC, showing model controls and a repository exploration" width="700">
-  <p><em>A native Codex session in FCC's browser UI.</em></p>
+  <img src="assets/browser-code-session.png" alt="Sesi Codex bawaan di peramban FCC yang menampilkan kontrol model dan penelusuran repositori" width="700">
+  <p><em>Sesi Codex bawaan di antarmuka peramban FCC.</em></p>
 </div>
 
-## Quick Start
+## Mulai Cepat
 
 <a id="install"></a>
 
-### 1. Install
+### 1. Instalasi
 
 macOS/Linux:
 
@@ -64,48 +64,45 @@ Windows PowerShell:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-code/main/scripts/install.ps1")))
 ```
 
-When prompted, choose at least one coding agent and optionally enable [RTK](https://github.com/rtk-ai/rtk) + [Headroom](https://github.com/headroomlabs-ai/headroom) token optimization for supported agents.
+Saat diminta, pilih setidaknya satu agen pemrograman. Anda juga dapat mengaktifkan pengoptimalan token [RTK](https://github.com/rtk-ai/rtk) dan [Headroom](https://github.com/headroomlabs-ai/headroom) untuk agen yang didukung.
 
-### 2. Start FCC
+### 2. Jalankan FCC
 
 #### Windows
 
-Open **Free Claude Code** from your desktop or Start menu.
+Buka **Free Claude Code** dari desktop atau menu Start.
 
 #### macOS
 
-Open **Free Claude Code** from your desktop or Applications folder.
+Buka **Free Claude Code** dari desktop atau folder Applications.
 
 #### Linux
 
-Run:
+Jalankan:
 
 ```bash
 fcc-server
 ```
 
-FCC opens the Admin UI after starting. On Windows and macOS, use the tray or
-menu-bar icon to open Admin, restart, or quit. When using `fcc-server`, keep its
-terminal open.
+Setelah dijalankan, FCC akan membuka Antarmuka Admin. Di Windows dan macOS, gunakan ikon area notifikasi atau bar menu untuk membuka Admin, memulai ulang, atau keluar. Jika menggunakan `fcc-server`, biarkan terminal tetap terbuka.
 
 <a id="nvidia-nim-provider"></a>
 
-### 3. Configure NVIDIA NIM
+### 3. Konfigurasikan NVIDIA NIM
 
-1. Create an API key at [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys).
-2. Open the Admin UI URL from the server log.
-3. Open NVIDIA NIM in **Providers**, click **Add key**, paste the key, and click **Save**.
-4. Leave `MODEL` on the default `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, or search the model dropdown and select another model.
-5. Click **Apply** to save your model selection.
+1. Buat kunci API di [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys).
+2. Buka URL Antarmuka Admin yang tercantum di log server.
+3. Buka NVIDIA NIM pada **Providers**, klik **Add key**, tempel kunci, lalu klik **Save**.
+4. Biarkan `MODEL` menggunakan nilai bawaan `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, atau cari model lain melalui daftar pilihan model.
+5. Klik **Apply** untuk menyimpan pilihan model.
 
-To protect the local proxy with a bearer token, enable **Proxy Authentication**
-in Admin.
+Untuk melindungi proksi lokal dengan token bearer, aktifkan **Proxy Authentication** di Admin.
 
 <div align="center">
-  <img src="assets/admin-page.png" alt="Free Claude Code Admin UI" width="700">
+  <img src="assets/admin-page.png" alt="Antarmuka Admin Free Claude Code" width="700">
 </div>
 
-### 4. Run Your Coding Agent
+### 4. Jalankan Agen Pemrograman
 
 Claude Code:
 
@@ -167,7 +164,7 @@ Aider:
 fcc-aider
 ```
 
-Antigravity CLI (connect on the Integrations page first):
+Antigravity CLI (hubungkan terlebih dahulu melalui halaman Integrations):
 
 ```bash
 fcc-agy
@@ -176,39 +173,35 @@ fcc-agy
 <a id="model-picker"></a>
 
 <div align="center">
-  <img src="assets/cc-model-picker.png" alt="Claude Code model picker showing FCC models" width="700">
-  <p><em>Select an FCC model from Claude Code's native <code>/model</code> picker.</em></p>
+  <img src="assets/cc-model-picker.png" alt="Pemilih model Claude Code yang menampilkan model FCC" width="700">
+  <p><em>Pilih model FCC dari pemilih <code>/model</code> bawaan Claude Code.</em></p>
 </div>
 
-## Choose A Provider
+## Pilih Penyedia
 
-1. Open a provider link below for its key, models, or setup instructions.
-2. In the Admin UI, configure the listed setting. For OpenAI / ChatGPT
-   subscription access, use **Providers → OAuth providers** instead.
-3. Search the `MODEL` dropdown and select a model. If the provider cannot list
-   models, enter `<provider-id>/<exact-provider-model-id>` manually.
-4. Click **Apply**.
+1. Buka tautan penyedia di bawah untuk mendapatkan kunci, melihat model, atau membaca petunjuk penyiapan.
+2. Atur nilai yang tercantum di Antarmuka Admin. Untuk akses langganan OpenAI / ChatGPT, gunakan **Providers → OAuth providers**.
+3. Cari dan pilih model melalui daftar `MODEL`. Jika penyedia tidak dapat menampilkan daftar model, masukkan `<provider-id>/<exact-provider-model-id>` secara manual.
+4. Klik **Apply**.
 
-Optional: add an ordered **Fallback Models** list under **Model Config**. It
-applies to every connected client. A failed request may reach and consume usage
-from more than one provider before succeeding.
+Opsional: tambahkan daftar berurutan **Fallback Models** pada **Model Config**. Daftar ini berlaku untuk semua klien yang terhubung. Permintaan yang gagal dapat menggunakan kuota dari lebih dari satu penyedia sebelum berhasil.
 
-Provider modals support numbered API keys. Use **Add key**, remove rows, or drag their handles to reorder them. FCC uses key 1.
+Dialog penyedia mendukung kunci API bernomor. Gunakan **Add key**, hapus baris, atau seret pegangan untuk mengubah urutannya. FCC menggunakan kunci nomor 1.
 
-For another API endpoint, open **Providers → Custom providers → Add provider**. Enter its API base URL, optional keys, and API format. Leave **Model IDs** empty to discover models automatically, or enter one upstream model ID per line. Save, then select a model in **Model Config**.
+Untuk menggunakan endpoint API lain, buka **Providers → Custom providers → Add provider**. Masukkan URL dasar API, kunci opsional, dan format API. Kosongkan **Model IDs** agar model ditemukan secara otomatis, atau masukkan satu ID model hulu pada setiap baris. Simpan, lalu pilih model di **Model Config**.
 
 <details>
-<summary><strong>Provider catalog</strong></summary>
+<summary><strong>Katalog penyedia</strong></summary>
 
-| Provider | Admin UI setting | Example `MODEL` |
+| Penyedia | Pengaturan Antarmuka Admin | Contoh `MODEL` |
 | --- | --- | --- |
 | [NVIDIA NIM](https://build.nvidia.com/settings/api-keys) | `NVIDIA_NIM_API_KEY` | `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b` |
 | [OpenRouter](https://openrouter.ai/keys) | `OPENROUTER_API_KEY` | `open_router/openrouter/free` |
 | [Groq](https://console.groq.com/keys) | `GROQ_API_KEY` | `groq/llama-3.3-70b-versatile` |
 | [ClinePass](https://docs.cline.bot/getting-started/clinepass) | `CLINE_API_KEY` | `cline_pass/cline-pass/kimi-k3` |
-| [OpenAI / ChatGPT](https://learn.chatgpt.com/docs/auth) | Connect ChatGPT in the Admin UI | `openai/<model-id>` |
+| [OpenAI / ChatGPT](https://learn.chatgpt.com/docs/auth) | Hubungkan ChatGPT di Antarmuka Admin | `openai/<model-id>` |
 | [OpenAI API](https://platform.openai.com/api-keys) | `OPENAI_API_KEY` | `openai_api/gpt-5.6-sol` |
-| [GitHub Copilot](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate) | Connect GitHub Copilot in the Admin UI | `github_copilot/<model-id>` |
+| [GitHub Copilot](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate) | Hubungkan GitHub Copilot di Antarmuka Admin | `github_copilot/<model-id>` |
 | [xAI (Grok)](https://console.x.ai/team/default/api-keys) | `XAI_API_KEY` | `xai/grok-4.5` |
 | [Alibaba Cloud](https://www.alibabacloud.com/help/en/model-studio/get-api-key) | `ALIBABA_CLOUD_API_KEY` | `alibaba_cloud/<model-id>` |
 | [QwenCloud Token Plan](https://home.qwencloud.com/api-keys) | `QWENCLOUD_API_KEY` | `qwencloud/qwen3.7-plus` |
@@ -267,67 +260,68 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 </details>
 
 <details>
-<summary><strong>Provider-specific setup</strong></summary>
+<summary><strong>Penyiapan khusus penyedia</strong></summary>
 
-- OpenAI / ChatGPT uses your ChatGPT subscription rather than an API key. Connect from
-  **Providers → OAuth providers → OpenAI / ChatGPT → Connect** in the Admin UI
-  and finish signing in through your browser. Restart an already-running agent after connecting.
-- Anthropic uses a separately billed API key. Add it under
-  **Providers → Cloud providers → Anthropic → Configure**, then choose a discovered
-  model. Multi-workspace keys also require `ANTHROPIC_WORKSPACE_ID`.
-- OpenAI API uses a separate Platform API key. Enter it under
-  **Providers → Cloud providers → OpenAI API → Configure**. The model list may
-  include IDs that cannot handle coding requests. Choose a text-generation model.
-- GitHub Copilot uses your signed-in GitHub account and subscription. Install
+- OpenAI / ChatGPT menggunakan langganan ChatGPT Anda, bukan kunci API. Hubungkan melalui
+  **Providers → OAuth providers → OpenAI / ChatGPT → Connect** di Antarmuka Admin,
+  lalu selesaikan proses masuk melalui peramban. Mulai ulang agen yang sudah berjalan setelah terhubung.
+- Anthropic menggunakan kunci API dengan penagihan terpisah. Tambahkan kunci melalui
+  **Providers → Cloud providers → Anthropic → Configure**, lalu pilih model yang ditemukan.
+  Kunci untuk beberapa ruang kerja juga memerlukan `ANTHROPIC_WORKSPACE_ID`.
+- OpenAI API menggunakan kunci Platform API tersendiri. Masukkan kunci melalui
+  **Providers → Cloud providers → OpenAI API → Configure**. Daftar model mungkin
+  mencakup ID yang tidak dapat menangani permintaan pemrograman. Pilih model untuk pembuatan teks.
+- GitHub Copilot menggunakan akun GitHub yang sedang Anda gunakan beserta langganannya. Pasang
   [Copilot CLI 1.0.83](https://github.com/github/copilot-cli/releases/tag/v1.0.83)
-  on PATH, then choose **Providers → OAuth providers → GitHub Copilot → Connect**.
-  Finish signing in, then select a `github_copilot/<model-id>` from the model picker.
-  Available models and quotas depend on your subscription and organization policies.
-  Restart an already-running agent after connecting.
-- Azure OpenAI uses the deployment names from your resource. Set
-  `AZURE_OPENAI_BASE_URL` to its complete v1 endpoint, such as
-  `https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1/`, and select a
-  deployment that supports Chat Completions. Enter the deployment name as a
-  custom model slug if it does not appear in the model dropdown.
-- Mistral Codestral uses a separate key from Mistral La Plateforme.
-- Kimi Code subscription keys use `kimi_code/`. Kimi API credit keys use
-  `kimi/`. Kimi Code plans are for personal interactive coding-agent use under
-  [Kimi's community guidelines](https://www.kimi.com/code/docs/en/kimi-code/community-guidelines.html).
-- Alibaba Cloud uses a Model Studio pay-as-you-go key and defaults to Singapore.
-  For another region or workspace, set `ALIBABA_CLOUD_BASE_URL` to its
-  [OpenAI-compatible endpoint](https://www.alibabacloud.com/help/en/model-studio/base-url)
-  ending in `/compatible-mode/v1`. The key and endpoint must use the same region.
-- QwenCloud Coding Plan keys use `qwencloud_coding/`. QwenCloud Token Plan keys
-  use `qwencloud/`. The keys and endpoints are not interchangeable. Coding Plan
-  is for local, personal, interactive coding-agent use under the
-  [Coding Plan terms](https://www.alibabacloud.com/help/en/model-studio/coding-plan).
-- OpenCode Zen and OpenCode Go share `OPENCODE_API_KEY` but use the explicit
-  `opencode_zen/` and `opencode_go/` model prefixes.
-- For Amazon Bedrock, set `BEDROCK_BASE_URL` to the URL for the same region as
-  the API key and select one of the listed models.
-- Vertex AI uses Google Application Default Credentials instead of an API key.
-  Locally, run `gcloud auth application-default login` once. Service-account
-  files and attached service accounts also work. Set `VERTEX_PROJECT_ID`, and
-  optionally change `VERTEX_LOCATION` from its `global` default.
-- Cloudflare requires both its API token and account ID.
-- For Ollama Cloud, use the exact model IDs shown in the model picker. Local
-  Ollama uses the separate `ollama/` prefix.
-- Prefer tool-capable models for coding agents. Local models also need enough context for the agent's system prompt and tool definitions.
+  di PATH, lalu pilih **Providers → OAuth providers → GitHub Copilot → Connect**.
+  Selesaikan proses masuk, kemudian pilih `github_copilot/<model-id>` dari pemilih model.
+  Model dan kuota yang tersedia bergantung pada langganan serta kebijakan organisasi Anda.
+  Mulai ulang agen yang sudah berjalan setelah terhubung.
+- Azure OpenAI menggunakan nama deployment dari sumber daya Anda. Atur
+  `AZURE_OPENAI_BASE_URL` ke endpoint v1 lengkap, misalnya
+  `https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1/`, lalu pilih deployment
+  yang mendukung Chat Completions. Jika nama deployment tidak muncul di daftar model,
+  masukkan nama tersebut sebagai slug model khusus.
+- Mistral Codestral menggunakan kunci yang berbeda dari Mistral La Plateforme.
+- Kunci langganan Kimi Code menggunakan awalan `kimi_code/`. Kunci kredit Kimi API
+  menggunakan awalan `kimi/`. Paket Kimi Code ditujukan untuk penggunaan agen
+  pemrograman interaktif pribadi sesuai [pedoman komunitas Kimi](https://www.kimi.com/code/docs/en/kimi-code/community-guidelines.html).
+- Alibaba Cloud menggunakan kunci bayar sesuai pemakaian Model Studio dan secara
+  bawaan menggunakan wilayah Singapura. Untuk wilayah atau ruang kerja lain, atur
+  `ALIBABA_CLOUD_BASE_URL` ke [endpoint yang kompatibel dengan OpenAI](https://www.alibabacloud.com/help/en/model-studio/base-url)
+  yang berakhiran `/compatible-mode/v1`. Kunci dan endpoint harus menggunakan wilayah yang sama.
+- Kunci QwenCloud Coding Plan menggunakan awalan `qwencloud_coding/`, sedangkan
+  kunci QwenCloud Token Plan menggunakan `qwencloud/`. Kunci dan endpoint tersebut
+  tidak dapat saling dipertukarkan. Coding Plan ditujukan untuk penggunaan agen
+  pemrograman interaktif pribadi dan lokal sesuai [ketentuan Coding Plan](https://www.alibabacloud.com/help/en/model-studio/coding-plan).
+- OpenCode Zen dan OpenCode Go menggunakan `OPENCODE_API_KEY` yang sama, tetapi
+  memakai awalan model `opencode_zen/` dan `opencode_go/`.
+- Untuk Amazon Bedrock, atur `BEDROCK_BASE_URL` ke URL di wilayah yang sama dengan
+  kunci API, lalu pilih salah satu model yang tercantum.
+- Vertex AI menggunakan Google Application Default Credentials, bukan kunci API.
+  Untuk penggunaan lokal, jalankan `gcloud auth application-default login` satu kali.
+  Berkas akun layanan dan akun layanan yang terpasang juga dapat digunakan. Atur
+  `VERTEX_PROJECT_ID`, dan ubah `VERTEX_LOCATION` dari nilai bawaan `global` bila perlu.
+- Cloudflare memerlukan token API dan ID akun.
+- Untuk Ollama Cloud, gunakan ID model persis seperti yang ditampilkan pada pemilih
+  model. Ollama lokal menggunakan awalan terpisah `ollama/`.
+- Utamakan model yang mendukung alat untuk agen pemrograman. Model lokal juga
+  memerlukan konteks yang cukup untuk perintah sistem dan definisi alat agen.
 
 </details>
 
 <details>
-<summary><strong>Local provider setup</strong></summary>
+<summary><strong>Penyiapan penyedia lokal</strong></summary>
 
-FCC automatically discovers models from running local servers at startup. If you start a server later, click **Refresh models** in Admin to add its models to the picker.
+Saat dijalankan, FCC otomatis menemukan model dari server lokal yang aktif. Jika server baru dijalankan kemudian, klik **Refresh models** di Admin untuk menambahkan modelnya ke pemilih.
 
 ### LM Studio
 
-Start LM Studio's local server, load a tool-capable model, and use the model identifier shown by LM Studio with the `lmstudio/` prefix. The default URL is `http://localhost:1234/v1`.
+Jalankan server lokal LM Studio, muat model yang mendukung alat, lalu gunakan pengenal model yang ditampilkan LM Studio dengan awalan `lmstudio/`. URL bawaannya adalah `http://localhost:1234/v1`.
 
 ### llama.cpp
 
-Start `llama-server` with its OpenAI-compatible Chat Completions API and enough context for the model. Use the local model ID with the `llamacpp/` prefix. `LLAMACPP_BASE_URL` defaults to `http://localhost:8080/v1`.
+Jalankan `llama-server` dengan API Chat Completions yang kompatibel dengan OpenAI dan konteks yang memadai untuk model. Gunakan ID model lokal dengan awalan `llamacpp/`. Nilai bawaan `LLAMACPP_BASE_URL` adalah `http://localhost:8080/v1`.
 
 ### Ollama
 
@@ -336,58 +330,57 @@ ollama pull llama3.1
 ollama serve
 ```
 
-Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` defaults to `http://localhost:11434`.
+Gunakan tag yang ditampilkan oleh `ollama list` dengan awalan `ollama/`. Nilai bawaan `OLLAMA_BASE_URL` adalah `http://localhost:11434`.
 
-Provider cards show the checked endpoint and response time, with a useful message when a local server is unavailable. After starting the server or correcting its settings, click **Test** to refresh its models.
-
-</details>
-
-<details>
-<summary><strong>Optional model-tier routing</strong></summary>
-
-`MODEL` is the fallback for every request. Select a model for `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, or `MODEL_HAIKU` to override an individual Claude Code tier. Select **None** to use `MODEL`.
-
-In **Admin UI → Model Config**, add **Fallback Models** in the order FCC should try them if the selected model fails. Each fallback has its own reasoning effort: **Inherit**, **Off**, **From client**, **Low**, **Medium**, **High**, **X-High**, or **Max**.
-
-Choose a model, effort, and API key number in the bottom row, then click **+**. **Key 1**, **Key 2**, and so on refer to the current numbered keys in that provider's settings. Edit the selections in place, drag the handle to change the order, or click the red trash button to remove a fallback.
-
-**Inherit** keeps the original request's resolved reasoning setting. **From client** uses the effort or token budget sent by your coding agent, bypassing the global or tier setting. You can select the same model with another key number.
+Kartu penyedia menampilkan endpoint yang diperiksa dan waktu respons, serta pesan yang informatif jika server lokal tidak tersedia. Setelah menjalankan server atau memperbaiki pengaturannya, klik **Test** untuk memperbarui daftar model.
 
 </details>
 
 <details>
-<summary><strong>Reasoning control</strong></summary>
+<summary><strong>Perutean tingkat model opsional</strong></summary>
 
-Open **Admin UI → Model Config → Model Routing** and choose an effort beside each model. **Default Effort** starts at **From client**. Fable, Opus, Sonnet, and Haiku start at **Inherit**.
+`MODEL` menjadi model cadangan untuk setiap permintaan. Pilih model untuk `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, atau `MODEL_HAIKU` guna mengganti model pada tingkat Claude Code tertentu. Pilih **None** untuk menggunakan `MODEL`.
 
-| Selection | Behavior |
+Di **Admin UI → Model Config**, tambahkan **Fallback Models** sesuai urutan percobaan FCC jika model yang dipilih gagal. Setiap model cadangan memiliki tingkat upaya penalaran sendiri: **Inherit**, **Off**, **From client**, **Low**, **Medium**, **High**, **X-High**, atau **Max**.
+
+Pilih model, tingkat upaya, dan nomor kunci API pada baris paling bawah, lalu klik **+**. **Key 1**, **Key 2**, dan seterusnya merujuk pada kunci bernomor yang sedang diatur untuk penyedia tersebut. Ubah pilihan secara langsung, seret pegangan untuk mengubah urutan, atau klik tombol hapus berwarna merah untuk menghapus model cadangan.
+
+**Inherit** mempertahankan pengaturan penalaran yang telah ditetapkan pada permintaan awal. **From client** menggunakan tingkat upaya atau anggaran token yang dikirim agen pemrograman, tanpa mengikuti pengaturan global atau tingkat model. Anda dapat memilih model yang sama dengan nomor kunci lain.
+
+</details>
+
+<details>
+<summary><strong>Kontrol penalaran</strong></summary>
+
+Buka **Admin UI → Model Config → Model Routing**, lalu pilih tingkat upaya di samping setiap model. Nilai awal **Default Effort** adalah **From client**. Fable, Opus, Sonnet, dan Haiku menggunakan **Inherit** sebagai nilai awal.
+
+| Pilihan | Perilaku |
 | --- | --- |
-| **From client** | Use the effort sent by your coding agent. If none is sent, keep the provider default. |
-| **Off** | Request reasoning to be disabled. |
-| **Low**, **Medium**, **High**, **X-High**, or **Max** | Override the client with the selected reasoning level. |
-| **Inherit** | Tier overrides use Default Effort. Fallbacks keep the original request's resolved effort. |
+| **From client** | Gunakan tingkat upaya yang dikirim agen pemrograman. Jika tidak ada, gunakan nilai bawaan penyedia. |
+| **Off** | Minta agar penalaran dinonaktifkan. |
+| **Low**, **Medium**, **High**, **X-High**, atau **Max** | Ganti pengaturan klien dengan tingkat penalaran yang dipilih. |
+| **Inherit** | Penggantian tingkat model menggunakan Default Effort. Model cadangan mempertahankan tingkat upaya permintaan awal yang telah ditetapkan. |
 
 </details>
 
 <a id="connect-your-client"></a>
 
-## Connect Your Client
+## Hubungkan Klien Anda
 
-FCC launchers automatically start the server.
+Peluncur FCC menjalankan server secara otomatis.
 
-For editor and app integrations, install the client, start FCC, then open
-**Admin UI → Integrations** and click **Connect** on its card.
+Untuk mengintegrasikan editor dan aplikasi, pasang klien, jalankan FCC, lalu buka
+**Admin UI → Integrations** dan klik **Connect** pada kartunya.
 
-- **Claude Code in VS Code**: Install the [Claude Code extension](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code).
-- **VS Code Chat**: Install the latest [VS Code](https://code.visualstudio.com/), connect, and select an FCC model in its built-in Chat model picker.
-- **Claude Desktop**: Install [Claude Desktop](https://claude.ai/download). Fully quit it before connecting or disconnecting, then reopen it. Disconnect returns to normal Claude sign-in.
-- **Codex in VS Code and App**: Install the [Codex extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt) or Codex App.
-- **DeepSeek Harness Desktop**: Install and open the app once before connecting. Start a new session to use FCC models.
-- **Claude Code in JetBrains ACP**: Install Claude Agent in JetBrains AI Assistant and start it once, then click **Connect** in FCC. Reopen the IDE, select **Claude Code (FCC)**, and start a new chat. After JetBrains updates the agent, restart FCC before starting a new chat. Requires a local IDE in its standard installation locations.
+- **Claude Code di VS Code**: Pasang [ekstensi Claude Code](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code).
+- **VS Code Chat**: Pasang [VS Code](https://code.visualstudio.com/) versi terbaru, hubungkan, lalu pilih model FCC dari pemilih model Chat bawaan.
+- **Claude Desktop**: Pasang [Claude Desktop](https://claude.ai/download). Keluar sepenuhnya sebelum menghubungkan atau memutuskan koneksi, lalu buka kembali. Setelah koneksi diputus, Anda dapat masuk ke Claude seperti biasa.
+- **Codex di VS Code dan aplikasi**: Pasang [ekstensi Codex](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt) atau Codex App.
+- **DeepSeek Harness Desktop**: Pasang dan buka aplikasi satu kali sebelum menghubungkannya. Mulai sesi baru untuk menggunakan model FCC.
+- **Claude Code di JetBrains ACP**: Pasang Claude Agent di JetBrains AI Assistant dan jalankan satu kali, lalu klik **Connect** di FCC. Buka kembali IDE, pilih **Claude Code (FCC)**, dan mulai obrolan baru. Setelah JetBrains memperbarui agen, mulai ulang FCC sebelum memulai obrolan baru. IDE harus terpasang secara lokal di lokasi pemasangan standar.
 
-Reload VS Code or restart the app/IDE after connecting. In Codex and Claude Desktop, select an FCC
-model from the model picker. Reload or restart the client when FCC reports updated settings. Use
-**Disconnect** on the same card to remove the integration.
+Muat ulang VS Code atau mulai ulang aplikasi/IDE setelah menghubungkan. Di Codex dan Claude Desktop, pilih
+model FCC dari pemilih model. Muat ulang atau mulai ulang klien saat FCC melaporkan pengaturan yang diperbarui. Gunakan
 
 To complete Claude Code onboarding separately, open **Admin UI → Integrations →
 Claude Code onboarding** and click **Complete onboarding**. Connecting Claude Code
