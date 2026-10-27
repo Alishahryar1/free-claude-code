@@ -664,13 +664,15 @@ button.startup-busy::before,
 }
 
 .model-combobox-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
   border-radius: var(--radius-sm);
   padding: 9px 10px;
   color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.35;
-  overflow-wrap: anywhere;
   cursor: pointer;
 }
 
@@ -678,6 +680,37 @@ button.startup-busy::before,
 .model-combobox-option.active {
   background: var(--accent-muted);
   color: var(--accent);
+}
+
+.model-option-logo {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  object-fit: contain;
+}
+
+.model-option-logo-fallback {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--panel-strong);
+  color: var(--text-strong);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.model-option-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-weight: 500;
+}
+
+.model-option-provider {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
 }
 
 .model-combobox-empty {

@@ -9,12 +9,18 @@
         emptyMessage,
         registry,
         displayValue = (value) => value,
+        formatSelection = displayValue,
+        renderOption = null,
+        trackSelection = false,
         onSelect = null,
         onClose = null,
       },
     ) {
       this.input = input;
       this.displayValue = displayValue;
+      this.formatSelection = formatSelection;
+      this.renderOption = renderOption;
+      this.trackSelection = trackSelection;
       this.getValues = values;
       this.getEmptyMessage = emptyMessage;
       this.registry = registry;
@@ -129,10 +135,15 @@
         optionEl.id = `${this.listbox.id}-option-${index}`;
         optionEl.dataset.value = value;
         optionEl.setAttribute("role", "option");
-        optionEl.textContent = this.displayValue(value);
+        if (this.renderOption) this.renderOption(optionEl, value);
+        else optionEl.textContent = this.displayValue(value);
         this.listbox.appendChild(optionEl);
       });
-      const selectedIndex = values.indexOf(this.input.value);
+      const selectedIndex = values.indexOf(
+        this.trackSelection
+          ? this.input.dataset.selectedModelRef || this.input.value
+          : this.input.value,
+      );
       this.setActive(selectedIndex >= 0 ? selectedIndex : 0, false);
     }
 
@@ -156,11 +167,20 @@
     }
 
     select(value) {
-      this.input.value = value;
+      this.input.value = this.formatSelection(value);
+      if (this.trackSelection) this.input.dataset.selectedModelRef = value;
       if (this.onSelect) this.onSelect(value);
       this.input.dispatchEvent(new Event("change", { bubbles: true }));
       this.close();
       this.input.focus();
+    }
+
+    refreshSelection() {
+      if (!this.trackSelection) return;
+      const value = this.input.dataset.selectedModelRef || this.input.value;
+      if (!this.getValues().includes(value)) return;
+      this.input.dataset.selectedModelRef = value;
+      this.input.value = this.formatSelection(value);
     }
 
     handleKeydown(event) {
