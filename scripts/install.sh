@@ -145,12 +145,12 @@ print_installer_retry() {
             shell_quote "$fcc_install_version"
             printf ' '
         fi
-        printf 'sh '
+        printf 'UV_LINK_MODE=copy sh '
         shell_quote "$installer_path"
     else
         installer_ref=main
         [ -z "$fcc_install_version" ] || installer_ref="v$fcc_install_version"
-        printf "curl -fsSL 'https://raw.githubusercontent.com/Alishahryar1/free-claude-code/%s/scripts/install.sh' | " "$installer_ref"
+        printf "curl -fsSL 'https://raw.githubusercontent.com/Alishahryar1/free-claude-code/%s/scripts/install.sh' | UV_LINK_MODE=copy " "$installer_ref"
         if [ -n "$fcc_install_version" ]; then
             printf 'FCC_INSTALL_VERSION='
             shell_quote "$fcc_install_version"
@@ -1586,7 +1586,7 @@ install_free_claude_code() {
     assert_no_fcc_processes_running
     spec=$(package_spec)
 
-    set -- uv tool install --force --refresh-package free-claude-code
+    set -- uv tool install --link-mode copy --force --refresh-package free-claude-code
     if [ "$(uname -s)" = "Darwin" ]; then
         set -- env -u UV_PYTHON_PREFERENCE "$@" --managed-python --python "$PYTHON_VERSION+gil"
     else
@@ -1693,7 +1693,7 @@ dispatch_release() {
         print_installer_retry >&2
         fail "Could not load the installer for FCC $fcc_install_version."
     fi
-    FCC_INSTALL_VERSION=$fcc_install_version _FCC_INSTALLER_RELEASE=$fcc_install_version exec sh -c "$selected_installer" sh "$@"
+    UV_LINK_MODE=copy FCC_INSTALL_VERSION=$fcc_install_version _FCC_INSTALLER_RELEASE=$fcc_install_version exec sh -c "$selected_installer" sh "$@"
 }
 
 parse_toolchain_requirements() {

@@ -159,10 +159,10 @@ function Start-InstallStep {
 
 function Get-InstallerRetryCommand {
     $options = @()
-    $prefix = ""
+    $prefix = "`$env:UV_LINK_MODE = 'copy'; "
     $installerRef = "main"
     if ($FccInstallVersion) {
-        $prefix = "`$env:FCC_INSTALL_VERSION = '$FccInstallVersion'; "
+        $prefix += "`$env:FCC_INSTALL_VERSION = '$FccInstallVersion'; "
         $installerRef = "v$FccInstallVersion"
     }
     if ($VoiceLocal) { $options += "-VoiceLocal" }
@@ -1740,6 +1740,8 @@ function Install-FreeClaudeCode {
     $arguments = @(
         "tool",
         "install",
+        "--link-mode",
+        "copy",
         "--force",
         "--refresh-package",
         "free-claude-code",
@@ -1982,12 +1984,13 @@ function Invoke-SelectedReleaseInstaller {
         throw
     }
     $previousContext = @{}
-    foreach ($name in @('FCC_INSTALL_VERSION', '_FCC_INSTALLER_RELEASE')) {
+    foreach ($name in @('FCC_INSTALL_VERSION', '_FCC_INSTALLER_RELEASE', 'UV_LINK_MODE')) {
         $previousContext[$name] = Get-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
     }
     try {
         $env:FCC_INSTALL_VERSION = $FccInstallVersion
         $env:_FCC_INSTALLER_RELEASE = $FccInstallVersion
+        $env:UV_LINK_MODE = "copy"
         & $installer @InstallerArguments
     } finally {
         foreach ($name in $previousContext.Keys) {
