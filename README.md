@@ -7,13 +7,13 @@
   </picture>
 </h1>
 
-[![Lisensi: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-2e7d32.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/blob/main/LICENSE)
+[![Lisensi: AGPL v3](https://img.shields.io/badge/Lisensi-AGPL_v3-2e7d32.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/blob/main/LICENSE)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![Package Manager: uv](assets/package-manager-uv.svg)](https://github.com/astral-sh/uv)
-[![Pengujian: Pytest](https://img.shields.io/badge/Testing-Pytest-ad1457.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/actions/workflows/tests.yml)
-[![Pemeriksa Tipe: Ty](https://img.shields.io/badge/Type%20Checker-ty-fdd835.svg?style=for-the-badge)](https://pypi.org/project/ty/)
-[![Pemformat Kode: Ruff](https://img.shields.io/badge/Formatter-ruff-bf4b00.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
-[![Pencatatan: Loguru](https://img.shields.io/badge/logging-loguru-00695c.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
+[![Pengelola Paket: uv](assets/package-manager-uv.svg)](https://github.com/astral-sh/uv)
+[![Pengujian: Pytest](https://img.shields.io/badge/Pengujian-Pytest-ad1457.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/actions/workflows/tests.yml)
+[![Pemeriksa Tipe: Ty](https://img.shields.io/badge/Pemeriksa%20Tipe-ty-fdd835.svg?style=for-the-badge)](https://pypi.org/project/ty/)
+[![Pemformat Kode: Ruff](https://img.shields.io/badge/Pemformat%20Kode-ruff-bf4b00.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
+[![Pencatatan: Loguru](https://img.shields.io/badge/Pencatatan-loguru-00695c.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
 
 [Mulai Cepat](#mulai-cepat) · [Penyedia](#pilih-penyedia) · [Hubungkan Klien](#connect-your-client) · [Integrasi Opsional](#optional-integrations) · [Kelola Instalasi](#kelola-instalasi)
 
@@ -216,7 +216,7 @@ Untuk menggunakan endpoint API lain, buka **Providers → Custom providers → A
 | [ZenMux](https://zenmux.ai/platform/pay-as-you-go) | `ZENMUX_API_KEY` | `zenmux/deepseek/deepseek-v4-flash-free` |
 | [W&B Inference](https://wandb.ai/settings) | `WANDB_API_KEY` | `wandb/openai/gpt-oss-20b` |
 | [Anthropic](https://platform.claude.com/settings/keys) | `ANTHROPIC_API_KEY` | `anthropic/<model-id>` |
-| [Azure OpenAI](https://learn.microsoft.com/azure/foundry/openai/how-to/chatgpt) | `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_BASE_URL` | `azure_openai/<deployment-name>` |
+| [Azure OpenAI](https://learn.microsoft.com/azure/foundry/openai/how-to/chatgpt) | `AZURE_OPENAI_API_KEY` dan `AZURE_OPENAI_BASE_URL` | `azure_openai/<deployment-name>` |
 | [Google AI Studio (Gemini)](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` | `gemini/models/gemini-3.1-flash-lite` |
 | [Google Vertex AI](https://cloud.google.com/vertex-ai/generative-ai/docs/start/openai) | `VERTEX_PROJECT_ID` + ADC | `vertex/google/gemini-3.5-flash` |
 | [DeepSeek](https://platform.deepseek.com/api_keys) | `DEEPSEEK_API_KEY` | `deepseek/deepseek-chat` |
@@ -485,7 +485,7 @@ Untuk memasang ulang FCC atau mengubah komponen opsional meskipun sudah mengguna
 
 Untuk dukungan suara lokal, sertakan `--voice-local` (macOS/Linux) atau `-VoiceLocal` (Windows), serta opsi `--torch-backend` atau `-TorchBackend` jika digunakan.
 
-### Muse Code di Windows bawaan
+### Muse Code di Windows tanpa WSL
 
 Untuk memasang atau memperbarui Muse Code saja:
 
