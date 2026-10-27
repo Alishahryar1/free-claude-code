@@ -379,73 +379,71 @@ Untuk mengintegrasikan editor dan aplikasi, pasang klien, jalankan FCC, lalu buk
 - **DeepSeek Harness Desktop**: Pasang dan buka aplikasi satu kali sebelum menghubungkannya. Mulai sesi baru untuk menggunakan model FCC.
 - **Claude Code di JetBrains ACP**: Pasang Claude Agent di JetBrains AI Assistant dan jalankan satu kali, lalu klik **Connect** di FCC. Buka kembali IDE, pilih **Claude Code (FCC)**, dan mulai obrolan baru. Setelah JetBrains memperbarui agen, mulai ulang FCC sebelum memulai obrolan baru. IDE harus terpasang secara lokal di lokasi pemasangan standar.
 
-Muat ulang VS Code atau mulai ulang aplikasi/IDE setelah menghubungkan. Di Codex dan Claude Desktop, pilih
-model FCC dari pemilih model. Muat ulang atau mulai ulang klien saat FCC melaporkan pengaturan yang diperbarui. Gunakan
+Muat ulang VS Code atau mulai ulang aplikasi/IDE setelah menghubungkan. Di Codex dan Claude Desktop, pilih model FCC dari pemilih model. Muat ulang atau mulai ulang klien saat FCC melaporkan pengaturan yang diperbarui. Gunakan **Disconnect** pada kartu yang sama untuk menghapus integrasi.
 
-To complete Claude Code onboarding separately, open **Admin UI → Integrations →
-Claude Code onboarding** and click **Complete onboarding**. Connecting Claude Code
-in VS Code also completes onboarding.
+Untuk menyelesaikan orientasi awal Claude Code secara terpisah, buka **Admin UI → Integrations →
+Claude Code onboarding**, lalu klik **Complete onboarding**. Menghubungkan Claude Code
+di VS Code juga menyelesaikan orientasi awal.
 
-Run FCC on the same computer and in the same user environment as the client you
-are configuring.
+Jalankan FCC di komputer dan lingkungan pengguna yang sama dengan klien yang sedang Anda konfigurasi.
 
 <a id="optional-integrations"></a>
 
-## Optional Integrations
+## Integrasi Opsional
 
-Configure integrations from **Admin UI → Messaging**, then click **Apply**.
+Konfigurasikan integrasi melalui **Admin UI → Messaging**, lalu klik **Apply**.
 
 <details>
 <summary><strong>Discord bot</strong></summary>
 
-1. Create a bot in the [Discord Developer Portal](https://discord.com/developers/applications).
-2. Enable **Message Content Intent** and invite it with read, send,
-   message-history, and **Manage Messages** permissions so `/clear` can remove
-   user prompts.
-3. Set **Messaging Platform** to **discord**.
-4. Enter **Discord Bot Token**, **Allowed Discord Channels**, and an absolute **Allowed Directory**.
-5. Apply the settings and restart the server if requested.
+1. Buat bot di [Discord Developer Portal](https://discord.com/developers/applications).
+2. Aktifkan **Message Content Intent** dan undang bot dengan izin membaca,
+   mengirim pesan, melihat riwayat pesan, serta **Manage Messages** agar `/clear`
+   dapat menghapus permintaan pengguna.
+3. Atur **Messaging Platform** ke **discord**.
+4. Masukkan **Discord Bot Token**, **Allowed Discord Channels**, dan **Allowed Directory** dengan jalur absolut.
+5. Terapkan pengaturan dan mulai ulang server jika diminta.
 
 </details>
 
 <details>
 <summary><strong>Telegram bot</strong></summary>
 
-1. Create a bot with [@BotFather](https://t.me/BotFather).
-2. Get your numeric user ID from [@userinfobot](https://t.me/userinfobot).
-   In groups, grant the bot permission to delete messages.
-3. Set **Messaging Platform** to **telegram**.
-4. Enter **Telegram Bot Token**, **Allowed Telegram User ID**, and an absolute **Allowed Directory**.
-5. Apply the settings and restart the server if requested.
+1. Buat bot melalui [@BotFather](https://t.me/BotFather).
+2. Dapatkan ID pengguna numerik Anda dari [@userinfobot](https://t.me/userinfobot).
+   Di grup, berikan izin kepada bot untuk menghapus pesan.
+3. Atur **Messaging Platform** ke **telegram**.
+4. Masukkan **Telegram Bot Token**, **Allowed Telegram User ID**, dan **Allowed Directory** dengan jalur absolut.
+5. Terapkan pengaturan dan mulai ulang server jika diminta.
 
 </details>
 
-### Messaging commands
+### Perintah pesan
 
-| Usage | Behavior |
+| Penggunaan | Perilaku |
 | --- | --- |
-| `/stats` | Show session state. |
-| Standalone `/stop` | Cancel all work. |
-| Reply with `/stop` | Cancel only the selected request while other queued requests continue. |
-| Standalone `/clear` | Clear all FCC conversations and their messages in this chat. |
-| Reply with `/clear` | Delete the selected message and the chain of replies to it. Keep other conversations. |
+| `/stats` | Tampilkan status sesi. |
+| `/stop` sebagai pesan tersendiri | Batalkan semua pekerjaan. |
+| Balas dengan `/stop` | Batalkan hanya permintaan yang dipilih, sementara permintaan lain dalam antrean tetap berjalan. |
+| `/clear` sebagai pesan tersendiri | Hapus semua percakapan FCC beserta pesannya di obrolan ini. |
+| Balas dengan `/clear` | Hapus pesan yang dipilih dan rangkaian balasan terhadapnya. Percakapan lain tetap dipertahankan. |
 
 <details>
-<summary><strong>Voice notes</strong></summary>
+<summary><strong>Catatan suara</strong></summary>
 
-NVIDIA NIM transcription support is included in every installation. In **Admin UI → Messaging → Voice**, enable voice notes, select `nvidia_nim`, and choose a supported model. Configure your **NVIDIA NIM API key** on the Providers page.
+Transkripsi NVIDIA NIM tersedia pada setiap instalasi. Di **Admin UI → Messaging → Voice**, aktifkan catatan suara, pilih `nvidia_nim`, lalu pilih model yang didukung. Atur **NVIDIA NIM API key** Anda di halaman Providers.
 
-For local Whisper on CPU or CUDA, re-run the installer with the local voice option:
+Untuk menggunakan Whisper secara lokal dengan CPU atau CUDA, jalankan kembali pemasang dengan opsi suara lokal:
 
 macOS/Linux:
 
-Local Whisper on CPU or CUDA:
+Whisper lokal dengan CPU atau CUDA:
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-code/main/scripts/install.sh" | sh -s -- --voice-local
 ```
 
-Local Whisper with CUDA 13.0:
+Whisper lokal dengan CUDA 13.0:
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-code/main/scripts/install.sh" | sh -s -- --voice-local --torch-backend cu130
@@ -453,69 +451,69 @@ curl -fsSL "https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-cod
 
 Windows PowerShell:
 
-Local Whisper on CPU or CUDA:
+Whisper lokal dengan CPU atau CUDA:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-code/main/scripts/install.ps1"))) -VoiceLocal
 ```
 
-Local Whisper with CUDA 13.0:
+Whisper lokal dengan CUDA 13.0:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-code/main/scripts/install.ps1"))) -VoiceLocal -TorchBackend cu130
 ```
 
-After installing local support, restart `fcc-server`. In **Admin UI → Messaging → Voice**, enable voice notes, select `cpu` or `cuda`, and choose the Whisper model. Local gated models need `HUGGINGFACE_API_KEY`.
+Setelah memasang dukungan lokal, mulai ulang `fcc-server`. Di **Admin UI → Messaging → Voice**, aktifkan catatan suara, pilih `cpu` atau `cuda`, lalu pilih model Whisper. Model lokal yang aksesnya dibatasi memerlukan `HUGGINGFACE_API_KEY`.
 
 </details>
 
-## Manage Your Installation
+## Kelola Instalasi
 
-Run `fcc-server --version` to check the installed version without starting FCC.
+Jalankan `fcc-server --version` untuk memeriksa versi yang terpasang tanpa menjalankan FCC.
 
-### Update
+### Perbarui
 
-Stop all running FCC commands, then run:
+Hentikan semua perintah FCC yang sedang berjalan, lalu jalankan:
 
 ```sh
 fcc-update
 ```
 
-The update installs the checked stable FCC release with its matching installer.
+Pembaruan memasang rilis FCC stabil yang telah diperiksa beserta pemasang yang sesuai.
 
-To reinstall FCC or change optional components while already up to date, run the [installer](#install) directly.
+Untuk memasang ulang FCC atau mengubah komponen opsional meskipun sudah menggunakan versi terbaru, jalankan [pemasang](#install) secara langsung.
 
-For local voice support, include `--voice-local` (macOS/Linux) or `-VoiceLocal` (Windows), plus your `--torch-backend` or `-TorchBackend` option if used.
+Untuk dukungan suara lokal, sertakan `--voice-local` (macOS/Linux) atau `-VoiceLocal` (Windows), serta opsi `--torch-backend` atau `-TorchBackend` jika digunakan.
 
-### Muse Code on native Windows
+### Muse Code di Windows bawaan
 
-To install or update only Muse Code:
+Untuk memasang atau memperbarui Muse Code saja:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-code/main/scripts/install-muse.ps1")))
 ```
 
-To remove the Muse Code copy installed by FCC, keeping its data:
+Untuk menghapus Muse Code yang dipasang oleh FCC tanpa menghapus datanya:
 
 ```powershell
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-code/main/scripts/uninstall-muse.ps1")))
 ```
 
-Uninstalling FCC leaves Muse Code installed.
+Menghapus FCC tidak akan menghapus Muse Code.
 
-### Uninstall
+### Hapus Instalasi
 
-Stop every running FCC command and quit connected desktop/editor apps before uninstalling.
+Hentikan semua perintah FCC yang sedang berjalan dan tutup aplikasi desktop/editor yang terhubung sebelum menghapus instalasi.
 
-**Removes**
+**Yang dihapus**
 
-- Free Claude Code, including its desktop launcher and commands
+- Free Claude Code, termasuk peluncur desktop dan perintahnya
 - `~/.fcc/`
 
-**Keeps**
+**Yang tetap dipertahankan**
 
-- uv and Python
-- Your coding agents, RTK, and Headroom
+- uv dan Python
+- Agen pemrograman, RTK, dan Headroom Anda
 
 macOS/Linux:
 
@@ -529,17 +527,17 @@ Windows PowerShell:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-code/main/scripts/uninstall.ps1")))
 ```
 
-## Project Links
+## Tautan Proyek
 
-For a problem after installation, run the command below and paste its output into your bug report.
+Jika mengalami masalah setelah instalasi, jalankan perintah berikut dan sertakan keluarannya dalam laporan bug Anda.
 
 ```bash
 fcc-doctor
 ```
 
-- [Report bugs or request features](https://github.com/Alishahryar1/free-claude-code/issues)
-- [Contributing guide](CONTRIBUTING.md)
+- [Laporkan bug atau ajukan permintaan fitur](https://github.com/Alishahryar1/free-claude-code/issues)
+- [Panduan kontribusi](CONTRIBUTING.md)
 
-## License
+## Lisensi
 
-GNU Affero General Public License version 3 only (`AGPL-3.0-only`). See [LICENSE](LICENSE) for details.
+GNU Affero General Public License versi 3 saja (`AGPL-3.0-only`). Baca [LICENSE](LICENSE) untuk informasi lebih lanjut.
