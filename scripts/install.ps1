@@ -23,7 +23,7 @@ $HermesInstallUrl = "https://hermes-agent.nousresearch.com/install.ps1"
 $DshMinimumVersion = "0.2.0-rc.2"
 $DshPackage = "@deepseek-ai/dsh@latest"
 $GrokInstallUrl = "https://x.ai/cli/install.ps1"
-$MuseInstallUrl = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1"
+$MuseInstallUrl = "https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-code/main/scripts/install-muse.ps1"
 $AgyInstallUrl = "https://antigravity.google/cli/install.ps1"
 $AgyMinimumVersion = "1.4.7"
 $RtkVersion = "0.44.2"
@@ -47,6 +47,8 @@ $script:PiAvailable = $false
 $script:MuseAvailable = $false
 $script:EnableRtkHeadroom = $RtkHeadroom.IsPresent
 $FccInstallVersion = [Environment]::GetEnvironmentVariable("FCC_INSTALL_VERSION")
+$FccSourceRepository = "mridwanfirdaus2603/free-claude-code"
+$FccSourceRef = if ($FccInstallVersion) { "v$FccInstallVersion" } else { "main" }
 $FccReleasePattern = '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z'
 $script:InstallLog = ""
 $script:InstallLogWarning = $false
@@ -171,7 +173,7 @@ function Get-InstallerRetryCommand {
     if ($script:InstallerPath -and (Test-Path -LiteralPath $script:InstallerPath -PathType Leaf)) {
         return $prefix + "& " + (Format-Command $script:InstallerPath $options)
     }
-    return $prefix + "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Alishahryar1/free-claude-code/$installerRef/scripts/install.ps1'))) " + (($options | ForEach-Object { Format-Argument $_ }) -join " ")
+    return $prefix + "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/mridwanfirdaus2603/free-claude-code/$installerRef/scripts/install.ps1'))) " + (($options | ForEach-Object { Format-Argument $_ }) -join " ")
 }
 
 function Show-InstallReport {
@@ -1728,10 +1730,8 @@ function Ensure-Uv {
 }
 
 function Get-PackageSpec {
-    $spec = if ($VoiceLocal) { "free-claude-code[voice_local]" } else { "free-claude-code" }
-    if ($FccInstallVersion) { $spec += "==$FccInstallVersion" }
-    elseif ($DryRun) { $spec += "==<selected-release>" }
-    return $spec
+    $package = if ($VoiceLocal) { "free-claude-code[voice_local]" } else { "free-claude-code" }
+    return "$package @ git+https://github.com/$FccSourceRepository.git@$FccSourceRef"
 }
 
 function Install-FreeClaudeCode {
@@ -1961,45 +1961,6 @@ function Show-InstallerNextSteps {
 
 }
 
-function Invoke-SelectedReleaseInstaller {
-    param([hashtable] $InstallerArguments)
-
-    try {
-        if (-not $FccInstallVersion) {
-            $releaseBase = "https://github.com/Alishahryar1/free-claude-code/releases"
-            $response = Invoke-WebRequest -Uri "$releaseBase/latest" -UseBasicParsing -TimeoutSec 10 -MaximumRedirection 5
-            $selectedUrl = if ($response.BaseResponse.PSObject.Properties['ResponseUri']) {
-                $response.BaseResponse.ResponseUri.AbsoluteUri
-            } else { $response.BaseResponse.RequestMessage.RequestUri.AbsoluteUri }
-            $prefix = "$releaseBase/tag/v"
-            if (-not $selectedUrl.StartsWith($prefix, [StringComparison]::Ordinal)) { throw "GitHub returned an unexpected FCC release URL." }
-            $FccInstallVersion = $selectedUrl.Substring($prefix.Length)
-            if ($FccInstallVersion -cnotmatch $FccReleasePattern) { throw "GitHub did not return a canonical FCC release version." }
-        }
-        $text = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v$FccInstallVersion/scripts/install.ps1" -TimeoutSec 10 -MaximumRedirection 5
-        if ($text -isnot [string] -or [string]::IsNullOrWhiteSpace($text)) { throw "The installer for FCC $FccInstallVersion was empty or invalid." }
-        $installer = [scriptblock]::Create($text)
-    } catch {
-        Write-Host "Retry: $(Get-InstallerRetryCommand)"
-        throw
-    }
-    $previousContext = @{}
-    foreach ($name in @('FCC_INSTALL_VERSION', '_FCC_INSTALLER_RELEASE', 'UV_LINK_MODE')) {
-        $previousContext[$name] = Get-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
-    }
-    try {
-        $env:FCC_INSTALL_VERSION = $FccInstallVersion
-        $env:_FCC_INSTALLER_RELEASE = $FccInstallVersion
-        $env:UV_LINK_MODE = "copy"
-        & $installer @InstallerArguments
-    } finally {
-        foreach ($name in $previousContext.Keys) {
-            if ($null -ne $previousContext[$name]) { Set-Item -LiteralPath "Env:$name" -Value $previousContext[$name].Value }
-            else { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
-        }
-    }
-}
-
 function Read-ToolchainRequirements {
     param([string] $Text)
 
@@ -2038,9 +1999,9 @@ function Read-ToolchainRequirements {
 }
 
 function Get-ReleaseToolchain {
-    $metadataUrl = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v$FccInstallVersion/pyproject.toml"
+    $metadataUrl = "https://raw.githubusercontent.com/$FccSourceRepository/$FccSourceRef/pyproject.toml"
     $text = Invoke-RestMethod -Uri $metadataUrl -TimeoutSec 10 -MaximumRedirection 5 -ErrorAction Stop
-    if ($text -isnot [string]) { throw "Invalid pyproject.toml response for FCC $FccInstallVersion." }
+    if ($text -isnot [string]) { throw "Invalid pyproject.toml response for $FccSourceRepository@$FccSourceRef." }
     return Read-ToolchainRequirements -Text $text
 }
 
@@ -2063,15 +2024,6 @@ if ((-not [string]::IsNullOrWhiteSpace($TorchBackend)) -and (-not $VoiceLocal)) 
 }
 
 if (-not $DryRun) {
-    # A public pin requests a release; only the consumed marker skips dispatch.
-    $installerRelease = [Environment]::GetEnvironmentVariable("_FCC_INSTALLER_RELEASE")
-    if ($installerRelease -and $installerRelease -cne $FccInstallVersion) { throw "Invalid FCC release handoff." }
-    Remove-Item Env:_FCC_INSTALLER_RELEASE -ErrorAction SilentlyContinue
-    if (-not $installerRelease) {
-        $installerParameters = @{} + $PSBoundParameters
-        Invoke-SelectedReleaseInstaller -InstallerArguments $installerParameters
-        return
-    }
     try {
         $requirements = Get-ReleaseToolchain
     } catch {

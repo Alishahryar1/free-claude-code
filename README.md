@@ -479,7 +479,7 @@ Hentikan semua perintah FCC yang sedang berjalan, lalu jalankan:
 fcc-update
 ```
 
-Pembaruan memasang rilis FCC stabil yang telah diperiksa beserta pemasang yang sesuai.
+Pembaruan mengambil versi terbaru FCC dari cabang `main` fork dan menjalankan pemasang yang sesuai.
 
 Untuk memasang ulang FCC atau mengubah komponen opsional meskipun sudah menggunakan versi terbaru, jalankan [pemasang](#install) secara langsung.
 
