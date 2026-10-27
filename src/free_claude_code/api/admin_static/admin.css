@@ -1,61 +1,44 @@
 :root {
-  color-scheme: dark;
-  
-  /* Color Palette */
-  --bg: #090a0f;
-  --panel: #11131c;
-  --panel-strong: #171b26;
-  --card: #151822;
-  --card-hover: #1e2230;
-  --input: #0a0b10;
-  --input-focus: #0f1118;
-  --text: #f3f4f6;
-  --text-strong: #ffffff;
-  --muted: #9ca3af;
-  --line: rgba(255, 255, 255, 0.06);
-  --line-strong: rgba(255, 255, 255, 0.12);
-  
-  /* Brand and Accent Colors */
-  --accent: #10b981;
-  --accent-dark: #059669;
-  --accent-muted: rgba(16, 185, 129, 0.08);
-  --accent-border: rgba(16, 185, 129, 0.3);
-  
-  /* Status Colors */
-  --ok: #10b981;
-  --ok-bg: rgba(16, 185, 129, 0.08);
-  --ok-border: rgba(16, 185, 129, 0.25);
-  
-  --warn: #f59e0b;
-  --warn-bg: rgba(245, 158, 11, 0.08);
-  --warn-border: rgba(245, 158, 11, 0.25);
-  
-  --error: #ef4444;
-  --error-bg: rgba(239, 68, 68, 0.08);
-  --error-border: rgba(239, 68, 68, 0.25);
-  
-  --neutral: #6b7280;
-  --neutral-bg: rgba(107, 114, 128, 0.08);
-  --neutral-border: rgba(107, 114, 128, 0.25);
-  
-  --info: #3b82f6;
-  
-  /* Box Shadow & Glows */
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
-  --shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
-  --glow-accent: 0 0 12px rgba(16, 185, 129, 0.15);
-  
-  /* Borders and Radius */
+  color-scheme: light;
+  --bg: #faf9f5;
+  --panel: #efe9de;
+  --panel-strong: #e8e0d2;
+  --card: #faf9f5;
+  --card-hover: #f5f0e8;
+  --input: #faf9f5;
+  --input-focus: #faf9f5;
+  --text: #3d3d3a;
+  --text-strong: #141413;
+  --muted: #6c6a64;
+  --line: #ebe6df;
+  --line-strong: #e6dfd8;
+  --accent: #cc785c;
+  --accent-dark: #a9583e;
+  --accent-muted: #f5f0e8;
+  --accent-border: #e6dfd8;
+  --ok: #438d54;
+  --ok-bg: rgba(93, 184, 114, 0.12);
+  --ok-border: rgba(93, 184, 114, 0.3);
+  --warn: #9a7410;
+  --warn-bg: rgba(212, 160, 23, 0.12);
+  --warn-border: rgba(212, 160, 23, 0.3);
+  --error: #c64545;
+  --error-bg: rgba(198, 69, 69, 0.1);
+  --error-border: rgba(198, 69, 69, 0.28);
+  --neutral: #6c6a64;
+  --neutral-bg: #f5f0e8;
+  --neutral-border: #e6dfd8;
+  --info: #438f81;
+  --shadow-sm: 0 1px 3px rgba(20, 20, 19, 0.08);
+  --shadow: 0 1px 3px rgba(20, 20, 19, 0.06);
+  --glow-accent: 0 0 0 3px rgba(204, 120, 92, 0.14);
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
   --radius-full: 9999px;
-  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239ca3af' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
-  
-  /* Typography */
-  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  
-  /* Transitions */
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236c6a64' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+  --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Tiempos Headline", "Cormorant Garamond", "EB Garamond", Garamond, "Times New Roman", serif;
   --transition-fast: 0.15s ease;
   --transition-normal: 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -74,7 +57,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -144,7 +127,7 @@ textarea {
 
 .brand h1 {
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.2;
   color: var(--text-strong);
   margin: 0;
@@ -173,7 +156,7 @@ textarea {
   padding: 10px 14px;
   text-align: left;
   cursor: pointer;
-  font-weight: 600;
+  font-weight: 500;
   font-size: 14px;
   transition: all var(--transition-fast);
 }
@@ -213,10 +196,11 @@ textarea:focus-visible,
 }
 
 .topbar h2 {
-  font-size: 30px;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 400;
+  line-height: 1.15;
+  letter-spacing: -0.5px;
   color: var(--text-strong);
   margin: calc((1cap - 1em) / 2) 0 0;
 }
@@ -247,8 +231,10 @@ textarea:focus-visible,
 
 .strip-header h3,
 .section-heading h3 {
-  font-size: 18px;
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 1.3;
   color: var(--text-strong);
   margin: 0;
 }
@@ -389,7 +375,7 @@ button.startup-busy::before,
 
 .provider-title strong {
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-strong);
 }
 
@@ -496,7 +482,7 @@ button.startup-busy::before,
 .primary-button {
   border-color: var(--accent);
   background: var(--accent);
-  color: #06100b;
+  color: #ffffff;
 }
 
 .primary-button:hover:not(:disabled) {
@@ -756,7 +742,7 @@ button.startup-busy::before,
 .field textarea:focus {
   border-color: var(--accent);
   background: var(--input-focus);
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+  box-shadow: var(--glow-accent);
   outline: none;
 }
 
@@ -779,7 +765,7 @@ button.startup-busy::before,
 .field input:disabled,
 .field select:disabled,
 .field textarea:disabled {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--card-hover);
   border-color: var(--line);
   color: var(--muted);
   cursor: not-allowed;
@@ -820,11 +806,11 @@ button.startup-busy::before,
   align-items: center;
   min-height: 80px;
   border-top: 1px solid var(--line);
-  background: rgba(9, 10, 15, 0.82);
+  background: rgba(250, 249, 245, 0.94);
   padding: 16px 40px;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 -1px 3px rgba(20, 20, 19, 0.08);
 }
 
 .action-meta {
@@ -915,7 +901,7 @@ button.startup-busy::before,
     gap: 12px;
     padding: 16px 20px;
     min-height: auto;
-    background: rgba(9, 10, 15, 0.95);
+    background: rgba(250, 249, 245, 0.97);
   }
 
   .action-meta {
@@ -960,7 +946,7 @@ button.startup-busy::before,
   }
 
   .topbar h2 {
-    font-size: 24px;
+    font-size: 28px;
   }
 
   .provider-grid {
@@ -982,12 +968,12 @@ button.startup-busy::before,
   }
 }
 .field-error {
-  color: var(--danger, #ef4444);
+  color: var(--error);
   font-size: 13px;
 }
 
 .field [aria-invalid="true"] {
-  border-color: var(--danger, #ef4444);
+  border-color: var(--error);
 }
 
 #messageArea {
