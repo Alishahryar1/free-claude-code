@@ -31,6 +31,16 @@ def _fallbacks(editor: Locator) -> list[dict[str, str | int]]:
     return json.loads(value) if value else []
 
 
+def _model_option(root: Locator, model_ref: str) -> Locator:
+    return root.locator(f'[role="option"][data-value="{model_ref}"]')
+
+
+def _option_values(root: Locator) -> list[str]:
+    return root.locator('[role="option"]').evaluate_all(
+        "(options) => options.map((option) => option.dataset.value)"
+    )
+
+
 def test_model_routing_pairs_five_models_with_effort_and_defaults(
     page: Page, admin_base_url: str
 ) -> None:
@@ -152,12 +162,17 @@ def test_fallback_editor_adds_filters_reorders_and_removes_models(
     expect(editor.locator(".model-list-row")).to_have_count(0)
 
     add_input.fill("model-b")
-    expect(
-        editor.get_by_role("option", name="open_router/vendor/model-b", exact=True)
-    ).to_be_visible()
+    model_option = _model_option(editor, "open_router/vendor/model-b")
+    expect(model_option).to_be_visible()
+    expect(model_option.locator(".model-option-name")).to_have_text("Model B")
+    expect(model_option.locator(".model-option-provider")).to_have_text("OpenRouter")
+    expect(model_option.locator(".model-option-logo")).to_be_visible()
     add_input.press("ArrowDown")
     add_input.press("Enter")
-    expect(add_input).to_have_value("open_router/vendor/model-b")
+    expect(add_input).to_have_value("Model B")
+    expect(add_input).to_have_attribute(
+        "data-selected-model-ref", "open_router/vendor/model-b"
+    )
     add_effort.select_option("low")
     editor.get_by_role("button", name="Add fallback", exact=True).click()
     expect(add_effort).to_have_value("inherit")
@@ -302,8 +317,11 @@ def test_fallback_editor_pairs_match_existing_controls_and_save_effort(
     editor.get_by_role("button", name="Add fallback", exact=True).click()
     row_model = editor.get_by_role("combobox", name="Fallback model 1", exact=True)
     row_model.fill("model-b")
-    editor.get_by_role("option", name="open_router/vendor/model-b", exact=True).click()
-    expect(row_model).to_have_value("open_router/vendor/model-b")
+    _model_option(editor, "open_router/vendor/model-b").click()
+    expect(row_model).to_have_value("Model B")
+    expect(row_model).to_have_attribute(
+        "data-selected-model-ref", "open_router/vendor/model-b"
+    )
     row_effort = editor.get_by_label(
         "Reasoning effort for open_router/vendor/model-b", exact=True
     )
@@ -501,7 +519,11 @@ def test_fallback_model_edits_validate_without_losing_saved_configuration(
     with page.expect_response("**/admin/api/config/apply") as rejected:
         page.locator("#applyButton").click()
     assert rejected.value.json()["applied"] is False
-    expect(model).to_have_value(invalid_model)
+    if invalid_model:
+        expect(model).to_have_value("Model B")
+        expect(model).to_have_attribute("data-selected-model-ref", invalid_model)
+    else:
+        expect(model).to_have_value("")
     fields = page.request.get(f"{admin_base_url}/admin/api/config").json()["fields"]
     persisted = next(field for field in fields if field["key"] == "MODEL_FALLBACKS")
     assert json.loads(persisted["value"]) == original
@@ -535,11 +557,14 @@ def test_editable_fallbacks_keep_focus_and_live_model_suggestions(
     # Refresh the catalog without closing the currently edited model dropdown.
     with page.expect_response("**/admin/api/models"):
         page.evaluate("void hydrateModelOptions()")
-    expect(
-        editor.get_by_role("option", name="open_router/new-model", exact=True)
-    ).to_be_visible()
+    model_option = _model_option(editor, "open_router/new-model")
+    expect(model_option).to_be_visible()
     expect(model).to_have_value("new-model")
-    editor.get_by_role("option", name="open_router/new-model", exact=True).click()
+    model_option.click()
+    expect(model).to_have_value("New Model")
+    expect(model).to_have_attribute(
+        "data-selected-model-ref", "open_router/new-model"
+    )
     assert _fallbacks(editor) == [
         {"model": "open_router/new-model", "reasoning": "client", "api_key_number": 1}
     ]
@@ -589,7 +614,7 @@ def test_model_suggestions_keep_server_order_after_provider_check_and_late_respo
     page.wait_for_function("!state.startupRequest && !state.startupTimer")
     field = page.locator('.field[data-key="MODEL_SONNET"]')
     field.locator("input").fill("")
-    expect(field.get_by_role("option")).to_have_text(["None", *models])
+    assert _option_values(field) == ["None", *models]
     field.locator("input").fill("open_router/custom-unsaved")
     field.locator("input").press("Tab")
 
@@ -606,11 +631,11 @@ def test_model_suggestions_keep_server_order_after_provider_check_and_late_respo
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(field.locator("input")).to_have_value("open_router/custom-unsaved")
     field.locator("input").fill("")
-    expect(field.get_by_role("option")).to_have_text(["None", *models])
+    assert _option_values(field) == ["None", *models]
     field.locator("input").press("Escape")
     optional = page.locator('.field[data-key="MODEL_OPUS"]')
     optional.locator("input").fill("")
-    expect(optional.get_by_role("option")).to_have_text(["None", *models])
+    assert _option_values(optional) == ["None", *models]
 
     page.wait_for_function("!state.startupRequest && !state.startupTimer")
     page.unroute("**/admin/api/models")
@@ -630,4 +655,4 @@ def test_model_suggestions_keep_server_order_after_provider_check_and_late_respo
     with page.expect_response("**/admin/api/models") as stale:
         pending[0].fulfill(json={"models": ["old/stale"], "failed_providers": []})
     stale.value.finished()
-    expect(optional.get_by_role("option")).to_have_text(["None", *models])
+    assert _option_values(optional) == ["None", *models]

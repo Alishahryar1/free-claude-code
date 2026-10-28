@@ -980,6 +980,7 @@ button.startup-busy::before,
 
   .topbar h2 {
     font-size: 28px;
+    margin-top: calc((1cap - 1em) / 2 - 2px);
   }
 
   .provider-grid {
