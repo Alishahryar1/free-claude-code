@@ -136,6 +136,37 @@ class ModelRouter:
         routed.model = resolved.provider_model
         return RoutedMessagesRequest(request=routed, resolved=resolved)
 
+    def rebind_messages_request(
+        self,
+        request: MessagesRequest,
+        provider_model_ref: str,
+        *,
+        original_model: str,
+    ) -> RoutedMessagesRequest:
+        """Produce a RoutedMessagesRequest for a specific ``provider/model`` ref.
+
+        Used by the service layer to walk a SkillOpt fallback chain: each
+        candidate rebinds the same incoming request to a different upstream
+        without re-running the whole router pipeline.
+        """
+        provider_id = Settings.parse_provider_type(provider_model_ref)
+        provider_model = Settings.parse_model_name(provider_model_ref)
+        if provider_id not in SUPPORTED_PROVIDER_IDS:
+            raise ValueError(
+                f"rebind: provider '{provider_id}' not registered"
+            )
+        thinking_enabled = self._settings.resolve_thinking(original_model)
+        resolved = ResolvedModel(
+            original_model=original_model,
+            provider_id=provider_id,
+            provider_model=provider_model,
+            provider_model_ref=provider_model_ref,
+            thinking_enabled=thinking_enabled,
+        )
+        routed = request.model_copy(deep=True)
+        routed.model = provider_model
+        return RoutedMessagesRequest(request=routed, resolved=resolved)
+
     def resolve_token_count_request(
         self, request: TokenCountRequest
     ) -> RoutedTokenCountRequest:

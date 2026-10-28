@@ -18,10 +18,16 @@ from core.anthropic import get_token_count, get_user_facing_error_message
 from core.anthropic.sse import ANTHROPIC_SSE_RESPONSE_HEADERS
 from core.trace import api_messages_request_snapshot, trace_event, traced_async_stream
 from providers.base import BaseProvider
-from providers.exceptions import InvalidRequestError, ProviderError
+from providers.exceptions import (
+    AuthenticationError,
+    InvalidRequestError,
+    ProviderError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
 
-from . import metrics, pricing, trajectory
-from .model_router import ModelRouter
+from . import metrics, pricing, skillopt, trajectory
+from .model_router import ModelRouter, RoutedMessagesRequest
 from .models.anthropic import MessagesRequest, TokenCountRequest
 from .models.responses import TokenCountResponse
 from .optimization_handlers import try_optimizations
@@ -146,6 +152,64 @@ def _require_non_empty_messages(messages: list[Any]) -> None:
         raise InvalidRequestError("messages cannot be empty")
 
 
+_RETRIABLE_PREFLIGHT_ERRORS: tuple[type[BaseException], ...] = (
+    AuthenticationError,
+    ServiceUnavailableError,
+    RateLimitError,
+)
+
+
+def _preflight_with_fallbacks(
+    *,
+    original_request: MessagesRequest,
+    original_model: str,
+    primary_routed: RoutedMessagesRequest,
+    fallback_refs: tuple[str, ...],
+    router: ModelRouter,
+    provider_getter: ProviderGetter,
+) -> tuple[RoutedMessagesRequest, BaseProvider]:
+    """Try the primary resolution first, then each SkillOpt fallback ref.
+
+    Returns ``(routed, provider)`` for the first candidate that passes
+    ``preflight_stream``. Re-raises the primary's error when every
+    candidate fails, so callers see the same exception they would have
+    seen without SkillOpt enabled.
+    """
+    candidates: list[RoutedMessagesRequest] = [primary_routed]
+    for ref in fallback_refs:
+        try:
+            candidates.append(
+                router.rebind_messages_request(
+                    original_request, ref, original_model=original_model
+                )
+            )
+        except ValueError:
+            logger.warning("SkillOpt fallback skipped: unknown provider in '{}'", ref)
+
+    first_error: BaseException | None = None
+    for candidate in candidates:
+        resolved = candidate.resolved
+        provider = provider_getter(resolved.provider_id)
+        try:
+            provider.preflight_stream(
+                candidate.request,
+                thinking_enabled=resolved.thinking_enabled,
+            )
+            return candidate, provider
+        except _RETRIABLE_PREFLIGHT_ERRORS as exc:
+            logger.warning(
+                "SkillOpt fallback: provider='{}' failed preflight ({})",
+                resolved.provider_id,
+                type(exc).__name__,
+            )
+            if first_error is None:
+                first_error = exc
+            continue
+
+    assert first_error is not None  # loop had at least one candidate
+    raise first_error
+
+
 class ClaudeProxyService:
     """Coordinate request optimization, model routing, token count, and providers."""
 
@@ -216,10 +280,13 @@ class ClaudeProxyService:
                 return optimized
             logger.debug("No optimization matched, routing to provider")
 
-            provider = self._provider_getter(routed.resolved.provider_id)
-            provider.preflight_stream(
-                routed.request,
-                thinking_enabled=routed.resolved.thinking_enabled,
+            routed, provider = _preflight_with_fallbacks(
+                original_request=request_data,
+                original_model=request_data.model,
+                primary_routed=routed,
+                fallback_refs=skillopt.fallbacks(skill),
+                router=self._model_router,
+                provider_getter=self._provider_getter,
             )
 
             trace_event(

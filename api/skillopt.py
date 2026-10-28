@@ -68,6 +68,19 @@ def lookup(skill: str | None) -> SkillPolicy | None:
     return cached.policies.get(skill)
 
 
+def fallbacks(skill: str | None) -> tuple[str, ...]:
+    """Return the ordered fallback refs for *skill*, or an empty tuple.
+
+    Only usable when SkillOpt is enabled AND a policy covers *skill*.
+    Returns bare, syntactically-well-formed ``provider/model`` strings —
+    callers still verify the provider is registered before use.
+    """
+    policy = lookup(skill)
+    if policy is None:
+        return ()
+    return policy.fallbacks
+
+
 def snapshot() -> dict[str, Any]:
     """Non-sensitive view for the admin UI."""
     cached = _current_cache()

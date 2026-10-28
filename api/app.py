@@ -18,6 +18,7 @@ from core.trace import extract_claude_session_id_from_headers, trace_event
 from providers.exceptions import ProviderError
 
 from .admin_routes import router as admin_router
+from .discovery_routes import router as discovery_router
 from .routes import router
 from .runtime import AppRuntime, startup_failure_message
 from .validation_log import summarize_request_validation_body
@@ -90,8 +91,13 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     )
 
     app_kwargs: dict[str, Any] = {
-        "title": "Claude Code Proxy",
-        "version": "2.0.0",
+        "title": "Free Claude Code — Anthropic-compatible model gateway",
+        "version": "2.3.0",
+        "description": (
+            "Drop-in Anthropic Messages API proxy that routes Claude Code CLI "
+            "and compatible clients to 18 provider backends. See /llms.txt and "
+            "/.well-known/agents.json for machine-readable discovery."
+        ),
     }
     if lifespan_enabled:
         app_kwargs["lifespan"] = lifespan
@@ -111,6 +117,7 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
 
     # Register routes
     app.include_router(admin_router)
+    app.include_router(discovery_router)
     app.include_router(router)
 
     # Exception handlers
