@@ -53,8 +53,8 @@ def _project_slot_name(project: Path) -> str:
     """Return the global slot name for a project directory.
 
     Mirrors Claude Code's project naming: every non-alphanumeric character of
-    the absolute path becomes a dash, e.g. ``C:\\AI_Agency\\You-Vid`` becomes
-    ``C--AI-Agency-You-Vid``.
+    the absolute path becomes a dash, e.g. ``C:\\work\\my-app`` becomes
+    ``C--work-my-app``.
     """
 
     return re.sub(r"[^A-Za-z0-9]", "-", str(project))
