@@ -211,7 +211,7 @@ def _openai_system_text(
     *,
     context: str,
 ) -> str | None:
-    """Return OpenAI-compatible system text without silently dropping blocks."""
+    """Return OpenAI-compatible system text, dropping only tool references."""
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
