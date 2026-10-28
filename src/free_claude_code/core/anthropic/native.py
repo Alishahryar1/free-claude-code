@@ -9,6 +9,7 @@ from typing import cast
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
+from .content import TOOL_CHANGE_BLOCK_TYPES
 from .models import MessagesRequest
 from .request_serialization import dump_messages_request
 
@@ -113,6 +114,13 @@ def apply_messages_options(body: JsonObject, options: NativeMessagesOptions) -> 
         )
 
 
+def _announces_tool_change(content: JsonValue) -> bool:
+    return isinstance(content, list) and any(
+        isinstance(block, Mapping) and block.get("type") in TOOL_CHANGE_BLOCK_TYPES
+        for block in content
+    )
+
+
 def build_native_messages_request(
     request: MessagesRequest, *, options: NativeMessagesOptions
 ) -> PreparedMessagesRequest:
@@ -144,6 +152,12 @@ def build_native_messages_request(
                 "reasoning_content cannot be replayed losslessly."
             )
         raw = cast(JsonObject, message.model_dump(mode="json", exclude_none=True))
+        if message.role == "system" and _announces_tool_change(raw["content"]):
+            # Claude Code places these announcements where the deferred tool
+            # becomes available; hoisting or stripping them would change which
+            # tools the upstream loads.
+            messages.append(raw)
+            continue
         if message.role == "system":
             if messages:
                 raise NativeMessagesError(
@@ -161,7 +175,10 @@ def build_native_messages_request(
                 system.extend(content)
             continue
         messages.append(raw)
-    if not messages:
+    if all(
+        isinstance(message, Mapping) and message.get("role") == "system"
+        for message in messages
+    ):
         raise NativeMessagesError("Messages input must contain a conversational turn.")
     body["messages"] = messages
     if system:

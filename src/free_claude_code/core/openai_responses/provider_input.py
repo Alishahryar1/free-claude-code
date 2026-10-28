@@ -3,7 +3,11 @@
 import json
 from typing import Any
 
-from free_claude_code.core.anthropic.content import get_block_attr, get_block_type
+from free_claude_code.core.anthropic.content import (
+    get_block_attr,
+    get_block_type,
+    tool_change_kind,
+)
 from free_claude_code.core.anthropic.conversion import resolve_anthropic_tool_choice
 from free_claude_code.core.anthropic.image_sources import (
     AnthropicImageSourceError,
@@ -315,6 +319,8 @@ def _user_items(content: Any) -> list[dict[str, Any]]:
             message_parts.clear()
 
     for block in content:
+        if _is_tool_reference_change(block):
+            continue
         block_type = get_block_type(block)
         if block_type == "text":
             message_parts.append(
@@ -368,6 +374,17 @@ def _image_part(block: Any) -> dict[str, Any]:
     return {"type": "input_image", "image_url": url}
 
 
+def _is_tool_reference_change(block: Any) -> bool:
+    """Return whether a block only announces a tool that ``tools`` already lists."""
+    kind = tool_change_kind(block)
+    if kind == "definition":
+        raise ResponsesConversionError(
+            "OpenAI Responses cannot represent an inline tool definition in "
+            f"a {get_block_type(block)!r} block. Declare the tool in tools instead."
+        )
+    return kind == "reference"
+
+
 def _message_text(content: Any, *, context: str) -> str:
     if isinstance(content, str):
         return content
@@ -375,6 +392,8 @@ def _message_text(content: Any, *, context: str) -> str:
         raise ResponsesConversionError(f"{context} must contain only text.")
     parts: list[str] = []
     for block in content:
+        if _is_tool_reference_change(block):
+            continue
         if get_block_type(block) != "text":
             raise ResponsesConversionError(f"{context} must contain only text.")
         parts.append(str(get_block_attr(block, "text", "")))

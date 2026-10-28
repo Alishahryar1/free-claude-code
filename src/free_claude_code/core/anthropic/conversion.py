@@ -23,7 +23,7 @@ from free_claude_code.core.openai_chat import (
 )
 from free_claude_code.core.tool_schema_patterns import translate_tool_schema_patterns
 
-from .content import get_block_attr, get_block_type
+from .content import get_block_attr, get_block_type, tool_change_kind
 from .image_sources import AnthropicImageSourceError, portable_anthropic_image_url
 from .models import MessagesRequest
 from .request_serialization import serialize_tool_result_content
@@ -195,6 +195,17 @@ def _assert_no_forbidden_assistant_block(block: Any) -> None:
         )
 
 
+def _is_tool_reference_change(block: Any) -> bool:
+    """Return whether a block only announces a tool that ``tools`` already lists."""
+    kind = tool_change_kind(block)
+    if kind == "definition":
+        raise OpenAIConversionError(
+            "OpenAI chat conversion cannot represent an inline tool definition in "
+            f"a {get_block_type(block)!r} block. Declare the tool in tools instead."
+        )
+    return kind == "reference"
+
+
 def _openai_system_text(
     content: Any,
     *,
@@ -212,6 +223,8 @@ def _openai_system_text(
 
     text_parts: list[str] = []
     for block in content:
+        if _is_tool_reference_change(block):
+            continue
         block_type = get_block_type(block)
         if block_type != "text":
             raise OpenAIConversionError(
@@ -782,6 +795,8 @@ class AnthropicToOpenAIConverter:
             tool_results.clear()
 
         for block in content:
+            if _is_tool_reference_change(block):
+                continue
             block_type = get_block_type(block)
 
             if block_type == "text":

@@ -73,6 +73,20 @@ class ContentBlockWebFetchToolResult(_AnthropicBlockBase):
     content: Any
 
 
+class ContentBlockToolAddition(_AnthropicBlockBase):
+    """Claude Code announcement that a deferred tool is now available."""
+
+    type: Literal["tool_addition"]
+    tool: dict[str, Any]
+
+
+class ContentBlockToolRemoval(_AnthropicBlockBase):
+    """Claude Code announcement that a tool is no longer available."""
+
+    type: Literal["tool_removal"]
+    tool: dict[str, Any]
+
+
 class SystemContent(_AnthropicBlockBase):
     type: Literal["text"]
     text: str
@@ -93,6 +107,8 @@ class Message(BaseModel):
             | ContentBlockServerToolUse
             | ContentBlockWebSearchToolResult
             | ContentBlockWebFetchToolResult
+            | ContentBlockToolAddition
+            | ContentBlockToolRemoval
         ]
     )
     reasoning_content: str | None = None
