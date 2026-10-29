@@ -842,3 +842,70 @@ async def test_rejected_credentials_are_replaced_by_the_refreshed_sdk_snapshot(
         assert "account-secret" not in str(second.headers)
     finally:
         await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_model_dispatch_when_available_and_rejected_when_absent(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path, CopilotEgress.CHAT)
+    try:
+        # 1. When runtime exposes "auto" (Student plan account)
+        harness.runtime.name = "auto"
+        harness.runtime.available = (
+            CopilotModel(
+                ProviderModelInfo(model_id="auto"),
+                MessagesModelCapabilities(),
+            ),
+        )
+        await harness.auth.models(refresh=True)
+        request = MessagesRequest(
+            model="auto",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=100,
+        )
+        result = await collect(harness.provider.stream_messages(request))
+        assert "ok" in result
+
+        # 2. Also accepts "github_copilot/auto" wire format
+        prefixed_request = MessagesRequest(
+            model="github_copilot/auto",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=100,
+        )
+        prefixed_result = await collect(
+            harness.provider.stream_messages(prefixed_request)
+        )
+        assert "ok" in prefixed_result
+
+        # 3. When runtime only exposes named model, requesting "auto" or "github_copilot/auto" fails
+        named_dir = tmp_path / "named"
+        named_dir.mkdir()
+        harness2 = Harness(named_dir, CopilotEgress.CHAT)
+        try:
+            harness2.runtime.name = "claude-model"
+            harness2.runtime.available = (
+                CopilotModel(
+                    ProviderModelInfo(model_id="claude-model"),
+                    MessagesModelCapabilities(),
+                ),
+            )
+            await harness2.auth.models(refresh=True)
+            with pytest.raises(InvalidRequestError, match="concrete"):
+                harness2.provider.stream_messages(request)
+
+            with pytest.raises(InvalidRequestError, match="concrete"):
+                harness2.provider.stream_messages(prefixed_request)
+        finally:
+            await harness2.close()
+
+        # 4. Empty model name fails with InvalidRequestError
+        empty_request = MessagesRequest(
+            model="  ",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=100,
+        )
+        with pytest.raises(InvalidRequestError, match="concrete model"):
+            await collect(harness.provider.stream_messages(empty_request))
+    finally:
+        await harness.close()
