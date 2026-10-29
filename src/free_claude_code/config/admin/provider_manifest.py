@@ -218,6 +218,16 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "vision models."
         ),
     },
+    "MODELSCOPE_API_KEY": {
+        "label": "ModelScope API Keys",
+        "description": (
+            "ModelScope API-Inference token (ms-...) for the OpenAI-compatible "
+            "endpoint at api-inference.modelscope.cn/v1. Create one at "
+            "[modelscope.cn](https://modelscope.cn/my/myaccesstokens). Bind an "
+            "Alibaba Cloud account with real-name verification first to enable "
+            "the free inference quota."
+        ),
+    },
     "NEBIUS_API_KEY": {
         "label": "Nebius Token Factory API Keys",
         "description": (

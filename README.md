@@ -216,6 +216,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 | [Together AI](https://api.together.ai/settings/api-keys) | `TOGETHER_API_KEY` | `together/zai-org/GLM-5.2` |
 | [DeepInfra](https://deepinfra.com/dash/api_keys) | `DEEPINFRA_API_KEY` | `deepinfra/deepseek-ai/DeepSeek-V4-Flash` |
 | [SiliconFlow](https://cloud.siliconflow.com/account/ak) | `SILICONFLOW_API_KEY` | `siliconflow/Qwen/Qwen3-32B` |
+| [ModelScope](https://modelscope.cn/my/myaccesstokens) | `MODELSCOPE_API_KEY` | `modelscope/Qwen/Qwen3.8-27B` |
 | [Nebius Token Factory](https://tokenfactory.nebius.com/project/api-keys) | `NEBIUS_API_KEY` | `nebius/Qwen/Qwen3-30B-A3B` |
 | [Chutes](https://chutes.ai/docs/getting-started/authentication) | `CHUTES_API_KEY` | `chutes/Qwen/Qwen3-32B-TEE` |
 | [Featherless AI](https://featherless.ai/account/api-keys) | `FEATHERLESS_API_KEY` | `featherless/Qwen/Qwen3-32B` |
@@ -297,6 +298,10 @@ For another API endpoint, open **Providers → Custom providers → Add provider
   For another region or workspace, set `ALIBABA_CLOUD_BASE_URL` to its
   [OpenAI-compatible endpoint](https://www.alibabacloud.com/help/en/model-studio/base-url)
   ending in `/compatible-mode/v1`. The key and endpoint must use the same region.
+- ModelScope free inference requires an Alibaba Cloud account with real-name
+  verification bound to your ModelScope account before the daily free quota is
+  enabled. Bind it under account settings at
+  [modelscope.cn](https://modelscope.cn/my/myaccesstokens), then create the token.
 - QwenCloud Coding Plan keys use `qwencloud_coding/`. QwenCloud Token Plan keys
   use `qwencloud/`. The keys and endpoints are not interchangeable. Coding Plan
   is for local, personal, interactive coding-agent use under the

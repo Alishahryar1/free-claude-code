@@ -26,6 +26,7 @@ from free_claude_code.config.provider_catalog import (
     KIMI_CODE_DEFAULT_BASE,
     LLM7_DEFAULT_BASE,
     MINIMAX_DEFAULT_BASE,
+    MODELSCOPE_DEFAULT_BASE,
     NEBIUS_DEFAULT_BASE,
     OLLAMA_CLOUD_DEFAULT_BASE,
     OPPER_DEFAULT_BASE,
@@ -100,6 +101,7 @@ def _make_settings(**overrides):
     mock.together_api_keys = "test_together_key"
     mock.deepinfra_api_keys = "test_deepinfra_key"
     mock.siliconflow_api_keys = "test_siliconflow_key"
+    mock.modelscope_api_keys = "test_modelscope_key"
     mock.nebius_api_keys = "test_nebius_key"
     mock.scw_secret_keys = "test_scw_key"
     mock.opper_api_keys = "test_opper_key"
@@ -196,6 +198,7 @@ def _make_settings(**overrides):
     mock.together_proxy = None
     mock.deepinfra_proxy = None
     mock.siliconflow_proxy = None
+    mock.modelscope_proxy = None
     mock.nebius_proxy = None
     mock.scw_proxy = None
     mock.opper_proxy = None
@@ -621,6 +624,31 @@ async def test_siliconflow_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.base_url_attr is None
     assert config.api_key == "siliconflow-token"
     assert config.base_url == SILICONFLOW_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
+async def test_modelscope_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["modelscope"]
+    settings = _make_settings(
+        modelscope_api_keys="modelscope-token",
+        modelscope_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "modelscope",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "ModelScope"
+    assert descriptor.credential_env == "MODELSCOPE_API_KEY"
+    assert descriptor.base_url_attr is None
+    assert config.api_key == "modelscope-token"
+    assert config.base_url == MODELSCOPE_DEFAULT_BASE
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
@@ -1180,6 +1208,7 @@ async def test_create_provider_instantiates_each_builtin():
         "together": OpenAIChatProvider,
         "deepinfra": OpenAIChatProvider,
         "siliconflow": OpenAIChatProvider,
+        "modelscope": OpenAIChatProvider,
         "nebius": OpenAIChatProvider,
         "scaleway": OpenAIChatProvider,
         "opper": OpenAIChatProvider,
