@@ -18,6 +18,7 @@ from .custom_providers import CustomProviderDefinition, decode_custom_providers
 from .model_refs import ModelFallback, ModelFallbacks
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
+    MINIMAX_DEFAULT_BASE,
     PROVIDER_CATALOG,
     SUPPORTED_PROVIDER_IDS,
 )
@@ -165,6 +166,10 @@ class Settings(BaseModel):
 
     # ==================== MiniMax Config ====================
     minimax_api_keys: ApiKeyList = Field(default=(), validation_alias="MINIMAX_API_KEY")
+    minimax_base_url: NonEmptyString = Field(
+        default=MINIMAX_DEFAULT_BASE,
+        validation_alias="MINIMAX_BASE_URL",
+    )
 
     # ==================== OpenCode Zen / OpenCode Go ====================
     # Same key from opencode.ai/auth; Zen uses ``opencode_zen/``, Go uses ``opencode_go/``.

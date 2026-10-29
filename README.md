@@ -230,7 +230,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 | [Mistral La Plateforme](https://console.mistral.ai/) | `MISTRAL_API_KEY` | `mistral/devstral-small-latest` |
 | [Mistral Codestral](https://console.mistral.ai/) | `CODESTRAL_API_KEY` | `mistral_codestral/codestral-latest` |
 | [OpenCode Zen](https://opencode.ai/auth) | `OPENCODE_API_KEY` | `opencode_zen/gpt-5.3-codex` |
-| [OpenCode Go](https://opencode.ai/auth) | `OPENCODE_API_KEY` | `opencode_go/minimax-m2.7` |
+| [OpenCode Go](https://opencode.ai/auth) | `OPENCODE_API_KEY` | `opencode_go/minimax-m3.1-flash-free` |
 | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway/models-and-providers) | `AI_GATEWAY_API_KEY` | `vercel/openai/gpt-5.5` |
 | [Amazon Bedrock](https://console.aws.amazon.com/bedrock/) | `AWS_BEARER_TOKEN_BEDROCK` | `bedrock/openai.gpt-oss-120b` |
 | [Hugging Face Inference Providers](https://huggingface.co/settings/tokens) | `HUGGINGFACE_API_KEY` | `huggingface/Qwen/Qwen3-Coder-480B-A35B-Instruct:fastest` |
@@ -238,7 +238,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 | [Wafer](https://wafer.ai/) | `WAFER_API_KEY` | `wafer/DeepSeek-V4-Pro` |
 | [Kimi API](https://platform.moonshot.ai/console/api-keys) | `KIMI_API_KEY` | `kimi/kimi-k2.5` |
 | [Kimi Code](https://www.kimi.com/code/console) | `KIMI_CODE_API_KEY` | `kimi_code/k3` |
-| [MiniMax](https://platform.minimax.io/user-center/basic-information/interface-key) | `MINIMAX_API_KEY` | `minimax/MiniMax-M3` |
+| [MiniMax](https://platform.minimax.io/user-center/basic-information/interface-key) | `MINIMAX_API_KEY` + optional `MINIMAX_BASE_URL` | `minimax/MiniMax-M3.1-Flash` |
 | [Cerebras Inference](https://cloud.cerebras.ai/) | `CEREBRAS_API_KEY` | `cerebras/gpt-oss-120b` |
 | [SambaNova](https://cloud.sambanova.ai/apis) | `SAMBANOVA_API_KEY` | `sambanova/Meta-Llama-3.3-70B-Instruct` |
 | [Kilo.ai](https://kilo.ai) | `KILO_API_KEY` | `kilo/kilo-auto/free` |
@@ -305,6 +305,14 @@ For another API endpoint, open **Providers → Custom providers → Add provider
   `opencode_zen/` and `opencode_go/` model prefixes.
 - For Amazon Bedrock, set `BEDROCK_BASE_URL` to the URL for the same region as
   the API key and select one of the listed models.
+- MiniMax uses `https://api.minimax.io/v1` by default. For China-region
+  OpenAI-compatible access, set `MINIMAX_BASE_URL=https://api.minimaxi.com/v1`.
+  Use `minimax/MiniMax-M3.1-Flash` for new configurations; `minimax/MiniMax-M3`
+  remains available. These IDs work with either regional endpoint. Discovered
+  current MiniMax choices show Flash first; saved older model IDs and custom
+  endpoints remain usable. Gateway models appear only when their provider lists
+  them. MiniMax keeps the provider's default thinking behavior and requests
+  separate reasoning output; Flash does not support disabling thinking.
 - Vertex AI uses Google Application Default Credentials instead of an API key.
   Locally, run `gcloud auth application-default login` once. Service-account
   files and attached service accounts also work. Set `VERTEX_PROJECT_ID`, and

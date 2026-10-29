@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pytest
+
 from free_claude_code.application.model_catalog import (
     CatalogModel,
     catalog_wire_slug_for_ref,
@@ -118,6 +120,76 @@ def test_catalog_retains_configured_models_and_enriches_each_reference_once():
     assert catalog.models[0].supports_reasoning is None
     assert catalog.models[0].context_window_tokens is None
     assert catalog.models[1].context_window_tokens == 65536
+
+
+@pytest.mark.parametrize(
+    ("provider", "flash", "m3", "legacy"),
+    [
+        ("minimax", "MiniMax-M3.1-Flash", "MiniMax-M3", "MiniMax-M2.7"),
+        ("minimax", "MiniMax-M3.1-Flash", "MiniMax-M3", "abab6.5s-chat"),
+        (
+            "open_router",
+            "minimax/minimax-m3.1-flash:free",
+            "minimax/minimax-m3",
+            "minimax/minimax-m2.5",
+        ),
+        ("opencode_zen", "minimax-m3.1-flash-free", "minimax-m3", "minimax-m2.7"),
+        ("opencode_go", "minimax-m3.1-flash-free", "minimax-m3", "minimax-m2.7"),
+    ],
+)
+def test_minimax_catalog_prefers_flash_but_preserves_saved_legacy(
+    provider, flash, m3, legacy
+):
+    refs = [f"{provider}/{model}" for model in (m3, legacy, flash)]
+    infos = tuple(ProviderModelInfo(ref) for ref in refs)
+    settings = Settings(model=refs[0])
+    catalog = read_model_catalog(ModelCatalogSnapshot(settings, infos))
+    assert [model.provider_model_ref for model in catalog.models] == [refs[2], refs[0]]
+    assert catalog.default_model_id == refs[0]
+
+    saved = read_model_catalog(ModelCatalogSnapshot(Settings(model=refs[1]), infos))
+    assert {model.provider_model_ref for model in saved.models} == set(refs)
+    assert saved.default_model_id == refs[1]
+
+
+@pytest.mark.parametrize(
+    ("provider", "m3", "legacy"),
+    [
+        ("nvidia_nim", "minimaxai/minimax-m3", "minimaxai/minimax-m2.7"),
+        ("wafer", "MiniMax-M3", "MiniMax-M2.5"),
+    ],
+)
+def test_unverified_flash_gateway_is_not_synthesized(provider, m3, legacy):
+    current = f"{provider}/{m3}"
+    infos = tuple(ProviderModelInfo(f"{provider}/{model}") for model in (legacy, m3))
+    catalog = read_model_catalog(ModelCatalogSnapshot(Settings(model=current), infos))
+    assert [model.provider_model_ref for model in catalog.models] == [current]
+
+
+def test_minimax_unknown_model_still_resolves_as_explicit_selection():
+    selected = "minimax/MiniMax-private"
+    catalog = read_model_catalog(ModelCatalogSnapshot(Settings(model=selected), ()))
+    assert catalog.default_model_id == selected
+    assert [model.provider_model_ref for model in catalog.models] == [selected]
+
+
+def test_minimax_filter_preserves_nontext_and_custom_provider_models():
+    definition = CustomProviderDefinition(
+        provider_id="custom_00000000000000000000000000000001",
+        display_name="Private MiniMax",
+        base_url="https://gateway.example/v1",
+    )
+    refs = (
+        "open_router/other/model",
+        "minimax/speech-2.6-hd",
+        "minimax/private-model",
+        f"{definition.provider_id}/MiniMax-M2.7",
+    )
+    settings = Settings(model=refs[0], custom_providers=(definition,))
+    catalog = read_model_catalog(
+        ModelCatalogSnapshot(settings, tuple(ProviderModelInfo(ref) for ref in refs))
+    )
+    assert {model.provider_model_ref for model in catalog.models} == set(refs)
 
 
 def _client_model(wire_slug: str, provider_model_ref: str) -> CatalogModel:

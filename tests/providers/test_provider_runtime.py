@@ -110,6 +110,7 @@ def _make_settings(**overrides):
     mock.deepseek_api_keys = "test_deepseek_key"
     mock.wafer_api_keys = "test_wafer_key"
     mock.minimax_api_keys = "test_minimax_key"
+    mock.minimax_base_url = MINIMAX_DEFAULT_BASE
     mock.opencode_api_keys = "test_opencode_key"
     mock.vercel_ai_gateway_api_keys = "test_vercel_key"
     mock.bedrock_api_keys = "test_bedrock_key"
