@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from free_claude_code.application.model_catalog import ModelCatalog
@@ -91,7 +92,8 @@ def _check_native(
 def launch_harness(spec: HarnessSpec, argv: Sequence[str] | None = None) -> None:
     """Prepare the FCC connection and leave command semantics to the harness."""
 
-    args = list(sys.argv[1:] if argv is None else argv)
+    from free_claude_code.cli import entrypoints as project_entrypoints
+
     base_env = dict(os.environ)
     auth_token = base_env.get("ANTHROPIC_AUTH_TOKEN", "")
     stage = "load settings"
@@ -100,6 +102,14 @@ def launch_harness(spec: HarnessSpec, argv: Sequence[str] | None = None) -> None
             binary_name=spec.binary_name,
             display_name=spec.display_name,
             install_hint=spec.install_hint,
+        )
+        # Resolve the per-project config slot first: it relocates the home the
+        # settings, token, and proxy URL below are read from. A missing slot
+        # and its stable port are scaffolded here, exactly as fcc-server does.
+        program = Path(sys.argv[0]).name or spec.display_name
+        project_entrypoints._apply_project_arg(argv, program=program)
+        args = project_entrypoints._strip_project_pair(
+            sys.argv[1:] if argv is None else argv
         )
         if spec.compatibility_check:
             _check_native(
