@@ -80,6 +80,19 @@ CASES = [
         401,
     ),
     (
+        "empiriolabs",
+        "https://api.empiriolabs.ai/v1/account/usage?limit=1",
+        {
+            "object": "account_usage",
+            "balance": {"amount": 0, "currency": "USD"},
+            "summary": {},
+            "spend": {},
+            "data": [],
+            "has_more": False,
+        },
+        401,
+    ),
+    (
         "deepinfra",
         "https://api.deepinfra.com/v1/me",
         {"uid": "id", "email": None},
@@ -405,6 +418,23 @@ async def test_programming_errors_do_not_become_permission_to_save(monkeypatch):
 async def test_xkiro_unexpected_usage_remains_unverified(monkeypatch, payload):
     _mock_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
     result = await _check_credentials(_settings("xkiro"), ("XKIRO_API_KEY",))
+    assert result[0].status == validation.CredentialStatus.UNVERIFIED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"object": "list", "data": []},
+        {"object": "account_usage", "balance": None},
+        {"object": "usage", "balance": {"amount": 0}},
+    ],
+)
+async def test_empiriolabs_unexpected_usage_remains_unverified(monkeypatch, payload):
+    _mock_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
+    result = await _check_credentials(
+        _settings("empiriolabs"), ("EMPIRIOLABS_API_KEY",)
+    )
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
 
 
