@@ -945,28 +945,70 @@ run_opencode_installer() {
     VERSION= bash "$@"
 }
 
+latest_opencode_v1() {
+    tags=$(curl -fsSL --max-time 10 "https://registry.npmjs.org/-/package/opencode-ai/dist-tags") ||
+        fail "Could not discover the latest OpenCode 1 release. Upgrade OpenCode manually, then rerun the installer."
+    latest=$(printf '%s' "$tags" | tr '\r\n' '  ' | tr ',{}' '\n' | sed -n 's/^[[:space:]]*"latest"[[:space:]]*:[[:space:]]*//p' | sed 's/[[:space:]]*$//')
+    version=$(printf '%s' "$latest" | sed -n 's/^"\(1\.[0-9][0-9]*\.[0-9][0-9]*\)"$/\1/p')
+    if [ "$latest" != "\"$version\"" ] ||
+        ! printf '%s\n' "$version" | grep -Eq '^1\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
+        ! stable_version_is_supported "$version" "1.19.0"; then
+        fail "The OpenCode registry did not return one stable v1 release at or above 1.19.0. Upgrade OpenCode manually, then rerun the installer."
+    fi
+    printf '%s\n' "$version"
+}
+
+run_opencode_upgrade() {
+    opencode_upgrade_target=$1
+    assert_no_opencode_processes_running
+    opencode_saved_path=$PATH
+    if [ -n "${original_opencode_path:-}" ] && [ -n "${original_opencode_search_path:-}" ]; then
+        # Installer-added directories must not hide a failed upgrade behind another copy.
+        PATH=$original_opencode_search_path
+        export PATH
+    fi
+    print_command "$opencode_path" upgrade "$opencode_upgrade_target"
+    write_install_log "$(print_command "$opencode_path" upgrade "$opencode_upgrade_target")"
+    if "$opencode_path" upgrade "$opencode_upgrade_target"; then
+        :
+    else
+        status=$?
+        fail "OpenCode upgrade $opencode_upgrade_target failed (exit code $status). Finish the official upgrade manually, then rerun the installer."
+    fi
+    hash -r 2>/dev/null || true
+    opencode_path=$(command -v opencode || true)
+    [ -n "$opencode_path" ] || fail "OpenCode is missing from PATH after upgrade $opencode_upgrade_target. Finish the official upgrade manually, then rerun the installer."
+    opencode_current=$(opencode_version "$opencode_path") ||
+        fail "Could not read OpenCode at $opencode_path after upgrade $opencode_upgrade_target. Finish the official upgrade manually, then rerun the installer."
+    PATH=$opencode_saved_path
+    export PATH
+    if [ "$opencode_upgrade_target" = --major ]; then
+        case "$opencode_current" in
+            2.*) ;;
+            *) fail "OpenCode upgrade --major left '$opencode_current' at $opencode_path. Finish the official upgrade manually, then rerun the installer." ;;
+        esac
+    fi
+}
+
 check_opencode_install() {
     [ -n "${HOME:-}" ] || fail "HOME is required to install OpenCode."
     opencode_native="$HOME/.opencode/bin/opencode"
     opencode_path=${original_opencode_path:-$(command -v opencode || true)}
-    opencode_install=1
+    opencode_action=install
     if [ -n "$opencode_path" ]; then
         opencode_current=$(opencode_version "$opencode_path") ||
             fail "Could not read OpenCode version at $opencode_path. Correct that installation, then rerun the installer."
         case "$opencode_current" in
-            2.*) opencode_install=0 ;;
-            1.*)
-                [ "$opencode_path" = "$opencode_native" ] ||
-                    fail "OpenCode 1 at $opencode_path requires manual migration. Remove it with its package manager (npm: npm uninstall -g opencode-ai), then rerun this installer. See https://opencode.ai/v2/docs/migrate-v1/"
-                ;;
+            2.*) opencode_action=reuse ;;
+            1.*) opencode_action=upgrade ;;
             *) fail "OpenCode at $opencode_path is not a recognized stable v1 or v2. Correct that installation, then rerun the installer. See https://opencode.ai/v2/docs/migrate-v1/" ;;
         esac
     fi
     opencode_plugin=$(opencode_rtk_plugin) || return $?
-    if [ "$opencode_install" -eq 1 ] || [ -n "$opencode_plugin" ]; then
+    if [ "$opencode_action" != reuse ] || [ -n "$opencode_plugin" ]; then
         assert_no_opencode_processes_running
     fi
-    if [ "$opencode_install" -eq 1 ]; then
+    if [ "$opencode_action" = install ]; then
         for opencode_target in "$HOME/.opencode" "$HOME/.opencode/bin" "$opencode_native"; do
             [ ! -L "$opencode_target" ] || fail "OpenCode installation path is linked: $opencode_target. Migrate it manually."
         done
@@ -979,7 +1021,9 @@ ensure_opencode() {
     opencode_path=${original_opencode_path:-$(command -v opencode || true)}
     if [ "$dry_run" -eq 1 ]; then
         print_command opencode --version
-        printf 'Install stable OpenCode 2 if absent, or migrate v1 at %s; external v1 requires manual upgrade.\n' "$opencode_native"
+        printf 'Install stable OpenCode 2 if absent; retain stable v2.\n'
+        printf 'For v1 below 1.19.0: discover latest stable v1 and run opencode upgrade <latest-v1>, then verify.\n'
+        printf 'For remaining stable v1 at or above 1.19.0: run opencode upgrade --major, then verify stable v2.\n'
         printf 'Check and back up the recognized old OpenCode RTK plugin if present.\n'
         if [ -z "$opencode_path" ]; then
             download_and_run "$OPENCODE_INSTALL_URL" bash "OpenCode"
@@ -988,7 +1032,7 @@ ensure_opencode() {
     fi
 
     check_opencode_install
-    if [ "$opencode_install" -eq 1 ]; then
+    if [ "$opencode_action" = install ]; then
         download_and_run "$OPENCODE_INSTALL_URL" run_opencode_installer "OpenCode"
         add_known_bin_directories
         hash -r 2>/dev/null || true
@@ -997,8 +1041,23 @@ ensure_opencode() {
             2.*) ;;
             *) fail "The OpenCode installer did not install stable OpenCode 2. See https://opencode.ai/v2/docs/" ;;
         esac
+    elif [ "$opencode_action" = upgrade ]; then
+        if ! stable_version_is_supported "$opencode_current" "1.19.0"; then
+            opencode_v1_target=$(latest_opencode_v1) || return $?
+            run_opencode_upgrade "$opencode_v1_target"
+            case "$opencode_current" in
+                2.*) ;;
+                *)
+                    [ "${opencode_current%%+*}" = "$opencode_v1_target" ] ||
+                        fail "OpenCode upgrade $opencode_v1_target left '$opencode_current' at $opencode_path. Finish the official upgrade manually, then rerun the installer."
+                    ;;
+            esac
+        fi
+        case "$opencode_current" in
+            1.*) run_opencode_upgrade --major ;;
+        esac
     fi
-    if [ "$opencode_install" -eq 0 ] && [ -z "$opencode_plugin" ]; then
+    if [ "$opencode_action" = reuse ] && [ -z "$opencode_plugin" ]; then
         install_step_outcome=Reused
     fi
     # Check the command selected after the installer's PATH additions.
@@ -1008,7 +1067,7 @@ ensure_opencode() {
     opencode_current=$(opencode_version "$opencode_path") || fail "Could not verify OpenCode at $opencode_path."
     case "$opencode_current" in
         2.*) printf 'Verified OpenCode %s at %s.\n' "$opencode_current" "$opencode_path" ;;
-        *) fail "OpenCode at $opencode_path is not stable OpenCode 2. Correct PATH, then rerun the installer." ;;
+        *) fail "OpenCode at $opencode_path is not stable OpenCode 2 (found '$opencode_current'). Correct PATH or finish the official upgrade manually, then rerun the installer." ;;
     esac
     if [ -n "$opencode_plugin" ]; then
         opencode_plugin=$(opencode_rtk_plugin) || return $?
@@ -1763,6 +1822,7 @@ if [ "$dry_run" -eq 0 ]; then install_report_started=1; fi
 start_install_step Preflight
 # Preserve the user's winning command before adding installer search paths.
 original_opencode_path=$(command -v opencode || true)
+original_opencode_search_path=$PATH
 add_known_bin_directories
 if command -v cline >/dev/null 2>&1 || command -v npm >/dev/null 2>&1; then
     install_cline=1
