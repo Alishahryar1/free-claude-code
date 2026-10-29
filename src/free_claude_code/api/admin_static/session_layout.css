@@ -366,19 +366,22 @@
 
 .session-markdown pre {
   overflow-x: auto;
-  border: 1px solid var(--line);
+  border: 1px solid #252320;
   border-radius: var(--radius-sm);
-  background: var(--input);
-  padding: 13px;
+  background: #181715;
+  color: #faf9f5;
+  padding: 16px;
 }
 
 .session-markdown code {
   border-radius: 4px;
-  background: var(--input);
+  background: var(--card-hover);
   padding: 0.12em 0.3em;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 
 .session-markdown pre code {
+  background: transparent;
   padding: 0;
 }
 
@@ -427,7 +430,7 @@
 .session-composer:focus-within {
   border-color: var(--accent);
   background: var(--input-focus);
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+  box-shadow: var(--glow-accent);
 }
 
 .session-composer textarea {

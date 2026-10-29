@@ -24,6 +24,17 @@
   padding: 12px 16px;
   background: var(--panel);
 }
+.code-tool pre,
+.code-prompt pre {
+  border-radius: var(--radius-sm);
+  background: #181715;
+  color: #faf9f5;
+  padding: 12px;
+}
+.code-tool code,
+.code-prompt code {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
 .code-tool summary {
   cursor: pointer;
   font-weight: 600;
@@ -98,7 +109,7 @@
   padding: 24px;
 }
 .code-dialog::backdrop {
-  background: #0008;
+  background: rgba(20, 20, 19, 0.55);
 }
 .code-dialog h3 {
   margin-top: 0;

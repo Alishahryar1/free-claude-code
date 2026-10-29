@@ -971,7 +971,10 @@ function renderField(field) {
   input.dataset.remove = "false";
   input.dataset.fieldType = field.type;
   input.disabled = field.locked;
-  input.addEventListener("input", updateDirtyState);
+  input.addEventListener("input", () => {
+    delete input.dataset.selectedModelRef;
+    updateDirtyState();
+  });
   input.addEventListener("change", updateDirtyState);
   input.addEventListener("input", () => {
     input.dataset.remove = "false";
@@ -1078,10 +1081,16 @@ function inputForField(field) {
 }
 
 function createModelCombobox(input, field) {
-  return new window.FccModelCombobox(input, {
+  input.addEventListener("input", () => {
+    delete input.dataset.selectedModelRef;
+  });
+  const combobox = new window.FccModelCombobox(input, {
     listboxId: `model-options-${field.key}`,
     label: field.label,
-    displayValue: (value) => state.modelLabels.get(value) || value,
+    displayValue: modelDisplayName,
+    formatSelection: modelDisplayName,
+    renderOption: renderModelOption,
+    trackSelection: true,
     values: () =>
       field.type === "optional_model"
         ? ["None", ...state.modelOptions]
@@ -1092,6 +1101,112 @@ function createModelCombobox(input, field) {
         : "No discovered models. Refresh models or enter a custom slug.",
     registry: state.modelComboboxes,
   });
+  combobox.refreshSelection();
+  return combobox;
+}
+
+function providerForModel(value) {
+  const providerId = value.split("/", 1)[0];
+  return state.config?.provider_status?.find(
+    (provider) => provider.provider_id === providerId,
+  );
+}
+
+function modelDisplayName(value) {
+  if (value === "None") return value;
+  const providerId = value.split("/", 1)[0];
+  const label = state.modelLabels.get(value) || value;
+  const providerModelName = label.startsWith(`${providerId}/`)
+    ? label.slice(providerId.length + 1)
+    : label;
+  const modelSegments = providerModelName.split("/").filter(Boolean);
+  const modelName = modelSegments[modelSegments.length - 1] || providerModelName;
+  const suffix = modelName.endsWith(" (no thinking)")
+    ? " (no thinking)"
+    : "";
+  const slug = suffix ? modelName.slice(0, -" (no thinking)".length) : modelName;
+  const words = slug.split(/[\/_-]+/).filter(Boolean);
+  const acronyms = new Map([
+    ["gpt", "GPT"],
+    ["llama", "Llama"],
+    ["glm", "GLM"],
+    ["qwen", "Qwen"],
+    ["deepseek", "DeepSeek"],
+    ["minimax", "MiniMax"],
+    ["codestral", "Codestral"],
+    ["llm", "LLM"],
+    ["api", "API"],
+  ]);
+  const formattedWords = [];
+  for (let index = 0; index < words.length; index++) {
+    const word = words[index];
+    const lower = word.toLocaleLowerCase();
+    if (acronyms.has(lower)) {
+      formattedWords.push(acronyms.get(lower));
+      continue;
+    }
+    if (/^\d+$/.test(word) && /^\d+$/.test(words[index + 1] || "")) {
+      const version = `${word}.${words[index + 1]}`;
+      formattedWords.push(
+        index === 1 && words[0]?.toLocaleLowerCase() === "gpt"
+          ? `-${version}`
+          : version,
+      );
+      index++;
+      continue;
+    }
+    if (/^\d+(?:\.\d+)*$/.test(word)) {
+      formattedWords.push(
+        index === 1 && words[0]?.toLocaleLowerCase() === "gpt"
+          ? `-${word}`
+          : word,
+      );
+      continue;
+    }
+    formattedWords.push(word.charAt(0).toLocaleUpperCase() + word.slice(1));
+  }
+  const formatted = formattedWords.join(" ").replace(/ -/g, "-");
+  return formatted + suffix;
+}
+
+function renderModelOption(optionEl, value) {
+  if (value === "None") {
+    optionEl.textContent = value;
+    return;
+  }
+  const providerId = value.split("/", 1)[0];
+  const provider = providerForModel(value);
+  let logo;
+  if (provider?.logo_filename) {
+    logo = document.createElement("img");
+    logo.className = "model-option-logo";
+    logo.alt = "";
+    logo.width = 20;
+    logo.height = 20;
+    logo.src = new URL(`providers/${provider.logo_filename}`, adminAssetBase);
+    logo.onerror = () => logo.remove();
+  } else {
+    logo = document.createElement("span");
+    logo.className = "model-option-logo model-option-logo-fallback";
+    logo.textContent = (provider?.display_name || providerId)
+      .split(/\s+/)
+      .map((part) => part[0])
+      .join("")
+      .slice(0, 2)
+      .toLocaleUpperCase();
+    logo.setAttribute("aria-hidden", "true");
+  }
+  const name = document.createElement("span");
+  name.className = "model-option-name";
+  name.textContent = modelDisplayName(value);
+  const providerName = document.createElement("span");
+  providerName.className = "model-option-provider";
+  providerName.textContent = provider?.display_name || providerId;
+  optionEl.setAttribute(
+    "aria-label",
+    `${providerName.textContent} ${name.textContent}`,
+  );
+  optionEl.append(logo, name, providerName);
 }
 
 class ModelListEditor {
@@ -1117,8 +1232,9 @@ class ModelListEditor {
     this.addKey = this.keySelect("", 1, "Fallback API key");
     this.addProviderId = "";
     const updateAddModel = () => {
-      const providerId = this.providerId(this.addInput.value);
-      this.updateKeySelect(this.addKey, this.addInput.value, providerId === this.addProviderId ? Number(this.addKey.value) : 1);
+      const model = modelInputValue(this.addInput);
+      const providerId = this.providerId(model);
+      this.updateKeySelect(this.addKey, model, providerId === this.addProviderId ? Number(this.addKey.value) : 1);
       this.addProviderId = providerId;
     };
     this.addInput.addEventListener("input", updateAddModel);
@@ -1161,7 +1277,7 @@ class ModelListEditor {
   }
 
   add() {
-    const value = this.addInput.value.trim();
+    const value = modelInputValue(this.addInput).trim();
     if (!value) {
       showMessage("Enter a full provider/model fallback.", "error");
       return;
@@ -1173,6 +1289,7 @@ class ModelListEditor {
     }
     this.values.push({ model: value, reasoning: this.addEffort.value, api_key_number: apiKeyNumber });
     this.addInput.value = "";
+    delete this.addInput.dataset.selectedModelRef;
     this.addEffort.value = "inherit";
     this.addProviderId = "";
     this.updateKeySelect(this.addKey, "", 1);
@@ -1252,7 +1369,7 @@ class ModelListEditor {
       remove.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
       const updateModel = () => {
         const previousProvider = this.providerId(entry.model);
-        entry.model = combobox.input.value.trim();
+        entry.model = modelInputValue(combobox.input).trim();
         if (this.providerId(entry.model) !== previousProvider) entry.api_key_number = 1;
         this.updateKeySelect(key, entry.model, entry.api_key_number ?? 1);
         key.setAttribute("aria-label", `API key for ${entry.model}`);
@@ -1351,7 +1468,7 @@ class ModelListEditor {
   }
 
   refreshKeyOptions() {
-    this.updateKeySelect(this.addKey, this.addInput.value, Number(this.addKey.value));
+    this.updateKeySelect(this.addKey, modelInputValue(this.addInput), Number(this.addKey.value));
     this.rowKeys.forEach(({ entry, select }) => this.updateKeySelect(select, entry.model, entry.api_key_number ?? 1));
   }
 
@@ -1385,6 +1502,7 @@ function readFieldValue(input) {
   ) {
     return null;
   }
+  if (input.dataset.selectedModelRef) return input.dataset.selectedModelRef;
   if (input.dataset.secret === "true" && input.dataset.configured === "true") {
     return input.value ? input.value : MASKED_SECRET;
   }
@@ -1802,8 +1920,13 @@ function setModelOptions(models) {
     new Set(models.filter((model) => typeof model === "string" && model.trim())),
   );
   state.modelComboboxes.forEach((combobox) => {
+    combobox.refreshSelection();
     if (combobox.isOpen) combobox.render(combobox.query);
   });
+}
+
+function modelInputValue(input) {
+  return input.dataset.selectedModelRef || input.value;
 }
 
 function showMessage(message, kind = "") {

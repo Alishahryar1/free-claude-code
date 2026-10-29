@@ -23,8 +23,10 @@ def test_retired_provider_is_absent_and_default_setup_remains_available(
     expect(page.get_by_role("button", name="Add key", exact=True)).to_be_focused()
     close_provider(page)
     page.get_by_role("button", name="Model Config", exact=True).click()
-    expect(page.locator("#field-MODEL")).to_have_value(
-        "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+    default_model = page.locator("#field-MODEL")
+    expect(default_model).to_have_value("Nemotron 3 Ultra 550b A55b")
+    expect(default_model).to_have_attribute(
+        "data-selected-model-ref", "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
     )
 
 
@@ -135,7 +137,9 @@ def test_configured_provider_check_keeps_readiness_and_adds_models(
     expect(page.get_by_role("option", name="None", exact=True)).to_be_visible()
     fable.fill("vendor/model-a")
     expect(
-        page.get_by_role("option", name="open_router/vendor/model-a", exact=True)
+        page.locator(
+            '[role="option"][data-value="open_router/vendor/model-a"]'
+        )
     ).to_be_visible()
 
 

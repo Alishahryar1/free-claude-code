@@ -112,7 +112,7 @@ def test_desktop_connect_disconnect_and_retry(page, admin_base_url, tmp_path):
     action.click()
     expect(dialog).not_to_be_visible()
     expect(opener).to_have_text("Disconnect")
-    expect(opener).to_have_css("color", "rgb(239, 68, 68)")
+    expect(opener).to_have_class("danger-button")
     assert json.loads(profile.read_text())["inferenceProvider"] == "gateway"
     page.reload()
     expect(opener).to_have_text("Disconnect")

@@ -42,7 +42,7 @@ def test_connect_disconnect_preserves_native_settings(page, admin_base_url, tmp_
     dialog.get_by_role("button", name="Connect", exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(opener).to_have_text("Disconnect")
-    expect(opener).to_have_css("color", "rgb(239, 68, 68)")
+    expect(opener).to_have_class("danger-button")
     page.screenshot(path=str(tmp_path / "dsh-integrations.png"), full_page=True)
     assert "free-claude-code" in patch.read_text()
     page.reload()

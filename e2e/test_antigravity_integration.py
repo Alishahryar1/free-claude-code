@@ -79,7 +79,7 @@ def test_connect_disconnect_and_existing_connection(page, admin_base_url):
     page.locator("#confirmAntigravityIntegration").click()
     expect(dialog).not_to_be_visible()
     expect(opener).to_have_text("Disconnect")
-    expect(opener).to_have_css("color", "rgb(239, 68, 68)")
+    expect(opener).to_have_class("danger-button")
     assert json.loads(path.read_text())["modelProvider"] == "gemini"
     page.reload()
     expect(opener).to_have_text("Disconnect")
@@ -87,7 +87,7 @@ def test_connect_disconnect_and_existing_connection(page, admin_base_url):
     expect(dialog).to_contain_text("Running sessions can continue")
     page.locator("#confirmAntigravityIntegration").click()
     expect(opener).to_have_text("Connect")
-    expect(opener).to_have_css("color", "rgb(6, 16, 11)")
+    expect(opener).to_have_class("primary-button")
     assert json.loads(path.read_text()) == original
     assert not state.exists()
 
