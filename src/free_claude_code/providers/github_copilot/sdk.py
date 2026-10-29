@@ -103,7 +103,7 @@ class SdkRuntime:
             try:
                 client = CopilotClient(
                     connection=RuntimeConnection.for_stdio(
-                        path=path, args=("--disable-builtin-mcps",)
+                        path=path, args=("--no-auto-update", "--disable-builtin-mcps")
                     ),
                     env=env,
                     working_directory=directory.name,
