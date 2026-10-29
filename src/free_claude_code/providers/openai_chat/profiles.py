@@ -373,6 +373,31 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             max_output_tokens_path=("max_output_length",),
         ),
     ),
+    "runcrate": OpenAIChatProfile(
+        _policy(
+            "RUNCRATE",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(
+            _ALL_EFFORTS,
+            disabled_value="none",
+            enabled_value="high",
+        ),
+        model_listing=OpenAIModelListing(
+            path="/models",
+            required_sequence_items=(
+                ("input_modalities", "text"),
+                ("output_modalities", "text"),
+                ("supported_features", "tools"),
+            ),
+            exclude_missing_sequence_fields=True,
+            tags_field="supported_features",
+            input_modalities_path=("input_modalities",),
+            context_window_tokens_path=("context_length",),
+            max_output_tokens_path=("max_output_length",),
+        ),
+    ),
     "featherless": OpenAIChatProfile(
         _policy(
             "FEATHERLESS",

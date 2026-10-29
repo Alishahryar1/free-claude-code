@@ -34,6 +34,7 @@ from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     QWENCLOUD_CODING_DEFAULT_BASE,
     QWENCLOUD_DEFAULT_BASE,
+    RUNCRATE_DEFAULT_BASE,
     SCALEWAY_DEFAULT_BASE,
     SILICONFLOW_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
@@ -104,6 +105,7 @@ def _make_settings(**overrides):
     mock.scw_secret_keys = "test_scw_key"
     mock.opper_api_keys = "test_opper_key"
     mock.chutes_api_keys = "test_chutes_key"
+    mock.runcrate_api_keys = "test_runcrate_key"
     mock.featherless_api_keys = "test_featherless_key"
     mock.mistral_api_keys = "test_mistral_key"
     mock.codestral_api_keys = "test_codestral_key"
@@ -200,6 +202,7 @@ def _make_settings(**overrides):
     mock.scw_proxy = None
     mock.opper_proxy = None
     mock.chutes_proxy = None
+    mock.runcrate_proxy = None
     mock.featherless_proxy = None
     mock.azure_openai_proxy = None
     mock.provider_rate_limit = 40
@@ -706,6 +709,32 @@ async def test_opper_provider_config_uses_key_base_and_proxy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runcrate_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["runcrate"]
+    settings = _make_settings(
+        runcrate_api_keys="runcrate-token",
+        runcrate_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "runcrate",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "Runcrate"
+    assert descriptor.credential_env == "RUNCRATE_API_KEY"
+    assert descriptor.credential_url == "https://www.runcrate.ai/dashboard/api-keys"
+    assert descriptor.base_url_attr is None
+    assert config.api_key == "runcrate-token"
+    assert config.base_url == RUNCRATE_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
 async def test_chutes_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["chutes"]
     settings = _make_settings(
@@ -1184,6 +1213,7 @@ async def test_create_provider_instantiates_each_builtin():
         "scaleway": OpenAIChatProvider,
         "opper": OpenAIChatProvider,
         "chutes": OpenAIChatProvider,
+        "runcrate": OpenAIChatProvider,
         "featherless": OpenAIChatProvider,
         "azure_openai": OpenAIChatProvider,
         "open_router": OpenRouterProvider,
