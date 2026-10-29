@@ -969,7 +969,7 @@ run_opencode_upgrade() {
     fi
     print_command "$opencode_path" upgrade "$opencode_upgrade_target"
     write_install_log "$(print_command "$opencode_path" upgrade "$opencode_upgrade_target")"
-    if "$opencode_path" upgrade "$opencode_upgrade_target"; then
+    if VERSION= "$opencode_path" upgrade "$opencode_upgrade_target"; then
         :
     else
         status=$?

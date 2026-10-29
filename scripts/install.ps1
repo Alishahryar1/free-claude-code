@@ -1142,7 +1142,9 @@ function Invoke-OpenCodeUpgrade {
 
     Assert-NoOpenCodeProcessesRunning
     $savedPath = $env:Path
+    $savedVersion = $env:VERSION
     try {
+        $env:VERSION = $null
         if ($script:OriginalOpenCode -and $script:OriginalOpenCodeSearchPath) {
             # Installer-added directories must not hide a failed upgrade behind another copy.
             $env:Path = $script:OriginalOpenCodeSearchPath
@@ -1161,6 +1163,7 @@ function Invoke-OpenCodeUpgrade {
     }
     finally {
         $env:Path = $savedPath
+        $env:VERSION = $savedVersion
     }
 }
 

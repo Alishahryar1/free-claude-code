@@ -4943,6 +4943,8 @@ if "%2"=="--major" (
     set "result=%FAKE_OPENCODE_MAJOR%"
 )
 echo upgrade-path:%stage%:%~f0>>"%CALL_LOG%"
+echo upgrade-version:%stage%:%VERSION%>>"%CALL_LOG%"
+if "%stage%"=="major" if not "%VERSION%"=="" exit /b 0
 if "%FAKE_OPENCODE_FAIL%"=="%stage%" exit /b 31
 if "%FAKE_OPENCODE_KEEP%"=="%stage%" exit /b 0
 >"%FAKE_OPENCODE_STATE%" echo %result%
@@ -4966,6 +4968,8 @@ stage=preliminary
 result=$FAKE_OPENCODE_PRELIMINARY
 if [ "$2" = "--major" ]; then stage=major; result=$FAKE_OPENCODE_MAJOR; fi
 echo "upgrade-path:$stage:$0" >> "$CALL_LOG"
+echo "upgrade-version:$stage:${VERSION:-}" >> "$CALL_LOG"
+if [ "$stage" = major ] && [ -n "${VERSION:-}" ]; then exit 0; fi
 [ "$FAKE_OPENCODE_FAIL" != "$stage" ] || exit 31
 [ "$FAKE_OPENCODE_KEEP" != "$stage" ] || exit 0
 printf '%s\\n' "$result" > "$FAKE_OPENCODE_STATE"
@@ -5017,6 +5021,45 @@ def test_opencode_official_upgrade_routing(release_harness, version, upgrades):
     assert (
         Path(release_harness.env["FAKE_OPENCODE_STATE"]).read_text().strip() == "2.0.10"
     )
+
+
+@pytest.mark.parametrize("version", ["1.18.31", "1.19.0"])
+@pytest.mark.parametrize("pin", ["1.18.31", "2.0.9", "invalid"])
+def test_opencode_upgrade_ignores_ambient_version_and_preserves_parent(
+    release_harness, version, pin
+):
+    _prepare_opencode_upgrade(release_harness, version)
+    release_harness.env["VERSION"] = pin
+    body = (
+        '$script:OriginalOpenCode = Get-ApplicationCommand "opencode"\n'
+        'Ensure-OpenCode\nAdd-Content -LiteralPath $env:CALL_LOG -Value "version-after-upgrade:$env:VERSION"'
+        if isinstance(release_harness, PowerShellHarness)
+        else 'original_opencode_path=$(command -v opencode)\nensure_opencode\nprintf "version-after-upgrade:%s\\n" "$VERSION" >> "$CALL_LOG"'
+    )
+    result = release_harness.run_functions(body)
+    assert result.returncode == 0, result.stdout + result.stderr
+    stages = ["preliminary", "major"] if version == "1.18.31" else ["major"]
+    assert [
+        call for call in release_harness.calls() if call.startswith("upgrade-version:")
+    ] == [f"upgrade-version:{stage}:" for stage in stages]
+    assert f"version-after-upgrade:{pin}" in release_harness.calls()
+
+
+def test_opencode_failed_upgrade_preserves_ambient_version(release_harness):
+    _prepare_opencode_upgrade(release_harness, "1.19.0")
+    release_harness.env.update(VERSION="unrelated-pin", FAKE_OPENCODE_FAIL="major")
+    body = (
+        '$script:OriginalOpenCode = Get-ApplicationCommand "opencode"\n'
+        'try { Ensure-OpenCode } finally { Add-Content -LiteralPath $env:CALL_LOG -Value "version-after-upgrade:$env:VERSION" }'
+        if isinstance(release_harness, PowerShellHarness)
+        else """original_opencode_path=$(command -v opencode)
+trap 'printf "version-after-upgrade:%s\\n" "$VERSION" >> "$CALL_LOG"' 0
+ensure_opencode"""
+    )
+    result = release_harness.run_functions(body)
+    assert result.returncode != 0
+    assert "upgrade-version:major:" in release_harness.calls()
+    assert "version-after-upgrade:unrelated-pin" in release_harness.calls()
 
 
 def test_opencode_preliminary_upgrade_can_reach_v2(release_harness):
@@ -5562,11 +5605,14 @@ def test_install_ps1_opencode_validates_current_path(
 
 
 @pytest.mark.parametrize("version_pin", ["1.18.31", "0.0.0-dev-19882", "2.0.9"])
+@pytest.mark.parametrize("existing_v1", [False, True])
 def test_install_sh_opencode_ignores_version_pin_only_for_upstream_installer(
-    posix_harness: PosixHarness, version_pin: str
+    posix_harness: PosixHarness, version_pin: str, existing_v1: bool
 ) -> None:
     (posix_harness.bin_dir / "opencode").unlink()
     native = Path(posix_harness.env["HOME"]) / ".opencode/bin/opencode"
+    if existing_v1:
+        _prepare_opencode_upgrade(posix_harness, "1.18.31", directory=native.parent)
     posix_harness.env["VERSION"] = version_pin
     next_installer = posix_harness.fixtures / "hermes-installer.sh"
     with next_installer.open("a", encoding="utf-8") as script:
@@ -5582,7 +5628,10 @@ def test_install_sh_opencode_ignores_version_pin_only_for_upstream_installer(
         text=True,
         check=True,
     )
-    assert installed.stdout.strip() == "opencode v2.0.10"
+    assert installed.stdout.strip() == ("2.0.10" if existing_v1 else "opencode v2.0.10")
+    if existing_v1:
+        assert "upgrade-version:preliminary:" in posix_harness.calls()
+        assert "upgrade-version:major:" in posix_harness.calls()
     assert f"version-after-opencode:{version_pin}" in posix_harness.calls()
 
 
