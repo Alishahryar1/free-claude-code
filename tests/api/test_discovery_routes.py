@@ -88,7 +88,7 @@ def test_openapi_has_agent_friendly_title():
     assert r.status_code == 200
     spec = json.loads(r.text)
     assert "Free Claude Code" in spec["info"]["title"]
-    assert spec["info"]["version"] == "2.3.0"
+    assert spec["info"]["version"] == "2.4.0"
 
 
 # ── public — no auth needed, no proxy env to set ─────────────────────

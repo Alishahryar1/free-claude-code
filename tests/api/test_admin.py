@@ -583,6 +583,83 @@ def test_admin_skillopt_endpoint_is_loopback_only(monkeypatch, tmp_path):
     assert remote_client.get("/admin/api/skillopt").status_code == 403
 
 
+def test_admin_auto_forge_endpoint_returns_state(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.delenv("AUTO_FORGE_ENABLED", raising=False)
+    from api import auto_forge
+
+    auto_forge.reset_for_tests()
+    app = create_app(lifespan_enabled=False)
+
+    response = _local_client(app).get("/admin/api/auto-forge")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is False
+    assert body["running"] is False
+    assert body["last_run_status"] == "never"
+
+
+def test_admin_auto_forge_endpoint_is_loopback_only(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    app = create_app(lifespan_enabled=False)
+
+    remote_client = TestClient(app, client=("203.0.113.10", 50000))
+    assert remote_client.get("/admin/api/auto-forge").status_code == 403
+
+
+def test_admin_forge_now_runs_and_invalidates_cache(monkeypatch, tmp_path):
+    """POST /admin/api/skillopt/forge runs EvoForge immediately."""
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("FCC_CACHE_DIR", str(tmp_path))
+
+    # Seed a small trajectory corpus so EvoForge has something to score.
+    import json as _json
+
+    (tmp_path / "trajectories.jsonl").write_text(
+        "\n".join(
+            _json.dumps(
+                {
+                    "provider_id": "openai",
+                    "model": "gpt-4o",
+                    "skill": "edit",
+                    "latency_ms": 500,
+                    "cost_usd": 0.001,
+                    "status": "ok",
+                    "input_tokens": 100,
+                    "output_tokens": 100,
+                }
+            )
+            for _ in range(6)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    from api import auto_forge, skillopt
+
+    auto_forge.reset_for_tests()
+    skillopt.invalidate_cache()
+
+    app = create_app(lifespan_enabled=False)
+    response = _local_client(app).post("/admin/api/skillopt/forge")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["last_run_status"] == "ok"
+    assert body["last_policy_skills"] == 1
+    assert (tmp_path / "skillopt_policy.json").is_file()
+
+
+def test_admin_forge_now_is_loopback_only(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    app = create_app(lifespan_enabled=False)
+
+    remote_client = TestClient(app, client=("203.0.113.10", 50000))
+    assert (
+        remote_client.post("/admin/api/skillopt/forge").status_code == 403
+    )
+
+
 def test_admin_metrics_endpoint_is_loopback_only(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     app = create_app(lifespan_enabled=False)

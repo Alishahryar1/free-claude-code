@@ -1,5 +1,5 @@
 # Free Claude Code — Project Blueprint
-**Version:** 2.3.0 · **Updated:** 2026-10-28 · **Python:** 3.14.0
+**Version:** 2.4.0 · **Updated:** 2026-10-29 · **Python:** 3.14.0
 **Live:** https://free-claude-code-main-ebon.vercel.app · **Repo:** https://github.com/dnzengou/free-claude-code
 
 ---
@@ -289,18 +289,25 @@ All enforced in `.github/workflows/tests.yml` on push/PR to `main`/`master`:
 - [x] **EvoForge offline pipeline** — `api/evoforge.py` + `scripts/evoforge.py` CLI; ingest → aggregate → score (`-λ_cost·cost - λ_lat·p95 + λ_success·ok`) → build policy → atomic write; deterministic tie-break; kills nothing at runtime
 - [x] **SkillOpt runtime routing** — `api/skillopt.py`, mtime-cached policy loader; `ModelRouter.resolve(..., skill=...)` consults it after direct-slug routing and before `MODEL_*` tier overrides; `SKILLOPT_ENABLED=0` kill switch, default off
 - [x] **SkillOpt fallback traversal** — `_preflight_with_fallbacks` walks `policies[skill].fallbacks[]` on retriable preflight errors; closes the single-provider SPOF; falls back to primary's error contract when every candidate fails
+- [x] **Periodic auto-forge** — `api/auto_forge.py` background task that calls `evoforge.run` every `AUTO_FORGE_INTERVAL_HOURS` (default 24, floor 60s). `AUTO_FORGE_ENABLED=1` to turn on; `POST /admin/api/skillopt/forge` triggers an immediate run and invalidates the SkillOpt mtime cache so the policy takes effect on the next request. Serverless-safe: a read-only-FS OSError disables the loop for the process without crashing.
 - [x] **Agent-detectable discovery** — `/llms.txt`, `/llms-full.txt`, `/.well-known/{ai-plugin,agents,mcp}.json`, `/robots.txt`; OpenAPI info block renamed to describe the service
 - [x] **Ecosystem integration guide (`ECOSYSTEM.md`)** — four deployment patterns + cross-service EvoMetaClaw flywheel
 
 ### Planned 🔲
 - [ ] **In-stream fallback** — current fallback traversal catches only `preflight_stream` failures; mid-stream disconnect still bubbles up. Needs a resumable SSE wrapper that buffers the first N bytes before committing to a candidate.
 - [ ] **EvoForge held-out evaluation** — replay a held-out corpus slice against a candidate policy before publishing, so the new policy has to *beat* the incumbent on the same requests before it can win.
-- [ ] **Periodic auto-forge** — background task (opt-in) that triggers EvoForge every N hours when `TRAJECTORY_LOG_ENABLED=1`.
 - [ ] Learned skill classifier — replace heuristic `infer_skill` once the corpus exceeds ~10k rows across 3+ skills.
 
 ---
 
 ## Changelog
+
+### v2.4.0 — 2026-10-29 (auto-forge)
+- **Periodic auto-forge (`api/auto_forge.py`)**: asyncio background task calls `evoforge.run()` under `asyncio.to_thread` every `AUTO_FORGE_INTERVAL_HOURS` (default 24, floored at 60s). Opt-in via `AUTO_FORGE_ENABLED=1`. Only one forge in-flight at a time (lock-guarded). An `OSError` on write (serverless read-only FS) disables the loop for the process — same discipline as `health_history` / `trajectory`. Wired into `AppRuntime.startup` / `.shutdown`; `best_effort` wraps shutdown so it never blocks lifespan teardown.
+- **`GET /admin/api/auto-forge`** (loopback-only): returns `{enabled, running, interval_seconds, runs_total, runs_ok, runs_error, last_run_ts, last_run_status, last_run_error_type, last_run_duration_ms, last_policy_skills, disabled_reason}`.
+- **`POST /admin/api/skillopt/forge`** (loopback-only): run EvoForge immediately regardless of schedule, then invalidate the SkillOpt mtime cache so the policy takes effect on the very next request. Returns the same snapshot shape as `/auto-forge`.
+- **Tests**: 13 new — `test_auto_forge.py` (9: disabled default, enabled env values, interval default + env + floor + garbage, run_now records success, error path, OSError disables, snapshot shape, start idempotency, start+stop lifecycle); `test_admin.py` (4: auto-forge GET returns state, auto-forge GET loopback-only, forge-now POST runs + writes policy, forge-now POST loopback-only).
+- **Blueprint**: v2.4.0; auto-forge moved from Planned → Completed; roadmap pruned.
 
 ### v2.3.0 — 2026-10-28 (agent SEO + fallback traversal + ecosystem)
 - **Agent-detectable discovery (`api/discovery_routes.py`)**: public, no-auth endpoints — `GET /llms.txt`, `/llms-full.txt`, `/.well-known/ai-plugin.json`, `/.well-known/agents.json`, `/.well-known/mcp.json`, `/robots.txt`. Base URL is forwarded-host aware. Admin UI stays loopback-only. OpenAPI info block renamed to "Free Claude Code — Anthropic-compatible model gateway" (v2.3.0) so the OpenAPI surface agents already crawl at `/openapi.json` describes the service correctly. 7 new tests cover the shape + public-vs-auth separation.

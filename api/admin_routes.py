@@ -18,6 +18,7 @@ from config.settings import Settings
 from config.settings import get_settings as get_cached_settings
 from providers.registry import ProviderRegistry
 
+from . import auto_forge as _auto_forge
 from . import health_history as _health_history
 from . import metrics as _metrics
 from . import pricing as _pricing
@@ -198,6 +199,27 @@ async def get_skillopt_policy(request: Request):
     """Return the currently loaded SkillOpt policy snapshot."""
     require_loopback_admin(request)
     return _skillopt.snapshot()
+
+
+@router.get("/admin/api/auto-forge")
+async def get_auto_forge_state(request: Request):
+    """Return the periodic auto-forge loop's observable state."""
+    require_loopback_admin(request)
+    return _auto_forge.snapshot()
+
+
+@router.post("/admin/api/skillopt/forge")
+async def trigger_forge_now(request: Request):
+    """Run EvoForge immediately, outside the schedule.
+
+    After writing the policy, invalidate the SkillOpt mtime cache so
+    the very next request picks up the new routing without waiting for
+    the normal mtime check.
+    """
+    require_loopback_admin(request)
+    result = await _auto_forge.run_now()
+    _skillopt.invalidate_cache()
+    return result
 
 
 @router.get("/admin/api/providers/local-status")

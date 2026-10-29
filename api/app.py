@@ -92,7 +92,7 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
 
     app_kwargs: dict[str, Any] = {
         "title": "Free Claude Code — Anthropic-compatible model gateway",
-        "version": "2.3.0",
+        "version": "2.4.0",
         "description": (
             "Drop-in Anthropic Messages API proxy that routes Claude Code CLI "
             "and compatible clients to 18 provider backends. See /llms.txt and "
