@@ -98,6 +98,8 @@ terminal open.
 4. Leave `MODEL` on the default `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, or search the model dropdown and select another model.
 5. Click **Apply** to save your model selection.
 
+For `z-ai/glm-5.3`, image inputs are replaced with a text placeholder because the NVIDIA NIM endpoint rejects images for this model.
+
 To protect the local proxy with a bearer token, enable **Proxy Authentication**
 in Admin.
 

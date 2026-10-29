@@ -12,6 +12,7 @@ from free_claude_code.core.anthropic.models import MessagesRequest, Tool
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.nvidia_nim.request_options import (
     _set_extra,
+    apply_nim_request_options,
 )
 from free_claude_code.providers.nvidia_nim.request_options import (
     build_nim_request_body as build_request_body,
@@ -155,6 +156,56 @@ class TestBuildRequestBody:
         body = build_request_body(req, reasoning=ReasoningPolicy(effort=effort))
         assert body["reasoning_effort"] == effort.value
         assert "chat_template_kwargs" not in body.get("extra_body", {})
+
+    @pytest.mark.parametrize(
+        ("model", "expected_content"),
+        [
+            (
+                "z-ai/glm-5.3",
+                [
+                    {"type": "text", "text": "Read this image."},
+                    {
+                        "type": "text",
+                        "text": "[Image omitted: this model does not accept image input.]",
+                    },
+                ],
+            ),
+            (
+                "nvidia/nemotron-3-super-120b-a12b",
+                [
+                    {"type": "text", "text": "Read this image."},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,AA=="},
+                    },
+                ],
+            ),
+        ],
+    )
+    def test_image_input_is_omitted_only_for_known_text_only_model(
+        self, model, expected_content
+    ):
+        body = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Read this image."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,AA=="},
+                        },
+                    ],
+                },
+                {"role": "user", "content": "Keep this text unchanged."},
+            ],
+        }
+
+        apply_nim_request_options(body, REASONING_ON, nim=NimSettings())
+
+        assert body["messages"][0]["content"] == expected_content
+        assert body["messages"][1]["content"] == "Keep this text unchanged."
 
     def test_named_effort_replaces_client_reasoning_budgets(self):
         req = make_messages_request(
