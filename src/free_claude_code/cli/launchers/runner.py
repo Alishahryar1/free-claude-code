@@ -103,11 +103,14 @@ def launch_harness(spec: HarnessSpec, argv: Sequence[str] | None = None) -> None
             display_name=spec.display_name,
             install_hint=spec.install_hint,
         )
-        # Resolve the per-project config slot first: it relocates the home the
-        # settings, token, and proxy URL below are read from. A missing slot
-        # and its stable port are scaffolded here, exactly as fcc-server does.
+        # FCC-PATCH(project-slots): resolve the per-project config slot before
+        # settings, token, and proxy URL below; a missing slot and its stable
+        # port are scaffolded here, exactly as fcc-server does.
         program = Path(sys.argv[0]).name or spec.display_name
         project_entrypoints._apply_project_arg(argv, program=program)
+        # The auto-started server child inherits this environment, so the slot
+        # relocation (FCC_HOME) must be re-captured for the spawn.
+        base_env = dict(os.environ)
         args = project_entrypoints._strip_project_pair(
             sys.argv[1:] if argv is None else argv
         )
