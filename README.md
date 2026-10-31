@@ -188,6 +188,14 @@ fcc-agy
   <p><em>Select an FCC model from Claude Code's native <code>/model</code> picker.</em></p>
 </div>
 
+## Web Search
+
+Claude Code WebSearch uses DuckDuckGo by default. To use Parallel Search, select
+**parallel** in **Web Search Provider** in the Admin UI, or set
+`WEB_SEARCH_PROVIDER=parallel`. Parallel sends your search objectives and queries
+to `https://search.parallel.ai/mcp` and works without an account or API key.
+Web fetch continues to retrieve pages directly.
+
 ## Choose A Provider
 
 1. Open a provider link below for its key, models, or setup instructions.

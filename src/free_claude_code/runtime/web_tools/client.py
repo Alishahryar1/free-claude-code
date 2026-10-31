@@ -1,6 +1,7 @@
 """Outbound HTTP for web_search / web_fetch with operation-scoped resources."""
 
 import asyncio
+import json
 import socket
 from collections.abc import AsyncIterator
 from urllib.parse import urljoin, urlparse
@@ -9,11 +10,14 @@ import aiohttp
 import httpx
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp.abc import AbstractResolver, ResolveResult
+from loguru import logger
 
 from free_claude_code.application.web_tools.ports import (
     WebFetchEgressPolicy,
     WebFetchEgressViolation,
 )
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.version import package_version
 from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
 
 from . import constants
@@ -142,10 +146,190 @@ async def _drain_aiohttp_body_capped(
             break
 
 
+_PARALLEL_SEARCH_MCP_URL = "https://search.parallel.ai/mcp"
+_MCP_PROTOCOL_VERSION = "2025-03-26"
+
+
+def _matching_mcp_response(value: object, *, request_id: int) -> bool:
+    if not isinstance(value, dict):
+        return False
+    response_id = value.get("id")
+    return (
+        value.get("jsonrpc") == "2.0"
+        and isinstance(response_id, int)
+        and not isinstance(response_id, bool)
+        and response_id == request_id
+        and ("result" in value) != ("error" in value)
+    )
+
+
+def _mcp_json(response: httpx.Response, *, request_id: int) -> dict[str, object]:
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        payloads = [
+            event.data
+            for event in parse_sse_text(response.text)
+            if _matching_mcp_response(event.data, request_id=request_id)
+        ]
+        if not payloads:
+            raise ValueError("MCP response did not contain a JSON-RPC event payload")
+        value = payloads[-1]
+    else:
+        value = response.json()
+    if not isinstance(value, dict):
+        raise ValueError("MCP response must be a JSON object")
+    if not _matching_mcp_response(value, request_id=request_id):
+        raise ValueError("MCP response did not contain a matching JSON-RPC response")
+    if "error" in value:
+        raise ValueError("MCP server returned a JSON-RPC error")
+    return value
+
+
+def _parallel_search_results(envelope: dict[str, object]) -> list[WebSearchResult]:
+    result = envelope.get("result")
+    if not isinstance(result, dict) or result.get("isError") is True:
+        raise ValueError("Parallel web_search failed")
+    structured = result.get("structuredContent")
+    if not isinstance(structured, dict):
+        content = result.get("content")
+        if not isinstance(content, list):
+            raise ValueError("Parallel web_search returned no result content")
+        text_blocks = [
+            block.get("text")
+            for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        ]
+        if not text_blocks:
+            raise ValueError("Parallel web_search returned no text result")
+        structured = json.loads(text_blocks[0])
+    if not isinstance(structured, dict):
+        raise ValueError("Parallel web_search result must be an object")
+    raw_results = structured.get("results")
+    if not isinstance(raw_results, list):
+        raise ValueError("Parallel web_search results must be a list")
+    results: list[WebSearchResult] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            raise ValueError("Parallel web_search result item must be an object")
+        url = item.get("url")
+        title = item.get("title")
+        excerpts = item.get("excerpts")
+        if (
+            not isinstance(url, str)
+            or not isinstance(excerpts, list)
+            or not all(isinstance(excerpt, str) for excerpt in excerpts)
+            or (title is not None and not isinstance(title, str))
+        ):
+            raise ValueError("Parallel web_search returned a malformed result")
+        results.append(
+            WebSearchResult(
+                url=url,
+                title=title or url,
+                content="\n".join(excerpts),
+            )
+        )
+    return results[:_MAX_SEARCH_RESULTS]
+
+
+async def _run_parallel_web_search(query: str) -> list[WebSearchResult]:
+    headers = {
+        **_WEB_TOOL_HTTP_HEADERS,
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    session_id: str | None = None
+    async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_S, headers=headers) as client:
+        try:
+            initialized = await client.post(
+                _PARALLEL_SEARCH_MCP_URL,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": _MCP_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "free-claude-code",
+                            "version": package_version(),
+                        },
+                    },
+                },
+            )
+            session_id = initialized.headers.get("mcp-session-id")
+            if session_id:
+                client.headers["Mcp-Session-Id"] = session_id
+            initialize_envelope = _mcp_json(initialized, request_id=1)
+            initialize_result = initialize_envelope.get("result")
+            negotiated_version = (
+                initialize_result.get("protocolVersion")
+                if isinstance(initialize_result, dict)
+                else None
+            )
+            if isinstance(negotiated_version, str):
+                client.headers["MCP-Protocol-Version"] = negotiated_version
+            notification = await client.post(
+                _PARALLEL_SEARCH_MCP_URL,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            )
+            notification.raise_for_status()
+            listed = _mcp_json(
+                await client.post(
+                    _PARALLEL_SEARCH_MCP_URL,
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                ),
+                request_id=2,
+            )
+            listed_result = listed.get("result")
+            tools = (
+                listed_result.get("tools") if isinstance(listed_result, dict) else None
+            )
+            if not isinstance(tools, list) or not any(
+                isinstance(tool, dict) and tool.get("name") == "web_search"
+                for tool in tools
+            ):
+                raise ValueError("Parallel MCP does not advertise web_search")
+            called = _mcp_json(
+                await client.post(
+                    _PARALLEL_SEARCH_MCP_URL,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "web_search",
+                            "arguments": {
+                                "objective": query,
+                                "search_queries": [query],
+                            },
+                        },
+                    },
+                ),
+                request_id=3,
+            )
+            return _parallel_search_results(called)
+        finally:
+            if session_id is not None:
+                try:
+                    await client.delete(_PARALLEL_SEARCH_MCP_URL)
+                except Exception as error:
+                    logger.warning(
+                        "web_tool_cleanup_failure tool={} exc_type={}",
+                        "web_search",
+                        type(error).__name__,
+                    )
+
+
 class HTTPWebToolsClient:
     """Stateless adapter; each call owns its HTTP resources until completion."""
 
+    def __init__(self, *, search_provider: str = "duckduckgo") -> None:
+        self._search_provider = search_provider
+
     async def search(self, query: str) -> list[WebSearchResult]:
+        if self._search_provider == "parallel":
+            return await _run_parallel_web_search(query)
         async with (
             httpx.AsyncClient(
                 timeout=_REQUEST_TIMEOUT_S,

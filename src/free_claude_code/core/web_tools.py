@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class WebSearchResult:
     title: str
     url: str
+    content: str = ""
 
 
 @dataclass(frozen=True, slots=True)

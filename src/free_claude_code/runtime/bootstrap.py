@@ -96,7 +96,7 @@ def build_asgi_app(
         requests=provider_manager,
         admin=runtime,
         tasks=runtime,
-        web_tools=HTTPWebToolsClient(),
+        web_tools=HTTPWebToolsClient(search_provider=settings.web_search_provider),
         code=code_service,
     )
     return RuntimeASGIApp(create_app(services), runtime)
