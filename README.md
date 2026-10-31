@@ -23,12 +23,14 @@
   <em>Independent open-source project. Not affiliated with or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.</em>
 </p>
 
-## What You Get
+## Features
 
-- **61 ToS-friendly providers. 1.3B+ free tokens every month.** Use free, paid, subscription, and local models from one searchable UI without putting your account at risk. FCC follows provider terms and removes integrations if they stop being allowed.
-- **12 coding agents. One model catalog.** Run [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [OpenCode](https://github.com/anomalyco/opencode), [Cline](https://github.com/cline/cline), [Hermes](https://github.com/NousResearch/hermes-agent), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Grok Build](https://github.com/xai-org/grok-build), [Muse Code](https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2/), [Aider](https://aider.chat/), [Antigravity CLI](https://antigravity.google/docs/getting-started/), or [VS Code Chat](https://code.visualstudio.com/) with your FCC models.
+- Route any supported harness to models from any supported provider.
+- 12 supported harnesses: [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [OpenCode](https://github.com/anomalyco/opencode), [Cline](https://github.com/cline/cline), [Hermes](https://github.com/NousResearch/hermes-agent), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Grok Build](https://github.com/xai-org/grok-build), [Muse Code](https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2/), [Aider](https://aider.chat/), [Antigravity CLI](https://antigravity.google/docs/getting-started/), or [VS Code Chat](https://code.visualstudio.com/).
+- 61 supported providers, including free, paid, subscription, and local providers.
+  - FCC follows provider TOS and removes integrations if they stop being allowed.
+- Up to 90% lower token usage using [RTK](https://github.com/rtk-ai/rtk) and [Headroom](https://github.com/headroomlabs-ai/headroom).
 - **Keep coding through provider outages.** After retries are exhausted, FCC automatically tries your next configured model without making you restart the turn. This works across every client.
-- **Up to 90% lower token usage.** Optional [RTK](https://github.com/rtk-ai/rtk) filters common command output, and [Headroom](https://github.com/headroomlabs-ai/headroom) compresses tool results.
 - **Native Code sessions in your browser.** Choose a folder and run Codex in the browser with real-time and background support. Freely switch providers/models in the same session. Support for switching harnesses in the same session coming soon!
 - **Terminal, desktop, IDE, or phone.** Work through native launchers, [VS Code](https://code.visualstudio.com/), [Codex App](https://learn.chatgpt.com/docs/app), [JetBrains](https://www.jetbrains.com/), [Discord](https://discord.com/), or [Telegram](https://telegram.org/).
 - **Voice notes in. Code out.** Talk to your agent using local [Whisper](https://github.com/openai/whisper) or [NVIDIA NIM](https://docs.nvidia.com/nim/speech/latest/asr/deploy-asr-models/whisper.html) transcription.
