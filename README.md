@@ -30,7 +30,7 @@
 - 61 supported providers, including free, paid, subscription, and local providers.
   - 1.3B+ free tokens per month.
   - FCC follows provider TOS and removes integrations if they stop being allowed.
-- Use through the terminal, desktop apps ([Codex App](https://learn.chatgpt.com/docs/app), [Claude Desktop](https://claude.ai/download), and [DeepSeek Harness Desktop](https://github.com/deepseek-ai/deepseek-harness)), IDE extensions ([VS Code](https://code.visualstudio.com/) and [JetBrains](https://www.jetbrains.com/)), or your phone ([Discord](https://discord.com/) and [Telegram](https://telegram.org/)).
+- Use through the terminal, desktop apps ([Codex App](https://learn.chatgpt.com/docs/app), [Claude Desktop](https://claude.ai/download), and [DeepSeek Desktop](https://github.com/deepseek-ai/deepseek-harness)), IDE extensions ([VS Code](https://code.visualstudio.com/) and [JetBrains](https://www.jetbrains.com/)), or your phone ([Discord](https://discord.com/) and [Telegram](https://telegram.org/)).
   - Voice notes supported for Discord and Telegram using local [Whisper](https://github.com/openai/whisper) or [NVIDIA NIM](https://docs.nvidia.com/nim/speech/latest/asr/deploy-asr-models/whisper.html).
 - Up to 90% lower token usage using [RTK](https://github.com/rtk-ai/rtk) and [Headroom](https://github.com/headroomlabs-ai/headroom).
 - State-of-the-art reliability features so you can keep coding through provider outages:
