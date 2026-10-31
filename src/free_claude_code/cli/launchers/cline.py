@@ -70,6 +70,7 @@ SPEC = HarnessSpec(
         ("--version",),
         lambda output: version_at_least(output, _VERSION_PATTERN, (3, 0, 55)),
         "FCC requires Cline 3.0.55 or newer.",
+        timeout_seconds=40.0,
     ),
 )
 
