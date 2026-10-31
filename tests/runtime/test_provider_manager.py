@@ -290,6 +290,81 @@ async def test_failed_startup_discovery_still_ensures_a_fresh_catalog() -> None:
     await manager.close()
 
 
+async def _until(condition) -> None:
+    while not condition():
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_failed_discovery_retries_itself_once_the_network_is_back() -> None:
+    factory = RuntimeFactory()
+    manager = ProviderRuntimeManager(
+        _settings("nvidia_nim/one"), runtime_factory=factory
+    )
+    provider = factory.runtimes[0].provider
+    provider.list_model_infos.side_effect = [
+        httpx2.ConnectError("network is unreachable"),
+        httpx2.ConnectError("network is unreachable"),
+        frozenset({ProviderModelInfo("one")}),
+    ]
+    try:
+        with patch(
+            "free_claude_code.runtime.provider_manager.DISCOVERY_RETRY_DELAYS_SECONDS",
+            (0.0, 0.0),
+        ):
+            result = await manager.refresh_model_list_cache()
+            assert result.failed_provider_ids == ("nvidia_nim",)
+            ready = {
+                "nvidia_nim": "ready",
+                **dict.fromkeys(("lmstudio", "llamacpp", "ollama"), "unavailable"),
+            }
+            await asyncio.wait_for(
+                _until(lambda: manager.catalog_status()["providers"] == ready), 1
+            )
+        assert manager.cached_model_ids()["nvidia_nim"] == frozenset({"one"})
+        assert provider.list_model_infos.await_count == 3
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_discovery_retries_are_bounded_and_cancelled_at_shutdown() -> None:
+    factory = RuntimeFactory()
+    manager = ProviderRuntimeManager(
+        _settings("nvidia_nim/one"), runtime_factory=factory
+    )
+    provider = factory.runtimes[0].provider
+    provider.list_model_infos.side_effect = httpx2.ConnectError("still offline")
+    with patch(
+        "free_claude_code.runtime.provider_manager.DISCOVERY_RETRY_DELAYS_SECONDS",
+        (0.0, 3600.0),
+    ):
+        await manager.refresh_model_list_cache()
+        await asyncio.wait_for(
+            _until(lambda: provider.list_model_infos.await_count == 2), 1
+        )
+        # A failed admin refresh must not start a second loop beside the sleeping one.
+        await manager.refresh_provider("nvidia_nim")
+        retries = dict(manager._current.retry_tasks)
+        assert list(retries) == ["nvidia_nim"]
+        await asyncio.wait_for(manager.close(), 1)
+    assert provider.list_model_infos.await_count == 3
+    assert retries["nvidia_nim"].cancelled()
+
+
+@pytest.mark.asyncio
+async def test_optional_local_discovery_failure_is_not_retried() -> None:
+    factory = RuntimeFactory()
+    manager = ProviderRuntimeManager(
+        _settings("nvidia_nim/one"), runtime_factory=factory
+    )
+    try:
+        await manager.refresh_model_list_cache()
+        assert manager._current.retry_tasks == {}
+    finally:
+        await manager.close()
+
+
 @pytest.mark.asyncio
 async def test_catalog_publication_tracks_connected_account_changes() -> None:
     factory = RuntimeFactory()

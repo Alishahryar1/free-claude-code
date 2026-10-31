@@ -327,7 +327,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 <details>
 <summary><strong>Local provider setup</strong></summary>
 
-FCC automatically discovers models from running local servers at startup. If you start a server later, click **Refresh models** in Admin to add its models to the picker.
+FCC automatically discovers models from running local servers at startup. If you start a server later, click **Refresh models** in Admin to add its models to the picker. Cloud providers, and local servers you configured explicitly, that are unreachable at startup (for example, before the network is up) are retried in the background for about 14 minutes.
 
 ### LM Studio
 
