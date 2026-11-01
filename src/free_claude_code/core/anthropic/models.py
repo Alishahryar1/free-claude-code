@@ -1,8 +1,8 @@
 """Pydantic models for the Anthropic Messages protocol."""
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class _AnthropicBlockBase(BaseModel):
@@ -112,6 +112,21 @@ class Message(BaseModel):
         ]
     )
     reasoning_content: str | None = None
+
+    @model_validator(mode="after")
+    def _reject_assistant_tool_changes(self) -> Self:
+        # Claude Code sends tool announcements in system and user turns only, and
+        # the assistant converters do not handle them, so fail at validation
+        # instead of dropping a tool or failing later in conversion.
+        if self.role == "assistant" and isinstance(self.content, list):
+            for block in self.content:
+                if isinstance(
+                    block, ContentBlockToolAddition | ContentBlockToolRemoval
+                ):
+                    raise ValueError(
+                        f"{block.type} blocks are not allowed in assistant messages"
+                    )
+        return self
 
 
 class Tool(_AnthropicBlockBase):

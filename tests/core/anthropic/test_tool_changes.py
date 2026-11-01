@@ -77,6 +77,14 @@ def test_messages_and_token_count_requests_accept_tool_changes() -> None:
         ]
 
 
+@pytest.mark.parametrize("announcement", [ANNOUNCEMENT, INLINE_DEFINITION])
+def test_assistant_messages_reject_tool_changes(announcement: JsonObject) -> None:
+    assistant = {**deepcopy(announcement), "role": "assistant"}
+
+    with pytest.raises(ValueError, match="not allowed in assistant messages"):
+        _request(assistant)
+
+
 def test_chat_conversion_drops_reference_changes_and_keeps_declared_tool() -> None:
     body = build_base_request_body(_request(ANNOUNCEMENT))
 
