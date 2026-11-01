@@ -138,13 +138,14 @@ function Invoke-SuppressionsCheck {
     Write-Host "+ Get-ChildItem -Recurse -Filter *.py (excluding .venv, .git) | Select-String '$pattern'"
 
     if (-not $DryRun) {
-        $matches = Get-ChildItem -Path . -Recurse -Filter *.py -File |
+        $matches = Get-ChildItem -Path . -Recurse -Force -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -eq '.py' } |
             Where-Object {
                 $full = $_.FullName
                 $full -notmatch '[\\/]\.venv[\\/]' -and
                     $full -notmatch '[\\/]\.git[\\/]'
             } |
-            Select-String -Pattern $pattern
+            Select-String -Pattern $pattern -ErrorAction SilentlyContinue
 
         if ($matches) {
             $matches | ForEach-Object { Write-Host $_.Line }
