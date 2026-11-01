@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -131,10 +132,13 @@ async def _exec_identity_probe(directory, after_exec):
         root / name for name in ("helper.pid", "exec.pid", "proceed")
     )
     command = root / "native-picker"
-    command.write_text(
-        f"#!{sys.executable}\nimport os, pathlib, threading\n"
+    probe = (
+        "import os, pathlib, threading\n"
         f"pathlib.Path({str(exec_ready)!r}).write_text(str(os.getpid()))\n"
-        "threading.Event().wait()\n",
+        "threading.Event().wait()\n"
+    )
+    command.write_text(
+        f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -c {shlex.quote(probe)}\n",
         encoding="utf-8",
     )
     command.chmod(0o700)

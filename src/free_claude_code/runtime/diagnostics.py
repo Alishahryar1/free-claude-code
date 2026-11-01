@@ -17,6 +17,7 @@ from free_claude_code.config.paths import (
     codex_model_catalog_path,
 )
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG, ProviderAuthKind
+from free_claude_code.config.routing_policy import parse_candidates
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.version import package_version
@@ -65,6 +66,11 @@ RUNTIME_FIELDS = (
     "max_message_log_entries_per_chat",
 )
 ROUTING_FIELDS = (
+    "routing_mode",
+    "routing_profile",
+    "routing_failover_enabled",
+    "routing_deadline_seconds",
+    "routing_first_event_timeout_seconds",
     "model",
     "model_fable",
     "model_opus",
@@ -123,7 +129,7 @@ def classified_settings() -> set[str]:
         set(RUNTIME_FIELDS + ROUTING_FIELDS + REASONING_FIELDS + WEB_FIELDS)
         | EXCLUDED_FIELDS
         | URL_FIELDS
-        | {"vertex_location", "custom_providers"}
+        | {"vertex_location", "custom_providers", "routing_candidates"}
     )
 
 
@@ -185,6 +191,7 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
         "providers": providers,
         "runtime": runtime,
         "model_routing": settings.model_dump(mode="json", include=set(ROUTING_FIELDS)),
+        "routing_candidate_count": len(parse_candidates(settings.routing_candidates)),
         "reasoning": {name: getattr(settings, name) for name in REASONING_FIELDS},
         "web_tools": {name: getattr(settings, name) for name in WEB_FIELDS},
     }

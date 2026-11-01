@@ -15,6 +15,7 @@ from free_claude_code.core.history_replay import (
     readable_reasoning,
 )
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_delivery import current_strict_routing
 from free_claude_code.core.stream_recovery import (
     ContinuationSeed,
     RecoveryAction,
@@ -325,6 +326,8 @@ def public_recovery(
     normal_stop_seen: bool,
     source: SourceRecoveryState,
 ) -> PublicRecovery | None:
+    if current_strict_routing():
+        return None
     delivery = execution.delivery
     if delivery is None or not delivery.content_released:
         return None

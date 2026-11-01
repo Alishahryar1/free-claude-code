@@ -1,6 +1,6 @@
 """Pure, validated application settings schema."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -22,6 +22,7 @@ from .provider_catalog import (
     SUPPORTED_PROVIDER_IDS,
 )
 from .reasoning import ReasoningPreference
+from .routing_policy import parse_candidates
 
 
 def _empty_to_none(value: object) -> object:
@@ -425,6 +426,38 @@ class Settings(BaseModel):
         default=None,
         validation_alias="MODEL_FALLBACKS",
     )
+
+    routing_mode: Literal["off", "shadow", "auto"] = Field(
+        default="off", validation_alias="ROUTING_MODE"
+    )
+    routing_profile: Literal["local-only", "allow-cloud"] = Field(
+        default="local-only", validation_alias="ROUTING_PROFILE"
+    )
+    routing_candidates: str = Field(
+        default="[]", repr=False, validation_alias="ROUTING_CANDIDATES"
+    )
+    routing_failover_enabled: bool = Field(
+        default=False, validation_alias="ROUTING_FAILOVER_ENABLED"
+    )
+    routing_deadline_seconds: float = Field(
+        default=120,
+        gt=0,
+        allow_inf_nan=False,
+        validation_alias="ROUTING_DEADLINE_SECONDS",
+    )
+    routing_first_event_timeout_seconds: float = Field(
+        default=15,
+        repr=False,
+        gt=0,
+        allow_inf_nan=False,
+        validation_alias="ROUTING_FIRST_EVENT_TIMEOUT_SECONDS",
+    )
+
+    @field_validator("routing_candidates")
+    @classmethod
+    def validate_routing_candidates(cls, value: str) -> str:
+        parse_candidates(value)
+        return value
 
     # ==================== Per-Provider Proxy ====================
     openai_proxy: OptionalNonEmptyString = Field(

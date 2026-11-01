@@ -22,6 +22,7 @@ from free_claude_code.application.connected_accounts import (
 from free_claude_code.application.errors import ApplicationError
 from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
+from free_claude_code.application.routing_decisions import decision_log
 from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY
 from free_claude_code.config.errors import ConfigConflictError
@@ -148,6 +149,15 @@ async def apply_admin_config(
         return await services.admin.apply_admin_config(_filtered_values(payload.values))
     except ConfigConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+@router.get("/admin/api/routing/decisions")
+async def routing_decisions(request: Request):
+    require_loopback_admin(request)
+    return JSONResponse(
+        content={"decisions": decision_log.recent()},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/admin/api/status")

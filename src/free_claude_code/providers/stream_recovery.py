@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from enum import Enum, StrEnum, auto
 
 from free_claude_code.core.async_tasks import wait_owned
-from free_claude_code.core.stream_delivery import StreamDeliveryState
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    current_strict_routing,
+)
 
 from .failure_policy import RetryableProviderProtocolError
 
@@ -159,6 +162,7 @@ class RecoveryController:
     def __init__(self, delivery: StreamDeliveryState | None = None) -> None:
         self._holdback = RecoveryHoldbackBuffer()
         self._delivery = delivery
+        self._strict_routing = current_strict_routing()
 
     @property
     def committed(self) -> bool:
@@ -208,6 +212,13 @@ class RecoveryController:
     ) -> RecoveryDecision:
         committed = self._holdback.committed
         has_buffered = self._holdback.has_buffered
+        if self._strict_routing:
+            return RecoveryDecision(
+                action=RecoveryFailureAction.FINAL_ERROR,
+                retryable=retryable,
+                committed=committed,
+                has_buffered=has_buffered,
+            )
         retry_available = attempts_remaining > 0
         reserve_last_attempt_for_recovery = generated_output and attempts_remaining == 1
 
@@ -271,7 +282,8 @@ def can_retry_undelivered_stream(
 ) -> bool:
     """A clean restart is safe only before content and a normal model stop."""
     return (
-        delivery is not None
+        not current_strict_routing()
+        and delivery is not None
         and not delivery.content_released
         and retryable
         and attempts_remaining > 0

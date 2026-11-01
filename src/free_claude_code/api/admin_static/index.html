@@ -54,6 +54,12 @@
               class="form-sections"
               aria-label="Model configuration"
             ></div>
+            <section class="settings-section routing-decisions" aria-labelledby="routingDecisionsHeading">
+              <h3 id="routingDecisionsHeading">Recent routing decisions</h3>
+              <p>Last 100 completed decisions in this process. Normalized usage can include estimates and is not authoritative billing data.</p>
+              <button id="refreshRoutingDecisions" class="secondary-button" type="button">Refresh</button>
+              <ul id="routingDecisions" aria-live="polite" aria-busy="false"></ul>
+            </section>
           </section>
 
           <section id="view-messaging" class="admin-view" data-view="messaging" hidden>

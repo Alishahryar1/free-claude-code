@@ -36,6 +36,7 @@ from free_claude_code.core.trace import (
     traced_async_stream,
 )
 
+from .policy_execution import strict_policy_candidates
 from .ports import ModelInfoLookup, ProviderResolver
 from .reasoning import (
     client_reasoning_policy,
@@ -52,6 +53,7 @@ from .routing import (
     RoutedNativeMessagesRequest,
     RoutedResponsesRequest,
 )
+from .routing_decisions import decision_log, observe_stream
 
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
 WireApi = Literal["messages", "responses", "gemini"]
@@ -446,6 +448,31 @@ class ProviderExecutor:
         """Start and consume candidates through one protocol-blind lifecycle."""
 
         primary = resolved.primary
+        decision: dict[str, object] = {
+            "request_id": request_id,
+            "requested_model": resolved.original_model,
+            "selected_model": primary.provider_model_ref,
+            "provider_id": primary.provider_id,
+            "proposed_model": resolved.proposed_model,
+            "mode": resolved.policy_mode,
+            "reason": resolved.policy_reason,
+            "wire_api": wire_api,
+            "estimated_cost": resolved.estimated_cost,
+            "attempt_count": 0,
+        }
+
+        async def tracked_open(
+            index: int,
+            candidate: ProviderModelCandidate,
+            continuation: ContinuationSeed | None,
+        ) -> AsyncIterator[str]:
+            decision["attempt_count"] = index + 1
+            decision["selected_model"] = candidate.target.provider_model_ref
+            decision["provider_id"] = candidate.target.provider_id
+            if index:
+                decision["estimated_cost"] = None
+            return await open_candidate(index, candidate, continuation)
+
         candidates = (ProviderModelCandidate(primary), *resolved.fallbacks)
         gateway_model = resolved.original_model
         route_trace: dict[str, object] = {
@@ -492,6 +519,21 @@ class ProviderExecutor:
             )
 
         async def provider_body() -> AsyncIterator[str]:
+            if resolved.policy_deadline_seconds is not None:
+                policy_stream = strict_policy_candidates(
+                    resolved, tracked_open, request_id=request_id
+                )
+                try:
+                    async for chunk in policy_stream:
+                        yield chunk
+                finally:
+                    await close_stream_input(
+                        policy_stream,
+                        owner="strict_policy_executor",
+                        source="application",
+                        preserved_error=sys.exception(),
+                    )
+                return
             loop = asyncio.get_running_loop()
             progress_deadline = loop.time() + self._progress_timeout_seconds
             delivery = current_stream_delivery()
@@ -505,7 +547,7 @@ class ProviderExecutor:
                 try:
                     opening_started = monotonic()
                     try:
-                        provider_stream = await open_candidate(
+                        provider_stream = await tracked_open(
                             index, candidate, continuation
                         )
                     except ExecutionFailure as failure:
@@ -636,20 +678,24 @@ class ProviderExecutor:
         if self._generation_id is not None:
             stream_trace["generation_id"] = self._generation_id
 
-        return traced_async_stream(
-            provider_body(),
-            stage="egress",
-            source="api",
-            complete_event=(
-                "free_claude_code.api.responses.stream_completed"
-                if wire_api == "responses"
-                else "free_claude_code.api.response.stream_completed"
+        return observe_stream(
+            traced_async_stream(
+                provider_body(),
+                stage="egress",
+                source="api",
+                complete_event=(
+                    "free_claude_code.api.responses.stream_completed"
+                    if wire_api == "responses"
+                    else "free_claude_code.api.response.stream_completed"
+                ),
+                interrupted_event=(
+                    "free_claude_code.api.responses.stream_interrupted"
+                    if wire_api == "responses"
+                    else "free_claude_code.api.response.stream_interrupted"
+                ),
+                chunk_event=None,
+                extra=stream_trace,
             ),
-            interrupted_event=(
-                "free_claude_code.api.responses.stream_interrupted"
-                if wire_api == "responses"
-                else "free_claude_code.api.response.stream_interrupted"
-            ),
-            chunk_event=None,
-            extra=stream_trace,
+            decision,
+            decision_log,
         )

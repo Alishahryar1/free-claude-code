@@ -64,6 +64,26 @@
   box-sizing: border-box;
 }
 
+.routing-decisions {
+  padding: 20px;
+}
+
+.routing-decisions p {
+  max-width: 75ch;
+  line-height: 1.5;
+}
+
+.routing-decisions ul {
+  max-height: 24rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.routing-decisions li + li {
+  margin-top: 12px;
+}
+
 [hidden] {
   display: none !important;
 }

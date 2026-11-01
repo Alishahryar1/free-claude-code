@@ -152,8 +152,11 @@ async def _create_messages_response(
         resolved = (
             router.resolve(model) if isinstance(model, str) and model.strip() else None
         )
-        native = resolved is not None and supports_native_messages(
-            resolved.primary.provider_id
+        native = (
+            resolved is not None
+            and isinstance(model, str)
+            and not router.requires_policy_inspection(model)
+            and supports_native_messages(resolved.primary.provider_id)
         )
         if native:
             try:

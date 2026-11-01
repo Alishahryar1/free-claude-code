@@ -698,7 +698,7 @@ def test_admin_static_places_reasoning_fields_in_model_config():
         encoding="utf-8"
     )
 
-    assert 'sections: ["models", "web_tools"]' in script
+    assert 'sections: ["models", "routing_policy", "web_tools"]' in script
     assert 'sections: ["models", "thinking", "web_tools"]' not in script
 
 

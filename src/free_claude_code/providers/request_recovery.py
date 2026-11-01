@@ -5,6 +5,7 @@ from typing import Any
 
 from free_claude_code.core.history_replay import HistoryProtocol
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_delivery import current_strict_routing
 from free_claude_code.providers.admission import (
     ProviderAttempt,
     ProviderCorrectionAction,
@@ -74,6 +75,8 @@ class RequestRecovery:
         propose_correction: Callable[[], JsonObject | None],
         normal_stop_seen: bool = False,
     ) -> JsonObject | None:
+        if current_strict_routing() and self._committed:
+            return None
         delivery = self.execution.delivery
         if (
             normal_stop_seen

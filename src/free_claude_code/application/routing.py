@@ -3,6 +3,7 @@
 from dataclasses import dataclass, replace
 
 from loguru import logger
+from pydantic import ValidationError
 
 from free_claude_code.application.errors import (
     InvalidRequestError,
@@ -16,11 +17,13 @@ from free_claude_code.config.model_refs import (
 )
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import ReasoningPreference
+from free_claude_code.config.routing_policy import parse_candidates
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
     MessagesRequest,
     NativeTokenCountRequest,
     TokenCountRequest,
+    get_token_count,
 )
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.gateway_model_ids import (
@@ -29,10 +32,14 @@ from free_claude_code.core.gateway_model_ids import (
     decode_gateway_model_id,
 )
 from free_claude_code.core.gemini import GeminiRequest
-from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.openai_responses import (
+    OpenAIResponsesRequest,
+    estimate_responses_input_tokens,
+)
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.trace import trace_event
 
+from .policy_selection import candidate_destination_allowed
 from .reasoning import (
     resolve_gemini_reasoning_policy,
     resolve_reasoning_policy,
@@ -73,6 +80,12 @@ class ResolvedModelRoute:
     primary: ProviderModelTarget
     fallbacks: tuple[ProviderModelCandidate, ...]
     reasoning_preference: ReasoningPreference
+    policy_mode: str = "off"
+    policy_reason: str = "legacy_mapping"
+    proposed_model: str | None = None
+    estimated_cost: float | None = None
+    policy_deadline_seconds: float | None = None
+    policy_first_event_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +131,7 @@ class ModelRouter:
 
     def __init__(self, settings: Settings):
         self._settings = settings
+        self._policy_candidates = parse_candidates(settings.routing_candidates)
 
     def resolve(self, claude_model_name: str) -> ResolvedModelRoute:
         (
@@ -142,8 +156,16 @@ class ModelRouter:
             return ResolvedModelRoute(
                 original_model=claude_model_name,
                 primary=primary,
-                fallbacks=self._fallback_targets(primary),
+                fallbacks=(
+                    self._fallback_targets(primary)
+                    if self._settings.routing_mode == "off"
+                    else ()
+                ),
                 reasoning_preference=reasoning_preference,
+                policy_mode=self._settings.routing_mode,
+                policy_reason="explicit_model"
+                if self._settings.routing_mode != "off"
+                else "legacy_mapping",
             )
 
         provider_model_ref = self._resolve_model_ref(claude_model_name)
@@ -160,6 +182,7 @@ class ModelRouter:
             primary=primary,
             fallbacks=self._fallback_targets(primary),
             reasoning_preference=reasoning_preference,
+            policy_mode=self._settings.routing_mode,
         )
 
     def _target_from_ref(
@@ -288,11 +311,122 @@ class ModelRouter:
             None,
         )
 
+    def requires_policy_inspection(self, model: str) -> bool:
+        """Automatic aliases need inspection before selecting native passthrough."""
+        return (
+            self._settings.routing_mode == "auto"
+            and self._direct_provider_model(model)[0] is None
+        )
+
+    def _apply_policy(
+        self,
+        resolved: ResolvedModelRoute,
+        *,
+        payload: dict[str, object],
+        input_tokens: int,
+        output_tokens: int | None,
+        reasoning: ReasoningPolicy,
+    ) -> ResolvedModelRoute:
+        if (
+            self._settings.routing_mode == "off"
+            or resolved.policy_reason == "explicit_model"
+        ):
+            return resolved
+        if payload.get("extra_body"):
+            if self._settings.routing_mode == "auto":
+                raise InvalidRequestError(
+                    "Automatic routing cannot validate extra_body overrides."
+                )
+            return replace(resolved, policy_reason="unsupported_extra_body")
+        block_types: set[str] = set()
+        pending: list[object] = [payload]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                kind = value.get("type")
+                if isinstance(kind, str):
+                    block_types.add(kind)
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+        needs_tools = bool(payload.get("tools")) or bool(
+            block_types
+            & {"tool_use", "tool_result", "function_call", "function_call_output"}
+        )
+        required_context = int(input_tokens * 1.1) + 256 + (output_tokens or 0)
+        eligible = [
+            candidate
+            for candidate in self._policy_candidates
+            if output_tokens is not None
+            and output_tokens > 0
+            and candidate.context_tokens >= required_context
+            and candidate.supports_tools is not None
+            and candidate.supports_thinking is not None
+            and (not needs_tools or candidate.supports_tools)
+            and (not reasoning.requests_reasoning or candidate.supports_thinking)
+            and (
+                not block_types.intersection({"image", "input_image"})
+                or candidate.supports_images is True
+            )
+            and (
+                not block_types.intersection({"document", "input_file"})
+                or candidate.supports_documents is True
+            )
+            and not payload.get("mcp_servers")
+            and candidate_destination_allowed(candidate, self._settings)
+        ]
+        if not eligible:
+            if self._settings.routing_mode == "auto":
+                raise InvalidRequestError(
+                    "No eligible routing candidate for this request"
+                )
+            return replace(resolved, policy_reason="no_eligible_candidate")
+        selected = eligible[0]
+        estimated_cost = None
+        if (
+            selected.input_cost_per_million is not None
+            and selected.output_cost_per_million is not None
+        ):
+            estimated_cost = (
+                input_tokens * selected.input_cost_per_million
+                + (output_tokens or 0) * selected.output_cost_per_million
+            ) / 1_000_000
+        decision = replace(
+            resolved,
+            policy_reason="ordered_candidates",
+            proposed_model=selected.model,
+            estimated_cost=estimated_cost,
+        )
+        if self._settings.routing_mode == "shadow":
+            return decision
+        fallbacks = (
+            (ProviderModelCandidate(self._target_from_ref(eligible[1].model)),)
+            if self._settings.routing_failover_enabled and len(eligible) > 1
+            else ()
+        )
+        return replace(
+            decision,
+            primary=self._target_from_ref(selected.model),
+            fallbacks=fallbacks,
+            policy_deadline_seconds=self._settings.routing_deadline_seconds,
+            policy_first_event_timeout_seconds=self._settings.routing_first_event_timeout_seconds,
+        )
+
     def route_native_messages(
         self,
         request: NativeMessagesRequest,
         resolved: ResolvedModelRoute,
     ) -> RoutedNativeMessagesRequest:
+        if (
+            self._settings.routing_mode == "shadow"
+            and resolved.policy_reason != "explicit_model"
+        ):
+            try:
+                parsed = MessagesRequest.model_validate(request.body)
+            except ValidationError:
+                resolved = replace(resolved, policy_reason="unsupported_inspection")
+            else:
+                resolved = self.resolve_messages_request(parsed).resolved
         eligible = tuple(
             candidate
             for candidate in resolved.fallbacks
@@ -320,13 +454,25 @@ class ModelRouter:
         resolved = self.resolve(request.model)
         routed = request.model_copy(deep=True)
         routed.model = resolved.primary.provider_model
+        reasoning = resolve_reasoning_policy(routed, resolved.reasoning_preference)
+        if (
+            self._settings.routing_mode != "off"
+            and resolved.policy_reason != "explicit_model"
+        ):
+            resolved = self._apply_policy(
+                resolved,
+                payload=request.model_dump(mode="json"),
+                input_tokens=get_token_count(
+                    request.messages, request.system, request.tools
+                ),
+                output_tokens=request.max_tokens,
+                reasoning=reasoning,
+            )
+            routed.model = resolved.primary.provider_model
         return RoutedMessagesRequest(
             request=routed,
             resolved=resolved,
-            reasoning=resolve_reasoning_policy(
-                routed,
-                resolved.reasoning_preference,
-            ),
+            reasoning=reasoning,
         )
 
     def resolve_messages_request_with_policy(
@@ -370,17 +516,33 @@ class ModelRouter:
         resolved = self.resolve(request.model)
         routed = request.model_copy(deep=True)
         routed.model = resolved.primary.provider_model
+        reasoning = resolve_responses_reasoning_policy(
+            routed, resolved.reasoning_preference
+        )
+        if (
+            self._settings.routing_mode != "off"
+            and resolved.policy_reason != "explicit_model"
+        ):
+            resolved = self._apply_policy(
+                resolved,
+                payload=request.model_dump(mode="json"),
+                input_tokens=estimate_responses_input_tokens(request),
+                output_tokens=request.max_output_tokens,
+                reasoning=reasoning,
+            )
+            routed.model = resolved.primary.provider_model
         return RoutedResponsesRequest(
             request=routed,
             resolved=resolved,
-            reasoning=resolve_responses_reasoning_policy(
-                routed,
-                resolved.reasoning_preference,
-            ),
+            reasoning=reasoning,
         )
 
     def resolve_gemini_request(self, request: GeminiRequest) -> RoutedGeminiRequest:
         resolved = self.resolve(request.model)
+        if self.requires_policy_inspection(request.model):
+            raise InvalidRequestError(
+                "Automatic policy routing currently supports Messages and Responses only."
+            )
         return RoutedGeminiRequest(
             request=request.model_copy(
                 update={"model": resolved.primary.provider_model}, deep=True

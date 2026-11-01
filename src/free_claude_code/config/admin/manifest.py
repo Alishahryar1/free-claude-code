@@ -41,6 +41,11 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "Provider keys, local endpoints, and proxy settings.",
     ),
     ConfigSectionSpec(
+        "routing_policy",
+        "Automatic Routing",
+        "Opt-in ordered candidates. Off preserves current upstream routing behavior.",
+    ),
+    ConfigSectionSpec(
         "models",
         "Model Routing",
         "Choose a model and effort together. Tier overrides can inherit the defaults.",
@@ -81,6 +86,54 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
 
 
 _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
+    ConfigFieldSpec(
+        "ROUTING_MODE",
+        "Routing Mode",
+        "routing_policy",
+        "select",
+        settings_attr="routing_mode",
+        options=("off", "shadow", "auto"),
+        description="Shadow observes proposals. Explicit model IDs remain pinned when policy is enabled.",
+    ),
+    ConfigFieldSpec(
+        "ROUTING_PROFILE",
+        "Data Destination",
+        "routing_policy",
+        "select",
+        settings_attr="routing_profile",
+        options=("local-only", "allow-cloud"),
+        description="Local-only automatic candidates require actual loopback endpoints without proxies.",
+    ),
+    ConfigFieldSpec(
+        "ROUTING_CANDIDATES",
+        "Ordered Candidates (JSON)",
+        "routing_policy",
+        "textarea",
+        settings_attr="routing_candidates",
+        description="JSON array: model, context_tokens, supports_tools, supports_thinking. Unknown capabilities are ineligible.",
+    ),
+    ConfigFieldSpec(
+        "ROUTING_FAILOVER_ENABLED",
+        "Allow One Alternate",
+        "routing_policy",
+        "boolean",
+        settings_attr="routing_failover_enabled",
+        description="Transient errors only, before the first yielded event. No post-output continuation.",
+    ),
+    ConfigFieldSpec(
+        "ROUTING_DEADLINE_SECONDS",
+        "Total Request Deadline (seconds)",
+        "routing_policy",
+        "number",
+        settings_attr="routing_deadline_seconds",
+    ),
+    ConfigFieldSpec(
+        "ROUTING_FIRST_EVENT_TIMEOUT_SECONDS",
+        "First Event Timeout (seconds)",
+        "routing_policy",
+        "number",
+        settings_attr="routing_first_event_timeout_seconds",
+    ),
     ConfigFieldSpec(
         "MODEL",
         "Default Model",

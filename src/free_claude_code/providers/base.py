@@ -29,6 +29,7 @@ class ProviderConfig:
     proxy: str | None
     log_raw_sse_events: bool
     log_api_error_tracebacks: bool
+    trust_env: bool = True
 
 
 class BaseProvider(ABC):

@@ -38,7 +38,7 @@ const VIEW_GROUPS = [
     id: "model_config",
     label: "Model Config",
     title: "Model Config",
-    sections: ["models", "web_tools"],
+    sections: ["models", "routing_policy", "web_tools"],
     containerId: "modelConfigSections",
   },
   {
@@ -265,6 +265,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   const activeView =
     VIEW_GROUPS.find((view) => view.id === viewId) || VIEW_GROUPS[0];
   state.activeView = activeView.id;
+  if (activeView.id === "model_config" && state.config) void refreshRoutingDecisions();
   byId("pageTitle").textContent = activeView.title;
   renderStartup();
   if (activeView.id === "code") void window.CodeSessions.refresh();
@@ -305,6 +306,36 @@ function setActiveView(viewId, { scroll = false } = {}) {
     refreshCodexIntegration();
     refreshClaudeDesktopIntegration();
     refreshDshDesktopIntegration();
+  }
+}
+
+async function refreshRoutingDecisions() {
+  const list = byId("routingDecisions");
+  const button = byId("refreshRoutingDecisions");
+  if (!list || !button) return;
+  button.disabled = true;
+  list.setAttribute("aria-busy", "true");
+  try {
+    const result = await api("/admin/api/routing/decisions");
+    list.replaceChildren();
+    if (!result.decisions.length) {
+      list.textContent = "No completed decisions yet. Shadow mode observes proposals without adding provider calls.";
+    }
+    for (const row of result.decisions) {
+      const item = document.createElement("li");
+      item.textContent = [
+        row.timestamp, row.mode, row.reason, row.selected_model || "no selection",
+        `outcome: ${row.outcome}`, `attempts: ${row.attempt_count ?? 0}`,
+        row.proposed_model ? `proposed: ${row.proposed_model}` : "",
+        "usage: normalized stream, not billing evidence",
+      ].filter(Boolean).join(" · ");
+      list.appendChild(item);
+    }
+  } catch {
+    list.textContent = "Could not load routing decisions. Select Refresh to retry.";
+  } finally {
+    button.disabled = false;
+    list.setAttribute("aria-busy", "false");
   }
 }
 
@@ -1817,6 +1848,7 @@ function showMessage(message, kind = "") {
 }
 
 byId("applyButton").addEventListener("click", () => apply());
+byId("refreshRoutingDecisions")?.addEventListener("click", refreshRoutingDecisions);
 byId("saveProvider").addEventListener("click", () => apply(state.providerId));
 byId("closeProviderDialog").addEventListener("click", () => byId("providerDialog").close());
 byId("cancelProviderDialog").addEventListener("click", () => byId("providerDialog").close());
