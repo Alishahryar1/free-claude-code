@@ -650,6 +650,14 @@ class Settings(BaseModel):
         validation_alias="HTTP_CONNECT_TIMEOUT",
     )
 
+    # ==================== Launcher readiness ====================
+    # How long an installed launcher (fcc-claude, fcc-codex, ...) waits for an
+    # auto-started local proxy to answer /health before giving up. Unset keeps
+    # the launcher's built-in default; set it to tune slow or fast machines.
+    server_startup_timeout: float | None = Field(
+        default=None, validation_alias="FCC_SERVER_STARTUP_TIMEOUT_SECONDS"
+    )
+
     # ==================== Local web server tools (web_search / web_fetch) ====================
     # On by default to match Claude Code's normal web-tool availability.
     enable_web_server_tools: bool = Field(

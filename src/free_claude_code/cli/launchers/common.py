@@ -29,9 +29,33 @@ from free_claude_code.core.interprocess_lock import InterprocessFileLock
 PROXY_PREFLIGHT_PATH = "/health"
 PROXY_PREFLIGHT_TIMEOUT_SECONDS = 1.5
 
-SERVER_STARTUP_TIMEOUT_SECONDS = 30.0
+# Readiness budget for an auto-started local proxy. Measured cold boots span
+# 7-35 seconds on Windows, so the old 30s budget failed first runs on slower
+# disks; 120s covers them with margin. Override per machine (shell env, slot
+# .env, or Admin) with FCC_SERVER_STARTUP_TIMEOUT_SECONDS.
+SERVER_STARTUP_TIMEOUT_SECONDS = 120.0
 SERVER_STARTUP_LOCK_TIMEOUT_SECONDS = 30.0
 SERVER_STARTUP_POLL_SECONDS = 0.25
+
+
+def _server_startup_timeout() -> float:
+    """Effective readiness budget.
+
+    FCC_SERVER_STARTUP_TIMEOUT_SECONDS wins when set: shell env, the managed
+    .env, and Admin edits all funnel through get_settings(). The module
+    constant is the fallback (and stays monkeypatchable for the autostart
+    suite's fast runs).
+    """
+
+    try:
+        from free_claude_code.config.loader import get_settings
+
+        configured = get_settings().server_startup_timeout
+    except OSError, ValueError:
+        configured = None
+    if configured and configured > 0:
+        return float(configured)
+    return SERVER_STARTUP_TIMEOUT_SECONDS
 
 
 class ProxyState(StrEnum):
@@ -263,7 +287,7 @@ def _wait_for_server(
             time.sleep(min(SERVER_STARTUP_POLL_SECONDS, remaining))
     return (
         "Free Claude Code did not become ready within "
-        f"{SERVER_STARTUP_TIMEOUT_SECONDS:g} seconds. If FCC is already running, "
+        f"{_server_startup_timeout():g} seconds. If FCC is already running, "
         "check its configured port or restart it."
     )
 
@@ -278,7 +302,7 @@ def ensure_proxy_available(
     """
 
     probe = _probe_proxy(
-        proxy_root_url, deadline=time.monotonic() + SERVER_STARTUP_TIMEOUT_SECONDS
+        proxy_root_url, deadline=time.monotonic() + _server_startup_timeout()
     )
     if probe.state is ProxyState.HEALTHY:
         return None
@@ -300,7 +324,7 @@ def ensure_proxy_available(
     try:
         # The startup budget starts now: time spent waiting for another
         # launcher's attempt must not shorten this launcher's own attempt.
-        deadline = time.monotonic() + SERVER_STARTUP_TIMEOUT_SECONDS
+        deadline = time.monotonic() + _server_startup_timeout()
         # Another launcher may have started the server while this one waited.
         probe = _probe_proxy(proxy_root_url, deadline=deadline)
         if probe.state is ProxyState.HEALTHY:

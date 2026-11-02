@@ -258,6 +258,18 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="http_connect_timeout",
     ),
     ConfigFieldSpec(
+        "FCC_SERVER_STARTUP_TIMEOUT_SECONDS",
+        "Launcher Startup Timeout",
+        "runtime",
+        "number",
+        settings_attr="server_startup_timeout",
+        description=(
+            "Seconds an installed launcher waits for an auto-started proxy to "
+            "pass its health check. Unset keeps the launcher default (120s)."
+        ),
+        advanced=True,
+    ),
+    ConfigFieldSpec(
         "HOST",
         "Server Host",
         "runtime",
