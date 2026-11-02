@@ -347,6 +347,13 @@ def test_ci_ps1_suppression_only_does_not_require_uv() -> None:
     assert "uv is required" not in result.stderr
 
 
+def test_ci_ps1_suppression_scan_warns_when_paths_are_unreadable() -> None:
+    body = _braced_body(_script_text("ci.ps1"), "function Invoke-SuppressionsCheck")
+
+    assert body.count("-ErrorVariable +scanErrors") == 2
+    assert "Write-Warning" in body
+
+
 def test_ci_ps1_fail_fast_runs_checks_sequentially() -> None:
     text = _script_text("ci.ps1")
 

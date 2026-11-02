@@ -223,9 +223,10 @@ def test_app_symlink_is_not_treated_as_owned(installer):
     real = app.with_name("Other.app")
     app.rename(real)
     try:
-        app.symlink_to(real, target_is_directory=True)
+        os.symlink(real, app, target_is_directory=True)
     except OSError as error:
         pytest.skip(f"Symlink creation is unavailable: {error}")
+    assert app.is_symlink()
     with pytest.raises(ValueError, match="not managed"):
         macos_app.install()
     assert (real / "old").read_text() == "preserve on failure"

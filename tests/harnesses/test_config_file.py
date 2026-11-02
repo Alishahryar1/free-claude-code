@@ -33,3 +33,31 @@ def test_failed_windows_replacements_preserve_existing_file(tmp_path, monkeypatc
         atomic_write_text(path, "replacement")
 
     assert path.read_text(encoding="utf-8") == "original"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Exercises Windows replacement retry")
+def test_read_only_windows_file_is_replaced_and_remains_read_only(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "settings.json"
+    path.write_text("original", encoding="utf-8")
+    path.chmod(stat.S_IREAD)
+    assert not path.stat().st_mode & stat.S_IWRITE
+
+    original_replace = Path.replace
+    attempts = 0
+
+    def fail_first_replace(self, target):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError("target is read-only")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_first_replace)
+
+    atomic_write_text(path, "replacement")
+
+    assert attempts == 2
+    assert path.read_text(encoding="utf-8") == "replacement"
+    assert not path.stat().st_mode & stat.S_IWRITE
