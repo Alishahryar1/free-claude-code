@@ -188,6 +188,76 @@ fcc-agy
   <p><em>Select an FCC model from Claude Code's native <code>/model</code> picker.</em></p>
 </div>
 
+## Opt-in automatic routing policies
+
+**Model Config > Automatic Routing** adds an optional policy above upstream's
+existing router. `ROUTING_MODE=off` preserves upstream defaults, including
+configured fallback behavior. `shadow` keeps the original route and records a
+proposal without extra provider calls; `auto` selects the first eligible candidate.
+Explicit provider/gateway model IDs remain pinned when policy is enabled and do
+not inherit `MODEL_FALLBACKS`.
+
+Enter **Ordered Candidates (JSON)** using real model IDs and verified capabilities:
+
+```json
+[
+  {
+    "model": "ollama/your-primary-model",
+    "context_tokens": 32768,
+    "supports_tools": true,
+    "supports_thinking": true
+  },
+  {
+    "model": "ollama/your-alternate-model",
+    "context_tokens": 32768,
+    "supports_tools": true,
+    "supports_thinking": true
+  }
+]
+```
+
+Unknown tool/thinking capabilities are ineligible. Images/documents require
+`supports_images`/`supports_documents`, including media nested in tool results.
+Automatic requests require a positive output limit; context fit is an estimate
+with headroom, not a provider-specific guarantee. Candidates currently support
+built-in configuration-backed providers, not custom providers or connected OAuth
+accounts whose availability needs separate runtime evidence.
+
+The default `ROUTING_PROFILE=local-only` restricts automatic model routes to
+loopback Ollama, LM Studio or llama.cpp endpoints without configured proxies.
+Their HTTP clients ignore inherited proxy variables. `allow-cloud` explicitly
+permits configured cloud candidates. This controls FCC's model destination, not
+forwarding by a local server or separately enabled web tools. Shadow mode does
+not make an existing cloud route local.
+
+`ROUTING_FAILOVER_ENABLED=false` by default. Enabling it permits at most one eligible
+alternate for a canonical retryable transient failure before the first yielded
+event. Heartbeats and metadata commit the attempt. Strict automatic routes disable
+hidden same-provider restart/continuation and never replay emitted text or tools.
+`ROUTING_FIRST_EVENT_TIMEOUT_SECONDS` bounds startup plus the first event per
+attempt; `ROUTING_DEADLINE_SECONDS` bounds the total request, including provider
+initialization and alternatives, rather than resetting on progress. Cancellation
+does not trigger fallback, and cleanup retains ownership of provider resources.
+
+Messages and native Responses retain their existing protocols. Automatic aliases
+are inspected before native Messages contract selection. Automatic Gemini aliases
+are not supported and fail closed; off/shadow preserve upstream execution. Existing
+leased provider generations and transactional configuration replacement are kept,
+so active streams are not torn down by Admin Apply.
+
+Recent decisions are bounded to 100 per server process, reset on restart, and are
+available locally at `/admin/api/routing/decisions`. They contain route IDs, reasons,
+attempts, latency and numeric normalized usage, never prompts, response text or tool
+arguments. Usage is `normalized_stream_unverified`, not billing evidence. Optional
+`input_cost_per_million`/`output_cost_per_million` estimates require both rates,
+`pricing_source`, and ISO `pricing_date`; they are not a hard budget. A cancelled or
+timed-out upstream may still perform work or incur charges.
+
+Disable policy/failover to restore upstream routing without deleting candidates.
+Guarded launchers that force explicit models intentionally bypass automatic
+selection. This is FCC-native functionality, not a verified external OmniRoute API
+integration. Deprecated utility-response mocks are not restored by this feature.
+
 ## Choose A Provider
 
 1. Open a provider link below for its key, models, or setup instructions.

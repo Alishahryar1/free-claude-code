@@ -4,6 +4,7 @@ import httpx
 import httpx2
 from openai import AsyncOpenAI, Omit
 
+from free_claude_code.core.stream_delivery import current_strict_routing
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 
 
@@ -36,6 +37,7 @@ class OpenAIRequestClient:
                 if self._transport is not None
                 else None,
                 follow_redirects=False,
+                trust_env=not current_strict_routing(),
             )
         # An endpoint is authoritative for every attempt, including after refresh.
         self._http.cookies.clear()

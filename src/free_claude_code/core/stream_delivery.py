@@ -105,6 +105,21 @@ class StreamDeliveryState:
 _delivery: ContextVar[StreamDeliveryState | None] = ContextVar(
     "stream_delivery", default=None
 )
+_strict_routing: ContextVar[bool] = ContextVar("strict_routing", default=False)
+
+
+def current_strict_routing() -> bool:
+    return _strict_routing.get()
+
+
+@contextmanager
+def bind_strict_routing(enabled: bool) -> Generator[None]:
+    """Bind around iterator operations, never across a yield to a public consumer."""
+    token = _strict_routing.set(enabled)
+    try:
+        yield
+    finally:
+        _strict_routing.reset(token)
 
 
 def current_stream_delivery() -> StreamDeliveryState | None:
