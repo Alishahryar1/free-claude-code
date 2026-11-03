@@ -356,6 +356,16 @@ class ProviderRuntimeManager:
             await asyncio.sleep(delay)
             if self._closing or generation is not self._current:
                 return
+            task = generation.catalog_tasks.get(provider_id)
+            if (
+                task is not None
+                and task.done()
+                and not task.cancelled()
+                and task.exception() is None
+                and not task.result().failed_provider_ids
+            ):
+                # A manual refresh already recovered this provider while we slept.
+                return
             result = await self._catalog_task(generation, provider_id, refresh=True)
             if not result.failed_provider_ids:
                 return
