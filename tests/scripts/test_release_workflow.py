@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from scripts.ci_shards import RUNNERS
 from tests.scripts.test_version_policy import commit, git, write
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,7 +33,16 @@ def test_post_merge_serializes_and_limits_publish_permissions():
         "macOS",
     }
     publish = config["jobs"]["publish"]
-    assert publish["runs-on"] == "macos-26"
+    assert publish["runs-on"] == "macos-latest"
+    assert {e["runner"] for e in cache["strategy"]["matrix"]["include"]} == set(
+        RUNNERS.values()
+    )
+    setup = next(
+        step
+        for step in publish["steps"]
+        if step.get("uses") == "./.github/actions/ci-environment"
+    )
+    assert setup["with"]["runner-label"] == publish["runs-on"]
     assert "needs" not in publish
     assert publish["environment"] == "pypi"
     assert publish["permissions"] == {"contents": "write", "id-token": "write"}
