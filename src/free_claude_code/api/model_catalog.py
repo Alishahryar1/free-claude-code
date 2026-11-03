@@ -12,6 +12,7 @@ from free_claude_code.application.model_catalog import (
 )
 from free_claude_code.application.ports import ModelCatalogPort
 from free_claude_code.application.routing import supports_native_messages
+from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import (
     desktop_model_id,
@@ -36,8 +37,8 @@ class ModelCatalogView(StrEnum):
 
 
 class MuseModelLimits(BaseModel):
-    context: int | None = None
-    output: int | None = None
+    context: int
+    output: int
 
 
 class MuseModelMetadata(BaseModel):
@@ -46,7 +47,7 @@ class MuseModelMetadata(BaseModel):
     name: str
     is_hidden: Literal[False] = False
     reasoning: bool | None = None
-    limit: MuseModelLimits | None = None
+    limit: MuseModelLimits
 
 
 class MuseMetadataEnvelope(BaseModel):
@@ -171,20 +172,17 @@ def build_muse_models_list_response(
         settings, runtime, view=ModelCatalogView.RESPONSES
     )
     for model in catalog.data:
-        limits = (
-            MuseModelLimits(
-                context=model.context_window_tokens,
-                output=model.max_output_tokens,
-            )
-            if model.context_window_tokens is not None
-            or model.max_output_tokens is not None
-            else None
-        )
+        context = model.context_window_tokens
+        assert context is not None  # The Responses view resolves client context.
+        # Muse discards all native metadata if either limit is missing.
+        output = model.max_output_tokens
+        if output is None:
+            output = min(ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS, context)
         model.metadata = MuseMetadataEnvelope(
             muse_code=MuseModelMetadata(
                 name=model.display_name,
                 reasoning=model.supports_reasoning,
-                limit=limits,
+                limit=MuseModelLimits(context=context, output=output),
             )
         )
     return catalog

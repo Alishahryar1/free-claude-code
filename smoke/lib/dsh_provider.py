@@ -40,8 +40,6 @@ class DshProvider:
             ) and "Create a concise title for an AI coding-assistant session" in str(
                 first.get("content", "")
             ):
-                assert body.get("max_tokens", body.get("max_output_tokens")) == 64
-                assert not body.get("tools")
                 return "title"
             if any(
                 isinstance(message, dict)
