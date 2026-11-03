@@ -345,12 +345,13 @@ class _OpenAIChatStreamAssembler:
             yield from self._output.close_content_blocks()
             for tool_call in native_tool_calls:
                 extra_content = tool_call_extra_content(tool_call)
+                function = tool_call.function
                 tool_call_info = {
                     "index": tool_call.index,
                     "id": tool_call.id,
                     "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments,
+                        "name": function.name if function is not None else None,
+                        "arguments": function.arguments if function is not None else "",
                     },
                 }
                 if extra_content:
@@ -373,6 +374,16 @@ class _OpenAIChatStreamAssembler:
             )
         if is_context_window_finish_reason(self._finish_reason):
             raise context_window_exceeded_provider_failure()
+        if any(
+            not state.started and index not in self._tool_name_buffers
+            for index, state in self._output.tool_states.items()
+        ):
+            raise ExecutionFailure(
+                FailureKind.UPSTREAM,
+                502,
+                "Provider stream ended with a tool call missing its function name.",
+                False,
+            )
         if any(
             not self._tool_names.is_unchanged_name(name)
             for name in self._tool_name_buffers.values()
