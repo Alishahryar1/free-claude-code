@@ -608,7 +608,6 @@ async def test_successful_fallback_preserves_raw_state_and_gets_unmodified_input
                 primary if name == "provider" else provider
             )
         ),
-        progress_timeout_seconds=10,
     )
     try:
         saved = await _saved_reply(

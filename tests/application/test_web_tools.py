@@ -24,7 +24,7 @@ def _service(settings, client, *, token_counter=lambda *_: 5):
     return WebToolService(
         settings=settings,
         client=client,
-        executor=ProviderExecutor(_no_provider, progress_timeout_seconds=30),
+        executor=ProviderExecutor(_no_provider),
         token_counter=token_counter,
     )
 

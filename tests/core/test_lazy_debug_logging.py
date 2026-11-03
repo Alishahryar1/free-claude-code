@@ -65,7 +65,6 @@ async def _probe(level: str, raw: bool) -> None:
         ):
             executor = execution.ProviderExecutor(
                 AsyncMock(return_value=provider),
-                progress_timeout_seconds=60,
                 token_counter=lambda *args: 1,
                 responses_token_counter=lambda request: 1,
                 log_raw_payloads=raw,

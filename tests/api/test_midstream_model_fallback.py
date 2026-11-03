@@ -35,7 +35,7 @@ def release_provider_events(monkeypatch):
     )
 
 
-async def delivered_candidates(senders, wire, *, tools=None, progress_timeout=10):
+async def delivered_candidates(senders, wire, *, tools=None):
     history = [{"role": "user", "content": "greet"}]
 
     async def open_candidate(index, candidate, continuation=None):
@@ -53,9 +53,7 @@ async def delivered_candidates(senders, wire, *, tools=None, progress_timeout=10
             for index in range(1, len(senders))
         )
     )
-    body = ProviderExecutor(
-        AsyncMock(), progress_timeout_seconds=progress_timeout
-    )._stream_candidates(
+    body = ProviderExecutor(AsyncMock())._stream_candidates(
         resolved=routed.resolved,
         reasoning=ReasoningPolicy.provider_default(),
         wire_api=wire,

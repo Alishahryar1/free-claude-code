@@ -215,6 +215,7 @@ def test_settings_projection_excludes_secrets_and_url_credentials():
         result["providers"]["lmstudio"]["base_url"]["origin"] == "http://localhost:1234"
     )
     assert result["model_routing"]["model"] == "openai_api/gpt-example"
+    assert "provider_progress_timeout" not in result["runtime"]
 
 
 def test_all_settings_have_an_explicit_reporting_policy():

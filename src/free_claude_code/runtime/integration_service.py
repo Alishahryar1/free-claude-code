@@ -284,13 +284,11 @@ class IntegrationService:
 
         def status_reader() -> Callable[[str, str, bool], JsonObject]:
             catalog = read_model_catalog(self.provider_manager)
-            timeout = self.settings.provider_progress_timeout
             return lambda url, token, ready: dsh_desktop_integration.status(
                 dsh_desktop_integration.config_home(),
                 url,
                 token,
                 catalog,
-                provider_progress_timeout=timeout,
             )
 
         def disconnect(url: str, token: str, ready: bool) -> JsonObject:
@@ -354,13 +352,11 @@ class IntegrationService:
                     catalog = read_model_catalog(snapshot)
                     url = local_proxy_root_url(self.settings)
                     token = self.settings.proxy_auth_token
-                    timeout = self.settings.provider_progress_timeout
 
                     def operate(
                         catalog: ModelCatalog = catalog,
                         url: str = url,
                         token: str = token,
-                        timeout: float = timeout,
                     ) -> JsonObject:
                         home = dsh_desktop_integration.config_home()
                         if action == "refresh":
@@ -370,7 +366,6 @@ class IntegrationService:
                                     url,
                                     token,
                                     catalog,
-                                    provider_progress_timeout=timeout,
                                 )
                             }
                         return dsh_desktop_integration.configure(
@@ -378,7 +373,6 @@ class IntegrationService:
                             url,
                             token,
                             catalog,
-                            provider_progress_timeout=timeout,
                         )
 
                     result = await run_sync_owned(operate)

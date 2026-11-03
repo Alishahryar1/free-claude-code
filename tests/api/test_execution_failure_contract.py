@@ -12,8 +12,9 @@ from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.loader import compose_settings_snapshot
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.anthropic import MessagesRequest, ReasoningReplayMode
+from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -32,6 +33,7 @@ from free_claude_code.providers.openai_chat import (
 )
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import create_test_app
+from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.support import immediate_admission, make_provider_config
 
 _PARTIAL_CONTENT = "PARTIAL_ASSISTANT_CONTENT"
@@ -104,31 +106,12 @@ class CanonicalFailureProvider:
         )
 
 
-class StalledProvider:
-    """Provider double that makes no protocol-visible progress."""
+class ResponsesFailureProvider:
+    """Provider double that raises after committing a Responses lifecycle."""
 
     def __init__(self, *, responses_chunks: tuple[str, ...] = ()) -> None:
         self._responses_chunks = responses_chunks
         self.close_calls = 0
-
-    async def stream_messages(
-        self,
-        _request: MessagesRequest,
-        *,
-        input_tokens: int,
-        request_id: str,
-        response_model: str,
-        reasoning: ReasoningPolicy,
-        request_headers: Mapping[str, str] | None = None,
-        model_info: ProviderModelInfo | None = None,
-        continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
-        del input_tokens, request_id, response_model, reasoning
-        try:
-            await asyncio.Event().wait()
-            yield ""
-        finally:
-            self.close_calls += 1
 
     async def stream_responses(
         self,
@@ -142,12 +125,16 @@ class StalledProvider:
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
-        del input_tokens, request_id, response_model, reasoning
+        del input_tokens, response_model, reasoning
         try:
             for chunk in self._responses_chunks:
                 yield chunk
-            await asyncio.Event().wait()
-            yield ""
+            raise ExecutionFailure(
+                FailureKind.TIMEOUT,
+                504,
+                f"Provider read timed out.\n\nRequest ID: {request_id}",
+                False,
+            )
         finally:
             self.close_calls += 1
 
@@ -274,7 +261,7 @@ def _responses_wire_payload(
 
 
 def _client_for(
-    provider: CanonicalFailureProvider | StalledProvider | OpenAIChatProvider,
+    provider: CanonicalFailureProvider | ResponsesFailureProvider | OpenAIChatProvider,
     *,
     settings: Settings | None = None,
 ):
@@ -283,6 +270,83 @@ def _client_for(
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
         TestClient(app),
     )
+
+
+@pytest.mark.parametrize("path", ["/v1/messages", "/v1/responses"])
+@pytest.mark.parametrize("partial", [False, True])
+def test_retired_progress_value_does_not_interrupt_slow_response(
+    path, partial, monkeypatch
+):
+    monkeypatch.setattr(
+        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
+        lambda: RecoveryHoldbackBuffer(max_bytes=1),
+    )
+    closed = []
+
+    class SlowStream(httpx2.AsyncByteStream):
+        async def __aiter__(self):
+            chunks = [
+                ("data: " + json.dumps(event) + "\n\n").encode()
+                for event in text_events("chat", "Hello")
+            ]
+            if partial:
+                yield chunks.pop(0)
+            release = asyncio.Event()
+            timer = asyncio.get_running_loop().call_later(0.05, release.set)
+            try:
+                await release.wait()
+            finally:
+                timer.cancel()
+            for chunk in chunks:
+                yield chunk
+            yield b"data: [DONE]\n\n"
+
+        async def aclose(self):
+            closed.append(True)
+
+    sdk = AsyncOpenAI(
+        api_key="test",
+        base_url="https://provider.invalid/v1",
+        max_retries=0,
+        http_client=httpx2.AsyncClient(
+            transport=httpx2.MockTransport(
+                lambda _: httpx2.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    stream=SlowStream(),
+                )
+            )
+        ),
+    )
+    provider = OpenAIChatProvider(
+        make_provider_config(api_key="test", base_url="https://provider.invalid/v1"),
+        profile=OpenAIChatProfile(
+            OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.DISABLED), NO_REASONING
+        ),
+        admission=immediate_admission(),
+        client=sdk,
+    )
+    settings = compose_settings_snapshot(
+        {}, {"PROVIDER_PROGRESS_TIMEOUT": "0.01"}
+    ).settings
+    resolver_patch, client = _client_for(provider, settings=settings)
+    try:
+        with resolver_patch, client:
+            response = client.post(
+                path,
+                json=_messages_payload(stream=True)
+                if path == "/v1/messages"
+                else _responses_payload(),
+            )
+    finally:
+        asyncio.run(sdk.close())
+    assert response.status_code == 200, response.text
+    events = parse_sse_text(response.text)
+    assert events[-1].event == (
+        "message_stop" if path == "/v1/messages" else "response.completed"
+    )
+    assert "Hello" in response.text
+    assert closed == [True]
 
 
 @pytest.mark.parametrize("partial", [False, True])
@@ -400,35 +464,9 @@ def _timeout_provider(chunks: list[str]) -> CanonicalFailureProvider:
         chunks,
         kind=FailureKind.TIMEOUT,
         status_code=504,
-        message="Provider execution made no progress for 600 seconds.",
+        message="Provider read timed out.",
         retryable=False,
     )
-
-
-@pytest.mark.parametrize(
-    ("path", "payload"),
-    [
-        ("/v1/messages", _messages_payload(stream=True)),
-        ("/v1/responses", _responses_payload()),
-    ],
-)
-def test_configured_progress_timeout_reaches_default_handler_executor(
-    path: str,
-    payload: dict[str, object],
-) -> None:
-    provider = StalledProvider()
-    resolver_patch, client = _client_for(
-        provider,
-        settings=Settings(provider_progress_timeout=0.02),
-    )
-
-    with resolver_patch, client:
-        response = client.post(path, json=payload)
-
-    assert response.status_code == 504
-    assert response.headers["x-should-retry"] == "false"
-    assert "made no progress for 0.02 seconds" in response.json()["error"]["message"]
-    assert provider.close_calls == 1
 
 
 @pytest.mark.parametrize(
@@ -876,7 +914,7 @@ def test_messages_stream_false_discards_partial_content_on_execution_failure() -
         ("/v1/responses", _responses_payload()),
     ],
 )
-def test_pre_start_progress_timeout_is_terminal_504(
+def test_pre_start_provider_timeout_is_terminal_504(
     path: str,
     payload: dict[str, object],
 ) -> None:
@@ -896,10 +934,7 @@ def test_pre_start_progress_timeout_is_terminal_504(
     assert response.headers["x-should-retry"] == "false"
     assert response.json()["error"] == {
         "type": "timeout_error",
-        "message": (
-            "Provider execution made no progress for 600 seconds.\n\n"
-            f"Request ID: {request_id}"
-        ),
+        "message": (f"Provider read timed out.\n\nRequest ID: {request_id}"),
         **({} if path == "/v1/messages" else {"param": None, "code": None}),
     }
     if path == "/v1/messages":
@@ -916,7 +951,7 @@ def test_pre_start_progress_timeout_is_terminal_504(
 
 
 @pytest.mark.parametrize("path", ["/v1/messages", "/v1/responses"])
-def test_post_start_progress_timeout_is_terminal_protocol_event(path: str) -> None:
+def test_post_start_provider_timeout_is_terminal_protocol_event(path: str) -> None:
     provider = _timeout_provider(_partial_anthropic_stream(close_block=True))
     payload = (
         _messages_payload(stream=True)
@@ -946,10 +981,7 @@ def test_post_start_progress_timeout_is_terminal_protocol_event(path: str) -> No
         assert events[-1].data["response"]["id"] == events[0].data["response"]["id"]
         error = events[-1].data["response"]["error"]
     assert error["type"] == "timeout_error"
-    assert error["message"] == (
-        "Provider execution made no progress for 600 seconds.\n\n"
-        f"Request ID: {request_id}"
-    )
+    assert error["message"] == (f"Provider read timed out.\n\nRequest ID: {request_id}")
     if path == "/v1/messages":
         trace = _terminal_trace(trace_mock)
         assert trace["failure_kind"] == "timeout"
@@ -959,9 +991,9 @@ def test_post_start_progress_timeout_is_terminal_protocol_event(path: str) -> No
         trace_mock.assert_not_called()
 
 
-def test_responses_application_progress_timeout_closes_committed_lifecycle() -> None:
-    response_id = "resp_application_timeout"
-    provider = StalledProvider(
+def test_responses_provider_timeout_closes_committed_lifecycle() -> None:
+    response_id = "resp_provider_timeout"
+    provider = ResponsesFailureProvider(
         responses_chunks=(
             _responses_event(
                 "response.created",
@@ -976,10 +1008,7 @@ def test_responses_application_progress_timeout_closes_committed_lifecycle() -> 
             ),
         )
     )
-    resolver_patch, client = _client_for(
-        provider,
-        settings=Settings(provider_progress_timeout=0.02),
-    )
+    resolver_patch, client = _client_for(provider)
 
     with (
         resolver_patch,
@@ -1000,10 +1029,7 @@ def test_responses_application_progress_timeout_closes_committed_lifecycle() -> 
     assert failed["id"] == response_id
     assert failed["status"] == "failed"
     assert failed["error"] == {
-        "message": (
-            "Provider execution made no progress for 0.02 seconds.\n\n"
-            f"Request ID: {request_id}"
-        ),
+        "message": (f"Provider read timed out.\n\nRequest ID: {request_id}"),
         "type": "timeout_error",
         "param": None,
         "code": None,
@@ -1024,7 +1050,7 @@ def test_responses_application_progress_timeout_closes_committed_lifecycle() -> 
     }
 
 
-def test_stream_false_progress_timeout_discards_partial_content() -> None:
+def test_stream_false_provider_timeout_discards_partial_content() -> None:
     provider = _timeout_provider(_partial_anthropic_stream(close_block=False))
     resolver_patch, client = _client_for(provider)
 
@@ -1036,9 +1062,6 @@ def test_stream_false_progress_timeout_discards_partial_content() -> None:
     assert response.headers["x-should-retry"] == "false"
     assert response.json()["error"] == {
         "type": "timeout_error",
-        "message": (
-            "Provider execution made no progress for 600 seconds.\n\n"
-            f"Request ID: {request_id}"
-        ),
+        "message": (f"Provider read timed out.\n\nRequest ID: {request_id}"),
     }
     assert _PARTIAL_CONTENT not in response.text

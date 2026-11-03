@@ -49,13 +49,11 @@ def home(tmp_path):
 
 
 def connect(home, token=TOKEN, model="fixture/model"):
-    return desktop.configure(
-        home, URL, token, catalog(model), provider_progress_timeout=600
-    )
+    return desktop.configure(home, URL, token, catalog(model))
 
 
 def status(home):
-    return desktop.status(home, URL, TOKEN, catalog(), provider_progress_timeout=600)
+    return desktop.status(home, URL, TOKEN, catalog())
 
 
 def test_connect_status_disconnect_and_reconnect(home):
@@ -126,17 +124,14 @@ def test_status_requires_all_fcc_keys_and_connect_replaces_them(home, field):
     assert status(home)["connected"]
 
 
-def test_status_compares_current_catalog_url_token_and_timeout(home):
+def test_status_compares_current_catalog_url_and_token(home):
     connect(home)
-    for url, token, models, timeout in [
-        (URL + "-changed", TOKEN, catalog(), 600),
-        (URL, "rotated", catalog(), 600),
-        (URL, TOKEN, catalog("fixture/new"), 600),
-        (URL, TOKEN, catalog(), 30),
+    for url, token, models in [
+        (URL + "-changed", TOKEN, catalog()),
+        (URL, "rotated", catalog()),
+        (URL, TOKEN, catalog("fixture/new")),
     ]:
-        assert not desktop.status(
-            home, url, token, models, provider_progress_timeout=timeout
-        )["connected"]
+        assert not desktop.status(home, url, token, models)["connected"]
 
 
 def test_other_settings_accounts_comments_tags_and_peer_files_are_preserved(home):
@@ -226,9 +221,7 @@ def test_absent_home_status_disconnect_and_refresh_create_nothing(tmp_path):
     home = tmp_path / "absent"
     assert not status(home)["connected"]
     assert not desktop.disconnect(home)["connected"]
-    assert not desktop.refresh_connected(
-        home, URL, TOKEN, catalog(), provider_progress_timeout=600
-    )
+    assert not desktop.refresh_connected(home, URL, TOKEN, catalog())
     assert not home.exists()
 
 
@@ -254,3 +247,21 @@ def test_connect_honors_native_profile_lock(home, monkeypatch):
         connect(home)
     assert lock.read_text() == "native writer"
     assert not (home / ".credentials.yaml").exists()
+
+
+def test_refresh_replaces_old_derived_timeout_and_preserves_other_settings(home):
+    connect(home)
+    patch = home / "profiles/desktop/cordis.patch.yml"
+    rows = read(patch)
+    llm = config(rows, "llm-pi-ai")
+    llm["providers"][ROUTE]["streamIdleTimeoutMs"] = 660_000
+    llm["providers"]["other"] = {"models": ["unchanged"]}
+    llm["anotherSetting"] = "unchanged"
+    write(patch, rows)
+    assert not status(home)["connected"]
+    assert desktop.refresh_connected(home, URL, TOKEN, catalog())
+    assert status(home)["connected"]
+    refreshed = config(read(patch), "llm-pi-ai")
+    assert refreshed["providers"][ROUTE]["streamIdleTimeoutMs"] == 2_147_483_647
+    assert refreshed["providers"]["other"] == {"models": ["unchanged"]}
+    assert refreshed["anotherSetting"] == "unchanged"

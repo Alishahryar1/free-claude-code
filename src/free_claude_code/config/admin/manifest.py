@@ -224,19 +224,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="provider_max_concurrency",
     ),
     ConfigFieldSpec(
-        "PROVIDER_PROGRESS_TIMEOUT",
-        "Provider Progress Timeout",
-        "runtime",
-        "number",
-        settings_attr="provider_progress_timeout",
-        description=(
-            "Maximum seconds without a non-empty protocol event, including "
-            "provider admission, retries, and backoff. Independent of HTTP Read "
-            "Timeout."
-        ),
-        advanced=True,
-    ),
-    ConfigFieldSpec(
         "HTTP_READ_TIMEOUT",
         "HTTP Read Timeout",
         "runtime",

@@ -105,7 +105,6 @@ def test_dsh_desktop_native_composition_e2e(
         "http://127.0.0.1:8182",
         "fixture-only",
         ModelCatalog((model,), model.wire_slug),
-        provider_progress_timeout=600,
     )
     assert composed()["providers"] == ["free-claude-code", "native-user-provider"]
     assert composed()["default"] == {
@@ -283,7 +282,6 @@ def test_dsh_desktop_live_catalog_credentials_and_restart_e2e(
                 url,
                 token,
                 catalog,
-                provider_progress_timeout=600,
             )
 
         configure(server.base_url, "desktop-first", "FCC Desktop Fixture")
