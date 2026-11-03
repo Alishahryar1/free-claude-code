@@ -23,7 +23,7 @@ def _launcher_settings(
     return Settings(
         host="0.0.0.0",
         port=port,
-        proxy_auth_enabled=False,
+        proxy_auth_enabled=True,
         proxy_auth_token=token,
         model="nvidia_nim/test-model",
         open_admin_browser=open_admin_browser,
