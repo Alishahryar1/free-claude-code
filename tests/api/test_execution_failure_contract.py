@@ -6,12 +6,14 @@ from collections.abc import AsyncIterator, Mapping
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
+from openai import AsyncOpenAI
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.anthropic import MessagesRequest
+from free_claude_code.core.anthropic import MessagesRequest, ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -22,7 +24,15 @@ from free_claude_code.core.openai_responses import (
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.providers.openai_chat import (
+    NO_REASONING,
+    OpenAIChatProfile,
+    OpenAIChatProvider,
+    OpenAIChatRequestPolicy,
+)
+from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import create_test_app
+from tests.providers.support import immediate_admission, make_provider_config
 
 _PARTIAL_CONTENT = "PARTIAL_ASSISTANT_CONTENT"
 
@@ -264,7 +274,7 @@ def _responses_wire_payload(
 
 
 def _client_for(
-    provider: CanonicalFailureProvider | StalledProvider,
+    provider: CanonicalFailureProvider | StalledProvider | OpenAIChatProvider,
     *,
     settings: Settings | None = None,
 ):
@@ -273,6 +283,94 @@ def _client_for(
         patch("free_claude_code.api.routes.resolve_provider", return_value=provider),
         TestClient(app),
     )
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_sdk_stream_invalid_request_preserves_public_error_semantics(
+    partial, monkeypatch
+) -> None:
+    if partial:
+        monkeypatch.setattr(
+            "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
+            lambda: RecoveryHoldbackBuffer(max_bytes=1),
+        )
+    calls = 0
+
+    def reply(request: httpx2.Request) -> httpx2.Response:
+        nonlocal calls
+        calls += 1
+        events = []
+        if partial:
+            events.append(
+                {
+                    "id": "chat_invalid",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": _PARTIAL_CONTENT},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+        # Actual error shape captured from hosted NIM, inside HTTP 200 SSE.
+        events.append(
+            {
+                "error": {
+                    "message": "ValueError: Received multimodal data but multimodal processing is not enabled. Use --enable-multimodal flag to enable multimodal processing.",
+                    "type": "invalid_request_error",
+                    "code": 400,
+                }
+            }
+        )
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events)
+            + "data: [DONE]\n\n",
+        )
+
+    sdk = AsyncOpenAI(
+        api_key="test",
+        base_url="https://provider.invalid/v1",
+        max_retries=0,
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)),
+    )
+    provider = OpenAIChatProvider(
+        make_provider_config(api_key="test", base_url="https://provider.invalid/v1"),
+        profile=OpenAIChatProfile(
+            OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.DISABLED), NO_REASONING
+        ),
+        admission=immediate_admission(max_attempts=3),
+        client=sdk,
+    )
+    resolver_patch, client = _client_for(provider)
+    try:
+        with resolver_patch, client:
+            response = client.post("/v1/messages", json=_messages_payload(stream=True))
+    finally:
+        asyncio.run(sdk.close())
+
+    assert calls == 1
+    request_id = response.headers["request-id"]
+    if partial:
+        assert response.status_code == 200
+        events = parse_sse_text(response.text)
+        assert _PARTIAL_CONTENT in response.text
+        assert events[-1].event == "error"
+        assert not any(event.event == "message_stop" for event in events)
+        error = events[-1].data["error"]
+    else:
+        assert response.status_code == 400
+        assert response.headers["x-should-retry"] == "false"
+        assert response.json()["request_id"] == request_id
+        error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert "multimodal processing is not enabled" in error["message"]
+    assert request_id in error["message"]
 
 
 def _terminal_trace(trace_mock: MagicMock) -> dict[str, Any]:

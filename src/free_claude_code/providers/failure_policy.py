@@ -176,7 +176,7 @@ def retryable_transient_status(exc: BaseException) -> int | None:
         return status if exc.retryable and _is_retryable_status(status) else None
     if _reports_context_window_exceeded(exc):
         return None
-    if _reported_status(exc) == 413:
+    if _is_invalid_request_error(exc) or _reported_status(exc) == 413:
         return None
     if isinstance(exc, openai.RateLimitError):
         return 429
@@ -342,6 +342,11 @@ def _classify_provider_failure(
     if _reports_context_window_exceeded(exc):
         return context_window_exceeded_provider_failure()
 
+    if _is_invalid_request_error(exc):
+        return _failure(
+            FailureKind.INVALID_REQUEST, 400, _INVALID_REQUEST_MESSAGE, False
+        )
+
     if _reported_status(exc) == 413:
         return _failure(
             FailureKind.INVALID_REQUEST,
@@ -458,6 +463,22 @@ def _stable_upstream(status_code: int) -> str:
     if status_code in (502, 503, 504):
         return "Provider is temporarily unavailable. Please retry."
     return "Provider API request failed."
+
+
+def _is_invalid_request_error(exc: BaseException) -> bool:
+    """Recognize invalid requests without masking status or credential failures."""
+    status = _reported_status(exc)
+    if status is not None:
+        return status == 400
+    if isinstance(exc, Exception) and provider_authentication_status(exc) is not None:
+        return False
+    return any(
+        isinstance(value, str) and anthropic_status_for_error_type(value.lower()) == 400
+        for item in _body_candidates(getattr(exc, "body", None))
+        if isinstance(item, Mapping)
+        for key in ("type", "code")
+        if (value := item.get(key)) is not None
+    )
 
 
 def _status_from_exception(exc: BaseException) -> int | None:
