@@ -1,6 +1,5 @@
 """Model-list response construction for FCC clients."""
 
-import math
 from enum import StrEnum
 from typing import Literal
 
@@ -22,7 +21,8 @@ from free_claude_code.core.gateway_model_ids import (
 from free_claude_code.core.model_capabilities import ModelInputModality
 
 DISCOVERED_MODEL_CREATED_AT = "1970-01-01T00:00:00Z"
-_INFERENCE_IDLE_TIMEOUT_MARGIN_SECONDS = 60
+# Keep clients waiting while FCC owns transport retries and cancellation.
+_INFERENCE_IDLE_TIMEOUT_SECONDS = 2_147_483
 _REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 
@@ -160,7 +160,7 @@ def build_models_list_response(
         return _build_claude_models_response(
             catalog, desktop=view is ModelCatalogView.CLAUDE_DESKTOP
         )
-    return _build_direct_models_response(settings, catalog, view=view)
+    return _build_direct_models_response(catalog, view=view)
 
 
 def build_muse_models_list_response(
@@ -226,16 +226,13 @@ def _build_claude_models_response(
 
 
 def _build_direct_models_response(
-    settings: Settings,
     catalog: ModelCatalog,
     *,
     view: ModelCatalogView,
 ) -> ModelsListResponse:
     models: list[ModelResponse] = []
     timeout_seconds = (
-        _responses_inference_idle_timeout_seconds(settings.provider_progress_timeout)
-        if view is ModelCatalogView.RESPONSES
-        else None
+        _INFERENCE_IDLE_TIMEOUT_SECONDS if view is ModelCatalogView.RESPONSES else None
     )
 
     default_model_id = catalog.default_model_id
@@ -292,10 +289,6 @@ def _serialize_input_modalities(
     if modalities is None:
         return None
     return tuple(modality for modality in ModelInputModality if modality in modalities)
-
-
-def _responses_inference_idle_timeout_seconds(provider_progress_timeout: float) -> int:
-    return math.ceil(provider_progress_timeout) + _INFERENCE_IDLE_TIMEOUT_MARGIN_SECONDS
 
 
 def _discovered_model_response(model_id: str, *, display_name: str) -> ModelResponse:

@@ -145,7 +145,7 @@ def _local_tool_body(
     service = WebToolService(
         settings=settings,
         client=StubWebToolsClient(),
-        executor=ProviderExecutor(unexpected_provider, progress_timeout_seconds=30),
+        executor=ProviderExecutor(unexpected_provider),
         token_counter=lambda *_: input_tokens,
     )
     routed = FixedProviderModelRouter(

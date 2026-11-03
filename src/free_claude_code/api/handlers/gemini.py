@@ -44,7 +44,6 @@ class GeminiHandler:
         self._router = ModelRouter(settings)
         self._executor = ProviderExecutor(
             provider_resolver,
-            progress_timeout_seconds=settings.provider_progress_timeout,
             generation_id=generation_id,
             request_headers=request_headers,
             model_info_lookup=model_info_lookup,

@@ -1,13 +1,12 @@
 """Only the final candidate failure reaches the public Responses lifecycle."""
 
-import asyncio
 from copy import deepcopy
 from itertools import pairwise
 
 import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
@@ -301,26 +300,22 @@ async def test_fallback_timeout_before_its_first_frame_retains_prefix_and_closes
     opened = []
     closed = []
 
-    async def waiting(*args, **kwargs):
+    async def timed_out(*args, **kwargs):
         opened.append(kwargs["continuation"])
         try:
-            await asyncio.Event().wait()
+            raise ExecutionFailure(
+                FailureKind.TIMEOUT, 504, "Provider read timed out", False
+            )
             yield "unreachable"
         finally:
             closed.append(True)
-
-    async def forbidden(*args, **kwargs):
-        raise AssertionError("The application deadline cannot select another candidate")
-        yield "unreachable"
 
     async with _harness(
         "chat",
         lambda _: (200, text_events("chat", "Before. ", complete=False)),
         max_attempts=1,
     ) as (first, _, _):
-        raw = await delivered_candidates(
-            [first, waiting, forbidden], wire, progress_timeout=0.1
-        )
+        raw = await delivered_candidates([first, timed_out], wire)
     assert len(opened) == 1 and opened[0].text == "Before. "
     assert closed == [True]
     events = parse_sse_text(raw)

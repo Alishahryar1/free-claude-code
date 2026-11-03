@@ -1,5 +1,4 @@
 import json
-import math
 
 import pytest
 from fastapi.testclient import TestClient
@@ -331,7 +330,7 @@ def test_direct_model_views_exclude_claude_aliases_and_duplicate_variants():
             "xhigh",
             "max",
         ],
-        "inferenceIdleTimeoutSecs": 660,
+        "inferenceIdleTimeoutSecs": 2_147_483,
     }
     plain = responses["data"][1]
     assert plain["supportsReasoningEffort"] is False
@@ -494,34 +493,6 @@ def test_muse_catalog_uses_native_metadata_for_known_limits_and_reasoning():
         "is_hidden": False,
         "limit": {"context": 200000},
     }
-
-
-def test_responses_model_view_rounds_timeout_up_before_margin():
-    app = create_test_app(
-        _settings().model_copy(update={"provider_progress_timeout": 1.1})
-    )
-
-    response = TestClient(app).get("/v1/models?view=responses")
-
-    assert response.status_code == 200
-    assert {row["inferenceIdleTimeoutSecs"] for row in response.json()["data"]} == {62}
-
-
-def test_responses_model_view_timeout_fits_unsigned_range():
-    largest_accepted_timeout = math.nextafter(float(1 << 64), 0.0)
-    app = create_test_app(
-        _settings().model_copy(
-            update={"provider_progress_timeout": largest_accepted_timeout}
-        )
-    )
-
-    response = TestClient(app).get("/v1/models?view=responses")
-
-    assert response.status_code == 200
-    assert all(
-        row["inferenceIdleTimeoutSecs"] <= (1 << 64) - 1
-        for row in response.json()["data"]
-    )
 
 
 def test_unknown_model_view_is_rejected():

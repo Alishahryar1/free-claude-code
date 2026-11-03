@@ -138,7 +138,6 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
                 primary if provider_id == "nvidia_nim" else fallback
             )
         ),
-        progress_timeout_seconds=10,
     )
     router = ModelRouter(settings)
     if wire_api == "messages":
@@ -241,9 +240,7 @@ async def test_candidate_efforts_survive_retry_and_continuation(monkeypatch, wir
         admission=immediate_admission(max_attempts=2),
         openai_transport=httpx2.MockTransport(reply),
     )
-    executor = ProviderExecutor(
-        AsyncMock(return_value=instance), progress_timeout_seconds=10
-    )
+    executor = ProviderExecutor(AsyncMock(return_value=instance))
     router = ModelRouter(settings)
     if wire_api == "messages":
         routed = router.resolve_messages_request(

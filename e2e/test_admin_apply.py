@@ -55,16 +55,15 @@ def test_apply_is_the_only_config_action_and_retains_invalid_edits(
     expect(apply_button).to_be_disabled()
 
     runtime_section = page.locator("#section-runtime")
-    runtime_section.get_by_role("button", name="Show advanced", exact=True).click()
-    timeout_input = runtime_section.locator("#field-PROVIDER_PROGRESS_TIMEOUT")
-    timeout_input.fill("0")
+    concurrency_input = runtime_section.locator("#field-PROVIDER_MAX_CONCURRENCY")
+    concurrency_input.fill("0")
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
     expect(apply_button).to_be_enabled()
 
     apply_button.click()
 
-    expect(page.locator("#messageArea")).to_contain_text("PROVIDER_PROGRESS_TIMEOUT")
-    expect(timeout_input).to_have_value("0")
+    expect(page.locator("#messageArea")).to_contain_text("PROVIDER_MAX_CONCURRENCY")
+    expect(concurrency_input).to_have_value("0")
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
     expect(apply_button).to_be_enabled()
     assert config_mutations == [("POST", "apply")]

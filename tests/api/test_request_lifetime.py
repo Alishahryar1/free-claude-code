@@ -574,7 +574,7 @@ async def _disconnect_real_app(
     payload: dict[str, object],
     provider: _ControlledProvider,
 ) -> tuple[list[Message], _Lease]:
-    settings = Settings(provider_progress_timeout=60.0)
+    settings = Settings()
     lease = _Lease(settings, cast(ProviderPort, provider))
     requests = _Requests(lease)
     app = create_app(
