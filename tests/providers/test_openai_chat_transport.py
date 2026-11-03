@@ -46,14 +46,14 @@ def _transport(client: AsyncOpenAI) -> OpenAIChatTransport:
     )
 
 
-def _success() -> httpx2.Response:
+def _success(content: str = "hello") -> httpx2.Response:
     chunk = {
         "id": "chat_test",
         "object": "chat.completion.chunk",
         "created": 0,
         "model": "model",
         "choices": [
-            {"index": 0, "delta": {"content": "hello"}, "finish_reason": "stop"}
+            {"index": 0, "delta": {"content": content}, "finish_reason": "stop"}
         ],
     }
     return httpx2.Response(
@@ -72,6 +72,26 @@ async def _consume(transport: OpenAIChatTransport, wire: str) -> str:
         )
     )
     return "".join([event async for event in stream])
+
+
+async def test_error_shaped_model_text_is_not_a_protocol_error() -> None:
+    content = '{"error":{"type":"invalid_request_error","code":400}}'
+    async with AsyncOpenAI(
+        api_key="test",
+        base_url="https://provider.invalid/v1",
+        max_retries=0,
+        http_client=httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda request: _success(content))
+        ),
+    ) as client:
+        result = await _consume(_transport(client), "messages")
+    payloads = [
+        json.loads(line[6:])
+        for line in result.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert "".join(p.get("delta", {}).get("text", "") for p in payloads) == content
+    assert payloads[-1]["type"] == "message_stop"
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
