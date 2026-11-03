@@ -1,3 +1,4 @@
+import json
 import subprocess
 from contextlib import nullcontext
 from pathlib import Path
@@ -6,6 +7,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from free_claude_code.config import env_migrations, paths
+from free_claude_code.config.env_migrations import atomic_write_managed_config
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
 from smoke.lib import child_process
@@ -23,6 +26,56 @@ from smoke.lib.http import collect_message_stream
 from smoke.lib.server import RunningServer
 from smoke.product import test_client_product_live as client_smoke
 from smoke.product import test_provider_product_live as provider_smoke
+
+
+def test_isolated_smoke_client_uses_server_token_without_importing_legacy_config(
+    monkeypatch, tmp_path: Path
+):
+    original = paths.managed_env_path()
+    atomic_write_managed_config({"ANTHROPIC_AUTH_TOKEN": "server-token"}, path=original)
+    original_bytes = original.read_bytes()
+    server_settings = ManagedConfigStore().read({}).settings
+    legacy = tmp_path / "legacy.env"
+    legacy.write_text(
+        "ANTHROPIC_AUTH_TOKEN=legacy-token\nGROQ_API_KEY=legacy-provider-secret\n"
+    )
+    legacy_bytes = legacy.read_bytes()
+    monkeypatch.setattr(env_migrations, "verified_checkout_env_path", lambda: legacy)
+    monkeypatch.delenv("FCC_ENV_FILE", raising=False)
+
+    env = client_smoke._isolated_dsh_env(
+        tmp_path=tmp_path,
+        server_port=4567,
+        auth_token=server_settings.proxy_auth_token,
+        credential_env_keys=client_smoke._provider_credential_env_keys(),
+    )
+    monkeypatch.setattr(paths, "config_dir_path", lambda: Path(env["HOME"]) / ".fcc")
+    process = {"ANTHROPIC_AUTH_TOKEN": "conflicting-process-token"}
+    store = ManagedConfigStore()
+    store.initialize(process)
+    snapshot = store.read(process)
+
+    assert snapshot.settings.proxy_auth_token == server_settings.proxy_auth_token
+    assert "GROQ_API_KEY" not in snapshot.managed
+    assert original.read_bytes() == original_bytes
+    assert legacy.read_bytes() == legacy_bytes
+
+
+def test_smoke_counts_access_records_once_in_mixed_logs():
+    access = '127.0.0.1:1234 - "POST /v1/responses HTTP/1.1" 200'
+    record = json.dumps({"text": access + "\n", "record": {"message": access}})
+    other_messages = (
+        '127.0.0.1:1234 - "GET /v1/responses HTTP/1.1" 200',
+        '127.0.0.1:1234 - "POST /v1/responses/extra HTTP/1.1" 200',
+        '127.0.0.1:1234 - "POST /v1/chat/completions HTTP/1.1" 200',
+    )
+    output = "\n".join(
+        [access, record, access, record, "{malformed", "[]", "null", '{"record":null}']
+        + [json.dumps({"record": {"message": message}}) for message in other_messages]
+        + [json.dumps({"text": access, "record": {"message": "unrelated"}})]
+    )
+
+    assert client_smoke._access_request_count(output, "POST", "/v1/responses") == 2
 
 
 def test_smoke_reads_native_trace_events_from_mixed_subprocess_output():
