@@ -450,3 +450,59 @@ async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_range
         ("Plan", False),
         ("Plan", True),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_signed_sibling_is_rejected_before_late_alias_metadata_is_published(
+    wire, fallback
+):
+    first = _chat_reasoning_events([{"reasoning_content": "Plan"}])[:-1]
+    second = _chat_reasoning_events(
+        [
+            {"reasoning_content": "PlanAct"},
+            {
+                "reasoning_details": [
+                    {"type": "reasoning.summary", "summary": "PlanAct", "index": 0},
+                    {
+                        "type": "reasoning.text",
+                        "text": "Signed sibling",
+                        "signature": "signed",
+                        "index": 1,
+                    },
+                ]
+            },
+        ]
+    )
+    async with (
+        _harness(
+            "chat",
+            lambda bodies: (200, first if len(bodies) == 1 else second),
+            max_attempts=1 if fallback else 2,
+        ) as (primary, first_bodies, _),
+        _harness("chat", lambda _: (200, second), max_attempts=1) as (
+            backup,
+            backup_bodies,
+            _,
+        ),
+    ):
+        raw = await delivered_candidates(
+            [primary, backup] if fallback else [primary], wire
+        )
+    events = parse_sse_text(raw)
+    assert len(first_bodies) + len(backup_bodies) == 2
+    assert events[-1].event in {"error", "response.failed"}
+    assert "Signed sibling" not in raw
+    assert "fcc:history" not in raw
+    if wire == "messages":
+        thinking = "".join(
+            event.data.get("delta", {}).get("thinking", "") for event in events
+        )
+    else:
+        thinking = "".join(
+            event.data.get("delta", "")
+            for event in events
+            if event.event == "response.reasoning_text.delta"
+        )
+    assert thinking == "PlanAct"

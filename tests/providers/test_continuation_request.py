@@ -13,6 +13,7 @@ from free_claude_code.core.history_replay import (
     encode_replay,
     prepare_history,
 )
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.continuation import ContinuationRequest
 from tests.providers.support import assistant_history_text, continuation_seed
@@ -89,6 +90,46 @@ def test_responses_string_input_is_preserved_across_continuations():
     assert second["input"][0] == {"role": "user", "content": "Original prompt"}
     assert assistant_history_text(second["input"]) == "Answer"
     assert str(second["input"]).count("A thought.") == 1
+
+
+@pytest.mark.parametrize("parts", [None, [], [""], ["Half", ""], ["   ", ""]])
+def test_messages_suffix_accepts_summary_only_and_incomplete_text(parts):
+    items: list[JsonObject] = [
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Summary"}]}
+    ]
+    if parts is not None:
+        items.append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text} for text in parts],
+            }
+        )
+    seed = ContinuationSeed("responses", tuple(items))
+    source = {"model": "model", "messages": [{"role": "user", "content": "Continue"}]}
+    original = deepcopy(source)
+    original_items = deepcopy(seed.items)
+    builder = ContinuationRequest("messages")
+    first = builder.build(source, seed)
+    assert source == original and seed.items == original_items
+    assert "Summary" not in str(first)
+    assistant = [
+        message for message in first["messages"] if message["role"] == "assistant"
+    ]
+    expected = [text for text in parts or [] if text]
+    assert assistant == (
+        [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": text} for text in expected],
+            }
+        ]
+        if expected
+        else []
+    )
+    second = builder.build(first, continuation_seed("Recovered"))
+    assert second["messages"][:-2] == original["messages"]
+    assert assistant_history_text(second["messages"]) == "Recovered"
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])

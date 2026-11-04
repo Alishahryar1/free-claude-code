@@ -12,11 +12,11 @@ from .gemini.request import (
     build_gemini_messages_request,
     build_gemini_responses_request,
 )
-from .json_types import JsonObject
+from .json_types import JsonObject, JsonValue
 from .openai_responses import (
     OpenAIResponsesRequest,
     build_responses_chat_request,
-    build_responses_messages_request,
+    build_responses_messages_suffix,
     build_responses_provider_request,
 )
 from .reasoning import ReasoningPolicy
@@ -126,12 +126,7 @@ class ContinuationRequest:
                         structured_reasoning_details=True,
                     ).body["messages"],
                 )
-            return cast(
-                list[Any],
-                build_responses_messages_request(request, options=options).body[
-                    "messages"
-                ],
-            )
+            return build_responses_messages_suffix(cast(list[JsonValue], items))
         request = GeminiRequest.model_validate(
             {"model": model, "contents": [{"role": "model", "parts": items}]}
         )

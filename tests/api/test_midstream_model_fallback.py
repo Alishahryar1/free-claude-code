@@ -76,6 +76,61 @@ async def delivered_candidates(senders, wire, *, tools=None, history=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "case",
+    ["full", "summary", "summary_empty_text", "text_empty_part", "summary_whitespace"],
+)
+async def test_messages_fallback_accepts_partial_output_slots(wire, case):
+    prefix = (
+        "Half"
+        if case == "text_empty_part"
+        else "   "
+        if case == "summary_whitespace"
+        else ""
+    )
+    if case == "text_empty_part":
+        first = text_events("responses", prefix, complete=False)
+        first.append({**first[2], "content_index": 1})
+    else:
+        first = reasoning_events(
+            field="content" if case == "full" else "summary", closed=False
+        )
+        if case in {"summary_empty_text", "summary_whitespace"}:
+            tail = text_events("responses", prefix, complete=False)[1:]
+            for event in tail:
+                event["output_index"] = 1
+            first.extend(tail)
+    first = [{**event, "sequence_number": index} for index, event in enumerate(first)]
+    async with (
+        _harness("responses", lambda _: (200, first), max_attempts=1) as (
+            primary,
+            _,
+            _,
+        ),
+        _harness(
+            "messages",
+            lambda _: (200, text_events("messages", "Recovered.")),
+            max_attempts=1,
+        ) as (fallback, bodies, _),
+    ):
+        raw = await delivered_candidates([primary, fallback], wire)
+    events = parse_sse_text(raw)
+    assert len(bodies) == 1
+    assert_completed(events, wire)
+    assert public_text(events, wire) == prefix + "Recovered."
+    for message in bodies[0]["messages"]:
+        if message.get("role") == "assistant":
+            assert all(
+                block.get("text") != ""
+                for block in message["content"]
+                if block.get("type") == "text"
+            )
+    if wire == "responses" and case != "full":
+        assert "Find 17." not in str(bodies[0]["messages"])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
