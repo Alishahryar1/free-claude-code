@@ -1,7 +1,7 @@
 """Map continuation events into an existing public response lifecycle."""
 
 from copy import deepcopy
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4, uuid5
 
 from .continuation_overlap import ContinuationOverlap
@@ -24,8 +24,8 @@ class ContinuationStream:
         self._offset = 0
         self._namespace = uuid4()
         self._boundary: list[dict[str, Any]] = []
-        self._expected = ""
-        self._overlap = ContinuationOverlap("")
+        self._expected: dict[Literal["text", "thinking", "summary"], str] = {}
+        self._overlaps: list[ContinuationOverlap] = []
         self._initial_progress = 0
         self._prefix_items: list[dict[str, Any]] = []
 
@@ -38,7 +38,12 @@ class ContinuationStream:
         self.handoff = handoff
         self._offset = max(self.delivered.items, default=-1) + 1
         self._boundary = self.delivered.closing_events()
-        self._expected = self.delivered.snapshot().text
+        prefix = self.delivered.snapshot().continuation
+        assert prefix is not None
+        self._expected = {
+            channel: prefix.readable_text(channel)
+            for channel in ("text", "thinking", "summary")
+        }
         self.restart_attempt()
         finalized = deepcopy(self.delivered.items)
         for event in self._boundary:
@@ -49,7 +54,10 @@ class ContinuationStream:
     def restart_attempt(self) -> None:
         """Replace an invisible attempt without losing its finalized prefix."""
         self._namespace = uuid4()
-        self._overlap = ContinuationOverlap(self._expected)
+        self._overlaps = [
+            ContinuationOverlap(expected, channel=channel)
+            for channel, expected in self._expected.items()
+        ]
         self._initial_progress = self.delivered.progress
 
     def boundary(self) -> list[dict[str, Any]]:
@@ -86,7 +94,10 @@ class ContinuationStream:
             "response.in_progress",
         }:
             return []
-        events = [deepcopy(payload)] if self.handoff else self._overlap.feed(payload)
+        events = [deepcopy(payload)]
+        if not self.handoff:
+            for overlap in self._overlaps:
+                events = [ready for event in events for ready in overlap.feed(event)]
         return [self._map(event) for event in events]
 
     def _map(self, data: dict[str, Any]) -> dict[str, Any]:

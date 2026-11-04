@@ -3,10 +3,12 @@
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import replace
 from typing import Literal
 
-from .history_replay import ReplayRecord, encode_replay
+from .gemini.replay import ReplayBundle, encode_bundle
+from .history_replay import ReplayRecord, encode_replay, readable_reasoning
 from .stream_recovery import RECOVERY_RETENTION_BYTES, DeliveredPrefix
 
 
@@ -49,9 +51,44 @@ class StreamDeliveryState:
             self.replay_exhausted
             or size + prefix.retained_bytes > RECOVERY_RETENTION_BYTES
         )
+        records = () if limited else self._committed_replay + current
+        continuation = prefix.continuation
+        if records and continuation is not None and continuation.wire_api == "gemini":
+            covered = "".join(
+                text
+                for record in records
+                for text, _ in readable_reasoning(record.native)
+            )
+            # Completed metadata can precede Gemini's final public bundle. Use
+            # it once in the native suffix, removing only its proven prefix echo.
+            # An unmatched visible thought remains authoritative for recovery.
+            if not prefix.thinking or prefix.thinking.startswith(covered):
+                remaining = len(covered) if prefix.thinking else 0
+                parts = []
+                for item in deepcopy(continuation.items):
+                    if (
+                        remaining
+                        and item.get("thought")
+                        and isinstance(text := item.get("text"), str)
+                    ):
+                        size = min(len(text), remaining)
+                        item["text"] = text[size:]
+                        remaining -= size
+                        if not item["text"] and set(item) <= {"thought", "text"}:
+                            continue
+                    parts.append(item)
+                parts.append(
+                    {
+                        "thoughtSignature": encode_bundle(
+                            ReplayBundle("continuation", records, ())
+                        )
+                    }
+                )
+                continuation = replace(continuation, items=tuple(parts))
         return replace(
             prefix,
-            replay_records=() if limited else self._committed_replay + current,
+            replay_records=records,
+            continuation=continuation,
             eligible=prefix.eligible and not limited,
             can_handoff=prefix.can_handoff and not limited,
             unsafe_reason="retention_limit" if limited else prefix.unsafe_reason,

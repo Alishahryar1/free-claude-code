@@ -22,7 +22,11 @@ from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.application.test_execution import _routed_request, _target
-from tests.providers.support import make_provider_config, without_empty_reasoning
+from tests.providers.support import (
+    assistant_history_text,
+    make_provider_config,
+    without_empty_reasoning,
+)
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
 
@@ -35,8 +39,9 @@ def release_provider_events(monkeypatch):
     )
 
 
-async def delivered_candidates(senders, wire, *, tools=None):
-    history = [{"role": "user", "content": "greet"}]
+async def delivered_candidates(senders, wire, *, tools=None, history=None):
+    if history is None:
+        history = [{"role": "user", "content": "greet"}]
 
     async def open_candidate(index, candidate, continuation=None):
         return senders[index](
@@ -99,8 +104,9 @@ async def test_exhausted_model_continues_on_next_candidate(source, target, wire)
     assert public_text(events, wire) == "Hello there. Done."
     body = second_bodies[0]
     history = without_empty_reasoning(body.get("messages", body.get("input")))
-    assert len(history) == 3
-    assert "Hello there. " in str(history[-2])
+    assert history[0]["role"] == "user" and "greet" in str(history[0]["content"])
+    assert assistant_history_text(history) == "Hello there. "
+    assert sum(row.get("role") == "user" for row in history) == 2
     assert body["tools"]
     if wire == "responses":
         assert (
@@ -136,7 +142,10 @@ async def test_fallback_preserves_readable_reasoning_without_a_heading(target, w
     history = bodies[0].get("messages", bodies[0].get("input"))
     content = history[-1]["content"]
     instruction = content if isinstance(content, str) else content[0]["text"]
-    assert instruction.split("\n\n", 1)[0] == "Find 17."
+    assert "Find 17." not in instruction
+    assert ("Find 17." in str(history[:-1])) is not (
+        wire == "responses" and target == "messages"
+    )
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello world."
@@ -200,8 +209,8 @@ async def test_each_model_receives_the_latest_prefix_and_its_own_budget(wire):
         (third_bodies[0], "One two three "),
     ]:
         history = without_empty_reasoning(body.get("messages", body.get("input")))
-        assert len(history) == 3
-        assert expected in str(history[-2])
+        assert sum(row.get("role") == "user" for row in history) == 2
+        assert assistant_history_text(history) == expected
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == "One two three four."

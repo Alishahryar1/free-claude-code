@@ -166,7 +166,7 @@ def test_late_snapshot_cannot_rewrite_a_decided_prefix(change):
         extra = deepcopy(items[0])
         extra["id"] = "msg_late"
         items.insert(0, extra)
-    with pytest.raises(ExecutionFailure, match="observed answer prefix"):
+    with pytest.raises(ExecutionFailure, match=r"observed .* prefix"):
         overlap.feed(terminal)
 
 
@@ -176,7 +176,7 @@ def test_terminal_cannot_omit_pending_source_text():
     for event in source[:-1]:
         overlap.feed(event)
     source[-1]["response"]["output"] = []
-    with pytest.raises(ExecutionFailure, match="observed answer prefix"):
+    with pytest.raises(ExecutionFailure, match=r"observed .* prefix"):
         overlap.feed(source[-1])
 
 

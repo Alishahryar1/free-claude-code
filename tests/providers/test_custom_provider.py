@@ -13,10 +13,10 @@ from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
-from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
+from tests.providers.support import continuation_seed
 
 pytestmark = pytest.mark.asyncio
 
@@ -465,7 +465,7 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
     try:
         policy = ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM)
         continuation = (
-            ContinuationSeed("Prefix text", "Prior reasoning") if seeded else None
+            continuation_seed("Prefix text", "Prior reasoning") if seeded else None
         )
         if ingress == "messages":
             request = MessagesRequest(
@@ -500,7 +500,8 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
         if seeded:
             history = body.get("messages", body.get("input"))
             assert "Prefix text" in str(history[-2])
-            assert "Prior reasoning" in str(history[-1])
+            assert "Prior reasoning" in str(history[:-1])
+            assert "Prior reasoning" not in str(history[-1])
             assert "Prefix text" not in str(request.model_dump())
         if ingress == "responses" and api_format == "openai_responses":
             assert body["reasoning"]["effort"] == "medium"

@@ -9,6 +9,7 @@ from free_claude_code.core.history_replay import (
     HistoryMode,
     HistoryPath,
     ReplayOrigin,
+    normalize_history_source,
     prepare_history,
     resolve_messages_replay,
 )
@@ -108,8 +109,11 @@ class HistoryNegotiation:
         reasoning_field: str = "reasoning_content",
         structured_details: bool = True,
         finalize: Callable[[JsonObject], JsonObject] | None = None,
+        continuation: bool = False,
     ) -> JsonObject:
-        self._source = resolve_history_overrides(body)
+        self._source = normalize_history_source(
+            resolve_history_overrides(body), origin.protocol
+        )
         origin = replace(origin, model=str(self._source["model"]))
         if origin.protocol == "messages":
             messages = self._source.get("messages")
@@ -141,6 +145,7 @@ class HistoryNegotiation:
                 reasoning_field=reasoning_field,
                 structured_details=structured_details,
                 source_paths=paths,
+                continuation=continuation,
             )
             return finalize(projected) if finalize is not None else projected
 

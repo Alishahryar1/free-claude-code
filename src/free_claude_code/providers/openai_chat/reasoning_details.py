@@ -5,7 +5,11 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
-from free_claude_code.core.history_replay import readable_reasoning
+from free_claude_code.core.history_replay import (
+    ReplayRecord,
+    encode_replay,
+    readable_reasoning,
+)
 from free_claude_code.core.json_types import JsonObject
 
 from .stream_output import ChatStreamOutput
@@ -21,7 +25,7 @@ class _ReasoningGroup:
     output_sources: dict[tuple[str, int], int] = field(default_factory=dict)
     output_reasoning: bool = True
     after_content: bool = False
-    # Retain native phase transitions without using that field for publication.
+    # Publish the first readable source while later aliases retain native metadata.
     native_primary: bool | None = None
 
 
@@ -89,10 +93,11 @@ class StructuredReasoningStream:
             elif any(_reasoning_detail_text(detail) for detail in details):
                 group.native_primary = False
         if native_reasoning is not None:
-            # This may be an aggregate alias of signed details arriving later.
+            # Later structured details can be aliases, but must not delay the
+            # readable source that the provider is already streaming.
             group.native_parts.append(native_reasoning)
             group.native_fields.setdefault(native_field, []).append(native_reasoning)
-            if not self._structured_details and output_reasoning and native_reasoning:
+            if group.native_primary and output_reasoning and native_reasoning:
                 yield from output.ensure_reasoning_block()
                 yield output.emit_reasoning_delta(native_reasoning)
                 key = ("native", 0)
@@ -133,6 +138,7 @@ class StructuredReasoningStream:
                 if (
                     output_reasoning
                     and not group.after_content
+                    and not group.native_primary
                     and (text := _reasoning_detail_text(detail))
                 ):
                     visible_parts.append(
@@ -159,7 +165,12 @@ class StructuredReasoningStream:
             for slot, detail in enumerate(group.details)
             if (text := _reasoning_detail_text(detail))
         ]
+        aliases = _native_aliases(group)
         for key, text, summary in typed:
+            if key in aliases:
+                group.output_sources[key] = 0
+                group.visible_parts[key] = text
+                continue
             yield from self._remaining_part(output, group, key, text, summary=summary)
             group.visible_parts[key] = text
         represented = set(group.visible_parts.values())
@@ -208,6 +219,23 @@ class StructuredReasoningStream:
             captured = (
                 completed and bool(native) and output.capture_reasoning_record(native)
             )
+            if (
+                completed
+                and not captured
+                and output.replay_origin
+                and any(
+                    _reasoning_detail_opaque(group.details[slot])
+                    for _, slot in _native_aliases(group)
+                )
+            ):
+                # The readable aggregate was already published. Preserve later
+                # per-part signatures in one exact record attached to that same
+                # block, rather than publishing the thinking a second time.
+                yield from output.complete_reasoning_record(
+                    [encode_replay(ReplayRecord(output.replay_origin, native))],
+                    source=0,
+                )
+                captured = True
             for slot, detail in enumerate(group.details):
                 if detail.get("type") != "reasoning.text":
                     continue
@@ -237,6 +265,29 @@ class StructuredReasoningStream:
                 if completed and not captured
                 else []
             )
+
+
+def _native_aliases(group: _ReasoningGroup) -> set[tuple[str, int]]:
+    published = group.visible_parts.get(("native", 0))
+    if not group.native_primary or not published:
+        return set()
+    aliases = set()
+    for summary in (None, False, True):
+        parts = [
+            (("detail", slot), text)
+            for slot, detail in enumerate(group.details)
+            if (text := _reasoning_detail_text(detail))
+            and (
+                summary is None
+                or (detail.get("type") == "reasoning.summary") == summary
+            )
+        ]
+        if published in {
+            "".join(text for _, text in parts),
+            "\n\n".join(text for _, text in parts),
+        }:
+            aliases.update(key for key, _ in parts)
+    return aliases
 
 
 def _output_source(group: _ReasoningGroup, key: tuple[str, int]) -> int:

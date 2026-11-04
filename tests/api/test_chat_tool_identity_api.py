@@ -230,10 +230,17 @@ def test_gemini_unresolvable_calls_cannot_complete(
         monkeypatch, events, wire, streaming, max_attempts=1
     )
     assert len(sent) == 1
-    # The public tool buffer has not committed a response, so failure can
-    # still be reported as an HTTP error for streaming requests too.
-    assert response.status_code == 502
-    assert isinstance(response.json().get("error"), dict)
+    if streaming:
+        # Lifecycle metadata is immediate, while unfinished calls stay private.
+        assert response.status_code == 200
+        output = parse_sse_text(response.text)
+        assert output[-1].event == (
+            "error" if wire == "messages" else "response.failed"
+        )
+        assert "call_a" not in response.text and "call_b" not in response.text
+    else:
+        assert response.status_code == 502
+        assert isinstance(response.json().get("error"), dict)
 
 
 def completed_arguments(events, wire):
@@ -326,12 +333,12 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
             send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)), wire
         )
 
-    # Structured records retain the existing conservative recovery policy.
-    retry = stop is None and max_attempts > 1 and prefix != "reasoning_details"
+    # Unsigned readable reasoning follows the same continuation policy as text.
+    retry = stop is None and max_attempts > 1
     assert len(bodies) == (2 if retry else 1)
     assert "call_abandoned" not in result
     events = parse_sse_text(result)
-    visible_prefix = prefix in {"content", "reasoning_details"}
+    visible_prefix = prefix is not None
     assert ("already visible" in result) == visible_prefix
     if retry:
         assert completed_arguments(events, wire) == '{"path":"winning"}'

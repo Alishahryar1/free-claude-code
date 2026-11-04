@@ -21,6 +21,7 @@ from tests.api.test_hidden_stream_retries import delivered, partial_tool
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.support import (
+    assistant_history_text,
     immediate_admission,
     make_provider_config,
     without_empty_reasoning,
@@ -313,8 +314,9 @@ async def test_repeated_interruption_uses_latest_prefix_and_one_budget(protocol,
     history = without_empty_reasoning(
         bodies[-1].get("messages", bodies[-1].get("input"))
     )
-    assert len(history) == 3
-    assert "One two " in str(history)
+    assert history[0] == bodies[0].get("messages", bodies[0].get("input"))[0]
+    assert sum(row.get("role") == "user" for row in history) == 2
+    assert assistant_history_text(history) == "One two "
 
 
 @pytest.mark.asyncio
@@ -753,10 +755,9 @@ async def test_readable_thinking_retries_or_continues_into_text(wire, structured
     assert_completed(events, wire)
     assert public_text(events, wire) == "Answer."
     assert len(bodies) == 2
-    assert (thought in result) == (not structured)
-    assert (thought in str(bodies[-1])) == (not structured)
-    if structured:
-        assert bodies[0] == bodies[1]
+    assert thought in result
+    assert thought in str(bodies[-1])
+    assert bodies[0] != bodies[1]
 
 
 @pytest.mark.asyncio

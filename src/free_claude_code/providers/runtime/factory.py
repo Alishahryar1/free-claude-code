@@ -37,7 +37,10 @@ def _load_anthropic() -> ProviderFactory:
         history_cache: HistoryModeCache | None = None,
     ) -> BaseProvider:
         return AnthropicProvider(
-            config, workspace_id=settings.anthropic_workspace_id, admission=admission
+            config,
+            workspace_id=settings.anthropic_workspace_id,
+            admission=admission,
+            history_cache=history_cache,
         )
 
     return construct
@@ -340,7 +343,10 @@ def prepare_provider(
             )
             admission = admission_registry.get(provider_id, api_key=config.api_key)
             return CustomProvider(
-                config, definition=custom_definition, admission=admission
+                config,
+                definition=custom_definition,
+                admission=admission,
+                history_cache=history_cache,
             )
 
         return construct_custom

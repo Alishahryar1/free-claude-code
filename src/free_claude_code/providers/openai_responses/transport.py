@@ -384,15 +384,11 @@ class OpenAIResponsesTransport:
             execution, endpoint=endpoint, stream=recovery
         )
         corrections = RequestCorrections("responses", reasoning_correction)
+        body = resolve_history_overrides(body)
         continuation_request = ContinuationRequest("responses")
         operation_kind = ProviderOperationKind.GENERATION
         if continuation is not None:
-            body = continuation_request.build(
-                body,
-                continuation.text,
-                continuation.thinking,
-                replay_records=continuation.replay_records,
-            )
+            body = continuation_request.build(body, continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
         trace_event(
             stage="provider",
@@ -435,7 +431,10 @@ class OpenAIResponsesTransport:
                     endpoint=endpoint.snapshot if endpoint is not None else None,
                 )
                 sent_body = corrections.prepare_history(
-                    body, origin, self._history_cache
+                    body,
+                    origin,
+                    self._history_cache,
+                    continuation=operation_kind is ProviderOperationKind.CONTINUATION,
                 )
                 presenter = presenter_factory(
                     operation_kind is ProviderOperationKind.GENERATION, origin

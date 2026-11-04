@@ -61,9 +61,11 @@ class GeminiOutput:
         self.records: list[ReplayRecord] = []
         self.calls: list[CallReplay] = []
         self.completed = False
-        self._thought_digest = sha256()
-        self._has_thoughts = False
         self._delivery = current_stream_delivery()
+        prefix = self._delivery.prefix if self._delivery is not None else None
+        previous = prefix.thinking if prefix is not None else ""
+        self._thought_digest = sha256(previous.encode("utf-8"))
+        self._has_thoughts = bool(previous)
 
     def capture(self, record: ReplayRecord) -> None:
         self.records.append(record)

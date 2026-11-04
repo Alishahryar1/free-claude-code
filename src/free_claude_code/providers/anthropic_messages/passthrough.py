@@ -85,9 +85,7 @@ async def stream_native_messages(
         continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
         if continuation is not None:
-            body = continuation_request.build(
-                body, continuation.text, continuation.thinking
-            )
+            body = continuation_request.build(body, continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
         while execution.can_attempt:
             normal_stop_seen = False
@@ -102,7 +100,12 @@ async def stream_native_messages(
                 origin = replay_origin(
                     provider_name, "messages", str(body["model"]), endpoint=endpoint
                 )
-                sent_body = corrections.prepare_history(body, origin, cache)
+                sent_body = corrections.prepare_history(
+                    body,
+                    origin,
+                    cache,
+                    continuation=operation_kind is ProviderOperationKind.CONTINUATION,
+                )
                 response = scope.retain(
                     await client.send(
                         client.build_request(

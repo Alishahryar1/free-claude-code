@@ -25,12 +25,14 @@ from free_claude_code.core.anthropic.streaming import (
     ToolSchema,
     accept_tool_json_repair,
     continuation_suffix,
-    make_response_recovery_body,
-    make_text_recovery_body,
     make_tool_repair_body,
     map_stop_reason,
     parse_complete_tool_input,
     tool_schemas_by_name,
+)
+from free_claude_code.core.continuation_request import (
+    make_response_recovery_body,
+    make_text_recovery_body,
 )
 from free_claude_code.core.diagnostics import (
     exception_cause_types,
@@ -662,6 +664,8 @@ class OpenAIChatTransport:
                         self._history_cache,
                         reasoning_field=self._profile.request_policy.reasoning_replay.value,
                         structured_details=self._profile.structured_reasoning_details,
+                        continuation=operation_kind
+                        is ProviderOperationKind.CONTINUATION,
                         finalize=lambda projected, origin=origin: (
                             self._behavior.prepare_history_body(
                                 cast(
@@ -1069,16 +1073,11 @@ class _OpenAIChatStreamRunner:
             if event:
                 yield from recovery.push(event)
 
-        body = self._body
+        body = resolve_history_overrides(self._body)
         continuation_request = ContinuationRequest("chat")
         operation_kind = ProviderOperationKind.GENERATION
         if self._continuation is not None:
-            body = continuation_request.build(
-                body,
-                self._continuation.text,
-                self._continuation.thinking,
-                replay_records=self._continuation.replay_records,
-            )
+            body = continuation_request.build(body, self._continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
         request_stream_usage(body)
         output_reasoning = self._reasoning.output_enabled

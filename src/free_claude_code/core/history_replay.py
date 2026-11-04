@@ -284,7 +284,7 @@ def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
                 for part in parts
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
             )
-            if text and text not in {value for value, _ in fields}:
+            if text:
                 fields.append((text, key == "summary"))
     if fields:
         return fields
@@ -332,15 +332,15 @@ def has_readable_replay(value: object) -> bool:
     )
 
 
-def unencrypted_responses_replay(value: object) -> ReplayRecord | None:
-    """Identify local Responses carriers without native encrypted reasoning."""
+def unprotected_replay(value: object) -> ReplayRecord | None:
+    """Identify local carriers whose native records contain editable reasoning."""
     if not isinstance(value, str) or not is_replay(value):
         return None
     try:
         record = decode_replay(value)
     except HistoryReplayError:
         return None
-    if record.origin.protocol != "responses" or record.native.get("encrypted_content"):
+    if protected_reasoning(record.native):
         return None
     return record
 
@@ -461,6 +461,16 @@ def protected_reasoning(item: Mapping[str, JsonValue]) -> bool:
     )
 
 
+def normalize_history_source(
+    body: Mapping[str, JsonValue], protocol: HistoryProtocol
+) -> JsonObject:
+    """Own the input shape used by both projection paths and corrections."""
+    result = deepcopy(dict(body))
+    if protocol == "responses" and isinstance(result.get("input"), dict):
+        result["input"] = [result["input"]]
+    return result
+
+
 def prepare_history(
     body: Mapping[str, JsonValue],
     destination: ReplayOrigin,
@@ -469,22 +479,23 @@ def prepare_history(
     reasoning_field: str = "reasoning_content",
     structured_details: bool = True,
     source_paths: dict[HistoryPath, HistoryPath] | None = None,
+    continuation: bool = False,
 ) -> JsonObject:
     """Restore native records and project readable history on a fresh wire copy.
 
     Source paths identify original records for precise corrections after filtering.
     They are request-local metadata, never fields in the outgoing JSON.
     """
-    result = deepcopy(dict(body))
+    result = normalize_history_source(body, destination.protocol)
     paths = source_paths if source_paths is not None else {}
     paths.clear()
     if destination.protocol == "responses":
-        _prepare_response_history(result, destination, scope, paths)
+        _prepare_response_history(result, destination, scope, paths, continuation)
         return result
     messages = result.get("messages")
     if not isinstance(messages, list):
         return result
-    last_user = _last_user(messages)
+    last_user = _last_user(messages[:-1] if continuation else messages)
     projected: list[JsonValue] = []
     for index, message in enumerate(messages):
         output_index = len(projected)
@@ -578,13 +589,14 @@ def _prepare_response_history(
     destination: ReplayOrigin,
     scope: HistoryMode,
     paths: dict[HistoryPath, HistoryPath],
+    continuation: bool,
 ) -> None:
     items = body.get("input")
     if isinstance(items, dict):
         items = [items]
     if not isinstance(items, list):
         return
-    last_user = _last_user(items)
+    last_user = _last_user(items[:-1] if continuation else items)
     projected: list[JsonValue] = []
     index = 0
     while index < len(items):

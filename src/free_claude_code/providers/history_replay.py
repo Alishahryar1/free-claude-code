@@ -20,6 +20,8 @@ from free_claude_code.core.history_replay import (
     decode_replay,
     encode_replay,
     is_replay,
+    normalize_history_source,
+    protected_reasoning,
     readable_reasoning,
     resolve_messages_replay,
 )
@@ -50,13 +52,35 @@ def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
     messages = []
     try:
         for message in request.messages:
-            if message.role != "assistant" or isinstance(message.content, str):
+            if message.role != "assistant":
                 messages.append(message)
                 continue
             body = message.model_dump(mode="json")
-            body["content"] = resolve_messages_replay(
-                cast(list[JsonValue], body["content"])
-            )
+            blocks = body["content"]
+            if isinstance(blocks, list):
+                blocks = resolve_messages_replay(cast(list[JsonValue], blocks))
+            if message.reasoning_content is not None:
+                if isinstance(blocks, str):
+                    blocks = [{"type": "text", "text": blocks}] if blocks else []
+                represented: set[str] = set()
+                for block in blocks:
+                    if not isinstance(block, dict):
+                        continue
+                    native = block
+                    carrier = block.get("signature", block.get("data"))
+                    if isinstance(carrier, str) and is_replay(carrier):
+                        native = decode_replay(carrier).native
+                    represented.update(
+                        text
+                        for text, summary in readable_reasoning(native)
+                        if not summary
+                    )
+                if message.reasoning_content not in represented:
+                    blocks.insert(
+                        0, {"type": "thinking", "thinking": message.reasoning_content}
+                    )
+                body["reasoning_content"] = None
+            body["content"] = blocks
             messages.append(Message.model_validate(body))
     except HistoryReplayError as error:
         raise InvalidRequestError(str(error)) from error
@@ -132,6 +156,9 @@ def history_retry_body(
     source_paths: Mapping[HistoryPath, HistoryPath] | None = None,
 ) -> dict[str, Any] | None:
     """Repair one explicitly rejected historical record on an independent copy."""
+    body = normalize_history_source(body, protocol)
+    if source is not None:
+        source = normalize_history_source(source, protocol)
     detail = extract_upstream_error_detail(error)
     if detail.status_code not in {None, 200, 400, 422}:
         return None
@@ -169,12 +196,16 @@ def history_retry_body(
         if matched is None:
             continue
         path, original = matched
+        if invalid_native and not protected_reasoning(original):
+            # A readable-only rejection belongs to mode negotiation, not opaque
+            # state repair. In particular, never turn partial thinking into prose.
+            continue
         if source is not None:
             mapped = source_paths.get(path) if source_paths is not None else None
             if mapped is None:
                 continue
             path = mapped
-        result = deepcopy(dict(source if source is not None else body))
+        result: dict[str, Any] = deepcopy(dict(source if source is not None else body))
         parent: Any = result
         for key in path[:-1]:
             parent = parent[key]

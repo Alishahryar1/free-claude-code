@@ -328,3 +328,51 @@ async def test_history_cache_survives_settings_and_key_replacement_but_clears_on
         await lease.release()
         await manager.close()
     assert HistoryNegotiation(cache, origin).mode is HistoryMode.ALL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind", ["anthropic", "openai_chat", "openai_responses", "anthropic_messages"]
+)
+async def test_exceptional_factories_retain_history_cache_across_replacement(kind):
+    from free_claude_code.core.history_replay import HistoryMode
+    from tests.config.test_custom_providers import definition
+
+    custom = definition(
+        api_format=kind if kind != "anthropic" else "openai_chat", api_key="first"
+    )
+    settings = Settings(
+        anthropic_api_keys="first",
+        custom_providers=() if kind == "anthropic" else (custom,),
+    )
+    provider_id = "anthropic" if kind == "anthropic" else custom.provider_id
+    manager = ProviderRuntimeManager(settings)
+    lease = await manager.acquire()
+    cache = manager._history_cache
+    key = (provider_id, "https://provider.test", "messages", "model")
+    cache.update(key, 0, HistoryMode.NONE)
+    try:
+        old = await manager._current.runtime.resolve_provider(provider_id)
+        assert old._history_cache is cache
+        replacement = settings.model_copy(
+            update={
+                "anthropic_api_keys": Settings(
+                    anthropic_api_keys="second"
+                ).anthropic_api_keys,
+                "custom_providers": ()
+                if kind == "anthropic"
+                else (custom.model_copy(update={"api_key": "second"}),),
+            }
+        )
+        with patch.object(
+            type(old), "list_model_infos", AsyncMock(return_value=frozenset())
+        ):
+            await manager.replace(replacement, commit=AsyncMock())
+            new = await manager._current.runtime.resolve_provider(provider_id)
+        assert new is not old
+        assert new._history_cache is cache
+        assert new._history_cache.read(key).mode is HistoryMode.NONE
+    finally:
+        await lease.release()
+        await manager.close()
+    assert cache.read(key).mode is None

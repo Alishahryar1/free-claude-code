@@ -506,8 +506,8 @@ async def test_typed_upstream_failure_qualifies_before_wire_error(
         {
             "type": "error",
             "error": {
-                "type": "overloaded_error" if retryable else "authentication_error",
-                "message": "temporary overload" if retryable else "unauthorized",
+                "type": "overloaded_error" if retryable else "invalid_request_error",
+                "message": "temporary overload" if retryable else "invalid request",
             },
         }
         if protocol == "messages"

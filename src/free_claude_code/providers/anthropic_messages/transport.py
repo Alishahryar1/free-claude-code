@@ -353,12 +353,7 @@ class AnthropicMessagesTransport:
         continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
         if continuation is not None:
-            body = continuation_request.build(
-                body,
-                continuation.text,
-                continuation.thinking,
-                replay_records=continuation.replay_records,
-            )
+            body = continuation_request.build(body, continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
         source: SourceRecoveryState | None = None
         while execution.can_attempt:
@@ -384,7 +379,10 @@ class AnthropicMessagesTransport:
                     endpoint=endpoint,
                 )
                 sent_body = corrections.prepare_history(
-                    body, origin, self._history_cache
+                    body,
+                    origin,
+                    self._history_cache,
+                    continuation=operation_kind is ProviderOperationKind.CONTINUATION,
                 )
                 presenter = presenter_factory(origin)
                 headers = httpx.Headers(

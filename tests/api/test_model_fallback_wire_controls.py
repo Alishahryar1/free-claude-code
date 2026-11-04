@@ -30,7 +30,7 @@ from tests.api.test_delivered_stream_recovery import (
     text_events,
 )
 from tests.api.test_hidden_stream_retries import delivered
-from tests.providers.support import immediate_admission
+from tests.providers.support import assistant_history_text, immediate_admission
 from tests.providers.test_custom_provider import completion, definition, provider
 from tests.web_tools_support import StubWebToolsClient
 
@@ -272,7 +272,7 @@ async def test_candidate_efforts_survive_retry_and_continuation(monkeypatch, wir
             ("low", "low"),
             ("inherited", "high"),
         ]
-        assert "Hello there. " in str(bodies[2]["input"])
-        assert "Low work. " in str(bodies[4]["input"])
+        assert assistant_history_text(bodies[2]["input"]) == "Hello there. "
+        assert assistant_history_text(bodies[4]["input"]) == "Hello there. Low work. "
     finally:
         await instance.cleanup()

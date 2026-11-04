@@ -20,7 +20,6 @@ from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
 )
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
-from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.lmstudio import LMStudioProvider
 from tests.application.test_execution import (
@@ -35,6 +34,7 @@ from tests.providers.support import (
     REASONING_OFF,
     REASONING_ON,
     SDKStreamDouble,
+    continuation_seed,
     immediate_admission,
     make_provider_config,
 )
@@ -401,7 +401,7 @@ async def test_continuation_prefix_counts_before_generation(lmstudio_provider, w
         await anext(
             getattr(lmstudio_provider, f"stream_{wire}")(
                 request,
-                continuation=ContinuationSeed("large " * 10000, "consider this"),
+                continuation=continuation_seed("large " * 10000, "consider this"),
             )
         )
     assert error.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED

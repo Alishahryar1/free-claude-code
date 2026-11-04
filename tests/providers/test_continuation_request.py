@@ -13,7 +13,9 @@ from free_claude_code.core.history_replay import (
     encode_replay,
     prepare_history,
 )
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.continuation import ContinuationRequest
+from tests.providers.support import assistant_history_text, continuation_seed
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
@@ -35,7 +37,7 @@ def test_next_continuation_preserves_corrected_history_and_options(
     }
     original = deepcopy(body)
     request = ContinuationRequest(protocol)
-    first = request.build(body, initial_text, "First thought.")
+    first = request.build(body, continuation_seed(initial_text, "First thought."))
     assert body == original
     corrected = deepcopy(first)
     # An accepted correction can remove a historical row and change request options.
@@ -45,37 +47,48 @@ def test_next_continuation_preserves_corrected_history_and_options(
     del corrected["temperature"]
     corrected["max_tokens"] = 200
     before = deepcopy(corrected)
-    second = request.build(corrected, "First answer.", "First thought. Second thought.")
+    second = request.build(
+        corrected, continuation_seed("First answer.", "First thought. Second thought.")
+    )
     assert corrected == before
-    assert second[field][:-2] == [user_turn]
+    assert second[field][0] == user_turn
+    assert assistant_history_text(second[field]) == "First answer."
+    assert sum(row.get("role") == "user" for row in second[field]) == 2
     assert second["max_tokens"] == 200
     assert second["extra_body"] == {"retained": True}
     assert "reasoning" not in second and "temperature" not in second
     assert "First answer." in str(second[field][-2])
-    assert "First thought. Second thought." in str(second[field][-1])
-    assert request.build(second, "First answer. More.", "")[field][:-2] == [user_turn]
+    assert "First thought. Second thought." in str(second[field][:-1])
+    assert "First thought." not in str(second[field][-1])
+    assert request.build(second, continuation_seed("First answer. More."))[field][
+        :-2
+    ] == [user_turn]
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 def test_original_turns_matching_private_instruction_are_preserved(protocol):
     field = "input" if protocol == "responses" else "messages"
-    instruction_turn = ContinuationRequest(protocol).build({field: []}, "", "")[field][
-        -1
-    ]
+    instruction_turn = ContinuationRequest(protocol).build(
+        {field: []}, continuation_seed()
+    )[field][-1]
     body = {field: [instruction_turn, {"role": "user", "content": "Continue"}]}
     original = deepcopy(body)
     request = ContinuationRequest(protocol)
-    first = request.build(body, "One", "")
-    second = request.build(first, "One two", "")
+    first = request.build(body, continuation_seed("One"))
+    second = request.build(first, continuation_seed("One two"))
     assert second[field][:-2] == original[field]
     assert body == original
 
 
 def test_responses_string_input_is_preserved_across_continuations():
     request = ContinuationRequest("responses")
-    first = request.build({"input": "Original prompt"}, "", "A thought.")
-    second = request.build(first, "Answer", "A thought.")
-    assert second["input"][:-2] == [{"role": "user", "content": "Original prompt"}]
+    first = request.build(
+        {"input": "Original prompt"}, continuation_seed(thinking="A thought.")
+    )
+    second = request.build(first, continuation_seed("Answer", "A thought."))
+    assert second["input"][0] == {"role": "user", "content": "Original prompt"}
+    assert assistant_history_text(second["input"]) == "Answer"
+    assert str(second["input"]).count("A thought.") == 1
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
@@ -86,10 +99,24 @@ def test_native_continuation_carriers_project_and_replace_as_one_suffix(protocol
     original = {field: [{"role": "user", "content": "hello"}]}
     request = ContinuationRequest(protocol)
     first = request.build(
-        original, "First", "retained native thought", replay_records=(record,)
+        original,
+        ContinuationSeed(
+            "messages",
+            (
+                {"type": "redacted_thinking", "data": encode_replay(record)},
+                {"type": "text", "text": "First"},
+            ),
+        ),
     )
     second = request.build(
-        first, "First second", "retained native thought", replay_records=(record,)
+        first,
+        ContinuationSeed(
+            "messages",
+            (
+                {"type": "redacted_thinking", "data": encode_replay(record)},
+                {"type": "text", "text": "First second"},
+            ),
+        ),
     )
     assert json.dumps(second).count(encode_replay(record)) == 1
     projected = prepare_history(

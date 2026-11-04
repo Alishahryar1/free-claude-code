@@ -125,6 +125,7 @@ class RequestCorrections:
         reasoning_field: str = "reasoning_content",
         structured_details: bool = True,
         finalize: Callable[[JsonObject], JsonObject] | None = None,
+        continuation: bool = False,
     ) -> JsonObject:
         if self.history is None:
             self.history = HistoryNegotiation(cache, origin)
@@ -134,6 +135,7 @@ class RequestCorrections:
             reasoning_field=reasoning_field,
             structured_details=structured_details,
             finalize=finalize,
+            continuation=continuation,
         )
 
     def accepted_history(self) -> None:

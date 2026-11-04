@@ -107,9 +107,8 @@ async def test_readable_reasoning_continues_from_released_content(field, closed,
     assert public_text(events, wire) == "Hello world."
     assert "Find 17." in str(bodies[1]["input"])
     assert "Hello " in str(bodies[1]["input"])
-    assert (
-        bodies[1]["input"][-1]["content"][0]["text"].split("\n\n", 1)[0] == "Find 17."
-    )
+    assert "Find 17." not in str(bodies[1]["input"][-1])
+    assert any(item.get("type") == "reasoning" for item in bodies[1]["input"])
 
 
 @pytest.mark.asyncio

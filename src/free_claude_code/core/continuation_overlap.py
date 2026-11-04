@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import simplejson
 
@@ -43,7 +43,10 @@ class _Frame:
 class ContinuationOverlap:
     """Own unpublished replay evidence, never the public response transcript."""
 
-    def __init__(self, expected: str) -> None:
+    def __init__(
+        self, expected: str, *, channel: Literal["text", "thinking", "summary"] = "text"
+    ) -> None:
+        self._channel = channel
         self._expected = expected
         self._pending = bool(expected)
         self._parts: dict[PartKey, _Part] = {}
@@ -55,19 +58,21 @@ class ContinuationOverlap:
     def feed(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         data = deepcopy(payload)
         block = data.get("content_block", {})
+        field = "thinking" if self._channel == "thinking" else "text"
         if (
-            data.get("type") == "content_block_start"
-            and block.get("type") == "text"
-            and block.get("text")
+            self._channel != "summary"
+            and data.get("type") == "content_block_start"
+            and block.get("type") == field
+            and block.get(field)
         ):
-            text, block["text"] = block["text"], ""
+            text, block[field] = block[field], ""
             return [
                 *self._feed(data),
                 *self._feed(
                     {
                         "type": "content_block_delta",
                         "index": data["index"],
-                        "delta": {"type": "text_delta", "text": text},
+                        "delta": {"type": f"{field}_delta", field: text},
                     }
                 ),
             ]
@@ -164,22 +169,25 @@ class ContinuationOverlap:
             return [
                 _Text(("gemini", 0), (0, 0), part, "text", delta=True)
                 for part in gemini_parts(data)
-                if "text" in part and not part.get("thought")
+                if "text" in part
+                and self._channel != "summary"
+                and bool(part.get("thought")) == (self._channel == "thinking")
             ]
         kind = data.get("type", "")
         index = data.get("index", 0)
+        field = "thinking" if self._channel == "thinking" else "text"
         if kind == "content_block_start":
             block = data.get("content_block", {})
             return (
-                [_Text((index, 0), (index, 0), block, "text")]
-                if block.get("type") == "text"
+                [_Text((index, 0), (index, 0), block, field)]
+                if self._channel != "summary" and block.get("type") == field
                 else []
             )
         if kind == "content_block_delta":
             delta = data.get("delta", {})
             return (
-                [_Text((index, 0), (index, 0), delta, "text", delta=True)]
-                if delta.get("type") == "text_delta"
+                [_Text((index, 0), (index, 0), delta, field, delta=True)]
+                if self._channel != "summary" and delta.get("type") == f"{field}_delta"
                 else []
             )
         if kind in {"response.completed", "response.incomplete"}:
@@ -189,40 +197,62 @@ class ContinuationOverlap:
             return texts
         item = data.get("item", {})
         if kind in {"response.output_item.added", "response.output_item.done"}:
-            if item.get("type") != "message":
+            if item.get("type") != (
+                "message" if self._channel == "text" else "reasoning"
+            ):
                 return []
             identity = self._identity(data, item)
             return self._item_texts(item, identity, data.get("output_index", 0))
+        text_event = {
+            "text": "response.output_text",
+            "thinking": "response.reasoning_text",
+            "summary": "response.reasoning_summary_text",
+        }[self._channel]
+        part_event = (
+            "response.reasoning_summary_part"
+            if self._channel == "summary"
+            else "response.content_part"
+        )
         if kind not in {
-            "response.content_part.added",
-            "response.content_part.done",
-            "response.output_text.delta",
-            "response.output_text.done",
+            f"{text_event}.delta",
+            f"{text_event}.done",
+            f"{part_event}.added",
+            f"{part_event}.done",
         }:
             return []
-        position = data.get("content_index", 0)
+        position = data.get(
+            "summary_index" if self._channel == "summary" else "content_index", 0
+        )
         key = (self._identity(data, {}), position)
         order = (data.get("output_index", 0), position)
-        if kind in {"response.output_text.delta", "response.output_text.done"}:
+        if kind in {f"{text_event}.delta", f"{text_event}.done"}:
             delta = kind.endswith(".delta")
             return [_Text(key, order, data, "delta" if delta else "text", delta=delta)]
         part = data.get("part", {})
         return (
             [_Text(key, order, part, "text")]
-            if part.get("type") == "output_text"
+            if part.get("type") == self._part_type
             else []
         )
 
-    @staticmethod
+    @property
+    def _part_type(self) -> str:
+        return {
+            "text": "output_text",
+            "thinking": "reasoning_text",
+            "summary": "summary_text",
+        }[self._channel]
+
     def _item_texts(
-        item: dict[str, Any], identity: int | str, index: int
+        self, item: dict[str, Any], identity: int | str, index: int
     ) -> list[_Text]:
-        if item.get("type") != "message":
+        if item.get("type") != ("message" if self._channel == "text" else "reasoning"):
             return []
+        field = "summary" if self._channel == "summary" else "content"
         return [
             _Text((identity, position), (index, position), part, "text")
-            for position, part in enumerate(item.get("content", []))
-            if part.get("type") == "output_text"
+            for position, part in enumerate(item.get(field) or [])
+            if part.get("type") == self._part_type
         ]
 
     def _close_parts(self, data: dict[str, Any], *, terminal: bool) -> None:
@@ -230,7 +260,8 @@ class ContinuationOverlap:
         identity = (
             self._identity(data, data.get("item", {}))
             if kind == "response.output_item.done"
-            and data.get("item", {}).get("type") == "message"
+            and data.get("item", {}).get("type")
+            == ("message" if self._channel == "text" else "reasoning")
             else data.get("index")
             if kind == "content_block_stop"
             else None
@@ -353,6 +384,6 @@ class ContinuationOverlap:
         raise ExecutionFailure(
             kind=FailureKind.UPSTREAM,
             status_code=502,
-            message="The continuation changed an already observed answer prefix.",
+            message="The continuation changed an already observed output prefix.",
             retryable=False,
         )

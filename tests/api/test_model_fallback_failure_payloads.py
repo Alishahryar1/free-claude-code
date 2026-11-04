@@ -316,7 +316,7 @@ async def test_fallback_timeout_before_its_first_frame_retains_prefix_and_closes
         max_attempts=1,
     ) as (first, _, _):
         raw = await delivered_candidates([first, timed_out], wire)
-    assert len(opened) == 1 and opened[0].text == "Before. "
+    assert len(opened) == 1 and opened[0].readable_text("text") == "Before. "
     assert closed == [True]
     events = parse_sse_text(raw)
     assert public_text(events, wire) == "Before. "

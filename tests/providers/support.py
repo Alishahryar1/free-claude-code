@@ -10,6 +10,7 @@ from openai import AsyncOpenAI
 from free_claude_code.application.reasoning import client_reasoning_policy
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.async_iterators import AsyncCloseable
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import (
     UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
@@ -174,3 +175,32 @@ def without_empty_reasoning(value: Any) -> Any:
             )
         }
     return value
+
+
+def continuation_seed(text: str = "", thinking: str = ""):
+    from free_claude_code.core.stream_recovery import ContinuationSeed
+
+    items: list[JsonObject] = []
+    if thinking:
+        items.append({"type": "thinking", "thinking": thinking})
+    if text:
+        items.append({"type": "text", "text": text})
+    return ContinuationSeed("messages", tuple(items))
+
+
+def assistant_history_text(rows):
+    """Read actual assistant answer text across both upstream request formats."""
+    parts = []
+    for row in rows:
+        if row.get("role") != "assistant":
+            continue
+        content = row.get("content", "")
+        if isinstance(content, str):
+            parts.append(content)
+        else:
+            parts.extend(
+                part.get("text", "")
+                for part in content
+                if part.get("type") in {"text", "output_text"}
+            )
+    return "".join(parts)

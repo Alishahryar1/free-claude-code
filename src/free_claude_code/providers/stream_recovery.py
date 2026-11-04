@@ -154,7 +154,7 @@ class _HoldbackReader[EventT](AsyncIterator[EventT | HoldbackSignal]):
 
 
 class RecoveryController:
-    """Own commit-boundary holdback for one provider stream lifecycle."""
+    """Use public delivery evidence; retain holdback only for private consumers."""
 
     def __init__(self, delivery: StreamDeliveryState | None = None) -> None:
         self._holdback = RecoveryHoldbackBuffer()
@@ -162,15 +162,19 @@ class RecoveryController:
 
     @property
     def committed(self) -> bool:
-        return self._holdback.committed
+        return (
+            self._delivery.content_released
+            if self._delivery is not None
+            else self._holdback.committed
+        )
 
     @property
     def has_buffered(self) -> bool:
-        return self._holdback.has_buffered
+        return self._delivery is None and self._holdback.has_buffered
 
     @property
     def remaining_delay(self) -> float | None:
-        return self._holdback.remaining_delay
+        return self._holdback.remaining_delay if self._delivery is None else None
 
     @asynccontextmanager
     async def read_stream[EventT](
@@ -183,10 +187,10 @@ class RecoveryController:
             await reader.aclose()
 
     def push(self, event: str) -> list[str]:
-        return self._holdback.push(event)
+        return self._holdback.push(event) if self._delivery is None else [event]
 
     def flush(self) -> list[str]:
-        return self._holdback.flush()
+        return self._holdback.flush() if self._delivery is None else []
 
     def discard(self) -> None:
         self._holdback.discard()
@@ -206,8 +210,8 @@ class RecoveryController:
         attempts_remaining: int,
         normal_stop_seen: bool = False,
     ) -> RecoveryDecision:
-        committed = self._holdback.committed
-        has_buffered = self._holdback.has_buffered
+        committed = self.committed
+        has_buffered = self.has_buffered
         retry_available = attempts_remaining > 0
         reserve_last_attempt_for_recovery = generated_output and attempts_remaining == 1
 
